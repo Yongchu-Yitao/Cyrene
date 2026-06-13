@@ -1877,7 +1877,10 @@ TOOL_DEFS = [
                 "tool/approach that works, a dead-end to avoid, a key file or command, the user's "
                 "stated preference, or an environment fact. Persistent and visible to the user on the "
                 "project's Memory page. Do NOT use it for transient chit-chat, one-off task output, or "
-                "secrets. Duplicates are merged automatically, so saving the same fact twice is safe."
+                "secrets. Duplicates are merged automatically, and if this fact updates/contradicts an "
+                "older memory (e.g. a changed value or a corrected conclusion) the outdated one is "
+                "retired automatically — so always record your latest understanding without worrying "
+                "about stale entries."
             ),
             "parameters": {
                 "type": "object",

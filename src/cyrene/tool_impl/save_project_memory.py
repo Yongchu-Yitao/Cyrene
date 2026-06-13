@@ -43,13 +43,19 @@ async def _tool_save_project_memory(
 
     # Lazy import: the store lives in the webui layer (loaded in the server
     # process); importing it here at module load would invert package layering.
-    from webui.routes_workbench_memory import add_agent_memory
+    from webui.routes_workbench_memory import add_agent_memory_checked
 
-    saved = add_agent_memory(data_key, content, category=category, tags=tags, source="agent")
+    # Resolves textual duplicates (reinforce) and asks an LLM whether this fact
+    # contradicts/supersedes existing memories — retiring the outdated ones.
+    saved, retired = await add_agent_memory_checked(data_key, content, category=category, tags=tags)
     if not saved:
         return "Not saved (blank, too short, or out of project scope)."
     cat_label = str(saved.get("category_label") or saved.get("category") or "")
-    return f"Saved to project memory [{cat_label}]: {saved.get('content') or content}"
+    msg = f"Saved to project memory [{cat_label}]: {saved.get('content') or content}"
+    if retired:
+        superseded = "; ".join("“" + str(r.get("content") or "")[:60] + "”" for r in retired)
+        msg += f" — superseded {len(retired)} now-outdated memory(ies): {superseded}"
+    return msg
 
 
 handler = _tool_save_project_memory

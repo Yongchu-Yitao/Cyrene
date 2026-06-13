@@ -491,6 +491,129 @@ def add_agent_memory(
     return _serialize(entry)
 
 
+async def _detect_conflicting_memories(new_content: str, candidates: list[dict]) -> list[str]:
+    """LLM judge: which existing memories does the new fact contradict/supersede?
+
+    Conservative — flags only genuine conflicts (same thing with a different or
+    updated value; a conclusion that overturns an old one), not merely related
+    or complementary facts. Returns entry ids to retire. Best-effort → []."""
+    if not new_content or not candidates:
+        return []
+    from cyrene.agent.state import _call_llm, _caller_type
+    lines = [f"- id={_entry_id(e)}: {str(e.get('content') or '').strip()}" for e in candidates]
+    prompt = (
+        "正在为一个项目记录一条【新记忆】。判断它是否与下面某些【已有记忆】直接冲突，"
+        "或使其过时（例如：同一参数/设置给了不同的值；新结论推翻了旧结论）。"
+        "只标记真正冲突或被取代的；仅仅相关、互补、不矛盾的【不要】标记。\n\n"
+        f"新记忆：{new_content}\n\n"
+        "已有记忆：\n" + "\n".join(lines) + "\n\n"
+        '只返回 JSON：{"conflicts":["被取代记忆的 id", ...]}，没有冲突就返回 {"conflicts":[]}。'
+    )
+    token = _caller_type.set("workbench_memory")
+    try:
+        resp = await asyncio.wait_for(
+            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=300, secondary=True, thinking="disabled"),
+            timeout=30,
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("Workbench conflict-detector failed", exc_info=True)
+        return []
+    finally:
+        _caller_type.reset(token)
+    parsed = _parse_json_object(resp.get("content") or "")
+    raw = parsed.get("conflicts") if isinstance(parsed, dict) else None
+    if not isinstance(raw, list):
+        return []
+    valid = {_entry_id(e) for e in candidates}
+    out: list[str] = []
+    for x in raw:
+        sid = str(x or "").strip()
+        if sid in valid and sid not in out:
+            out.append(sid)
+    return out
+
+
+async def add_agent_memory_checked(
+    workspace_id: str | None,
+    content: str,
+    *,
+    category: str = "fact",
+    tags: Any = None,
+    confidence: str = "",
+) -> tuple[dict | None, list[dict]]:
+    """Agent-facing write with semantic conflict resolution.
+
+    Like :func:`add_agent_memory`, but before appending a genuinely new fact it
+    asks an LLM whether the fact contradicts/supersedes existing active memories
+    and retires (marks stale) those — so the agent's latest understanding wins,
+    while the superseded record is kept (reversible) and no longer injected.
+
+    Returns ``(new_or_reinforced_entry, [retired_entries])``. At most one LLM
+    call, only on this deliberate tool path; never raises (degrades to a plain
+    add). The cheap conversation-capture / reflection-sink paths are unaffected."""
+    content = str(content or "").strip()
+    if len(content) < 4:
+        return None, []
+    if _resolve_workspace_id(workspace_id) == "default":
+        return None, []
+    category = str(category or "").strip().lower()
+    if category not in _CATEGORY_LABELS:
+        category = "fact"
+    entries = _load(workspace_id)
+    today = _today()
+
+    # Textually (near-)identical → reinforce; a fact never conflicts with itself.
+    dup = _similar_entry(entries, content)
+    if dup is not None:
+        dup["last_mentioned"] = today
+        dup["mention_count"] = int(dup.get("mention_count") or 1) + 1
+        dup["stale"] = False
+        _save(workspace_id, entries)
+        return _serialize(dup), []
+
+    new_id = "mem_" + uuid.uuid4().hex[:12]
+
+    # Semantic conflict check against active memories (recent first, capped).
+    active = [
+        e for e in entries
+        if isinstance(e, dict) and not e.get("stale") and str(e.get("content") or "").strip()
+    ]
+    active.sort(key=lambda e: str(e.get("last_mentioned") or e.get("first_seen") or ""), reverse=True)
+    try:
+        conflict_ids = await _detect_conflicting_memories(content, active[:25])
+    except Exception:  # noqa: BLE001 — conflict detection must never block the write
+        logger.debug("Workbench conflict-detection failed, saving without it", exc_info=True)
+        conflict_ids = []
+    retired: list[dict] = []
+    if conflict_ids:
+        cset = set(conflict_ids)
+        for e in entries:
+            if isinstance(e, dict) and _entry_id(e) in cset and not e.get("stale"):
+                e["stale"] = True
+                e["supersededAt"] = today
+                e["supersededBy"] = new_id
+                retired.append(_serialize(e))
+
+    entry: dict[str, Any] = {
+        "id": new_id,
+        "content": content,
+        "type": category,
+        "category": category,
+        "source": "agent",
+        "tags": _normalize_tags(tags),
+        "first_seen": today,
+        "last_mentioned": today,
+        "mention_count": 1,
+        "emotional_valence": 0,
+    }
+    conf = str(confidence or "").strip().lower()
+    if conf in _CONFIDENCE_LABELS:
+        entry["confidence"] = conf
+    entries.append(entry)
+    _save(workspace_id, entries)
+    return _serialize(entry), retired
+
+
 def render_memory_for_injection(
     workspace_id: str | None,
     *,
