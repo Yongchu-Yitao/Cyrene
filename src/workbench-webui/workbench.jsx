@@ -1574,6 +1574,43 @@ function useTaskController(session, onRefresh, runtime) {
     busy: busy,
     applyStore: apply,
 
+    // Intent-aware composer entry (idle / answered / acted). The server decides:
+    // a question → a direct answer (status `answered`); a one-shot instruction →
+    // execute + report (status `acted`); a complex goal → a plan (status
+    // `planning`). The reply card follows the returned status. On total failure,
+    // degrade to an honest client-side plan rather than swallowing the input.
+    send: function (text) {
+      var input = (text != null ? String(text) : "").trim();
+      var hasAttach = (((runtime && runtime.attachments) || []).length > 0);
+      if (!input && !hasAttach) return Promise.resolve();
+      return runAgentic({ kind: "dispatch", label: "正在理解你的输入…" }, model.dispatch(sid, input, {
+        attachments: (runtime && runtime.attachments) || [],
+        mode: (runtime && runtime.mode) || undefined,
+      }).then(function (store) {
+        if (runtime && runtime.clearAttachments) runtime.clearAttachments();
+        return store;
+      }).catch(function () {
+        var goal = (session.goal || input).trim();
+        return patch({
+          status: "planning",
+          goal: goal,
+          plan: model.buildPlanSteps(goal, session.constraints || []),
+          acceptanceCriteria: model.buildAcceptance(goal, session.constraints || []),
+          agentReply: "处理服务暂时不可用，我先给出一份基础计划，你可以编辑后逐步执行，或稍后重试。",
+          events: model.withEvent(session, "PlanGenerated", "生成基础执行计划（兜底）。"),
+        });
+      }));
+    },
+
+    // answered / acted → promote this exchange into a real, planned task.
+    promoteToPlan: function () {
+      var goal = (session.goal || "").trim();
+      if (!goal) { focusComposer(); return Promise.resolve(); }
+      return runAgentic({ kind: "plan", label: "正在把它整理成执行计划…" }, model.generatePlan(sid, goal).catch(function () {
+        return patch({ status: "planning", goal: goal, plan: model.buildPlanSteps(goal, session.constraints || []), acceptanceCriteria: model.buildAcceptance(goal, session.constraints || []), agentReply: "计划生成服务暂时不可用，已生成基础计划。", events: model.withEvent(session, "PlanGenerated", "生成基础执行计划（兜底）。") });
+      }));
+    },
+
     // idle → planning. Generate a REAL plan from the goal — the agent explores
     // the project workspace server-side ("执行前必须有计划"); no agent work runs
     // yet. On failure, fall back to an honest client-side template (all pending).
@@ -1950,6 +1987,8 @@ function StateCard(props) {
   // stale status card (otherwise a 待验收 task just keeps showing 「已完成」).
   if (props.session.agentBusy && status !== "running") return <AgentActivityCard {...props} />;
   if (status === "planning") return <AgentPlanCard {...props} />;
+  if (status === "answered") return <AgentReplyCard {...props} />;
+  if (status === "acted") return <AgentReplyCard {...props} acted={true} />;
   if (status === "waiting_for_approval" || status === "waiting_for_user" || status === "blocked") return <ConfirmCard {...props} />;
   if (status === "running") return <AgentActivityCard {...props} />;
   if (status === "paused") return <PausedCard {...props} />;
@@ -2116,6 +2155,12 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession 
 // [{ label, onClick }]; running/idle add nothing (covered by chips + static items).
 function headerMenuActions(status, controller, session, project, onSelectSession) {
   function openNext() { openNextSession(session, project, onSelectSession); }
+  if (status === "answered" || status === "acted") {
+    return [
+      { label: "整理成任务", onClick: function () { controller.promoteToPlan(); } },
+      { label: "创建后续任务", onClick: function () { controller.createFollowUp(); } },
+    ];
+  }
   if (status === "planning") {
     return [
       { label: "批准执行", onClick: function () { controller.approvePlan(); } },
@@ -2251,6 +2296,39 @@ function AgentPlanCard({ session, controller, onRightTab }) {
         <ol className="wb-ordered">{plan.map(function (s) { return <li key={s.id}>{s.title}</li>; })}</ol>
       </div>
       <p className="wb-card-hint">是否继续？批准后会进入确认环节，再开始执行。</p>
+    </WbCard>
+  );
+}
+
+// answered — a question the agent just answered. acted — a one-shot instruction
+// the agent just carried out. Neither generated a plan: show the reply directly,
+// and (for acted) what changed, plus a way to promote the exchange into a real
+// planned task. Driven by the intent classifier behind /dispatch.
+function AgentReplyCard({ session, controller, onRightTab, acted }) {
+  var runs = Array.isArray(session.runs) ? session.runs : [];
+  var lastRun = runs.length ? runs[runs.length - 1] : null;
+  var fileChanges = (lastRun && Array.isArray(lastRun.fileChanges)) ? lastRun.fileChanges : [];
+  var toolCalls = (lastRun && Array.isArray(lastRun.toolCalls)) ? lastRun.toolCalls : [];
+  return (
+    <WbCard tone={acted ? "done" : "agent"} icon={acted ? ICONS.check : ICONS.spark} title={acted ? "Agent 已执行" : "Agent 回复"}>
+      <AgentReplyBlock text={session.agentReply || (acted ? "已按你的指令完成。" : "这是我的回答。")} />
+      {acted && fileChanges.length > 0 && (
+        <div className="wb-done-grid">
+          <button type="button" className="wb-done-stat" onClick={function () { onRightTab && onRightTab("files"); }}>
+            <b>{fileChanges.length}</b><small>文件变更</small>
+          </button>
+          {toolCalls.length > 0 && (
+            <button type="button" className="wb-done-stat" onClick={function () { onRightTab && onRightTab("logs"); }}>
+              <b>{toolCalls.length}</b><small>工具调用</small>
+            </button>
+          )}
+        </div>
+      )}
+      <p className="wb-card-hint">{acted ? "如果这只是其中一步，可以把它整理成完整任务再继续。" : "这是一个直接回答，没有生成执行计划。需要的话可以把它推进成一个任务。"}</p>
+      <WbActions>
+        <WbBtn kind="ghost" disabled={controller.busy} onClick={function () { controller.promoteToPlan(); }}>整理成任务</WbBtn>
+        <WbBtn kind="ghost" disabled={controller.busy} onClick={focusComposer}>继续</WbBtn>
+      </WbActions>
     </WbCard>
   );
 }
@@ -2673,7 +2751,8 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
 }
 
 function composerPlaceholder(status) {
-  if (status === "idle" || status === "pending") return wbT("task.placeholder.idle", "Describe this task's goal, boundaries, and acceptance criteria...");
+  if (status === "idle" || status === "pending") return wbT("task.placeholder.idle", "Ask a question, give a direct instruction, or describe a task...");
+  if (status === "answered" || status === "acted") return wbT("task.placeholder.reply", "Ask a follow-up, give the next instruction, or describe a fuller task...");
   if (status === "running") return wbT("task.placeholder.running", "The agent is running; input is temporarily disabled...");
   if (status === "planning") return wbT("task.placeholder.planning", "Add to or revise the execution plan...");
   if (status === "waiting_for_approval" || status === "waiting_for_user") return wbT("task.placeholder.waiting", "Revise requirements, or approve execution...");
@@ -2686,6 +2765,19 @@ function composerPlaceholder(status) {
 function composerChips(status, controller, onRightTab) {
   if (status === "idle" || status === "pending") {
     return [];
+  }
+  if (status === "answered") {
+    return [
+      { label: wbT("task.action.promoteToTask", "Make it a task"), onClick: function () { controller.promoteToPlan(); } },
+      { label: wbT("task.action.continueEditing", "Continue editing"), onClick: focusComposer },
+    ];
+  }
+  if (status === "acted") {
+    return [
+      { label: wbT("task.action.viewChanges", "View changes"), guard: false, onClick: function () { onRightTab && onRightTab("files"); } },
+      { label: wbT("task.action.promoteToTask", "Make it a task"), onClick: function () { controller.promoteToPlan(); } },
+      { label: wbT("task.action.continueEditing", "Continue editing"), onClick: focusComposer },
+    ];
   }
   if (status === "planning") {
     return [
@@ -2782,10 +2874,10 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
 
   function dispatch(text) {
     resetDraft();
-    if (status === "idle" || status === "pending") {
-      controller.start(text); // typed text becomes the goal, then the plan
+    if (status === "idle" || status === "pending" || status === "answered" || status === "acted") {
+      controller.send(text); // server classifies → direct answer / direct action / plan
     } else if (!running) {
-      controller.modifyPlan(text); // refine → back to planning from any structured state
+      controller.modifyPlan(text); // refine → back to planning from a structured state
     }
   }
 

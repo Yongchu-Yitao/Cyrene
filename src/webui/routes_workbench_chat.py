@@ -309,6 +309,128 @@ def _truncate_state_for_retry(session_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Chat → task synthesis
+#
+# Promoting a conversation into a task must consider the WHOLE conversation, not
+# just the last user message: requirements get refined turn by turn, constraints
+# surface mid-thread, and the assistant's replies often pin down the real intent.
+# These helpers render the transcript and ask an LLM to distil a structured task
+# brief (goal / constraints / acceptance) the downstream planner can build on.
+# ---------------------------------------------------------------------------
+
+def _chat_transcript_for_brief(chat: dict[str, Any], *, max_messages: int = 40, max_chars: int = 12000) -> str:
+    """Render the conversation as a readable user/assistant transcript.
+
+    Keeps the most RECENT turns within a character budget so long chats still
+    fit a single LLM call; older turns are dropped from the top (the tail of a
+    conversation carries the settled intent). Each message is itself clipped so
+    one giant paste can't crowd out the rest of the thread.
+    """
+    raw = chat.get("messages") if isinstance(chat.get("messages"), list) else []
+    messages = [
+        m for m in raw
+        if isinstance(m, dict)
+        and str(m.get("content") or "").strip()
+        and str(m.get("role") or "") in ("user", "assistant", "agent")
+    ]
+    if not messages:
+        return ""
+    picked = messages[-max_messages:]
+    blocks: list[str] = []
+    total = 0
+    for message in reversed(picked):  # newest → oldest, stop when budget is spent
+        role = "用户" if str(message.get("role")) == "user" else "助手"
+        text = str(message.get("content") or "").strip()
+        if len(text) > 2000:
+            text = text[:2000] + "…（内容过长已截断）"
+        block = f"{role}：{text}"
+        if blocks and total + len(block) > max_chars:
+            break
+        blocks.append(block)
+        total += len(block)
+    blocks.reverse()
+    return "\n\n".join(blocks)
+
+
+def _coerce_brief_constraints(raw: Any) -> list[str]:
+    items = raw if isinstance(raw, list) else []
+    out: list[str] = []
+    for item in items:
+        text = str(item).strip()
+        if not text:
+            continue
+        out.append(text[:300])
+        if len(out) >= 8:
+            break
+    return out
+
+
+def _coerce_brief_acceptance(raw: Any) -> list[dict[str, Any]]:
+    items = raw if isinstance(raw, list) else []
+    out: list[dict[str, Any]] = []
+    for item in items:
+        text = str(item).strip()
+        if not text:
+            continue
+        out.append({"id": _short_id("accept"), "text": text[:300], "status": "pending"})
+        if len(out) >= 8:
+            break
+    return out
+
+
+async def _summarize_chat_to_brief(chat: dict[str, Any], project: dict[str, Any]) -> dict[str, Any] | None:
+    """Distil a full conversation into a structured task brief via the LLM.
+
+    Returns ``{"title", "goal", "constraints", "acceptanceCriteria"}`` or ``None``
+    when the conversation is empty or the model call/parse fails (callers then
+    fall back to the last user message).
+    """
+    transcript = _chat_transcript_for_brief(chat)
+    if not transcript:
+        return None
+    from webui import routes as R
+
+    title_hint = str(chat.get("title") or "").strip()
+    project_hint = str(project.get("name") or "").strip()
+    prompt = (
+        "你是任务整理 Agent。下面是用户与助手的一整段对话。请综合**整段对话**"
+        "（不要只看最后一句），还原用户真正想完成的任务，整理成一份结构化任务简报，"
+        "供后续执行 Agent 据此规划与执行。\n\n"
+        f"{('所属项目：' + project_hint + chr(10)) if project_hint else ''}"
+        f"{('对话标题：' + title_hint + chr(10)) if title_hint else ''}"
+        "===== 对话开始 =====\n"
+        f"{transcript}\n"
+        "===== 对话结束 =====\n\n"
+        "只返回一个 JSON 对象，不要 Markdown 代码块标记。结构：\n"
+        "{\n"
+        '  "title": "简洁的任务标题（中文，≤30字）",\n'
+        '  "goal": "综合整段对话后的完整任务目标：要解决什么问题、关键背景与上下文、'
+        '逐步澄清后的真实需求、期望的最终产出。写成连贯的一两段，信息要足够后续 Agent 直接据此规划。",\n'
+        '  "constraints": ["对话中明确提到的约束 / 要求 / 偏好 / 边界"],\n'
+        '  "acceptanceCriteria": ["判断任务完成的可检验标志"]\n'
+        "}\n\n"
+        "要求：goal 必须覆盖对话里反复强调或被逐步澄清的需求，而不是只取最后一条消息；"
+        "constraints 与 acceptanceCriteria 只写对话中真实出现或可直接推断的内容，"
+        "没有就给空数组（[]）；全部使用简体中文。"
+    )
+    try:
+        response = await asyncio.wait_for(
+            R._call_llm(
+                [{"role": "user", "content": prompt}],
+                tools=None,
+                max_tokens=2000,
+                thinking="disabled",
+            ),
+            timeout=90,
+        )
+    except Exception:
+        logger.exception("chat→task brief synthesis failed for %s", chat.get("id"))
+        return None
+    parsed = R._workbench_parse_json_object(response.get("content") or "")
+    return parsed if isinstance(parsed, dict) else None
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -640,19 +762,45 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         project = R._workbench_find_project(store, str(chat.get("projectId") or ""))
         if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
+        # Fallback signal when synthesis is unavailable: the last user message.
         last_user = ""
         for message in reversed(chat.get("messages") or []):
             if message.get("role") == "user" and str(message.get("content") or "").strip():
                 last_user = str(message["content"]).strip()
                 break
-        title = str(body.get("title") or chat.get("title") or "新任务").strip()[:80] or "新任务"
-        goal = str(body.get("goal") or last_user or title).strip()
+
+        # Synthesize a task brief from the WHOLE conversation unless the caller
+        # passed explicit overrides for both title and goal.
+        override_title = str(body.get("title") or "").strip()
+        override_goal = str(body.get("goal") or "").strip()
+        brief: dict[str, Any] = {}
+        if not (override_title and override_goal):
+            synthesized = await _summarize_chat_to_brief(chat, project)
+            if isinstance(synthesized, dict):
+                brief = synthesized
+
+        from_synthesis = bool(brief)
+        title = (override_title or str(brief.get("title") or "").strip()
+                 or str(chat.get("title") or "").strip() or "新任务")[:80] or "新任务"
+        goal = (override_goal or str(brief.get("goal") or "").strip() or last_user or title).strip()
+        constraints = _coerce_brief_constraints(brief.get("constraints"))
+        acceptance = _coerce_brief_acceptance(brief.get("acceptanceCriteria"))
+
         session = R._workbench_new_session(project.get("id"), title, goal)
+        if constraints:
+            session["constraints"] = constraints
+        if acceptance:
+            session["acceptanceCriteria"] = acceptance
+        session["sourceChatId"] = chat_id
         session["events"] = [{
             "id": _short_id("event"),
             "type": "CreatedFromChat",
             "createdAt": _utc_now_iso(),
-            "body": f"由对话「{chat.get('title')}」创建。",
+            "body": (
+                f"由对话「{chat.get('title') or '新对话'}」综合整理而来（已通读完整对话）。"
+                if from_synthesis else
+                f"由对话「{chat.get('title') or '新对话'}」创建。"
+            ),
             "chatId": chat_id,
         }]
         project.setdefault("sessions", []).insert(0, session)
@@ -660,6 +808,13 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         store["activeProjectId"] = project.get("id")
         store["activeSessionId"] = session["id"]
         R._write_workbench_store(store)
+
+        # Keep the original conversation and link it to the task, so it's clearly
+        # preserved (never consumed) and reachable from both sides.
+        chat["convertedSessionId"] = session["id"]
+        chat["convertedTaskTitle"] = title
+        chat["convertedAt"] = session["createdAt"]
+        _write_chats_store(payload)
         append_notification(
             title="对话已转为任务",
             body=f"对话「{chat.get('title') or '新对话'}」已创建任务「{title}」。",

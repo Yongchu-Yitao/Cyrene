@@ -2220,6 +2220,42 @@ async def _workbench_should_reflect(goal: str, acceptance: list[Any], feedback: 
     return bool(parsed.get("reflect")) if isinstance(parsed, dict) else False
 
 
+async def _workbench_classify_intent(text: str, session: dict[str, Any]) -> str:
+    """Classify a task-composer input → ``answer`` | ``direct`` | ``plan``.
+
+    Not every line typed into a task is a multi-step goal. A question wants a
+    reply; a one-shot instruction wants to just be done; only a genuinely complex
+    goal is worth planning first. One lightweight secondary call; any failure
+    falls back to ``plan`` — the existing, safe behaviour."""
+    src = str(text or "").strip()
+    if not src:
+        return "plan"
+    goal = str(session.get("goal") or session.get("title") or "").strip()
+    prompt = (
+        "你在判断用户在一个工作台「任务」里输入的一句话应该如何处理。"
+        "只返回 JSON：{\"kind\":\"question\"|\"command\"|\"task\"}。\n\n"
+        "- question：在提问或想了解信息，期待一个直接回答，本身不要求改动文件或执行操作。"
+        "例：「这个项目用什么框架？」「登录逻辑在哪个文件？」\n"
+        "- command：一条明确、范围清晰、基本一步就能做完的直接指令。"
+        "例：「把 README 标题改成 X」「跑一下测试」「格式化这个文件」。\n"
+        "- task：较复杂、需要拆成多步、值得先规划再执行的目标。"
+        "例：「实现用户登录系统」「重构整个支付模块」。\n\n"
+        f"当前任务背景：{goal or '（暂无）'}\n用户输入：{src}\n\n"
+        "拿不准时：更像要动手做的较大工程 → task；像随口一问 → question。"
+    )
+    try:
+        resp = await asyncio.wait_for(
+            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=60, secondary=True, thinking="disabled"),
+            timeout=20,
+        )
+    except Exception:
+        logger.exception("Workbench intent-classifier failed")
+        return "plan"
+    parsed = _workbench_parse_json_object(resp.get("content") or "")
+    kind = str(parsed.get("kind") or "").strip().lower() if isinstance(parsed, dict) else ""
+    return {"question": "answer", "command": "direct", "task": "plan"}.get(kind, "plan")
+
+
 # Session statuses still "open" enough that a sibling's reflection is worth a nudge.
 _WORKBENCH_OPEN_STATUSES = {"idle", "pending", "planning", "paused", "review", "failed"}
 
@@ -5566,6 +5602,134 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             meta={"sessionId": session_id},
         )
         return {"ok": True, "project": project, "session": session, **payload}
+
+    @router.post("/api/task-sessions/{session_id}/dispatch")
+    async def api_workbench_dispatch(session_id: str, request: Request):
+        """Intent-aware entry for the task composer.
+
+        Classifies the input and routes it: a question → a direct answer; a
+        one-shot instruction → execute it and report what changed; a complex goal
+        → generate a plan. Only the plan branch enters the planning/approval flow;
+        answer/direct return an agent reply with no plan/steps. ``replyKind`` tells
+        the client which card to render.
+        """
+        body = await request.json()
+        user_input = str(body.get("input") or body.get("message") or "").strip()
+        attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
+        mode = str(body.get("mode") or "auto")
+        command = str(body.get("command") or "")
+        if not user_input and not attachments:
+            return JSONResponse({"error": "input is required"}, status_code=400)
+        payload = _read_workbench_store()
+        project, session = _workbench_find_session(payload, session_id)
+        if not session or not project:
+            return JSONResponse({"error": "session not found"}, status_code=404)
+
+        # A slash command or attachment-only message is already a concrete action —
+        # skip classification and treat it as a direct instruction.
+        if command or (not user_input and attachments):
+            kind = "direct"
+        else:
+            kind = await _workbench_classify_intent(user_input, session)
+
+        now = _utc_now_iso()
+        # Seed the goal/constraints on first input so the task has a title and
+        # context regardless of which branch we take.
+        if not str(session.get("goal") or "").strip() and user_input:
+            session["goal"] = user_input
+            merged = list(session.get("constraints") or [])
+            for item in _workbench_extract_constraints(user_input):
+                if item not in merged:
+                    merged.append(item)
+            session["constraints"] = merged
+
+        if kind == "plan":
+            steps, from_llm = await _workbench_generate_plan_steps(session, project, feedback="")
+            session["plan"] = steps
+            session["acceptanceCriteria"] = _workbench_acceptance_from_session(session)
+            session["status"] = "planning"
+            session["agentReply"] = (
+                "我已结合工作区里的实际内容拆解出执行计划。你可以直接编辑，或逐步执行（顺序由你决定）。"
+                if from_llm else
+                "计划生成服务暂时不可用，我先给出一份基础计划，你可以编辑后逐步执行，或稍后让我重新拆解。"
+            )
+            session["events"] = list(session.get("events") or []) + [{
+                "id": _short_id("event"),
+                "type": "PlanGenerated",
+                "createdAt": now,
+                "body": f"生成执行计划，共 {len(steps)} 步。" + ("" if from_llm else "（兜底计划）"),
+            }]
+            session["updatedAt"] = now
+            project["updatedAt"] = now
+            payload["activeProjectId"] = project.get("id")
+            payload["activeSessionId"] = session_id
+            _write_workbench_store(payload)
+            return {"ok": True, "replyKind": "plan", "planSource": "llm" if from_llm else "fallback", "project": project, "session": session, **payload}
+
+        # answer / direct — run a real agent reply (no plan generated), then collect
+        # any tool activity + file changes the run produced so the card can report
+        # what actually happened.
+        run_start_ts = _utc_now_iso()
+        workspace_root = _workbench_workspace_root(project)
+        git_status_before = _workbench_git_status_snapshot(workspace_root)
+        ephemeral_system = _workbench_compose_ephemeral_system(project, session)
+        agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
+        git_status_after = _workbench_git_status_snapshot(workspace_root)
+        session["agentReply"] = agent_reply
+        if not command:
+            schedule_capture(_workbench_project_data_key(project), user_input, agent_reply)
+        session["status"] = "acted" if kind == "direct" else "answered"
+
+        normalized_attachments = _workbench_normalize_attachments(attachments)
+        public_attachments = [build_public_attachment_payload(item) for item in normalized_attachments]
+        run_id = _short_id("run")
+        activity_events = _collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
+        tool_call_events = [event for event in activity_events if event.get("type") == "ToolCallEvent"]
+        file_changes = _workbench_merge_file_changes([
+            *[change for event in tool_call_events for change in (event.get("fileChanges") or [])],
+            *_workbench_git_status_delta(git_status_before, git_status_after, workspace_root),
+        ])
+        events = [
+            {"id": _short_id("event"), "type": "UserMessageEvent", "runId": run_id, "createdAt": now, "body": user_input or "[附件]", "attachments": public_attachments},
+            *activity_events,
+            {"id": _short_id("event"), "type": "AgentResponseEvent", "runId": run_id, "createdAt": now, "body": agent_reply},
+        ]
+        run = {
+            "id": run_id,
+            "taskId": session_id,
+            "userInput": user_input,
+            "agentResponse": agent_reply,
+            "status": "completed",
+            "startedAt": now,
+            "endedAt": now,
+            "contextPackId": _short_id("ctx"),
+            "events": events,
+            "fileChanges": file_changes,
+            "toolCalls": [{"tool": e["tool"], "argsPreview": e["argsPreview"]} for e in tool_call_events],
+            "artifacts": [],
+            "attachments": public_attachments,
+            "mode": mode,
+            "error": None,
+        }
+        session.setdefault("runs", []).append(run)
+        session.setdefault("events", []).extend(events)
+        _workbench_promote_file_artifacts(session, file_changes, now)
+        session["updatedAt"] = now
+        project["updatedAt"] = now
+        payload["activeProjectId"] = project.get("id")
+        payload["activeSessionId"] = session_id
+        _write_workbench_store(payload)
+        append_notification(
+            title="Agent 回复完成",
+            body=f"Agent 在「{session.get('title') or '任务'}」中" + ("执行了你的指令。" if kind == "direct" else "回复了你。"),
+            tab="comment",
+            project_ref=project.get("id"),
+            source="task_reply",
+            source_label="任务",
+            link_label=str(session.get("title") or ""),
+            meta={"sessionId": session_id, "runId": run_id},
+        )
+        return {"ok": True, "replyKind": kind, "project": project, "session": session, "run": run, **payload}
 
     @router.post("/api/task-sessions/{session_id}/init/submit")
     async def api_workbench_submit_init(session_id: str, request: Request):

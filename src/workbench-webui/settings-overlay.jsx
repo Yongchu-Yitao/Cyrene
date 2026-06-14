@@ -67,9 +67,6 @@ function SettingsOverlay({
   var [tab, setTab] = useStateSt(initialTab || "general");
 
   // ── General state ──
-  var [developerMode, setDeveloperMode] = useStateSt(function () {
-    try { return localStorage.getItem("cyrene-developer-mode") === "1"; } catch (e) { return false; }
-  });
   var [desktopNotifications, setDesktopNotifications] = useStateSt(function () {
     try { return localStorage.getItem("cyrene-desktop-notifications") === "1"; } catch (e) { return false; }
   });
@@ -158,10 +155,7 @@ function SettingsOverlay({
     return function () { window.removeEventListener("keydown", onKeyDown); };
   }, [onClose]);
 
-  // Persist dev mode / desktop notifications
-  useEffectSt(function () {
-    try { localStorage.setItem("cyrene-developer-mode", developerMode ? "1" : "0"); window.dispatchEvent(new Event("cyrene-developer-mode-change")); } catch (e) {}
-  }, [developerMode]);
+  // Persist desktop notifications
   useEffectSt(function () {
     try { localStorage.setItem("cyrene-desktop-notifications", desktopNotifications ? "1" : "0"); } catch (e) {}
   }, [desktopNotifications]);
@@ -360,7 +354,7 @@ function SettingsOverlay({
 
         // Content area
         React.createElement("div", { className: "settings-overlay-content" },
-          tab === "general" && GeneralPanel({ t, lang, setLang, developerMode, setDeveloperMode, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved }),
+          tab === "general" && GeneralPanel({ t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved }),
           tab === "models" && ModelsPanel({ t, models, setModels, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, saveModels, config }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, wechatToken, setWechatToken, wechatSaved, setWechatSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
@@ -376,7 +370,7 @@ function SettingsOverlay({
 
 // ── General Panel ──
 function GeneralPanel(p) {
-  var { t, lang, setLang, developerMode, setDeveloperMode, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved } = p;
+  var { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved } = p;
 
   function saveAmapKey() {
     if (!amapKey || amapKey.startsWith("••")) { setAmapKeySaved(t("settings.noChanges")); setTimeout(function () { setAmapKeySaved(""); }, 1500); return; }
@@ -399,9 +393,6 @@ function GeneralPanel(p) {
         React.createElement("button", { className: "wb-seg-btn" + (lang === "en" ? " active" : ""), onClick: function () { setLang("en"); } }, "English"),
         React.createElement("button", { className: "wb-seg-btn" + (lang === "zh" ? " active" : ""), onClick: function () { setLang("zh"); } }, "中文"),
       ),
-    ),
-    FieldRow(t("settings.developerMode"), t("settings.developerModeHint"),
-      Toggle(developerMode, function () { setDeveloperMode(!developerMode); }),
     ),
     FieldRow(t("settings.desktopNotifications"), t("settings.desktopNotificationsHint"),
       Toggle(desktopNotifications, toggleDesktopNotifications),
@@ -478,14 +469,29 @@ function ModelsPanel(p) {
       models.slice(1).map(function (m) {
         return ModelCard([
           React.createElement("div", { className: "wb-model-actions" },
-            React.createElement("button", { className: "wb-icon-btn-small", onClick: function () { moveModel(m.id, -1); } }, "▲"),
-            React.createElement("button", { className: "wb-icon-btn-small", onClick: function () { moveModel(m.id, 1); } }, "▼"),
-            React.createElement("button", { className: "wb-icon-btn-small danger", onClick: function () { deleteModel(m.id); } }, "✖"),
+            React.createElement("div", { className: "wb-sort-group" },
+              React.createElement("button", { className: "wb-sort-btn", title: "上移", onClick: function () { moveModel(m.id, -1); } },
+                React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+                  React.createElement("polyline", { points: "18 15 12 9 6 15" })
+                )
+              ),
+              React.createElement("button", { className: "wb-sort-btn", title: "下移", onClick: function () { moveModel(m.id, 1); } },
+                React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+                  React.createElement("polyline", { points: "6 9 12 15 18 9" })
+                )
+              ),
+            ),
+            React.createElement("button", { className: "wb-delete-btn", title: "移除", onClick: function () { deleteModel(m.id); } },
+              React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+                React.createElement("line", { x1: "18", y1: "6", x2: "6", y2: "18" }),
+                React.createElement("line", { x1: "6", y1: "6", x2: "18", y2: "18" })
+              )
+            ),
           ),
           ModelField(t("settings.modelIdentifierLabel"), React.createElement("input", { className: "wb-input mono", value: m.model, onChange: function (e) { updateModel(m.id, "model", e.target.value); }, placeholder: t("settings.placeholderModelIdentifier") })),
           ModelField(t("settings.apiKey"), React.createElement("input", { className: "wb-input mono", type: "password", value: m.api_key, onChange: function (e) { updateModel(m.id, "api_key", e.target.value); }, placeholder: "sk-..." })),
           ModelField(t("settings.baseUrlLabel"), React.createElement("input", { className: "wb-input mono", value: m.base_url, onChange: function (e) { updateModel(m.id, "base_url", e.target.value); }, placeholder: DEFAULT_MODEL_BASE_URL })),
-        ]);
+        ], m.id);
       }),
     ),
     modelDraftField(draftModel, setDraftModel, addModel, t),
@@ -512,14 +518,29 @@ function ModelsPanel(p) {
       visionModels.slice(1).map(function (m) {
         return ModelCard([
           React.createElement("div", { className: "wb-model-actions" },
-            React.createElement("button", { className: "wb-icon-btn-small", onClick: function () { moveVisionModel(m.id, -1); } }, "▲"),
-            React.createElement("button", { className: "wb-icon-btn-small", onClick: function () { moveVisionModel(m.id, 1); } }, "▼"),
-            React.createElement("button", { className: "wb-icon-btn-small danger", onClick: function () { deleteVisionModel(m.id); } }, "✖"),
+            React.createElement("div", { className: "wb-sort-group" },
+              React.createElement("button", { className: "wb-sort-btn", title: "上移", onClick: function () { moveVisionModel(m.id, -1); } },
+                React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+                  React.createElement("polyline", { points: "18 15 12 9 6 15" })
+                )
+              ),
+              React.createElement("button", { className: "wb-sort-btn", title: "下移", onClick: function () { moveVisionModel(m.id, 1); } },
+                React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+                  React.createElement("polyline", { points: "6 9 12 15 18 9" })
+                )
+              ),
+            ),
+            React.createElement("button", { className: "wb-delete-btn", title: "移除", onClick: function () { deleteVisionModel(m.id); } },
+              React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+                React.createElement("line", { x1: "18", y1: "6", x2: "6", y2: "18" }),
+                React.createElement("line", { x1: "6", y1: "6", x2: "18", y2: "18" })
+              )
+            ),
           ),
           ModelField(t("settings.modelIdentifierLabel"), React.createElement("input", { className: "wb-input mono", value: m.model, onChange: function (e) { updateVisionModel(m.id, "model", e.target.value); }, placeholder: t("settings.placeholderModelIdentifier") })),
           ModelField(t("settings.apiKey"), React.createElement("input", { className: "wb-input mono", type: "password", value: m.api_key, onChange: function (e) { updateVisionModel(m.id, "api_key", e.target.value); }, placeholder: "sk-..." })),
           ModelField(t("settings.baseUrlLabel"), React.createElement("input", { className: "wb-input mono", value: m.base_url, onChange: function (e) { updateVisionModel(m.id, "base_url", e.target.value); }, placeholder: DEFAULT_MODEL_BASE_URL })),
-        ]);
+        ], m.id);
       }),
     ),
     modelDraftField(draftVision, setDraftVision, addVisionModel, t),
@@ -589,17 +610,17 @@ function ChannelsPanel(p) {
     React.createElement("div", { className: "wb-channel-card" },
       React.createElement("div", { className: "wb-channel-head" },
         React.createElement("span", { className: "wb-channel-icon" }, "⌖"),
-        React.createElement("b", null, "微信 / WeChat"),
+        React.createElement("b", null, t("settings.wechat")),
       ),
-      React.createElement("p", { className: "wb-channel-desc" }, "通过 WeChat token 接入本地微信通道，用于通知与消息投递。"),
-      FieldRow("WeChat Bot Token", null,
+      React.createElement("p", { className: "wb-channel-desc" }, t("settings.wechatTokenHint")),
+      FieldRow(t("settings.wechatToken"), null,
         React.createElement("div", { className: "wb-inline-row" },
           React.createElement("input", { className: "wb-input mono", type: "password", value: wechatToken, onChange: function (e) { setWechatToken(e.target.value); }, placeholder: "WECHAT_BOT_TOKEN" }),
           React.createElement("button", { className: "wb-btn primary", onClick: saveWechat }, t("settings.save")),
         ),
         wechatSaved && React.createElement("span", { className: "wb-hint saved" }, wechatSaved),
       ),
-      FieldRow("通知推送", null, Toggle(notifyWechat, function () {
+      FieldRow(t("settings.notifyWechat"), t("settings.notifyWechatHint"), Toggle(notifyWechat, function () {
         var next = !notifyWechat;
         setNotifyWechat(next);
         fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notify_wechat: next }) }).catch(function () {});
@@ -767,7 +788,7 @@ function CapabilitiesPanel(p) {
       ),
       toolsExpanded && React.createElement("div", { className: "wb-tool-list" },
         toolList.map(function (tool) {
-          return FieldRow(React.createElement("span", { className: "mono" }, tool.name), tool.desc, Toggle(tool.enabled, function () { toggleTool(tool.name); }));
+          return FieldRow(React.createElement("span", { className: "mono" }, tool.name), tool.desc, Toggle(tool.enabled, function () { toggleTool(tool.name); }), tool.name);
         }),
         React.createElement("div", { className: "wb-save-actions" },
           React.createElement("button", { className: "wb-btn primary", onClick: saveTools }, t("settings.saveTools")),
@@ -988,8 +1009,8 @@ function SectionBlock(title, extra, children) {
   );
 }
 
-function FieldRow(label, hint, controls) {
-  return React.createElement("div", { className: "wb-field" },
+function FieldRow(label, hint, controls, key) {
+  return React.createElement("div", { className: "wb-field", key: key },
     React.createElement("div", { className: "wb-label" },
       label,
       hint && React.createElement("small", null, hint),
@@ -999,14 +1020,17 @@ function FieldRow(label, hint, controls) {
 }
 
 function Toggle(on, onClick) {
-  return React.createElement("div", {
+  return React.createElement("button", {
+    type: "button",
     className: "wb-toggle" + (on ? " on" : ""),
+    role: "switch",
+    "aria-checked": on ? "true" : "false",
     onClick: onClick,
   });
 }
 
-function ModelCard(children) {
-  return React.createElement("div", { className: "wb-model-card" }, children);
+function ModelCard(children, key) {
+  return React.createElement("div", { className: "wb-model-card", key: key }, children);
 }
 
 function ModelField(label, input) {

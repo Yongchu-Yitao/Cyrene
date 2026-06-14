@@ -220,6 +220,25 @@ var WorkbenchModel = (function () {
     }).then(normalizeStore);
   }
 
+  // Intent-aware composer entry: the server classifies the input and routes it
+  // to a direct answer / direct action / plan generation, returning ``replyKind``.
+  // Not every input becomes a plan — see the /dispatch endpoint.
+  function dispatch(sessionId, input, options) {
+    options = options || {};
+    var init = {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        input: input || "",
+        attachments: options.attachments || [],
+        mode: options.mode || undefined,
+        command: options.command || undefined,
+      }),
+    };
+    if (options.signal) init.signal = options.signal;
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/dispatch", init).then(normalizeStore);
+  }
+
   function sendChat(sessionId, message, options) {
     options = options || {};
     var init = {
@@ -311,6 +330,8 @@ var WorkbenchModel = (function () {
       pending: ["status.pending", "Pending"],
       initializing: ["status.initializing", "Initializing"],
       planning: ["status.planning", "Planning"],
+      answered: ["status.answered", "Answered"],
+      acted: ["status.acted", "Done"],
       running: ["status.running", "Running"],
       waiting_for_user: ["status.waiting", "Waiting"],
       waiting_for_approval: ["status.waiting", "Waiting"],
@@ -331,7 +352,8 @@ var WorkbenchModel = (function () {
 
   function statusTone(status) {
     var raw = String(status || "idle");
-    if (raw === "running" || raw === "planning" || raw === "review" || raw === "initializing") return "blue";
+    if (raw === "running" || raw === "planning" || raw === "review" || raw === "initializing" || raw === "answered") return "blue";
+    if (raw === "acted") return "green";
     if (raw === "waiting_for_user" || raw === "waiting_for_approval" || raw === "blocked") return "amber";
     if (raw === "paused") return "amber";
     if (raw === "failed") return "red";
@@ -616,6 +638,7 @@ var WorkbenchModel = (function () {
     acceptHint: acceptHint,
     dismissHint: dismissHint,
     generatePlan: generatePlan,
+    dispatch: dispatch,
     sendChat: sendChat,
     fetchFileDiff: fetchFileDiff,
     checkWorkspacePath: checkWorkspacePath,

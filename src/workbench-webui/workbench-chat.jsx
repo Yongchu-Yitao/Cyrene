@@ -338,6 +338,8 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   var [error, setError] = useWbcState("");
   var [sideTab, setSideTab] = useWbcState("overview");
   var [viewerFile, setViewerFile] = useWbcState(null);
+  // True while the backend reads the whole conversation and synthesizes a task.
+  var [toTaskBusy, setToTaskBusy] = useWbcState(false);
   // Streaming runtime for the in-flight request (single concurrent run per page).
   var [runtime, setRuntime] = useWbcState(null); // {chatId, text, progress[], startedAt}
   var runtimeRef = useWbcRef(null);
@@ -593,10 +595,16 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   }
 
   function handleToTask() {
-    if (!activeChat) return;
+    if (!activeChat || toTaskBusy) return;
+    setToTaskBusy(true);
+    setError("");
     model.toTask(activeChat.id).then(function (payload) {
       if (onOpenTask) onOpenTask(payload);
-    }).catch(function (err) { setError(wbcErrorText(err)); });
+    }).catch(function (err) {
+      setError(wbcErrorText(err));
+    }).then(function () {
+      setToTaskBusy(false);
+    });
   }
 
   var running = !!runtime;
@@ -625,6 +633,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         onRename={handleRename}
         onDelete={handleDelete}
         onToTask={handleToTask}
+        toTaskBusy={toTaskBusy}
         onOpenFile={openViewer}
       />
       <WbcSide
@@ -638,6 +647,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         onRename={handleRename}
         onDelete={handleDelete}
         onToTask={handleToTask}
+        toTaskBusy={toTaskBusy}
       />
     </div>
   );
@@ -736,7 +746,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatId, onSelect, onCrea
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onInterrupt, onRetryMessage, onRename, onDelete, onToTask, onOpenFile }) {
+function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onInterrupt, onRetryMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile }) {
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
@@ -778,6 +788,7 @@ function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onIn
           onRename={onRename}
           onDelete={onDelete}
           onToTask={onToTask}
+          toTaskBusy={toTaskBusy}
         />
       ) : (
         <div className="wbc-header">
@@ -838,7 +849,7 @@ function WbcErrorNotice({ message, onRetry }) {
   );
 }
 
-function WbcHeader({ project, chat, running, onRename, onDelete, onToTask }) {
+function WbcHeader({ project, chat, running, onRename, onDelete, onToTask, toTaskBusy }) {
   var [editing, setEditing] = useWbcState(false);
   var [draft, setDraft] = useWbcState(chat.title || "");
   var [menuOpen, setMenuOpen] = useWbcState(false);
@@ -903,8 +914,10 @@ function WbcHeader({ project, chat, running, onRename, onDelete, onToTask }) {
       </div>
       <div className="wbc-header-actions">
         {!isLegacy && (
-          <button type="button" className="wb-btn primary wbc-totask" disabled={running} onClick={onToTask} title={wbcT("workbenchChat.toTaskTitle", "Create a task from this chat")}>
-            {WBC_ICONS.play}<span>{wbcT("workbenchChat.toTask", "Convert to task")}</span>
+          <button type="button" className={"wb-btn primary wbc-totask" + (toTaskBusy ? " is-busy" : "")} disabled={running || toTaskBusy} onClick={onToTask} title={wbcT("workbenchChat.toTaskTitle", "Create a task from this chat")}>
+            {toTaskBusy
+              ? <><span className="wbc-spinner" aria-hidden="true"></span><span>{wbcT("workbenchChat.toTaskBusy", "Analyzing chat…")}</span></>
+              : <>{WBC_ICONS.play}<span>{wbcT("workbenchChat.toTask", "Convert to task")}</span></>}
           </button>
         )}
         {!isLegacy && (
@@ -917,7 +930,7 @@ function WbcHeader({ project, chat, running, onRename, onDelete, onToTask }) {
                 <div className="wbc-menu-scrim" onClick={function () { setMenuOpen(false); }}></div>
                 <div className="wbc-menu">
                   <button type="button" onClick={function () { setMenuOpen(false); setEditing(true); }}>{wbcT("workbenchChat.rename", "Rename chat")}</button>
-                  <button type="button" onClick={function () { setMenuOpen(false); onToTask(); }}>{wbcT("workbenchChat.toTask", "Convert to task")}</button>
+                  <button type="button" disabled={toTaskBusy} onClick={function () { setMenuOpen(false); onToTask(); }}>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</button>
                   <button type="button" className="danger" onClick={function () { setMenuOpen(false); onDelete(); }}>{wbcT("workbenchChat.delete", "Delete chat")}</button>
                 </div>
               </>
@@ -1275,7 +1288,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
 // Right context panel (column 4)
 // ---------------------------------------------------------------------------
 
-function WbcSide({ project, chat, runtime, tab, onTabChange, viewerFile, onOpenFile, onRename, onDelete, onToTask }) {
+function WbcSide({ project, chat, runtime, tab, onTabChange, viewerFile, onOpenFile, onRename, onDelete, onToTask, toTaskBusy }) {
   var hasMap = wbcChatUsedMap(chat, runtime);
   var tabs = [
     { id: "overview", label: wbcT("chat.side.overview", "Overview") },
@@ -1298,7 +1311,7 @@ function WbcSide({ project, chat, runtime, tab, onTabChange, viewerFile, onOpenF
         })}
       </div>
       <div className={"wbc-side-body" + (flush ? " flush" : "")}>
-        {activeTab === "overview" && <WbcOverviewTab chat={chat} onRename={onRename} onDelete={onDelete} onToTask={onToTask} />}
+        {activeTab === "overview" && <WbcOverviewTab chat={chat} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} />}
         {activeTab === "context" && <WbcContextTab project={project} chat={chat} />}
         {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} onOpenFile={onOpenFile} />}
         {activeTab === "viewer" && <WbcViewerTab file={viewerFile} />}
@@ -1638,11 +1651,12 @@ function WbcModelUsage() {
   );
 }
 
-function WbcOverviewTab({ chat, onRename, onDelete, onToTask }) {
+function WbcOverviewTab({ chat, onRename, onDelete, onToTask, toTaskBusy }) {
   if (!chat) {
     return <p className="workbench-muted">{wbcT("workbenchChat.noMessages", "Select or create a chat.")}</p>;
   }
   var usage = chat.usage || {};
+  var convertedTitle = chat.convertedSessionId ? String(chat.convertedTaskTitle || "").trim() : "";
   return (
     <div className="workbench-side-stack">
       <section className="workbench-side-section">
@@ -1665,9 +1679,12 @@ function WbcOverviewTab({ chat, onRename, onDelete, onToTask }) {
             var next = window.prompt(wbcT("workbenchChat.titleLabel", "Chat title"), chat.title || "");
             if (next != null) onRename(String(next).trim() || chat.title);
           }}>{WBC_ICONS.edit}<span>{wbcT("workbenchChat.rename", "Rename chat")}</span></button>
-          <button type="button" onClick={onToTask}>{WBC_ICONS.task}<span>{wbcT("workbenchChat.toTask", "Convert to task")}</span></button>
+          <button type="button" disabled={toTaskBusy} onClick={onToTask}>{WBC_ICONS.task}<span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span></button>
           <button type="button" className="danger" onClick={onDelete}>{WBC_ICONS.trash}<span>{wbcT("workbenchChat.delete", "Delete chat")}</span></button>
         </div>
+        {convertedTitle && (
+          <p className="wbc-converted-note">{wbcT("workbenchChat.convertedNote", "Converted to task")}：<b>{convertedTitle}</b></p>
+        )}
       </section>
     </div>
   );
