@@ -322,6 +322,9 @@ var WorkbenchModel = (function () {
       done: ["status.done", "Done"],
       completed: ["status.done", "Done"],
       skipped: ["status.skipped", "Skipped"],
+      draft: ["status.draft", "Draft"],
+      created: ["status.created", "Created"],
+      modified: ["status.modified", "Modified"],
     };
     return map[raw] ? wbModelT(map[raw][0], map[raw][1]) : raw;
   }

@@ -200,3 +200,54 @@ async def test_workbench_init_task_plan_reports_fallback_on_failure(monkeypatch)
     )
     assert from_llm is False
     assert plan, "fallback plan must not be empty"
+
+
+def test_workbench_promote_file_artifacts_promotes_and_dedups():
+    from webui.routes import _workbench_promote_file_artifacts
+
+    session = {"artifacts": [{"id": "a1", "type": "task_brief", "name": "task-brief.md", "status": "draft"}]}
+    changes = [
+        {"path": "cyrene/Cyrene_v1.py", "status": "modified"},
+        {"path": "cyrene/train.py", "status": "created/updated"},
+        {"path": "scan_channels.py", "status": "created"},
+        {"path": "old.py", "status": "deleted"},            # not a deliverable
+        {"path": "cyrene/Cyrene_v1.py", "status": "modified"},  # duplicate
+    ]
+    added = _workbench_promote_file_artifacts(session, changes, "2026-06-14T00:00:00Z")
+
+    assert added == 3
+    file_arts = [a for a in session["artifacts"] if a["type"] == "file_change"]
+    by_name = {a["name"]: a for a in file_arts}
+    assert set(by_name) == {"Cyrene_v1.py", "train.py", "scan_channels.py"}
+    assert by_name["Cyrene_v1.py"]["status"] == "modified"
+    assert by_name["train.py"]["status"] == "created"
+    assert by_name["train.py"]["path"] == "cyrene/train.py"
+    # task brief is preserved, deletions are not promoted
+    assert any(a["type"] == "task_brief" for a in session["artifacts"])
+    assert "old.py" not in {a.get("path") for a in file_arts}
+
+    # idempotent: re-running adds nothing
+    assert _workbench_promote_file_artifacts(session, changes, "2026-06-14T01:00:00Z") == 0
+
+
+def test_workbench_backfill_file_artifacts_from_runs_and_steps():
+    from webui.routes import _workbench_backfill_file_artifacts
+
+    session = {
+        "artifacts": [{"id": "a1", "type": "task_brief", "name": "task-brief.md", "status": "draft"}],
+        "runs": [{"fileChanges": [
+            {"path": "cyrene/train.py", "status": "created/updated"},
+            {"path": "old.py", "status": "deleted"},
+        ]}],
+        "plan": [{"relatedFiles": [
+            {"path": "cyrene/Cyrene_v1.py", "status": "modified"},
+            {"path": "cyrene/train.py", "status": "modified"},  # also in a run -> merged
+        ]}],
+    }
+    added = _workbench_backfill_file_artifacts(session, "2026-06-14T00:00:00Z")
+
+    assert added == 2  # train.py + Cyrene_v1.py, dedup across run/step
+    names = {a["name"] for a in session["artifacts"] if a["type"] == "file_change"}
+    assert names == {"train.py", "Cyrene_v1.py"}
+    # idempotent
+    assert _workbench_backfill_file_artifacts(session, "2026-06-14T00:00:00Z") == 0

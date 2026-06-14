@@ -1251,7 +1251,7 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   pointer-events: auto;
 }
 
-/* Chat card: inline in card-top, replaces the time on hover */
+/* Chat card: inline in card-top, overlays actions on time without layout shift */
 .wbc-chat-card-right {
   flex: 0 0 auto;
   display: flex;
@@ -1260,21 +1260,32 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
 }
 
 .wbc-chat-card-actions {
-  display: none;
-  position: relative;
+  display: flex;
+  align-items: center;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s ease;
+}
+
+.wbc-chat-card-time {
+  transition: opacity .12s ease;
 }
 
 .wbc-chat-card:hover .wbc-chat-card-time,
 .wbc-chat-card.active .wbc-chat-card-time,
 .wbc-chat-card.menu-open .wbc-chat-card-time {
-  display: none;
+  opacity: 0;
 }
 
 .wbc-chat-card:hover .wbc-chat-card-actions,
 .wbc-chat-card.active .wbc-chat-card-actions,
 .wbc-chat-card.menu-open .wbc-chat-card-actions {
-  display: flex;
-  align-items: center;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .wb-card-menu-btn {
@@ -1982,6 +1993,7 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   font-size: 13px;
   line-height: 1.55;
   color: var(--wb-text);
+  overflow-wrap: anywhere;
 }
 
 .wbp-events {
@@ -1999,6 +2011,7 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   font-size: 12px;
   line-height: 1.45;
   color: var(--wb-muted);
+  overflow-wrap: anywhere;
 }
 
 .wbp-events li::before {

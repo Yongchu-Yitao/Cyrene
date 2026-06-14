@@ -1355,6 +1355,8 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> None:
             session.setdefault("artifacts", [])
             session.setdefault("acceptanceCriteria", [])
             session.setdefault("summary", None)
+            if _workbench_backfill_file_artifacts(session, now):
+                changed = True
     if projects and not payload.get("activeProjectId"):
         payload["activeProjectId"] = projects[0].get("id")
         changed = True
@@ -1870,6 +1872,66 @@ def _workbench_apply_step_file_changes(session: dict[str, Any], step_id: str, fi
         existing = step.get("relatedFiles") if isinstance(step.get("relatedFiles"), list) else []
         step["relatedFiles"] = _workbench_merge_file_changes([*existing, *file_changes])
         break
+
+
+def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: list[dict[str, Any]], now: str) -> int:
+    """Surface files the agent produced as task artifacts (dedup by path).
+
+    Created/modified files are real deliverables, so they belong in the 产物
+    panel alongside the task brief. Without this they only ever showed up under
+    文件变更. Deletions are not deliverables and are skipped. Returns the number
+    of artifacts added so callers can decide whether the store needs writing."""
+    if not file_changes:
+        return 0
+    artifacts = session.get("artifacts") if isinstance(session.get("artifacts"), list) else []
+    known_paths = {
+        str(a.get("path") or a.get("name") or "").strip()
+        for a in artifacts
+        if isinstance(a, dict)
+    }
+    status_map = {
+        "created": "created",
+        "created/updated": "created",
+        "modified": "modified",
+        "renamed": "modified",
+    }
+    added = 0
+    for change in file_changes:
+        if not isinstance(change, dict):
+            continue
+        path = str(change.get("path") or change.get("name") or "").strip()
+        if not path or path in known_paths:
+            continue
+        change_type = str(change.get("status") or change.get("changeType") or "")
+        status = status_map.get(change_type)
+        if not status:  # e.g. deleted — not a produced artifact
+            continue
+        known_paths.add(path)
+        artifacts.append({
+            "id": _short_id("artifact"),
+            "type": "file_change",
+            "name": path.rsplit("/", 1)[-1] or path,
+            "path": path,
+            "status": status,
+            "createdAt": now,
+            "summary": path,
+        })
+        added += 1
+    session["artifacts"] = artifacts
+    return added
+
+
+def _workbench_backfill_file_artifacts(session: dict[str, Any], now: str) -> int:
+    """Derive file_change artifacts from a session's already-recorded runs and
+    plan steps, for tasks that ran before file promotion existed."""
+    changes: list[dict[str, Any]] = []
+    for run in session.get("runs") or []:
+        if isinstance(run, dict):
+            changes.extend(c for c in (run.get("fileChanges") or []) if isinstance(c, dict))
+    for step in session.get("plan") or []:
+        if isinstance(step, dict):
+            changes.extend(c for c in (step.get("relatedFiles") or []) if isinstance(c, dict))
+    return _workbench_promote_file_artifacts(session, _workbench_merge_file_changes(changes), now)
 
 
 def _collect_run_tool_events(session_id: str, run_start_ts: str, run_id: str, workspace_root: Path | None = None) -> list[dict[str, Any]]:
@@ -5445,6 +5507,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                     "summary": "任务目标、约束、计划和验收标准的结构化记录。",
                 }
             ]
+        _workbench_promote_file_artifacts(session, file_changes, now)
         payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)

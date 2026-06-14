@@ -3202,13 +3202,16 @@ function AcceptanceTab({ session, onRefresh }) {
   );
 }
 
+var ARTIFACT_TYPE_LABELS = { task_brief: "任务简报", file_change: "文件" };
+
 function ArtifactsTab({ session }) {
   var artifacts = session && Array.isArray(session.artifacts) ? session.artifacts : [];
   return (
     <div className="workbench-side-stack">
       <SideSection title={"产物 (" + artifacts.length + ")"}>
         {artifacts.length ? artifacts.map(function (artifact, i) {
-          return <div className="workbench-artifact-row" key={artifact.id || i}><b>{artifact.name}</b><small>{artifact.type} · {WorkbenchModel.statusText(artifact.status)}</small><p>{artifact.summary || ""}</p></div>;
+          var typeLabel = ARTIFACT_TYPE_LABELS[artifact.type] || artifact.type;
+          return <div className="workbench-artifact-row" key={artifact.id || i}><b>{artifact.name}</b><small>{typeLabel} · {WorkbenchModel.statusText(artifact.status)}</small><p>{artifact.summary || ""}</p></div>;
         }) : <p className="workbench-muted">当前任务尚未生成产物。</p>}
       </SideSection>
     </div>
