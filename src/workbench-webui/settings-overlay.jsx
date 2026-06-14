@@ -58,12 +58,13 @@ var TABS = [
 // ── Settings Overlay ──
 function SettingsOverlay({
   onClose,
+  initialTab,
   theme: initialTheme,
   actualTheme,
   onToggleTheme,
 }) {
   var { t, lang, setLang } = useWorkbenchI18n();
-  var [tab, setTab] = useStateSt("general");
+  var [tab, setTab] = useStateSt(initialTab || "general");
 
   // ── General state ──
   var [developerMode, setDeveloperMode] = useStateSt(function () {

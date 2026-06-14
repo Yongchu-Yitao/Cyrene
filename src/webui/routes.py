@@ -837,6 +837,7 @@ async def _workbench_run_explore_agent(
     max_tokens: int = 3000,
     timeout: float = 90,
     secondary: bool = False,
+    session_id: str = "",
 ) -> dict[str, Any] | None:
     """Run an LLM that may explore the workspace (list_directory/read_file/glob)
     before answering, and return the JSON object it emits (or None on failure).
@@ -844,52 +845,90 @@ async def _workbench_run_explore_agent(
     Rich workspaces can tempt the model to keep exploring past the turn budget,
     so after ``max_turns`` of tool use we force one final answer WITHOUT tools —
     the model must return the JSON from what it has already gathered.
+
+    When ``session_id`` is given the run is tagged with it (via the agent-state
+    ContextVar) so each LLM "thinking" round and exploration tool call publishes
+    a live SSE event the workbench task card can stream — otherwise this agent
+    works invisibly and the UI can only show a spinner.
     """
-    messages = [{"role": "user", "content": prompt}]
-    for turn in range(max_turns):
+    from cyrene.agent.state import _current_session_id
+
+    sid = str(session_id or "").strip()
+    token = _current_session_id.set(sid) if sid else None
+
+    async def _emit_tool_event(tc: dict[str, Any]) -> None:
+        if not sid:
+            return
         try:
-            response = await asyncio.wait_for(
-                _call_llm(
-                    messages,
-                    tools=_WORKBENCH_EXPLORE_TOOLS,
-                    max_tokens=max_tokens,
-                    secondary=secondary,
-                    thinking="disabled",
-                ),
+            fn = tc.get("function") or {}
+            name = str(fn.get("name") or "").strip()
+            if not name:
+                return
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            await debug.publish_event({
+                "type": "tool_call",
+                "session_id": sid,
+                "tool": name,
+                "args": args,
+                "caller": "explore",
+                "timestamp": _utc_now_iso(),
+            })
+        except Exception:
+            pass  # live progress is best-effort; never break the run for it
+
+    try:
+        messages = [{"role": "user", "content": prompt}]
+        for turn in range(max_turns):
+            try:
+                response = await asyncio.wait_for(
+                    _call_llm(
+                        messages,
+                        tools=_WORKBENCH_EXPLORE_TOOLS,
+                        max_tokens=max_tokens,
+                        secondary=secondary,
+                        thinking="disabled",
+                    ),
+                    timeout=timeout,
+                )
+            except Exception:
+                logger.exception("Workbench explore-agent failed (turn %d)", turn + 1)
+                return None
+            tool_calls = response.get("tool_calls") or []
+            if not tool_calls:
+                return _workbench_parse_json_object(response.get("content") or "")
+            # The assistant tool-call message MUST be appended before the tool
+            # results — a 'tool' message has to follow an assistant message carrying
+            # its tool_calls, otherwise the next request is malformed and rejected.
+            assistant_entry: dict[str, Any] = {"role": "assistant", "content": response.get("content") or "", "tool_calls": tool_calls}
+            if response.get("reasoning_content"):
+                assistant_entry["reasoning_content"] = response["reasoning_content"]
+            messages.append(assistant_entry)
+            for tc in tool_calls:
+                await _emit_tool_event(tc)
+                result = await _workbench_exec_explore_tool(tc, workspace_root)
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+
+        # Turn budget exhausted while still exploring — force a final answer with no
+        # tools available, so the model has to emit the JSON now.
+        messages.append({
+            "role": "user",
+            "content": "请停止探索。基于你已经了解到的信息，现在只返回最终的 JSON 对象本身，不要再调用任何工具，也不要任何额外说明或 Markdown 代码块标记。",
+        })
+        try:
+            final = await asyncio.wait_for(
+                _call_llm(messages, tools=None, max_tokens=max_tokens, secondary=secondary, thinking="disabled"),
                 timeout=timeout,
             )
         except Exception:
-            logger.exception("Workbench explore-agent failed (turn %d)", turn + 1)
+            logger.exception("Workbench explore-agent final answer failed")
             return None
-        tool_calls = response.get("tool_calls") or []
-        if not tool_calls:
-            return _workbench_parse_json_object(response.get("content") or "")
-        # The assistant tool-call message MUST be appended before the tool
-        # results — a 'tool' message has to follow an assistant message carrying
-        # its tool_calls, otherwise the next request is malformed and rejected.
-        assistant_entry: dict[str, Any] = {"role": "assistant", "content": response.get("content") or "", "tool_calls": tool_calls}
-        if response.get("reasoning_content"):
-            assistant_entry["reasoning_content"] = response["reasoning_content"]
-        messages.append(assistant_entry)
-        for tc in tool_calls:
-            result = await _workbench_exec_explore_tool(tc, workspace_root)
-            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
-
-    # Turn budget exhausted while still exploring — force a final answer with no
-    # tools available, so the model has to emit the JSON now.
-    messages.append({
-        "role": "user",
-        "content": "请停止探索。基于你已经了解到的信息，现在只返回最终的 JSON 对象本身，不要再调用任何工具，也不要任何额外说明或 Markdown 代码块标记。",
-    })
-    try:
-        final = await asyncio.wait_for(
-            _call_llm(messages, tools=None, max_tokens=max_tokens, secondary=secondary, thinking="disabled"),
-            timeout=timeout,
-        )
-    except Exception:
-        logger.exception("Workbench explore-agent final answer failed")
-        return None
-    return _workbench_parse_json_object(final.get("content") or "")
+        return _workbench_parse_json_object(final.get("content") or "")
+    finally:
+        if token is not None:
+            _current_session_id.reset(token)
 
 
 async def _workbench_generate_init_form(
@@ -1526,7 +1565,10 @@ async def _workbench_generate_plan_steps(
         "如果是修改已有计划，必须返回完整的修订后计划，保留未被反馈明确要求删除的原步骤，"
         "只调整相关步骤或追加必要的新步骤。"
     )
-    parsed = await _workbench_run_explore_agent(workspace_root, prompt, max_tokens=4000, timeout=120)
+    parsed = await _workbench_run_explore_agent(
+        workspace_root, prompt, max_tokens=4000, timeout=120,
+        session_id=str(session.get("id") or ""),
+    )
     if not isinstance(parsed, dict):
         return fallback, False
     steps = _workbench_coerce_plan_steps(parsed, session)
@@ -2266,7 +2308,10 @@ async def _workbench_verify_acceptance(
         "}\n"
         "只要有任一标准未达成，通常 recommend_reflection 应为 true。"
     )
-    parsed = await _workbench_run_explore_agent(workspace_root, prompt, max_tokens=3000, timeout=120)
+    parsed = await _workbench_run_explore_agent(
+        workspace_root, prompt, max_tokens=3000, timeout=120,
+        session_id=str(session.get("id") or ""),
+    )
     return parsed if isinstance(parsed, dict) else None
 
 

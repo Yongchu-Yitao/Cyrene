@@ -6,6 +6,34 @@ var {
   useRef: useWorkbenchRef,
 } = React;
 
+// Help center external destinations (kept in sync with the About section in
+// settings-overlay.jsx).
+var WB_HELP_DOCS_URL = "https://github.com/ikerrrrrrrrrrr/Cyrene#readme";
+var WB_HELP_FEEDBACK_URL = "https://github.com/ikerrrrrrrrrrr/Cyrene/issues/new";
+
+// Platform-aware keyboard shortcut rendering. Mac shows ⌘/⇧/⌥/⌃ glyphs; other
+// platforms fall back to Ctrl/Shift/Alt text so the help center mirrors whatever
+// modifier the user's OS actually uses.
+function wbIsMacPlatform() {
+  try {
+    var nav = window.navigator || {};
+    var uaData = nav.userAgentData;
+    if (uaData && uaData.platform) return /mac/i.test(uaData.platform);
+    if (nav.platform) return /mac|iphone|ipad|ipod/i.test(nav.platform);
+    return /mac|iphone|ipad|ipod/i.test(nav.userAgent || "");
+  } catch (e) {
+    return false;
+  }
+}
+
+function wbShortcutKey(token, isMac) {
+  if (token === "mod") return isMac ? "⌘" : "Ctrl";
+  if (token === "shift") return isMac ? "⇧" : "Shift";
+  if (token === "alt") return isMac ? "⌥" : "Alt";
+  if (token === "ctrl") return isMac ? "⌃" : "Ctrl";
+  return token;
+}
+
 function wbArgsPreview(args) {
   if (!args || typeof args !== "object") return "";
   var parts = [];
@@ -69,7 +97,7 @@ function wbLiveEventFromSse(data) {
       actor: actor2,
       phase: phase,
       model: String(data.model || ""),
-      body: actor2 + " 正在思考" + (phase ? "（" + phase + "）" : ""),
+      body: actor2 + " 正在思考…",
       live: true,
     };
   }
@@ -112,7 +140,75 @@ function wbMergeLiveEventIntoSession(session, event) {
   return Object.assign({}, session, { events: events, plan: updatedPlan });
 }
 
-function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
+// The live activity feed shown inside the "Agent 正在处理" card. Two sources,
+// unified to {id, time, body}: a running plan step accumulates its own
+// progressEvents (step execution); a non-step background op (规划 / 反思 / 验收)
+// has no running step, so we pull the session-level live events that arrived
+// after the op began. Capped to the most recent lines so the feed stays tight.
+function wbLiveActivityLines(session, runningStep, busyOp) {
+  if (runningStep && Array.isArray(runningStep.progressEvents) && runningStep.progressEvents.length) {
+    return runningStep.progressEvents.slice(-14);
+  }
+  var since = busyOp && busyOp.startedAt ? String(busyOp.startedAt) : "";
+  var events = Array.isArray(session.events) ? session.events : [];
+  var out = [];
+  for (var i = 0; i < events.length; i++) {
+    var e = events[i];
+    if (!e || !e.live) continue;
+    if (["ToolCallEvent", "LlmCallEvent", "SubagentStatusEvent"].indexOf(e.type) < 0) continue;
+    if (since && String(e.createdAt || "") < since) continue;
+    out.push({ id: e.id, time: e.createdAt, body: e.body });
+  }
+  return out.slice(-14);
+}
+
+// True when an unread notification points at whatever the user is *currently*
+// looking at (the open conversation, or the active task session) and the window
+// is actually visible — i.e. the user has already seen the underlying message,
+// so it should not surface as a brand-new unread item.
+function wbNotificationOnScreen(item, view) {
+  if (!item || item.read || !view) return false;
+  if (typeof document !== "undefined" && document.hidden) return false;
+  var meta = (item && item.meta) || {};
+  if (view.page === "chat") {
+    return !!meta.chatId && meta.chatId === view.chatId;
+  }
+  if (!view.page) { // default task view
+    return !!meta.sessionId && meta.sessionId === view.sessionId;
+  }
+  return false;
+}
+
+// Given a freshly-fetched notifications payload, silently mark-as-read any item
+// the user is already seeing and return an adjusted payload whose unread counts
+// exclude them — so the badge never blinks for on-screen content. Counts are
+// decremented (not recomputed) because the server's totals span items beyond the
+// returned page / active tab filter.
+function wbSuppressOnScreenNotifications(payload, view, model) {
+  if (!payload || !Array.isArray(payload.items)) return payload;
+  var hidden = payload.items.filter(function (item) { return wbNotificationOnScreen(item, view); });
+  if (!hidden.length) return payload;
+  var hideIds = hidden.map(function (item) { return item.id; });
+  try { if (model && model.markNotificationsRead) model.markNotificationsRead(hideIds, false); } catch (e) {}
+  var hideSet = {};
+  hideIds.forEach(function (id) { hideSet[id] = true; });
+  var items = payload.items.map(function (item) {
+    return hideSet[item.id] ? Object.assign({}, item, { read: true }) : item;
+  });
+  var unreadByTab = Object.assign({ all: 0, mention: 0, comment: 0, system: 0 }, payload.unreadByTab || {});
+  unreadByTab.all = Math.max(0, Number(unreadByTab.all || 0) - hidden.length);
+  hidden.forEach(function (item) {
+    var key = String((item && item.tab) || "");
+    if (key && key !== "all" && unreadByTab[key] != null) unreadByTab[key] = Math.max(0, unreadByTab[key] - 1);
+  });
+  return Object.assign({}, payload, {
+    items: items,
+    unreadCount: Math.max(0, Number(payload.unreadCount || 0) - hidden.length),
+    unreadByTab: unreadByTab,
+  });
+}
+
+function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   useDataVersion();
   var workbenchI18n = window.useWorkbenchI18n();
   var t = workbenchI18n.t;
@@ -123,20 +219,34 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
   var [loading, setLoading] = useWorkbenchState(true);
   var [error, setError] = useWorkbenchState("");
   var [fullPage, setFullPage] = useWorkbenchState(function () {
-    try { return localStorage.getItem("wb-active-page") || null; } catch (e) { return null; }
+    try {
+      // Returning users resume their last page. First-time users (no page ever
+      // stored AND never welcomed) land on the welcome / get-started page — it
+      // is auto-detected here rather than opened from a rail button.
+      var stored = localStorage.getItem("wb-active-page");
+      if (stored) return stored;
+      if (!localStorage.getItem("cyrene-workbench-welcomed")) return "welcome";
+      return null;
+    } catch (e) { return null; }
   });
   var [rightTab, setRightTab] = useWorkbenchState("context");
   var [expandedStepId, setExpandedStepId] = useWorkbenchState("");
   var [searchOpen, setSearchOpen] = useWorkbenchState(false);
   var [settingsOpen, setSettingsOpen] = useWorkbenchState(false);
+  var [settingsTab, setSettingsTab] = useWorkbenchState("");
   var [newProjectOpen, setNewProjectOpen] = useWorkbenchState(false);
   var [newTaskOpen, setNewTaskOpen] = useWorkbenchState(false);
   var [editProject, setEditProject] = useWorkbenchState(null);
   var [chatCrumb, setChatCrumb] = useWorkbenchState("");
   var [notifications, setNotifications] = useWorkbenchState({ items: [], counts: { all: 0, mention: 0, comment: 0, system: 0 }, unreadByTab: { all: 0, mention: 0, comment: 0, system: 0 }, unreadCount: 0 });
+  var [activeChatId, setActiveChatId] = useWorkbenchState("");
+  // Always-fresh snapshot of what the user is looking at, read inside async
+  // notification callbacks (interval / SSE closures captured once on mount).
+  var activeViewRef = useWorkbenchRef({ page: null, chatId: "", sessionId: "" });
 
   function reloadNotifications(tab, limit) {
     return model.fetchNotifications(tab || "all", limit || 80).then(function (payload) {
+      payload = wbSuppressOnScreenNotifications(payload, activeViewRef.current, model);
       setNotifications({
         items: Array.isArray(payload.items) ? payload.items : [],
         counts: payload.counts || { all: 0, mention: 0, comment: 0, system: 0 },
@@ -178,6 +288,13 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
     } catch (e) {}
   }, [fullPage]);
 
+  // Once the welcome page has been shown, remember it so it never auto-pops
+  // again on subsequent launches. Re-entry stays available from the Help center.
+  useWorkbenchEffect(function () {
+    if (fullPage !== "welcome") return;
+    try { localStorage.setItem("cyrene-workbench-welcomed", "1"); } catch (e) {}
+  }, [fullPage]);
+
   useWorkbenchEffect(function () {
     reloadWorkbench();
     reloadNotifications();
@@ -197,12 +314,49 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
     return undefined;
   }, []);
 
+  // Keep the active-view snapshot current for the notification suppression /
+  // polling closures (which capture refs, not state, to dodge stale values).
+  useWorkbenchEffect(function () {
+    activeViewRef.current = {
+      page: fullPage || null,
+      chatId: activeChatId || "",
+      sessionId: (store && store.activeSessionId) || "",
+    };
+  }, [fullPage, activeChatId, store && store.activeSessionId]);
+
+  // Auto-refresh the notification center on a timer so new items (agent replies,
+  // scheduled-task results, knowledge ingestion…) appear without a page reload —
+  // workbench notifications are persisted server-side but never pushed over SSE.
+  // Polling pauses while the tab is hidden and resumes (with an immediate pull)
+  // on focus / visibility, so a backgrounded window costs nothing.
+  useWorkbenchEffect(function () {
+    var INTERVAL_MS = 30000;
+    var timer = null;
+    function tick() { reloadNotifications(); }
+    function start() { if (!timer) timer = setInterval(tick, INTERVAL_MS); }
+    function stop() { if (timer) { clearInterval(timer); timer = null; } }
+    function onVisibility() {
+      if (document.hidden) { stop(); }
+      else { tick(); start(); }
+    }
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", tick);
+    return function () {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", tick);
+    };
+  }, []);
+
   useWorkbenchEffect(function () {
     function handleRuntimeEvent(data) {
       if (!data || ["tool_call", "llm_call", "subagent_update"].indexOf(data.type) < 0) return;
       setStore(function (prev) {
         var active = prev && prev.activeSession;
-        if (!active || active.status !== "running") return prev;
+        // Merge live activity while a plan step runs, OR while any background
+        // agent op (规划 / 反思 / 验收) is in flight — both feed the activity card.
+        if (!active || (active.status !== "running" && !active.agentBusy)) return prev;
         var dataSessionId = String(data.session_id || "").trim();
         if (dataSessionId && dataSessionId !== active.id) return prev;
         if (!dataSessionId && String(data.caller || "").indexOf("subagent_") !== 0) return prev;
@@ -287,6 +441,31 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
     });
   }
 
+  // Optimistically merge top-level fields into the active session client-side
+  // (no server round-trip) — used for transient UI state like the `agentBusy`
+  // marker that drives the "Agent 正在处理" card while a background agent op
+  // runs. Cleared the moment a server response replaces activeSession.
+  function patchActiveSessionLocal(partial) {
+    if (!partial) return;
+    setStore(function (prev) {
+      if (!prev.activeSession) return prev;
+      var activeId = prev.activeSession.id;
+      function mergeSession(s) {
+        if (!s || s.id !== activeId) return s;
+        return Object.assign({}, s, partial);
+      }
+      var nextProjects = (prev.projects || []).map(function (p) {
+        if (!p || p.id !== prev.activeProjectId) return p;
+        return Object.assign({}, p, { sessions: (p.sessions || []).map(mergeSession) });
+      });
+      return Object.assign({}, prev, {
+        projects: nextProjects,
+        activeProject: nextProjects.find(function (p) { return p.id === prev.activeProjectId; }) || prev.activeProject,
+        activeSession: mergeSession(prev.activeSession),
+      });
+    });
+  }
+
   // New project / task creation now goes through dedicated workbench modals
   // (WorkbenchNewProjectModal / WorkbenchNewTaskModal). These handlers perform
   // the actual API calls; the rail buttons just open the modals.
@@ -300,6 +479,9 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
       setStore(next);
       setExpandedStepId("");
       setRightTab("context");
+      // Land in the freshly-created project's task view — important when the
+      // project was created from the welcome page, so we leave it behind.
+      setFullPage(null);
       return next;
     });
   }
@@ -371,8 +553,40 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
   var isSchedule = fullPage === "schedule";
   var isMemory = fullPage === "memory";
   var isChat = fullPage === "chat";
-  var isModulePage = isKnowledge || isSchedule || isMemory || isChat;
+  var isWelcome = fullPage === "welcome";
+  var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isWelcome;
   var fullPageConfig = fullPage && !isModulePage ? workbenchFullPageConfig(fullPage, setFullPage, store) : null;
+
+  // First-run onboarding (LLM + personality). Driven by the backend onboarding
+  // state — the workbench's own setup flow, independent of the legacy wizard.
+  // It takes over the whole shell (no rails) until both are configured; once the
+  // backend reports needsOnboarding=false the shell falls through to normal.
+  var onboarding = (window.DATA && window.DATA.onboarding) || {};
+  var onboardingActive = onboarding.needsOnboarding != null ? !!onboarding.needsOnboarding : !!needsOnboarding;
+  if (onboardingActive) {
+    return (
+      <div className="workbench-shell wb-ob-shell" data-screen-label="Cyrene · onboarding">
+        <div className="wb-ob-topbar">
+          <div className="workbench-brand">
+            <div className="brand-mark"></div>
+            <strong>Cyrene</strong>
+          </div>
+          <button type="button" className="workbench-icon-btn" onClick={onToggleTheme} title={t("workbench.theme." + (theme === "system" ? "system" : actualTheme === "dark" ? "dark" : "light"))}>
+            {theme === "system" ? (
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" stroke="none"/></svg>
+            ) : actualTheme === "dark" ? (
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+            )}
+          </button>
+        </div>
+        {React.createElement(window.WorkbenchWelcomePage || function () { return <div className="workbench-empty">{t("workbench.welcomeLoading")}</div>; }, {
+          onboarding: onboarding,
+        })}
+      </div>
+    );
+  }
 
   return (
     <div className="workbench-shell" data-screen-label="Cyrene · workbench">
@@ -384,7 +598,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
         notifications={notifications}
         onReloadNotifications={reloadNotifications}
         onSearch={function () { setSearchOpen(true); }}
-        onSettings={function () { setSettingsOpen(true); }}
+        onSettings={function (tab) { setSettingsTab(typeof tab === "string" ? tab : ""); setSettingsOpen(true); }}
+        onNewProject={createProject}
+        onNewTask={createSession}
+        onOpenPage={handleOpenPage}
         theme={theme}
         actualTheme={actualTheme}
         onToggleTheme={onToggleTheme}
@@ -392,7 +609,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
       {fullPageConfig ? (
         <WorkbenchFullPage config={fullPageConfig} onClose={function () { setFullPage(null); }} />
       ) : (
-        <div className={"workbench-grid" + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "")}>
+        <div className={"workbench-grid" + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "")}>
           <ProjectRail
             projects={store.projects}
             activeProjectId={store.activeProjectId}
@@ -408,6 +625,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
               project: store.activeProject,
               onOpenTask: handleChatToTask,
               onActiveChatChange: setChatCrumb,
+              onActiveChatIdChange: setActiveChatId,
             })
           ) : isKnowledge ? (
             React.createElement(window.WorkbenchKnowledgePage || function () { return <div className="workbench-empty">{t("workbench.knowledgeLoading")}</div>; }, { project: store.activeProject, onBack: function () { setFullPage(null); } })
@@ -415,6 +633,17 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
             React.createElement(window.WorkbenchSchedulePage || function () { return <div className="workbench-empty">{t("workbench.scheduleLoading")}</div>; }, { project: store.activeProject, onBack: function () { setFullPage(null); } })
           ) : isMemory ? (
             React.createElement(window.WorkbenchMemoryPage || function () { return <div className="workbench-empty">{t("workbench.memoryLoading")}</div>; }, { project: store.activeProject, onBack: function () { setFullPage(null); } })
+          ) : isWelcome ? (
+            React.createElement(window.WorkbenchWelcomePage || function () { return <div className="workbench-empty">{t("workbench.welcomeLoading")}</div>; }, {
+              project: store.activeProject,
+              hasProjects: Array.isArray(store.projects) && store.projects.length > 0,
+              onNewProject: createProject,
+              onOpenPage: handleOpenPage,
+              onSettings: function (tab) { setSettingsTab(typeof tab === "string" ? tab : ""); setSettingsOpen(true); },
+              theme: theme,
+              actualTheme: actualTheme,
+              onToggleTheme: onToggleTheme,
+            })
           ) : (
           <>
           <TaskRail
@@ -435,6 +664,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
             onSelectSession={selectSession}
             onCreateSession={createSession}
             onInitPatch={patchActiveInit}
+            onLocalPatch={patchActiveSessionLocal}
             onRefresh={function (nextStore) {
               setStore(function (prev) {
                 // Preserve expandedStepId, rightTab, etc. from current UI state
@@ -492,6 +722,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
         window.SettingsOverlay || function () { return null; },
         {
           onClose: function () { setSettingsOpen(false); },
+          initialTab: settingsTab,
           theme: theme,
           actualTheme: actualTheme,
           onToggleTheme: onToggleTheme,
@@ -529,10 +760,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme }) {
   );
 }
 
-function WorkbenchTopbar({ project, session, activePage, chatCrumb, notifications, onReloadNotifications, onSearch, onSettings, theme, actualTheme, onToggleTheme }) {
+function WorkbenchTopbar({ project, session, activePage, chatCrumb, notifications, onReloadNotifications, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = window.useWorkbenchI18n();
   var title = project ? project.name : "Project";
-  var pageLabels = { chat: t("workbench.page.chat"), knowledge: t("workbench.page.knowledge"), schedule: t("workbench.page.schedule"), memory: t("workbench.page.memory") };
+  var pageLabels = { chat: t("workbench.page.chat"), knowledge: t("workbench.page.knowledge"), schedule: t("workbench.page.schedule"), memory: t("workbench.page.memory"), welcome: t("workbench.page.welcome") };
   var sessionTitle = activePage && pageLabels[activePage] ? pageLabels[activePage] : (session ? session.title : t("workbench.page.task"));
   var chatTail = activePage === "chat" ? String(chatCrumb || "").trim() : "";
   var themeTitle = theme === "system" ? t("workbench.theme.system") : actualTheme === "dark" ? t("workbench.theme.dark") : t("workbench.theme.light");
@@ -570,10 +801,8 @@ function WorkbenchTopbar({ project, session, activePage, chatCrumb, notification
         </button>
         <WorkbenchNotificationCenter notifications={notifications} onReload={onReloadNotifications} onSettings={onSettings} />
         <button type="button" className="workbench-icon-btn" onClick={onToggleTheme} title={themeTitle}>{themeIcon}</button>
-        <button type="button" className="workbench-icon-btn" title={t("workbench.help")}>
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
-        </button>
-        <button type="button" className="workbench-icon-btn" onClick={onSettings} title={t("nav.settings")}>
+        <WorkbenchHelpCenter onNewProject={onNewProject} onNewTask={onNewTask} onOpenPage={onOpenPage} onSettings={onSettings} />
+        <button type="button" className="workbench-icon-btn" onClick={function () { onSettings(); }} title={t("nav.settings")}>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
         <div className="workbench-avatar">{WorkbenchModel.initials(DATA.user && DATA.user.name)}</div>
@@ -704,6 +933,140 @@ function WorkbenchNotificationItem({ item, onOpen }) {
         <span className="workbench-notif-item-meta">{item.sourceLabel || item.projectName || item.linkLabel || t("notifications.title")}</span>
       </span>
     </button>
+  );
+}
+
+function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }) {
+  var { t } = window.useWorkbenchI18n();
+  var [open, setOpen] = useWorkbenchState(false);
+  var rootRef = useWorkbenchRef(null);
+  var isMac = useWorkbenchMemo(wbIsMacPlatform, []);
+
+  useWorkbenchEffect(function () {
+    if (!open) return undefined;
+    function handlePointer(event) {
+      if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false);
+    }
+    function handleKey(event) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", handlePointer);
+    document.addEventListener("keydown", handleKey);
+    return function () {
+      document.removeEventListener("mousedown", handlePointer);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [open]);
+
+  function run(action) {
+    setOpen(false);
+    if (typeof action === "function") action();
+  }
+
+  var quickItems = [
+    {
+      id: "get-started", tone: "purple", title: t("help.getStarted"), desc: t("help.getStartedDesc"),
+      icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M5 15c-1.5 1.5-2 5-2 5s3.5-.5 5-2M9 11a9 9 0 0 1 9-9c1.5 0 2 .5 2 2a9 9 0 0 1-9 9M9 11l4 4M9 11l-4-1 2.5-2.5M13 15l1 4 2.5-2.5"/></svg>,
+      action: function () { onOpenPage && onOpenPage("welcome"); },
+    },
+    {
+      id: "new-project", tone: "blue", title: t("help.newProject"), desc: t("help.newProjectDesc"),
+      icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18"/><path d="M7 14h7M7 17h4"/></svg>,
+      action: function () { onNewProject && onNewProject(); },
+    },
+    {
+      id: "new-task", tone: "green", title: t("help.createTask"), desc: t("help.createTaskDesc"),
+      icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="4.5"/><path d="m8 12 2.8 2.8L16.5 9"/></svg>,
+      action: function () { onNewTask && onNewTask(); },
+    },
+    {
+      id: "knowledge", tone: "amber", title: t("help.uploadKnowledge"), desc: t("help.uploadKnowledgeDesc"),
+      icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 15V4"/><path d="m8 8 4-4 4 4"/><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg>,
+      action: function () { onOpenPage && onOpenPage("knowledge"); },
+    },
+    {
+      id: "agent", tone: "purple", title: t("help.connectAgent"), desc: t("help.connectAgentDesc"),
+      icon: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="8.5" width="14" height="11" rx="3.5"/><path d="M12 8.5V4.5M12 4.5a1.5 1.5 0 1 0 0-.01"/><path d="M3.5 13.5v3M20.5 13.5v3"/><circle cx="9.5" cy="13.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="13.5" r="1.1" fill="currentColor" stroke="none"/></svg>,
+      action: function () { onSettings && onSettings("agents"); },
+    },
+  ];
+
+  var shortcuts = [
+    { id: "search", label: t("help.shortcut.search"), keys: ["mod", "K"] },
+    { id: "new-chat", label: t("help.shortcut.newChat"), keys: ["mod", "N"] },
+    { id: "new-task", label: t("help.shortcut.newTask"), keys: ["mod", "T"] },
+    { id: "command-palette", label: t("help.shortcut.commandPalette"), keys: ["mod", "shift", "P"] },
+    { id: "switch-project", label: t("help.shortcut.switchProject"), keys: ["mod", "1–9"] },
+  ];
+
+  var version = (window.DATA && window.DATA.appVersion) || "1.0.0";
+
+  return (
+    <div className={"workbench-help-anchor" + (open ? " open" : "")} ref={rootRef}>
+      <button type="button" className={"workbench-icon-btn" + (open ? " active" : "")} title={t("workbench.help")} onClick={function () { setOpen(!open); }}>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+      </button>
+      {open ? (
+        <div className="workbench-help-popover" role="dialog" aria-label={t("help.title")}>
+          <div className="workbench-help-popover-arrow"></div>
+          <div className="workbench-help-head">
+            <b>{t("help.title")}</b>
+            <button type="button" className="workbench-icon-btn" title={t("common.close")} onClick={function () { setOpen(false); }}>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>
+            </button>
+          </div>
+          <div className="workbench-help-body">
+            <div className="workbench-help-section">
+              <span className="workbench-help-section-title">{t("help.quickStart")}</span>
+              <div className="workbench-help-quick">
+                {quickItems.map(function (item) {
+                  return (
+                    <button key={item.id} type="button" className="workbench-help-quick-item" onClick={function () { run(item.action); }}>
+                      <span className={"workbench-help-quick-icon " + item.tone}>{item.icon}</span>
+                      <span className="workbench-help-quick-main">
+                        <b>{item.title}</b>
+                        <small>{item.desc}</small>
+                      </span>
+                      <svg className="workbench-help-quick-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 6 6 6-6 6"/></svg>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="workbench-help-divider"></div>
+            <div className="workbench-help-section">
+              <span className="workbench-help-section-title">{t("help.shortcuts")}</span>
+              <div className="workbench-help-shortcuts">
+                {shortcuts.map(function (item) {
+                  return (
+                    <div key={item.id} className="workbench-help-shortcut">
+                      <span>{item.label}</span>
+                      <span className="workbench-help-keys">
+                        {item.keys.map(function (token, idx) {
+                          return <kbd key={idx}>{wbShortcutKey(token, isMac)}</kbd>;
+                        })}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="workbench-help-divider"></div>
+            <div className="workbench-help-links">
+              <a className="workbench-help-link" href={WB_HELP_DOCS_URL} target="_blank" rel="noopener noreferrer">
+                <span>{t("help.docs")}</span>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M19 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4.5"/></svg>
+              </a>
+              <a className="workbench-help-link" href={WB_HELP_FEEDBACK_URL} target="_blank" rel="noopener noreferrer">
+                <span>{t("help.feedback")}</span>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M19 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4.5"/></svg>
+              </a>
+            </div>
+          </div>
+          <div className="workbench-help-foot">{t("help.version", { version: version })}</div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1115,6 +1478,18 @@ function useTaskController(session, onRefresh, runtime) {
     setBusy(true);
     return promise.then(apply).catch(fail).finally(function () { setBusy(false); });
   }
+  // Client-only "agent is working" marker that drives the 「Agent 正在处理」card
+  // for background ops that don't enter the `running` status (规划 / 反思 / 验收).
+  function setAgentBusy(op) {
+    if (runtime && runtime.onLocalPatch) runtime.onLocalPatch({ agentBusy: op || null });
+  }
+  // Like run(), but also flips on the activity card + opens the live feed window
+  // (events after startedAt are this op's). Cleared when the server response lands.
+  function runAgentic(op, promise) {
+    setBusy(true);
+    setAgentBusy(Object.assign({ startedAt: new Date().toISOString() }, op || {}));
+    return promise.then(apply).catch(fail).finally(function () { setBusy(false); setAgentBusy(null); });
+  }
   function firstUnresolvedStepIndex(plan) {
     var items = Array.isArray(plan) ? plan : [];
     for (var i = 0; i < items.length; i++) {
@@ -1205,7 +1580,7 @@ function useTaskController(session, onRefresh, runtime) {
     start: function (goalText) {
       var goal = (goalText != null ? String(goalText) : (session.goal || "")).trim();
       if (!goal) return Promise.resolve();
-      return run(model.generatePlan(sid, goal).catch(function () {
+      return runAgentic({ kind: "plan", label: "正在分析任务并生成执行计划…" }, model.generatePlan(sid, goal).catch(function () {
         var constraints = session.constraints || [];
         return patch({
           status: "planning",
@@ -1231,7 +1606,7 @@ function useTaskController(session, onRefresh, runtime) {
           events: model.withEvent(session, "PlanRevised", "执行中补充：" + text),
         }));
       }
-      return run(model.generatePlan(sid, goal, { feedback: text }).catch(function () {
+      return runAgentic({ kind: "plan", label: "正在结合你的补充重新规划…" }, model.generatePlan(sid, goal, { feedback: text }).catch(function () {
         var keepPlan = Array.isArray(session.plan) && session.plan.length ? session.plan : model.buildPlanSteps(goal, session.constraints || []);
         var keepAcceptance = Array.isArray(session.acceptanceCriteria) && session.acceptanceCriteria.length
           ? session.acceptanceCriteria
@@ -1248,7 +1623,7 @@ function useTaskController(session, onRefresh, runtime) {
 
     regeneratePlan: function () {
       var goal = (session.goal || "").trim();
-      return run(model.generatePlan(sid, goal).catch(function () {
+      return runAgentic({ kind: "plan", label: "正在重新生成执行计划…" }, model.generatePlan(sid, goal).catch(function () {
         return patch({ status: "planning", plan: model.buildPlanSteps(goal, session.constraints || []), agentReply: "重新生成失败，已保留基础计划。", events: model.withEvent(session, "PlanGenerated", "重新生成执行计划（兜底）。") });
       }));
     },
@@ -1420,15 +1795,15 @@ function useTaskController(session, onRefresh, runtime) {
 
     // Deep reflection over the task's accumulated history → session.reflection.
     reflect: function (focus) {
-      return run(model.reflect(sid, { focus: focus || "" }));
+      return runAgentic({ kind: "reflect", label: "正在深度反思整个任务…" }, model.reflect(sid, { focus: focus || "" }));
     },
     // Independent acceptance agent verifies criteria against the real results.
     verify: function () {
-      return run(model.verify(sid));
+      return runAgentic({ kind: "verify", label: "正在独立核验验收标准…" }, model.verify(sid));
     },
     // Reflect on a failed task, then fork a fresh session carrying the packet.
     reflectAndFork: function () {
-      return run(model.reflectAndFork(sid));
+      return runAgentic({ kind: "reflect", label: "正在反思并另起新任务…" }, model.reflectAndFork(sid));
     },
     // Accept a sibling-reflection hint → merge its packet into this session.
     acceptHint: function (hintId) {
@@ -1470,6 +1845,7 @@ function TaskWorkArea(props) {
     attachments: attachments,
     mode: mode,
     clearAttachments: function () { setAttachments([]); },
+    onLocalPatch: props.onLocalPatch,
   });
   if (props.loading) {
     return <main className="workbench-main"><div className="workbench-empty">正在加载工作台...</div></main>;
@@ -1569,6 +1945,10 @@ function ReflectionHintBanner({ session, controller }) {
 // Picks the primary middle card for the current task status.
 function StateCard(props) {
   var status = String(props.session.status || "idle");
+  // A background agent op (规划 / 反思 / 验收) is in flight but the task status
+  // hasn't moved to `running` — show the live activity card instead of the now
+  // stale status card (otherwise a 待验收 task just keeps showing 「已完成」).
+  if (props.session.agentBusy && status !== "running") return <AgentActivityCard {...props} />;
   if (status === "planning") return <AgentPlanCard {...props} />;
   if (status === "waiting_for_approval" || status === "waiting_for_user" || status === "blocked") return <ConfirmCard {...props} />;
   if (status === "running") return <AgentActivityCard {...props} />;
@@ -1891,24 +2271,56 @@ function ConfirmCard({ session, controller, onRightTab }) {
   );
 }
 
-// running — Agent 正在处理.
+// running / busy — Agent 正在处理. Streams the agent's live tool calls and
+// thinking rounds (from the running step's progressEvents, or the session-level
+// feed for non-step ops like 规划 / 反思 / 验收) so background work is visible
+// instead of a silent spinner.
 function AgentActivityCard({ session, controller, onRightTab }) {
   var plan = Array.isArray(session.plan) ? session.plan : [];
   var done = plan.filter(function (s) { return s.status === "completed" || s.status === "done"; }).length;
-  var current = plan.filter(function (s) { return s.status === "running"; })[0] || plan[done] || null;
+  var runningStep = plan.filter(function (s) { return s.status === "running"; })[0] || null;
+  var busyOp = session.agentBusy || null;
   var pct = plan.length ? Math.round((done / plan.length) * 100) : 0;
+  var lines = wbLiveActivityLines(session, runningStep, busyOp);
+  var stage = runningStep ? runningStep.title : ((busyOp && busyOp.label) || "执行中");
+  var feedRef = useWorkbenchRef(null);
+  // Keep the newest activity line in view as it streams in.
+  useWorkbenchEffect(function () {
+    var el = feedRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [lines.length]);
   return (
     <WbCard tone="running" icon={<span className="wb-spinner" />} title="Agent 正在处理"
-      badge={<span className="wb-progress-badge">{done} / {plan.length}</span>}>
-      <p className="wb-running-stage">当前阶段：{current ? current.title : "执行中"}</p>
-      <AgentReplyBlock text={session.agentReply || "正在处理当前任务，请稍候…"} />
-      <div className="wb-progress"><span style={{ width: pct + "%" }} /></div>
-      <ul className="wb-step-mini">
-        {plan.map(function (s, i) {
-          var st = (s.status === "completed" || s.status === "done") ? "done" : s.status === "running" ? "active" : "todo";
-          return <li key={s.id} className={st}>{i + 1}. {s.title}</li>;
-        })}
-      </ul>
+      badge={runningStep
+        ? <span className="wb-progress-badge">{done} / {plan.length}</span>
+        : <span className="wb-progress-badge live">处理中</span>}>
+      <p className="wb-running-stage">当前阶段：{stage}</p>
+      {lines.length > 0 ? (
+        <ul className="wb-live-feed" ref={feedRef}>
+          {lines.map(function (ln, i) {
+            var last = i === lines.length - 1;
+            return (
+              <li key={ln.id || i} className={"wb-live-line" + (last ? " latest" : "")}>
+                <span className="wb-live-dot" />
+                <span className="wb-live-body">{ln.body}</span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <AgentReplyBlock text={session.agentReply || "正在处理当前任务，请稍候…"} />
+      )}
+      {runningStep && plan.length > 0 && (
+        <div className="wb-progress"><span style={{ width: pct + "%" }} /></div>
+      )}
+      {runningStep && (
+        <ul className="wb-step-mini">
+          {plan.map(function (s, i) {
+            var st = (s.status === "completed" || s.status === "done") ? "done" : s.status === "running" ? "active" : "todo";
+            return <li key={s.id} className={st}>{i + 1}. {s.title}</li>;
+          })}
+        </ul>
+      )}
     </WbCard>
   );
 }

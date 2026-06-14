@@ -771,7 +771,9 @@ function App() {
   useEffectApp(function () {
     // Only the workbench shell drives --accent here; the legacy shell runs its
     // own accent pipeline, so skip when it's showing to avoid fighting the var.
-    if (needsOnboarding || shellMode === "legacy" || typeof window.WorkbenchApp === "undefined") return;
+    // The workbench now renders during its own onboarding too, so drive accent
+    // regardless of onboarding state (the legacy-shell guard still applies).
+    if (shellMode === "legacy" || typeof window.WorkbenchApp === "undefined") return;
     const root = document.documentElement.style;
     const a = typeof accent === "string" ? accent.trim() : "";
     const m = a.match(/^#([0-9a-f]{6})$/i);
@@ -808,11 +810,15 @@ function App() {
     setThemeMode(order[(idx + 1) % order.length]);
   }
 
-  if (needsOnboarding || shellMode === "legacy" || typeof window.WorkbenchApp === "undefined") {
+  // The legacy shell keeps its own SetupWizard (see LegacyAppShell). The
+  // workbench shell handles onboarding itself — its LLM + personality setup
+  // lives in workbench-webui/, fully independent of the legacy SetupWizard — so
+  // we no longer divert to the legacy shell just because onboarding is pending.
+  if (shellMode === "legacy" || typeof window.WorkbenchApp === "undefined") {
     return <LegacyAppShell />;
   }
 
-  return <window.WorkbenchApp theme={themeMode} actualTheme={actualTheme} onToggleTheme={toggleWorkbenchTheme} />;
+  return <window.WorkbenchApp theme={themeMode} actualTheme={actualTheme} onToggleTheme={toggleWorkbenchTheme} needsOnboarding={needsOnboarding} />;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);

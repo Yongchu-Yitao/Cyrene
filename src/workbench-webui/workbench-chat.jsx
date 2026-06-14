@@ -327,7 +327,7 @@ function wbcCommandMeta(id) {
 // Page
 // ---------------------------------------------------------------------------
 
-function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange }) {
+function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveChatIdChange }) {
   window.useWorkbenchI18n();
   var model = window.WorkbenchChatModel;
   var projectId = project ? project.id : "";
@@ -404,6 +404,13 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange }) {
     if (onActiveChatChange) onActiveChatChange(activeChat ? activeChat.title : "");
     return function () { if (onActiveChatChange) onActiveChatChange(""); };
   }, [activeChat && activeChat.title]);
+
+  // Report the open conversation id up to the shell so the notification center
+  // can treat replies in *this* chat as already-seen (no redundant "new" badge).
+  useWbcEffect(function () {
+    if (onActiveChatIdChange) onActiveChatIdChange(activeChatId || "");
+    return function () { if (onActiveChatIdChange) onActiveChatIdChange(""); };
+  }, [activeChatId]);
 
   // Live tool progress: reuse the global SSE feed (data.jsx) and keep only
   // events tagged with the running conversation's session id.
