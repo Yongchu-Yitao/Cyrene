@@ -255,6 +255,15 @@ var WorkbenchModel = (function () {
     return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/chat", init).then(normalizeStore);
   }
 
+  // Answer a paused run's permission / clarification question → resume the round.
+  function answer(sessionId, questionId, answerText) {
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question_id: questionId || "", answer: answerText || "" }),
+    }).then(normalizeStore);
+  }
+
   function fetchFileDiff(sessionId, path) {
     return apiJson(
       "/api/task-sessions/" + encodeURIComponent(sessionId) + "/files/diff?path=" + encodeURIComponent(path || "")
@@ -640,6 +649,7 @@ var WorkbenchModel = (function () {
     generatePlan: generatePlan,
     dispatch: dispatch,
     sendChat: sendChat,
+    answer: answer,
     fetchFileDiff: fetchFileDiff,
     checkWorkspacePath: checkWorkspacePath,
     patchSession: patchSession,

@@ -430,7 +430,7 @@
     function addTask() {
       props.onChange(tasks.concat([{
         id: "draft_" + Date.now(),
-        title: "新步骤",
+        title: T("init.plan.newStep"),
         goal: "",
         priority: "medium",
         constraints: [],
@@ -440,8 +440,8 @@
     if (!tasks.length) {
       return (
         <div className="wb-init-plan">
-          <div className="wb-init-plan-empty">还没有任务计划。完成问题后，初始化 Agent 会先生成大任务计划。</div>
-          <button type="button" className="wb-btn ghost" onClick={addTask}>手动添加任务</button>
+          <div className="wb-init-plan-empty">{T("init.plan.empty")}</div>
+          <button type="button" className="wb-btn ghost" onClick={addTask}>{T("init.plan.addManually")}</button>
         </div>
       );
     }
@@ -449,10 +449,10 @@
       <div className="wb-init-plan">
         <div className="wb-init-plan-head">
           <div>
-            <b>大任务计划</b>
-            <p>每个大任务会在确认后创建为一个独立 session。</p>
+            <b>{T("init.plan.title")}</b>
+            <p>{T("init.plan.desc")}</p>
           </div>
-          <button type="button" className="wb-btn ghost" onClick={addTask}>添加任务</button>
+          <button type="button" className="wb-btn ghost" onClick={addTask}>{T("init.plan.addTask")}</button>
         </div>
         <div className="wb-init-plan-list">
           {tasks.map(function (task, index) {
@@ -463,7 +463,7 @@
                   <input
                     className="wb-init-input"
                     value={task.title || ""}
-                    placeholder="任务标题"
+                    placeholder={T("init.plan.taskTitle")}
                     onChange={function (e) { updateTask(index, { title: e.target.value }); }}
                   />
                   <select
@@ -471,37 +471,37 @@
                     value={task.priority || "medium"}
                     onChange={function (e) { updateTask(index, { priority: e.target.value }); }}
                   >
-                    <option value="high">高</option>
-                    <option value="medium">中</option>
-                    <option value="low">低</option>
+                    <option value="high">{T("priority.high")}</option>
+                    <option value="medium">{T("priority.medium")}</option>
+                    <option value="low">{T("priority.low")}</option>
                   </select>
-                  <button type="button" className="wb-btn ghost" onClick={function () { removeTask(index); }}>删除</button>
+                  <button type="button" className="wb-btn ghost" onClick={function () { removeTask(index); }}>{T("schedule.delete")}</button>
                 </div>
                 <textarea
                   className="wb-init-textarea"
                   rows={3}
                   value={task.goal || ""}
-                  placeholder="这个 session 要完成的目标、边界和上下文"
+                  placeholder={T("init.plan.goalPlaceholder")}
                   onChange={function (e) { updateTask(index, { goal: e.target.value }); }}
                 />
                 <div className="wb-init-plan-cols">
                   <label>
-                    <span>约束</span>
+                    <span>{T("init.plan.constraints")}</span>
                     <textarea
                       className="wb-init-textarea"
                       rows={2}
                       value={listToLines(task.constraints)}
-                      placeholder="一行一条"
+                      placeholder={T("init.plan.onePerLine")}
                       onChange={function (e) { updateTask(index, { constraints: linesToList(e.target.value) }); }}
                     />
                   </label>
                   <label>
-                    <span>验收标准</span>
+                    <span>{T("init.plan.acceptanceCriteria")}</span>
                     <textarea
                       className="wb-init-textarea"
                       rows={2}
                       value={listToLines(task.acceptanceCriteria)}
-                      placeholder="一行一条"
+                      placeholder={T("init.plan.onePerLine")}
                       onChange={function (e) { updateTask(index, { acceptanceCriteria: linesToList(e.target.value) }); }}
                     />
                   </label>
@@ -648,18 +648,18 @@
       <div className="wb-init">
         <div className="wb-init-head">
           <div className="wb-init-head-main">
-            <h1>初始化项目</h1>
-            <span className={"workbench-status-pill " + (completed ? "green" : "blue")}>{completed ? "已完成" : "初始化中"}</span>
+            <h1>{T("init.title")}</h1>
+            <span className={"workbench-status-pill " + (completed ? "green" : "blue")}>{completed ? T("status.done") : T("status.initializing")}</span>
             <span className="wb-init-head-project">{project ? project.name : ""}</span>
           </div>
           {!completed && !planReady && (
-            <button type="button" className="wb-btn ghost" disabled={generating} onClick={regenerate}>{generating ? "生成中…" : "重新生成问题"}</button>
+            <button type="button" className="wb-btn ghost" disabled={generating} onClick={regenerate}>{generating ? T("init.generating") : T("init.regenerateQuestions")}</button>
           )}
         </div>
 
         <div className="wb-init-scroll">
           {!init.generated && generating && (
-            <div className="wb-init-generating"><span className="wb-spinner" /> Agent 正在初始化项目中…</div>
+            <div className="wb-init-generating"><span className="wb-spinner" /> {T("init.agentInitializing")}</div>
           )}
 
           {init.generated && (
@@ -672,7 +672,7 @@
               </div>
 
               {generating && (
-                <div className="wb-init-generating"><span className="wb-spinner" /> 正在重新生成问题…</div>
+                <div className="wb-init-generating"><span className="wb-spinner" /> {T("init.regeneratingQuestions")}</div>
               )}
 
               {!showPlan && (
@@ -685,7 +685,7 @@
                     <button type="button" className="wb-init-section-head" onClick={function () { setExpanded(open ? "" : section.id); }}>
                       <span className="wb-init-section-n">{sIdx + 1}.</span>
                       <b>{section.title}</b>
-                      {done && <span className="wb-init-section-done">已完成</span>}
+                      {done && <span className="wb-init-section-done">{T("status.done")}</span>}
                       <i className="wb-init-chevron">{open ? "⌃" : "⌄"}</i>
                     </button>
                     {open && (
@@ -716,10 +716,10 @@
                     className="wb-init-textarea"
                     rows={2}
                     value={feedback}
-                    placeholder="告诉初始化 Agent 如何调整计划，例如：先做核心部分，其他后续迭代。"
+                    placeholder={T("init.feedbackPlaceholder")}
                     onChange={function (e) { setFeedback(e.target.value); }}
                   />
-                  <button type="button" className="wb-btn ghost" disabled={planning} onClick={revisePlan}>{planning ? "调整中…" : "让 Agent 调整计划"}</button>
+                  <button type="button" className="wb-btn ghost" disabled={planning} onClick={revisePlan}>{planning ? T("init.revising") : T("init.revisePlan")}</button>
                 </div>
               )}
             </React.Fragment>
@@ -730,13 +730,13 @@
 
         <div className="wb-init-foot">
           <div className="wb-init-foot-hint">
-            {completed ? "项目初始化已完成。你仍可以修改问题答案并保存。"
-              : planReady ? "确认后会按拆分好的步骤逐步推进。"
-                : "完成问题后会生成可执行的计划。"}
+            {completed ? T("init.foot.completed")
+              : planReady ? T("init.foot.planReady")
+                : T("init.foot.questions")}
           </div>
-          {completed && <button type="button" className="wb-btn primary" disabled={busy} onClick={saveCompletedAnswers}>{busy ? "保存中…" : "保存修改"}</button>}
-          {!completed && !planReady && <button type="button" className="wb-btn primary" disabled={busy} onClick={complete}>{busy ? "生成计划中…" : "完成问题并生成计划"}</button>}
-          {!completed && planReady && <button type="button" className="wb-btn primary" disabled={busy || !taskPlan.length} onClick={confirmPlan}>{busy ? "创建中…" : "确认计划并创建 sessions"}</button>}
+          {completed && <button type="button" className="wb-btn primary" disabled={busy} onClick={saveCompletedAnswers}>{busy ? T("settings.saving") : T("init.saveChanges")}</button>}
+          {!completed && !planReady && <button type="button" className="wb-btn primary" disabled={busy} onClick={complete}>{busy ? T("init.generatingPlan") : T("init.completeQuestions")}</button>}
+          {!completed && planReady && <button type="button" className="wb-btn primary" disabled={busy || !taskPlan.length} onClick={confirmPlan}>{busy ? T("common.creating") : T("init.confirmPlan")}</button>}
         </div>
       </div>
     );
@@ -760,7 +760,7 @@
     // the user has moved on to confirming the plan.
     rows.forEach(function (row, i) { row.active = !planReady && i === firstIncomplete; });
     rows.push({
-      label: planReady ? "确认计划并创建 sessions" : "生成大任务计划",
+      label: planReady ? T("init.confirmPlan") : T("init.progress.generatePlan"),
       done: completed,
       active: !completed && (planReady || firstIncomplete === -1),
     });

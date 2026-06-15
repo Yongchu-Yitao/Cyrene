@@ -285,9 +285,13 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
 
             try:
                 from cyrene.entities import list_entities
-                if resolved_workspace == "default":
-                    entities = await list_entities(db_path, has_due_date=True, limit=500)
-                    events.extend(_entity_events(entities, start_dt, end_dt))
+                # Scope entity deadlines (日程) to this project, mirroring the
+                # task scoping above. Agent-created entities (track_entity) carry
+                # the project_id; legacy / auto-extracted ones default to "default".
+                entities = await list_entities(
+                    db_path, has_due_date=True, project_id=resolved_workspace, limit=500
+                )
+                events.extend(_entity_events(entities, start_dt, end_dt))
             except Exception:  # noqa: BLE001
                 # Entities are optional context; never fail the whole calendar
                 # because the entity store hiccuped.

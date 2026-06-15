@@ -123,11 +123,14 @@ CREATE TABLE IF NOT EXISTS entities (
     source              TEXT DEFAULT 'extracted',
     source_round_id     TEXT,
     confidence          REAL DEFAULT 1.0,
-    metadata            TEXT DEFAULT '{}'
+    metadata            TEXT DEFAULT '{}',
+    project_id          TEXT DEFAULT 'default'
 );
 CREATE INDEX IF NOT EXISTS idx_entities_type   ON entities(type);
 CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status);
 CREATE INDEX IF NOT EXISTS idx_entities_due    ON entities(due_date);
+-- idx_entities_project_id is created in init_db() AFTER the ALTER migration, so
+-- it also lands on pre-existing DBs whose CREATE TABLE above was a no-op.
 
 CREATE TABLE IF NOT EXISTS entity_candidates (
     id              TEXT PRIMARY KEY,
@@ -231,6 +234,14 @@ async def init_db(db_path: str) -> None:
             pass  # Column already exists
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_project_id ON scheduled_tasks(project_id)"
+        )
+        # Migration: scope entities to a Workbench project (calendar 日程 view).
+        try:
+            await db.execute("ALTER TABLE entities ADD COLUMN project_id TEXT DEFAULT 'default'")
+        except Exception:
+            pass  # Column already exists
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entities_project_id ON entities(project_id)"
         )
         try:
             await db.execute("ALTER TABLE kb_documents ADD COLUMN content_hash TEXT DEFAULT ''")

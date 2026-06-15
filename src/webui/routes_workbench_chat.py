@@ -656,6 +656,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 assistant_entry["attachments"] = files
             fresh_chat.setdefault("messages", []).append(assistant_entry)
             fresh_chat["status"] = "idle"
+            fresh_chat.pop("pendingQuestion", None)
             fresh_chat["updatedAt"] = assistant_entry["createdAt"]
             _write_chats_store(fresh)
             if not command and not retry:
@@ -679,6 +680,21 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 fresh_chat["status"] = "idle"
                 _write_chats_store(fresh)
 
+        def _stash_chat_pending(pending: dict[str, Any] | None) -> None:
+            """Persist a paused run's pending question on the chat record so the
+            transcript shows an answer prompt (not the raw awaiting-user sentinel)."""
+            fresh = _read_chats_store()
+            fresh_chat = _find_chat(fresh, chat_id)
+            if not fresh_chat:
+                return
+            fresh_chat["status"] = "idle"
+            if pending:
+                fresh_chat["pendingQuestion"] = pending
+            else:
+                fresh_chat.pop("pendingQuestion", None)
+            fresh_chat["updatedAt"] = _utc_now_iso()
+            _write_chats_store(fresh)
+
         if not wants_stream:
             try:
                 reply = await _run()
@@ -686,6 +702,10 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 logger.exception("Workbench chat run failed for %s", chat_id)
                 _settle_status()
                 return JSONResponse({"error": "agent run failed", "detail": str(exc)}, status_code=502)
+            if reply == R._AWAITING_USER_SENTINEL:
+                pending = R._workbench_pending_question_for(chat_id)
+                _stash_chat_pending(pending)
+                return {"ok": True, "awaitingUser": True, "pendingQuestion": pending, "userMessage": _public_message(user_entry), "retry": retry}
             assistant_entry = _finalize(reply)
             return {"ok": True, "userMessage": _public_message(user_entry), "assistantMessage": assistant_entry, "retry": retry}
 
@@ -730,6 +750,13 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                         "error": "model_call_failed",
                         "message": str(exc).strip() or exc.__class__.__name__,
                     })
+                    return
+                if reply == R._AWAITING_USER_SENTINEL:
+                    # Run paused for a permission / clarification answer — surface
+                    # the question instead of streaming the sentinel as a reply.
+                    pending = R._workbench_pending_question_for(chat_id)
+                    _stash_chat_pending(pending)
+                    yield _ndjson_line({"type": "awaiting_user", "pending_question": pending})
                     return
                 if not saw_reply_events:
                     yield _ndjson_line({"type": "reply_start"})
@@ -826,6 +853,83 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             meta={"chatId": chat_id, "sessionId": session["id"]},
         )
         return {"ok": True, "session": session, **store}
+
+    @router.post("/api/workbench/chats/{chat_id}/answer")
+    async def api_workbench_chat_answer(chat_id: str, request: Request):
+        """Answer a paused chat run's permission / clarification question and
+        resume the SAME round. Returns the continued reply (appended as an
+        assistant message) or a follow-up question. Session-scoped to this chat."""
+        body = await request.json()
+        question_id = str(body.get("question_id") or "").strip()
+        answer_text = str(body.get("answer") or body.get("selected_option") or "").strip()
+        if not question_id or not answer_text:
+            return JSONResponse({"error": "question_id and answer are required"}, status_code=400)
+        payload = _read_chats_store()
+        chat = _find_chat(payload, chat_id)
+        if not chat:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        pending = chat.get("pendingQuestion") if isinstance(chat.get("pendingQuestion"), dict) else None
+        if not pending or str(pending.get("id") or "") != question_id:
+            return JSONResponse({"error": "no matching pending question"}, status_code=409)
+
+        R = _routes()
+        project_id = str(chat.get("projectId") or "")
+        state_len_before = len(_session_state_messages(chat_id))
+        # Chat runs are not workspace-confined (see send: run_agent without
+        # workspace_dir), so resume with the global scope too.
+        try:
+            reply = await R._workbench_answer_pending(chat_id, question_id, answer_text, "")
+        except Exception as exc:
+            logger.exception("Workbench chat answer-resume failed for %s", chat_id)
+            return JSONResponse({"error": "answer resume failed", "detail": str(exc)}, status_code=502)
+
+        if reply == R._AWAITING_USER_SENTINEL:
+            new_pending = R._workbench_pending_question_for(chat_id)
+            _stash_chat_pending_for(chat_id, new_pending)
+            return {"ok": True, "awaitingUser": True, "pendingQuestion": new_pending}
+
+        trace, usage, files = _extract_exchange_meta(_session_state_messages(chat_id), state_len_before)
+        fresh = _read_chats_store()
+        fresh_chat = _find_chat(fresh, chat_id)
+        if not fresh_chat:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        assistant_entry: dict[str, Any] = {
+            "id": _short_id("msg"),
+            "role": "assistant",
+            "content": str(reply or ""),
+            "createdAt": _utc_now_iso(),
+            "model": fresh_chat.get("model") or "",
+        }
+        if trace:
+            assistant_entry["trace"] = trace
+        if any(usage.values()):
+            assistant_entry["usage"] = usage
+        if files:
+            assistant_entry["attachments"] = files
+        fresh_chat.setdefault("messages", []).append(assistant_entry)
+        fresh_chat["status"] = "idle"
+        fresh_chat.pop("pendingQuestion", None)
+        fresh_chat["updatedAt"] = assistant_entry["createdAt"]
+        _write_chats_store(fresh)
+        if project_id:
+            R.schedule_capture(_project_data_key(project_id), answer_text, str(reply or ""))
+        return {"ok": True, "awaitingUser": False, "assistantMessage": _public_message(assistant_entry)}
+
+
+def _stash_chat_pending_for(chat_id: str, pending: dict[str, Any] | None) -> None:
+    """Module-level twin of the send handler's ``_stash_chat_pending`` (which is a
+    closure): persist / clear a chat's pending question by id."""
+    payload = _read_chats_store()
+    chat = _find_chat(payload, chat_id)
+    if not chat:
+        return
+    chat["status"] = "idle"
+    if pending:
+        chat["pendingQuestion"] = pending
+    else:
+        chat.pop("pendingQuestion", None)
+    chat["updatedAt"] = _utc_now_iso()
+    _write_chats_store(payload)
 
 
 async def remove_project_chats(project_id: str) -> int:

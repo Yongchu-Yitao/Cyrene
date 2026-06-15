@@ -504,7 +504,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
 
   function handleDeleteSession(session) {
     if (!session) return;
-    if (!window.confirm("确定删除任务「" + (session.title || "此任务") + "」吗？删除后无法恢复。")) return;
+    if (!window.confirm(t("task.confirmDelete", { name: session.title || t("task.thisTask") }))) return;
     model.deleteSession(session.id).then(function (next) {
       setStore(next);
       setExpandedStepId("");
@@ -1277,7 +1277,7 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
                 <button
                   type="button"
                   className="wb-card-menu-btn"
-                  title="更多操作"
+                  title={t("common.moreActions")}
                   onClick={function (e) { e.stopPropagation(); setMenuId(isMenuOpen ? "" : session.id); }}
                 >
                   {ICONS.dots}
@@ -1288,7 +1288,7 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
                       e.stopPropagation();
                       setMenuId("");
                       onDeleteSession && onDeleteSession(session);
-                    }}>删除任务</button>
+                    }}>{t("rail.deleteTask")}</button>
                   </div>
                 )}
               </div>
@@ -1600,6 +1600,16 @@ function useTaskController(session, onRefresh, runtime) {
           events: model.withEvent(session, "PlanGenerated", "生成基础执行计划（兜底）。"),
         });
       }));
+    },
+
+    // Answer a paused run's permission / clarification question → resume the
+    // round. The server returns either the continued reply or a follow-up
+    // question; apply() swaps the card accordingly.
+    answer: function (questionId, optionText) {
+      var qid = String(questionId || "").trim();
+      var ans = String(optionText || "").trim();
+      if (!qid || !ans) return Promise.resolve();
+      return runAgentic({ kind: "answer", label: "正在继续…" }, model.answer(sid, qid, ans));
     },
 
     // answered / acted → promote this exchange into a real, planned task.
@@ -1986,6 +1996,10 @@ function StateCard(props) {
   // hasn't moved to `running` — show the live activity card instead of the now
   // stale status card (otherwise a 待验收 task just keeps showing 「已完成」).
   if (props.session.agentBusy && status !== "running") return <AgentActivityCard {...props} />;
+  // A run paused for a permission / clarification answer — show the question card
+  // (with answer buttons) ahead of the status card, so the round can resume.
+  var pq = props.session.pendingQuestion;
+  if (pq && pq.id) return <AgentQuestionCard {...props} />;
   if (status === "planning") return <AgentPlanCard {...props} />;
   if (status === "answered") return <AgentReplyCard {...props} />;
   if (status === "acted") return <AgentReplyCard {...props} acted={true} />;
@@ -2029,7 +2043,7 @@ function sessionSummaryText(session) {
   if (summary && typeof summary === "object") {
     summary = summary.text || summary.body || summary.content || summary.summary || "";
   }
-  return compactText(summary || session.goal || session.agentReply || "Agent 会在执行过程中生成这个 session 的内容总结。", 128);
+  return compactText(summary || session.goal || session.agentReply || wbT("task.summaryFallback", "Agent will generate a summary for this session during execution."), 128);
 }
 
 function TaskHeader({ project, session, controller, onRightTab, onSelectSession }) {
@@ -2094,13 +2108,13 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession 
                 if (e.key === "Enter") saveTitle();
                 if (e.key === "Escape") { setDraftTitle(session.title || ""); setEditing(false); }
               }}
-              aria-label="任务标题"
+              aria-label={wbT("task.titleLabel", "Task title")}
             />
           ) : (
             <h1 title={session.title}>{session.title}</h1>
           )}
           {!editing && (
-            <button type="button" className="wb-th-iconbtn" onClick={function () { setEditing(true); }} title="修改标题">
+            <button type="button" className="wb-th-iconbtn" onClick={function () { setEditing(true); }} title={wbT("task.editTitle", "Edit title")}>
               {ICONS.edit}
             </button>
           )}
@@ -2110,7 +2124,7 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession 
           <span className="wb-th-summary-text">{sessionSummaryText(session)}</span>
         </p>
         <div className="wb-th-meta">
-          <span>优先级 {priorityText(session.priority)}</span>
+          <span>{wbT("task.priorityPrefix", "Priority {priority}", { priority: priorityText(session.priority) })}</span>
           <span>{project.name}</span>
         </div>
       </div>
@@ -2120,13 +2134,13 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession 
           className="wb-th-control-btn wb-th-pause"
           disabled={controller.busy || status === "paused" || status === "completed" || status === "cancelled"}
           onClick={function () { status === "running" ? controller.interrupt() : controller.pause(); }}
-          title="暂停任务"
-          aria-label="暂停任务"
+          title={wbT("task.action.pauseTask", "Pause task")}
+          aria-label={wbT("task.action.pauseTask", "Pause task")}
         >
           {ICONS.pause}
         </button>
         <div className="wb-th-menu-wrap">
-          <button type="button" className="wb-th-control-btn wb-th-menu-btn" onClick={function () { setMenuOpen(!menuOpen); }} title="详情菜单" aria-label="详情菜单">
+          <button type="button" className="wb-th-control-btn wb-th-menu-btn" onClick={function () { setMenuOpen(!menuOpen); }} title={wbT("task.detailMenu", "Details menu")} aria-label={wbT("task.detailMenu", "Details menu")}>
             {ICONS.dots}
           </button>
           {menuOpen && (
@@ -2137,10 +2151,10 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession 
                   return <button key={"act" + i} type="button" disabled={controller.busy} onClick={function () { setMenuOpen(false); a.onClick(); }}>{a.label}</button>;
                 })}
                 {menuActions.length > 0 && <div className="wb-th-menu-sep" />}
-                <button type="button" onClick={function () { setMenuOpen(false); onRightTab && onRightTab("context"); }}>查看上下文</button>
-                <button type="button" onClick={function () { setMenuOpen(false); onRightTab && onRightTab("logs"); }}>运行日志</button>
-                <button type="button" onClick={function () { setMenuOpen(false); onRightTab && onRightTab("acceptance"); }}>验收标准</button>
-                <button type="button" onClick={function () { setMenuOpen(false); focusComposer(); }}>编辑任务内容</button>
+                <button type="button" onClick={function () { setMenuOpen(false); onRightTab && onRightTab("context"); }}>{wbT("task.menu.viewContext", "View context")}</button>
+                <button type="button" onClick={function () { setMenuOpen(false); onRightTab && onRightTab("logs"); }}>{wbT("task.menu.runLogs", "Run logs")}</button>
+                <button type="button" onClick={function () { setMenuOpen(false); onRightTab && onRightTab("acceptance"); }}>{wbT("task.menu.acceptance", "Acceptance criteria")}</button>
+                <button type="button" onClick={function () { setMenuOpen(false); focusComposer(); }}>{wbT("task.menu.editTask", "Edit task content")}</button>
               </div>
             </>
           )}
@@ -2157,50 +2171,50 @@ function headerMenuActions(status, controller, session, project, onSelectSession
   function openNext() { openNextSession(session, project, onSelectSession); }
   if (status === "answered" || status === "acted") {
     return [
-      { label: "整理成任务", onClick: function () { controller.promoteToPlan(); } },
-      { label: "创建后续任务", onClick: function () { controller.createFollowUp(); } },
+      { label: wbT("task.action.promoteToTask", "Make it a task"), onClick: function () { controller.promoteToPlan(); } },
+      { label: wbT("task.action.createFollowUp", "Create follow-up task"), onClick: function () { controller.createFollowUp(); } },
     ];
   }
   if (status === "planning") {
     return [
-      { label: "批准执行", onClick: function () { controller.approvePlan(); } },
-      { label: "取消", onClick: function () { controller.cancel(); } },
+      { label: wbT("task.action.approveExecution", "Approve execution"), onClick: function () { controller.approvePlan(); } },
+      { label: wbT("common.cancel", "Cancel"), onClick: function () { controller.cancel(); } },
     ];
   }
   if (status === "waiting_for_approval" || status === "waiting_for_user" || status === "blocked") {
     return [
-      { label: "批准", onClick: function () { controller.execute(); } },
-      { label: "拒绝", onClick: function () { controller.reject(); } },
+      { label: wbT("task.action.approveExecution", "Approve"), onClick: function () { controller.execute(); } },
+      { label: wbT("task.action.reject", "Reject"), onClick: function () { controller.reject(); } },
     ];
   }
   if (status === "paused") {
     return [
-      { label: "继续任务", onClick: function () { controller.resume(); } },
-      { label: "取消", onClick: function () { controller.cancel(); } },
+      { label: wbT("task.action.resumeTask", "Resume task"), onClick: function () { controller.resume(); } },
+      { label: wbT("common.cancel", "Cancel"), onClick: function () { controller.cancel(); } },
     ];
   }
   if (status === "failed") {
     return [
-      { label: "重试", onClick: function () { controller.retry(); } },
-      { label: "取消", onClick: function () { controller.cancel(); } },
+      { label: wbT("task.action.retry", "Retry"), onClick: function () { controller.retry(); } },
+      { label: wbT("common.cancel", "Cancel"), onClick: function () { controller.cancel(); } },
     ];
   }
   if (status === "review" || status === "done") {
     return [
-      { label: "标记完成", onClick: function () { controller.markComplete(); } },
-      { label: "创建后续任务", onClick: function () { controller.createFollowUp(); } },
-      { label: "打开下一个任务", onClick: openNext },
+      { label: wbT("task.action.markComplete", "Mark complete"), onClick: function () { controller.markComplete(); } },
+      { label: wbT("task.action.createFollowUp", "Create follow-up task"), onClick: function () { controller.createFollowUp(); } },
+      { label: wbT("task.action.openNext", "Open next task"), onClick: openNext },
     ];
   }
   if (status === "completed") {
     return [
-      { label: "重新打开", onClick: function () { controller.reopen(); } },
-      { label: "创建后续任务", onClick: function () { controller.createFollowUp(); } },
-      { label: "打开下一个任务", onClick: openNext },
+      { label: wbT("task.action.reopen", "Reopen"), onClick: function () { controller.reopen(); } },
+      { label: wbT("task.action.createFollowUp", "Create follow-up task"), onClick: function () { controller.createFollowUp(); } },
+      { label: wbT("task.action.openNext", "Open next task"), onClick: openNext },
     ];
   }
   if (status === "cancelled") {
-    return [{ label: "重新打开", onClick: function () { controller.reopen(); } }];
+    return [{ label: wbT("task.action.reopen", "Reopen"), onClick: function () { controller.reopen(); } }];
   }
   return [];
 }
@@ -2259,28 +2273,28 @@ function TaskBriefCard({ session, controller }) {
   var accept = Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : [];
   var hasGoal = !!goal;
   return (
-    <WbCard tone="brief" icon={ICONS.target} title="任务详情">
+    <WbCard tone="brief" icon={ICONS.target} title={wbT("task.card.details", "Task details")}>
       {hasGoal ? (
         <div className="wb-brief">
-          <div className="wb-brief-row"><label>任务目标</label><p>{goal}</p></div>
+          <div className="wb-brief-row"><label>{wbT("task.field.goal", "Task goal")}</label><p>{goal}</p></div>
           {constraints.length > 0 && (
-            <div className="wb-brief-row"><label>执行约束</label>
+            <div className="wb-brief-row"><label>{wbT("task.field.constraints", "Constraints")}</label>
               <ul className="wb-bullet">{constraints.map(function (c, i) { return <li key={i}>{c}</li>; })}</ul>
             </div>
           )}
           {accept.length > 0 && (
-            <div className="wb-brief-row"><label>验收标准</label>
+            <div className="wb-brief-row"><label>{wbT("task.field.acceptance", "Acceptance criteria")}</label>
               <ul className="wb-bullet">{accept.map(function (a) { return <li key={a.id}>{a.text}</li>; })}</ul>
             </div>
           )}
         </div>
       ) : (
-        <p className="wb-card-hint">先在下方输入框描述这个任务的目标、边界和验收标准，Agent 会把它整理成结构化任务，然后再开始执行。</p>
+        <p className="wb-card-hint">{wbT("task.brief.emptyHint", "Describe the task goal, boundaries, and acceptance criteria below. The agent will turn it into a structured task before execution.")}</p>
       )}
       <WbActions>
-        <WbBtn kind="primary" disabled={controller.busy || !hasGoal} onClick={function () { controller.start(); }}>开始执行</WbBtn>
-        {accept.length > 0 && <WbBtn kind="ghost" disabled={controller.busy} onClick={function () { controller.regeneratePlan(); }}>重新规划</WbBtn>}
-        <WbBtn kind="ghost" disabled={controller.busy} onClick={focusComposer}>编辑任务</WbBtn>
+        <WbBtn kind="primary" disabled={controller.busy || !hasGoal} onClick={function () { controller.start(); }}>{wbT("task.action.generatePlan", "Generate plan")}</WbBtn>
+        {accept.length > 0 && <WbBtn kind="ghost" disabled={controller.busy} onClick={function () { controller.regeneratePlan(); }}>{wbT("task.action.replan", "Replan")}</WbBtn>}
+        <WbBtn kind="ghost" disabled={controller.busy} onClick={focusComposer}>{wbT("task.action.editTask", "Edit task")}</WbBtn>
       </WbActions>
     </WbCard>
   );
@@ -2290,12 +2304,12 @@ function TaskBriefCard({ session, controller }) {
 function AgentPlanCard({ session, controller, onRightTab }) {
   var plan = Array.isArray(session.plan) ? session.plan : [];
   return (
-    <WbCard tone="agent" icon={ICONS.spark} title="Agent 回复">
-      <AgentReplyBlock text={session.agentReply || "我将按以下步骤执行当前任务。"} />
-      <div className="wb-brief-row"><label>执行步骤</label>
+    <WbCard tone="agent" icon={ICONS.spark} title={wbT("task.card.agentReply", "Agent reply")}>
+      <AgentReplyBlock text={session.agentReply || wbT("task.plan.defaultReply", "I will execute this task with the following steps.")} />
+      <div className="wb-brief-row"><label>{wbT("task.field.steps", "Execution steps")}</label>
         <ol className="wb-ordered">{plan.map(function (s) { return <li key={s.id}>{s.title}</li>; })}</ol>
       </div>
-      <p className="wb-card-hint">是否继续？批准后会进入确认环节，再开始执行。</p>
+      <p className="wb-card-hint">{wbT("task.plan.hint", "Continue? After approval, Cyrene will move to confirmation before execution starts.")}</p>
     </WbCard>
   );
 }
@@ -2310,25 +2324,75 @@ function AgentReplyCard({ session, controller, onRightTab, acted }) {
   var fileChanges = (lastRun && Array.isArray(lastRun.fileChanges)) ? lastRun.fileChanges : [];
   var toolCalls = (lastRun && Array.isArray(lastRun.toolCalls)) ? lastRun.toolCalls : [];
   return (
-    <WbCard tone={acted ? "done" : "agent"} icon={acted ? ICONS.check : ICONS.spark} title={acted ? "Agent 已执行" : "Agent 回复"}>
-      <AgentReplyBlock text={session.agentReply || (acted ? "已按你的指令完成。" : "这是我的回答。")} />
+    <WbCard tone={acted ? "done" : "agent"} icon={acted ? ICONS.check : ICONS.spark} title={acted ? wbT("task.card.agentActed", "Agent acted") : wbT("task.card.agentReply", "Agent reply")}>
+      <AgentReplyBlock text={session.agentReply || (acted ? wbT("task.reply.acted", "Done as instructed.") : wbT("task.reply.answered", "Here is my answer."))} />
       {acted && fileChanges.length > 0 && (
         <div className="wb-done-grid">
           <button type="button" className="wb-done-stat" onClick={function () { onRightTab && onRightTab("files"); }}>
-            <b>{fileChanges.length}</b><small>文件变更</small>
+              <b>{fileChanges.length}</b><small>{wbT("task.stat.fileChanges", "File changes")}</small>
           </button>
           {toolCalls.length > 0 && (
             <button type="button" className="wb-done-stat" onClick={function () { onRightTab && onRightTab("logs"); }}>
-              <b>{toolCalls.length}</b><small>工具调用</small>
+              <b>{toolCalls.length}</b><small>{wbT("task.stat.toolCalls", "Tool calls")}</small>
             </button>
           )}
         </div>
       )}
-      <p className="wb-card-hint">{acted ? "如果这只是其中一步，可以把它整理成完整任务再继续。" : "这是一个直接回答，没有生成执行计划。需要的话可以把它推进成一个任务。"}</p>
+      <p className="wb-card-hint">{acted ? wbT("task.reply.actedHint", "If this was only one step, turn it into a full task before continuing.") : wbT("task.reply.answerHint", "This was a direct answer without an execution plan. You can promote it into a task if needed.")}</p>
       <WbActions>
-        <WbBtn kind="ghost" disabled={controller.busy} onClick={function () { controller.promoteToPlan(); }}>整理成任务</WbBtn>
-        <WbBtn kind="ghost" disabled={controller.busy} onClick={focusComposer}>继续</WbBtn>
+        <WbBtn kind="ghost" disabled={controller.busy} onClick={function () { controller.promoteToPlan(); }}>{wbT("task.action.promoteToTask", "Make it a task")}</WbBtn>
+        <WbBtn kind="ghost" disabled={controller.busy} onClick={focusComposer}>{wbT("task.action.continueEditing", "Continue")}</WbBtn>
       </WbActions>
+    </WbCard>
+  );
+}
+
+// A run paused awaiting the user's answer to a permission-elevation request or a
+// clarification question (ask_user). Renders the question + its options as
+// buttons — each answer resumes the SAME round server-side; allowCustom adds a
+// free-text reply for open questions.
+function AgentQuestionCard({ session, controller }) {
+  var pq = (session && session.pendingQuestion) || {};
+  var options = Array.isArray(pq.options) ? pq.options : [];
+  var kind = String(pq.kind || "");
+  var isPermission = kind.indexOf("permission") >= 0 || kind.indexOf("elevation") >= 0 || kind.indexOf("confirmation") >= 0;
+  var customState = useWorkbenchState("");
+  var customText = customState[0], setCustomText = customState[1];
+  function submitCustom() {
+    var t = String(customText || "").trim();
+    if (!t || controller.busy) return;
+    setCustomText("");
+    controller.answer(pq.id, t);
+  }
+  return (
+    <WbCard tone="confirm" icon={ICONS.shield} title={isPermission ? wbT("workbenchChat.permissionTitle", "Authorization needed") : wbT("workbenchChat.questionTitle", "Confirmation needed")}>
+      <AgentReplyBlock text={pq.text || wbT("workbenchChat.questionFallback", "Agent needs your confirmation to continue.")} />
+      {isPermission ? (
+        // Authorization: a simple binary. Buttons read 确认/拒绝 but send the
+        // backend-recognized option text (options[0] = allow, last = deny).
+        <WbActions>
+          <WbBtn kind="primary" disabled={controller.busy} onClick={function () { controller.answer(pq.id, options[0] || "确认"); }}>{wbT("workbenchChat.approve", "Confirm")}</WbBtn>
+          <WbBtn kind="ghost" disabled={controller.busy} onClick={function () { controller.answer(pq.id, options.length ? options[options.length - 1] : "拒绝"); }}>{wbT("workbenchChat.reject", "Reject")}</WbBtn>
+        </WbActions>
+      ) : (
+        <React.Fragment>
+          {options.length > 0 && (
+            <WbActions>
+              {options.map(function (opt, i) {
+                return <WbBtn key={i} kind={i === 0 ? "primary" : "ghost"} disabled={controller.busy} onClick={function () { controller.answer(pq.id, opt); }}>{opt}</WbBtn>;
+              })}
+            </WbActions>
+          )}
+          {pq.allowCustom && (
+            <div className="wb-q-custom">
+              <input type="text" className="wb-q-input" value={customText} placeholder={wbT("workbenchChat.customAnswer", "Or enter a custom reply...")} disabled={controller.busy}
+                onChange={function (e) { setCustomText(e.target.value); }}
+                onKeyDown={function (e) { if (e.key === "Enter") { e.preventDefault(); submitCustom(); } }} />
+              <WbBtn kind="ghost" disabled={controller.busy || !String(customText).trim()} onClick={submitCustom}>{wbT("workbenchChat.send", "Send")}</WbBtn>
+            </div>
+          )}
+        </React.Fragment>
+      )}
     </WbCard>
   );
 }
@@ -2338,11 +2402,11 @@ function ConfirmCard({ session, controller, onRightTab }) {
   var summary = window.WorkbenchModel.confirmSummary(session);
   var riskTone = summary.risk === "高" ? "red" : summary.risk === "中" ? "amber" : "green";
   return (
-    <WbCard tone="confirm" icon={ICONS.shield} title="需要你确认"
-      badge={<span className={"wb-risk " + riskTone}>风险 {summary.risk}</span>}>
-      <p className="wb-card-hint">Agent 计划进行以下操作：</p>
+    <WbCard tone="confirm" icon={ICONS.shield} title={wbT("workbenchChat.questionTitle", "Confirmation needed")}
+      badge={<span className={"wb-risk " + riskTone}>{wbT("task.risk", "Risk {risk}", { risk: summary.risk })}</span>}>
+      <p className="wb-card-hint">{wbT("task.confirm.actionsIntro", "The agent plans to perform these actions:")}</p>
       <ol className="wb-ordered">{summary.actions.map(function (a, i) { return <li key={i}>{a}</li>; })}</ol>
-      <div className="wb-brief-row"><label>影响范围</label>
+      <div className="wb-brief-row"><label>{wbT("task.confirm.scope", "Scope")}</label>
         <ul className="wb-bullet">{summary.scope.map(function (s, i) { return <li key={i}>{s}</li>; })}</ul>
       </div>
     </WbCard>
@@ -2360,7 +2424,7 @@ function AgentActivityCard({ session, controller, onRightTab }) {
   var busyOp = session.agentBusy || null;
   var pct = plan.length ? Math.round((done / plan.length) * 100) : 0;
   var lines = wbLiveActivityLines(session, runningStep, busyOp);
-  var stage = runningStep ? runningStep.title : ((busyOp && busyOp.label) || "执行中");
+  var stage = runningStep ? runningStep.title : ((busyOp && busyOp.label) || wbT("status.running", "Running"));
   var feedRef = useWorkbenchRef(null);
   // Keep the newest activity line in view as it streams in.
   useWorkbenchEffect(function () {
@@ -2368,11 +2432,11 @@ function AgentActivityCard({ session, controller, onRightTab }) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [lines.length]);
   return (
-    <WbCard tone="running" icon={<span className="wb-spinner" />} title="Agent 正在处理"
+    <WbCard tone="running" icon={<span className="wb-spinner" />} title={wbT("task.card.agentWorking", "Agent is working")}
       badge={runningStep
         ? <span className="wb-progress-badge">{done} / {plan.length}</span>
-        : <span className="wb-progress-badge live">处理中</span>}>
-      <p className="wb-running-stage">当前阶段：{stage}</p>
+        : <span className="wb-progress-badge live">{wbT("task.processing", "Processing")}</span>}>
+      <p className="wb-running-stage">{wbT("task.currentStage", "Current stage: {stage}", { stage: stage })}</p>
       {lines.length > 0 ? (
         <ul className="wb-live-feed" ref={feedRef}>
           {lines.map(function (ln, i) {
@@ -2386,7 +2450,7 @@ function AgentActivityCard({ session, controller, onRightTab }) {
           })}
         </ul>
       ) : (
-        <AgentReplyBlock text={session.agentReply || "正在处理当前任务，请稍候…"} />
+        <AgentReplyBlock text={session.agentReply || wbT("task.workingFallback", "Processing the current task. Please wait...")} />
       )}
       {runningStep && plan.length > 0 && (
         <div className="wb-progress"><span style={{ width: pct + "%" }} /></div>
@@ -2409,8 +2473,8 @@ function PausedCard({ session, controller }) {
   var done = plan.filter(function (s) { return s.status === "completed" || s.status === "done"; }).length;
   var current = plan[done] || plan[plan.length - 1] || null;
   return (
-    <WbCard tone="paused" icon={ICONS.pause} title="任务已暂停">
-      <p className="wb-card-hint">当前停在：第 {Math.min(done + 1, plan.length || 1)} 步{current ? "：" + current.title : ""}。</p>
+    <WbCard tone="paused" icon={ICONS.pause} title={wbT("task.card.paused", "Task paused")}>
+      <p className="wb-card-hint">{wbT("task.pausedAt", "Paused at step {n}{title}.", { n: Math.min(done + 1, plan.length || 1), title: current ? ": " + current.title : "" })}</p>
     </WbCard>
   );
 }
@@ -2420,11 +2484,11 @@ function FailedCard({ session, controller }) {
   var plan = Array.isArray(session.plan) ? session.plan : [];
   var failedIdx = plan.findIndex(function (s) { return s.status === "failed"; });
   return (
-    <WbCard tone="failed" icon={ICONS.alert} title="任务执行失败">
-      <AgentReplyBlock text={session.agentReply || "执行过程中出现错误。"} />
-      {failedIdx >= 0 && <p className="wb-card-hint">失败位置：第 {failedIdx + 1} 步：{plan[failedIdx].title}</p>}
+    <WbCard tone="failed" icon={ICONS.alert} title={wbT("task.card.failed", "Task failed")}>
+      <AgentReplyBlock text={session.agentReply || wbT("task.failedFallback", "An error occurred during execution.")} />
+      {failedIdx >= 0 && <p className="wb-card-hint">{wbT("task.failedAt", "Failed at step {n}: {title}", { n: failedIdx + 1, title: plan[failedIdx].title })}</p>}
       {session.recommendReflection && (
-        <p className="wb-card-hint">验收建议：先「深度反思」，再「新建任务」换思路重试，或在本任务继续。</p>
+        <p className="wb-card-hint">{wbT("task.failedReflectionHint", "Suggested review: deep reflect first, then create a new task to try a different approach, or continue in this task.")}</p>
       )}
     </WbCard>
   );
@@ -2436,14 +2500,14 @@ function CompletionCard({ session, controller, onRightTab, onSelectSession, proj
   var passed = accept.filter(function (a) { return a.status === "passed" || a.status === "done"; }).length;
   var artifacts = Array.isArray(session.artifacts) ? session.artifacts : [];
   return (
-    <WbCard tone="done" icon={ICONS.check} title={confirmed ? "任务已完成" : "Agent 已完成，待你确认"}>
-      <AgentReplyBlock text={session.agentReply || "已完成当前任务。"} />
+    <WbCard tone="done" icon={ICONS.check} title={confirmed ? wbT("task.card.completed", "Task completed") : wbT("task.card.awaitingConfirmation", "Agent finished; awaiting your confirmation")}>
+      <AgentReplyBlock text={session.agentReply || wbT("task.completedFallback", "The current task is complete.")} />
       <div className="wb-done-grid">
         <button type="button" className="wb-done-stat" onClick={function () { onRightTab && onRightTab("acceptance"); }}>
-          <b>{passed} / {accept.length || 0}</b><small>验收通过</small>
+          <b>{passed} / {accept.length || 0}</b><small>{wbT("task.stat.acceptancePassed", "Acceptance passed")}</small>
         </button>
         <button type="button" className="wb-done-stat" onClick={function () { onRightTab && onRightTab("artifacts"); }}>
-          <b>{artifacts.length}</b><small>产物</small>
+          <b>{artifacts.length}</b><small>{wbT("workbenchChat.artifacts", "Artifacts")}</small>
         </button>
       </div>
     </WbCard>
@@ -2453,8 +2517,8 @@ function CompletionCard({ session, controller, onRightTab, onSelectSession, proj
 // cancelled.
 function CancelledCard({ session, controller }) {
   return (
-    <WbCard tone="cancelled" icon={ICONS.x} title="任务已取消">
-      <p className="wb-card-hint">这个任务已被取消，当前进度仍然保留。你可以重新打开它继续。</p>
+    <WbCard tone="cancelled" icon={ICONS.x} title={wbT("task.card.cancelled", "Task cancelled")}>
+      <p className="wb-card-hint">{wbT("task.cancelledHint", "This task was cancelled. Current progress is kept, and you can reopen it to continue.")}</p>
     </WbCard>
   );
 }
@@ -2914,7 +2978,11 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
 
   var translatedModes = WB_MODES.map(function (m) { return wbModeMeta(m.id); });
 
-  var chips = composerChips(status, controller, onRightTab);
+  // While a run is paused awaiting a permission / clarification answer, the only
+  // valid actions are on the question card itself — suppress the composer's
+  // status chips so no answer buttons sit above the input box.
+  var awaitingAnswer = !!(session.pendingQuestion && session.pendingQuestion.id);
+  var chips = awaitingAnswer ? [] : composerChips(status, controller, onRightTab);
   var disabled = controller.busy || running;
   var current = wbModeMeta(mode || "auto");
   var sendDisabled = running ? false : (disabled || (!draft.trim() && attachments.length === 0));
@@ -3021,16 +3089,16 @@ function RightContextPanel({ project, session, expandedStepId, tab, onTabChange,
   var activeStep = steps.find(function (step) { return step.id === expandedStepId; }) || null;
   var isInit = !!(session && session.kind === "init");
   var tabs = isInit ? [
-    { id: "context", label: "上下文" },
+    { id: "context", label: wbT("task.side.context", "Context") },
   ] : [
-    { id: "context", label: "上下文" },
-    { id: "files", label: "文件变更" },
-    { id: "logs", label: "运行日志" },
-    { id: "acceptance", label: "验收标准" },
-    { id: "artifacts", label: "产物" },
+    { id: "context", label: wbT("task.side.context", "Context") },
+    { id: "files", label: wbT("task.side.fileChanges", "File changes") },
+    { id: "logs", label: wbT("task.side.runLogs", "Run logs") },
+    { id: "acceptance", label: wbT("task.side.acceptance", "Acceptance") },
+    { id: "artifacts", label: wbT("workbenchChat.artifacts", "Artifacts") },
   ];
   if (!session) {
-    return <aside className="workbench-right-panel"><div className="workbench-right-body"><p className="workbench-muted">请选择一个任务。</p></div></aside>;
+    return <aside className="workbench-right-panel"><div className="workbench-right-body"><p className="workbench-muted">{wbT("task.noTaskSelected", "Select a task.")}</p></div></aside>;
   }
   return (
     <aside className="workbench-right-panel">
@@ -3061,17 +3129,17 @@ function ReflectionSection({ session }) {
     return <ul className="wb-bullet">{arr.map(function (x, i) { return <li key={i}>{String(x)}</li>; })}</ul>;
   }
   return (
-    <SideSection title="深度反思">
-      {packet.goal_gap && <div className="wb-brief-row"><label>目标差距</label><p>{String(packet.goal_gap)}</p></div>}
+    <SideSection title={wbT("task.reflection.title", "Deep reflection")}>
+      {packet.goal_gap && <div className="wb-brief-row"><label>{wbT("task.reflection.goalGap", "Goal gap")}</label><p>{String(packet.goal_gap)}</p></div>}
       {Array.isArray(packet.excluded_paths) && packet.excluded_paths.length > 0 && (
-        <div className="wb-brief-row"><label>应避开（死路）</label>{bullets(packet.excluded_paths)}</div>
+        <div className="wb-brief-row"><label>{wbT("task.reflection.excludedPaths", "Avoid")}</label>{bullets(packet.excluded_paths)}</div>
       )}
       {Array.isArray(packet.promising_directions) && packet.promising_directions.length > 0 && (
-        <div className="wb-brief-row"><label>可行方向</label>{bullets(packet.promising_directions)}</div>
+        <div className="wb-brief-row"><label>{wbT("task.reflection.promisingDirections", "Promising directions")}</label>{bullets(packet.promising_directions)}</div>
       )}
-      {packet.next_step && <div className="wb-brief-row"><label>下一步</label><p>{String(packet.next_step)}</p></div>}
+      {packet.next_step && <div className="wb-brief-row"><label>{wbT("task.reflection.nextStep", "Next step")}</label><p>{String(packet.next_step)}</p></div>}
       {Array.isArray(packet.open_questions) && packet.open_questions.length > 0 && (
-        <div className="wb-brief-row"><label>待解问题</label>{bullets(packet.open_questions)}</div>
+        <div className="wb-brief-row"><label>{wbT("task.reflection.openQuestions", "Open questions")}</label>{bullets(packet.open_questions)}</div>
       )}
     </SideSection>
   );
@@ -3083,7 +3151,7 @@ function ContextTab({ project, session, activeStep }) {
   if (isInit && window.WorkbenchInitProgress) {
     return (
       <div className="workbench-side-stack">
-        <SideSection title="初始化进度">
+        <SideSection title={wbT("init.progress.title", "Initialization progress")}>
           {React.createElement(window.WorkbenchInitProgress, { session: session })}
         </SideSection>
       </div>
@@ -3091,27 +3159,27 @@ function ContextTab({ project, session, activeStep }) {
   }
   return (
     <div className="workbench-side-stack">
-      <SideSection title="任务概况">
-        <div className="wb-kv"><span>状态</span><b>{WorkbenchModel.statusText(session.status)}</b></div>
-        {!isInit && <div className="wb-kv"><span>优先级</span><b>{priorityText(session.priority)}</b></div>}
-        <p>{session.goal || "暂无任务目标"}</p>
+      <SideSection title={wbT("task.side.overview", "Task overview")}>
+        <div className="wb-kv"><span>{wbT("workbenchChat.statusLabel", "Status")}</span><b>{WorkbenchModel.statusText(session.status)}</b></div>
+        {!isInit && <div className="wb-kv"><span>{wbT("create.task.priority", "Priority")}</span><b>{priorityText(session.priority)}</b></div>}
+        <p>{session.goal || wbT("task.noGoal", "No task goal yet")}</p>
       </SideSection>
       <ReflectionSection session={session} />
-      <SideSection title="项目上下文">
+      <SideSection title={wbT("task.side.projectContext", "Project context")}>
         {project && project.context && project.context.summary && !isInit && <div className="wb-agent-body markdown" dangerouslySetInnerHTML={{ __html: wbRenderMarkdown(project.context.summary) }} />}
       </SideSection>
-      <SideSection title={"任务约束 (" + constraints.length + ")"}>
+      <SideSection title={wbT("task.side.constraintsCount", "Constraints ({count})", { count: constraints.length })}>
         {constraints.length
           ? constraints.map(function (item, i) { return <div className="workbench-check" key={i}><span className="workbench-status-dot amber"></span>{item}</div>; })
-          : <p className="workbench-muted">暂无约束。在任务里用“不要…”“只…”等表达，会被自动识别为约束。</p>}
+          : <p className="workbench-muted">{wbT("task.noConstraints", "No constraints yet. Phrases like \"do not\" or \"only\" in the task are recognized as constraints automatically.")}</p>}
       </SideSection>
       {isInit && window.WorkbenchInitProgress ? (
-        <SideSection title="初始化进度">
+        <SideSection title={wbT("init.progress.title", "Initialization progress")}>
           {React.createElement(window.WorkbenchInitProgress, { session: session })}
         </SideSection>
       ) : (
-        <SideSection title="依赖任务">
-          <p className="workbench-muted">暂无依赖任务。</p>
+        <SideSection title={wbT("task.side.dependencies", "Dependencies")}>
+          <p className="workbench-muted">{wbT("task.noDependencies", "No dependent tasks yet.")}</p>
         </SideSection>
       )}
     </div>
@@ -3162,7 +3230,7 @@ function FilesTab({ session, activeStep }) {
         setDiffState({
           loading: false,
           diff: data.diff || "",
-          error: data.has_changes ? "" : "当前 git 工作区中没有可显示的差异。",
+          error: data.has_changes ? "" : wbT("task.files.noDiff", "No displayable diff in the current git worktree."),
           path: data.path || path,
         });
       })
@@ -3172,7 +3240,7 @@ function FilesTab({ session, activeStep }) {
   }
   return (
     <div className="workbench-side-stack">
-      <SideSection title={"文件变更 (" + files.length + ")"}>
+      <SideSection title={wbT("task.side.fileChangesCount", "File changes ({count})", { count: files.length })}>
         {files.length ? files.map(function (file, i) {
           var path = file.path || file.name || "";
           var selected = selectedFile && String(selectedFile.path || selectedFile.name || "") === String(path);
@@ -3185,7 +3253,7 @@ function FilesTab({ session, activeStep }) {
                 type="button"
                 className="wb-file-diff-trigger"
                 onClick={function () { openDiff(file); }}
-                title={selected ? "收起文件 diff" : "查看文件 diff"}
+                title={selected ? wbT("task.files.collapseDiff", "Collapse file diff") : wbT("task.files.viewDiff", "View file diff")}
               >
                 <span>{path}</span>
                 <small>{file.status || file.changeType || file.type || ""}</small>
@@ -3193,7 +3261,7 @@ function FilesTab({ session, activeStep }) {
               {selected && (
                 <div className="wb-file-diff-inline">
                   {diffState.loading ? (
-                    <p className="workbench-muted">正在加载 diff...</p>
+                    <p className="workbench-muted">{wbT("task.files.loadingDiff", "Loading diff...")}</p>
                   ) : diffState.error ? (
                     <p className="workbench-muted">{diffState.error}</p>
                   ) : typeof DiffViewerPanel !== "undefined" ? (
@@ -3207,7 +3275,7 @@ function FilesTab({ session, activeStep }) {
               )}
             </div>
           );
-        }) : <p className="workbench-muted">当前任务还没有记录文件变更。</p>}
+        }) : <p className="workbench-muted">{wbT("task.files.empty", "No file changes recorded for this task yet.")}</p>}
       </SideSection>
     </div>
   );
@@ -3217,7 +3285,7 @@ function LogsTab({ session }) {
   var events = session && Array.isArray(session.events) ? session.events : [];
   return (
     <div className="workbench-side-stack">
-      <SideSection title={"运行日志 (" + events.length + ")"}>
+      <SideSection title={wbT("task.side.runLogsCount", "Run logs ({count})", { count: events.length })}>
         {events.length ? events.slice().reverse().slice(0, 60).map(function (event, i) {
           if (event.type === "ToolCallEvent") {
             return (
@@ -3237,9 +3305,9 @@ function LogsTab({ session }) {
               </div>
             );
           }
-          var logBody = event.body || (event.stepCount != null ? ("步骤数 " + event.stepCount) : "");
+          var logBody = event.body || (event.stepCount != null ? wbT("task.logs.stepCount", "Steps {count}", { count: event.stepCount }) : "");
           return <div className="workbench-log-row" key={event.id || i}><time>{WorkbenchModel.formatTime(event.createdAt)}</time><span>{WorkbenchModel.eventLabel(event.type)}</span>{logBody && <div className="wb-agent-body markdown wb-log-body" dangerouslySetInnerHTML={{ __html: wbRenderMarkdown(logBody) }} />}</div>;
-        }) : <p className="workbench-muted">暂无运行日志。</p>}
+        }) : <p className="workbench-muted">{wbT("task.logs.empty", "No run logs yet.")}</p>}
       </SideSection>
     </div>
   );
@@ -3271,13 +3339,13 @@ function AcceptanceTab({ session, onRefresh }) {
   }
   return (
     <div className="workbench-side-stack">
-      <SideSection title={"验收标准" + (items.length ? " (" + passed + "/" + items.length + ")" : "")}>
+      <SideSection title={items.length ? wbT("task.side.acceptanceCount", "Acceptance criteria ({passed}/{count})", { passed: passed, count: items.length }) : wbT("task.field.acceptance", "Acceptance criteria")}>
         {items.length ? items.map(function (item) {
           var done = item.status === "passed" || item.status === "done";
           var dot = done ? "green" : item.status === "failed" ? "red" : "muted";
-          var label = done ? "已通过" : item.status === "failed" ? "未通过" : "待验证";
+          var label = done ? wbT("task.acceptance.passed", "Passed") : item.status === "failed" ? wbT("task.acceptance.failed", "Failed") : wbT("task.acceptance.pending", "Pending");
           return (
-            <button type="button" className="workbench-check wb-accept-toggle" key={item.id} disabled={busy} onClick={function () { toggle(item.id); }} title="点击逐条核验验收标准">
+            <button type="button" className="workbench-check wb-accept-toggle" key={item.id} disabled={busy} onClick={function () { toggle(item.id); }} title={wbT("task.acceptance.toggleTitle", "Click to verify this acceptance criterion")}>
               <span className={"workbench-status-dot " + dot}></span>
               <span className="wb-accept-text">{item.text}</span>
               <span className={"wb-accept-state " + dot}>{label}</span>
@@ -3285,8 +3353,8 @@ function AcceptanceTab({ session, onRefresh }) {
           );
         }) : (
           <div className="wb-empty-action">
-            <p className="workbench-muted">暂无验收标准。</p>
-            <button type="button" className="wb-btn ghost" disabled={busy} onClick={generate}>{busy ? "生成中…" : "让 Agent 生成验收标准"}</button>
+            <p className="workbench-muted">{wbT("task.acceptance.empty", "No acceptance criteria yet.")}</p>
+            <button type="button" className="wb-btn ghost" disabled={busy} onClick={generate}>{busy ? wbT("init.generating", "Generating...") : wbT("task.acceptance.generate", "Ask Agent to generate acceptance criteria")}</button>
           </div>
         )}
       </SideSection>
@@ -3294,17 +3362,17 @@ function AcceptanceTab({ session, onRefresh }) {
   );
 }
 
-var ARTIFACT_TYPE_LABELS = { task_brief: "任务简报", file_change: "文件" };
+var ARTIFACT_TYPE_LABELS = { task_brief: "task.artifact.taskBrief", file_change: "task.artifact.file" };
 
 function ArtifactsTab({ session }) {
   var artifacts = session && Array.isArray(session.artifacts) ? session.artifacts : [];
   return (
     <div className="workbench-side-stack">
-      <SideSection title={"产物 (" + artifacts.length + ")"}>
+      <SideSection title={wbT("task.side.artifactsCount", "Artifacts ({count})", { count: artifacts.length })}>
         {artifacts.length ? artifacts.map(function (artifact, i) {
-          var typeLabel = ARTIFACT_TYPE_LABELS[artifact.type] || artifact.type;
+          var typeLabel = ARTIFACT_TYPE_LABELS[artifact.type] ? wbT(ARTIFACT_TYPE_LABELS[artifact.type], artifact.type) : artifact.type;
           return <div className="workbench-artifact-row" key={artifact.id || i}><b>{artifact.name}</b><small>{typeLabel} · {WorkbenchModel.statusText(artifact.status)}</small><p>{artifact.summary || ""}</p></div>;
-        }) : <p className="workbench-muted">当前任务尚未生成产物。</p>}
+        }) : <p className="workbench-muted">{wbT("task.artifacts.empty", "No artifacts generated for this task yet.")}</p>}
       </SideSection>
     </div>
   );

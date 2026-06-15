@@ -116,6 +116,7 @@ var WorkbenchChatModel = (function () {
         else if (type === "reply_delta" && handlers.onReplyDelta) handlers.onReplyDelta(event.delta || "");
         else if (type === "reply_done" && handlers.onReplyDone) handlers.onReplyDone(event.response || "");
         else if (type === "saved" && handlers.onSaved) handlers.onSaved(event);
+        else if (type === "awaiting_user" && handlers.onAwaitingUser) handlers.onAwaitingUser(event);
         else if (type === "error" && handlers.onError) handlers.onError(new Error(event.message || wbcT("settings.failed", "Failed")));
       }
 
@@ -136,6 +137,19 @@ var WorkbenchChatModel = (function () {
     });
   }
 
+  // Answer a paused chat run's permission / clarification question → resume.
+  // Resolves to { awaitingUser, assistantMessage?, pendingQuestion? }.
+  function answerChat(chatId, questionId, answerText) {
+    return fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question_id: questionId || "", answer: answerText || "" }),
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (b) { throw new Error((b && b.error) || ("HTTP " + r.status)); });
+      return r.json();
+    });
+  }
+
   window.WorkbenchChatModel = {
     listChats: listChats,
     createChat: createChat,
@@ -146,6 +160,7 @@ var WorkbenchChatModel = (function () {
     interrupt: interrupt,
     uploadFiles: uploadFiles,
     sendMessage: sendMessage,
+    answerChat: answerChat,
   };
   return window.WorkbenchChatModel;
 })();
@@ -524,6 +539,15 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
           syncRuntime(null);
           refreshChats(chatId);
         },
+        onAwaitingUser: function (event) {
+          // The run paused for a permission / clarification answer — stash the
+          // question so the composer shows an answer prompt instead of a reply.
+          setActiveChat(function (prev) {
+            if (!prev || prev.id !== chatId) return prev;
+            return { ...prev, status: "idle", pendingQuestion: event.pending_question || null };
+          });
+          syncRuntime(null);
+        },
         onError: function (err) {
           setError(wbcErrorText(err));
           syncRuntime(null);
@@ -550,6 +574,35 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     var current = runtimeRef.current;
     if (current) model.interrupt(current.chatId);
     if (abortRef.current) { try { abortRef.current.abort(); } catch (e) {} }
+  }
+
+  // Answer the pending permission / clarification question → resume the round.
+  // The server returns the continued reply (append it) or a follow-up question
+  // (swap the prompt). Optimistically clears the prompt while resuming.
+  function handleAnswer(questionId, optionText) {
+    var chatId = activeChatId;
+    if (!chatId || !questionId || !optionText) return;
+    setError("");
+    setActiveChat(function (prev) {
+      if (!prev || prev.id !== chatId) return prev;
+      return { ...prev, pendingQuestion: null, status: "running" };
+    });
+    model.answerChat(chatId, questionId, optionText).then(function (res) {
+      setActiveChat(function (prev) {
+        if (!prev || prev.id !== chatId) return prev;
+        if (res && res.awaitingUser) {
+          return { ...prev, status: "idle", pendingQuestion: res.pendingQuestion || null };
+        }
+        var msgs = prev.messages || [];
+        if (res && res.assistantMessage) msgs = msgs.concat([res.assistantMessage]);
+        return { ...prev, status: "idle", pendingQuestion: null, messages: msgs };
+      });
+      refreshChats(chatId);
+    }).catch(function (err) {
+      setError(wbcErrorText(err));
+      // Restore the prompt so the user can retry.
+      model.getChat(chatId).then(setActiveChat).catch(function () {});
+    });
   }
 
   // Regenerate the last assistant reply (replays the last user message).
@@ -629,6 +682,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         running={running}
         onSend={handleSend}
         onInterrupt={handleInterrupt}
+        onAnswer={handleAnswer}
         onRetryMessage={handleRetryMessage}
         onRename={handleRename}
         onDelete={handleDelete}
@@ -713,7 +767,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatId, onSelect, onCrea
                     <button
                       type="button"
                       className="wb-card-menu-btn"
-                      title="更多操作"
+                      title={wbcT("common.moreActions", "More actions")}
                       onClick={function (e) { e.stopPropagation(); setMenuId(isMenuOpen ? "" : chat.id); }}
                     >
                       {WBC_ICONS.dots}
@@ -724,7 +778,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatId, onSelect, onCrea
                           e.stopPropagation();
                           setMenuId("");
                           onDelete && onDelete(chat.id);
-                        }}>删除对话</button>
+                        }}>{wbcT("workbenchChat.delete", "Delete chat")}</button>
                       </div>
                     )}
                   </span>
@@ -746,7 +800,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatId, onSelect, onCrea
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onInterrupt, onRetryMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile }) {
+function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onInterrupt, onAnswer, onRetryMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile }) {
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
@@ -814,6 +868,9 @@ function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onIn
             : <WbcAssistantMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onRetryMessage={canRetry ? onRetryMessage : null} />;
         })}
         {runtime && <WbcLiveMessage runtime={runtime} />}
+        {chat && chat.pendingQuestion && chat.pendingQuestion.id && !runtime && (
+          <WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} />
+        )}
       </div>
       <WbcComposer
         chat={chat}
@@ -823,6 +880,59 @@ function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onIn
         onInterrupt={onInterrupt}
       />
     </main>
+  );
+}
+
+// A paused chat run awaiting the user's answer to a permission elevation or a
+// clarification (ask_user). Renders the question + option buttons inline at the
+// bottom of the thread; each answer resumes the same round server-side.
+function WbcQuestionPrompt({ pending, onAnswer, busy }) {
+  var pq = pending || {};
+  var options = Array.isArray(pq.options) ? pq.options : [];
+  var kind = String(pq.kind || "");
+  var isPermission = kind.indexOf("permission") >= 0 || kind.indexOf("elevation") >= 0 || kind.indexOf("confirmation") >= 0;
+  var customState = useWbcState("");
+  var customText = customState[0], setCustomText = customState[1];
+  function submitCustom() {
+    var t = String(customText || "").trim();
+    if (!t || busy || !onAnswer) return;
+    setCustomText("");
+    onAnswer(pq.id, t);
+  }
+  return (
+    <div className="wbc-question">
+      <div className="wbc-question-head">
+        <span className="wbc-question-ico">{WBC_ICONS.alert}</span>
+        <b>{isPermission ? wbcT("workbenchChat.permissionTitle", "Authorization needed") : wbcT("workbenchChat.questionTitle", "Confirmation needed")}</b>
+      </div>
+      <p className="wbc-question-text">{pq.text || wbcT("workbenchChat.questionFallback", "Agent needs your confirmation to continue.")}</p>
+      {isPermission ? (
+        // Authorization: binary confirm / reject. Labels are 确认/拒绝 but the
+        // value sent is the backend-recognized option (options[0]=allow, last=deny).
+        <div className="wbc-question-options">
+          <button type="button" className="wbc-question-opt primary" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options[0] || "确认"); }}>{wbcT("workbenchChat.approve", "Confirm")}</button>
+          <button type="button" className="wbc-question-opt" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options.length ? options[options.length - 1] : "拒绝"); }}>{wbcT("workbenchChat.reject", "Reject")}</button>
+        </div>
+      ) : (
+        <React.Fragment>
+          {options.length > 0 && (
+            <div className="wbc-question-options">
+              {options.map(function (opt, i) {
+                return <button key={i} type="button" className={"wbc-question-opt" + (i === 0 ? " primary" : "")} disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, opt); }}>{opt}</button>;
+              })}
+            </div>
+          )}
+          {pq.allowCustom && (
+            <div className="wbc-question-custom">
+              <input type="text" value={customText} placeholder={wbcT("workbenchChat.customAnswer", "Or enter a custom reply...")} disabled={busy}
+                onChange={function (e) { setCustomText(e.target.value); }}
+                onKeyDown={function (e) { if (e.key === "Enter") { e.preventDefault(); submitCustom(); } }} />
+              <button type="button" className="wbc-question-send" disabled={busy || !String(customText).trim()} onClick={submitCustom}>{WBC_ICONS.send}</button>
+            </div>
+          )}
+        </React.Fragment>
+      )}
+    </div>
   );
 }
 

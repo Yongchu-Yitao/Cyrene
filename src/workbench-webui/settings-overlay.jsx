@@ -405,7 +405,7 @@ function GeneralPanel(p) {
     ),
     mapProvider === "amap" && FieldRow(t("settings.amapKey"), t("settings.amapKeyHint"),
       React.createElement("div", { className: "wb-inline-row" },
-        React.createElement("input", { className: "wb-input mono", type: "password", value: amapKey, onChange: function (e) { setAmapKey(e.target.value); }, placeholder: "高德 Web 服务 Key" }),
+        React.createElement("input", { className: "wb-input mono", type: "password", value: amapKey, onChange: function (e) { setAmapKey(e.target.value); }, placeholder: t("settings.amapKeyPlaceholder") }),
         React.createElement("button", { className: "wb-btn primary", onClick: saveAmapKey }, t("settings.save")),
       ),
       amapKeySaved && React.createElement("span", { className: "wb-hint saved" }, amapKeySaved),
@@ -470,18 +470,18 @@ function ModelsPanel(p) {
         return ModelCard([
           React.createElement("div", { className: "wb-model-actions" },
             React.createElement("div", { className: "wb-sort-group" },
-              React.createElement("button", { className: "wb-sort-btn", title: "上移", onClick: function () { moveModel(m.id, -1); } },
+              React.createElement("button", { className: "wb-sort-btn", title: t("common.moveUp"), onClick: function () { moveModel(m.id, -1); } },
                 React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
                   React.createElement("polyline", { points: "18 15 12 9 6 15" })
                 )
               ),
-              React.createElement("button", { className: "wb-sort-btn", title: "下移", onClick: function () { moveModel(m.id, 1); } },
+              React.createElement("button", { className: "wb-sort-btn", title: t("common.moveDown"), onClick: function () { moveModel(m.id, 1); } },
                 React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
                   React.createElement("polyline", { points: "6 9 12 15 18 9" })
                 )
               ),
             ),
-            React.createElement("button", { className: "wb-delete-btn", title: "移除", onClick: function () { deleteModel(m.id); } },
+            React.createElement("button", { className: "wb-delete-btn", title: t("common.remove"), onClick: function () { deleteModel(m.id); } },
               React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
                 React.createElement("line", { x1: "18", y1: "6", x2: "6", y2: "18" }),
                 React.createElement("line", { x1: "6", y1: "6", x2: "18", y2: "18" })
@@ -519,18 +519,18 @@ function ModelsPanel(p) {
         return ModelCard([
           React.createElement("div", { className: "wb-model-actions" },
             React.createElement("div", { className: "wb-sort-group" },
-              React.createElement("button", { className: "wb-sort-btn", title: "上移", onClick: function () { moveVisionModel(m.id, -1); } },
+              React.createElement("button", { className: "wb-sort-btn", title: t("common.moveUp"), onClick: function () { moveVisionModel(m.id, -1); } },
                 React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
                   React.createElement("polyline", { points: "18 15 12 9 6 15" })
                 )
               ),
-              React.createElement("button", { className: "wb-sort-btn", title: "下移", onClick: function () { moveVisionModel(m.id, 1); } },
+              React.createElement("button", { className: "wb-sort-btn", title: t("common.moveDown"), onClick: function () { moveVisionModel(m.id, 1); } },
                 React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
                   React.createElement("polyline", { points: "6 9 12 15 18 9" })
                 )
               ),
             ),
-            React.createElement("button", { className: "wb-delete-btn", title: "移除", onClick: function () { deleteVisionModel(m.id); } },
+            React.createElement("button", { className: "wb-delete-btn", title: t("common.remove"), onClick: function () { deleteVisionModel(m.id); } },
               React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
                 React.createElement("line", { x1: "18", y1: "6", x2: "6", y2: "18" }),
                 React.createElement("line", { x1: "6", y1: "6", x2: "18", y2: "18" })

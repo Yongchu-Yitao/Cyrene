@@ -21,6 +21,17 @@
   var HOUR_PX = 52;            // height of one hour row on the timeline
   var DAY_PX = HOUR_PX * 24;
   var WEEKDAY_CN = ["日", "一", "二", "三", "四", "五", "六"];
+  var WEEKDAY_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  function T(key, params, fallback) {
+    return window.WorkbenchI18n && window.WorkbenchI18n.t ? window.WorkbenchI18n.t(key, params, fallback) : (fallback || key);
+  }
+  function currentLang() {
+    return window.WorkbenchI18n && window.WorkbenchI18n.getLang ? window.WorkbenchI18n.getLang() : "en";
+  }
+  function weekdayName(d, short) {
+    return currentLang() === "zh" ? WEEKDAY_CN[d.getDay()] : WEEKDAY_EN[d.getDay()];
+  }
 
   // ── date helpers ─────────────────────────────────────────────────────
 
@@ -52,11 +63,19 @@
   }
 
   function dayHeading(d) {
+    if (currentLang() !== "zh") return d.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
     return d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日 周" + WEEKDAY_CN[d.getDay()];
   }
-  function monthHeading(d) { return d.getFullYear() + "年" + (d.getMonth() + 1) + "月"; }
+  function monthHeading(d) {
+    if (currentLang() !== "zh") return d.toLocaleDateString(undefined, { year: "numeric", month: "long" });
+    return d.getFullYear() + "年" + (d.getMonth() + 1) + "月";
+  }
   function weekHeading(d) {
     var s = startOfWeekMon(d), e = addDays(s, 6);
+    if (currentLang() !== "zh") {
+      return s.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " - " +
+        e.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    }
     if (s.getMonth() === e.getMonth()) {
       return s.getFullYear() + "年" + (s.getMonth() + 1) + "月 " + s.getDate() + "–" + e.getDate() + " 日";
     }
@@ -66,11 +85,14 @@
   // ── categories (driven by real backend data) ─────────────────────────
 
   var CATEGORIES = [
-    { id: "task_recurring", label: "定时任务", hint: "重复执行的 Agent 任务" },
-    { id: "task_once", label: "单次任务", hint: "执行一次的 Agent 任务" },
-    { id: "entity_due", label: "日程", hint: "记录在日历中的普通事项" },
+    { id: "task_recurring", labelKey: "schedule.category.taskRecurring", hintKey: "schedule.category.taskRecurringHint" },
+    { id: "task_once", labelKey: "schedule.category.taskOnce", hintKey: "schedule.category.taskOnceHint" },
+    { id: "entity_due", labelKey: "schedule.category.entityDue", hintKey: "schedule.category.entityDueHint" },
   ];
-  var CATEGORY_LABEL = { task_recurring: "定时任务", task_once: "单次任务", entity_due: "日程" };
+  function categoryLabel(id) {
+    var item = CATEGORIES.find(function (c) { return c.id === id; });
+    return item ? T(item.labelKey) : id;
+  }
 
   // ── API model ────────────────────────────────────────────────────────
 
@@ -244,18 +266,18 @@
       "div", { className: "wb-sched-mini" },
       React.createElement(
         "div", { className: "wb-sched-mini-head" },
-        React.createElement("b", null, view.getFullYear() + "年" + (view.getMonth() + 1) + "月"),
+        React.createElement("b", null, monthHeading(view)),
         React.createElement(
           "div", { className: "wb-sched-mini-nav" },
-          React.createElement("button", { type: "button", onClick: function () { props.onViewMonth(addMonths(view, -1)); }, title: "上个月" }, "‹"),
-          React.createElement("button", { type: "button", onClick: function () { props.onViewMonth(addMonths(view, 1)); }, title: "下个月" }, "›")
+          React.createElement("button", { type: "button", onClick: function () { props.onViewMonth(addMonths(view, -1)); }, title: T("schedule.previousMonth") }, "‹"),
+          React.createElement("button", { type: "button", onClick: function () { props.onViewMonth(addMonths(view, 1)); }, title: T("schedule.nextMonth") }, "›")
         )
       ),
       React.createElement(
         "div", { className: "wb-sched-mini-grid" },
         WEEKDAY_CN.map(function (w, idx) {
           // Monday-first header order
-          var order = ["一", "二", "三", "四", "五", "六", "日"];
+          var order = currentLang() === "zh" ? ["一", "二", "三", "四", "五", "六", "日"] : ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
           return idx < 7 ? React.createElement("span", { key: "h" + idx, className: "wb-sched-mini-dow" }, order[idx]) : null;
         }),
         cells.map(function (d, i) {
@@ -281,10 +303,10 @@
       React.createElement(
         "div", { className: "wb-sched-rail-head" },
         props.onBack && React.createElement(
-          "button", { type: "button", className: "wb-sched-rail-back", onClick: props.onBack, title: "返回工作台" },
+          "button", { type: "button", className: "wb-sched-rail-back", onClick: props.onBack, title: T("schedule.backToWorkbench") },
           svg(["m15 18-6-6 6-6"], { width: 17, height: 17 })
         ),
-        React.createElement("span", null, "日历")
+        React.createElement("span", null, T("schedule.calendar"))
       ),
       React.createElement(MiniMonth, {
         viewMonth: props.viewMonth, onViewMonth: props.onViewMonth,
@@ -292,17 +314,17 @@
       }),
       React.createElement(
         "div", { className: "wb-sched-cal-section" },
-        React.createElement("div", { className: "wb-sched-cal-section-title" }, "我的日历"),
+        React.createElement("div", { className: "wb-sched-cal-section-title" }, T("schedule.myCalendar")),
         CATEGORIES.map(function (c) {
           var on = props.visible[c.id];
           return React.createElement(
             "button", {
               key: c.id, type: "button", className: "wb-sched-cal-item" + (on ? "" : " off"),
-              onClick: function () { props.onToggle(c.id); }, title: c.hint,
+              onClick: function () { props.onToggle(c.id); }, title: T(c.hintKey),
             },
             React.createElement("span", { className: "wb-sched-cal-check cat-" + c.id + (on ? " on" : "") },
               on ? svg(["M5 12l4 4 10-10"], { width: 12, height: 12, strokeWidth: 2.6 }) : null),
-            React.createElement("span", { className: "wb-sched-cal-name" }, c.label),
+            React.createElement("span", { className: "wb-sched-cal-name" }, T(c.labelKey)),
             React.createElement("span", { className: "wb-sched-cal-count" }, props.counts[c.id] || 0)
           );
         })
@@ -394,7 +416,7 @@
     if (!props.items || !props.items.length) return null;
     return React.createElement(
       "div", { className: "wb-sched-allday" },
-      React.createElement("span", { className: "wb-sched-allday-label" }, "全天"),
+      React.createElement("span", { className: "wb-sched-allday-label" }, T("schedule.allDay")),
       React.createElement(
         "div", { className: "wb-sched-allday-items" },
         props.items.map(function (ev) {
@@ -443,14 +465,14 @@
               key: i, type: "button", className: "wb-sched-week-daycol" + (isToday ? " today" : ""),
               onClick: function () { props.onPickDay(startOfDay(d)); },
             },
-            React.createElement("small", null, "周" + WEEKDAY_CN[d.getDay()]),
+            React.createElement("small", null, currentLang() === "zh" ? "周" + WEEKDAY_CN[d.getDay()] : WEEKDAY_EN[d.getDay()]),
             React.createElement("b", null, d.getDate())
           );
         })
       ),
       (allDayByCol.some(function (l) { return l.length; })) && React.createElement(
         "div", { className: "wb-sched-week-allday" },
-        React.createElement("span", { className: "wb-sched-allday-label" }, "全天"),
+        React.createElement("span", { className: "wb-sched-allday-label" }, T("schedule.allDay")),
         React.createElement(
           "div", { className: "wb-sched-week-allday-cols" },
           allDayByCol.map(function (list, i) {
@@ -509,8 +531,8 @@
       "div", { className: "wb-sched-monthview" },
       React.createElement(
         "div", { className: "wb-sched-month-dow" },
-        ["一", "二", "三", "四", "五", "六", "日"].map(function (w, i) {
-          return React.createElement("span", { key: i }, "周" + w);
+        (currentLang() === "zh" ? ["一", "二", "三", "四", "五", "六", "日"] : ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]).map(function (w, i) {
+          return React.createElement("span", { key: i }, currentLang() === "zh" ? "周" + w : w);
         })
       ),
       React.createElement(
@@ -556,9 +578,9 @@
     var isTask = ev.source === "task";
     var tab = props.tab, setTab = props.setTab;
     var statusTone = ev.status === "paused" ? "amber" : ev.status === "completed" || ev.status === "done" ? "slate" : "green";
-    var statusText = ev.status === "paused" ? "已暂停" : ev.status === "completed" || ev.status === "done" ? "已完成" : "进行中";
+    var statusText = ev.status === "paused" ? T("status.paused") : ev.status === "completed" || ev.status === "done" ? T("status.done") : T("status.running");
 
-    var tabs = isTask ? [{ id: "detail", label: "详情" }, { id: "runs", label: "运行记录" }] : [{ id: "detail", label: "详情" }];
+    var tabs = isTask ? [{ id: "detail", label: T("schedule.detail") }, { id: "runs", label: T("schedule.runHistory") }] : [{ id: "detail", label: T("schedule.detail") }];
 
     return React.createElement(
       "aside", { className: "wb-sched-detail" },
@@ -570,7 +592,7 @@
             onClick: function () { setTab(it.id); },
           }, it.label);
         }),
-        React.createElement("button", { type: "button", className: "wb-sched-detail-close", onClick: props.onClose, title: "关闭" }, "×")
+        React.createElement("button", { type: "button", className: "wb-sched-detail-close", onClick: props.onClose, title: T("common.close") }, "×")
       ),
       React.createElement(
         "div", { className: "wb-sched-detail-head" },
@@ -591,40 +613,40 @@
             }),
             React.createElement(MetaRow, {
               icon: svg(["M4 7h16M4 12h16M4 17h10"]),
-              value: CATEGORY_LABEL[ev.category] || ev.category,
+              value: categoryLabel(ev.category),
             })
           ),
           isTask && React.createElement(
             "div", { className: "wb-sched-detail-sec" },
-            React.createElement("div", { className: "wb-sched-detail-sec-title" }, "任务内容"),
+            React.createElement("div", { className: "wb-sched-detail-sec-title" }, T("schedule.taskContent")),
             React.createElement("p", { className: "wb-sched-detail-prompt" }, ev.title)
           ),
           isTask && React.createElement(
             "div", { className: "wb-sched-detail-grid" },
-            React.createElement(KV, { k: "下次执行", v: absTimeText(ev.next_run) }),
-            React.createElement(KV, { k: "上次执行", v: absTimeText(ev.last_run) })
+            React.createElement(KV, { k: T("schedule.nextRun"), v: absTimeText(ev.next_run) }),
+            React.createElement(KV, { k: T("schedule.lastRun"), v: absTimeText(ev.last_run) })
           ),
           !isTask && React.createElement(
             "div", { className: "wb-sched-detail-grid" },
-            React.createElement(KV, { k: "类型", v: ev.entity_type || "—" }),
-            React.createElement(KV, { k: "优先级", v: ev.priority || "—" })
+            React.createElement(KV, { k: T("schedule.type"), v: ev.entity_type || "—" }),
+            React.createElement(KV, { k: T("create.task.priority"), v: ev.priority ? T("priority." + ev.priority, null, ev.priority) : "—" })
           ),
           !isTask && ev.content && React.createElement(
             "div", { className: "wb-sched-detail-sec" },
-            React.createElement("div", { className: "wb-sched-detail-sec-title" }, "备注"),
+            React.createElement("div", { className: "wb-sched-detail-sec-title" }, T("schedule.note")),
             React.createElement("p", { className: "wb-sched-detail-prompt" }, ev.content)
           ),
           isTask && React.createElement(
             "div", { className: "wb-sched-detail-actions" },
-            React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { props.onEdit(ev); } }, "编辑"),
+            React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { props.onEdit(ev); } }, T("schedule.edit")),
             React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { props.onToggleStatus(ev); } },
-              ev.status === "paused" ? "启用" : "暂停"),
-            React.createElement("button", { type: "button", className: "wb-btn danger", onClick: function () { props.onDelete(ev); } }, "删除")
+              ev.status === "paused" ? T("schedule.enable") : T("schedule.pause")),
+            React.createElement("button", { type: "button", className: "wb-btn danger", onClick: function () { props.onDelete(ev); } }, T("schedule.delete"))
           ),
           !isTask && React.createElement(
             "div", { className: "wb-sched-detail-actions" },
-            React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { props.onEdit(ev); } }, "编辑"),
-            React.createElement("button", { type: "button", className: "wb-btn danger", onClick: function () { props.onDelete(ev); } }, "删除")
+            React.createElement("button", { type: "button", className: "wb-btn", onClick: function () { props.onEdit(ev); } }, T("schedule.edit")),
+            React.createElement("button", { type: "button", className: "wb-btn danger", onClick: function () { props.onDelete(ev); } }, T("schedule.delete"))
           )
         ),
         tab === "runs" && React.createElement(RunsTab, { runs: props.runs, loading: props.runsLoading })
@@ -644,8 +666,8 @@
   }
 
   function RunsTab(props) {
-    if (props.loading) return React.createElement("div", { className: "wb-sched-muted pad" }, "加载运行记录…");
-    if (!props.runs || !props.runs.length) return React.createElement("div", { className: "wb-sched-muted pad" }, "暂无运行记录。");
+    if (props.loading) return React.createElement("div", { className: "wb-sched-muted pad" }, T("schedule.runsLoading"));
+    if (!props.runs || !props.runs.length) return React.createElement("div", { className: "wb-sched-muted pad" }, T("schedule.runsEmpty"));
     return React.createElement(
       "div", { className: "wb-sched-runs" },
       props.runs.map(function (run) {
@@ -654,7 +676,7 @@
           "div", { className: "wb-sched-run", key: run.id },
           React.createElement(
             "div", { className: "wb-sched-run-head" },
-            React.createElement("span", { className: "wb-sched-badge " + (ok ? "green" : "red") }, ok ? "成功" : "失败"),
+            React.createElement("span", { className: "wb-sched-badge " + (ok ? "green" : "red") }, ok ? T("schedule.success") : T("schedule.failure")),
             React.createElement("time", null, absTimeText(run.run_at)),
             React.createElement("small", null, (run.duration_ms != null ? Math.round(run.duration_ms / 100) / 10 + "s" : ""))
           ),
@@ -665,7 +687,13 @@
   }
 
   function detailTimeText(ev) {
-    if (ev.all_day) return ev._start.getFullYear() + "年" + (ev._start.getMonth() + 1) + "月" + ev._start.getDate() + "日 · 全天";
+    if (ev.all_day) return (currentLang() === "zh"
+      ? ev._start.getFullYear() + "年" + (ev._start.getMonth() + 1) + "月" + ev._start.getDate() + "日"
+      : ev._start.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })) + " · " + T("schedule.allDay");
+    if (currentLang() !== "zh") {
+      return ev._start.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" }) +
+        " " + clockHM(ev._start) + " - " + clockHM(ev._end);
+    }
     return ev._start.getFullYear() + "年" + (ev._start.getMonth() + 1) + "月" + ev._start.getDate() + "日 周" + WEEKDAY_CN[ev._start.getDay()] +
       " " + clockHM(ev._start) + " – " + clockHM(ev._end);
   }
@@ -700,17 +728,17 @@
     var errState = useState(""); var err = errState[0], setErr = errState[1];
 
     var REPEATS = [
-      { id: "none", label: "不重复" }, { id: "daily", label: "每天" }, { id: "weekly", label: "每周" },
-      { id: "monthly", label: "每月" }, { id: "interval", label: "固定间隔" }, { id: "cron", label: "自定义 (Cron)" },
+      { id: "none", labelKey: "schedule.repeat.none" }, { id: "daily", labelKey: "schedule.repeat.daily" }, { id: "weekly", labelKey: "schedule.repeat.weekly" },
+      { id: "monthly", labelKey: "schedule.repeat.monthly" }, { id: "interval", labelKey: "schedule.repeat.interval" }, { id: "cron", labelKey: "schedule.repeat.cron" },
     ];
 
     function submit() {
       var p = prompt.trim();
-      if (!p) { setErr(formKind === "task" ? "请填写任务内容" : "请填写日程标题"); return; }
+      if (!p) { setErr(formKind === "task" ? T("schedule.error.taskContentRequired") : T("schedule.error.eventTitleRequired")); return; }
       if (formKind === "entity") {
-        if (!entityDate) { setErr("请选择日程日期"); return; }
+        if (!entityDate) { setErr(T("schedule.error.dateRequired")); return; }
         var dueDate = new Date(entityDate + "T23:59:59");
-        if (isNaN(dueDate.getTime())) { setErr("请选择有效的日程日期"); return; }
+        if (isNaN(dueDate.getTime())) { setErr(T("schedule.error.invalidDate")); return; }
         var entityBody = {
           title: p,
           content: note.trim(),
@@ -726,9 +754,9 @@
         return;
       }
       var startDate = new Date(startVal);
-      if (repeat !== "cron" && repeat !== "interval" && isNaN(startDate.getTime())) { setErr("请选择有效的首次时间"); return; }
+      if (repeat !== "cron" && repeat !== "interval" && isNaN(startDate.getTime())) { setErr(T("schedule.error.invalidFirstTime")); return; }
       var spec = buildSchedule(repeat, startDate, cronText, ivVal, ivUnit);
-      if ((spec.schedule_type === "cron" || spec.schedule_type === "interval") && !spec.schedule_value) { setErr("请填写重复规则"); return; }
+      if ((spec.schedule_type === "cron" || spec.schedule_type === "interval") && !spec.schedule_value) { setErr(T("schedule.error.repeatRequired")); return; }
       var body = { prompt: p, schedule_type: spec.schedule_type, schedule_value: spec.schedule_value };
       if (spec.schedule_type === "once") body.next_run = startDate.toISOString();
       setSaving(true); setErr("");
@@ -743,32 +771,32 @@
         "div", { className: "wb-create-modal wb-create-task wb-sched-create-modal" },
         React.createElement(
           "div", { className: "wb-create-head" },
-          React.createElement("b", null, props.task ? "编辑定时任务" : props.entity ? "编辑日程" : "新增内容"),
-          React.createElement("button", { type: "button", className: "wb-create-x", onClick: props.onClose, title: "关闭" }, "×")
+          React.createElement("b", null, props.task ? T("schedule.editTask") : props.entity ? T("schedule.editEvent") : T("schedule.addContent")),
+          React.createElement("button", { type: "button", className: "wb-create-x", onClick: props.onClose, title: T("common.close") }, "×")
         ),
         React.createElement(
           "div", { className: "wb-create-body wb-sched-create-body" },
           !props.task && !props.entity && React.createElement(
             "div", { className: "wb-sched-create-kind" },
-            React.createElement("span", { className: "wb-sched-create-label" }, "添加类型"),
+            React.createElement("span", { className: "wb-sched-create-label" }, T("schedule.addType")),
             React.createElement(
               "div", { className: "wb-sched-kind-switch" },
               React.createElement("button", {
                 type: "button", className: "wb-sched-kind-btn" + (formKind === "entity" ? " on" : ""),
                 onClick: function () { setFormKind("entity"); setErr(""); },
-              }, "日程"),
+              }, T("schedule.event")),
               React.createElement("button", {
                 type: "button", className: "wb-sched-kind-btn" + (formKind === "task" ? " on" : ""),
                 onClick: function () { setFormKind("task"); setErr(""); },
-              }, "定时任务")
+              }, T("schedule.scheduledTask"))
             )
           ),
           React.createElement(
             "label", { className: "wb-sched-field" },
-            React.createElement("span", null, formKind === "task" ? "任务内容" : "日程标题"),
+            React.createElement("span", null, formKind === "task" ? T("schedule.taskContent") : T("schedule.eventTitle")),
             React.createElement("textarea", {
               value: prompt, rows: 3, autoFocus: true,
-              placeholder: formKind === "task" ? "例如：每天早上汇总今天的待办并提醒我" : "例如：产品评审会 / 提案截止 / 出差行程",
+              placeholder: formKind === "task" ? T("schedule.taskPlaceholder") : T("schedule.eventPlaceholder"),
               onChange: function (e) { setPrompt(e.target.value); },
             })
           ),
@@ -778,80 +806,80 @@
               "div", { className: "wb-sched-create-grid" },
               React.createElement(
                 "label", { className: "wb-sched-field" },
-                React.createElement("span", null, "日期"),
+                React.createElement("span", null, T("schedule.date")),
                 React.createElement("input", { type: "date", value: entityDate, onChange: function (e) { setEntityDate(e.target.value); } })
               ),
               React.createElement(
                 "label", { className: "wb-sched-field" },
-                React.createElement("span", null, "优先级"),
+                React.createElement("span", null, T("create.task.priority")),
                 React.createElement("select", { value: entityPriority, onChange: function (e) { setEntityPriority(e.target.value); } },
-                  React.createElement("option", { value: "high" }, "高"),
-                  React.createElement("option", { value: "medium" }, "中"),
-                  React.createElement("option", { value: "low" }, "低"))
+                  React.createElement("option", { value: "high" }, T("priority.high")),
+                  React.createElement("option", { value: "medium" }, T("priority.medium")),
+                  React.createElement("option", { value: "low" }, T("priority.low")))
               )
             ),
             React.createElement(
               "label", { className: "wb-sched-field" },
-              React.createElement("span", null, "状态"),
+              React.createElement("span", null, T("workbenchChat.statusLabel")),
               React.createElement("div", { className: "wb-sched-seg" },
-                [{ id: "pending", label: "待处理" }, { id: "active", label: "进行中" }, { id: "done", label: "已完成" }].map(function (it) {
+                [{ id: "pending", labelKey: "status.pending" }, { id: "active", labelKey: "status.running" }, { id: "done", labelKey: "status.done" }].map(function (it) {
                   return React.createElement("button", {
                     key: it.id, type: "button", className: entityStatus === it.id ? "on" : "",
                     onClick: function () { setEntityStatus(it.id); },
-                  }, it.label);
+                  }, T(it.labelKey));
                 }))
             ),
             React.createElement(
               "label", { className: "wb-sched-field" },
-              React.createElement("span", null, "备注"),
+              React.createElement("span", null, T("schedule.note")),
               React.createElement("textarea", {
                 value: note, rows: 4,
-                placeholder: "补充地点、参与人或上下文（可选）",
+                placeholder: T("schedule.notePlaceholder"),
                 onChange: function (e) { setNote(e.target.value); },
               })
             )
           ),
           showStart && React.createElement(
             "label", { className: "wb-sched-field" },
-            React.createElement("span", null, repeat === "none" ? "时间" : "首次时间"),
+            React.createElement("span", null, repeat === "none" ? T("schedule.time") : T("schedule.firstTime")),
             React.createElement("input", { type: "datetime-local", value: startVal, onChange: function (e) { setStartVal(e.target.value); } })
           ),
           formKind === "task" && React.createElement(
             "label", { className: "wb-sched-field" },
-            React.createElement("span", null, "重复"),
+            React.createElement("span", null, T("schedule.repeat")),
             React.createElement("div", { className: "wb-sched-seg" },
               REPEATS.map(function (r) {
                 return React.createElement("button", {
                   key: r.id, type: "button", className: repeat === r.id ? "on" : "",
                   onClick: function () { setRepeat(r.id); },
-                }, r.label);
+                }, T(r.labelKey));
               }))
           ),
           formKind === "task" && repeat === "interval" && React.createElement(
             "label", { className: "wb-sched-field" },
-            React.createElement("span", null, "间隔"),
+            React.createElement("span", null, T("schedule.interval")),
             React.createElement("div", { className: "wb-sched-inline" },
               React.createElement("input", { type: "number", min: 1, value: ivVal, onChange: function (e) { setIvVal(e.target.value); }, style: { width: "90px" } }),
               React.createElement("select", { value: ivUnit, onChange: function (e) { setIvUnit(e.target.value); } },
-                React.createElement("option", { value: "m" }, "分钟"),
-                React.createElement("option", { value: "h" }, "小时"),
-                React.createElement("option", { value: "d" }, "天")))
+                React.createElement("option", { value: "m" }, T("schedule.unit.minutes")),
+                React.createElement("option", { value: "h" }, T("schedule.unit.hours")),
+                React.createElement("option", { value: "d" }, T("schedule.unit.days"))))
           ),
           formKind === "task" && repeat === "cron" && React.createElement(
             "label", { className: "wb-sched-field" },
-            React.createElement("span", null, "Cron 表达式 (UTC)"),
-            React.createElement("input", { type: "text", value: cronText, placeholder: "例如 30 1 * * 1  （周一 01:30 UTC）", onChange: function (e) { setCronText(e.target.value); } })
+            React.createElement("span", null, T("schedule.cronExpression")),
+            React.createElement("input", { type: "text", value: cronText, placeholder: T("schedule.cronPlaceholder"), onChange: function (e) { setCronText(e.target.value); } })
           ),
           React.createElement("p", { className: "wb-sched-form-note" }, formKind === "task"
-            ? "通过这里创建的为「仅工作区」权限任务；需要完整权限的定时任务请在对话中创建。"
-            : "普通日程会作为日历事项保存，并以全天形式显示在对应日期。"),
+            ? T("schedule.taskFormNote")
+            : T("schedule.eventFormNote")),
           err && React.createElement("div", { className: "wb-sched-form-err" }, err)
         ),
         React.createElement(
           "div", { className: "wb-create-foot" },
-          React.createElement("button", { type: "button", className: "wb-btn", onClick: props.onClose }, "取消"),
+          React.createElement("button", { type: "button", className: "wb-btn", onClick: props.onClose }, T("common.cancel")),
           React.createElement("button", { type: "button", className: "wb-btn primary", onClick: submit, disabled: saving || !prompt.trim() },
-            saving ? "保存中…" : (props.task || props.entity ? "保存" : "创建"))
+            saving ? T("settings.saving") : (props.task || props.entity ? T("common.save") : T("create.task.create")))
         )
       )
     );
@@ -954,11 +982,11 @@
       API.update(ev.task_id, { status: next }).then(function () { load(); }).catch(function (e) { setError(e.message || String(e)); });
     }
     function removeTask(ev) {
-      if (!window.confirm("确定删除该定时任务？此操作不可撤销。")) return;
+      if (!window.confirm(T("schedule.confirmDeleteTask"))) return;
       API.remove(ev.task_id).then(function () { setSelectedId(null); load(); }).catch(function (e) { setError(e.message || String(e)); });
     }
     function removeEntity(ev) {
-      if (!window.confirm("确定删除该日程？此操作不可撤销。")) return;
+      if (!window.confirm(T("schedule.confirmDeleteEvent"))) return;
       API.removeEntity(ev.entity_id).then(function () { setSelectedId(null); setEntityDetail(null); load(); }).catch(function (e) { setError(e.message || String(e)); });
     }
     function openEdit(ev) {
@@ -991,26 +1019,26 @@
           "div", { className: "wb-sched-toolbar" },
           React.createElement(
             "div", { className: "wb-sched-toolbar-left" },
-            React.createElement("button", { type: "button", className: "wb-sched-today", onClick: goToday }, "今天"),
-            React.createElement("button", { type: "button", className: "wb-sched-iconbtn", onClick: goPrev, title: "上一个" }, svg(["m15 18-6-6 6-6"])),
-            React.createElement("button", { type: "button", className: "wb-sched-iconbtn", onClick: goNext, title: "下一个" }, svg(["m9 18 6-6-6-6"])),
+            React.createElement("button", { type: "button", className: "wb-sched-today", onClick: goToday }, T("schedule.today")),
+            React.createElement("button", { type: "button", className: "wb-sched-iconbtn", onClick: goPrev, title: T("schedule.previous") }, svg(["m15 18-6-6 6-6"])),
+            React.createElement("button", { type: "button", className: "wb-sched-iconbtn", onClick: goNext, title: T("schedule.next") }, svg(["m9 18 6-6-6-6"])),
             React.createElement("h2", { className: "wb-sched-heading" }, headingText)
           ),
           React.createElement(
             "div", { className: "wb-sched-toolbar-right" },
             React.createElement(
               "div", { className: "wb-sched-viewseg" },
-              [{ id: "day", label: "日" }, { id: "week", label: "周" }, { id: "month", label: "月" }].map(function (v) {
+              [{ id: "day", labelKey: "schedule.view.day" }, { id: "week", labelKey: "schedule.view.week" }, { id: "month", labelKey: "schedule.view.month" }].map(function (v) {
                 return React.createElement("button", {
                   key: v.id, type: "button", className: viewMode === v.id ? "on" : "",
                   onClick: function () { setViewMode(v.id); },
-                }, v.label);
+                }, T(v.labelKey));
               })
             ),
             React.createElement(
               "button", { type: "button", className: "wb-btn primary wb-sched-new", onClick: function () { setFormMode({ defaultDate: anchorDate }); } },
               svg(["M12 5v14M5 12h14"], { width: 15, height: 15, strokeWidth: 2.4 }),
-              React.createElement("span", null, "新增")
+              React.createElement("span", null, T("schedule.add"))
             )
           )
         ),
@@ -1019,7 +1047,7 @@
         React.createElement(
           "div", { className: "wb-sched-viewport" },
           loading
-            ? React.createElement("div", { className: "wb-sched-loading" }, "加载日程中…")
+            ? React.createElement("div", { className: "wb-sched-loading" }, T("workbench.scheduleLoading"))
             : viewMode === "day" ? React.createElement(DayView, { anchorDate: anchorDate, events: events, activeId: selectedId, onSelect: selectEvent })
               : viewMode === "week" ? React.createElement(WeekView, { anchorDate: anchorDate, events: events, activeId: selectedId, onSelect: selectEvent, onPickDay: pickDay })
                 : React.createElement(MonthView, { anchorDate: anchorDate, events: events, activeId: selectedId, onSelect: selectEvent, onPickDay: pickDay })
@@ -1038,7 +1066,8 @@
           "aside", { className: "wb-sched-detail empty" },
           React.createElement("div", { className: "wb-sched-detail-placeholder" },
             svg(["M3 4.5h18M8 2.5v4M16 2.5v4", React.createElement("rect", { key: "r", x: 3, y: 4.5, width: 18, height: 17, rx: 2.5 })], { width: 34, height: 34, strokeWidth: 1.3 }),
-            React.createElement("p", null, "选择一个日程查看详情"))
+            React.createElement("p", null, T("schedule.selectEvent"))
+          )
         ),
       formMode && React.createElement(ScheduleForm, {
         api: API,

@@ -2413,6 +2413,95 @@ async def _workbench_verify_acceptance(
     return parsed if isinstance(parsed, dict) else None
 
 
+def _public_pending_question(q: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Public (camelCase) shape of a paused-round pending question for the UI.
+
+    Returns ``None`` when there is no real question (empty dict / missing id).
+    """
+    if not isinstance(q, dict) or not str(q.get("id") or "").strip():
+        return None
+    meta = q.get("meta") if isinstance(q.get("meta"), dict) else {}
+    return {
+        "id": str(q.get("id") or ""),
+        "text": str(q.get("text") or ""),
+        "options": [str(o) for o in (q.get("options") or [])],
+        "roundId": str(q.get("round_id") or ""),
+        "clientRequestId": str(q.get("client_request_id") or ""),
+        "allowCustom": bool(q.get("allow_custom", True)),
+        "kind": str(meta.get("kind") or ""),
+    }
+
+
+def _workbench_pending_question_for(session_id: str) -> dict[str, Any] | None:
+    """Read a session's pending question (set when a run paused for permission /
+    clarification). Session-scoped: temporarily binds ``_current_session_id`` so
+    the read targets the right Workbench task/chat session, not the default one.
+    """
+    from cyrene.agent.state import _current_session_id
+    tok = _current_session_id.set(str(session_id or ""))
+    try:
+        return _public_pending_question(get_pending_question())
+    finally:
+        _current_session_id.reset(tok)
+
+
+def _workbench_apply_pending(session: dict[str, Any], session_id: str, agent_reply: str) -> tuple[str, bool]:
+    """If ``agent_reply`` is the awaiting-user sentinel, attach the session's
+    pending question to ``session`` (so the reply card renders it) and return a
+    human-readable stand-in for the raw sentinel. Otherwise clear any stale
+    pending question. Returns ``(display_reply, is_awaiting)``.
+    """
+    if agent_reply == _AWAITING_USER_SENTINEL:
+        pending = _workbench_pending_question_for(session_id)
+        if pending:
+            session["pendingQuestion"] = pending
+            session["status"] = "waiting_for_user"
+            return (pending.get("text") or "需要你确认后才能继续。"), True
+        # Sentinel but no question recoverable — degrade gracefully.
+        session.pop("pendingQuestion", None)
+        return "我需要你的确认才能继续，但没能取到具体问题，请重试。", False
+    session.pop("pendingQuestion", None)
+    return agent_reply, False
+
+
+async def _workbench_answer_pending(
+    session_id: str,
+    question_id: str,
+    answer_text: str,
+    workspace_dir: str,
+) -> str:
+    """Resume a paused Workbench round with the user's answer. Binds the session
+    + workspace ContextVars so ``answer_pending_question`` (which calls
+    ``_run_chat_agent`` directly, bypassing ``run_agent``'s context setup) grants
+    permission / retries the blocked action inside the right project scope.
+    """
+    from cyrene.agent.state import _current_session_id, _active_workspace_dir
+    s_tok = _current_session_id.set(str(session_id or ""))
+    w_tok = _active_workspace_dir.set(workspace_dir or "")
+    try:
+        return await answer_pending_question(
+            question_id, answer_text, _bot, _CHAT_ID, _db_path,
+        )
+    finally:
+        _current_session_id.reset(s_tok)
+        _active_workspace_dir.reset(w_tok)
+
+
+def _workbench_resolve_workspace_dir(project: dict[str, Any] | None) -> str:
+    """Resolve a project's confined workspace dir (created if missing). Empty →
+    the global WORKSPACE_DIR. Mirrors the logic in ``_workbench_agent_reply``."""
+    ws_raw = str((project or {}).get("workspacePath") or "").strip()
+    if not ws_raw:
+        return ""
+    try:
+        ws_path = Path(ws_raw).expanduser()
+        ws_path.mkdir(parents=True, exist_ok=True)
+        return str(ws_path.resolve())
+    except OSError:
+        logger.warning("Workbench workspace unavailable, using global: %s", ws_raw)
+        return ""
+
+
 async def _workbench_agent_reply(
     user_input: str,
     session: dict[str, Any],
@@ -2517,6 +2606,8 @@ async def _reset_app_data() -> dict[str, Any]:
     reset_web_settings()
     reset_onboarding_state()
 
+    from cyrene.config import STORE_DIR
+
     for path in (
         STATE_FILE,
         DATA_DIR / "short_term.json",
@@ -2524,8 +2615,18 @@ async def _reset_app_data() -> dict[str, Any]:
         DATA_DIR / "web_settings.json",
         DATA_DIR / "onboarding_state.json",
         DATA_DIR / ".setup_done",
+        # Workbench store: projects/tasks, chat threads, notifications. Without
+        # these, "reset" would leave the app showing old projects and skip the
+        # first-run onboarding on restart.
+        _WORKBENCH_STORE,
+        DATA_DIR / "workbench_chats.json",
+        DATA_DIR / "workbench_notifications.json",
     ):
         _remove_path(path)
+
+    # Per-workspace agent memory (store/wb_memory_<ws>.json).
+    for mem_path in STORE_DIR.glob("wb_memory_*.json"):
+        _remove_path(mem_path)
 
     for path in (
         CONVERSATIONS_DIR,
@@ -5008,7 +5109,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             for s in (doomed_project.get("sessions") or []):
                 sid = str(s.get("id") or "").strip()
                 if sid:
-                    await clear_session_id(session_id=sid)
+                    try:
+                        await clear_session_id(session_id=sid)
+                    except Exception:
+                        logger.exception("Failed to clear session state for %s", sid)
             # Also drop the project's workbench conversations (chat-kind sessions).
             try:
                 from webui.routes_workbench_chat import remove_project_chats
@@ -5487,11 +5591,14 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         ephemeral_system = _workbench_compose_ephemeral_system(project, session)
         agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
+        # A run that hit a permission / clarification boundary pauses awaiting the
+        # user's answer — surface the question on the card instead of the sentinel.
+        agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
         session["agentReply"] = agent_reply
         # Sink durable memories from this exchange into the project's workspace store.
-        if not command:
+        if not command and not awaiting_user:
             schedule_capture(_workbench_project_data_key(project), user_input, agent_reply)
-        if not is_step_run:
+        if not is_step_run and not awaiting_user:
             session["status"] = "planning" if session.get("status") in ("idle", "pending") else session.get("status", "planning")
         session["updatedAt"] = now
         project["updatedAt"] = now
@@ -5576,11 +5683,12 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         chat_run_start_ts = _utc_now_iso()
         ephemeral_system = _workbench_compose_ephemeral_system(project, session)
         agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
+        agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
         session["agentReply"] = agent_reply
         # Sink durable memories from this exchange into the project's workspace store.
-        if not command:
+        if not command and not awaiting_user:
             schedule_capture(_workbench_project_data_key(project), message, agent_reply)
-        session["status"] = "completed"
+        session["status"] = "waiting_for_user" if awaiting_user else "completed"
         now = _utc_now_iso()
         session["updatedAt"] = now
         project["updatedAt"] = now
@@ -5675,10 +5783,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         ephemeral_system = _workbench_compose_ephemeral_system(project, session)
         agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
+        agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
         session["agentReply"] = agent_reply
-        if not command:
+        if not command and not awaiting_user:
             schedule_capture(_workbench_project_data_key(project), user_input, agent_reply)
-        session["status"] = "acted" if kind == "direct" else "answered"
+        session["status"] = "waiting_for_user" if awaiting_user else ("acted" if kind == "direct" else "answered")
 
         normalized_attachments = _workbench_normalize_attachments(attachments)
         public_attachments = [build_public_attachment_payload(item) for item in normalized_attachments]
@@ -5730,6 +5839,85 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             meta={"sessionId": session_id, "runId": run_id},
         )
         return {"ok": True, "replyKind": kind, "project": project, "session": session, "run": run, **payload}
+
+    @router.post("/api/task-sessions/{session_id}/answer")
+    async def api_workbench_answer(session_id: str, request: Request):
+        """Answer a paused run's permission / clarification question and resume
+        the SAME round inside the project scope. The continued reply (or a follow-up
+        question) replaces the question card. Mirrors the legacy chat answer flow,
+        but session-scoped to this Workbench task."""
+        body = await request.json()
+        question_id = str(body.get("question_id") or "").strip()
+        answer_text = str(body.get("answer") or body.get("selected_option") or "").strip()
+        if not question_id or not answer_text:
+            return JSONResponse({"error": "question_id and answer are required"}, status_code=400)
+        payload = _read_workbench_store()
+        project, session = _workbench_find_session(payload, session_id)
+        if not session or not project:
+            return JSONResponse({"error": "session not found"}, status_code=404)
+        pending = session.get("pendingQuestion") if isinstance(session.get("pendingQuestion"), dict) else None
+        if not pending or str(pending.get("id") or "") != question_id:
+            return JSONResponse({"error": "no matching pending question"}, status_code=409)
+
+        now = _utc_now_iso()
+        run_start_ts = now
+        workspace_root = _workbench_workspace_root(project)
+        workspace_dir = _workbench_resolve_workspace_dir(project)
+        git_status_before = _workbench_git_status_snapshot(workspace_root)
+        try:
+            agent_reply = await _workbench_answer_pending(session_id, question_id, answer_text, workspace_dir)
+        except Exception:
+            logger.exception("Workbench answer-resume failed for session %s", session_id)
+            return JSONResponse({"error": "answer resume failed"}, status_code=502)
+        git_status_after = _workbench_git_status_snapshot(workspace_root)
+
+        # Another boundary may have been hit while resuming → re-surface the new
+        # question; otherwise clear the card and settle on the continued reply.
+        agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
+        session["agentReply"] = agent_reply
+        if not awaiting_user:
+            session.pop("pendingQuestion", None)
+            session["status"] = "acted"
+            schedule_capture(_workbench_project_data_key(project), answer_text, agent_reply)
+
+        run_id = _short_id("run")
+        activity_events = _collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
+        tool_call_events = [e for e in activity_events if e.get("type") == "ToolCallEvent"]
+        file_changes = _workbench_merge_file_changes([
+            *[change for event in tool_call_events for change in (event.get("fileChanges") or [])],
+            *_workbench_git_status_delta(git_status_before, git_status_after, workspace_root),
+        ])
+        events = [
+            {"id": _short_id("event"), "type": "UserMessageEvent", "runId": run_id, "createdAt": now, "body": f"[确认] {answer_text}"},
+            *activity_events,
+            {"id": _short_id("event"), "type": "AgentResponseEvent", "runId": run_id, "createdAt": now, "body": agent_reply},
+        ]
+        run = {
+            "id": run_id,
+            "taskId": session_id,
+            "userInput": answer_text,
+            "agentResponse": agent_reply,
+            "status": "completed",
+            "startedAt": now,
+            "endedAt": now,
+            "contextPackId": _short_id("ctx"),
+            "events": events,
+            "fileChanges": file_changes,
+            "toolCalls": [{"tool": e["tool"], "argsPreview": e["argsPreview"]} for e in tool_call_events],
+            "artifacts": [],
+            "attachments": [],
+            "mode": "auto",
+            "error": None,
+        }
+        session.setdefault("runs", []).append(run)
+        session.setdefault("events", []).extend(events)
+        _workbench_promote_file_artifacts(session, file_changes, now)
+        session["updatedAt"] = now
+        project["updatedAt"] = now
+        payload["activeProjectId"] = project.get("id")
+        payload["activeSessionId"] = session_id
+        _write_workbench_store(payload)
+        return {"ok": True, "awaitingUser": awaiting_user, "project": project, "session": session, "run": run, **payload}
 
     @router.post("/api/task-sessions/{session_id}/init/submit")
     async def api_workbench_submit_init(session_id: str, request: Request):

@@ -1234,8 +1234,10 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
 
 /* ---- Card action menu (task rail + chat rail hover dots) ---- */
 
-/* Task card: absolute overlay in top-right corner */
-.wb-card-actions {
+/* Task card: absolute overlay in top-right corner.
+   Scoped to the task rail card — a bare `.wb-card-actions` is also the in-card
+   button row (WbActions); leaving this global hid those buttons (opacity:0). */
+.workbench-task-card .wb-card-actions {
   position: absolute;
   top: 7px;
   right: 8px;
@@ -2529,6 +2531,27 @@ html[data-theme="dark"] .wbp-detail-card .wbp-ctx-input {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 2px;
+}
+/* Free-text reply row for an open clarification question on the question card. */
+.wb-q-custom {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
+.wb-q-custom .wb-q-input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--wb-text, inherit);
+  background: var(--wb-main-bg, #fff);
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  outline: none;
+}
+.wb-q-custom .wb-q-input:focus {
+  border-color: var(--wb-accent);
 }
 
 /* Per-state accents (icon tint + border highlight). */
@@ -6764,6 +6787,90 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 /* ---- composer ---- */
+
+/* Inline permission / clarification prompt at the bottom of the chat thread. */
+.wbc-question {
+  align-self: stretch;
+  max-width: 760px;
+  margin: 4px auto 8px;
+  padding: 14px 16px;
+  background: var(--wb-main-bg, #fff);
+  border: 1px solid var(--wb-line);
+  border-left: 3px solid var(--wb-accent);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+.wbc-question-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  color: var(--wb-accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+.wbc-question-ico { display: inline-flex; }
+.wbc-question-text {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--wb-text, inherit);
+  white-space: pre-wrap;
+}
+.wbc-question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.wbc-question-opt {
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--wb-text, inherit);
+  background: var(--wb-surface, #f5f6f8);
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.wbc-question-opt:hover:not(:disabled) { border-color: var(--wb-accent); }
+.wbc-question-opt.primary {
+  color: #fff;
+  background: var(--wb-accent);
+  border-color: var(--wb-accent);
+}
+.wbc-question-opt:disabled { opacity: 0.5; cursor: default; }
+.wbc-question-custom {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+.wbc-question-custom input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 11px;
+  font-size: 13px;
+  color: var(--wb-text, inherit);
+  background: var(--wb-surface, #f5f6f8);
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  outline: none;
+}
+.wbc-question-custom input:focus { border-color: var(--wb-accent); }
+.wbc-question-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  color: #fff;
+  background: var(--wb-accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.wbc-question-send:disabled { opacity: 0.45; cursor: default; }
 
 .wbc-composer {
   flex: 0 0 auto;

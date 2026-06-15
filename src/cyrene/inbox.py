@@ -242,19 +242,15 @@ async def clear_all_inboxes(session_id: str = "") -> None:
     When *session_id* is provided, only that session's inbox tree is cleared.
     Otherwise the entire ``inbox/`` directory tree is wiped.
     """
+    import shutil
+
     async with _INBOX_LOCK:
         if session_id:
             session_dir = INBOX_DIR / session_id
             if session_dir.exists():
-                for path in session_dir.glob("*"):
-                    try:
-                        path.unlink()
-                    except FileNotFoundError:
-                        continue
-                try:
-                    session_dir.rmdir()
-                except FileNotFoundError:
-                    pass
+                # Session inbox contains per-agent subdirectories, not plain files.
+                # shutil.rmtree handles the nested structure correctly on all platforms.
+                shutil.rmtree(session_dir, ignore_errors=True)
             return
         # Clear all inboxes (legacy behavior)
         if INBOX_DIR.exists():
@@ -262,11 +258,11 @@ async def clear_all_inboxes(session_id: str = "") -> None:
                 for path in inbox_dir.glob("*"):
                     try:
                         path.unlink()
-                    except FileNotFoundError:
+                    except (FileNotFoundError, OSError):
                         continue
                 try:
                     inbox_dir.rmdir()
-                except FileNotFoundError:
+                except (FileNotFoundError, OSError):
                     continue
         INBOX_DIR.mkdir(parents=True, exist_ok=True)
 
