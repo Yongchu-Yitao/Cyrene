@@ -51,6 +51,7 @@ var TABS = [
   { id: "agents", labelKey: "settings.agents" },
   { id: "appearance", labelKey: "settings.appearance" },
   { id: "capabilities", labelKey: "settings.capabilities" },
+  { id: "skills", labelKey: "settings.skills" },
   { id: "data", labelKey: "settings.data" },
   { id: "about", labelKey: "settings.about" },
 ];
@@ -367,6 +368,7 @@ function SettingsOverlay({
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
           tab === "appearance" && AppearancePanel({ t, tweaks, setTweak, actualTheme, theme: initialTheme }),
           tab === "capabilities" && CapabilitiesPanel({ t, browserTools, saveBrowserTools, mcpConfigs, setMcpConfigs, mcpServers, toolList, toolsExpanded, setToolsExpanded, toolsSaved, saveTools, newMcpServer, setNewMcpServer, mcpSaved, saveMcp, config }),
+          tab === "skills" && React.createElement(SkillsPanel, { t }),
           tab === "data" && DataPanel({ t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSid, setExportSid, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
           tab === "about" && AboutPanel({ t, config }),
         ),
@@ -994,6 +996,295 @@ function UpdateSection({ t }) {
     downloading && React.createElement("div", { className: "wb-progress-bar", style: { width: "100%" } },
       React.createElement("div", { style: { width: progress.total > 0 ? Math.round((progress.downloaded / progress.total) * 100) + "%" : "0%", height: 4, background: "var(--wb-blue)", borderRadius: 2, transition: "width 0.3s" } }),
     ),
+  );
+}
+
+// ── Skills Panel ──
+function SkillsPanel(p) {
+  var t = p.t;
+  var [skills, setSkills] = useStateSt([]);
+  var [loading, setLoading] = useStateSt(true);
+  var [query, setQuery] = useStateSt("");
+  var [selectedId, setSelectedId] = useStateSt("");
+  var [busy, setBusy] = useStateSt(false);
+  var [message, setMessage] = useStateSt("");
+  var [messageKind, setMessageKind] = useStateSt("");
+  var [showMenu, setShowMenu] = useStateSt(false);
+
+  function fmtBytes(n) {
+    n = Number(n || 0);
+    if (n < 1024) return n + " B";
+    if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1048576).toFixed(1) + " MB";
+  }
+  function fmtDate(iso) {
+    if (!iso) return "—";
+    try { return new Date(iso).toLocaleString(); } catch (e) { return String(iso); }
+  }
+  function setNotice(text, kind) {
+    setMessage(text);
+    setMessageKind(kind || "info");
+    setTimeout(function () { setMessage(""); setMessageKind(""); }, 3000);
+  }
+
+  function loadSkills() {
+    setLoading(true);
+    return fetch("/api/skills/installed")
+      .then(function (r) { return r.ok ? r.json() : Promise.reject("HTTP " + r.status); })
+      .then(function (data) {
+        var list = (data && data.skills) || [];
+        setSkills(list);
+        setSelectedId(function (prev) {
+          return prev && list.some(function (s) { return s.id === prev; }) ? prev : (list[0] && list[0].id) || "";
+        });
+        setLoading(false);
+      })
+      .catch(function () {
+        setNotice(t("settings.networkError"), "error");
+        setLoading(false);
+      });
+  }
+
+  useEffectSt(function () { loadSkills(); }, []);
+
+  useEffectSt(function () {
+    if (!showMenu) return;
+    function onDocClick(e) {
+      if (!e.target.closest(".wb-skill-install-menu") && !e.target.closest(".wb-skill-install-btn")) {
+        setShowMenu(false);
+      }
+    }
+    document.addEventListener("click", onDocClick);
+    return function () { document.removeEventListener("click", onDocClick); };
+  }, [showMenu]);
+
+  function handleToggle(id) {
+    if (busy) return;
+    setBusy(true);
+    fetch("/api/skills/" + id + "/toggle", { method: "POST" })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+      .then(function (data) {
+        if (data && data.ok) {
+          loadSkills().then(function () { setBusy(false); });
+        } else {
+          setNotice(t("settings.toggleFailed"), "error");
+          setBusy(false);
+        }
+      })
+      .catch(function () { setNotice(t("settings.toggleFailed"), "error"); setBusy(false); });
+  }
+
+  function handleUninstall(id, name) {
+    if (busy) return;
+    if (!window.confirm(t("settings.uninstallSkillConfirm", { name: name || id }))) return;
+    setBusy(true);
+    fetch("/api/skills/" + id + "/uninstall", { method: "POST" })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+      .then(function (data) {
+        if (data && data.ok) {
+          loadSkills().then(function () { setBusy(false); });
+        } else {
+          setNotice(t("settings.uninstallFailed"), "error");
+          setBusy(false);
+        }
+      })
+      .catch(function () { setNotice(t("settings.uninstallFailed"), "error"); setBusy(false); });
+  }
+
+  function handleFileSelected(e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) {
+      setNotice(t("settings.installCancelled"), "info");
+      return;
+    }
+    setBusy(true);
+    setShowMenu(false);
+    var formData = new FormData();
+    formData.append("file", file);
+    fetch("/api/skills/install-upload", { method: "POST", body: formData })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+      .then(function (data) {
+        if (data && data.ok) {
+          setNotice(t("settings.saved"), "success");
+          loadSkills().then(function () { setBusy(false); });
+        } else {
+          setNotice(data && data.error ? data.error : t("settings.installFailed"), "error");
+          setBusy(false);
+        }
+      })
+      .catch(function () { setNotice(t("settings.installFailed"), "error"); setBusy(false); });
+  }
+
+  function handleInstallFile() {
+    var input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".md,.txt,.zip,.json,.yaml,.yml,.prompt";
+    input.onchange = handleFileSelected;
+    input.click();
+  }
+
+  function handleInstallFolder() {
+    setBusy(true);
+    setShowMenu(false);
+    fetch("/api/skills/install-picker", { method: "POST" })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+      .then(function (data) {
+        if (data && data.cancelled) {
+          setNotice(t("settings.installCancelled"), "info");
+          setBusy(false);
+          return;
+        }
+        if (data && data.ok) {
+          setNotice(t("settings.saved"), "success");
+          loadSkills().then(function () { setBusy(false); });
+        } else {
+          setNotice(data && data.error ? data.error : t("settings.installFailed"), "error");
+          setBusy(false);
+        }
+      })
+      .catch(function () { setNotice(t("settings.installFailed"), "error"); setBusy(false); });
+  }
+
+  function handleScanExisting() {
+    if (busy) return;
+    setBusy(true);
+    fetch("/api/skills/scan", { method: "POST" })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+      .then(function (data) {
+        if (data && data.ok) {
+          var count = Number(data.added) || 0;
+          setNotice(t("settings.skillsImported", { n: count }), count > 0 ? "success" : "info");
+          loadSkills().then(function () { setBusy(false); });
+        } else {
+          setNotice(data && data.error ? data.error : t("settings.installFailed"), "error");
+          setBusy(false);
+        }
+      })
+      .catch(function () { setNotice(t("settings.networkError"), "error"); setBusy(false); });
+  }
+
+  var filtered = skills.filter(function (skill) {
+    if (!query) return true;
+    var q = query.toLowerCase();
+    return [skill.name, skill.desc, skill.file_name, skill.source_path].join(" ").toLowerCase().indexOf(q) >= 0;
+  });
+  var selected = filtered.find(function (s) { return s.id === selectedId; }) || filtered[0] || null;
+
+  return React.createElement("div", { className: "wb-skills-page" },
+    React.createElement("div", { className: "wb-skills-head" },
+      SectionTitle(t("settings.skills"), t("settings.skillsSubtitle")),
+      React.createElement("div", { className: "wb-skill-actions" },
+        React.createElement("button", {
+          className: "wb-btn",
+          onClick: handleScanExisting,
+          disabled: busy,
+          title: t("settings.scanExistingSkillsHint"),
+        }, t("settings.scanExistingSkills")),
+        React.createElement("div", { className: "wb-skill-install-wrap" },
+          React.createElement("button", {
+            className: "wb-btn primary wb-skill-install-btn",
+            onClick: function () { setShowMenu(!showMenu); },
+            disabled: busy,
+          }, t("settings.installSkill")),
+        showMenu && React.createElement("div", { className: "wb-skill-install-menu" },
+          React.createElement("div", {
+            className: "wb-skill-install-item",
+            onClick: function () { handleInstallFile(); },
+          }, t("settings.installFile")),
+          React.createElement("div", {
+            className: "wb-skill-install-item",
+            onClick: function () { handleInstallFolder(); },
+          }, t("settings.installFolder"))
+        )
+      )
+    )
+  ),
+  React.createElement("div", { className: "wb-skills-search" },
+      React.createElement("input", {
+        className: "wb-input",
+        value: query,
+        placeholder: t("settings.filterPlaceholder"),
+        onChange: function (e) { setQuery(e.target.value); },
+      })
+    ),
+    message && React.createElement("div", { className: "wb-skills-message " + messageKind }, message),
+    loading && skills.length === 0 && React.createElement("div", { className: "wb-skills-empty" }, t("settings.loading")),
+    !loading && filtered.length === 0 && React.createElement("div", { className: "wb-skills-empty" },
+      query ? t("settings.noSkillsMatch") : t("settings.noSkills")
+    ),
+    React.createElement("div", { className: "wb-skills-list" },
+      filtered.map(function (skill) {
+        var isActive = selected && selected.id === skill.id;
+        return React.createElement("div", {
+          key: skill.id,
+          className: "wb-card wb-skill-card" + (isActive ? " active" : ""),
+          onClick: function (e) {
+            if (e.target.closest(".wb-skill-card-actions") || e.target.closest(".wb-toggle")) return;
+            setSelectedId(isActive ? "" : skill.id);
+          },
+        },
+          React.createElement("div", { className: "wb-skill-card-head" },
+            React.createElement("div", { className: "wb-skill-card-icon" }, (skill.name || "S").slice(0, 1)),
+            React.createElement("div", { className: "wb-skill-card-body" },
+              React.createElement("div", { className: "wb-skill-card-name" }, skill.name),
+              React.createElement("div", { className: "wb-skill-card-desc" }, skill.desc || "—"),
+              React.createElement("div", { className: "wb-skill-card-meta" },
+                React.createElement("span", { className: "wb-skill-status-pill " + (skill.enabled ? "enabled" : "disabled") },
+                  skill.enabled ? t("settings.skillEnabled") : t("settings.skillDisabled")
+                ),
+                React.createElement("span", null, fmtBytes(skill.size_bytes || 0))
+              )
+            ),
+            React.createElement("div", { className: "wb-skill-card-actions" },
+              Toggle(skill.enabled !== false, function (e) {
+                if (e && e.stopPropagation) e.stopPropagation();
+                handleToggle(skill.id);
+              }),
+              React.createElement("button", {
+                className: "wb-btn danger",
+                onClick: function (e) { e.stopPropagation(); handleUninstall(skill.id, skill.name); },
+                disabled: busy,
+              }, t("settings.uninstallSkill"))
+            )
+          ),
+          isActive && React.createElement("div", { className: "wb-skill-detail-body" },
+            SectionBlock(t("settings.skillDetails"), null,
+              React.createElement("div", { className: "wb-skill-meta-grid" },
+                React.createElement("div", { className: "wb-skill-meta-row wide" },
+                  React.createElement("span", { className: "wb-skill-meta-label" }, t("settings.sourcePath")),
+                  React.createElement("pre", { className: "wb-skill-code compact" }, skill.source_path || "—")
+                ),
+                React.createElement("div", { className: "wb-skill-meta-row wide" },
+                  React.createElement("span", { className: "wb-skill-meta-label" }, t("settings.storedPath")),
+                  React.createElement("pre", { className: "wb-skill-code compact" }, skill.stored_path || "—")
+                ),
+                React.createElement("div", { className: "wb-skill-meta-row" },
+                  React.createElement("span", { className: "wb-skill-meta-label" }, t("settings.installedAt")),
+                  React.createElement("span", { className: "wb-skill-meta-value" }, fmtDate(skill.installed_at))
+                ),
+                React.createElement("div", { className: "wb-skill-meta-row" },
+                  React.createElement("span", { className: "wb-skill-meta-label" }, t("settings.updatedAt")),
+                  React.createElement("span", { className: "wb-skill-meta-value" }, fmtDate(skill.updated_at))
+                )
+              )
+            ),
+            (skill.files || []).length > 1 && SectionBlock(t("settings.files"), null,
+              React.createElement("div", { className: "wb-skill-files" },
+                skill.files.map(function (f) {
+                  return React.createElement("div", { key: f.path, className: "wb-skill-file-row" },
+                    React.createElement("span", null, f.path),
+                    React.createElement("span", null, fmtBytes(f.size))
+                  );
+                })
+              )
+            ),
+            SectionBlock(t("settings.preview"), null,
+              React.createElement("pre", { className: "wb-skill-code wb-skill-preview" }, skill.preview || "—")
+            )
+          )
+        );
+      })
+    )
   );
 }
 

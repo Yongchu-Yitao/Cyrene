@@ -1,6 +1,26 @@
 // Cyrene workbench data adapter.
 // Keeps the new Project/Task Session UI decoupled from the legacy chat shell.
 
+// Pending-question kinds that are real permission / elevation requests and must
+// render as a binary 确认/拒绝 authorization card. This MUST mirror the backend's
+// _PERMISSION_ELEVATION_KINDS (cyrene/agent/session.py) exactly — matching by
+// substring (e.g. anything containing "confirmation") wrongly captures
+// plan_confirmation and claude_code_prompt_confirmation, which are ordinary
+// questions and should show their real options instead.
+var WB_PERMISSION_QUESTION_KINDS = {
+  scope_elevation: true,
+  write_permission_request: true,
+  read_elevation: true,
+  subshell_elevation: true,
+  delete_confirmation: true,
+  task_permission_request: true,
+  git_commit: true,
+};
+function wbIsPermissionQuestionKind(kind) {
+  return Object.prototype.hasOwnProperty.call(WB_PERMISSION_QUESTION_KINDS, String(kind == null ? "" : kind).trim());
+}
+window.wbIsPermissionQuestionKind = wbIsPermissionQuestionKind;
+
 var WorkbenchModel = (function () {
   function wbModelT(key, fallback, params) {
     if (window.WorkbenchI18n && typeof window.WorkbenchI18n.t === "function") {
@@ -216,7 +236,7 @@ var WorkbenchModel = (function () {
     return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/plan/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ goal: goal || "", feedback: options.feedback || "" }),
+      body: JSON.stringify({ goal: goal || "", feedback: options.feedback || "", autoStart: !!options.autoStart }),
     }).then(normalizeStore);
   }
 

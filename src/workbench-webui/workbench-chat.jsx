@@ -359,6 +359,9 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   var [runtime, setRuntime] = useWbcState(null); // {chatId, text, progress[], startedAt}
   var runtimeRef = useWbcRef(null);
   var abortRef = useWbcRef(null);
+  // Tracks the pending-question id whose plan we've already auto-revealed, so we
+  // switch to the 计划 tab once per plan rather than fighting manual tab changes.
+  var revealedPlanQidRef = useWbcRef("");
 
   function openViewer(file) {
     if (!file) return;
@@ -413,8 +416,20 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   // Viewer / content tabs belong to one conversation — reset on switch.
   useWbcEffect(function () {
     setViewerFile(null);
-    setSideTab(function (prev) { return (prev === "viewer" || prev === "map") ? "overview" : prev; });
+    revealedPlanQidRef.current = "";
+    setSideTab(function (prev) { return (prev === "viewer" || prev === "map" || prev === "plan") ? "overview" : prev; });
   }, [activeChatId]);
+
+  // When the agent pauses for a plan-mode confirmation, reveal its plan in the
+  // right panel (the prompt text points the user at "右侧「计划」标签"). Only
+  // auto-switch once per plan so we don't override a manual tab change.
+  useWbcEffect(function () {
+    var pq = activeChat && activeChat.pendingQuestion;
+    if (pq && pq.id && pq.plan && pq.id !== revealedPlanQidRef.current) {
+      revealedPlanQidRef.current = pq.id;
+      setSideTab("plan");
+    }
+  }, [activeChat && activeChat.pendingQuestion && activeChat.pendingQuestion.id]);
 
   // Surface the active conversation title in the topbar crumbs.
   useWbcEffect(function () {
@@ -900,7 +915,7 @@ function WbcQuestionPrompt({ pending, onAnswer, busy }) {
   var pq = pending || {};
   var options = Array.isArray(pq.options) ? pq.options : [];
   var kind = String(pq.kind || "");
-  var isPermission = kind.indexOf("permission") >= 0 || kind.indexOf("elevation") >= 0 || kind.indexOf("confirmation") >= 0;
+  var isPermission = window.wbIsPermissionQuestionKind(kind);
   var customState = useWbcState("");
   var customText = customState[0], setCustomText = customState[1];
   function submitCustom() {
@@ -1118,7 +1133,7 @@ function WbcTraceCard({ trace, live, label }) {
   return (
     <div className={"wbc-trace" + (live ? " live" : "")}>
       <div className="wbc-trace-head">
-        {live ? <span className="wb-spinner" /> : <span className="wbc-trace-icon">{WBC_ICONS.tool}</span>}
+        {live && entries.length === 0 ? <span className="wb-spinner" /> : (!live ? <span className="wbc-trace-icon">{WBC_ICONS.tool}</span> : null)}
         <b>{label || (live ? wbcT("workbenchChat.traceIdle", "Thinking...") : wbcT("workbenchChat.traceSummary", "Execution ({count} tool calls)", { count: entries.length }))}</b>
       </div>
       {entries.length > 0 && (
@@ -1422,11 +1437,13 @@ function WbcComposer({ chat, project, running, otherRunning, onSend, onInterrupt
 
 function WbcSide({ project, chat, runtime, tab, onTabChange, viewerFile, onOpenFile, onRename, onDelete, onToTask, toTaskBusy }) {
   var hasMap = wbcChatUsedMap(chat, runtime);
+  var pendingPlan = wbcPendingPlan(chat);
   var tabs = [
     { id: "overview", label: wbcT("chat.side.overview", "Overview") },
-    { id: "context", label: wbcT("workbenchChat.context", "Context") },
-    { id: "artifacts", label: wbcT("workbenchChat.artifacts", "Artifacts") },
   ];
+  if (pendingPlan) tabs.push({ id: "plan", label: wbcT("chat.side.plan", "Plan") });
+  tabs.push({ id: "context", label: wbcT("workbenchChat.context", "Context") });
+  tabs.push({ id: "artifacts", label: wbcT("workbenchChat.artifacts", "Artifacts") });
   if (viewerFile) tabs.push({ id: "viewer", label: wbcT("workbenchChat.viewer", "Viewer") });
   if (hasMap) tabs.push({ id: "map", label: wbcT("chat.side.map", "Map") });
   var activeTab = tabs.some(function (item) { return item.id === tab; }) ? tab : "overview";
@@ -1444,12 +1461,58 @@ function WbcSide({ project, chat, runtime, tab, onTabChange, viewerFile, onOpenF
       </div>
       <div className={"wbc-side-body" + (flush ? " flush" : "")}>
         {activeTab === "overview" && <WbcOverviewTab chat={chat} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} />}
+        {activeTab === "plan" && <WbcPlanTab plan={pendingPlan} />}
         {activeTab === "context" && <WbcContextTab project={project} chat={chat} />}
         {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} onOpenFile={onOpenFile} />}
         {activeTab === "viewer" && <WbcViewerTab file={viewerFile} />}
         {activeTab === "map" && <WbcMapTab chatId={chat ? chat.id : ""} active={true} />}
       </div>
     </aside>
+  );
+}
+
+// The plan attached to a pending plan-mode confirmation, if any. The chat-mode
+// plan is a structured {title, summary, steps:[{title, tasks[]}]} dict carried
+// on the pending question's `plan` field (see _public_pending_question).
+function wbcPendingPlan(chat) {
+  var pq = chat && chat.pendingQuestion;
+  var plan = pq && pq.plan;
+  if (!plan || typeof plan !== "object") return null;
+  var hasSteps = Array.isArray(plan.steps) && plan.steps.length > 0;
+  return (plan.title || plan.summary || hasSteps) ? plan : null;
+}
+
+// Right-panel 计划 tab — renders the proposed plan the agent is asking the user
+// to confirm. Shown only while a plan_confirmation is pending.
+function WbcPlanTab({ plan }) {
+  var p = plan || {};
+  var steps = Array.isArray(p.steps) ? p.steps : [];
+  return (
+    <div className="workbench-side-stack">
+      <section className="workbench-side-section wbc-plan">
+        <h3>{p.title || wbcT("chat.side.planTitle", "Proposed plan")}</h3>
+        {p.summary ? <p className="workbench-muted">{p.summary}</p> : null}
+        {steps.length === 0 ? (
+          <p className="workbench-muted">{wbcT("chat.side.planEmpty", "The agent has not detailed any steps yet.")}</p>
+        ) : (
+          <ol className="wbc-plan-steps">
+            {steps.map(function (step, i) {
+              var tasks = Array.isArray(step.tasks) ? step.tasks : [];
+              return (
+                <li key={i} className="wbc-plan-step">
+                  <b>{step.title || (wbcT("chat.side.planStep", "Step") + " " + (i + 1))}</b>
+                  {tasks.length > 0 && (
+                    <ul className="wbc-plan-tasks">
+                      {tasks.map(function (t, j) { return <li key={j}>{String(t)}</li>; })}
+                    </ul>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </section>
+    </div>
   );
 }
 

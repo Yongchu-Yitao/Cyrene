@@ -348,6 +348,57 @@ def install_skill_from_path(source_path: Path) -> dict[str, Any]:
     return {"ok": True, "skill": skill_payload_from_record(record)}
 
 
+def register_existing_skills() -> dict[str, Any]:
+    """Scan the installed-skills directory and register any valid skill folders/files
+    that are not already tracked in settings. Returns the newly registered skills.
+    """
+    records = skill_settings_records()
+    existing_stored = {
+        str((record.get("stored_path") or "")).rstrip("/"): True for record in records
+    }
+    added: list[dict[str, Any]] = []
+    for entry in skills_storage_dir().iterdir():
+        if not entry.exists():
+            continue
+        if entry.name.startswith("."):
+            continue
+        if entry.is_dir():
+            if validate_skill_directory(entry) is not None:
+                continue
+        elif entry.is_file():
+            if validate_skill_file(entry) is not None:
+                continue
+        else:
+            continue
+        entrypoint = _skill_entrypoint(entry)
+        if entrypoint is None:
+            continue
+        stored_str = str(entry)
+        if stored_str.rstrip("/") in existing_stored:
+            continue
+        name, desc, _preview = extract_skill_summary(entrypoint)
+        base_id = slugify_skill_id(entry.name if entry.is_dir() else entry.stem)
+        record = {
+            "id": unique_skill_id(base_id, records),
+            "name": name,
+            "desc": desc,
+            "enabled": True,
+            "installed_at": datetime.now(timezone.utc).isoformat(),
+            "source_path": stored_str,
+            "source_kind": "directory" if entry.is_dir() else "file",
+            "stored_path": stored_str,
+        }
+        records.append(record)
+        added.append(record)
+    if added:
+        save_skill_settings_records(records)
+    return {
+        "ok": True,
+        "added": len(added),
+        "skills": [skill_payload_from_record(record) for record in added],
+    }
+
+
 def uninstall_skill(skill_id: str) -> bool:
     kept: list[dict[str, Any]] = []
     removed = False

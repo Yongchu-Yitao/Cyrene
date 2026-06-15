@@ -96,6 +96,7 @@ from cyrene.settings_store import get_all as get_web_settings
 from cyrene.skills_registry import (
     build_skills as _build_skills,
     install_skill_from_path,
+    register_existing_skills as _register_existing_skills,
     skill_payload_from_record as _skill_payload_from_record,
     toggle_skill as _toggle_skill,
     uninstall_skill as _uninstall_skill,
@@ -228,7 +229,7 @@ def _workbench_default_project() -> dict[str, Any]:
     now = _utc_now_iso()
     project_id = _short_id("project")
     workspace_name = _workbench_default_project_name()
-    initial_session = _workbench_new_session(project_id, "新任务", "通过对话明确当前任务目标。", now)
+    initial_session = _workbench_new_session(project_id, "新任务", "", now)
     return {
         "projects": [
             {
@@ -254,6 +255,66 @@ def _workbench_default_project() -> dict[str, Any]:
         "activeProjectId": project_id,
         "activeSessionId": initial_session["id"],
     }
+
+
+# Legacy placeholder goal once stamped on blank 新任务 sessions. New tasks now
+# start with an empty goal; this constant still lets us recognize the old filler
+# (in already-stored sessions) as "no real goal yet" — so it is never treated as
+# a goal, and the first real message can become the goal.
+_WORKBENCH_PLACEHOLDER_GOAL = "通过对话明确当前任务目标。"
+
+
+def _workbench_is_blank_goal(goal: Any) -> bool:
+    g = str(goal or "").strip()
+    return not g or g == _WORKBENCH_PLACEHOLDER_GOAL
+
+
+def _workbench_is_default_title(title: Any) -> bool:
+    return not str(title or "").strip() or str(title or "").strip() == "新任务"
+
+
+def _workbench_derive_title(text: str) -> str:
+    """A short task title from free text — its first line/sentence, trimmed."""
+    raw = re.sub(r"\s+", " ", str(text or "").strip())
+    if not raw:
+        return "新任务"
+    head = re.split(r"[。\n？?！!；;]", raw, maxsplit=1)[0].strip() or raw
+    return head[:24] or "新任务"
+
+
+def set_task_goal_for_session(session_id: str, goal: str, title: str = "") -> dict[str, Any]:
+    """Set/correct a Workbench task session's goal (+ optional short title).
+
+    Backs the ``set_task_goal`` agent tool: the agent may call it once it actually
+    understands what the task is (e.g. after exploring the project, or when the
+    user's opener was a question rather than a goal). Returns a small status dict.
+    """
+    sid = str(session_id or "").strip()
+    new_goal = str(goal or "").strip()
+    if not sid:
+        return {"ok": False, "error": "no active task session"}
+    if len(new_goal) < 3:
+        return {"ok": False, "error": "goal is empty or too short"}
+    payload = _read_workbench_store()
+    project, session = _workbench_find_session(payload, sid)
+    if not session or not project:
+        return {"ok": False, "error": "session not found"}
+    if str(session.get("kind") or "") == "init":
+        return {"ok": False, "error": "cannot set goal on an init session"}
+    now = _utc_now_iso()
+    session["goal"] = new_goal
+    new_title = str(title or "").strip()
+    if new_title or _workbench_is_default_title(session.get("title")):
+        session["title"] = (new_title or _workbench_derive_title(new_goal))[:80]
+    merged = list(session.get("constraints") or [])
+    for item in _workbench_extract_constraints(new_goal):
+        if item not in merged:
+            merged.append(item)
+    session["constraints"] = merged
+    session["updatedAt"] = now
+    project["updatedAt"] = now
+    _write_workbench_store(payload)
+    return {"ok": True, "goal": session["goal"], "title": session.get("title") or ""}
 
 
 def _workbench_new_session(
@@ -1339,7 +1400,7 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> None:
                 changed = True
         sessions = project.setdefault("sessions", [])
         if not sessions:
-            sessions.append(_workbench_new_session(project["id"], "新任务", "通过对话明确当前任务目标。", now))
+            sessions.append(_workbench_new_session(project["id"], "新任务", "", now))
             changed = True
         for session in sessions:
             session.setdefault("projectId", project["id"])
@@ -1526,13 +1587,22 @@ async def _workbench_generate_plan_steps(
     session: dict[str, Any],
     project: dict[str, Any],
     feedback: str = "",
+    auto_start: bool = False,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Generate a REAL execution plan for a task session from its goal +
     constraints, exploring the project workspace. Returns ``(steps, from_llm)``;
-    ``from_llm`` is False when generation failed and the fallback was used."""
+    ``from_llm`` is False when generation failed and the fallback was used.
+
+    ``auto_start`` (「直接开始」): no goal is given up front — the agent explores
+    the project and the LLM proposes a concise goal + title (back-filled onto the
+    session) alongside the steps, so the task gets a real, project-relevant
+    identity instead of filler."""
     goal = str(session.get("goal") or session.get("title") or "").strip()
     existing_plan = session.get("plan") if isinstance(session.get("plan"), list) else []
     feedback = str(feedback or "").strip()
+    # 直接开始 with no goal yet → plan toward "work out what the project needs".
+    if auto_start and _workbench_is_blank_goal(goal):
+        goal = "通读本项目的工作区文件与项目说明，判断当前最应该推进的工作并据此规划"
     fallback = existing_plan if feedback and existing_plan else _workbench_plan_from_input(goal, {"id": session.get("id", "")})
     if not goal:
         return fallback, False
@@ -1551,22 +1621,40 @@ async def _workbench_generate_plan_steps(
         "优先采用 promising_directions（更有希望的方向），并参考 next_step：\n"
         + reflection_text
     ) if reflection_text else ""
-    prompt = (
-        "你是任务执行规划 Agent。请把下面这个任务拆解成清晰、有顺序、可逐步执行的步骤。\n"
-        "工作区已有文件，你可以使用 list_directory、read_file、glob 工具先探索再规划，"
-        "让步骤贴合项目实际（尽量引用真实的文件/目录/模块），不要套用空泛模板。\n\n"
-        f"任务目标：{goal}{constraints_block}{existing_plan_block}{feedback_block}{reflection_block}\n\n"
-        "充分了解后再返回 JSON，只返回一个 JSON 对象，不要 Markdown 代码块标记。结构：\n"
-        "{\n"
-        '  "steps": [\n'
-        '    {"title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块"}\n'
-        "  ]\n"
-        "}\n\n"
-        "要求：生成 3-7 个步骤；顺序合理、彼此衔接；每个步骤聚焦一件可执行的事；"
-        "尽量引用工作区里的真实文件或模块；全部使用简体中文。"
-        "如果是修改已有计划，必须返回完整的修订后计划，保留未被反馈明确要求删除的原步骤，"
-        "只调整相关步骤或追加必要的新步骤。"
-    )
+    if auto_start:
+        prompt = (
+            "你是任务执行规划 Agent。这是一个「直接开始」的任务——用户没有明确给出目标，"
+            "请你先用 list_directory、read_file、glob 工具通读这个项目（工作区文件 + 项目说明），"
+            "判断当前最应该推进的一件工作，然后据此给出目标、标题和执行步骤。\n\n"
+            f"规划方向：{goal}{constraints_block}{reflection_block}\n\n"
+            "充分了解后再返回 JSON，只返回一个 JSON 对象，不要 Markdown 代码块标记。结构：\n"
+            "{\n"
+            '  "goal": "一句话、具体、贴合本项目实际的任务目标（中文）",\n'
+            '  "title": "几个字的短标题（中文，<=20字）",\n'
+            '  "steps": [\n'
+            '    {"title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块"}\n'
+            "  ]\n"
+            "}\n\n"
+            "要求：goal 必须具体到这个项目、不要泛泛而谈；生成 3-7 个步骤、顺序合理、"
+            "尽量引用真实文件/目录/模块；全部使用简体中文。"
+        )
+    else:
+        prompt = (
+            "你是任务执行规划 Agent。请把下面这个任务拆解成清晰、有顺序、可逐步执行的步骤。\n"
+            "工作区已有文件，你可以使用 list_directory、read_file、glob 工具先探索再规划，"
+            "让步骤贴合项目实际（尽量引用真实的文件/目录/模块），不要套用空泛模板。\n\n"
+            f"任务目标：{goal}{constraints_block}{existing_plan_block}{feedback_block}{reflection_block}\n\n"
+            "充分了解后再返回 JSON，只返回一个 JSON 对象，不要 Markdown 代码块标记。结构：\n"
+            "{\n"
+            '  "steps": [\n'
+            '    {"title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块"}\n'
+            "  ]\n"
+            "}\n\n"
+            "要求：生成 3-7 个步骤；顺序合理、彼此衔接；每个步骤聚焦一件可执行的事；"
+            "尽量引用工作区里的真实文件或模块；全部使用简体中文。"
+            "如果是修改已有计划，必须返回完整的修订后计划，保留未被反馈明确要求删除的原步骤，"
+            "只调整相关步骤或追加必要的新步骤。"
+        )
     parsed = await _workbench_run_explore_agent(
         workspace_root, prompt, max_tokens=4000, timeout=120,
         session_id=str(session.get("id") or ""),
@@ -1578,6 +1666,15 @@ async def _workbench_generate_plan_steps(
         return fallback, False
     if feedback:
         steps = _workbench_reconcile_revised_plan(existing_plan, steps, feedback)
+    # 直接开始: back-fill the LLM-proposed goal/title onto the session (only while
+    # still blank) so the task gets a real identity rather than filler.
+    if auto_start:
+        derived_goal = str(parsed.get("goal") or "").strip()
+        derived_title = str(parsed.get("title") or "").strip()
+        if derived_goal and _workbench_is_blank_goal(session.get("goal")):
+            session["goal"] = derived_goal
+        if _workbench_is_default_title(session.get("title")):
+            session["title"] = (derived_title or _workbench_derive_title(session.get("goal") or ""))[:80]
     return steps, True
 
 
@@ -2177,6 +2274,18 @@ def _workbench_compose_ephemeral_system(
     invalidates the cached system+history prefix and preserves prompt-cache hits.
     """
     parts: list[str] = []
+    # Task-mode framing: this run belongs to a task that owns an editable
+    # execution plan, so bias the agent toward planning/updating it rather than
+    # ad-hoc one-off actions (mirrors the intent classifier's plan-leaning).
+    parts.append(
+        "## 任务执行模式\n"
+        "你正在一个带有可编辑「执行计划」的任务里工作，本工作台鼓励先规划再执行。\n"
+        "- 需要动手完成多步工作时，优先制定或更新执行计划，再按计划逐步推进，不要脱离计划临时发挥。\n"
+        "- 已有计划时以它为准，按步骤推进；发现计划需要调整就更新对应步骤，而不是另起一套做法。\n"
+        "- 仅当用户只是提问、或一句话就能完成的小事时，才直接回答或执行、无需计划。\n"
+        "- 如果这个任务还没有明确目标，或现有目标/标题与你实际要做的事不符（例如用户开场只是提了个"
+        "问题），就调用 set_task_goal 设定一个简洁的目标和短标题。"
+    )
     try:
         mem_block = render_memory_for_injection(_workbench_project_data_key(project))
     except Exception:
@@ -2231,6 +2340,13 @@ async def _workbench_classify_intent(text: str, session: dict[str, Any]) -> str:
     if not src:
         return "plan"
     goal = str(session.get("goal") or session.get("title") or "").strip()
+    plan = session.get("plan") if isinstance(session.get("plan"), list) else []
+    plan_note = (
+        "\n注意：本任务已经有一份执行计划。若用户是在增删/调整步骤、改变做法或追加目标 → "
+        "task（会按计划修订处理，保留已完成/进行中的步骤，不清空进度）；只是就计划或项目"
+        "提问 → question；一条立刻能做完的小改动 → command。"
+        if plan else ""
+    )
     prompt = (
         "你在判断用户在一个工作台「任务」里输入的一句话应该如何处理。"
         "只返回 JSON：{\"kind\":\"question\"|\"command\"|\"task\"}。\n\n"
@@ -2240,8 +2356,10 @@ async def _workbench_classify_intent(text: str, session: dict[str, Any]) -> str:
         "例：「把 README 标题改成 X」「跑一下测试」「格式化这个文件」。\n"
         "- task：较复杂、需要拆成多步、值得先规划再执行的目标。"
         "例：「实现用户登录系统」「重构整个支付模块」。\n\n"
-        f"当前任务背景：{goal or '（暂无）'}\n用户输入：{src}\n\n"
-        "拿不准时：更像要动手做的较大工程 → task；像随口一问 → question。"
+        f"当前任务背景：{goal or '（暂无）'}{plan_note}\n用户输入：{src}\n\n"
+        "判定倾向：本工作台鼓励「先规划再执行」。除非是纯提问(question)或一句话立刻能做完的"
+        "小事(command)，凡是要动手推进、涉及多步、或会改动多个文件/模块的工作，一律优先 "
+        "task（制定或修改执行计划）。拿不准 → task。"
     )
     try:
         resp = await asyncio.wait_for(
@@ -2421,7 +2539,7 @@ def _public_pending_question(q: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(q, dict) or not str(q.get("id") or "").strip():
         return None
     meta = q.get("meta") if isinstance(q.get("meta"), dict) else {}
-    return {
+    public: dict[str, Any] = {
         "id": str(q.get("id") or ""),
         "text": str(q.get("text") or ""),
         "options": [str(o) for o in (q.get("options") or [])],
@@ -2430,6 +2548,13 @@ def _public_pending_question(q: dict[str, Any] | None) -> dict[str, Any] | None:
         "allowCustom": bool(q.get("allow_custom", True)),
         "kind": str(meta.get("kind") or ""),
     }
+    # Plan-mode confirmations carry the proposed plan in meta — surface it so the
+    # chat UI can render it in the right-side 计划 tab (the prompt text refers to
+    # "右侧「计划」标签"). Only the structured {title, summary, steps} dict.
+    plan = meta.get("plan")
+    if isinstance(plan, dict) and plan:
+        public["plan"] = plan
+    return public
 
 
 def _workbench_pending_question_for(session_id: str) -> dict[str, Any] | None:
@@ -4303,6 +4428,13 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     async def api_installed_skills():
         return {"skills": _build_skills()}
 
+    @router.post("/api/skills/scan")
+    async def api_scan_existing_skills():
+        """Register valid skill folders/files already present in installed_skills/ but
+        missing from the settings registry (e.g. after a data reset or manual copy).
+        """
+        return _register_existing_skills()
+
     @router.post("/api/skills/install")
     async def api_install_skill(request: Request):
         body = await request.json()
@@ -5354,6 +5486,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         body = await request.json()
         goal = str(body.get("goal") or "").strip()
         feedback = str(body.get("feedback") or "").strip()
+        auto_start = bool(body.get("autoStart"))
         payload = _read_workbench_store()
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
@@ -5379,7 +5512,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             if packet:
                 _workbench_store_reflection(session, packet, trigger="feedback", project=project)
                 await _workbench_dispatch_reflection_hints(project, session, packet)
-        steps, from_llm = await _workbench_generate_plan_steps(session, project, feedback=feedback)
+        steps, from_llm = await _workbench_generate_plan_steps(session, project, feedback=feedback, auto_start=auto_start)
         session["plan"] = steps
         session["acceptanceCriteria"] = _workbench_acceptance_from_session(session)
         session["status"] = "planning"
@@ -5741,10 +5874,14 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             kind = await _workbench_classify_intent(user_input, session)
 
         now = _utc_now_iso()
-        # Seed the goal/constraints on first input so the task has a title and
-        # context regardless of which branch we take.
-        if not str(session.get("goal") or "").strip() and user_input:
+        # Seed goal/title/constraints from the first ACTIONABLE input so the task
+        # gets a real identity — but not for a pure question (kind=="answer"): a
+        # question is not a task goal. The agent can still set/correct goal+title
+        # at any time via the set_task_goal tool.
+        if kind != "answer" and _workbench_is_blank_goal(session.get("goal")) and user_input:
             session["goal"] = user_input
+            if _workbench_is_default_title(session.get("title")):
+                session["title"] = _workbench_derive_title(user_input)
             merged = list(session.get("constraints") or [])
             for item in _workbench_extract_constraints(user_input):
                 if item not in merged:
@@ -5752,20 +5889,35 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             session["constraints"] = merged
 
         if kind == "plan":
-            steps, from_llm = await _workbench_generate_plan_steps(session, project, feedback="")
+            # A plan already exists → treat this as a REVISION (pass the input as
+            # feedback) so _workbench_generate_plan_steps reconciles + preserves
+            # completed/in-progress steps, rather than wiping progress with a
+            # fresh plan. No plan yet → first-time generation.
+            existing_plan = session.get("plan") if isinstance(session.get("plan"), list) else []
+            revising = bool(existing_plan)
+            steps, from_llm = await _workbench_generate_plan_steps(
+                session, project, feedback=(user_input if revising else "")
+            )
             session["plan"] = steps
             session["acceptanceCriteria"] = _workbench_acceptance_from_session(session)
             session["status"] = "planning"
-            session["agentReply"] = (
-                "我已结合工作区里的实际内容拆解出执行计划。你可以直接编辑，或逐步执行（顺序由你决定）。"
-                if from_llm else
-                "计划生成服务暂时不可用，我先给出一份基础计划，你可以编辑后逐步执行，或稍后让我重新拆解。"
-            )
+            if revising:
+                session["agentReply"] = (
+                    "我已按你的说明调整了执行计划（保留了已完成/进行中的步骤）。你可以继续编辑，或逐步执行。"
+                    if from_llm else
+                    "计划调整服务暂时不可用，已保留原计划。你可以稍后再让我调整。"
+                )
+            else:
+                session["agentReply"] = (
+                    "我已结合工作区里的实际内容拆解出执行计划。你可以直接编辑，或逐步执行（顺序由你决定）。"
+                    if from_llm else
+                    "计划生成服务暂时不可用，我先给出一份基础计划，你可以编辑后逐步执行，或稍后让我重新拆解。"
+                )
             session["events"] = list(session.get("events") or []) + [{
                 "id": _short_id("event"),
                 "type": "PlanGenerated",
                 "createdAt": now,
-                "body": f"生成执行计划，共 {len(steps)} 步。" + ("" if from_llm else "（兜底计划）"),
+                "body": ((f"调整执行计划，共 {len(steps)} 步。" if revising else f"生成执行计划，共 {len(steps)} 步。")) + ("" if from_llm else "（兜底计划）"),
             }]
             session["updatedAt"] = now
             project["updatedAt"] = now

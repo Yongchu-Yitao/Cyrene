@@ -1906,6 +1906,35 @@ TOOL_DEFS = [
     },
     {
         "type": "function",
+        "function": {
+            "name": "set_task_goal",
+            "description": (
+                "Set or correct the goal (and optionally a short title) of THE CURRENT Workbench task. "
+                "Use this when the task has no real goal yet, or when its goal/title doesn't match what "
+                "the work is actually about — for example after you've explored the project and understood "
+                "what should be done, or when the user's first message was a question rather than a goal. "
+                "The goal should be one concise sentence describing the objective; the title a few words. "
+                "This updates the goal shown on the task card and in the task list. Only valid inside a "
+                "Workbench task; it does nothing in a plain chat."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "The task objective as one concise, self-contained sentence (e.g. 'Add OAuth login to the web app.').",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional short task title (a few words, <= 24 chars). Defaults to a trimmed form of the goal.",
+                    },
+                },
+                "required": ["goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
         "function": {"name": "list_tasks", "description": "List all scheduled tasks.", "parameters": {"type": "object", "properties": {}}},
     },
     {

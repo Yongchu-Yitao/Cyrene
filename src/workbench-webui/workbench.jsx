@@ -1640,6 +1640,24 @@ function useTaskController(session, onRefresh, runtime) {
       }));
     },
 
+    // Empty task (no real goal) → 「直接开始」. The agent reads the project
+    // workspace + notes server-side and proposes a plan to kick things off, so the
+    // user doesn't have to phrase a goal first. Same path as start(), but seeded
+    // with a project-derived default goal (passed in from the card so it follows
+    // the UI language).
+    autoStart: function () {
+      return runAgentic({ kind: "plan", label: "正在阅读项目并规划…" }, model.generatePlan(sid, "", { autoStart: true }).catch(function () {
+        var basis = (session.goal || "").trim() || "推进本项目当前最该做的工作";
+        return patch({
+          status: "planning",
+          plan: model.buildPlanSteps(basis, session.constraints || []),
+          acceptanceCriteria: model.buildAcceptance(basis, session.constraints || []),
+          agentReply: "计划生成服务暂时不可用，已生成一份基础计划，你可以编辑后逐步执行，或稍后重试。",
+          events: model.withEvent(session, "PlanGenerated", "自动生成执行计划（兜底）。"),
+        });
+      }));
+    },
+
     // Revise the plan from natural-language feedback. While the plan is still
     // untouched or already fully handled, regenerate it with the feedback. While
     // execution is still in progress, just record the note — regenerating would
@@ -2043,7 +2061,7 @@ function sessionSummaryText(session) {
   if (summary && typeof summary === "object") {
     summary = summary.text || summary.body || summary.content || summary.summary || "";
   }
-  return compactText(summary || session.goal || session.agentReply || wbT("task.summaryFallback", "Agent will generate a summary for this session during execution."), 128);
+  return compactText(summary || wbRealGoal(session) || session.agentReply || wbT("task.summaryFallback", "Agent will generate a summary for this session during execution."), 128);
 }
 
 function TaskHeader({ project, session, controller, onRightTab, onSelectSession }) {
@@ -2267,8 +2285,18 @@ function AgentReplyBlock({ text }) {
 // ---- State cards -----------------------------------------------------------
 
 // idle / pending — task detail + 开始执行.
+// Legacy placeholder goal once stamped on blank 新任务 sessions (routes.py
+// _workbench_new_session). New tasks now start with an empty goal; this still
+// recognizes the old filler in already-stored sessions as "no real goal yet", so
+// it is never shown as a goal or handed to the agent. MUST mirror the backend.
+var WB_PLACEHOLDER_GOAL = "通过对话明确当前任务目标。";
+function wbRealGoal(session) {
+  var g = String((session && session.goal) || "").trim();
+  return (g && g !== WB_PLACEHOLDER_GOAL) ? g : "";
+}
+
 function TaskBriefCard({ session, controller }) {
-  var goal = String(session.goal || "").trim();
+  var goal = wbRealGoal(session);
   var constraints = Array.isArray(session.constraints) ? session.constraints : [];
   var accept = Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : [];
   var hasGoal = !!goal;
@@ -2289,13 +2317,23 @@ function TaskBriefCard({ session, controller }) {
           )}
         </div>
       ) : (
-        <p className="wb-card-hint">{wbT("task.brief.emptyHint", "Describe the task goal, boundaries, and acceptance criteria below. The agent will turn it into a structured task before execution.")}</p>
+        <p className="wb-card-hint">{wbT("task.brief.emptyHint", "Just describe a goal or ask a question below. The agent decides whether to answer, take action, or draft a plan first — you don't have to generate a plan up front.")}</p>
       )}
-      <WbActions>
-        <WbBtn kind="primary" disabled={controller.busy || !hasGoal} onClick={function () { controller.start(); }}>{wbT("task.action.generatePlan", "Generate plan")}</WbBtn>
-        {accept.length > 0 && <WbBtn kind="ghost" disabled={controller.busy} onClick={function () { controller.regeneratePlan(); }}>{wbT("task.action.replan", "Replan")}</WbBtn>}
-        <WbBtn kind="ghost" disabled={controller.busy} onClick={focusComposer}>{wbT("task.action.editTask", "Edit task")}</WbBtn>
-      </WbActions>
+      {/* One primary action per state. Real goal → hand it over (agent auto-judges
+          answer/act/plan). No goal yet → 直接开始: the agent reads the project and
+          proposes a plan. Either way the composer below stays open for free chat. */}
+      {hasGoal ? (
+        <React.Fragment>
+          <p className="wb-card-hint">{wbT("task.brief.autoHint", "Clicking \"Hand to agent\" starts on this goal right away — the agent decides whether to answer, act, or propose a plan first. You can also keep refining or asking below.")}</p>
+          <WbActions>
+            <WbBtn kind="primary" disabled={controller.busy} onClick={function () { controller.send(goal); }}>{wbT("task.action.handToAgent", "Hand to agent")}</WbBtn>
+          </WbActions>
+        </React.Fragment>
+      ) : (
+        <WbActions>
+          <WbBtn kind="primary" disabled={controller.busy} onClick={function () { controller.autoStart(); }}>{wbT("task.action.autoStart", "Start now")}</WbBtn>
+        </WbActions>
+      )}
     </WbCard>
   );
 }
@@ -2338,7 +2376,7 @@ function AgentReplyCard({ session, controller, onRightTab, acted }) {
           )}
         </div>
       )}
-      <p className="wb-card-hint">{acted ? wbT("task.reply.actedHint", "If this was only one step, turn it into a full task before continuing.") : wbT("task.reply.answerHint", "This was a direct answer without an execution plan. You can promote it into a task if needed.")}</p>
+      <p className="wb-card-hint">{acted ? wbT("task.reply.actedHint", "Keep chatting below and the agent will judge each message; turn this into a full task if you need structured steps.") : wbT("task.reply.answerHint", "Keep asking or give an instruction below — the agent decides how to handle each one. Promote it into a task if you need a plan.")}</p>
       <WbActions>
         <WbBtn kind="ghost" disabled={controller.busy} onClick={function () { controller.promoteToPlan(); }}>{wbT("task.action.promoteToTask", "Make it a task")}</WbBtn>
         <WbBtn kind="ghost" disabled={controller.busy} onClick={focusComposer}>{wbT("task.action.continueEditing", "Continue")}</WbBtn>
@@ -2355,7 +2393,7 @@ function AgentQuestionCard({ session, controller }) {
   var pq = (session && session.pendingQuestion) || {};
   var options = Array.isArray(pq.options) ? pq.options : [];
   var kind = String(pq.kind || "");
-  var isPermission = kind.indexOf("permission") >= 0 || kind.indexOf("elevation") >= 0 || kind.indexOf("confirmation") >= 0;
+  var isPermission = window.wbIsPermissionQuestionKind(kind);
   var customState = useWorkbenchState("");
   var customText = customState[0], setCustomText = customState[1];
   function submitCustom() {
@@ -2916,6 +2954,10 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
   var fileRef = useWorkbenchRef(null);
   var status = String(session.status || "idle");
   var running = status === "running";
+  // No plan yet → the composer is a free chat: every send goes through the
+  // intent-aware dispatch so the agent itself decides whether to answer, act, or
+  // draft a plan. Once a plan exists, the composer refines that plan instead.
+  var hasPlan = Array.isArray(session.plan) && session.plan.length > 0;
   attachments = attachments || [];
 
   useWorkbenchEffect(function () {
@@ -2938,19 +2980,21 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
 
   function dispatch(text) {
     resetDraft();
-    if (status === "idle" || status === "pending" || status === "answered" || status === "acted") {
-      controller.send(text); // server classifies → direct answer / direct action / plan
-    } else if (!running) {
-      controller.modifyPlan(text); // refine → back to planning from a structured state
-    }
+    // The composer is always a free conversation: every message goes through the
+    // intent-aware dispatch so the agent decides — answer / act / create-or-revise
+    // the plan — regardless of whether a plan already exists. (A live run is
+    // intercepted earlier in submit() where the send button becomes the stop
+    // control; explicit plan ops still live on the plan chips/buttons.)
+    if (!running) controller.send(text);
   }
 
   function submit() {
     if (running) { controller.interrupt(); return; }
     var text = draft.trim();
     if ((!text && attachments.length === 0) || controller.busy) return;
-    // Rule 2 — keep the agent inside the current task.
-    if (status !== "idle" && status !== "pending" && model.looksOutOfScope(text)) {
+    // Rule 2 — keep the agent inside the task only once a plan is committed.
+    // Before that the task is still a free conversation, so don't gate it.
+    if (hasPlan && model.looksOutOfScope(text)) {
       setScopePrompt({ text: text });
       return;
     }
@@ -3162,7 +3206,7 @@ function ContextTab({ project, session, activeStep }) {
       <SideSection title={wbT("task.side.overview", "Task overview")}>
         <div className="wb-kv"><span>{wbT("workbenchChat.statusLabel", "Status")}</span><b>{WorkbenchModel.statusText(session.status)}</b></div>
         {!isInit && <div className="wb-kv"><span>{wbT("create.task.priority", "Priority")}</span><b>{priorityText(session.priority)}</b></div>}
-        <p>{session.goal || wbT("task.noGoal", "No task goal yet")}</p>
+        <p>{wbRealGoal(session) || wbT("task.noGoal", "No task goal yet")}</p>
       </SideSection>
       <ReflectionSection session={session} />
       <SideSection title={wbT("task.side.projectContext", "Project context")}>
