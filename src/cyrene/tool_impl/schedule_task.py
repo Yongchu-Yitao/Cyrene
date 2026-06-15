@@ -10,7 +10,6 @@ from cyrene.tool_legacy import (
     compute_next_run,
     datetime,
     db,
-    json,
     timezone,
 )
 from cyrene.workbench_context import resolve_project_data_key_for_session
@@ -48,8 +47,9 @@ async def _tool_schedule_task(args: dict[str, Any], _bot: Any, chat_id: int, db_
                 permission_kind="task_permission_request",
                 options=["仅此任务允许 full_access", "拒绝，保持 workspace_only"],
             )
-            status = json.loads(elevation_result)
-            if str(status.get("status", "")).strip() == "awaiting_user":
+            # None=已授权(auto 模式批准/full_access 短路)，继续创建任务；
+            # 非 None=拒绝串或 awaiting_user JSON，直接回传给 agent。
+            if elevation_result is not None:
                 return elevation_result
 
     project_id = resolve_project_data_key_for_session(_current_session_id.get())

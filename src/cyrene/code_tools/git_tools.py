@@ -3,15 +3,16 @@
 import asyncio
 import json
 
-from cyrene.config import WORKSPACE_DIR
-
 
 async def _run_git(args: list[str], timeout: float = 30.0) -> dict:
     """Run a git command and return {stdout, stderr, returncode}."""
+    # Follow the active Workbench project's workspace (per-round ContextVar),
+    # falling back to the global WORKSPACE_DIR outside a project — same as Bash.
+    from cyrene.agent.state import active_workspace_dir
     try:
         proc = await asyncio.create_subprocess_exec(
             "git", *args,
-            cwd=str(WORKSPACE_DIR),
+            cwd=str(active_workspace_dir()),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -135,8 +136,9 @@ async def _tool_git_commit(args: dict, bot=None, chat_id=None, db_path=None, not
             permission_kind="git_commit",
             options=["allow_once"],
         )
-        status = json.loads(elevation_result)
-        if str(status.get("status", "")).strip() == "awaiting_user":
+        # None=已授权(auto 模式批准/full_access 短路)，继续提交；
+        # 非 None=拒绝串或 awaiting_user JSON，直接回传给 agent。
+        if elevation_result is not None:
             return elevation_result
 
     # Stage files first (if specific files given, add only those)

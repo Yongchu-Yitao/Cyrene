@@ -661,6 +661,14 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   }
 
   var running = !!runtime;
+  // A run belongs to one conversation. Distinguish the page-level run (any chat
+  // streaming) from the run owned by the *open* conversation, so the live reply
+  // card, header status and composer reflect only the open chat — otherwise an
+  // in-flight run in chat A leaks its tool-call cards into a chat B opened (or
+  // created) while A is still streaming.
+  var activeRuntime = (runtime && runtime.chatId === activeChatId) ? runtime : null;
+  var activeRunning = !!activeRuntime;
+  var otherRunning = running && !activeRunning;
 
   return (
     <div className="wbc-page">
@@ -669,17 +677,18 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         activeChatId={activeChatId}
         loading={loading}
         runningChatId={runtime ? runtime.chatId : ""}
-        onSelect={function (id) { if (!running || (runtime && runtime.chatId === id)) setActiveChatId(id); }}
+        onSelect={function (id) { setActiveChatId(id); }}
         onCreate={handleCreateChat}
         onDelete={handleDeleteChat}
       />
       <WbcMain
         project={project}
         chat={activeChat}
-        runtime={runtime}
+        runtime={activeRuntime}
         error={error}
         onRetry={retryLoad}
-        running={running}
+        running={activeRunning}
+        otherRunning={otherRunning}
         onSend={handleSend}
         onInterrupt={handleInterrupt}
         onAnswer={handleAnswer}
@@ -693,7 +702,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
       <WbcSide
         project={project}
         chat={activeChat}
-        runtime={runtime}
+        runtime={activeRuntime}
         tab={sideTab}
         onTabChange={setSideTab}
         viewerFile={viewerFile}
@@ -800,7 +809,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatId, onSelect, onCrea
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onInterrupt, onAnswer, onRetryMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile }) {
+function WbcMain({ project, chat, runtime, error, onRetry, running, otherRunning, onSend, onInterrupt, onAnswer, onRetryMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile }) {
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
@@ -862,20 +871,21 @@ function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onIn
           </div>
         )}
         {messages.map(function (msg) {
-          var canRetry = !isLegacy && !running && String(msg.id || "") === lastAssistantId;
+          var canRetry = !isLegacy && !running && !otherRunning && String(msg.id || "") === lastAssistantId;
           return msg.role === "user"
             ? <WbcUserMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} />
             : <WbcAssistantMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onRetryMessage={canRetry ? onRetryMessage : null} />;
         })}
         {runtime && <WbcLiveMessage runtime={runtime} />}
         {chat && chat.pendingQuestion && chat.pendingQuestion.id && !runtime && (
-          <WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} />
+          <WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running || otherRunning} />
         )}
       </div>
       <WbcComposer
         chat={chat}
         project={project}
         running={running}
+        otherRunning={otherRunning}
         onSend={onSend}
         onInterrupt={onInterrupt}
       />
@@ -1189,7 +1199,7 @@ function WbcLiveMessage({ runtime }) {
 // Composer
 // ---------------------------------------------------------------------------
 
-function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
+function WbcComposer({ chat, project, running, otherRunning, onSend, onInterrupt }) {
   var model = window.WorkbenchChatModel;
   var [draft, setDraft] = useWbcState("");
   var [attachments, setAttachments] = useWbcState([]);
@@ -1276,6 +1286,18 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
       <div className="wbc-composer">
         <div className="wbc-composer-box wbc-composer-readonly">
           {wbcT("workbenchChat.legacyReadonly", "This is an archived legacy session — read-only. Start a new chat to continue the topic.")}
+        </div>
+      </div>
+    );
+  }
+
+  // Single concurrent run per page: while another conversation streams, lock
+  // this composer so a send here can't overwrite the in-flight runtime.
+  if (otherRunning) {
+    return (
+      <div className="wbc-composer">
+        <div className="wbc-composer-box wbc-composer-readonly">
+          {wbcT("workbenchChat.lockedByOther", "Another chat is still running. Wait for it to finish before sending here.")}
         </div>
       </div>
     );

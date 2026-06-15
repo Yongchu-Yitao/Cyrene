@@ -6796,7 +6796,6 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   padding: 14px 16px;
   background: var(--wb-main-bg, #fff);
   border: 1px solid var(--wb-line);
-  border-left: 3px solid var(--wb-accent);
   border-radius: 12px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
