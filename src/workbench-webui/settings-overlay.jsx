@@ -255,6 +255,13 @@ function SettingsOverlay({
         ctx_limit: (p.secondary_model && Number(p.secondary_model.ctx_limit)) || 0,
         max_concurrency: (p.secondary_model && Number(p.secondary_model.max_concurrency)) || 0,
       });
+      setConfig(function (previous) {
+        return {
+          ...previous,
+          model: p.active_model_name || previous.model,
+          base_url: p.base_url || previous.base_url,
+        };
+      });
       setModelsSaved(t("settings.saved"));
       setTimeout(function () { setModelsSaved(""); }, 1500);
     }).catch(function (e) {

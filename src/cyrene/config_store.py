@@ -422,6 +422,38 @@ def _apply_settings_migrations(config: dict) -> dict:
         settings["notify_wechat"] = settings.pop("wechat_notify_scheduled")
         changed = True
 
+    # Fix model entries created by older onboarding that lacked model/base_url/api_key.
+    env_base_url = config.get("env", {}).get("OPENAI_BASE_URL", _DEFAULT_ENV.get("OPENAI_BASE_URL", "https://api.deepseek.com/v1"))
+    env_api_key = config.get("env", {}).get("OPENAI_API_KEY", _DEFAULT_ENV.get("OPENAI_API_KEY", ""))
+    for model_key in ("models", "vision_models"):
+        items = settings.get(model_key)
+        if not isinstance(items, list):
+            continue
+        fixed = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("model") or item.get("name") or item.get("id") or "").strip()
+            if not model_id:
+                continue
+            if not item.get("model"):
+                item["model"] = model_id
+                changed = True
+            if not item.get("name"):
+                item["name"] = model_id
+                changed = True
+            if not item.get("base_url"):
+                item["base_url"] = env_base_url
+                changed = True
+            if "api_key" not in item:
+                # Only backfill the active env key when the model uses the same endpoint.
+                item["api_key"] = env_api_key if str(item.get("base_url") or "").rstrip("/") == env_base_url.rstrip("/") else ""
+                changed = True
+            fixed.append(item)
+        if len(fixed) != len(items):
+            settings[model_key] = fixed
+            changed = True
+
     if changed:
         _persist(config)
         logger.info("Applied settings migration")

@@ -285,9 +285,12 @@ async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> di
         new_entry = {
             "id": clean_model,
             "name": clean_model,
+            "model": clean_model,
             "desc": "",
             "ctx": "",
             "price": "",
+            "api_key": clean_api_key,
+            "base_url": clean_base_url,
         }
         save_models([new_entry] + list(current_models or []))
 
