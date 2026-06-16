@@ -3090,6 +3090,301 @@ async def _persist_direct_image_chat(
     )
 
 
+# ---- Workbench global search helpers -------------------------------------
+
+
+def _normalize_search_text(text: Any) -> str:
+    return re.sub(r"\s+", " ", str(text or "").lower()).strip()
+
+
+def _search_matches(query: str, text: str) -> bool:
+    """Case-insensitive, whitespace-normalized substring match.
+
+    Also supports a tiny space-removed fallback so "helloworld" matches
+    "hello world".
+    """
+    if not query or not text:
+        return False
+    haystack = _normalize_search_text(text)
+    needle = _normalize_search_text(query)
+    if not needle:
+        return False
+    if needle in haystack:
+        return True
+    if needle.replace(" ", "") and needle.replace(" ", "") in haystack.replace(" ", ""):
+        return True
+    return False
+
+
+def _search_snippet(text: str, query: str, length: int = 140) -> str:
+    """Return a short snippet centered on the first match."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    q = str(query or "").strip()
+    if not q:
+        return raw[:length] + ("…" if len(raw) > length else "")
+    # Direct case-insensitive substring match.
+    idx = raw.lower().find(q.lower())
+    if idx < 0:
+        # Fall back to flexible whitespace: "hello world" matches "hello  world".
+        try:
+            pattern = re.compile(re.sub(r"\s+", r"\\s+", re.escape(q)), re.IGNORECASE)
+            match = pattern.search(raw)
+            if match:
+                idx = match.start()
+        except re.error:
+            pass
+    if idx < 0:
+        return raw[:length] + ("…" if len(raw) > length else "")
+    start = max(0, idx - length // 2)
+    end = min(len(raw), start + length)
+    snippet = raw[start:end]
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(raw) else ""
+    return prefix + snippet + suffix
+
+
+async def _search_workbench_items(query: str, types: set[str], per_type_limit: int) -> dict[str, list[dict[str, Any]]]:
+    """Search across Workbench data sources and return grouped results."""
+    groups: dict[str, list[dict[str, Any]]] = {t: [] for t in types}
+    if not query:
+        return groups
+
+    store = _read_workbench_store()
+    projects = store.get("projects", [])
+    project_by_id: dict[str, dict[str, Any]] = {str(p.get("id") or ""): p for p in projects if p.get("id")}
+    project_names: dict[str, str] = {
+        pid: str(p.get("name") or p.get("id") or "").strip() or "Workspace"
+        for pid, p in project_by_id.items()
+    }
+    project_data_keys: dict[str, str] = {
+        pid: _workbench_project_data_key(p) for pid, p in project_by_id.items()
+    }
+
+    # Build reverse map from data key -> project id (first wins for legacy key).
+    data_key_to_project: dict[str, str] = {}
+    for pid, dk in project_data_keys.items():
+        data_key_to_project.setdefault(dk, pid)
+
+    # ---- projects ----
+    if "project" in types:
+        for project in projects:
+            pid = str(project.get("id") or "")
+            name = str(project.get("name") or "")
+            desc = str(project.get("description") or "")
+            summary = str((project.get("context") or {}).get("summary") or "")
+            if _search_matches(query, name) or _search_matches(query, desc) or _search_matches(query, summary):
+                groups["project"].append({
+                    "id": pid,
+                    "type": "project",
+                    "title": name or "Workspace",
+                    "snippet": _search_snippet(desc or summary, query),
+                    "projectId": pid,
+                    "projectName": project_names.get(pid, ""),
+                    "updatedAt": project.get("updatedAt") or project.get("createdAt") or "",
+                })
+                if len(groups["project"]) >= per_type_limit:
+                    break
+
+    # ---- tasks (workbench sessions) ----
+    if "task" in types:
+        for project in projects:
+            pid = str(project.get("id") or "")
+            for session in project.get("sessions", []):
+                sid = str(session.get("id") or "")
+                title = str(session.get("title") or "")
+                goal = str(session.get("goal") or "")
+                if _search_matches(query, title) or _search_matches(query, goal):
+                    groups["task"].append({
+                        "id": sid,
+                        "type": "task",
+                        "title": title or "New task",
+                        "snippet": _search_snippet(goal or title, query),
+                        "projectId": pid,
+                        "projectName": project_names.get(pid, ""),
+                        "sessionId": sid,
+                        "status": session.get("status") or "idle",
+                        "updatedAt": session.get("updatedAt") or session.get("createdAt") or "",
+                    })
+                    if len(groups["task"]) >= per_type_limit:
+                        break
+            if len(groups["task"]) >= per_type_limit:
+                break
+
+    # ---- chats ----
+    if "chat" in types:
+        try:
+            from webui.routes_workbench_chat import _read_chats_store
+            chats_payload = _read_chats_store()
+            for chat in chats_payload.get("chats", []):
+                chat_id = str(chat.get("id") or "")
+                pid = str(chat.get("projectId") or "")
+                title = str(chat.get("title") or "")
+                preview = str(chat.get("preview") or "")
+                matched = _search_matches(query, title) or _search_matches(query, preview)
+                if not matched and isinstance(chat.get("messages"), list):
+                    for message in chat["messages"]:
+                        if _search_matches(query, str(message.get("content") or message.get("body") or "")):
+                            matched = True
+                            break
+                if matched:
+                    groups["chat"].append({
+                        "id": chat_id,
+                        "type": "chat",
+                        "title": title or "New chat",
+                        "snippet": _search_snippet(preview or title, query),
+                        "projectId": pid,
+                        "projectName": project_names.get(pid, "Workspace"),
+                        "chatId": chat_id,
+                        "updatedAt": chat.get("updatedAt") or chat.get("createdAt") or "",
+                    })
+                    if len(groups["chat"]) >= per_type_limit:
+                        break
+        except Exception:
+            logger.exception("Workbench chat search failed")
+
+    # ---- knowledge ----
+    if "knowledge" in types:
+        try:
+            from cyrene.config import get_knowledge_db_path
+            from cyrene.knowledge import retrieve
+            from cyrene.db import init_knowledge_db
+
+            seen_docs: set[str] = set()
+            for pid, dk in project_data_keys.items():
+                db_path_kb = str(get_knowledge_db_path(dk))
+                try:
+                    await init_knowledge_db(db_path_kb)
+                    kb_results = await retrieve.search_knowledge(db_path_kb, query, k=per_type_limit * 3)
+                    for item in kb_results:
+                        doc_id = str(item.get("document_id") or "")
+                        if not doc_id:
+                            continue
+                        key = f"{dk}:{doc_id}"
+                        if key in seen_docs:
+                            continue
+                        seen_docs.add(key)
+                        groups["knowledge"].append({
+                            "id": doc_id,
+                            "type": "knowledge",
+                            "title": str(item.get("document_name") or doc_id),
+                            "snippet": _search_snippet(str(item.get("content") or ""), query),
+                            "projectId": pid,
+                            "projectName": project_names.get(pid, "Workspace"),
+                            "docId": doc_id,
+                            "chunkId": item.get("chunk_id"),
+                            "score": item.get("score"),
+                        })
+                        if len(groups["knowledge"]) >= per_type_limit:
+                            break
+                except Exception:
+                    logger.exception("Knowledge search failed for workspace %s", dk)
+                if len(groups["knowledge"]) >= per_type_limit:
+                    break
+        except Exception:
+            logger.exception("Workbench knowledge search failed")
+
+    # ---- memory ----
+    if "memory" in types:
+        try:
+            from cyrene.config import STORE_DIR
+            from cyrene.io_utils import read_json_safe
+            from webui.routes_workbench_memory import _entry_id
+
+            for mem_path in STORE_DIR.glob("wb_memory_*.json"):
+                if len(groups["memory"]) >= per_type_limit:
+                    break
+                dk = mem_path.stem[len("wb_memory_"):]
+                pid = data_key_to_project.get(dk, "")
+                data = read_json_safe(mem_path)
+                entries = data if isinstance(data, list) else []
+                for entry in entries:
+                    content = str(entry.get("content") or "")
+                    tags = [str(t) for t in (entry.get("tags") or [])]
+                    tag_text = " ".join(tags)
+                    if _search_matches(query, content) or _search_matches(query, tag_text):
+                        mem_id = _entry_id(entry)
+                        groups["memory"].append({
+                            "id": mem_id,
+                            "type": "memory",
+                            "title": content[:80] or "Memory",
+                            "snippet": _search_snippet(content, query),
+                            "projectId": pid,
+                            "projectName": project_names.get(pid, "Workspace"),
+                            "memId": mem_id,
+                            "category": entry.get("category") or entry.get("type") or "fact",
+                            "tags": tags,
+                            "updatedAt": entry.get("last_mentioned") or entry.get("first_seen") or "",
+                        })
+                        if len(groups["memory"]) >= per_type_limit:
+                            break
+        except Exception:
+            logger.exception("Workbench memory search failed")
+
+    # ---- schedule (scheduled tasks + entity deadlines) ----
+    if "schedule" in types:
+        try:
+            from cyrene import db as cy_db
+            from cyrene.entities import list_entities
+
+            # Scheduled tasks across all projects.
+            try:
+                all_tasks = await cy_db.get_all_tasks(_db_path)
+                for task in all_tasks:
+                    prompt = str(task.get("prompt") or "")
+                    if _search_matches(query, prompt):
+                        dk = str(task.get("project_id") or "default")
+                        pid = data_key_to_project.get(dk, "")
+                        groups["schedule"].append({
+                            "id": str(task.get("id") or ""),
+                            "type": "schedule",
+                            "title": prompt or "Scheduled task",
+                            "snippet": _search_snippet(prompt, query),
+                            "projectId": pid,
+                            "projectName": project_names.get(pid, "Workspace"),
+                            "taskId": str(task.get("id") or ""),
+                            "scheduleType": task.get("schedule_type") or "once",
+                            "scheduleValue": task.get("schedule_value") or "",
+                            "nextRun": task.get("next_run") or "",
+                            "category": "task_recurring" if task.get("schedule_type") != "once" else "task_once",
+                        })
+                        if len(groups["schedule"]) >= per_type_limit:
+                            break
+            except Exception:
+                logger.exception("Scheduled task search failed")
+
+            # Entity deadlines across all projects.
+            if len(groups["schedule"]) < per_type_limit:
+                try:
+                    entities = await list_entities(_db_path, has_due_date=True, limit=500)
+                    for entity in entities:
+                        title = str(entity.get("title") or "")
+                        content = str(entity.get("content") or "")
+                        if _search_matches(query, title) or _search_matches(query, content):
+                            dk = str(entity.get("project_id") or "default")
+                            pid = data_key_to_project.get(dk, "")
+                            groups["schedule"].append({
+                                "id": str(entity.get("id") or ""),
+                                "type": "schedule",
+                                "title": title or "Event",
+                                "snippet": _search_snippet(content or title, query),
+                                "projectId": pid,
+                                "projectName": project_names.get(pid, "Workspace"),
+                                "entityId": str(entity.get("id") or ""),
+                                "dueDate": entity.get("due_date") or "",
+                                "category": "entity_due",
+                            })
+                            if len(groups["schedule"]) >= per_type_limit:
+                                break
+                except Exception:
+                    logger.exception("Entity deadline search failed")
+        except Exception:
+            logger.exception("Workbench schedule search failed")
+
+    return groups
+
+
 def register_routes(app, bot: Any, db_path: str) -> None:
     global _bot, _db_path
     _bot = bot
@@ -4532,6 +4827,27 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             return {"ok": False, "error": "query is required"}
         results = await search_conversations_structured(q.strip(), limit=max(1, min(limit, 100)))
         return {"ok": True, "results": results}
+
+    # ---- Workbench global search ----
+
+    @router.get("/api/workbench/search")
+    async def api_workbench_search(q: str = "", types: str = "", limit: int = 50):
+        """Global search across Workbench data: projects, tasks, chats, knowledge, memory, schedule.
+
+        ``types`` is a comma-separated filter (default: all). Per-type limits are
+        derived from ``limit`` so a broad query still returns balanced groups.
+        """
+        query = str(q or "").strip()
+        if not query:
+            return {"ok": False, "error": "query is required"}
+
+        all_types = {"project", "task", "chat", "knowledge", "memory", "schedule"}
+        requested = {t.strip().lower() for t in (types or "").split(",") if t.strip()}
+        active_types = requested & all_types if requested else all_types
+        per_type_limit = max(1, min(limit, 100))
+
+        results = await _search_workbench_items(query, active_types, per_type_limit)
+        return {"ok": True, "groups": results}
 
     # ---- Token Usage API ----
 

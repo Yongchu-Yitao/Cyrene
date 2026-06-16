@@ -552,7 +552,6 @@ function LegacyAppShell() {
         window.SearchOverlay || (function () { return null; }),
         {
           onClose: function () { setSearchOpen(false); },
-          onOpenSession: function () { setPage("sessions"); },
         }
       )}
     </div>

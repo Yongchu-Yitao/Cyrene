@@ -290,7 +290,31 @@
         .catch(function (e) { setError(e.message || String(e)); setPayload({ memories: [], categories: [], sources: [], overview: {} }); })
         .finally(function () { setLoading(false); });
     }
-    useEffect(function () { setSelectedId(""); setActiveCat("all"); setSourceFilter(""); load(); }, [workspace]);
+    useEffect(function () {
+      setSelectedId("");
+      setActiveCat("all");
+      setSourceFilter("");
+      load().then(function () {
+        var pending = window.__workbenchPendingSelection;
+        var pendingMemId = pending && pending.type === "memory" ? (pending.memId || pending.id) : "";
+        if (pendingMemId) {
+          setSelectedId(pendingMemId);
+          window.__workbenchPendingSelection = null;
+        }
+      });
+    }, [workspace]);
+
+    // Listen for search-navigation events while already mounted.
+    useEffect(function () {
+      function onNavigate(event) {
+        var detail = event && event.detail;
+        if (!detail || detail.type !== "memory") return;
+        var id = detail.memId || detail.id;
+        if (id) setSelectedId(id);
+      }
+      window.addEventListener("cyrene:workbench-navigate", onNavigate);
+      return function () { window.removeEventListener("cyrene:workbench-navigate", onNavigate); };
+    }, []);
 
     var memories = (payload && payload.memories) || [];
     var categories = (payload && payload.categories) || [];

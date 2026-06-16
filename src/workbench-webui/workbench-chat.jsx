@@ -347,9 +347,14 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   var model = window.WorkbenchChatModel;
   var projectId = project ? project.id : "";
   var [chats, setChats] = useWbcState([]);
+  var chatsRef = useWbcRef([]);
   var [activeChatId, setActiveChatId] = useWbcState("");
   var [activeChat, setActiveChat] = useWbcState(null);
   var [loading, setLoading] = useWbcState(true);
+
+  useWbcEffect(function () {
+    chatsRef.current = chats;
+  }, [chats]);
   var [error, setError] = useWbcState("");
   var [sideTab, setSideTab] = useWbcState("overview");
   var [viewerFile, setViewerFile] = useWbcState(null);
@@ -362,6 +367,8 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   // Tracks the pending-question id whose plan we've already auto-revealed, so we
   // switch to the 计划 tab once per plan rather than fighting manual tab changes.
   var revealedPlanQidRef = useWbcRef("");
+  // Holds a chat id requested by global search until the chat list is loaded.
+  var pendingChatIdRef = useWbcRef("");
 
   function openViewer(file) {
     if (!file) return;
@@ -397,11 +404,28 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     model.listChats(projectId)
       .then(function (list) {
         setChats(list);
-        setActiveChatId(list[0] ? list[0].id : "");
+        var pending = window.__workbenchPendingSelection;
+        var pendingChatId = pending && pending.type === "chat" ? (pending.chatId || pending.id) : "";
+        if (pendingChatId && list.some(function (c) { return c.id === pendingChatId; })) {
+          pendingChatIdRef.current = pendingChatId;
+        } else {
+          setActiveChatId(list[0] ? list[0].id : "");
+        }
       })
       .catch(function (err) { setError(wbcErrorText(err)); })
       .finally(function () { setLoading(false); });
   }, [projectId]);
+
+  // Apply a chat id requested by global search once the chat list is available.
+  useWbcEffect(function () {
+    var targetId = pendingChatIdRef.current;
+    if (!targetId) return;
+    if (Array.isArray(chats) && chats.some(function (c) { return c.id === targetId; })) {
+      setActiveChatId(targetId);
+      pendingChatIdRef.current = "";
+      window.__workbenchPendingSelection = null;
+    }
+  }, [chats]);
 
   // Load the full transcript when the selection changes.
   useWbcEffect(function () {
@@ -443,6 +467,32 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     if (onActiveChatIdChange) onActiveChatIdChange(activeChatId || "");
     return function () { if (onActiveChatIdChange) onActiveChatIdChange(""); };
   }, [activeChatId]);
+
+  // Global search navigation: select the requested chat when the user clicks a
+  // search result. If the chat list is already loaded we apply immediately,
+  // otherwise we stash the id in a ref so the effect above can apply it once
+  // the list loads.
+  function applyPendingChatSelection() {
+    var pending = window.__workbenchPendingSelection;
+    var targetId = pending && pending.type === "chat" ? (pending.chatId || pending.id) : "";
+    if (!targetId) return;
+    if (Array.isArray(chatsRef.current) && chatsRef.current.some(function (c) { return c.id === targetId; })) {
+      setActiveChatId(targetId);
+      window.__workbenchPendingSelection = null;
+    } else {
+      pendingChatIdRef.current = targetId;
+    }
+  }
+
+  useWbcEffect(function () {
+    function onNavigate(event) {
+      var detail = event && event.detail;
+      if (detail && detail.type === "chat") applyPendingChatSelection();
+    }
+    window.addEventListener("cyrene:workbench-navigate", onNavigate);
+    applyPendingChatSelection();
+    return function () { window.removeEventListener("cyrene:workbench-navigate", onNavigate); };
+  }, []);
 
   // Live tool progress: reuse the global SSE feed (data.jsx) and keep only
   // events tagged with the running conversation's session id.

@@ -905,6 +905,9 @@
     var runsLoadState = useState(false); var runsLoading = runsLoadState[0], setRunsLoading = runsLoadState[1];
     var entityDetailState = useState(null); var entityDetail = entityDetailState[0], setEntityDetail = entityDetailState[1];
     var formState = useState(null); var formMode = formState[0], setFormMode = formState[1]; // null | {task?, defaultDate?}
+    var pendingTaskIdRef = useRef("");
+    var pendingEntityIdRef = useRef("");
+    var pendingDateAppliedRef = useRef(false);
 
     // Visible window for the occurrences query (a touch wider than the view).
     var windowRange = useMemo(function () {
@@ -923,7 +926,80 @@
         .catch(function (e) { setError(e.message || String(e)); setRawEvents([]); })
         .finally(function () { setLoading(false); });
     }
-    useEffect(function () { load(); /* eslint-disable-next-line */ }, [windowRange.start.getTime(), windowRange.end.getTime(), workspace]);
+    // Apply a schedule search selection once the event list is loaded. We use
+    // refs to avoid calling setState inside the rawEvents updater.
+    function applyPendingScheduleSelection() {
+      var targetTaskId = pendingTaskIdRef.current;
+      var targetEntityId = pendingEntityIdRef.current;
+      if (!targetTaskId && !targetEntityId) return;
+      var list = Array.isArray(rawEvents) ? rawEvents : [];
+      var match = null;
+      if (targetTaskId) {
+        match = list.find(function (e) { return e.task_id === targetTaskId; });
+      } else if (targetEntityId) {
+        match = list.find(function (e) { return e.entity_id === targetEntityId; });
+      }
+      if (match) {
+        selectEvent(decorate([match])[0]);
+        pendingTaskIdRef.current = "";
+        pendingEntityIdRef.current = "";
+        pendingDateAppliedRef.current = false;
+        window.__workbenchPendingSelection = null;
+      }
+    }
+
+    function dateFromPending(pending) {
+      var time = pending && (pending.nextRun || pending.dueDate);
+      if (!time) return null;
+      try {
+        var d = new Date(time);
+        if (!isNaN(d.getTime())) return d;
+      } catch (e) {}
+      return null;
+    }
+
+    function applyPendingDate(pending) {
+      if (pendingDateAppliedRef.current) return;
+      var d = dateFromPending(pending);
+      if (d) {
+        pendingDateAppliedRef.current = true;
+        setAnchorDate(d);
+        setViewMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+      }
+    }
+
+    useEffect(function () {
+      pendingDateAppliedRef.current = false;
+      load().then(function () {
+        var pending = window.__workbenchPendingSelection;
+        var pendingType = pending && pending.type;
+        if (pendingType === "schedule") {
+          applyPendingDate(pending);
+          pendingTaskIdRef.current = pending.taskId || pending.id || "";
+          pendingEntityIdRef.current = pending.entityId || "";
+        }
+      });
+      /* eslint-disable-next-line */
+    }, [windowRange.start.getTime(), windowRange.end.getTime(), workspace]);
+
+    useEffect(function () {
+      applyPendingScheduleSelection();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [rawEvents]);
+
+    // Listen for search-navigation events while already mounted.
+    useEffect(function () {
+      function onNavigate(event) {
+        var detail = event && event.detail;
+        if (!detail || detail.type !== "schedule") return;
+        applyPendingDate(detail);
+        pendingTaskIdRef.current = detail.taskId || detail.id || "";
+        pendingEntityIdRef.current = detail.entityId || "";
+        applyPendingScheduleSelection();
+      }
+      window.addEventListener("cyrene:workbench-navigate", onNavigate);
+      return function () { window.removeEventListener("cyrene:workbench-navigate", onNavigate); };
+    }, [rawEvents]);
 
     var events = useMemo(function () {
       return decorate(rawEvents).filter(function (ev) { return visible[ev.category]; });

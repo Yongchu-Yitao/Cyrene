@@ -416,6 +416,67 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     window.WorkbenchModel.setActiveProject(project.id, sessionId).catch(function () {});
   }
 
+  // Global search navigation: select the right project/session/page and tell
+  // the target module page which item to highlight/open.
+  function navigateFromSearch(payload) {
+    if (!payload || !payload.type) return;
+    var type = payload.type;
+    var projectId = payload.projectId;
+    var project = projectId
+      ? store.projects.find(function (p) { return p.id === projectId; })
+      : store.activeProject;
+    if (!project && type !== "conversation") return;
+
+    var pageMap = { chat: "chat", knowledge: "knowledge", memory: "memory", schedule: "schedule" };
+
+    if (type === "task" && project && payload.sessionId) {
+      var session = project.sessions.find(function (s) { return s.id === payload.sessionId; });
+      if (session) {
+        setStore(function (prev) {
+          return {
+            ...prev,
+            activeProjectId: project.id,
+            activeProject: project,
+            activeSessionId: session.id,
+            activeSession: session,
+          };
+        });
+        setExpandedStepId("");
+        setFullPage(null);
+        window.WorkbenchModel.setActiveProject(project.id, session.id).catch(function () {});
+      }
+    } else if (type === "project" && project) {
+      selectProject(project.id);
+      setFullPage(null);
+    } else {
+      if (project && project.id !== store.activeProjectId) {
+        selectProject(project.id);
+      }
+      if (pageMap[type]) {
+        setFullPage(pageMap[type]);
+      }
+    }
+
+    window.__workbenchPendingSelection = payload;
+    try {
+      window.dispatchEvent(new CustomEvent("cyrene:workbench-navigate", { detail: payload }));
+    } catch (e) {}
+    // If no module consumes the pending selection within a few seconds, clear
+    // it so it does not leak into unrelated navigation later.
+    setTimeout(function () {
+      if (window.__workbenchPendingSelection === payload) {
+        window.__workbenchPendingSelection = null;
+      }
+    }, 5000);
+  }
+
+  useWorkbenchEffect(function () {
+    window.__workbenchNavigate = navigateFromSearch;
+    return function () {
+      delete window.__workbenchNavigate;
+    };
+  }, [store.projects, store.activeProjectId]);
+
   // Optimistically merge fields into the active session's `init` object so the
   // init view and the right-panel 初始化进度 (siblings reading store data) stay
   // in sync between server writes. Used while answering onboarding questions.

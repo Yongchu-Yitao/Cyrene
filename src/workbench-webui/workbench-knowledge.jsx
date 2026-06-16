@@ -470,9 +470,34 @@
       // Reset selection when switching workspace/project.
       setSelectedId("");
       setDetail(null);
-      loadDocuments();
+      loadDocuments().then(function () {
+        // If a search result opened this page, select the requested document.
+        var pending = window.__workbenchPendingSelection;
+        var pendingDocId = pending && pending.type === "knowledge" ? (pending.docId || pending.id) : "";
+        if (pendingDocId) {
+          setTimeout(function () {
+            setSelectedId(pendingDocId);
+            client.detail(pendingDocId)
+              .then(function (full) { setDetail(full); })
+              .catch(function () { setDetail(null); });
+            window.__workbenchPendingSelection = null;
+          }, 0);
+        }
+      });
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [workspace]);
+
+    // Also listen for live search-navigation events while already mounted.
+    useEffect(function () {
+      function onNavigate(event) {
+        var detail = event && event.detail;
+        if (!detail || detail.type !== "knowledge") return;
+        var id = detail.docId || detail.id;
+        if (id) selectDoc(id);
+      }
+      window.addEventListener("cyrene:workbench-navigate", onNavigate);
+      return function () { window.removeEventListener("cyrene:workbench-navigate", onNavigate); };
+    }, []);
 
     function selectDoc(id) {
       setSelectedId(id);
