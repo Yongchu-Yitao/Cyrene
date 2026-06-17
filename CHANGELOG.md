@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0b0] - 2026-06-17
+
+### Added
+
+- **Windows on ARM support** — CI now builds native ARM64 installers alongside x64.
+- **Workbench UI by default** — GitHub Releases now bundle the workbench UI as the default shell.
+
+### Changed
+
+- Windows installer filenames now include architecture: `Cyrene-${version}-win-x64.exe` / `Cyrene-${version}-win-arm64.exe`.
+
 ## [0.5.0] - 2026-06-07
 
 ### Added

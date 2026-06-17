@@ -8,18 +8,18 @@ on:
       ui_mode:
         description: "Default UI to bundle (workbench = new UI, agent = classic UI)"
         required: false
-        default: "agent"
+        default: "workbench"
         type: choice
         options:
-          - agent
           - workbench
+          - agent
 
 permissions:
   contents: write
 
 env:
   PYTHON_VERSION: "3.12"
-  UI_MODE: ${{ inputs.ui_mode || 'agent' }}
+  UI_MODE: ${{ inputs.ui_mode || 'workbench' }}
 
 jobs:
   # ==========================================================================
@@ -89,13 +89,13 @@ jobs:
       - name: Install Python deps
         run: |
           pip install pyinstaller>=6.0 pillow packaging pypdf reportlab
-          pip install aiosqlite anyio apscheduler croniter fastapi httpx jinja2 python-dotenv python-telegram-bot requests sniffio websockets python-multipart certifi h11 idna
+          pip install pybind11 setuptools wheel
+          pip install aiosqlite anyio apscheduler croniter fastapi "httpx[http2]==0.28.1" "jinja2==3.1.6" python-dotenv python-telegram-bot requests sniffio websockets python-multipart certifi==2025.7.14 h11 idna
           pip install mcp httpx-sse pydantic pydantic-settings jsonschema referencing rpds-py attrs sse-starlette pyjwt
           pip install winloop
           # simplexng and its transitive deps (it uses --no-deps so we list them explicitly)
           pip install simplexng --no-deps
-          pip install babel brotli clideps flask flask-babel httpx-socks isodate lxml markdown-it-py msgspec platformdirs pyyaml rich setproctitle typer-slim valkey whitenoise
-          pip install waitress fasttext-predict pygments python-dateutil
+          pip install babel==2.17.0 brotli==1.1.0 clideps>=0.1.6 flask==3.1.1 flask-babel==4.0.0 "httpx-socks[asyncio]==0.10.0" isodate==0.7.2 lxml==6.0.0 markdown-it-py==3.0.0 msgspec==0.19.0 platformdirs>=4.3.8 pygments==2.19.2 "python-dateutil==2.9.0.post0" pyyaml==6.0.2 rich>=14.0.0 setproctitle==1.3.6 typer-slim==0.16.0 valkey==6.1.0 whitenoise==6.9.0 waitress>=3.0.2 fasttext-predict==0.9.2.4
           pip install .
           pip install --upgrade typing_extensions pydantic pydantic_core
 
@@ -195,7 +195,138 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: dist-electron/Cyrene-*-win64.exe
+          path: dist-electron/Cyrene-*-win-x64.exe
+          if-no-files-found: error
+
+  # ==========================================================================
+  # Windows on ARM Build
+  # ==========================================================================
+  build-windows-arm:
+    runs-on: windows-11-arm
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python deps
+        run: |
+          pip install pyinstaller>=6.0 pillow packaging pypdf reportlab
+          pip install pybind11 setuptools wheel
+          pip install aiosqlite anyio apscheduler croniter fastapi "httpx[http2]==0.28.1" "jinja2==3.1.6" python-dotenv python-telegram-bot requests sniffio websockets python-multipart certifi==2025.7.14 h11 idna
+          pip install mcp httpx-sse pydantic pydantic-settings jsonschema referencing rpds-py attrs sse-starlette pyjwt
+          pip install winloop
+          # simplexng and its transitive deps (it uses --no-deps so we list them explicitly)
+          pip install simplexng --no-deps
+          pip install babel==2.17.0 brotli==1.1.0 clideps>=0.1.6 flask==3.1.1 flask-babel==4.0.0 "httpx-socks[asyncio]==0.10.0" isodate==0.7.2 lxml==6.0.0 markdown-it-py==3.0.0 msgspec==0.19.0 platformdirs>=4.3.8 pygments==2.19.2 "python-dateutil==2.9.0.post0" pyyaml==6.0.2 rich>=14.0.0 setproctitle==1.3.6 typer-slim==0.16.0 valkey==6.1.0 whitenoise==6.9.0 waitress>=3.0.2 fasttext-predict==0.9.2.4
+          pip install .
+          pip install --upgrade typing_extensions pydantic pydantic_core
+
+      - name: Install Electron deps
+        run: cd electron && npm install
+
+      - name: Build WebUI JS
+        run: cd src/webui && npm install && node build-jsx.mjs
+
+      - name: Apply Windows compatibility patches
+        shell: python
+        run: |
+          import os, sys, site
+
+          import simplexng
+          sx = simplexng.__path__[0]
+          print(f"simplexng at: {sx}")
+
+          # 1. Replace uvloop with winloop
+          client_py = os.path.join(sx, "_vendor", "searx", "network", "client.py")
+          if os.path.exists(client_py):
+              with open(client_py, "r") as f:
+                  content = f.read()
+              content = content.replace(
+                  'import uvloop\nuvloop.install()',
+                  'import sys\nif sys.platform == "win32":\n    import winloop as uvloop\nelse:\n    import uvloop\nuvloop.install()'
+              )
+              with open(client_py, "w") as f:
+                  f.write(content)
+              print("Patched uvloop -> winloop")
+          else:
+              print(f"WARNING: {client_py} not found")
+
+          # 2. Replace fork with spawn
+          calc_py = os.path.join(sx, "_vendor", "searx", "plugins", "calculator.py")
+          if os.path.exists(calc_py):
+              with open(calc_py, "r") as f:
+                  content = f.read()
+              content = content.replace(
+                  'mp_fork = multiprocessing.get_context("fork")',
+                  'mp_fork = multiprocessing.get_context("fork" if sys.platform != "win32" else "spawn")'
+              )
+              with open(calc_py, "w") as f:
+                  f.write(content)
+              print("Patched fork -> spawn")
+          else:
+              print(f"WARNING: {calc_py} not found")
+
+          # 3. Create pwd stub
+          site_pkg = site.getsitepackages()[0]
+          pwd_py = os.path.join(site_pkg, "pwd.py")
+          with open(pwd_py, "w") as f:
+              f.write('''"""pwd stub for Windows - SearXNG compatibility."""
+          import os
+          def getpwuid(uid):
+              name = os.environ.get("USERNAME", "unknown")
+              return type("pw", (), {"pw_name": name, "pw_uid": uid})()
+          ''')
+          print(f"Created pwd stub at {pwd_py}")
+
+          # 4. Enable JSON API in SearXNG settings
+          settings_yml = os.path.join(sx, "settings", "settings_template.yml")
+          if os.path.exists(settings_yml):
+              with open(settings_yml, "r") as f:
+                  content = f.read()
+              if "formats:" in content and "json" not in content.split("formats:", 1)[1].split("\n\n", 1)[0]:
+                  content = content.replace(
+                      "formats:\n    - html",
+                      "formats:\n    - html\n    - json"
+                  )
+                  with open(settings_yml, "w") as f:
+                      f.write(content)
+                  print("Enabled JSON API in SearXNG settings")
+          else:
+              print(f"WARNING: {settings_yml} not found")
+
+          print("Windows compatibility patches applied.")
+
+      - name: Verify build environment imports
+        run: |
+          python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; import anyio, httpx, httpcore, sniffio, aiosqlite, apscheduler, croniter, jinja2, websockets, simplexng, mcp; print('imports-ok')"
+
+      - name: Full build (PyInstaller + Electron)
+        run: python build/build.py --ui-mode ${{ env.UI_MODE }} --arch arm64
+
+      - name: Smoke test packaged app
+        run: .\dist\Cyrene\Cyrene.exe --smoke-test
+
+      - name: Verify packaged modules
+        shell: powershell
+        run: |
+          if (-not (Test-Path dist\Cyrene\Cyrene.exe)) { throw "Cyrene.exe missing" }
+          if (-not (Test-Path dist\Cyrene\_internal\anyio)) { throw "anyio missing" }
+          if (-not (Test-Path dist\Cyrene\_internal\httpx)) { throw "httpx missing" }
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-arm
+          path: dist-electron/Cyrene-*-win-arm64.exe
           if-no-files-found: error
 
   # ==========================================================================
@@ -252,7 +383,7 @@ jobs:
   # Create GitHub Release
   # ==========================================================================
   release:
-    needs: [build-macos, build-windows, build-linux]
+    needs: [build-macos, build-windows, build-windows-arm, build-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

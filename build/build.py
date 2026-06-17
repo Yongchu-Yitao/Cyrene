@@ -154,7 +154,7 @@ def build_webui_js() -> None:
     print("  [ok] JSX compiled")
 
 
-def run_pyinstaller() -> None:
+def run_pyinstaller(arch: str = "x64") -> None:
     """运行 PyInstaller。"""
     print("\n[PyInstaller] Building...")
     cmd = [
@@ -164,6 +164,10 @@ def run_pyinstaller() -> None:
         "--noconfirm",
         str(SPEC_FILE),
     ]
+    # Windows cross-compilation support (x64 runner building ARM64 binaries).
+    if sys.platform == "win32" and arch == "arm64":
+        cmd.extend(["--target-arch", "ARM64"])
+        print("  [target] ARM64")
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     if result.returncode != 0:
         print("  [error] PyInstaller failed")
@@ -224,7 +228,7 @@ def package_mac() -> Path:
     return dmg_path
 
 
-def package_win() -> Path:
+def package_win(arch: str = "x64") -> Path:
     """Windows: onedir → .zip。"""
     version = get_version()
     dir_path = DIST_DIR / "Cyrene"
@@ -233,7 +237,8 @@ def package_win() -> Path:
         print("  [error] Cyrene dir not found, check PyInstaller output")
         sys.exit(1)
 
-    zip_path = DIST_DIR / f"Cyrene-{version}-win64.zip"
+    suffix = "win64" if arch == "x64" else "win-arm64"
+    zip_path = DIST_DIR / f"Cyrene-{version}-{suffix}.zip"
     print(f"\n[ZIP] Creating {zip_path.name}...")
     shutil.make_archive(
         str(zip_path.with_suffix("")),
@@ -350,7 +355,7 @@ def _appimage_arch() -> str:
     return arch_map.get(machine, machine or "x86_64")
 
 
-def run_electron_builder() -> None:
+def run_electron_builder(arch: str = "x64") -> None:
     """Run electron-builder to package the Electron app around the PyInstaller bundle."""
     electron_dir = PROJECT_ROOT / "electron"
 
@@ -382,6 +387,10 @@ def run_electron_builder() -> None:
         cmd.append("--mac")
     elif IS_WIN:
         cmd.append("--win")
+        if arch == "arm64":
+            cmd.append("--arm64")
+        else:
+            cmd.append("--x64")
     elif IS_LINUX:
         cmd.append("--linux")
 
@@ -473,11 +482,18 @@ def main() -> None:
         default="workbench",
         help="默认启动的 UI（workbench 或 agent），打包进二进制",
     )
+    parser.add_argument(
+        "--arch",
+        choices=["x64", "arm64"],
+        default="x64",
+        help="目标架构（目前仅 Windows 构建生效）",
+    )
     args = parser.parse_args()
 
     print(f"Cyrene Builder — {sys.platform}")
     print(f"  project: {PROJECT_ROOT}")
     print(f"  ui-mode: {args.ui_mode}")
+    print(f"  arch: {args.arch}")
 
     if args.clean:
         clean()
@@ -492,7 +508,7 @@ def main() -> None:
 
     try:
         write_buildinfo(args.ui_mode)
-        run_pyinstaller()
+        run_pyinstaller(arch=args.arch)
     finally:
         restore_buildinfo()
 
@@ -501,7 +517,7 @@ def main() -> None:
         return
 
     # Electron 打包
-    run_electron_builder()
+    run_electron_builder(arch=args.arch)
 
     # 列出产物
     electron_dist = PROJECT_ROOT / "dist-electron"
