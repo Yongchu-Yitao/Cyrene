@@ -205,6 +205,7 @@ exe = EXE(
     name="Cyrene",
     icon=_icon,
     console=False,
+    target_arch="arm64" if os.environ.get("PYINSTALLER_TARGET_ARCH") == "ARM64" else None,
 )
 
 coll = COLLECT(

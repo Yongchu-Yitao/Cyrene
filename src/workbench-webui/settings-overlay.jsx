@@ -796,8 +796,8 @@ function CapabilitiesPanel(p) {
         React.createElement("span", { className: "wb-collapse-icon" + (toolsExpanded ? " open" : "") }, "⌖ ".concat(toolsExpanded ? t("settings.collapseTools") : t("settings.expandTools", { count: toolList.length }))),
       ),
       toolsExpanded && React.createElement("div", { className: "wb-tool-list" },
-        toolList.map(function (tool) {
-          return FieldRow(React.createElement("span", { className: "mono" }, tool.name), tool.desc, Toggle(tool.enabled, function () { toggleTool(tool.name); }), tool.name);
+        toolList.map(function (tool, idx) {
+          return FieldRow(React.createElement("span", { className: "mono" }, tool.name), tool.desc, Toggle(tool.enabled, function () { toggleTool(tool.name); }), tool.name || "tool-" + idx);
         }),
         React.createElement("div", { className: "wb-save-actions" },
           React.createElement("button", { className: "wb-btn primary", onClick: saveTools }, t("settings.saveTools")),

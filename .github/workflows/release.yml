@@ -242,6 +242,7 @@ jobs:
           # when resolving pyproject.toml dependencies (mcp 1.28+ requires pydantic>=2.11.0).
           pip install --upgrade typing_extensions pydantic pydantic_core
           pip install mcp httpx-sse pydantic pydantic-settings jsonschema referencing rpds-py attrs sse-starlette pyjwt
+          pip install keyring uvicorn
 
       - name: Install Electron deps
         run: cd electron && npm install

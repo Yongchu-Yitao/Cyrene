@@ -921,7 +921,7 @@
 
     function load() {
       setLoading(true); setError("");
-      API.occurrences(windowRange.start.toISOString(), windowRange.end.toISOString())
+      return API.occurrences(windowRange.start.toISOString(), windowRange.end.toISOString())
         .then(function (evs) { setRawEvents(evs); })
         .catch(function (e) { setError(e.message || String(e)); setRawEvents([]); })
         .finally(function () { setLoading(false); });

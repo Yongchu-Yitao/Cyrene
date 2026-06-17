@@ -164,9 +164,9 @@ def run_pyinstaller(arch: str = "x64") -> None:
         "--noconfirm",
         str(SPEC_FILE),
     ]
-    # Windows cross-compilation support (x64 runner building ARM64 binaries).
+    # Windows cross-compilation support (x64 or ARM64 runners building ARM64 binaries).
     if sys.platform == "win32" and arch == "arm64":
-        cmd.extend(["--target-arch", "ARM64"])
+        os.environ["PYINSTALLER_TARGET_ARCH"] = "ARM64"
         print("  [target] ARM64")
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     if result.returncode != 0:
