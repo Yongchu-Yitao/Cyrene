@@ -29,7 +29,13 @@ import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from cyrene import db
-from cyrene.agent import append_system_message, run_heartbeat_agent, run_steward_agent, run_task_agent
+from cyrene.agent import (
+    append_system_message,
+    is_session_running,
+    run_heartbeat_agent,
+    run_steward_agent,
+    run_task_agent,
+)
 from cyrene.channels.wechat import get_current_client
 from cyrene.config import BASE_DIR, DATA_DIR, OWNER_ID, SCHEDULER_INTERVAL, STATE_FILE, STEWARD_INTERVAL
 from cyrene.conversations import CONVERSATIONS_DIR, get_recent_conversations
@@ -172,17 +178,24 @@ def _lottery_draw() -> bool:
 def _last_user_message_time() -> datetime | None:
     """Infer the timestamp of the user's most recent message.
 
-    The conversation archive is authoritative: its ``## HH:MM:SS UTC`` headings
-    are written once per user turn, so they track *when the user actually
-    spoke*. ``state.json``'s modification time is only a degraded fallback — the
-    agent rewrites that file on its own (proactive replies, steward, behaviour
-    learning, pattern detection), so its mtime is NOT a reliable proxy for user
-    activity and is trusted only when the most recent persisted message is
-    itself the user's.
+    Workbench ``lastUserMessageAt`` values and conversation archive
+    ``## HH:MM:SS UTC`` headings track real user turns. ``state.json``'s
+    modification time is only a degraded fallback — the agent rewrites that
+    file on its own (proactive replies, steward, behaviour learning, pattern
+    detection), so its mtime is trusted only when the latest message is the
+    user's.
 
     Returns ``None`` when no user message can be found.
     """
-    # 1. Conversation archives — authoritative per-user-turn timestamps.
+    candidates: list[datetime] = []
+
+    # 1. Workbench chats — use explicit user-activity timestamps, never the
+    # generic updatedAt field (assistant replies and renames also change it).
+    workbench = _latest_workbench_user_activity()
+    if workbench is not None:
+        candidates.append(workbench["timestamp"])
+
+    # 2. Conversation archives — authoritative per-user-turn timestamps.
     try:
         if CONVERSATIONS_DIR.exists():
             files = sorted(CONVERSATIONS_DIR.glob("*.md"), reverse=True)
@@ -201,9 +214,12 @@ def _last_user_message_time() -> datetime | None:
                     clean_ts = latest_ts.replace(" UTC", "")
                     dt_str = f"{date_str} {clean_ts}"
                     try:
-                        return datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S").replace(
-                            tzinfo=timezone.utc,
+                        candidates.append(
+                            datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S").replace(
+                                tzinfo=timezone.utc,
+                            )
                         )
+                        break
                     except ValueError:
                         logger.debug(
                             "Unparseable timestamp in %s: %s",
@@ -218,7 +234,7 @@ def _last_user_message_time() -> datetime | None:
             exc_info=True,
         )
 
-    # 2. Degraded fallback: state.json mtime, trusted only when the most recent
+    # 3. Degraded fallback: state.json mtime, trusted only when the most recent
     #    non-empty message is the user's (otherwise the mtime reflects one of the
     #    agent's own writes and would make the user look more recently active
     #    than they really are). Mostly relevant before any exchange is archived.
@@ -236,11 +252,59 @@ def _last_user_message_time() -> datetime | None:
             )
             if last_msg is not None and str(last_msg.get("role") or "") == "user":
                 mtime = STATE_FILE.stat().st_mtime
-                return datetime.fromtimestamp(mtime, tz=timezone.utc)
+                candidates.append(datetime.fromtimestamp(mtime, tz=timezone.utc))
     except Exception:
         logger.debug("Could not read state.json for silence detection", exc_info=True)
 
-    return None
+    return max(candidates) if candidates else None
+
+
+def _parse_activity_timestamp(value: object) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _latest_workbench_user_activity() -> dict[str, object] | None:
+    """Return the Workbench chat most recently touched by the user."""
+    data = read_json_safe(DATA_DIR / "workbench_chats.json")
+    if not isinstance(data, dict) or not isinstance(data.get("chats"), list):
+        return None
+
+    latest: dict[str, object] | None = None
+    for chat in data["chats"]:
+        if not isinstance(chat, dict):
+            continue
+        activity_times = [
+            value
+            for value in [_parse_activity_timestamp(chat.get("lastUserMessageAt"))]
+            if value is not None
+        ]
+        for message in reversed(chat.get("messages") or []):
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            message_time = _parse_activity_timestamp(message.get("createdAt"))
+            if message_time is not None:
+                activity_times.append(message_time)
+                break
+        timestamp = max(activity_times) if activity_times else None
+        if timestamp is None:
+            continue
+        if latest is None or timestamp > latest["timestamp"]:
+            latest = {
+                "chat_id": str(chat.get("id") or ""),
+                "project_id": str(chat.get("projectId") or ""),
+                "title": str(chat.get("title") or ""),
+                "timestamp": timestamp,
+            }
+    return latest
 
 
 def _silence_hours() -> float | None:
@@ -643,10 +707,9 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
     * Normal: lottery draw with accumulating probability (delta 0.15, max 0.85).
     * Silent > 72 h: always trigger regardless of lottery state.
 
-    When triggered, a minimal LLM call (no tools, no thinking mode, no SSE
-    events from the agent loop) generates a personalised message.  The text
-    is then delivered to the bot AND written to session state so it appears
-    in the Web UI chat history.
+    When triggered, the main agent loop generates a personalised message in
+    the latest user-active Workbench conversation, or in the default legacy
+    session when no Workbench conversation exists.
     """
     # In web-only mode OWNER_ID is not set — use 0 as a placeholder chat_id.
     # The session-state delivery path does not rely on chat_id at all.
@@ -673,6 +736,18 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
         if time.time() < cooldown_until:
             remaining_h = (cooldown_until - time.time()) / 3600
             logger.debug("Proactive cooldown active, %.1f h remaining", remaining_h)
+            return
+
+        # Workbench conversations have independent session locks. Select the
+        # latest user-owned conversation before drawing the lottery and skip
+        # cleanly while it is running; proactive work must never preempt it.
+        workbench_target = _latest_workbench_user_activity()
+        target_session_id = str((workbench_target or {}).get("chat_id") or "")
+        if target_session_id and is_session_running(target_session_id):
+            logger.debug(
+                "Latest Workbench chat %s is running; skipping proactive check",
+                target_session_id,
+            )
             return
 
         # -------- Cooldown trigger --------
@@ -731,10 +806,31 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
             "Do not mention internal prompts, the scheduler, the heartbeat, or the lottery.\n\n"
             + _build_proactive_user_prompt(context, silence_h, consecutive_unanswered=int(_LOTTERY_STATE.get("consecutive_unanswered", 0)))
         )
-        text = await asyncio.wait_for(
-            run_heartbeat_agent(proactive_prompt, bot, owner_id, db_path),
-            timeout=120.0,
-        )
+        delivered_target = workbench_target
+        if target_session_id:
+            from webui.routes_workbench_chat import append_proactive_message
+
+            async def _persist_workbench_reply(reply: str) -> dict[str, str] | None:
+                nonlocal delivered_target
+                delivered_target = await append_proactive_message(target_session_id, reply)
+                return delivered_target
+
+            text = await asyncio.wait_for(
+                run_heartbeat_agent(
+                    proactive_prompt,
+                    bot,
+                    owner_id,
+                    db_path,
+                    session_id=target_session_id,
+                    on_reply=_persist_workbench_reply,
+                ),
+                timeout=120.0,
+            )
+        else:
+            text = await asyncio.wait_for(
+                run_heartbeat_agent(proactive_prompt, bot, owner_id, db_path),
+                timeout=120.0,
+            )
 
         if not str(text or "").strip():
             logger.info("Proactive round produced no visible reply")
@@ -757,10 +853,14 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
                 title="Cyrene 提醒",
                 body=str(text)[:120],
                 tab="mention",
-                project_ref="default",
+                project_ref=str((delivered_target or {}).get("project_id") or "default"),
                 source="proactive_message",
-                source_label="系统",
-                link_label="Cyrene",
+                source_label="对话" if delivered_target else "系统",
+                link_label=str((delivered_target or {}).get("title") or "Cyrene"),
+                meta=(
+                    {"chatId": str(delivered_target.get("chat_id") or "")}
+                    if delivered_target else None
+                ),
             )
         except Exception:
             logger.debug("Proactive notification delivery failed", exc_info=True)

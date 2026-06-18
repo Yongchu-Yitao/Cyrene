@@ -134,6 +134,19 @@ def chunk_text(
 
 
 _INDEX_LOCK = asyncio.Lock()
+_ACTIVE_INDEX_TASKS: set[asyncio.Task] = set()
+
+
+async def cancel_pending_tasks() -> None:
+    """Cancel active knowledge indexing before destructive data operations."""
+    current = asyncio.current_task()
+    known_tasks = list(_ACTIVE_INDEX_TASKS)
+    tasks = [task for task in known_tasks if task is not current and not task.done()]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _ACTIVE_INDEX_TASKS.difference_update(known_tasks)
 
 
 async def index_document(db_path: str, doc_id: str) -> None:
@@ -144,8 +157,16 @@ async def index_document(db_path: str, doc_id: str) -> None:
     raise "database is locked". This also enforces the intended sequential,
     burst-free indexing.
     """
-    async with _INDEX_LOCK:
-        await _index_document_inner(db_path, doc_id)
+    task = asyncio.current_task()
+    already_active = task in _ACTIVE_INDEX_TASKS if task is not None else False
+    if task is not None:
+        _ACTIVE_INDEX_TASKS.add(task)
+    try:
+        async with _INDEX_LOCK:
+            await _index_document_inner(db_path, doc_id)
+    finally:
+        if task is not None and not already_active:
+            _ACTIVE_INDEX_TASKS.discard(task)
 
 
 async def _index_document_inner(db_path: str, doc_id: str) -> None:
@@ -232,14 +253,22 @@ async def process_pending(db_path: str, *, limit: int | None = None) -> None:
     Indexes up to `limit` pending documents. Failures are marked as error without retry.
     Sequential processing avoids overwhelming vision/embedding APIs.
     """
-    async with aiosqlite.connect(db_path, timeout=30) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT id FROM kb_documents WHERE status = ? ORDER BY created_at ASC LIMIT ?",
-            ("pending", limit or 999999),
-        )
-        rows = await cursor.fetchall()
+    task = asyncio.current_task()
+    already_active = task in _ACTIVE_INDEX_TASKS if task is not None else False
+    if task is not None:
+        _ACTIVE_INDEX_TASKS.add(task)
+    try:
+        async with aiosqlite.connect(db_path, timeout=30) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT id FROM kb_documents WHERE status = ? ORDER BY created_at ASC LIMIT ?",
+                ("pending", limit or 999999),
+            )
+            rows = await cursor.fetchall()
 
-    for row in rows:
-        doc_id = row["id"]
-        await index_document(db_path, doc_id)
+        for row in rows:
+            doc_id = row["id"]
+            await index_document(db_path, doc_id)
+    finally:
+        if task is not None and not already_active:
+            _ACTIVE_INDEX_TASKS.discard(task)

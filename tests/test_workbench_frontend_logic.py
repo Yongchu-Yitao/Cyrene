@@ -88,3 +88,45 @@ def test_workbench_chat_overview_i18n_has_zh_labels():
         "创建时间",
         "快捷操作",
     ]
+
+
+def test_workbench_chat_supports_parallel_conversation_runtimes():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    assert "var [runtimes, setRuntimes] = useWbcState({});" in source
+    assert "var abortRefs = useWbcRef({});" in source
+    assert "var activeRuntime = runtimes[activeChatId] || null;" in source
+    assert "if (runtimesRef.current[chatId]) return;" in source
+    assert "otherRunning" not in source
+    assert "workbenchChat.lockedByOther" not in source
+    assert "workbenchChat.lockedByOther" not in i18n
+
+
+def test_workbench_acceptance_button_calls_agent_endpoint():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
+
+    assert "window.WorkbenchModel.generateAcceptance(session.id)" in source
+    assert '"/acceptance/generate"' in model
+
+
+def test_workbench_regenerate_plan_fallback_updates_acceptance():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    regenerate_block = source.split("regeneratePlan: function ()", 1)[1].split("approvePlan: function ()", 1)[0]
+
+    assert "plan: model.buildPlanSteps(goal, constraints)" in regenerate_block
+    assert "acceptanceCriteria: model.buildAcceptance(goal, constraints)" in regenerate_block
+
+
+def test_workbench_plan_conflict_does_not_apply_client_fallback():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
+
+    assert 'err.code === "stale_plan_revision"' in source
+    assert "rethrowPlanConflict(err);" in source
+    assert "error.code = payload.code" in model

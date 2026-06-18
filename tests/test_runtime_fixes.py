@@ -976,6 +976,7 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
     monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
     monkeypatch.setattr(scheduler, "notify", AsyncMock())
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=0, cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
@@ -1015,6 +1016,7 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
     monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=0, cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
     )
@@ -1058,6 +1060,7 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
     monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
     monkeypatch.setattr(scheduler, "notify", AsyncMock())
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=0, cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
@@ -1100,6 +1103,7 @@ async def test_proactive_cooldown_arms_when_streak_reaches_threshold(monkeypatch
     monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
     monkeypatch.setattr(scheduler, "notify", AsyncMock())
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=scheduler._PROACTIVE_COOLDOWN_THRESHOLD,

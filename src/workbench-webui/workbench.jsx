@@ -1534,6 +1534,9 @@ function useTaskController(session, onRefresh, runtime) {
 
   function apply(next) { if (onRefresh && next) onRefresh(next); return next; }
   function fail(err) { window.alert((err && err.message) || String(err)); }
+  function rethrowPlanConflict(err) {
+    if (err && err.code === "stale_plan_revision") throw err;
+  }
   function patch(p) { return model.patchSession(sid, p); }
   function run(promise) {
     setBusy(true);
@@ -1647,10 +1650,12 @@ function useTaskController(session, onRefresh, runtime) {
       return runAgentic({ kind: "dispatch", label: "正在理解你的输入…" }, model.dispatch(sid, input, {
         attachments: (runtime && runtime.attachments) || [],
         mode: (runtime && runtime.mode) || undefined,
+        basePlanRevision: Number(session.planRevision || 0),
       }).then(function (store) {
         if (runtime && runtime.clearAttachments) runtime.clearAttachments();
         return store;
-      }).catch(function () {
+      }).catch(function (err) {
+        rethrowPlanConflict(err);
         var goal = (session.goal || input).trim();
         return patch({
           status: "planning",
@@ -1677,7 +1682,8 @@ function useTaskController(session, onRefresh, runtime) {
     promoteToPlan: function () {
       var goal = (session.goal || "").trim();
       if (!goal) { focusComposer(); return Promise.resolve(); }
-      return runAgentic({ kind: "plan", label: "正在把它整理成执行计划…" }, model.generatePlan(sid, goal).catch(function () {
+      return runAgentic({ kind: "plan", label: "正在把它整理成执行计划…" }, model.generatePlan(sid, goal, { basePlanRevision: Number(session.planRevision || 0) }).catch(function (err) {
+        rethrowPlanConflict(err);
         return patch({ status: "planning", goal: goal, plan: model.buildPlanSteps(goal, session.constraints || []), acceptanceCriteria: model.buildAcceptance(goal, session.constraints || []), agentReply: "计划生成服务暂时不可用，已生成基础计划。", events: model.withEvent(session, "PlanGenerated", "生成基础执行计划（兜底）。") });
       }));
     },
@@ -1688,7 +1694,8 @@ function useTaskController(session, onRefresh, runtime) {
     start: function (goalText) {
       var goal = (goalText != null ? String(goalText) : (session.goal || "")).trim();
       if (!goal) return Promise.resolve();
-      return runAgentic({ kind: "plan", label: "正在分析任务并生成执行计划…" }, model.generatePlan(sid, goal).catch(function () {
+      return runAgentic({ kind: "plan", label: "正在分析任务并生成执行计划…" }, model.generatePlan(sid, goal, { basePlanRevision: Number(session.planRevision || 0) }).catch(function (err) {
+        rethrowPlanConflict(err);
         var constraints = session.constraints || [];
         return patch({
           status: "planning",
@@ -1707,7 +1714,8 @@ function useTaskController(session, onRefresh, runtime) {
     // with a project-derived default goal (passed in from the card so it follows
     // the UI language).
     autoStart: function () {
-      return runAgentic({ kind: "plan", label: "正在阅读项目并规划…" }, model.generatePlan(sid, "", { autoStart: true }).catch(function () {
+      return runAgentic({ kind: "plan", label: "正在阅读项目并规划…" }, model.generatePlan(sid, "", { autoStart: true, basePlanRevision: Number(session.planRevision || 0) }).catch(function (err) {
+        rethrowPlanConflict(err);
         var basis = (session.goal || "").trim() || "推进本项目当前最该做的工作";
         return patch({
           status: "planning",
@@ -1732,7 +1740,8 @@ function useTaskController(session, onRefresh, runtime) {
           events: model.withEvent(session, "PlanRevised", "执行中补充：" + text),
         }));
       }
-      return runAgentic({ kind: "plan", label: "正在结合你的补充重新规划…" }, model.generatePlan(sid, goal, { feedback: text }).catch(function () {
+      return runAgentic({ kind: "plan", label: "正在结合你的补充重新规划…" }, model.generatePlan(sid, goal, { feedback: text, operation: "auto", basePlanRevision: Number(session.planRevision || 0) }).catch(function (err) {
+        rethrowPlanConflict(err);
         var keepPlan = Array.isArray(session.plan) && session.plan.length ? session.plan : model.buildPlanSteps(goal, session.constraints || []);
         var keepAcceptance = Array.isArray(session.acceptanceCriteria) && session.acceptanceCriteria.length
           ? session.acceptanceCriteria
@@ -1749,8 +1758,20 @@ function useTaskController(session, onRefresh, runtime) {
 
     regeneratePlan: function () {
       var goal = (session.goal || "").trim();
-      return runAgentic({ kind: "plan", label: "正在重新生成执行计划…" }, model.generatePlan(sid, goal).catch(function () {
-        return patch({ status: "planning", plan: model.buildPlanSteps(goal, session.constraints || []), agentReply: "重新生成失败，已保留基础计划。", events: model.withEvent(session, "PlanGenerated", "重新生成执行计划（兜底）。") });
+      return runAgentic({ kind: "plan", label: "正在重新生成执行计划…" }, model.generatePlan(sid, goal, {
+        feedback: "请基于当前任务目标生成一份全新的执行计划，不保留原计划步骤。",
+        operation: "replace",
+        basePlanRevision: Number(session.planRevision || 0),
+      }).catch(function (err) {
+        rethrowPlanConflict(err);
+        var constraints = session.constraints || [];
+        return patch({
+          status: "planning",
+          plan: model.buildPlanSteps(goal, constraints),
+          acceptanceCriteria: model.buildAcceptance(goal, constraints),
+          agentReply: "重新生成失败，已保留基础计划。",
+          events: model.withEvent(session, "PlanGenerated", "重新生成执行计划（兜底）。"),
+        });
       }));
     },
 
@@ -3424,8 +3445,7 @@ function AcceptanceTab({ session, onRefresh }) {
   var passed = items.filter(function (a) { return a.status === "passed" || a.status === "done"; }).length;
   function generate() {
     setBusy(true);
-    var accept = window.WorkbenchModel.buildAcceptance(session.goal || "", session.constraints || []);
-    window.WorkbenchModel.patchSession(session.id, { acceptanceCriteria: accept })
+    window.WorkbenchModel.generateAcceptance(session.id)
       .then(function (next) { onRefresh && onRefresh(next); })
       .catch(function (err) { window.alert(err.message || String(err)); })
       .finally(function () { setBusy(false); });

@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import cyrene.agent.state as _state
 
@@ -228,6 +228,11 @@ async def run_agent(
     finally:
         _current_session_id.reset(session_token)
         _active_workspace_dir.reset(workspace_token)
+
+
+def is_session_running(session_id: str = "") -> bool:
+    """Return whether an agent run currently owns the requested session."""
+    return _ensure_session(session_id).lock.locked()
 
 
 async def _clear_interrupt_when_idle(session_id: str = "") -> None:
@@ -790,7 +795,14 @@ async def run_task_agent(prompt: str, bot: Any, chat_id: int, db_path: str, noti
     return await _run_execution_agent(prompt, bot, chat_id, db_path, notify_state=notify_state)
 
 
-async def run_heartbeat_agent(prompt: str, bot: Any, chat_id: int, db_path: str) -> str:
+async def run_heartbeat_agent(
+    prompt: str,
+    bot: Any,
+    chat_id: int,
+    db_path: str,
+    session_id: str = "",
+    on_reply: Callable[[str], Awaitable[Any]] | None = None,
+) -> str:
     proactive_system = (
         "This round was initiated by the scheduler, not by a user chat message.\n"
         "The hidden task you receive is internal guidance, not text to answer literally.\n"
@@ -807,17 +819,29 @@ async def run_heartbeat_agent(prompt: str, bot: Any, chat_id: int, db_path: str)
         "- Keep it to 1–2 sentences. Be direct, warm, and specific.\n"
         "- If tools are useful, use them before composing the reply."
     )
-    default_ctx = _ensure_session("")
-    if default_ctx.lock.locked():
-        return ""
-    async with default_ctx.lock:
-        default_ctx.interrupt_event.clear()
-        return await _run_chat_agent(
-            prompt, bot, chat_id, db_path,
-            ephemeral_system=proactive_system, persist_user_message=False,
-            public_prompt="", refresh_labels=False, hide_initial_detail=True,
-            assistant_message_meta={"proactive": True, "system_initiated": True},
-        )
+    session_token = _current_session_id.set(session_id)
+    try:
+        ctx = _ensure_session(session_id)
+        # Proactive work is strictly non-preemptive. A user-owned run always
+        # wins; unlike run_agent(), this path must never interrupt or queue
+        # behind an active conversation.
+        if ctx.lock.locked():
+            return ""
+        async with ctx.lock:
+            ctx.interrupt_event.clear()
+            reply = await _run_chat_agent(
+                prompt, bot, chat_id, db_path,
+                ephemeral_system=proactive_system, persist_user_message=False,
+                public_prompt="", refresh_labels=False, hide_initial_detail=True,
+                assistant_message_meta={"proactive": True, "system_initiated": True},
+            )
+            if reply and on_reply is not None:
+                delivered = await on_reply(reply)
+                if delivered is None or delivered is False:
+                    return ""
+            return reply
+    finally:
+        _current_session_id.reset(session_token)
 
 
 async def run_steward_agent(conversation_text: str, soulmd_content: str, bot: Any, chat_id: int, db_path: str) -> str:

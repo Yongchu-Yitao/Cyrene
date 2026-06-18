@@ -349,21 +349,30 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   var [chats, setChats] = useWbcState([]);
   var chatsRef = useWbcRef([]);
   var [activeChatId, setActiveChatId] = useWbcState("");
+  var activeChatIdRef = useWbcRef("");
   var [activeChat, setActiveChat] = useWbcState(null);
   var [loading, setLoading] = useWbcState(true);
+  var projectIdRef = useWbcRef(projectId);
 
   useWbcEffect(function () {
     chatsRef.current = chats;
   }, [chats]);
+  useWbcEffect(function () {
+    activeChatIdRef.current = activeChatId;
+  }, [activeChatId]);
+  useWbcEffect(function () {
+    projectIdRef.current = projectId;
+  }, [projectId]);
   var [error, setError] = useWbcState("");
   var [sideTab, setSideTab] = useWbcState("overview");
   var [viewerFile, setViewerFile] = useWbcState(null);
   // True while the backend reads the whole conversation and synthesizes a task.
   var [toTaskBusy, setToTaskBusy] = useWbcState(false);
-  // Streaming runtime for the in-flight request (single concurrent run per page).
-  var [runtime, setRuntime] = useWbcState(null); // {chatId, text, progress[], startedAt}
-  var runtimeRef = useWbcRef(null);
-  var abortRef = useWbcRef(null);
+  // Streaming runtimes are isolated per conversation so different chats can
+  // run concurrently without overwriting each other's reply/progress state.
+  var [runtimes, setRuntimes] = useWbcState({}); // chatId -> runtime
+  var runtimesRef = useWbcRef({});
+  var abortRefs = useWbcRef({}); // chatId -> AbortController
   // Tracks the pending-question id whose plan we've already auto-revealed, so we
   // switch to the 计划 tab once per plan rather than fighting manual tab changes.
   var revealedPlanQidRef = useWbcRef("");
@@ -376,16 +385,27 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     setSideTab("viewer");
   }
 
-  function syncRuntime(next) {
-    runtimeRef.current = next;
-    setRuntime(next);
+  function updateRuntime(chatId, updater) {
+    if (!chatId) return null;
+    var currentMap = runtimesRef.current;
+    var current = currentMap[chatId] || null;
+    var next = typeof updater === "function" ? updater(current) : updater;
+    var nextMap = { ...currentMap };
+    if (next) nextMap[chatId] = next;
+    else delete nextMap[chatId];
+    runtimesRef.current = nextMap;
+    setRuntimes(nextMap);
+    return next;
   }
 
   function refreshChats(selectId) {
     if (!projectId) return Promise.resolve([]);
-    return model.listChats(projectId).then(function (list) {
+    var requestedProjectId = projectId;
+    return model.listChats(requestedProjectId).then(function (list) {
+      // A background run may finish after the user has switched projects.
+      if (projectIdRef.current !== requestedProjectId) return list;
       setChats(list);
-      var targetId = selectId || activeChatId;
+      var targetId = selectId || activeChatIdRef.current;
       var exists = list.some(function (c) { return c.id === targetId; });
       if (!exists) targetId = list[0] ? list[0].id : "";
       setActiveChatId(targetId);
@@ -399,7 +419,6 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     setError("");
     setActiveChat(null);
     setActiveChatId("");
-    syncRuntime(null);
     if (!projectId) { setChats([]); setLoading(false); return; }
     model.listChats(projectId)
       .then(function (list) {
@@ -495,12 +514,50 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   }, []);
 
   // Live tool progress: reuse the global SSE feed (data.jsx) and keep only
-  // events tagged with the running conversation's session id.
+  // events tagged with a running conversation's session id.
   useWbcEffect(function () {
     if (!window.__sseHandlers) return;
     function onEvent(event) {
-      var current = runtimeRef.current;
-      if (!current || !event || event.session_id !== current.chatId) return;
+      if (!event) return;
+      if (event.type === "workbench_proactive_message") {
+        if (String(event.project_id || "") !== String(projectIdRef.current || "")) return;
+        var proactiveChatId = String(event.chat_id || event.session_id || "");
+        var proactiveMessage = event.message;
+        var updatedAt = String(event.updated_at || (proactiveMessage && proactiveMessage.createdAt) || "");
+        setChats(function (prev) {
+          var found = false;
+          var next = prev.map(function (chat) {
+            if (chat.id !== proactiveChatId) return chat;
+            found = true;
+            return {
+              ...chat,
+              updatedAt: updatedAt || chat.updatedAt,
+              preview: proactiveMessage ? proactiveMessage.content : chat.preview,
+              messageCount: (chat.messageCount || 0) + 1,
+            };
+          });
+          if (!found) return prev;
+          return next.slice().sort(function (a, b) {
+            return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
+          });
+        });
+        if (activeChatIdRef.current === proactiveChatId && proactiveMessage) {
+          setActiveChat(function (prev) {
+            if (!prev || prev.id !== proactiveChatId) return prev;
+            var messages = prev.messages || [];
+            if (messages.some(function (item) { return item.id === proactiveMessage.id; })) return prev;
+            return {
+              ...prev,
+              updatedAt: updatedAt || prev.updatedAt,
+              messages: messages.concat([proactiveMessage]),
+            };
+          });
+        }
+        return;
+      }
+      var chatId = String(event.session_id || "");
+      var current = runtimesRef.current[chatId];
+      if (!current) return;
       var entry = null;
       if (event.type === "tool_call") {
         var args = event.args || {};
@@ -510,11 +567,13 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         entry = { kind: "phase", text: String(event.detail).slice(0, 80), preview: "" };
       }
       if (!entry) return;
-      var next = {
-        ...current,
-        progress: current.progress.concat([entry]).slice(-30),
-      };
-      syncRuntime(next);
+      updateRuntime(chatId, function (latest) {
+        if (!latest) return null;
+        return {
+          ...latest,
+          progress: latest.progress.concat([entry]).slice(-30),
+        };
+      });
     }
     window.__sseHandlers.add(onEvent);
     return function () { window.__sseHandlers.delete(onEvent); };
@@ -554,9 +613,12 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   function handleSend(input) {
     setError("");
     return ensureChat().then(function (chatId) {
+      // Keep message ordering deterministic within one conversation. Other
+      // conversation ids remain free to start their own run in parallel.
+      if (runtimesRef.current[chatId]) return;
       var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
-      abortRef.current = ac;
-      syncRuntime({ chatId: chatId, text: "", progress: [], startedAt: Date.now(), replying: false });
+      if (ac) abortRefs.current[chatId] = ac;
+      updateRuntime(chatId, { chatId: chatId, text: "", progress: [], startedAt: Date.now(), replying: false });
       return model.sendMessage(chatId, input, {
         onAck: function (event) {
           if (event.retry) {
@@ -582,17 +644,19 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
           });
         },
         onReplyStart: function () {
-          var current = runtimeRef.current;
-          if (current) syncRuntime({ ...current, replying: true });
+          updateRuntime(chatId, function (current) {
+            return current ? { ...current, replying: true } : null;
+          });
         },
         onReplyDelta: function (delta) {
-          var current = runtimeRef.current;
-          if (!current) return;
-          syncRuntime({ ...current, replying: true, text: current.text + delta });
+          updateRuntime(chatId, function (current) {
+            return current ? { ...current, replying: true, text: current.text + delta } : null;
+          });
         },
         onReplyDone: function (text) {
-          var current = runtimeRef.current;
-          if (current) syncRuntime({ ...current, text: text || current.text });
+          updateRuntime(chatId, function (current) {
+            return current ? { ...current, text: text || current.text } : null;
+          });
         },
         onSaved: function (event) {
           if (event.assistantMessage) {
@@ -601,8 +665,8 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
               return { ...prev, status: "idle", messages: (prev.messages || []).concat([event.assistantMessage]) };
             });
           }
-          syncRuntime(null);
-          refreshChats(chatId);
+          updateRuntime(chatId, null);
+          refreshChats();
         },
         onAwaitingUser: function (event) {
           // The run paused for a permission / clarification answer — stash the
@@ -611,23 +675,27 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
             if (!prev || prev.id !== chatId) return prev;
             return { ...prev, status: "idle", pendingQuestion: event.pending_question || null };
           });
-          syncRuntime(null);
+          updateRuntime(chatId, null);
+          refreshChats();
         },
         onError: function (err) {
           setError(wbcErrorText(err));
-          syncRuntime(null);
+          // Keep the runtime until the stream closes so `finally` performs the
+          // same server re-sync used for interrupts and transport failures.
         },
       }, ac ? ac.signal : undefined).catch(function (err) {
         if (err && err.name === "AbortError") return;
         setError(wbcErrorText(err));
       }).finally(function () {
-        abortRef.current = null;
-        var current = runtimeRef.current;
-        if (current && current.chatId === chatId) {
+        if (abortRefs.current[chatId] === ac) delete abortRefs.current[chatId];
+        var current = runtimesRef.current[chatId];
+        if (current) {
           // Stream ended without a `saved` event (e.g. interrupted) — re-pull.
-          syncRuntime(null);
-          model.getChat(chatId).then(setActiveChat).catch(function () {});
-          refreshChats(chatId);
+          updateRuntime(chatId, null);
+          model.getChat(chatId).then(function (chat) {
+            if (activeChatIdRef.current === chatId) setActiveChat(chat);
+          }).catch(function () {});
+          refreshChats();
         }
       });
     }).catch(function (err) {
@@ -636,9 +704,11 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   }
 
   function handleInterrupt() {
-    var current = runtimeRef.current;
-    if (current) model.interrupt(current.chatId);
-    if (abortRef.current) { try { abortRef.current.abort(); } catch (e) {} }
+    var chatId = activeChatIdRef.current;
+    var current = runtimesRef.current[chatId];
+    if (current) model.interrupt(chatId);
+    var controller = abortRefs.current[chatId];
+    if (controller) { try { controller.abort(); } catch (e) {} }
   }
 
   // Answer the pending permission / clarification question → resume the round.
@@ -662,7 +732,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         if (res && res.assistantMessage) msgs = msgs.concat([res.assistantMessage]);
         return { ...prev, status: "idle", pendingQuestion: null, messages: msgs };
       });
-      refreshChats(chatId);
+      refreshChats();
     }).catch(function (err) {
       setError(wbcErrorText(err));
       // Restore the prompt so the user can retry.
@@ -672,7 +742,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
 
   // Regenerate the last assistant reply (replays the last user message).
   function handleRetryMessage() {
-    if (!activeChat || activeChat.legacy || runtimeRef.current) return;
+    if (!activeChat || activeChat.legacy || runtimesRef.current[activeChat.id]) return;
     handleSend({ retry: true });
   }
 
@@ -703,6 +773,10 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     if (!chatId) return;
     if (!window.confirm(wbcT("workbenchChat.confirmDelete", "Delete this chat? Its messages cannot be recovered."))) return;
     model.deleteChat(chatId).then(function () {
+      var controller = abortRefs.current[chatId];
+      if (controller) { try { controller.abort(); } catch (e) {} }
+      delete abortRefs.current[chatId];
+      updateRuntime(chatId, null);
       setChats(function (prev) {
         var next = prev.filter(function (item) { return item.id !== chatId; });
         if (activeChatId === chatId) setActiveChatId(next[0] ? next[0].id : "");
@@ -725,15 +799,10 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     });
   }
 
-  var running = !!runtime;
-  // A run belongs to one conversation. Distinguish the page-level run (any chat
-  // streaming) from the run owned by the *open* conversation, so the live reply
-  // card, header status and composer reflect only the open chat — otherwise an
-  // in-flight run in chat A leaks its tool-call cards into a chat B opened (or
-  // created) while A is still streaming.
-  var activeRuntime = (runtime && runtime.chatId === activeChatId) ? runtime : null;
+  // The open conversation only renders and controls its own runtime. Other
+  // conversations continue streaming in the background.
+  var activeRuntime = runtimes[activeChatId] || null;
   var activeRunning = !!activeRuntime;
-  var otherRunning = running && !activeRunning;
 
   return (
     <div className="wbc-page">
@@ -741,7 +810,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         chats={chats}
         activeChatId={activeChatId}
         loading={loading}
-        runningChatId={runtime ? runtime.chatId : ""}
+        runningChatIds={runtimes}
         onSelect={function (id) { setActiveChatId(id); }}
         onCreate={handleCreateChat}
         onDelete={handleDeleteChat}
@@ -753,7 +822,6 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         error={error}
         onRetry={retryLoad}
         running={activeRunning}
-        otherRunning={otherRunning}
         onSend={handleSend}
         onInterrupt={handleInterrupt}
         onAnswer={handleAnswer}
@@ -785,7 +853,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
 // Conversation rail (column 2)
 // ---------------------------------------------------------------------------
 
-function WbcRail({ chats, activeChatId, loading, runningChatId, onSelect, onCreate, onDelete }) {
+function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCreate, onDelete }) {
   var [query, setQuery] = useWbcState("");
   var [menuId, setMenuId] = useWbcState("");
   var filtered = useWbcMemo(function () {
@@ -822,7 +890,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatId, onSelect, onCrea
       <div className="wbc-chat-list">
         {filtered.map(function (chat) {
           var active = chat.id === activeChatId;
-          var chatRunning = chat.id === runningChatId || chat.status === "running";
+          var chatRunning = !!(runningChatIds && runningChatIds[chat.id]) || chat.status === "running";
           var isMenuOpen = menuId === chat.id;
           return (
             <div
@@ -874,7 +942,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatId, onSelect, onCrea
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcMain({ project, chat, runtime, error, onRetry, running, otherRunning, onSend, onInterrupt, onAnswer, onRetryMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile }) {
+function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onInterrupt, onAnswer, onRetryMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile }) {
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
@@ -936,21 +1004,20 @@ function WbcMain({ project, chat, runtime, error, onRetry, running, otherRunning
           </div>
         )}
         {messages.map(function (msg) {
-          var canRetry = !isLegacy && !running && !otherRunning && String(msg.id || "") === lastAssistantId;
+          var canRetry = !isLegacy && !running && String(msg.id || "") === lastAssistantId;
           return msg.role === "user"
             ? <WbcUserMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} />
             : <WbcAssistantMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onRetryMessage={canRetry ? onRetryMessage : null} />;
         })}
         {runtime && <WbcLiveMessage runtime={runtime} />}
         {chat && chat.pendingQuestion && chat.pendingQuestion.id && !runtime && (
-          <WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running || otherRunning} />
+          <WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} />
         )}
       </div>
       <WbcComposer
         chat={chat}
         project={project}
         running={running}
-        otherRunning={otherRunning}
         onSend={onSend}
         onInterrupt={onInterrupt}
       />
@@ -1264,7 +1331,7 @@ function WbcLiveMessage({ runtime }) {
 // Composer
 // ---------------------------------------------------------------------------
 
-function WbcComposer({ chat, project, running, otherRunning, onSend, onInterrupt }) {
+function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   var model = window.WorkbenchChatModel;
   var [draft, setDraft] = useWbcState("");
   var [attachments, setAttachments] = useWbcState([]);
@@ -1351,18 +1418,6 @@ function WbcComposer({ chat, project, running, otherRunning, onSend, onInterrupt
       <div className="wbc-composer">
         <div className="wbc-composer-box wbc-composer-readonly">
           {wbcT("workbenchChat.legacyReadonly", "This is an archived legacy session — read-only. Start a new chat to continue the topic.")}
-        </div>
-      </div>
-    );
-  }
-
-  // Single concurrent run per page: while another conversation streams, lock
-  // this composer so a send here can't overwrite the in-flight runtime.
-  if (otherRunning) {
-    return (
-      <div className="wbc-composer">
-        <div className="wbc-composer-box wbc-composer-readonly">
-          {wbcT("workbenchChat.lockedByOther", "Another chat is still running. Wait for it to finish before sending here.")}
         </div>
       </div>
     );

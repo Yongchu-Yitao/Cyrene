@@ -38,7 +38,10 @@ var WorkbenchModel = (function () {
     return fetch(url, options || {}).then(function (response) {
       return response.json().catch(function () { return {}; }).then(function (payload) {
         if (!response.ok) {
-          throw new Error(payload.error || payload.detail || ("HTTP " + response.status));
+          var error = new Error(payload.error || payload.detail || ("HTTP " + response.status));
+          error.code = payload.code || "";
+          error.status = response.status;
+          throw error;
         }
         return payload;
       });
@@ -53,6 +56,7 @@ var WorkbenchModel = (function () {
       project.sessions.forEach(function (session) {
         if (!Array.isArray(session.constraints)) session.constraints = [];
         if (!Array.isArray(session.plan)) session.plan = [];
+        if (!Number.isFinite(Number(session.planRevision))) session.planRevision = 0;
         if (!Array.isArray(session.events)) session.events = [];
         if (!Array.isArray(session.runs)) session.runs = [];
         if (!Array.isArray(session.artifacts)) session.artifacts = [];
@@ -236,7 +240,21 @@ var WorkbenchModel = (function () {
     return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/plan/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ goal: goal || "", feedback: options.feedback || "", autoStart: !!options.autoStart }),
+      body: JSON.stringify({
+        goal: goal || "",
+        feedback: options.feedback || "",
+        autoStart: !!options.autoStart,
+        operation: options.operation || "auto",
+        basePlanRevision: options.basePlanRevision,
+      }),
+    }).then(normalizeStore);
+  }
+
+  function generateAcceptance(sessionId) {
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/acceptance/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
     }).then(normalizeStore);
   }
 
@@ -253,6 +271,7 @@ var WorkbenchModel = (function () {
         attachments: options.attachments || [],
         mode: options.mode || undefined,
         command: options.command || undefined,
+        basePlanRevision: options.basePlanRevision,
       }),
     };
     if (options.signal) init.signal = options.signal;
@@ -667,6 +686,7 @@ var WorkbenchModel = (function () {
     acceptHint: acceptHint,
     dismissHint: dismissHint,
     generatePlan: generatePlan,
+    generateAcceptance: generateAcceptance,
     dispatch: dispatch,
     sendChat: sendChat,
     answer: answer,

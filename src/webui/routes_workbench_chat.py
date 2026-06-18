@@ -74,6 +74,55 @@ def _write_chats_store(payload: dict[str, Any]) -> None:
     atomic_write_json(_CHATS_STORE, payload)
 
 
+def _mark_user_activity(chat: dict[str, Any], timestamp: str) -> None:
+    """Record real user activity and restart the proactive lottery window."""
+    from cyrene.scheduler import reset_lottery
+
+    chat["lastUserMessageAt"] = timestamp
+    chat["updatedAt"] = timestamp
+    reset_lottery()
+
+
+async def append_proactive_message(chat_id: str, text: str) -> dict[str, str] | None:
+    """Persist a proactive assistant reply in a Workbench public transcript."""
+    from cyrene import debug
+
+    payload = _read_chats_store()
+    chat = _find_chat(payload, str(chat_id or ""))
+    content = str(text or "").strip()
+    if not chat or not content:
+        return None
+    now = _utc_now_iso()
+    message = {
+        "id": _short_id("msg"),
+        "role": "assistant",
+        "content": content,
+        "createdAt": now,
+        "model": str(chat.get("model") or ""),
+        "proactive": True,
+        "systemInitiated": True,
+    }
+    chat.setdefault("messages", []).append(message)
+    chat["status"] = "idle"
+    chat["updatedAt"] = now
+    _write_chats_store(payload)
+
+    result = {
+        "chat_id": str(chat.get("id") or ""),
+        "project_id": str(chat.get("projectId") or ""),
+        "title": str(chat.get("title") or "新对话"),
+    }
+    await debug.publish_event({
+        "type": "workbench_proactive_message",
+        "session_id": result["chat_id"],
+        "chat_id": result["chat_id"],
+        "project_id": result["project_id"],
+        "updated_at": now,
+        "message": _public_message(message),
+    })
+    return result
+
+
 def _new_chat(project_id: str, title: str = "", model: str = "") -> dict[str, Any]:
     now = _utc_now_iso()
     return {
@@ -599,7 +648,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 chat["title"] = message.replace("\n", " ")[:24]
         chat["status"] = "running"
         chat["model"] = R._get_model()
-        chat["updatedAt"] = now
+        _mark_user_activity(chat, now)
         _write_chats_store(payload)
 
         agent_message = message
@@ -874,6 +923,9 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
 
         R = _routes()
         project_id = str(chat.get("projectId") or "")
+        now = _utc_now_iso()
+        _mark_user_activity(chat, now)
+        _write_chats_store(payload)
         state_len_before = len(_session_state_messages(chat_id))
         # Chat runs are not workspace-confined (see send: run_agent without
         # workspace_dir), so resume with the global scope too.

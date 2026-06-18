@@ -899,6 +899,7 @@ async def _workbench_run_explore_agent(
     timeout: float = 90,
     secondary: bool = False,
     session_id: str = "",
+    clean_context: bool = False,
 ) -> dict[str, Any] | None:
     """Run an LLM that may explore the workspace (list_directory/read_file/glob)
     before answering, and return the JSON object it emits (or None on failure).
@@ -911,14 +912,19 @@ async def _workbench_run_explore_agent(
     ContextVar) so each LLM "thinking" round and exploration tool call publishes
     a live SSE event the workbench task card can stream — otherwise this agent
     works invisibly and the UI can only show a spinner.
+
+    ``clean_context=True`` keeps the model call detached from the task's agent
+    session while still publishing explicit tool events to ``session_id``. Use
+    this for independent reviewers that must not inherit execution context.
     """
     from cyrene.agent.state import _current_session_id
 
-    sid = str(session_id or "").strip()
-    token = _current_session_id.set(sid) if sid else None
+    event_sid = str(session_id or "").strip()
+    context_sid = "" if clean_context else event_sid
+    token = _current_session_id.set(context_sid) if (event_sid or clean_context) else None
 
     async def _emit_tool_event(tc: dict[str, Any]) -> None:
-        if not sid:
+        if not event_sid:
             return
         try:
             fn = tc.get("function") or {}
@@ -931,7 +937,7 @@ async def _workbench_run_explore_agent(
                 args = {}
             await debug.publish_event({
                 "type": "tool_call",
-                "session_id": sid,
+                "session_id": event_sid,
                 "tool": name,
                 "args": args,
                 "caller": "explore",
@@ -1411,6 +1417,7 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> None:
             session.setdefault("updatedAt", now)
             session.setdefault("agentReply", "")
             session.setdefault("plan", [])
+            session.setdefault("planRevision", 0)
             session.setdefault("events", [])
             session.setdefault("runs", [])
             session.setdefault("artifacts", [])
@@ -1513,12 +1520,17 @@ def _workbench_coerce_plan_steps(raw: Any, session: dict[str, Any]) -> list[dict
         if isinstance(item, dict):
             title = str(item.get("title") or item.get("name") or "").strip()
             description = str(item.get("description") or item.get("detail") or "").strip()
+            source_step_id = str(item.get("sourceStepId") or item.get("source_step_id") or "").strip()
         else:
             title = str(item or "").strip()
             description = ""
+            source_step_id = ""
         if not title:
             continue
-        steps.append(_workbench_new_plan_step(title, description, len(steps) + 1, task_id))
+        step = _workbench_new_plan_step(title, description, len(steps) + 1, task_id)
+        if source_step_id:
+            step["sourceStepId"] = source_step_id
+        steps.append(step)
         if len(steps) >= 12:
             break
     return steps
@@ -1529,7 +1541,11 @@ def _workbench_plan_title_key(value: Any) -> str:
 
 
 def _workbench_plan_reset_requested(feedback: str) -> bool:
-    return bool(re.search(r"(重新生成|重新规划|重排|重做|从头|替换|清空|不要原计划|不保留原计划)", str(feedback or "")))
+    return bool(re.search(
+        r"(重新生成|重新规划|重排|重做|从头|替换|清空|不要原计划|不保留原计划|"
+        r"完全不一样|完全不同|全新计划|换一套|另一套方案|另一个方案)",
+        str(feedback or ""),
+    ))
 
 
 def _workbench_existing_plan_block(session: dict[str, Any]) -> str:
@@ -1544,7 +1560,8 @@ def _workbench_existing_plan_block(session: dict[str, Any]) -> str:
         status = str(step.get("status") or "pending").strip()
         description = str(step.get("description") or "").strip()
         suffix = f" — {description}" if description else ""
-        rows.append(f"{index}. [{status}] {title}{suffix}")
+        step_id = str(step.get("id") or "").strip()
+        rows.append(f"{index}. id={step_id} [{status}] {title}{suffix}")
     if not rows:
         return ""
     return "\n当前已有执行计划（除非用户明确要求删除/重排，请保留并在此基础上调整）：\n" + "\n".join(rows)
@@ -1554,33 +1571,69 @@ def _workbench_reconcile_revised_plan(
     existing: list[dict[str, Any]],
     generated: list[dict[str, Any]],
     feedback: str,
+    operation: str = "auto",
 ) -> list[dict[str, Any]]:
-    if not existing or not feedback or _workbench_plan_reset_requested(feedback):
+    mode = str(operation or "auto").strip().lower()
+    if mode not in ("revise", "replace"):
+        mode = "replace" if _workbench_plan_reset_requested(feedback) else "revise"
+    if not existing or not feedback or mode == "replace":
         return generated
     if not generated:
         return existing
 
-    existing_keys = [_workbench_plan_title_key(step.get("title")) for step in existing if isinstance(step, dict)]
-    generated_keys = [_workbench_plan_title_key(step.get("title")) for step in generated if isinstance(step, dict)]
-    overlap = sum(1 for key in existing_keys if key and key in generated_keys)
-    if existing_keys and overlap >= max(1, len(existing_keys) // 2):
-        return generated
-
-    merged = [dict(step) for step in existing if isinstance(step, dict)]
-    seen = {_workbench_plan_title_key(step.get("title")) for step in merged}
-    next_order = len(merged) + 1
-    for step in generated:
+    existing_steps = [dict(step) for step in existing if isinstance(step, dict)]
+    by_id = {str(step.get("id") or ""): step for step in existing_steps if str(step.get("id") or "")}
+    by_title = {
+        _workbench_plan_title_key(step.get("title")): step
+        for step in existing_steps
+        if _workbench_plan_title_key(step.get("title"))
+    }
+    merged_generated: list[dict[str, Any]] = []
+    matched_ids: set[str] = set()
+    for index, step in enumerate(generated):
         if not isinstance(step, dict):
             continue
-        key = _workbench_plan_title_key(step.get("title"))
-        if not key or key in seen:
-            continue
-        next_step = dict(step)
-        next_step["order"] = next_order
-        merged.append(next_step)
-        seen.add(key)
-        next_order += 1
-    return merged
+        source_id = str(step.get("sourceStepId") or "").strip()
+        original = by_id.get(source_id)
+        if original is None:
+            original = by_title.get(_workbench_plan_title_key(step.get("title")))
+        if original is not None:
+            next_step = dict(original)
+            next_step["title"] = str(step.get("title") or original.get("title") or "").strip()
+            next_step["description"] = str(step.get("description") or "").strip()
+            next_step["order"] = index + 1
+            next_step.pop("sourceStepId", None)
+            matched_ids.add(str(original.get("id") or ""))
+        else:
+            next_step = dict(step)
+            next_step["order"] = index + 1
+            next_step.pop("sourceStepId", None)
+        merged_generated.append(next_step)
+
+    # A revise response is expected to contain the complete revised plan. Some
+    # models still return only the changed/new steps. In that partial-response
+    # case, preserve the old plan and append the proposed additions rather than
+    # silently deleting work. The model can choose revisionMode=replace when the
+    # user's intent is to discard the old plan.
+    if not matched_ids:
+        merged = existing_steps
+        seen = {_workbench_plan_title_key(step.get("title")) for step in merged}
+        for step in merged_generated:
+            key = _workbench_plan_title_key(step.get("title"))
+            if key and key not in seen:
+                merged.append(step)
+                seen.add(key)
+        for index, step in enumerate(merged):
+            step["order"] = index + 1
+        return merged[:12]
+
+    for original in existing_steps:
+        original_id = str(original.get("id") or "")
+        if original_id and original_id not in matched_ids:
+            merged_generated.append(original)
+    for index, step in enumerate(merged_generated):
+        step["order"] = index + 1
+    return merged_generated[:12]
 
 
 async def _workbench_generate_plan_steps(
@@ -1588,10 +1641,12 @@ async def _workbench_generate_plan_steps(
     project: dict[str, Any],
     feedback: str = "",
     auto_start: bool = False,
-) -> tuple[list[dict[str, Any]], bool]:
+    requested_operation: str = "auto",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool, str]:
     """Generate a REAL execution plan for a task session from its goal +
-    constraints, exploring the project workspace. Returns ``(steps, from_llm)``;
-    ``from_llm`` is False when generation failed and the fallback was used.
+    constraints, exploring the project workspace. Returns
+    ``(steps, acceptance_criteria, from_llm, operation)``; ``from_llm`` is False
+    when generation failed and deterministic fallbacks were used.
 
     ``auto_start`` (「直接开始」): no goal is given up front — the agent explores
     the project and the LLM proposes a concise goal + title (back-filled onto the
@@ -1600,12 +1655,24 @@ async def _workbench_generate_plan_steps(
     goal = str(session.get("goal") or session.get("title") or "").strip()
     existing_plan = session.get("plan") if isinstance(session.get("plan"), list) else []
     feedback = str(feedback or "").strip()
+    requested_operation = str(requested_operation or "auto").strip().lower()
+    if requested_operation not in ("auto", "create", "revise", "replace"):
+        requested_operation = "auto"
     # 直接开始 with no goal yet → plan toward "work out what the project needs".
     if auto_start and _workbench_is_blank_goal(goal):
         goal = "通读本项目的工作区文件与项目说明，判断当前最应该推进的工作并据此规划"
     fallback = existing_plan if feedback and existing_plan else _workbench_plan_from_input(goal, {"id": session.get("id", "")})
+    existing_acceptance = session.get("acceptanceCriteria") if isinstance(session.get("acceptanceCriteria"), list) else []
+    # A failed incremental revision preserves both sides of the existing task
+    # definition. Replacing verified or hand-edited criteria while retaining the
+    # old plan would leave the session internally inconsistent.
+    fallback_acceptance = (
+        [dict(item) for item in existing_acceptance if isinstance(item, dict)]
+        if feedback and existing_plan and existing_acceptance
+        else _workbench_fallback_acceptance(session, fallback)
+    )
     if not goal:
-        return fallback, False
+        return fallback, fallback_acceptance, False, "create"
 
     constraints = [str(c).strip() for c in (session.get("constraints") or []) if str(c).strip()]
     workspace_path = str(project.get("workspacePath") or "").strip()
@@ -1632,11 +1699,13 @@ async def _workbench_generate_plan_steps(
             '  "goal": "一句话、具体、贴合本项目实际的任务目标（中文）",\n'
             '  "title": "几个字的短标题（中文，<=20字）",\n'
             '  "steps": [\n'
-            '    {"title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块"}\n'
-            "  ]\n"
+            '    {"sourceStepId": null, "title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块"}\n'
+            "  ],\n"
+            '  "acceptanceCriteria": ["任务完成后可独立核验的结果标准"]\n'
             "}\n\n"
             "要求：goal 必须具体到这个项目、不要泛泛而谈；生成 3-7 个步骤、顺序合理、"
-            "尽量引用真实文件/目录/模块；全部使用简体中文。"
+            "尽量引用真实文件/目录/模块；同时生成 3-8 条具体、可验证的验收标准，"
+            "避免“目标清晰”这类过程性描述；全部使用简体中文。"
         )
     else:
         prompt = (
@@ -1646,26 +1715,41 @@ async def _workbench_generate_plan_steps(
             f"任务目标：{goal}{constraints_block}{existing_plan_block}{feedback_block}{reflection_block}\n\n"
             "充分了解后再返回 JSON，只返回一个 JSON 对象，不要 Markdown 代码块标记。结构：\n"
             "{\n"
+            '  "revisionMode": "revise|replace",\n'
             '  "steps": [\n'
-            '    {"title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块"}\n'
-            "  ]\n"
+            '    {"sourceStepId": "保留/修改的原步骤 id；新增步骤填 null", "title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块"}\n'
+            "  ],\n"
+            '  "acceptanceCriteria": ["任务完成后可独立核验的结果标准"]\n'
             "}\n\n"
             "要求：生成 3-7 个步骤；顺序合理、彼此衔接；每个步骤聚焦一件可执行的事；"
-            "尽量引用工作区里的真实文件或模块；全部使用简体中文。"
-            "如果是修改已有计划，必须返回完整的修订后计划，保留未被反馈明确要求删除的原步骤，"
-            "只调整相关步骤或追加必要的新步骤。"
+            "尽量引用工作区里的真实文件或模块；同时生成 3-8 条具体、可验证的验收标准，"
+            "覆盖任务目标、约束和必要验证；全部使用简体中文。"
+            "你需要自行判断 revisionMode：用户只是补充、删改、调序或改变局部做法时用 revise；"
+            "用户要求完全不同、全新、换一套、从头重做，或新要求与原目标明显不同且旧计划不再适用时用 replace。"
+            "revise 时必须返回完整修订计划，并用 sourceStepId 标明保留或修改的是哪个原步骤；"
+            "replace 时不要保留旧步骤，所有 sourceStepId 填 null。验收标准必须对应最终完整计划。"
         )
     parsed = await _workbench_run_explore_agent(
         workspace_root, prompt, max_tokens=4000, timeout=120,
         session_id=str(session.get("id") or ""),
     )
     if not isinstance(parsed, dict):
-        return fallback, False
+        fallback_operation = "replace" if requested_operation == "replace" else "revise" if feedback else "create"
+        return fallback, fallback_acceptance, False, fallback_operation
     steps = _workbench_coerce_plan_steps(parsed, session)
     if not steps:
-        return fallback, False
+        fallback_operation = "replace" if requested_operation == "replace" else "revise" if feedback else "create"
+        return fallback, fallback_acceptance, False, fallback_operation
+    operation = "create"
     if feedback:
-        steps = _workbench_reconcile_revised_plan(existing_plan, steps, feedback)
+        agent_operation = str(parsed.get("revisionMode") or "").strip().lower()
+        if requested_operation in ("revise", "replace"):
+            operation = requested_operation
+        elif agent_operation in ("revise", "replace"):
+            operation = agent_operation
+        else:
+            operation = "replace" if _workbench_plan_reset_requested(feedback) else "revise"
+        steps = _workbench_reconcile_revised_plan(existing_plan, steps, feedback, operation)
     # 直接开始: back-fill the LLM-proposed goal/title onto the session (only while
     # still blank) so the task gets a real identity rather than filler.
     if auto_start:
@@ -1675,7 +1759,23 @@ async def _workbench_generate_plan_steps(
             session["goal"] = derived_goal
         if _workbench_is_default_title(session.get("title")):
             session["title"] = (derived_title or _workbench_derive_title(session.get("goal") or ""))[:80]
-    return steps, True
+
+    acceptance_session = dict(session)
+    acceptance_session["plan"] = steps
+    acceptance_fallback = _workbench_fallback_acceptance(acceptance_session, steps)
+    raw_acceptance = parsed.get("acceptanceCriteria")
+    has_generated_acceptance = isinstance(raw_acceptance, list) and any(
+        str(item.get("text") if isinstance(item, dict) else item).strip()
+        for item in raw_acceptance
+    )
+    if has_generated_acceptance:
+        acceptance = _workbench_coerce_acceptance_criteria(parsed, acceptance_fallback)
+    else:
+        # Keep revision latency bounded. The planner already had the complete task
+        # context; if it omitted criteria, use deterministic criteria for the exact
+        # final plan instead of launching a second exploratory agent.
+        acceptance = acceptance_fallback
+    return steps, acceptance, True, operation
 
 
 def _workbench_acceptance_from_session(session: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1690,6 +1790,108 @@ def _workbench_acceptance_from_session(session: dict[str, Any]) -> list[dict[str
         {"id": _short_id("accept"), "text": item, "status": "pending"}
         for item in items[:8]
     ]
+
+
+def _workbench_fallback_acceptance(session: dict[str, Any], steps: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Build deterministic criteria when the acceptance agent is unavailable."""
+    constraints = [
+        str(item).strip()
+        for item in (session.get("constraints") or [])
+        if str(item).strip()
+    ]
+    goal = str(session.get("goal") or session.get("title") or "").strip()
+    items = constraints[:4]
+    if goal:
+        items.append(f"任务目标已完成：{goal[:240]}")
+    if steps:
+        items.append("计划中的执行步骤均已完成或有明确处理结论")
+    items.extend(["相关变更或产物可追踪", "最终结果已验证并形成总结"])
+
+    unique: list[str] = []
+    for item in items:
+        if item and item not in unique:
+            unique.append(item)
+        if len(unique) >= 8:
+            break
+    return [
+        {"id": _short_id("accept"), "text": item, "status": "pending"}
+        for item in unique
+    ]
+
+
+def _workbench_coerce_acceptance_criteria(
+    raw: Any,
+    fallback: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Normalize agent-produced acceptance criteria into session records."""
+    source = raw.get("acceptanceCriteria") if isinstance(raw, dict) else raw
+    if not isinstance(source, list):
+        return fallback
+    criteria: list[dict[str, Any]] = []
+    for item in source:
+        text = str(item.get("text") if isinstance(item, dict) else item).strip()
+        if not text:
+            continue
+        criteria.append({
+            "id": _short_id("accept"),
+            "text": text[:300],
+            "status": "pending",
+        })
+        if len(criteria) >= 8:
+            break
+    return criteria or fallback
+
+
+async def _workbench_generate_acceptance_criteria(
+    session: dict[str, Any],
+    project: dict[str, Any],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Ask an agent to derive verifiable criteria from the current task plan."""
+    plan = session.get("plan") if isinstance(session.get("plan"), list) else []
+    fallback = _workbench_fallback_acceptance(session, plan)
+    goal = str(session.get("goal") or session.get("title") or "").strip()
+    constraints = [
+        str(item).strip()
+        for item in (session.get("constraints") or [])
+        if str(item).strip()
+    ]
+    plan_lines = "\n".join(
+        f"- {step.get('title') or ''}：{step.get('description') or ''}"
+        for step in plan
+        if isinstance(step, dict)
+    )
+    workspace_path = str(project.get("workspacePath") or "").strip()
+    workspace_root = Path(workspace_path).expanduser().resolve() if workspace_path else None
+    prompt = (
+        "你是任务验收设计 Agent。请根据任务目标、约束、当前执行计划和工作区实际内容，"
+        "生成清晰、具体、可核验的验收标准。你可以使用 list_directory、read_file、glob "
+        "工具探索项目，标准应尽量对应真实文件、功能、测试或产物，避免“目标清晰”这类过程性描述。\n\n"
+        f"任务目标：{goal or '暂无明确目标'}\n"
+        f"约束：{json.dumps(constraints, ensure_ascii=False)}\n"
+        f"当前计划：\n{plan_lines or '暂无计划'}\n\n"
+        "只返回一个 JSON 对象，不要 Markdown。结构：\n"
+        "{\n"
+        '  "acceptanceCriteria": ["可独立核验的验收标准"]\n'
+        "}\n\n"
+        "要求：生成 3-8 条；每条只表达一个可验证结果；覆盖核心功能、约束和必要验证；"
+        "全部使用简体中文。"
+    )
+    parsed = await _workbench_run_explore_agent(
+        workspace_root,
+        prompt,
+        max_tokens=2000,
+        timeout=120,
+        session_id=str(session.get("id") or ""),
+    )
+    if not isinstance(parsed, dict):
+        return fallback, False
+    criteria = _workbench_coerce_acceptance_criteria(parsed, fallback)
+    raw_criteria = parsed.get("acceptanceCriteria")
+    generated = isinstance(raw_criteria, list) and any(
+        str(item.get("text") if isinstance(item, dict) else item).strip()
+        for item in raw_criteria
+    )
+    return criteria, generated
 
 
 def _workbench_normalize_attachments(attachments: Any) -> list[dict[str, Any]]:
@@ -2513,7 +2715,9 @@ async def _workbench_verify_acceptance(
     workspace_root = Path(workspace_path).expanduser().resolve() if workspace_path else None
     crit_lines = "\n".join(f'- id={a.get("id")}: {a.get("text") or ""}' for a in criteria)
     prompt = (
-        "你是独立验收 Agent。请基于工作区里的真实产物，逐条核验下面的验收标准是否达成。"
+        "你是上下文完全独立的验收 Agent。你看不到也不得依赖任务执行 Agent 的对话、"
+        "推理、结论或自我报告。请只基于本提示提供的任务定义和工作区里的真实产物，"
+        "逐条核验下面的验收标准是否达成。"
         "可以用 list_directory、read_file、glob 工具检查文件/结果，不要臆测。\n\n"
         f"任务目标：{goal}\n验收标准：\n{crit_lines}\n\n"
         "核验后只返回一个 JSON 对象，不要 Markdown：\n"
@@ -2527,6 +2731,7 @@ async def _workbench_verify_acceptance(
     parsed = await _workbench_run_explore_agent(
         workspace_root, prompt, max_tokens=3000, timeout=120,
         session_id=str(session.get("id") or ""),
+        clean_context=True,
     )
     return parsed if isinstance(parsed, dict) else None
 
@@ -2711,11 +2916,27 @@ def _remove_path(path: Path) -> None:
         pass
 
 
+async def _clear_knowledge_data(store_dir: Path) -> None:
+    """Stop indexing and remove every workspace-scoped knowledge database."""
+    from cyrene.knowledge import ingest
+    from webui import routes_workbench_knowledge
+
+    await ingest.cancel_pending_tasks()
+
+    knowledge_paths: set[Path] = set()
+    for pattern in ("kb_*.db", "kb_*.db-wal", "kb_*.db-shm", "kb_*.db-journal"):
+        knowledge_paths.update(store_dir.glob(pattern))
+    for path in knowledge_paths:
+        _remove_path(path)
+
+    routes_workbench_knowledge._kb_initialized.clear()
+
+
 async def _reset_app_data() -> dict[str, Any]:
     """Wipe user-modifiable runtime data and restore first-run defaults."""
     from cyrene import agent as cy_agent
     from cyrene.config import write_env_keys
-    from cyrene.db import init_db
+    from cyrene.db import init_db, init_knowledge_db
     from cyrene.inbox import clear_all_inboxes
     from cyrene.settings_store import reset_all as reset_web_settings
 
@@ -2752,6 +2973,9 @@ async def _reset_app_data() -> dict[str, Any]:
     # Per-workspace agent memory (store/wb_memory_<ws>.json).
     for mem_path in STORE_DIR.glob("wb_memory_*.json"):
         _remove_path(mem_path)
+
+    await _clear_knowledge_data(STORE_DIR)
+    await init_knowledge_db(str(STORE_DIR / "kb_default.db"))
 
     for path in (
         CONVERSATIONS_DIR,
@@ -5735,9 +5959,12 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         for field in ("title", "goal", "status", "priority", "agentReply", "summary", "kind"):
             if field in body:
                 session[field] = body[field]
-        for field in ("constraints", "plan", "events", "runs", "artifacts", "acceptanceCriteria"):
+        for field in ("constraints", "events", "runs", "artifacts", "acceptanceCriteria"):
             if isinstance(body.get(field), list):
                 session[field] = body[field]
+        if isinstance(body.get("plan"), list):
+            session["plan"] = body["plan"]
+            session["planRevision"] = int(session.get("planRevision") or 0) + 1
         if isinstance(body.get("init"), dict):
             session["init"] = {**(session.get("init") or {}), **body["init"]}
         now = _utc_now_iso()
@@ -5803,10 +6030,23 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         goal = str(body.get("goal") or "").strip()
         feedback = str(body.get("feedback") or "").strip()
         auto_start = bool(body.get("autoStart"))
+        requested_operation = str(body.get("operation") or "auto").strip().lower()
         payload = _read_workbench_store()
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
+        base_plan_revision = int(session.get("planRevision") or 0)
+        requested_base_revision = body.get("basePlanRevision")
+        if requested_base_revision is not None:
+            try:
+                requested_base_revision = int(requested_base_revision)
+            except (TypeError, ValueError):
+                return JSONResponse({"error": "invalid basePlanRevision"}, status_code=400)
+            if requested_base_revision != base_plan_revision:
+                return JSONResponse(
+                    {"error": "计划已发生变化，请基于最新计划重试。", "code": "stale_plan_revision"},
+                    status_code=409,
+                )
 
         if goal:
             session["goal"] = goal
@@ -5819,7 +6059,12 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         # If the revision feedback signals a goal-level miss (not a minor tweak),
         # deep-reflect first so the regenerated plan avoids the dead-ends. The
         # packet is stored on the session and consumed by plan generation below.
-        if feedback and await _workbench_should_reflect(
+        should_reflect_before_replan = (
+            feedback
+            and requested_operation != "replace"
+            and str(session.get("status") or "") in ("failed", "review")
+        )
+        if should_reflect_before_replan and await _workbench_should_reflect(
             str(session.get("goal") or ""), session.get("acceptanceCriteria") or [], feedback
         ):
             packet = await _workbench_run_reflection(
@@ -5828,27 +6073,96 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             if packet:
                 _workbench_store_reflection(session, packet, trigger="feedback", project=project)
                 await _workbench_dispatch_reflection_hints(project, session, packet)
-        steps, from_llm = await _workbench_generate_plan_steps(session, project, feedback=feedback, auto_start=auto_start)
-        session["plan"] = steps
-        session["acceptanceCriteria"] = _workbench_acceptance_from_session(session)
-        session["status"] = "planning"
+        steps, acceptance, from_llm, operation = await _workbench_generate_plan_steps(
+            session,
+            project,
+            feedback=feedback,
+            auto_start=auto_start,
+            requested_operation=requested_operation,
+        )
+        latest_payload = _read_workbench_store()
+        latest_project, latest_session = _workbench_find_session(latest_payload, session_id)
+        if not latest_session or not latest_project:
+            return JSONResponse({"error": "session not found"}, status_code=404)
+        if int(latest_session.get("planRevision") or 0) != base_plan_revision:
+            return JSONResponse(
+                {"error": "计划已在生成期间发生变化，请基于最新计划重试。", "code": "stale_plan_revision"},
+                status_code=409,
+            )
+        if not (feedback and not from_llm):
+            latest_session["plan"] = steps
+            latest_session["planRevision"] = base_plan_revision + 1
+            latest_session["acceptanceCriteria"] = acceptance
+        for field in ("goal", "title", "constraints", "reflection"):
+            if field in session:
+                latest_session[field] = session[field]
+        latest_session["status"] = "planning"
         if from_llm:
-            session["agentReply"] = "我已结合工作区里的实际内容拆解出执行计划。你可以直接编辑，或逐步执行（顺序由你决定）。"
+            latest_session["agentReply"] = (
+                "我已生成一份全新的执行计划，原计划不再作为当前步骤。"
+                if operation == "replace" else
+                "我已结合你的要求修订执行计划，并保留了可对应步骤的执行状态。"
+                if operation == "revise" else
+                "我已结合工作区里的实际内容拆解出执行计划。你可以直接编辑，或逐步执行（顺序由你决定）。"
+            )
         else:
-            session["agentReply"] = "计划生成服务暂时不可用，我先给出一份基础计划，你可以编辑后逐步执行，或稍后让我重新拆解。"
+            latest_session["agentReply"] = (
+                "计划调整未能生成有效结果，当前计划保持不变。你可以稍后重试。"
+                if feedback else
+                "计划生成服务暂时不可用，我先给出一份基础计划，你可以编辑后逐步执行，或稍后让我重新拆解。"
+            )
+        now = _utc_now_iso()
+        latest_session["events"] = list(latest_session.get("events") or []) + [{
+            "id": _short_id("event"),
+            "type": "PlanRevised" if feedback else "PlanGenerated",
+            "createdAt": now,
+            "body": (
+                f"{'整体替换' if operation == 'replace' else '修订'}执行计划，共 {len(steps)} 步。"
+                if feedback else f"生成执行计划，共 {len(steps)} 步。"
+            ) + ("" if from_llm else "（生成失败，保留原计划）"),
+        }]
+        latest_session["updatedAt"] = now
+        latest_project["updatedAt"] = now
+        latest_payload["activeProjectId"] = latest_project.get("id")
+        latest_payload["activeSessionId"] = session_id
+        _write_workbench_store(latest_payload)
+        return {
+            "ok": True,
+            "project": latest_project,
+            "session": latest_session,
+            "planOperation": operation,
+            "planSource": "llm" if from_llm else "fallback",
+            **latest_payload,
+        }
+
+    @router.post("/api/task-sessions/{session_id}/acceptance/generate")
+    async def api_workbench_generate_acceptance(session_id: str):
+        """Generate fresh acceptance criteria from the current task and plan."""
+        payload = _read_workbench_store()
+        project, session = _workbench_find_session(payload, session_id)
+        if not session or not project:
+            return JSONResponse({"error": "session not found"}, status_code=404)
+        criteria, from_llm = await _workbench_generate_acceptance_criteria(session, project)
+        session["acceptanceCriteria"] = criteria
         now = _utc_now_iso()
         session["events"] = list(session.get("events") or []) + [{
             "id": _short_id("event"),
-            "type": "PlanGenerated",
+            "type": "AcceptanceGenerated",
             "createdAt": now,
-            "body": f"生成执行计划，共 {len(steps)} 步。" + ("" if from_llm else "（兜底计划）"),
+            "body": f"生成验收标准，共 {len(criteria)} 条。" + ("" if from_llm else "（兜底标准）"),
         }]
         session["updatedAt"] = now
         project["updatedAt"] = now
         payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
-        return {"ok": True, "project": project, "session": session, "planSource": "llm" if from_llm else "fallback", **payload}
+        return {
+            "ok": True,
+            "project": project,
+            "session": session,
+            "acceptanceSource": "llm" if from_llm else "fallback",
+            **payload,
+        }
 
     @router.post("/api/task-sessions/{session_id}/reflect")
     async def api_workbench_reflect(session_id: str, request: Request):
@@ -6175,6 +6489,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         mode = str(body.get("mode") or "auto")
         command = str(body.get("command") or "")
+        requested_base_revision = body.get("basePlanRevision")
         if not user_input and not attachments:
             return JSONResponse({"error": "input is required"}, status_code=400)
         payload = _read_workbench_store()
@@ -6211,36 +6526,78 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             # fresh plan. No plan yet → first-time generation.
             existing_plan = session.get("plan") if isinstance(session.get("plan"), list) else []
             revising = bool(existing_plan)
-            steps, from_llm = await _workbench_generate_plan_steps(
+            base_plan_revision = int(session.get("planRevision") or 0)
+            if requested_base_revision is not None:
+                try:
+                    requested_base_revision = int(requested_base_revision)
+                except (TypeError, ValueError):
+                    return JSONResponse({"error": "invalid basePlanRevision"}, status_code=400)
+                if requested_base_revision != base_plan_revision:
+                    return JSONResponse(
+                        {"error": "计划已发生变化，请基于最新计划重试。", "code": "stale_plan_revision"},
+                        status_code=409,
+                    )
+            steps, acceptance, from_llm, operation = await _workbench_generate_plan_steps(
                 session, project, feedback=(user_input if revising else "")
             )
-            session["plan"] = steps
-            session["acceptanceCriteria"] = _workbench_acceptance_from_session(session)
-            session["status"] = "planning"
+            latest_payload = _read_workbench_store()
+            latest_project, latest_session = _workbench_find_session(latest_payload, session_id)
+            if not latest_session or not latest_project:
+                return JSONResponse({"error": "session not found"}, status_code=404)
+            if int(latest_session.get("planRevision") or 0) != base_plan_revision:
+                return JSONResponse(
+                    {"error": "计划已在生成期间发生变化，请基于最新计划重试。", "code": "stale_plan_revision"},
+                    status_code=409,
+                )
+            if not (revising and not from_llm):
+                latest_session["plan"] = steps
+                latest_session["planRevision"] = base_plan_revision + 1
+                latest_session["acceptanceCriteria"] = acceptance
+            for field in ("goal", "title", "constraints", "reflection"):
+                if field in session:
+                    latest_session[field] = session[field]
+            latest_session["status"] = "planning"
             if revising:
-                session["agentReply"] = (
-                    "我已按你的说明调整了执行计划（保留了已完成/进行中的步骤）。你可以继续编辑，或逐步执行。"
+                latest_session["agentReply"] = (
+                    "我判断这次要求需要整体替换计划，已生成全新步骤。"
+                    if from_llm and operation == "replace" else
+                    "我已按你的说明修订执行计划，并保留了可对应步骤的执行状态。"
                     if from_llm else
                     "计划调整服务暂时不可用，已保留原计划。你可以稍后再让我调整。"
                 )
             else:
-                session["agentReply"] = (
+                latest_session["agentReply"] = (
                     "我已结合工作区里的实际内容拆解出执行计划。你可以直接编辑，或逐步执行（顺序由你决定）。"
                     if from_llm else
                     "计划生成服务暂时不可用，我先给出一份基础计划，你可以编辑后逐步执行，或稍后让我重新拆解。"
                 )
-            session["events"] = list(session.get("events") or []) + [{
+            latest_session["events"] = list(latest_session.get("events") or []) + [{
                 "id": _short_id("event"),
-                "type": "PlanGenerated",
+                "type": "PlanRevised" if revising else "PlanGenerated",
                 "createdAt": now,
-                "body": ((f"调整执行计划，共 {len(steps)} 步。" if revising else f"生成执行计划，共 {len(steps)} 步。")) + ("" if from_llm else "（兜底计划）"),
+                "body": (
+                    f"{'整体替换' if operation == 'replace' else '修订'}执行计划，共 {len(steps)} 步。"
+                    if revising else f"生成执行计划，共 {len(steps)} 步。"
+                ) + (
+                    "" if from_llm else
+                    "（生成失败，保留原计划）" if revising else
+                    "（兜底计划）"
+                ),
             }]
-            session["updatedAt"] = now
-            project["updatedAt"] = now
-            payload["activeProjectId"] = project.get("id")
-            payload["activeSessionId"] = session_id
-            _write_workbench_store(payload)
-            return {"ok": True, "replyKind": "plan", "planSource": "llm" if from_llm else "fallback", "project": project, "session": session, **payload}
+            latest_session["updatedAt"] = now
+            latest_project["updatedAt"] = now
+            latest_payload["activeProjectId"] = latest_project.get("id")
+            latest_payload["activeSessionId"] = session_id
+            _write_workbench_store(latest_payload)
+            return {
+                "ok": True,
+                "replyKind": "plan",
+                "planOperation": operation,
+                "planSource": "llm" if from_llm else "fallback",
+                "project": latest_project,
+                "session": latest_session,
+                **latest_payload,
+            }
 
         # answer / direct — run a real agent reply (no plan generated), then collect
         # any tool activity + file changes the run produced so the card can report

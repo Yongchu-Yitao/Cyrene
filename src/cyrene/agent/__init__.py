@@ -151,6 +151,7 @@ from cyrene.agent.guidance import (
 from cyrene.agent.coordinator import (
     _run_chat_agent,
     _run_execution_agent,
+    is_session_running,
     interrupt_active_run,
     run_agent,
     run_heartbeat_agent,
