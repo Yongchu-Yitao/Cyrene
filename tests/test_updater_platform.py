@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import cyrene.updater as updater
 
-VERSION = "0.6.0b1"
+VERSION = "0.6.0b2"
 
 # Ordered exactly as GitHub returns them: the macOS .dmg sorts first, which is
 # precisely the asset a broken platform match falls back to via assets[0].
