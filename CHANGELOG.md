@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.6.0b1] - 2026-06-18
+
+### Added
+
+- **Subagent UI** — Workbench now surfaces subagent status, payload inspection, and page-independent rendering; new subagent-related i18n strings added.
+- **Plan revision flow** — Agent can now detect conflicts with an existing plan and revise it in-place while preserving step progress, instead of always generating a fresh plan.
+- **Proactive activity detection tests** — New test suite for proactive user-activity triggers in the workbench scheduler.
+- **Knowledge data clearing** — New API and test coverage for resetting knowledge data per workspace.
+
+### Changed
+
+- **Acceptance criteria handling** — Criteria are normalised and reset correctly on each plan generation cycle; improved error handling in `WorkbenchModel`.
+- **Workbench chat** — Parallel-conversation support: removed `lockedByOther` lock state; subagent chat snapshots handled separately from main chat stream.
+- **Welcome / onboarding** — Timezone setting now uses long-value layout for readability; onboarding timezone selection covered by tests.
+- **App icon refresh** — Updated icon assets across all platforms (macOS `.icns`, Windows `.ico`, Linux `.png`).
+- **CSS layout** — New subagent panel styles; responsive layout fixes for project list with open context menus.
+
+### Fixed
+
+- `routes.py` task controller no longer silently drops plan-conflict errors; returns structured revision response instead.
+- `set_task_goal.py` legacy tool updated to match revised subagent payload schema.
+
 ## [0.6.0b0] - 2026-06-17
 
 ### Added
