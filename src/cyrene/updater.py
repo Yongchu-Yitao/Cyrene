@@ -30,6 +30,15 @@ def _current_version() -> str:
     return get_version()
 
 
+def _beta_updates_enabled() -> bool:
+    """读取用户是否选择接收测试版（pre-release）更新。"""
+    try:
+        from cyrene import settings_store
+        return bool(settings_store.get("beta_updates", False))
+    except Exception:
+        return False
+
+
 @dataclass
 class UpdateInfo:
     available: bool
@@ -52,19 +61,56 @@ def _platform_filter() -> str:
     return sys.platform
 
 
-async def check_for_update() -> UpdateInfo:
-    """查询 GitHub Releases API，比较版本。"""
+async def _fetch_target_release(
+    client: httpx.AsyncClient, include_prerelease: bool
+) -> dict | None:
+    """选择目标 release。
+
+    稳定版走 GitHub 的 /releases/latest（它会自动跳过 pre-release）；
+    若用户接收测试版，则拉取 release 列表并选出版本号最高的一个（含 pre-release）。
+    """
+    if not include_prerelease:
+        resp = await client.get(f"{_GITHUB_API}/latest")
+        if resp.status_code != 200:
+            logger.debug("GitHub API returned %d", resp.status_code)
+            return None
+        return resp.json()
+
+    resp = await client.get(_GITHUB_API, params={"per_page": 30})
+    if resp.status_code != 200:
+        logger.debug("GitHub API returned %d", resp.status_code)
+        return None
+
+    best: dict | None = None
+    best_v: Version | None = None
+    for rel in resp.json():
+        if rel.get("draft"):
+            continue
+        candidate = str(rel.get("tag_name", "")).lstrip("v")
+        try:
+            cand_v = Version(candidate)
+        except ValueError:
+            continue
+        if best_v is None or cand_v > best_v:
+            best_v, best = cand_v, rel
+    return best
+
+
+async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo:
+    """查询 GitHub Releases API，比较版本。
+
+    include_prerelease 为 None 时读取用户设置（beta_updates）；显式传入则覆盖。
+    """
     current = _current_version()
-    url = f"{_GITHUB_API}/latest"
+    if include_prerelease is None:
+        include_prerelease = _beta_updates_enabled()
 
     try:
         async with httpx.AsyncClient(timeout=15.0, trust_env=False, follow_redirects=True) as client:
-            resp = await client.get(url)
-            if resp.status_code != 200:
-                logger.debug("GitHub API returned %d", resp.status_code)
+            data = await _fetch_target_release(client, include_prerelease)
+            if not data:
                 return UpdateInfo(available=False, current_version=current, latest_version="")
 
-            data = resp.json()
             tag: str = data.get("tag_name", "")
             latest = tag.lstrip("v")
 

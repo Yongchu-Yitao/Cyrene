@@ -5760,6 +5760,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if "redact_secrets" in body:
             set_setting("redact_secrets", bool(body["redact_secrets"]))
             changed.append("redact_secrets")
+        if "beta_updates" in body:
+            set_setting("beta_updates", bool(body["beta_updates"]))
+            changed.append("beta_updates")
         return {"ok": True, "changed": changed}
 
     @router.post("/api/settings/reset-data")
@@ -9232,6 +9235,7 @@ def _build_config() -> dict:
         "notify_telegram": settings.get("notify_telegram", True),
         "notify_wechat": settings.get("notify_wechat", True),
         "redact_secrets": settings.get("redact_secrets", True),
+        "beta_updates": settings.get("beta_updates", False),
         "search_port": str(SEARXNG_PORT),
         "search_host": SEARXNG_HOST,
     }

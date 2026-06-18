@@ -960,26 +960,38 @@ function AboutPanel(p) {
       ),
       React.createElement("div", { className: "wb-about-card" },
         React.createElement("span", { className: "wb-about-label" }, t("settings.updates")),
-        React.createElement(UpdateSection, { t: t }),
+        React.createElement(UpdateSection, { t: t, config: config }),
       ),
     ),
   );
 }
 
 // ── Update Section (inlined) ──
-function UpdateSection({ t }) {
+function UpdateSection({ t, config }) {
   var [checking, setChecking] = useStateSt(false);
   var [info, setInfo] = useStateSt(null);
   var [downloading, setDownloading] = useStateSt(false);
   var [progress, setProgress] = useStateSt({ downloaded: 0, total: 0, done: false });
   var [downloaded, setDownloaded] = useStateSt(false);
   var [error, setError] = useStateSt("");
+  var [beta, setBeta] = useStateSt(!!(config && config.beta_updates));
 
   useEffectSt(function () { checkUpdate(); }, []);
+  // Sync local toggle with config once it loads from the server.
+  useEffectSt(function () { setBeta(!!(config && config.beta_updates)); }, [config && config.beta_updates]);
 
   function checkUpdate() {
     setChecking(true); setError("");
     fetch("/api/update/check").then(function (r) { return r.json(); }).then(function (d) { setInfo(d); }).catch(function () { setError(t("settings.updateCheckFailed")); }).finally(function () { setChecking(false); });
+  }
+
+  function toggleBeta() {
+    if (checking || downloading) return;
+    var next = !beta;
+    setBeta(next);
+    fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ beta_updates: next }) })
+      .then(function () { checkUpdate(); })
+      .catch(function () { setBeta(!next); });
   }
 
   function startDownload() {
@@ -1004,6 +1016,10 @@ function UpdateSection({ t }) {
 
   return React.createElement("div", { className: "wb-update-section" },
     React.createElement("strong", { className: "wb-update-status" }, statusText),
+    React.createElement("label", { className: "wb-update-beta" },
+      React.createElement("span", null, t("settings.betaUpdates")),
+      Toggle(beta, toggleBeta),
+    ),
     error && React.createElement("p", { className: "wb-hint", style: { color: "var(--wb-red)" } }, error),
     React.createElement("button", {
       className: "wb-btn" + (downloaded ? " primary" : ""),
