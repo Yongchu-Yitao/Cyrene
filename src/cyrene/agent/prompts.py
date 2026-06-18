@@ -16,20 +16,28 @@ logger = logging.getLogger(__name__)
 # Workspace scope block (injected into every agent system prompt)
 # ---------------------------------------------------------------------------
 
-_WORKSPACE_SCOPE_BLOCK = (
-    f"## Workspace Scope\n\n"
-    f"Your workspace is at `{WORKSPACE_DIR}`.\n\n"
-    f"- **Default to workspace paths** for all `Read`, `Write`, `Edit`, `Glob`, `Grep` calls. "
-    f"Relative paths resolve from the workspace root.\n"
-    f"- **External path access pauses the workflow** — the user sees a permission dialog. "
-    f"Only go outside the workspace when the task explicitly requires a specific external file location.\n"
-    f"- **`Bash` CWD is the workspace.** Read-only shell commands may reach external paths freely. "
-    f"Write/move/delete shell ops (`cp`, `mv`, `rm`, `>` redirect, etc.) must target workspace paths "
-    f"or they trigger a permission request.\n"
-    f"- **Avoid `$(...)` and backticks** in shell commands — they trigger a security review prompt.\n"
-    f"- **Avoid `rm` unless deletion is part of the task** — even workspace deletions prompt for user confirmation.\n"
-    f"- **Write output files into the workspace** (reports, exports, downloads), not `/tmp` or `~`."
-)
+def workspace_scope_block(workspace_dir: Any = WORKSPACE_DIR) -> str:
+    """Build workspace instructions for the current agent run."""
+    workspace = str(workspace_dir or WORKSPACE_DIR)
+    return (
+        f"## Workspace Scope\n\n"
+        f"Your workspace is at `{workspace}`.\n\n"
+        f"- **Default to workspace paths** for all `Read`, `Write`, `Edit`, `Glob`, `Grep` calls. "
+        f"Relative paths resolve from the workspace root.\n"
+        f"- **External path access pauses the workflow** — the user sees a permission dialog. "
+        f"Only go outside the workspace when the task explicitly requires a specific external file location.\n"
+        f"- **`Bash` already starts with CWD set to the workspace root.** Use relative paths directly; "
+        f"do not prepend `cd {workspace}` or add an extra `workspace/` path segment.\n"
+        f"- Read-only shell commands may reach external paths freely. "
+        f"Write/move/delete shell ops (`cp`, `mv`, `rm`, `>` redirect, etc.) must target workspace paths "
+        f"or they trigger a permission request.\n"
+        f"- **Avoid `$(...)` and backticks** in shell commands — they trigger a security review prompt.\n"
+        f"- **Avoid `rm` unless deletion is part of the task** — even workspace deletions prompt for user confirmation.\n"
+        f"- **Write output files into the workspace** (reports, exports, downloads), not `/tmp` or `~`."
+    )
+
+
+_WORKSPACE_SCOPE_BLOCK = workspace_scope_block()
 
 # ---------------------------------------------------------------------------
 # Agent mode prompts

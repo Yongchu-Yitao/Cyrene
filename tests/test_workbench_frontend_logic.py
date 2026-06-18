@@ -113,13 +113,14 @@ def test_workbench_acceptance_button_calls_agent_endpoint():
     assert '"/acceptance/generate"' in model
 
 
-def test_workbench_regenerate_plan_fallback_updates_acceptance():
+def test_workbench_regenerate_plan_failure_preserves_current_plan():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
     regenerate_block = source.split("regeneratePlan: function ()", 1)[1].split("approvePlan: function ()", 1)[0]
 
-    assert "plan: model.buildPlanSteps(goal, constraints)" in regenerate_block
-    assert "acceptanceCriteria: model.buildAcceptance(goal, constraints)" in regenerate_block
+    assert "plan: Array.isArray(session.plan) ? session.plan : []" in regenerate_block
+    assert "acceptanceCriteria: Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : []" in regenerate_block
+    assert "model.buildPlanSteps" not in regenerate_block
 
 
 def test_workbench_plan_conflict_does_not_apply_client_fallback():
@@ -130,6 +131,33 @@ def test_workbench_plan_conflict_does_not_apply_client_fallback():
     assert 'err.code === "stale_plan_revision"' in source
     assert "rethrowPlanConflict(err);" in source
     assert "error.code = payload.code" in model
+
+
+def test_workbench_init_plan_failure_shows_details_and_restart():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-create.jsx").read_text(encoding="utf-8")
+
+    assert "function InitPlanError" in source
+    assert 'className="wb-init-plan-error"' in source
+    assert "error.attempts" in source
+    assert "onRestart={complete}" in source
+    assert 'T("init.restart")' in source
+    assert "!planReady && !planError" in source
+
+    result = _run_workbench_i18n_js(
+        """
+[
+  window.WorkbenchI18n.t("init.planError.title"),
+  window.WorkbenchI18n.t("init.planError.summary", { count: 5 }),
+  window.WorkbenchI18n.t("init.restart")
+]
+"""
+    )
+    assert result == [
+        "计划生成失败",
+        "连续尝试 5 次后仍未生成计划，系统没有创建兜底计划。",
+        "重新开始",
+    ]
 
 
 def test_workbench_model_settings_preserve_form_on_failed_response():

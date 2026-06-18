@@ -6460,6 +6460,39 @@ html[data-theme="light"] .wb-tool-list .mono {
   background: var(--wb-control-bg); border: 1px dashed var(--wb-line-2);
 }
 
+.wb-init-plan-error {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 15px 16px; margin-bottom: 16px; border-radius: 12px;
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-red) 8%, var(--wb-card-bg));
+  border: 1px solid color-mix(in srgb, var(--wb-red) 34%, var(--wb-line));
+}
+.wb-init-plan-error-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+}
+.wb-init-plan-error-head .wb-btn { flex: 0 0 auto; white-space: nowrap; }
+.wb-init-plan-error-head b { display: block; font-size: 14px; color: var(--wb-red); }
+.wb-init-plan-error-head p { margin: 4px 0 0; font-size: 12.5px; color: var(--wb-muted); }
+.wb-init-plan-error-reason {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px;
+  font-size: 12.5px; line-height: 1.55;
+}
+.wb-init-plan-error-reason span { color: var(--wb-muted); }
+.wb-init-plan-error-reason strong { font-weight: 580; overflow-wrap: anywhere; }
+.wb-init-plan-error details {
+  border-top: 1px solid color-mix(in srgb, var(--wb-red) 22%, var(--wb-line));
+  padding-top: 10px;
+}
+.wb-init-plan-error summary { cursor: pointer; font-size: 12.5px; color: var(--wb-muted); }
+.wb-init-plan-error ol { margin: 10px 0 0; padding-left: 22px; }
+.wb-init-plan-error li { padding: 5px 0; font-size: 12px; }
+.wb-init-plan-error li > span { font-weight: 650; }
+.wb-init-plan-error code {
+  margin-left: 8px; padding: 1px 5px; border-radius: 5px;
+  color: var(--wb-red); background: color-mix(in srgb, var(--wb-red) 11%, transparent);
+}
+.wb-init-plan-error li p { margin: 3px 0 0; color: var(--wb-muted); overflow-wrap: anywhere; }
+
 .wb-init-sections { display: flex; flex-direction: column; gap: 10px; }
 .wb-init-section { border: none; border-radius: 0; background: transparent; overflow: visible; box-shadow: none; }
 .wb-init-section.open { border: none; }
@@ -6576,6 +6609,8 @@ html[data-theme="light"] .wb-tool-list .mono {
   .wb-init-plan-card-head .wb-init-select,
   .wb-init-plan-card-head .wb-btn { grid-column: 2; width: fit-content; }
   .wb-init-plan-cols, .wb-init-feedback { grid-template-columns: 1fr; }
+  .wb-init-plan-error-head { flex-direction: column; }
+  .wb-init-plan-error-reason { grid-template-columns: 1fr; gap: 3px; }
 }
 
 /* ── Dark-mode polish: depth + crisp 1px edges for the create flows + init view.

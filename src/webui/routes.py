@@ -683,6 +683,68 @@ _WORKBENCH_TEMPLATE_LABELS = {
 _INIT_QUESTION_TYPES = {"text", "textarea", "single", "multi"}
 
 
+class _WorkbenchGenerationError(RuntimeError):
+    """Structured, user-displayable failure from a workbench generation call."""
+
+    def __init__(self, category: str, message: str):
+        super().__init__(message)
+        self.category = str(category or "unknown")
+        self.message = str(message or "未知错误")
+
+
+def _workbench_redact_error_text(value: Any) -> str:
+    text = str(value or "")
+    text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer <redacted>", text)
+    text = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "sk-<redacted>", text)
+    text = re.sub(
+        r'(?i)(api[_ -]?key["\']?\s*[:=]\s*["\']?)[^"\'\s,}]+',
+        r"\1<redacted>",
+        text,
+    )
+    return text
+
+
+def _workbench_generation_error(exc: Exception) -> _WorkbenchGenerationError:
+    """Convert low-level model errors into useful, secret-safe UI details."""
+    if isinstance(exc, _WorkbenchGenerationError):
+        return exc
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException)):
+        return _WorkbenchGenerationError("timeout", "模型请求超时。")
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = int(exc.response.status_code)
+        body = re.sub(
+            r"\s+",
+            " ",
+            _workbench_redact_error_text(exc.response.text).strip(),
+        )[:500]
+        if status in (401, 403):
+            category = "authentication"
+            summary = f"模型服务鉴权失败（HTTP {status}）。"
+        elif status == 429:
+            category = "rate_limit"
+            summary = "模型服务触发限流（HTTP 429）。"
+        elif status >= 500:
+            category = "upstream"
+            summary = f"模型服务暂时异常（HTTP {status}）。"
+        else:
+            category = "http"
+            summary = f"模型服务返回 HTTP {status}。"
+        if body:
+            summary += f" 响应：{body}"
+        return _WorkbenchGenerationError(category, summary)
+    if isinstance(exc, httpx.RequestError):
+        return _WorkbenchGenerationError(
+            "network",
+            _workbench_redact_error_text(format_httpx_error(exc)),
+        )
+    return _WorkbenchGenerationError(
+        "internal",
+        _workbench_redact_error_text(
+            f"{type(exc).__name__}: {str(exc or '未知错误').strip()}"
+        ),
+    )
+
+
 def _workbench_coerce_init_form(raw: Any, base: dict[str, Any]) -> dict[str, Any] | None:
     """Validate/normalize an LLM-produced init form into our schema.
 
@@ -843,18 +905,84 @@ def _workbench_parse_json_object(text: str) -> dict[str, Any] | None:
     fence = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL | re.IGNORECASE)
     if fence and fence.group(1).strip():
         candidates.append(fence.group(1).strip())
-    # Greedy first-brace-to-last-brace span (handles prose around the object).
-    brace = re.search(r"\{.*\}", raw, re.DOTALL)
-    if brace:
-        candidates.append(brace.group(0))
     for candidate in candidates:
         try:
             parsed = json.loads(candidate)
         except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+
+    # Scan every opening brace with JSONDecoder.raw_decode(). This tolerates
+    # prose (including stray braces) before/after the actual object without the
+    # greedy first-brace-to-last-brace extraction swallowing unrelated text.
+    decoder = json.JSONDecoder()
+    top_level_object_starts: list[int] = []
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, char in enumerate(raw):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                top_level_object_starts.append(index)
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+
+    for start in top_level_object_starts:
+        try:
+            parsed, _end = decoder.raw_decode(raw[start:])
+        except (json.JSONDecodeError, TypeError):
             continue
         if isinstance(parsed, dict):
             return parsed
     return None
+
+
+async def _workbench_repair_json_response(
+    messages: list[dict[str, Any]],
+    invalid_content: str,
+    *,
+    max_tokens: int,
+    timeout: float,
+    secondary: bool,
+) -> dict[str, Any] | None:
+    """Ask the model once to convert a malformed final reply into strict JSON."""
+    content = str(invalid_content or "").strip()
+    repair_messages = list(messages)
+    if content:
+        repair_messages.append({"role": "assistant", "content": content})
+    repair_messages.append({
+        "role": "user",
+        "content": (
+            "你刚才的最终回答无法解析为 JSON。不要继续探索，也不要解释。"
+            "请保留原回答的结论和字段，只修正格式，并且只输出一个合法 JSON 对象。"
+            "不要使用 Markdown 代码块，不要输出 JSON 之外的任何文字。"
+        ),
+    })
+    repaired = await asyncio.wait_for(
+        _call_llm(
+            repair_messages,
+            tools=None,
+            max_tokens=max_tokens,
+            secondary=secondary,
+            thinking="disabled",
+        ),
+        timeout=timeout,
+    )
+    if not isinstance(repaired, dict):
+        return None
+    return _workbench_parse_json_object(repaired.get("content") or "")
 
 
 async def _workbench_exec_explore_tool(tc: dict, workspace_root: Path | None) -> str:
@@ -930,6 +1058,7 @@ async def _workbench_run_explore_agent(
     secondary: bool = False,
     session_id: str = "",
     clean_context: bool = False,
+    raise_on_failure: bool = False,
 ) -> dict[str, Any] | None:
     """Run an LLM that may explore the workspace (list_directory/read_file/glob)
     before answering, and return the JSON object it emits (or None on failure).
@@ -990,12 +1119,51 @@ async def _workbench_run_explore_agent(
                     ),
                     timeout=timeout,
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("Workbench explore-agent failed (turn %d)", turn + 1)
+                if raise_on_failure:
+                    raise _workbench_generation_error(exc)
+                return None
+            if not isinstance(response, dict):
+                error = _WorkbenchGenerationError(
+                    "configuration",
+                    "模型未配置，或模型服务返回了空响应。",
+                )
+                if raise_on_failure:
+                    raise error
                 return None
             tool_calls = response.get("tool_calls") or []
             if not tool_calls:
-                return _workbench_parse_json_object(response.get("content") or "")
+                content = response.get("content") or ""
+                parsed = _workbench_parse_json_object(content)
+                if parsed is not None:
+                    return parsed
+                try:
+                    repaired = await _workbench_repair_json_response(
+                        messages,
+                        content,
+                        max_tokens=max_tokens,
+                        timeout=timeout,
+                        secondary=secondary,
+                    )
+                except Exception as exc:
+                    logger.exception("Workbench explore-agent JSON repair failed")
+                    if raise_on_failure:
+                        raise _workbench_generation_error(exc)
+                    return None
+                if repaired is not None:
+                    return repaired
+                if raise_on_failure:
+                    preview = re.sub(
+                        r"\s+",
+                        " ",
+                        _workbench_redact_error_text(content).strip(),
+                    )[:500]
+                    detail = "模型响应不是有效的 JSON 对象。"
+                    if preview:
+                        detail += f" 响应片段：{preview}"
+                    raise _WorkbenchGenerationError("response_format", detail)
+                return None
             # The assistant tool-call message MUST be appended before the tool
             # results — a 'tool' message has to follow an assistant message carrying
             # its tool_calls, otherwise the next request is malformed and rejected.
@@ -1019,10 +1187,48 @@ async def _workbench_run_explore_agent(
                 _call_llm(messages, tools=None, max_tokens=max_tokens, secondary=secondary, thinking="disabled"),
                 timeout=timeout,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("Workbench explore-agent final answer failed")
+            if raise_on_failure:
+                raise _workbench_generation_error(exc)
             return None
-        return _workbench_parse_json_object(final.get("content") or "")
+        if not isinstance(final, dict):
+            if raise_on_failure:
+                raise _WorkbenchGenerationError(
+                    "configuration",
+                    "模型未配置，或模型服务返回了空响应。",
+                )
+            return None
+        content = final.get("content") or ""
+        parsed = _workbench_parse_json_object(content)
+        if parsed is not None:
+            return parsed
+        try:
+            repaired = await _workbench_repair_json_response(
+                messages,
+                content,
+                max_tokens=max_tokens,
+                timeout=timeout,
+                secondary=secondary,
+            )
+        except Exception as exc:
+            logger.exception("Workbench explore-agent final JSON repair failed")
+            if raise_on_failure:
+                raise _workbench_generation_error(exc)
+            return None
+        if repaired is not None:
+            return repaired
+        if raise_on_failure:
+            preview = re.sub(
+                r"\s+",
+                " ",
+                _workbench_redact_error_text(content).strip(),
+            )[:500]
+            detail = "模型在停止探索后仍未返回有效的 JSON 对象。"
+            if preview:
+                detail += f" 响应片段：{preview}"
+            raise _WorkbenchGenerationError("response_format", detail)
+        return None
     finally:
         if token is not None:
             _current_session_id.reset(token)
@@ -1251,20 +1457,17 @@ async def _workbench_generate_init_task_plan(
     form: dict[str, Any],
     feedback: str = "",
     current_plan: list[dict[str, Any]] | None = None,
-) -> tuple[list[dict[str, Any]], bool]:
+    max_attempts: int = 5,
+) -> tuple[list[dict[str, Any]] | None, bool, dict[str, Any] | None]:
     """Ask the initialization agent to split the project into major task sessions.
 
-    Returns ``(plan, from_llm)`` — ``from_llm`` is False when generation failed
-    and the deterministic fallback was used, so callers can tell the user the
-    truth instead of pretending the feedback was applied.
+    Returns ``(plan, from_llm, error)``. No synthetic plan is returned when all
+    attempts fail. ``error`` contains a user-displayable summary of every
+    attempt so the UI can explain the failure and offer a clean restart.
 
     When ``current_plan`` is given (a revision), it is shown to the agent so the
-    output adjusts the existing plan rather than regenerating from scratch, and
-    it becomes the fallback so an LLM failure preserves the user's edits.
+    output adjusts the existing plan rather than regenerating from scratch.
     """
-    fallback = _workbench_fallback_init_task_plan(project, form)
-    if isinstance(current_plan, list) and current_plan:
-        fallback = current_plan
     brief = _workbench_init_brief(project, form)
     feedback = str(feedback or "").strip()
     workspace_path = str(project.get("workspacePath") or "").strip()
@@ -1316,13 +1519,53 @@ async def _workbench_generate_init_task_plan(
         "要求：生成 3-6 个大任务；每个任务要能对应一个独立 session；避免过细的步骤；"
         "保留初始化回答中的时间、范围、技术约束。"
     )
-    parsed = await _workbench_run_explore_agent(
-        workspace_root, prompt, max_tokens=4000, timeout=120, secondary=True,
-    )
-    if not isinstance(parsed, dict):
-        logger.warning("Workbench init task-plan generation returned no JSON for project %s", project.get("id"))
-        return fallback, False
-    return _workbench_coerce_init_task_plan(parsed, fallback), True
+    attempts: list[dict[str, Any]] = []
+    attempt_limit = max(1, int(max_attempts or 1))
+    for attempt in range(1, attempt_limit + 1):
+        try:
+            parsed = await _workbench_run_explore_agent(
+                workspace_root,
+                prompt,
+                max_tokens=4000,
+                timeout=120,
+                secondary=True,
+                raise_on_failure=True,
+            )
+            plan = _workbench_coerce_init_task_plan(parsed, [])
+            if not plan:
+                raise _WorkbenchGenerationError(
+                    "response_format",
+                    "模型返回的 JSON 中没有可用的 tasks。",
+                )
+            return plan, True, None
+        except Exception as exc:
+            error = _workbench_generation_error(exc)
+            attempts.append({
+                "attempt": attempt,
+                "category": error.category,
+                "message": error.message,
+            })
+            logger.warning(
+                "Workbench init task-plan attempt %d/%d failed for project %s: %s",
+                attempt,
+                attempt_limit,
+                project.get("id"),
+                error.message,
+            )
+            if attempt < attempt_limit:
+                await asyncio.sleep(min(2 ** (attempt - 1), 4))
+
+    last = attempts[-1] if attempts else {
+        "category": "unknown",
+        "message": "未知错误",
+    }
+    return None, False, {
+        "code": "init_plan_generation_failed",
+        "attemptCount": attempt_limit,
+        "category": last["category"],
+        "summary": last["message"],
+        "attempts": attempts,
+    }
 
 
 def _workbench_create_sessions_from_init_plan(
@@ -1765,7 +2008,14 @@ async def _workbench_generate_plan_steps(
 
     constraints_block = ("\n约束：\n" + "\n".join(f"- {c}" for c in constraints)) if constraints else ""
     feedback_block = ("\n用户对计划的修改反馈（请据此调整）：" + feedback) if feedback else ""
-    existing_plan_block = _workbench_existing_plan_block(session) if feedback else ""
+    # A full replacement must be generated independently. Showing the complete
+    # old plan strongly anchors the model and often makes it repeat the same
+    # steps with fresh IDs.
+    existing_plan_block = (
+        _workbench_existing_plan_block(session)
+        if feedback and requested_operation != "replace"
+        else ""
+    )
     reflection_text = _workbench_render_reflection_block(session)
     reflection_block = (
         "\n\n## 深度反思结论（必须据此调整计划）\n"
@@ -1814,6 +2064,12 @@ async def _workbench_generate_plan_steps(
             "revise 时必须返回完整修订计划，并用 sourceStepId 标明保留或修改的是哪个原步骤；"
             "replace 时不要保留旧步骤，所有 sourceStepId 填 null。验收标准必须对应最终完整计划。"
         )
+        if requested_operation == "replace":
+            prompt += (
+                "\n这是用户主动点击的「重新生成」。必须从任务目标和工作区重新独立拆解，"
+                "至少一半步骤应采用不同的拆解方式或执行路径，不能只是改写措辞。"
+            )
+
     parsed = await _workbench_run_explore_agent(
         workspace_root, prompt, max_tokens=4000, timeout=120,
         session_id=str(session.get("id") or ""),
@@ -2823,8 +3079,44 @@ async def _workbench_verify_acceptance(
         workspace_root, prompt, max_tokens=3000, timeout=120,
         session_id=str(session.get("id") or ""),
         clean_context=True,
+        raise_on_failure=True,
     )
-    return parsed if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict):
+        raise _WorkbenchGenerationError("response_format", "验收模型没有返回 JSON 对象。")
+
+    raw_results = parsed.get("results")
+    if not isinstance(raw_results, list):
+        raise _WorkbenchGenerationError("response_format", "验收结果缺少 results 数组。")
+    expected_ids = {str(item.get("id") or "") for item in criteria}
+    normalized_results: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for result in raw_results:
+        if not isinstance(result, dict):
+            continue
+        result_id = str(result.get("id") or "").strip()
+        if result_id not in expected_ids or result_id in seen_ids:
+            continue
+        passed = result.get("passed")
+        if not isinstance(passed, bool):
+            continue
+        seen_ids.add(result_id)
+        normalized_results.append({
+            "id": result_id,
+            "passed": passed,
+            "evidence": str(result.get("evidence") or "").strip(),
+        })
+    missing_ids = expected_ids - seen_ids
+    if missing_ids:
+        raise _WorkbenchGenerationError(
+            "response_format",
+            f"验收模型遗漏了 {len(missing_ids)} 条验收标准。",
+        )
+    return {
+        **parsed,
+        "results": normalized_results,
+        "recommend_reflection": bool(parsed.get("recommend_reflection")),
+        "reason": str(parsed.get("reason") or "").strip(),
+    }
 
 
 def _public_pending_question(q: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -6328,9 +6620,32 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
-        verdict = await _workbench_verify_acceptance(session, project)
+        try:
+            verdict = await _workbench_verify_acceptance(session, project)
+        except Exception as exc:
+            error = _workbench_generation_error(exc)
+            logger.warning(
+                "Workbench verification failed for session %s: %s",
+                session_id,
+                error.message,
+            )
+            return JSONResponse(
+                {
+                    "error": f"验收暂时不可用：{error.message}",
+                    "code": "verification_unavailable",
+                    "category": error.category,
+                },
+                status_code=503,
+            )
         if not isinstance(verdict, dict):
-            return JSONResponse({"error": "verification unavailable"}, status_code=503)
+            return JSONResponse(
+                {
+                    "error": "验收暂时不可用：模型没有返回有效结果。",
+                    "code": "verification_unavailable",
+                    "category": "response_format",
+                },
+                status_code=503,
+            )
         results = verdict.get("results") if isinstance(verdict.get("results"), list) else []
         by_id = {str(r.get("id")): r for r in results if isinstance(r, dict)}
         criteria = [a for a in (session.get("acceptanceCriteria") or []) if isinstance(a, dict)]
@@ -6925,17 +7240,29 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         project["context"] = context
         if not str(project.get("description") or "").strip() and goal:
             project["description"] = goal[:200]
-        task_plan, plan_from_llm = await _workbench_generate_init_task_plan(project, form)
-        form["taskPlan"] = task_plan
-        form["planReady"] = True
+        task_plan, plan_from_llm, plan_error = await _workbench_generate_init_task_plan(project, form)
         form["completed"] = False
-        form["planSource"] = "llm" if plan_from_llm else "fallback"
+        form.pop("planError", None)
+        if plan_from_llm and task_plan:
+            form["taskPlan"] = task_plan
+            form["planReady"] = True
+            form["planSource"] = "llm"
+        else:
+            form["taskPlan"] = []
+            form["planReady"] = False
+            form["planSource"] = "error"
+            form["planError"] = {
+                **(plan_error or {}),
+                "occurredAt": now,
+            }
         session["init"] = form
         session["status"] = "waiting_for_user"
         if plan_from_llm:
             session["agentReply"] = "我已根据你的初始化回答拆解出大任务计划。你可以直接编辑，或继续告诉我如何调整；确认后我会把每个大任务创建为独立 session。"
         else:
-            session["agentReply"] = "计划生成服务暂时不可用，我先按你的回答生成了一份基础计划。你可以直接编辑后确认，或稍后让我重新拆解。"
+            summary = str((plan_error or {}).get("summary") or "未知错误")
+            attempt_count = int((plan_error or {}).get("attemptCount") or 5)
+            session["agentReply"] = f"计划生成连续重试 {attempt_count} 次后仍然失败：{summary}"
         session["summary"] = brief or session.get("summary")
         session["updatedAt"] = now
         project["updatedAt"] = now
@@ -6965,23 +7292,26 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if not current_plan:
             existing = form.get("taskPlan")
             current_plan = existing if isinstance(existing, list) and existing else None
-        task_plan, plan_from_llm = await _workbench_generate_init_task_plan(
+        task_plan, plan_from_llm, plan_error = await _workbench_generate_init_task_plan(
             project, form, feedback=feedback, current_plan=current_plan,
         )
-        if plan_from_llm:
+        form.pop("planError", None)
+        if plan_from_llm and task_plan:
             form["taskPlan"] = task_plan
             form["planSource"] = "llm"
             session["agentReply"] = "我已按你的反馈更新任务计划。你可以继续修改，或确认创建 sessions。"
         else:
-            # 生成失败时保留当前计划——直接用兜底计划覆盖会吞掉用户反馈，
-            # 还会把之前 LLM 生成的计划（或用户的手动编辑）替换成模板。
             if current_plan:
                 form["taskPlan"] = current_plan
-            elif not (isinstance(form.get("taskPlan"), list) and form.get("taskPlan")):
-                form["taskPlan"] = task_plan
-                form["planSource"] = "fallback"
-            session["agentReply"] = "计划生成服务暂时不可用，这次的反馈还没有应用，当前计划保持不变。你可以稍后重试，或直接手动编辑计划。"
-        form["planReady"] = True
+            form["planSource"] = "error"
+            form["planError"] = {
+                **(plan_error or {}),
+                "occurredAt": _utc_now_iso(),
+            }
+            summary = str((plan_error or {}).get("summary") or "未知错误")
+            attempt_count = int((plan_error or {}).get("attemptCount") or 5)
+            session["agentReply"] = f"计划调整连续重试 {attempt_count} 次后仍然失败，当前计划未改变：{summary}"
+        form["planReady"] = bool(isinstance(form.get("taskPlan"), list) and form.get("taskPlan"))
         session["init"] = form
         session["status"] = "waiting_for_user"
         now = _utc_now_iso()

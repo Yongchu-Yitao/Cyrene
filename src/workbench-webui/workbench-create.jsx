@@ -514,6 +514,44 @@
     );
   }
 
+  function InitPlanError(props) {
+    var error = props.error || {};
+    var attempts = Array.isArray(error.attempts) ? error.attempts : [];
+    return (
+      <div className="wb-init-plan-error" role="alert">
+        <div className="wb-init-plan-error-head">
+          <div>
+            <b>{T("init.planError.title")}</b>
+            <p>{T("init.planError.summary", { count: error.attemptCount || attempts.length || 5 })}</p>
+          </div>
+          <button type="button" className="wb-btn primary" disabled={props.busy} onClick={props.onRestart}>
+            {props.busy ? T("init.generatingPlan") : T("init.restart")}
+          </button>
+        </div>
+        <div className="wb-init-plan-error-reason">
+          <span>{T("init.planError.reason")}</span>
+          <strong>{error.summary || T("init.planError.unknown")}</strong>
+        </div>
+        {attempts.length > 0 && (
+          <details>
+            <summary>{T("init.planError.details")}</summary>
+            <ol>
+              {attempts.map(function (attempt) {
+                return (
+                  <li key={attempt.attempt}>
+                    <span>{T("init.planError.attempt", { n: attempt.attempt })}</span>
+                    <code>{attempt.category || "unknown"}</code>
+                    <p>{attempt.message || T("init.planError.unknown")}</p>
+                  </li>
+                );
+              })}
+            </ol>
+          </details>
+        )}
+      </div>
+    );
+  }
+
   function WorkbenchInitView(props) {
     var model = window.WorkbenchModel;
     var project = props.project;
@@ -639,6 +677,7 @@
 
     var greetingLines = String(init.greeting || "").split("\n");
     var planReady = !!init.planReady || taskPlan.length > 0;
+    var planError = init.planError && typeof init.planError === "object" ? init.planError : null;
     var showPlan = planReady && !completed;
     // Agent's latest message about the plan (生成 / 调整反馈 / 服务不可用), shown
     // so 让 Agent 调整计划 always surfaces an outcome instead of looking inert.
@@ -652,7 +691,7 @@
             <span className={"workbench-status-pill " + (completed ? "green" : "blue")}>{completed ? T("status.done") : T("status.initializing")}</span>
             <span className="wb-init-head-project">{project ? project.name : ""}</span>
           </div>
-          {!completed && !planReady && (
+          {!completed && !planReady && !planError && (
             <button type="button" className="wb-btn ghost" disabled={generating} onClick={regenerate}>{generating ? T("init.generating") : T("init.regenerateQuestions")}</button>
           )}
         </div>
@@ -673,6 +712,10 @@
 
               {generating && (
                 <div className="wb-init-generating"><span className="wb-spinner" /> {T("init.regeneratingQuestions")}</div>
+              )}
+
+              {!completed && planError && (
+                <InitPlanError error={planError} busy={busy} onRestart={complete} />
               )}
 
               {!showPlan && (
@@ -732,10 +775,11 @@
           <div className="wb-init-foot-hint">
             {completed ? T("init.foot.completed")
               : planReady ? T("init.foot.planReady")
+                : planError ? T("init.foot.planError")
                 : T("init.foot.questions")}
           </div>
           {completed && <button type="button" className="wb-btn primary" disabled={busy} onClick={saveCompletedAnswers}>{busy ? T("settings.saving") : T("init.saveChanges")}</button>}
-          {!completed && !planReady && <button type="button" className="wb-btn primary" disabled={busy} onClick={complete}>{busy ? T("init.generatingPlan") : T("init.completeQuestions")}</button>}
+          {!completed && !planReady && !planError && <button type="button" className="wb-btn primary" disabled={busy} onClick={complete}>{busy ? T("init.generatingPlan") : T("init.completeQuestions")}</button>}
           {!completed && planReady && <button type="button" className="wb-btn primary" disabled={busy || !taskPlan.length} onClick={confirmPlan}>{busy ? T("common.creating") : T("init.confirmPlan")}</button>}
         </div>
       </div>

@@ -1765,13 +1765,12 @@ function useTaskController(session, onRefresh, runtime) {
         basePlanRevision: Number(session.planRevision || 0),
       }).catch(function (err) {
         rethrowPlanConflict(err);
-        var constraints = session.constraints || [];
         return patch({
           status: "planning",
-          plan: model.buildPlanSteps(goal, constraints),
-          acceptanceCriteria: model.buildAcceptance(goal, constraints),
-          agentReply: "重新生成失败，已保留基础计划。",
-          events: model.withEvent(session, "PlanGenerated", "重新生成执行计划（兜底）。"),
+          plan: Array.isArray(session.plan) ? session.plan : [],
+          acceptanceCriteria: Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : [],
+          agentReply: "重新生成失败，原计划保持不变，请稍后重试。",
+          events: model.withEvent(session, "PlanGenerated", "重新生成执行计划失败，保留原计划。"),
         });
       }));
     },

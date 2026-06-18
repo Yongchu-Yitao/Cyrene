@@ -171,6 +171,47 @@ def test_workbench_acceptance_normalizes_agent_payload_and_resets_status():
     assert all(item["status"] == "pending" for item in criteria)
 
 
+def test_workbench_json_parser_skips_stray_braces_before_valid_object():
+    from webui.routes import _workbench_parse_json_object
+
+    parsed = _workbench_parse_json_object(
+        '说明里有一个无效片段 {not json}，最终结果是 '
+        '{"results": [{"id": "a1", "passed": true}], "reason": "ok"} 后续文字'
+    )
+
+    assert parsed["results"][0]["id"] == "a1"
+    assert parsed["reason"] == "ok"
+
+
+def test_workbench_json_parser_does_not_accept_nested_object_from_malformed_outer_json():
+    from webui.routes import _workbench_parse_json_object
+
+    parsed = _workbench_parse_json_object(
+        '{"results": [{"id": "a1", "passed": true}], "reason": "ok",}'
+    )
+
+    assert parsed is None
+
+
+async def test_workbench_explore_agent_repairs_malformed_json_once(monkeypatch):
+    from webui import routes
+
+    responses = [
+        {"content": '结果如下：{"ok": true,}', "tool_calls": []},
+        {"content": '{"ok": true}', "tool_calls": []},
+    ]
+
+    async def fake_llm(*args, **kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(routes, "_call_llm", fake_llm)
+
+    result = await routes._workbench_run_explore_agent(None, "return json")
+
+    assert result == {"ok": True}
+    assert responses == []
+
+
 async def test_workbench_plan_agent_returns_fresh_acceptance_criteria(monkeypatch, tmp_path):
     from webui import routes
 
@@ -344,6 +385,49 @@ async def test_workbench_plan_agent_can_choose_full_replacement(monkeypatch):
     assert [item["text"] for item in acceptance] == ["全新方案可运行"]
 
 
+async def test_workbench_explicit_regeneration_hides_old_plan(monkeypatch):
+    from webui import routes
+
+    prompts = []
+    async def fake_agent(_workspace_root, prompt, **_kwargs):
+        prompts.append(prompt)
+        return {
+            "revisionMode": "replace",
+            "steps": [
+                {"title": "建立对照实验", "description": "先验证关键假设"},
+                {"title": "实现替代架构", "description": "采用不同技术路径"},
+            ],
+            "acceptanceCriteria": ["替代方案通过验证"],
+        }
+
+    monkeypatch.setattr(routes, "_workbench_run_explore_agent", fake_agent)
+    session = {
+        "id": "task_1",
+        "title": "优化模型",
+        "goal": "提高模型准确率",
+        "constraints": [],
+        "plan": [
+            {"id": "step_1", "title": "读取日志", "description": "分析结果", "status": "pending"},
+            {"id": "step_2", "title": "修改模型", "description": "调整架构", "status": "pending"},
+        ],
+        "acceptanceCriteria": [],
+    }
+
+    steps, acceptance, from_llm, operation = await routes._workbench_generate_plan_steps(
+        session,
+        {"workspacePath": ""},
+        feedback="请基于当前任务目标生成一份全新的执行计划，不保留原计划步骤。",
+        requested_operation="replace",
+    )
+
+    assert from_llm is True
+    assert operation == "replace"
+    assert [step["title"] for step in steps] == ["建立对照实验", "实现替代架构"]
+    assert [item["text"] for item in acceptance] == ["替代方案通过验证"]
+    assert len(prompts) == 1
+    assert "当前已有执行计划" not in prompts[0]
+
+
 async def test_workbench_auto_start_acceptance_uses_derived_goal(monkeypatch):
     from webui import routes
 
@@ -412,8 +496,36 @@ async def test_workbench_verifier_uses_clean_agent_context(monkeypatch, tmp_path
     assert verdict["results"][0]["passed"] is True
     assert captured["kwargs"]["session_id"] == "task_session_1"
     assert captured["kwargs"]["clean_context"] is True
+    assert captured["kwargs"]["raise_on_failure"] is True
     assert "上下文完全独立" in captured["prompt"]
     assert "不得依赖任务执行 Agent 的对话" in captured["prompt"]
+
+
+async def test_workbench_verifier_rejects_missing_criteria_results(monkeypatch, tmp_path):
+    import pytest
+    from webui import routes
+
+    async def fake_agent(*args, **kwargs):
+        return {
+            "results": [{"id": "accept_1", "passed": True, "evidence": "ok"}],
+            "recommend_reflection": False,
+            "reason": "partial",
+        }
+
+    monkeypatch.setattr(routes, "_workbench_run_explore_agent", fake_agent)
+    session = {
+        "id": "task_session_1",
+        "title": "实现登录",
+        "acceptanceCriteria": [
+            {"id": "accept_1", "text": "接口完成", "status": "pending"},
+            {"id": "accept_2", "text": "测试通过", "status": "pending"},
+        ],
+    }
+
+    with pytest.raises(routes._WorkbenchGenerationError, match="遗漏了 1 条"):
+        await routes._workbench_verify_acceptance(
+            session, {"workspacePath": str(tmp_path)}
+        )
 
 
 async def test_workbench_clean_explore_agent_clears_inherited_session(monkeypatch):
@@ -528,27 +640,83 @@ async def test_workbench_init_task_plan_reports_llm_success(monkeypatch):
         return {"content": '{"tasks": [{"title": "拆解需求", "goal": "明确范围", "priority": "high"}]}'}
 
     monkeypatch.setattr(R, "_call_llm", fake_call_llm)
-    plan, from_llm = await R._workbench_generate_init_task_plan(
+    plan, from_llm, error = await R._workbench_generate_init_task_plan(
         {"id": "p1", "name": "Demo", "template": "blank"}, {"answers": {}},
     )
     assert from_llm is True
+    assert error is None
     assert plan[0]["title"] == "拆解需求"
 
 
 @pytest.mark.asyncio
-async def test_workbench_init_task_plan_reports_fallback_on_failure(monkeypatch):
+async def test_workbench_init_task_plan_retries_five_times_without_fallback(monkeypatch):
     from webui import routes as R
 
+    calls = 0
+
     async def failing_call_llm(messages, tools=None, max_tokens=None, secondary=False, thinking="auto"):
+        nonlocal calls
+        calls += 1
         raise RuntimeError("model down")
 
+    async def no_wait(_seconds):
+        return None
+
     monkeypatch.setattr(R, "_call_llm", failing_call_llm)
-    plan, from_llm = await R._workbench_generate_init_task_plan(
+    monkeypatch.setattr(R.asyncio, "sleep", no_wait)
+    plan, from_llm, error = await R._workbench_generate_init_task_plan(
         {"id": "p1", "name": "Demo", "template": "blank"},
         {"answers": {"goal": "做一个 CLI 工具"}},
     )
+    assert calls == 5
     assert from_llm is False
-    assert plan, "fallback plan must not be empty"
+    assert plan is None
+    assert error["code"] == "init_plan_generation_failed"
+    assert error["attemptCount"] == 5
+    assert len(error["attempts"]) == 5
+    assert all("model down" in attempt["message"] for attempt in error["attempts"])
+
+
+@pytest.mark.asyncio
+async def test_workbench_init_task_plan_can_recover_on_fifth_attempt(monkeypatch):
+    from webui import routes as R
+
+    calls = 0
+
+    async def flaky_call_llm(messages, tools=None, max_tokens=None, secondary=False, thinking="auto"):
+        nonlocal calls
+        calls += 1
+        if calls < 5:
+            raise RuntimeError(f"temporary failure {calls}")
+        return {"content": '{"tasks": [{"title": "最终成功", "goal": "完成规划"}]}'}
+
+    async def no_wait(_seconds):
+        return None
+
+    monkeypatch.setattr(R, "_call_llm", flaky_call_llm)
+    monkeypatch.setattr(R.asyncio, "sleep", no_wait)
+    plan, from_llm, error = await R._workbench_generate_init_task_plan(
+        {"id": "p1", "name": "Demo", "template": "blank"},
+        {"answers": {"goal": "做一个 CLI 工具"}},
+    )
+
+    assert calls == 5
+    assert from_llm is True
+    assert error is None
+    assert plan[0]["title"] == "最终成功"
+
+
+def test_workbench_generation_error_redacts_credentials():
+    from webui.routes import _workbench_generation_error
+
+    error = _workbench_generation_error(
+        RuntimeError("Bearer secret-token sk-abcdefghijkl api_key=private-value")
+    )
+
+    assert "secret-token" not in error.message
+    assert "abcdefghijkl" not in error.message
+    assert "private-value" not in error.message
+    assert "<redacted>" in error.message
 
 
 def test_workbench_promote_file_artifacts_promotes_and_dedups():

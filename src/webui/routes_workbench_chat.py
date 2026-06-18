@@ -845,6 +845,11 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
         project_id = str(chat.get("projectId") or "")
+        project_store = R._read_workbench_store()
+        project = R._workbench_find_project(project_store, project_id)
+        if not project:
+            return JSONResponse({"error": "project not found"}, status_code=404)
+        workspace_dir = R._workbench_resolve_workspace_dir(project)
 
         now = _utc_now_iso()
         messages = chat.setdefault("messages", [])
@@ -919,6 +924,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 command=command,
                 public_user_message=message or None,
                 public_attachments=public_attachments or None,
+                workspace_dir=workspace_dir,
             )
 
         def _finalize(reply_text: str) -> dict[str, Any]:
@@ -1161,14 +1167,19 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
 
         R = _routes()
         project_id = str(chat.get("projectId") or "")
+        project_store = R._read_workbench_store()
+        project = R._workbench_find_project(project_store, project_id)
+        if not project:
+            return JSONResponse({"error": "project not found"}, status_code=404)
+        workspace_dir = R._workbench_resolve_workspace_dir(project)
         now = _utc_now_iso()
         _mark_user_activity(chat, now)
         _write_chats_store(payload)
         state_len_before = len(_session_state_messages(chat_id))
-        # Chat runs are not workspace-confined (see send: run_agent without
-        # workspace_dir), so resume with the global scope too.
         try:
-            reply = await R._workbench_answer_pending(chat_id, question_id, answer_text, "")
+            reply = await R._workbench_answer_pending(
+                chat_id, question_id, answer_text, workspace_dir,
+            )
         except Exception as exc:
             logger.exception("Workbench chat answer-resume failed for %s", chat_id)
             return JSONResponse({"error": "answer resume failed", "detail": str(exc)}, status_code=502)

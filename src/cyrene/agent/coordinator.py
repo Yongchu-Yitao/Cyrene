@@ -43,6 +43,7 @@ from cyrene.agent.prompts import (
     _QUICK_ANSWER_PROMPT,
     _WORKSPACE_SCOPE_BLOCK,
     _spawn_policy_prompt_block,
+    workspace_scope_block,
 )
 from cyrene.agent.session import (
     _expand_report_reference_history,
@@ -83,6 +84,7 @@ from cyrene.agent.state import (
     _tool_quit,
     _ui_round_assistant_meta,
     _ui_round_hide_initial_detail,
+    active_workspace_dir,
 )
 from cyrene.config import ASSISTANT_NAME
 from cyrene.context_trace import context_block
@@ -431,14 +433,15 @@ async def _run_chat_agent(
             metadata={"date": f"{now:%Y-%m-%d}", "timezone": now.tzname()},
             transforms=["concat_into_system"],
         ))
-        main_system += "\n\n" + _WORKSPACE_SCOPE_BLOCK
+        current_workspace_scope = workspace_scope_block(active_workspace_dir())
+        main_system += "\n\n" + current_workspace_scope
         main_system_context.append(context_block(
             "runtime.workspace_scope",
             "system",
-            source="cyrene.agent.prompts._WORKSPACE_SCOPE_BLOCK",
+            source="cyrene.agent.prompts.workspace_scope_block",
             reason="constrain agent to workspace; prevent unnecessary permission prompts",
             transforms=["concat_into_system"],
-            content=_WORKSPACE_SCOPE_BLOCK,
+            content=current_workspace_scope,
         ))
 
         is_deep_research = command == "deep-research"

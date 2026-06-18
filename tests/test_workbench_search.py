@@ -255,3 +255,75 @@ def test_api_workbench_search_legacy_endpoint_still_works(client):
     assert response.status_code == 200
     data = response.json()
     assert "ok" in data
+
+
+def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypatch):
+    from cyrene import agent
+
+    captured = {}
+
+    async def fake_run_agent(**kwargs):
+        captured.update(kwargs)
+        return "done"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+
+    response = client.post(
+        "/api/workbench/chats/chat_1/messages",
+        json={"message": "inspect the project"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["assistantMessage"]["content"] == "done"
+    assert captured["workspace_dir"] == str(
+        (search_env["data_dir"].parent / "workspace").resolve()
+    )
+
+
+def test_workspace_scope_block_uses_runtime_workspace(tmp_path):
+    from cyrene.agent.prompts import workspace_scope_block
+
+    project_workspace = tmp_path / "project"
+    block = workspace_scope_block(project_workspace)
+
+    assert f"Your workspace is at `{project_workspace}`." in block
+    assert "already starts with CWD set to the workspace root" in block
+    assert f"do not prepend `cd {project_workspace}`" in block
+
+
+def test_workbench_chat_answer_resumes_in_project_workspace(
+    client, search_env, monkeypatch,
+):
+    from webui import routes as routes_mod
+
+    chats_path = search_env["data_dir"] / "workbench_chats.json"
+    chats = json.loads(chats_path.read_text(encoding="utf-8"))
+    chats["chats"][0]["pendingQuestion"] = {"id": "question_1"}
+    chats_path.write_text(json.dumps(chats), encoding="utf-8")
+    captured = {}
+
+    async def fake_answer_pending(session_id, question_id, answer_text, workspace_dir):
+        captured.update({
+            "session_id": session_id,
+            "question_id": question_id,
+            "answer_text": answer_text,
+            "workspace_dir": workspace_dir,
+        })
+        return "continued"
+
+    monkeypatch.setattr(routes_mod, "_workbench_answer_pending", fake_answer_pending)
+
+    response = client.post(
+        "/api/workbench/chats/chat_1/answer",
+        json={"question_id": "question_1", "answer": "continue"},
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "session_id": "chat_1",
+        "question_id": "question_1",
+        "answer_text": "continue",
+        "workspace_dir": str(
+            (search_env["data_dir"].parent / "workspace").resolve()
+        ),
+    }

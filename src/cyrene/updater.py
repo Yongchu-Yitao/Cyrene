@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import platform
 import shlex
 import sys
 import tempfile
@@ -51,14 +52,33 @@ class UpdateInfo:
 
 
 def _platform_filter() -> str:
-    """返回当前平台的 asset 匹配关键词。"""
+    """返回当前平台 release asset 名称中应包含的匹配关键词（统一小写）。
+
+    资产名遵循 CI 的 electron-builder ``artifactName`` 模板
+    （见 electron/package.json 与 .github/workflows/release.yml）：
+
+      - macOS:        ``Cyrene-<ver>-mac.dmg``
+      - Windows x64:  ``Cyrene-<ver>-win-x64.exe``
+      - Windows ARM:  ``Cyrene-<ver>-win-arm64.exe``
+      - Linux:        ``Cyrene-<ver>-x64.AppImage``
+
+    Windows 自 0.6.0b0 起按架构区分文件名，所以这里依据 ``platform.machine()``
+    （ARM64 / AMD64）选择 x64 还是 arm64，而不是写死单一 token。
+
+    调用方在 check_for_update() 中用 ``key in name.lower()`` 做大小写无关的子串
+    比较，故此处一律返回小写（旧实现返回的 ``x64.AppImage`` 含大写，永远匹配
+    不到小写后的资产名，这里一并修正）。
+    """
     if sys.platform == "darwin":
         return ".dmg"
     elif sys.platform == "win32":
-        return "win64.exe"
+        machine = platform.machine().lower()
+        if machine.startswith(("arm", "aarch")):
+            return "win-arm64.exe"
+        return "win-x64.exe"
     elif sys.platform.startswith("linux"):
-        return "x64.AppImage"
-    return sys.platform
+        return "x64.appimage"
+    return sys.platform.lower()
 
 
 async def _fetch_target_release(
@@ -131,8 +151,9 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
                     latest_version=latest,
                 )
 
-            # 查找匹配当前平台的 asset
-            platform_key = _platform_filter()
+            # 查找匹配当前平台的 asset。两侧统一小写做大小写无关的子串匹配，
+            # 避免 token 大小写与资产名不一致而漏匹配（参见 _platform_filter）。
+            platform_key = _platform_filter().lower()
             asset_url = ""
             asset_name = ""
             asset_size = 0
