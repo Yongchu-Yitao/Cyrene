@@ -184,6 +184,235 @@ def _public_chat_full(chat: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _subagent_tool_args(tool_call: Any) -> tuple[str, dict[str, Any]]:
+    if not isinstance(tool_call, dict):
+        return "", {}
+    function = tool_call.get("function")
+    if not isinstance(function, dict):
+        return "", {}
+    name = str(function.get("name") or "").strip()
+    raw = function.get("arguments")
+    if isinstance(raw, dict):
+        return name, raw
+    try:
+        parsed = json.loads(str(raw or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = {}
+    return name, parsed if isinstance(parsed, dict) else {}
+
+
+def _subagent_round_title(messages: list[dict[str, Any]], round_id: str) -> str:
+    for message in messages:
+        if str(message.get("round_id") or "").strip() != round_id:
+            continue
+        if str(message.get("role") or "") != "user":
+            continue
+        title = str(message.get("content") or "").replace("\n", " ").strip()
+        if title:
+            return title[:72]
+    return ""
+
+
+def _subagent_public_agent(agent_id: str, info: dict[str, Any], round_id: str) -> dict[str, Any]:
+    return {
+        "id": agent_id,
+        "name": agent_id,
+        "task": str(info.get("task") or "").strip(),
+        "status": str(info.get("status") or "done").strip(),
+        "result": str(info.get("result") or "").strip(),
+        "roundId": str(info.get("round_id") or round_id).strip(),
+        "createdAt": info.get("created_at"),
+        "updatedAt": info.get("updated_at"),
+        "messageCount": len(info.get("messages") or []),
+    }
+
+
+def _subagent_messages_from_agent(
+    agent_id: str, info: dict[str, Any], round_id: str
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    created_at = str(info.get("created_at") or "")
+    for index, message in enumerate(info.get("messages") or []):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for tool_call in message.get("tool_calls") or []:
+            name, args = _subagent_tool_args(tool_call)
+            if name not in ("send_agent_message", "broadcast_agent_message", "send_message_to_user"):
+                continue
+            content = str(args.get("content") or args.get("text") or "").strip()
+            if not content:
+                continue
+            target = "all" if name == "broadcast_agent_message" else (
+                "user" if name == "send_message_to_user" else str(args.get("to") or "").strip()
+            )
+            messages.append({
+                "id": str(tool_call.get("id") or f"{agent_id}_message_{index}"),
+                "type": "broadcast" if target == "all" else "message",
+                "from": agent_id,
+                "to": target,
+                "content": content,
+                "timestamp": message.get("created_at") or created_at,
+                "roundId": round_id,
+            })
+    result = str(info.get("result") or "").strip()
+    if result and result not in ("Done.", "无结果"):
+        messages.append({
+            "id": f"{agent_id}_result",
+            "type": "result",
+            "from": agent_id,
+            "to": "",
+            "content": result,
+            "timestamp": info.get("updated_at") or created_at,
+            "roundId": round_id,
+        })
+    return messages
+
+
+def _workbench_subagent_payload(chat_id: str, requested_round_id: str = "") -> dict[str, Any]:
+    """Build Workbench-only subagent data from this chat's own session state.
+
+    This intentionally does not call the legacy Chat UI payload builders. It
+    reconstructs completed rounds from ``subagent_flow_snapshot`` and overlays
+    live registry entries scoped by the Workbench chat session id.
+    """
+    raw_messages = _session_state_messages(chat_id)
+    rounds: dict[str, dict[str, Any]] = {}
+
+    def ensure_round(round_id: str, order: int) -> dict[str, Any] | None:
+        rid = str(round_id or "").strip()
+        if not rid:
+            return None
+        if rid not in rounds:
+            rounds[rid] = {
+                "id": rid,
+                "title": _subagent_round_title(raw_messages, rid),
+                "order": order,
+                "agents": {},
+                "messages": [],
+            }
+        return rounds[rid]
+
+    for index, message in enumerate(raw_messages):
+        if not isinstance(message, dict):
+            continue
+        round_id = str(message.get("round_id") or "").strip()
+        for tool_call in message.get("tool_calls") or []:
+            name, args = _subagent_tool_args(tool_call)
+            if name != "spawn_subagent":
+                continue
+            round_data = ensure_round(round_id, index)
+            agent_id = str(args.get("agent_id") or "").strip()
+            if not round_data or not agent_id:
+                continue
+            round_data["agents"].setdefault(agent_id, {
+                "task": str(args.get("task") or "").strip(),
+                "status": "done",
+                "result": "",
+                "messages": [],
+                "round_id": round_id,
+            })
+
+        snapshot = message.get("subagent_flow_snapshot")
+        if not isinstance(snapshot, dict):
+            continue
+        snapshot_round_id = str(snapshot.get("round_id") or round_id).strip()
+        round_data = ensure_round(snapshot_round_id, index)
+        if not round_data:
+            continue
+        for agent_id, info in (snapshot.get("agents") or {}).items():
+            if isinstance(info, dict):
+                round_data["agents"][str(agent_id)] = dict(info)
+        for comm in snapshot.get("comm_messages") or []:
+            if not isinstance(comm, dict):
+                continue
+            content = str(comm.get("content") or "").strip()
+            if not content:
+                continue
+            round_data["messages"].append({
+                "id": str(comm.get("message_id") or f"comm_{len(round_data['messages'])}"),
+                "type": "broadcast" if str(comm.get("type") or "") == "broadcast" else "message",
+                "from": str(comm.get("from") or ""),
+                "to": str(comm.get("to") or ""),
+                "content": content,
+                "timestamp": comm.get("timestamp"),
+                "roundId": snapshot_round_id,
+            })
+
+    from cyrene.subagent import _registry, _subagent_tasks  # noqa: WPS437
+    live_task_ids = {
+        agent_id
+        for agent_id, task in _subagent_tasks.items()
+        if task is not None and not task.done()
+    }
+    for agent_id, info in _registry.items():
+        if str(info.get("session_id") or "") != chat_id:
+            continue
+        round_id = str(info.get("round_id") or "").strip()
+        round_data = ensure_round(round_id, len(raw_messages) + 1)
+        if not round_data:
+            continue
+        round_data["agents"][agent_id] = dict(info)
+
+    public_rounds: list[dict[str, Any]] = []
+    for round_data in rounds.values():
+        agents = [
+            _subagent_public_agent(agent_id, info, round_data["id"])
+            for agent_id, info in round_data["agents"].items()
+            if not str(agent_id).startswith("agent_summary_")
+        ]
+        for agent in agents:
+            if (
+                agent["id"] not in live_task_ids
+                and agent["status"] in ("running", "resumed", "waiting")
+                and agent.get("result")
+            ):
+                agent["status"] = "done"
+        agents.sort(key=lambda item: (str(item.get("createdAt") or ""), item["name"]))
+        live_messages = list(round_data["messages"])
+        for agent in agents:
+            info = round_data["agents"].get(agent["id"], {})
+            live_messages.extend(_subagent_messages_from_agent(agent["id"], info, round_data["id"]))
+        seen_message_ids: set[str] = set()
+        messages: list[dict[str, Any]] = []
+        for entry in live_messages:
+            message_id = str(entry.get("id") or "")
+            if message_id and message_id in seen_message_ids:
+                continue
+            if message_id:
+                seen_message_ids.add(message_id)
+            messages.append(entry)
+        messages.sort(key=lambda item: str(item.get("timestamp") or ""))
+        active = sum(1 for item in agents if item["status"] in ("running", "resumed", "waiting"))
+        public_rounds.append({
+            "id": round_data["id"],
+            "title": round_data["title"] or round_data["id"],
+            "status": "running" if active else "done",
+            "agentCount": len(agents),
+            "activeCount": active,
+            "agents": agents,
+            "messages": messages,
+            "_order": round_data["order"],
+        })
+    public_rounds.sort(key=lambda item: item["_order"], reverse=True)
+    for item in public_rounds:
+        item.pop("_order", None)
+
+    selected_round_id = str(requested_round_id or "").strip()
+    if not any(item["id"] == selected_round_id for item in public_rounds):
+        running_round = next((item for item in public_rounds if item["status"] == "running"), None)
+        selected_round_id = (running_round or (public_rounds[0] if public_rounds else {})).get("id", "")
+    selected = next((item for item in public_rounds if item["id"] == selected_round_id), None)
+    return {
+        "rounds": [
+            {key: value for key, value in item.items() if key not in ("agents", "messages")}
+            for item in public_rounds
+        ],
+        "activeRoundId": selected_round_id,
+        "agents": list(selected.get("agents") or []) if selected else [],
+        "messages": list(selected.get("messages") or []) if selected else [],
+    }
+
+
 def _legacy_message(message: dict[str, Any], index: int) -> dict[str, Any]:
     role = "assistant" if message.get("role") in ("agent", "assistant") else str(message.get("role") or "user")
     out: dict[str, Any] = {
@@ -546,6 +775,15 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
         return {"chat": _public_chat_full(chat)}
+
+    @router.get("/api/workbench/chats/{chat_id}/subagents")
+    async def api_workbench_chat_subagents(chat_id: str, round_id: str = ""):
+        if chat_id.startswith("legacy:"):
+            return {"rounds": [], "activeRoundId": "", "agents": [], "messages": []}
+        payload = _read_chats_store()
+        if not _find_chat(payload, chat_id):
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        return _workbench_subagent_payload(chat_id, round_id)
 
     @router.patch("/api/workbench/chats/{chat_id}")
     async def api_workbench_update_chat(chat_id: str, request: Request):

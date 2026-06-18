@@ -1,10 +1,11 @@
 """Tool implementation for set_task_goal.
 
-Lets a Workbench task agent set or correct the current task's goal (and an
-optional short title) — e.g. once it has explored the project and understands
-what should be done, or when the user's opener was a question rather than a
-goal. The task scope is resolved from the active session id, so the agent never
-has to know (or be trusted with) the storage key.
+Lets a Workbench task agent set or correct the current task's goal, short title,
+and/or one-line summary (简介) — e.g. once it has explored the project and
+understands what should be done, or when the user's opener was a question rather
+than a goal. The task scope is resolved from the active session id, so the agent
+never has to know (or be trusted with) the storage key. The title is locked once
+the user has manually edited it; the agent can still update goal and summary.
 """
 
 from __future__ import annotations
@@ -24,13 +25,16 @@ async def _tool_set_task_goal(
     _db_path: str,
     _notify_state: dict[str, bool] | None,
 ) -> str:
-    """Set/correct the current Workbench task's goal (+ optional title)."""
+    """Set/correct the current Workbench task's goal, title, and/or summary."""
     from cyrene.agent.state import _current_session_id
 
     goal = str(args.get("goal", "") or "").strip()
     title = str(args.get("title", "") or "").strip()
-    if len(goal) < 3:
-        return "Not set: 'goal' is empty or too short."
+    summary = str(args.get("summary", "") or "").strip()
+    if not goal and not title and not summary:
+        return "Not set: provide at least one of goal, title, or summary."
+    if goal and len(goal) < 3:
+        return "Not set: 'goal' is too short."
 
     session_id = str(_current_session_id.get() or "").strip()
     if not session_id:
@@ -40,13 +44,19 @@ async def _tool_set_task_goal(
     # process); importing it at module load would invert package layering.
     from webui.routes import set_task_goal_for_session
 
-    result = set_task_goal_for_session(session_id, goal, title)
+    result = set_task_goal_for_session(session_id, goal, title, summary)
     if not result.get("ok"):
         return "Not set: " + str(result.get("error") or "could not update the task.")
-    saved_title = str(result.get("title") or "")
-    msg = "Task goal updated: " + str(result.get("goal") or goal)
-    if saved_title:
-        msg += f" (title: {saved_title})"
+    parts: list[str] = []
+    if result.get("goal"):
+        parts.append("goal=" + str(result.get("goal")))
+    if result.get("title"):
+        parts.append("title=" + str(result.get("title")))
+    if result.get("summary"):
+        parts.append("summary=" + str(result.get("summary")))
+    msg = "Task updated: " + ", ".join(parts) if parts else "Task updated."
+    if result.get("titleBlocked"):
+        msg += "（注意：标题已被用户手动设定，未改动；其余字段已更新。）"
     return msg
 
 

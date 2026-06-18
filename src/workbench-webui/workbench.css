@@ -812,6 +812,10 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   overflow: auto;
 }
 
+.workbench-project-list.has-open-menu {
+  overflow: visible;
+}
+
 .workbench-right-body {
   min-height: 0;
   overflow-y: auto;
@@ -7566,6 +7570,370 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   padding: 14px;
 }
 
+/* Workbench-only subagent page. Kept under .wbc-* so the legacy Chat UI
+   remains visually and structurally independent. */
+.wbc-subagent-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wbc-subagent-hero {
+  min-height: 62px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-line));
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--wb-accent) 13%, var(--wb-card-bg)), var(--wb-card-bg));
+  padding: 12px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wbc-subagent-hero > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wbc-subagent-hero b {
+  color: var(--wb-text);
+  font-size: 15px;
+  font-weight: 720;
+}
+
+.wbc-subagent-eyebrow {
+  color: var(--wb-accent);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.wbc-subagent-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.wbc-subagent-metrics > div {
+  min-width: 0;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-card-bg);
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wbc-subagent-metrics b {
+  color: var(--wb-text);
+  font-size: 18px;
+  line-height: 1.1;
+}
+
+.wbc-subagent-metrics span {
+  color: var(--wb-faint);
+  font-size: 10.5px;
+}
+
+.wbc-subagent-round {
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-card-bg);
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.wbc-subagent-round > span {
+  flex: 0 0 auto;
+  color: var(--wb-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.wbc-subagent-round select {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--wb-text);
+  font: inherit;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+}
+
+.wbc-subagent-section {
+  margin: 0;
+}
+
+.wbc-subagent-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+
+.wbc-subagent-section-head h3 {
+  margin: 0;
+}
+
+.wbc-subagent-section-head > span:not(.wbc-subagent-status) {
+  min-width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--wb-icon-bg);
+  color: var(--wb-faint);
+  font-size: 10.5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-subagent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.wbc-subagent-card {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  padding: 9px;
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wbc-subagent-card:hover {
+  background: var(--wb-row-hover-bg);
+}
+
+.wbc-subagent-card.active {
+  border-color: var(--wb-active-border);
+  background: var(--wb-active-bg);
+}
+
+.wbc-subagent-card-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wbc-subagent-card-copy b {
+  overflow: hidden;
+  color: var(--wb-text);
+  font-family: var(--mono, "IBM Plex Mono", monospace);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-subagent-card-copy small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--wb-faint);
+  font-size: 10.5px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.wbc-subagent-status-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--wb-faint);
+}
+
+.wbc-subagent-status-dot.running {
+  background: var(--wb-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-green) 16%, transparent);
+  animation: wb-live-pulse 1.6s ease-in-out infinite;
+}
+
+.wbc-subagent-status-dot.waiting { background: var(--wb-amber); }
+.wbc-subagent-status-dot.error { background: var(--wb-red); }
+.wbc-subagent-status-dot.done { background: var(--wb-blue); }
+
+.wbc-subagent-status {
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 9.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.wbc-subagent-status.running {
+  background: color-mix(in srgb, var(--wb-green) 14%, transparent);
+  color: var(--wb-green);
+}
+.wbc-subagent-status.waiting {
+  background: color-mix(in srgb, var(--wb-amber) 14%, transparent);
+  color: var(--wb-amber);
+}
+.wbc-subagent-status.error {
+  background: color-mix(in srgb, var(--wb-red) 14%, transparent);
+  color: var(--wb-red);
+}
+.wbc-subagent-status.done {
+  background: color-mix(in srgb, var(--wb-blue) 13%, transparent);
+  color: var(--wb-blue);
+}
+
+.wbc-subagent-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wbc-subagent-detail label {
+  color: var(--wb-faint);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.wbc-subagent-detail p {
+  margin: 0 0 7px;
+  color: var(--wb-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.wbc-subagent-result {
+  max-height: 270px;
+  overflow: auto;
+  border-left: 2px solid color-mix(in srgb, var(--wb-accent) 50%, var(--wb-line));
+  padding-left: 9px;
+  color: var(--wb-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.wbc-subagent-result > :first-child { margin-top: 0; }
+.wbc-subagent-result > :last-child { margin-bottom: 0; }
+
+.wbc-subagent-timeline {
+  display: flex;
+  flex-direction: column;
+}
+
+.wbc-subagent-event {
+  position: relative;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 8px;
+  padding-bottom: 13px;
+}
+
+.wbc-subagent-event:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 9px;
+  bottom: 0;
+  width: 1px;
+  background: var(--wb-line);
+}
+
+.wbc-subagent-event-mark {
+  position: relative;
+  z-index: 1;
+  width: 9px;
+  height: 9px;
+  margin-top: 3px;
+  border-radius: 50%;
+  border: 2px solid var(--wb-card-bg);
+  background: var(--wb-purple);
+  box-shadow: 0 0 0 1px var(--wb-line);
+}
+
+.wbc-subagent-event.result .wbc-subagent-event-mark {
+  background: var(--wb-green);
+}
+
+.wbc-subagent-event header {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-bottom: 3px;
+  font-size: 10.5px;
+}
+
+.wbc-subagent-event header b {
+  max-width: 120px;
+  overflow: hidden;
+  color: var(--wb-text);
+  font-family: var(--mono, "IBM Plex Mono", monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-subagent-event header span,
+.wbc-subagent-event header time {
+  color: var(--wb-faint);
+}
+
+.wbc-subagent-event header time {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.wbc-subagent-event .markdown {
+  color: var(--wb-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.wbc-subagent-event .markdown > :first-child { margin-top: 0; }
+.wbc-subagent-event .markdown > :last-child { margin-bottom: 0; }
+
+.wbc-subagent-empty {
+  min-height: 220px;
+  border: 1px dashed var(--wb-line);
+  border-radius: 12px;
+  color: var(--wb-muted);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.wbc-subagent-empty b {
+  color: var(--wb-text);
+  font-size: 13px;
+}
+
+.wbc-subagent-empty p {
+  max-width: 250px;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
 /* 计划 tab — proposed plan awaiting confirmation */
 .wbc-plan-steps {
   list-style: none;
@@ -7812,10 +8180,17 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   color: var(--wb-faint);
 }
 
-/* responsive: collapse the right panel on narrow widths */
-@media (max-width: 1280px) {
+@media (max-width: 1320px) {
   .wbc-page {
-    grid-template-columns: 250px minmax(0, 1fr);
+    grid-template-columns: 230px minmax(360px, 1fr) 310px;
+  }
+}
+
+/* responsive: collapse the right panel only when it can no longer remain
+   usable; normal 1280px desktop windows keep the Workbench context tabs. */
+@media (max-width: 980px) {
+  .wbc-page {
+    grid-template-columns: 220px minmax(0, 1fr);
   }
   .wbc-side {
     display: none;
@@ -8467,7 +8842,10 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
 .wb-wel-pref-label { font-size: 13.5px; font-weight: 600; color: var(--wb-text); white-space: nowrap; }
 
 .wb-wel-pref-value {
+  min-width: 0;
+  width: 100%;
   justify-self: end;
+  text-align: right;
   font-size: 12.5px;
   font-weight: 560;
   color: var(--wb-muted);
@@ -8477,6 +8855,40 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
 }
 
 .wb-wel-pref-caret { color: var(--wb-faint); display: grid; place-items: center; }
+
+.wb-wel-pref.is-long-value {
+  grid-template-columns: 30px minmax(0, 1fr) 16px;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+
+.wb-wel-pref.is-long-value .wb-wel-pref-ico,
+.wb-wel-pref.is-long-value .wb-wel-pref-caret {
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+.wb-wel-pref.is-long-value .wb-wel-pref-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.wb-wel-pref.is-long-value .wb-wel-pref-value {
+  grid-column: 2;
+  grid-row: 2;
+  justify-self: stretch;
+  text-align: left;
+  line-height: 1.35;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+.wb-wel-pref.is-long-value .wb-wel-pref-caret {
+  grid-column: 3;
+}
 
 /* ── bottom panels: templates + import ── */
 .wb-wel-bottom {
@@ -8621,7 +9033,7 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
+  padding: 0 20px 0 0;
   border-bottom: 1px solid var(--wb-line);
   background: var(--wb-topbar-bg);
 }
@@ -8630,6 +9042,7 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   display: flex;
   align-items: center;
   gap: 9px;
+  padding-left: 6px;
 }
 
 .wb-ob-topbar .workbench-brand strong { font-size: 15px; font-weight: 760; }

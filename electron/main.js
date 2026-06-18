@@ -372,7 +372,7 @@ async function createMainWindow(shellOverride) {
   };
   if (useInsetTitleBar) {
     windowOptions.titleBarStyle = 'hidden';
-    windowOptions.trafficLightPosition = { x: 12, y: 23 };
+    windowOptions.trafficLightPosition = { x: 12, y: 19 };
   }
   mainWindow = new BrowserWindow(windowOptions);
 

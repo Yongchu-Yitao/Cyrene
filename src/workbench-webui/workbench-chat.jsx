@@ -43,6 +43,14 @@ var WorkbenchChatModel = (function () {
       .then(function (payload) { return payload.chat; });
   }
 
+  function getSubagents(chatId, roundId) {
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) {
+      return Promise.resolve({ rounds: [], activeRoundId: "", agents: [], messages: [] });
+    }
+    var query = roundId ? ("?round_id=" + encodeURIComponent(roundId)) : "";
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/subagents" + query);
+  }
+
   function renameChat(chatId, title) {
     return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId), {
       method: "PATCH",
@@ -154,6 +162,7 @@ var WorkbenchChatModel = (function () {
     listChats: listChats,
     createChat: createChat,
     getChat: getChat,
+    getSubagents: getSubagents,
     renameChat: renameChat,
     deleteChat: deleteChat,
     toTask: toTask,
@@ -197,6 +206,26 @@ function wbcFormatTime(value) {
   } catch (e) {
     return "";
   }
+}
+
+function wbcSubagentStatusText(status) {
+  var key = String(status || "").trim().toLowerCase();
+  var labels = {
+    running: wbcT("workbenchChat.subagent.status.running", "Running"),
+    resumed: wbcT("workbenchChat.subagent.status.resumed", "Resumed"),
+    waiting: wbcT("workbenchChat.subagent.status.waiting", "Waiting"),
+    done: wbcT("workbenchChat.subagent.status.done", "Done"),
+    timeout: wbcT("workbenchChat.subagent.status.timeout", "Timed out"),
+  };
+  return labels[key] || key || wbcT("workbenchChat.subagent.status.unknown", "Unknown");
+}
+
+function wbcSubagentStatusClass(status) {
+  var key = String(status || "").trim().toLowerCase();
+  if (key === "running" || key === "resumed") return "running";
+  if (key === "waiting") return "waiting";
+  if (key === "timeout") return "error";
+  return "done";
 }
 
 function wbcCompactNumber(value) {
@@ -366,6 +395,10 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   var [error, setError] = useWbcState("");
   var [sideTab, setSideTab] = useWbcState("overview");
   var [viewerFile, setViewerFile] = useWbcState(null);
+  var [subagentData, setSubagentData] = useWbcState({ rounds: [], activeRoundId: "", agents: [], messages: [] });
+  var [subagentLoading, setSubagentLoading] = useWbcState(false);
+  var subagentRefreshTimerRef = useWbcRef(null);
+  var revealedSubagentRoundRef = useWbcRef("");
   // True while the backend reads the whole conversation and synthesizes a task.
   var [toTaskBusy, setToTaskBusy] = useWbcState(false);
   // Streaming runtimes are isolated per conversation so different chats can
@@ -396,6 +429,26 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     runtimesRef.current = nextMap;
     setRuntimes(nextMap);
     return next;
+  }
+
+  function loadSubagents(chatId, roundId) {
+    if (!chatId) {
+      setSubagentData({ rounds: [], activeRoundId: "", agents: [], messages: [] });
+      return Promise.resolve(null);
+    }
+    setSubagentLoading(true);
+    return model.getSubagents(chatId, roundId)
+      .then(function (payload) {
+        if (activeChatIdRef.current === chatId) setSubagentData(payload);
+        return payload;
+      })
+      .catch(function (err) {
+        if (activeChatIdRef.current === chatId) setError(wbcErrorText(err));
+        return null;
+      })
+      .finally(function () {
+        if (activeChatIdRef.current === chatId) setSubagentLoading(false);
+      });
   }
 
   function refreshChats(selectId) {
@@ -448,11 +501,21 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
 
   // Load the full transcript when the selection changes.
   useWbcEffect(function () {
-    if (!activeChatId) { setActiveChat(null); return; }
+    if (!activeChatId) {
+      setActiveChat(null);
+      setSubagentData({ rounds: [], activeRoundId: "", agents: [], messages: [] });
+      return;
+    }
     var cancelled = false;
-    model.getChat(activeChatId)
-      .then(function (chat) { if (!cancelled) setActiveChat(chat); })
-      .catch(function (err) { if (!cancelled) setError(wbcErrorText(err)); });
+    setSubagentLoading(true);
+    Promise.all([model.getChat(activeChatId), model.getSubagents(activeChatId)])
+      .then(function (results) {
+        if (cancelled) return;
+        setActiveChat(results[0]);
+        setSubagentData(results[1]);
+      })
+      .catch(function (err) { if (!cancelled) setError(wbcErrorText(err)); })
+      .finally(function () { if (!cancelled) setSubagentLoading(false); });
     return function () { cancelled = true; };
   }, [activeChatId]);
 
@@ -460,7 +523,10 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   useWbcEffect(function () {
     setViewerFile(null);
     revealedPlanQidRef.current = "";
-    setSideTab(function (prev) { return (prev === "viewer" || prev === "map" || prev === "plan") ? "overview" : prev; });
+    revealedSubagentRoundRef.current = "";
+    setSideTab(function (prev) {
+      return (prev === "viewer" || prev === "map" || prev === "plan" || prev === "subagents") ? "overview" : prev;
+    });
   }, [activeChatId]);
 
   // When the agent pauses for a plan-mode confirmation, reveal its plan in the
@@ -556,6 +622,26 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         return;
       }
       var chatId = String(event.session_id || "");
+      if (
+        chatId
+        && activeChatIdRef.current === chatId
+        && (event.type === "subagent_update" || event.type === "agent_comm" || event.type === "agent_chat_user_message")
+      ) {
+        if (subagentRefreshTimerRef.current) clearTimeout(subagentRefreshTimerRef.current);
+        subagentRefreshTimerRef.current = setTimeout(function () {
+          loadSubagents(chatId).then(function (payload) {
+            var roundId = payload && payload.activeRoundId;
+            if (
+              event.type === "subagent_update"
+              && roundId
+              && roundId !== revealedSubagentRoundRef.current
+            ) {
+              revealedSubagentRoundRef.current = roundId;
+              setSideTab("subagents");
+            }
+          });
+        }, 120);
+      }
       var current = runtimesRef.current[chatId];
       if (!current) return;
       var entry = null;
@@ -565,6 +651,12 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         entry = { kind: "tool", text: String(event.tool || wbcT("settings.tools", "Tools")), preview: preview };
       } else if (event.type === "phase_transition" && event.detail) {
         entry = { kind: "phase", text: String(event.detail).slice(0, 80), preview: "" };
+      } else if (event.type === "subagent_update") {
+        entry = {
+          kind: "subagent",
+          text: String(event.agent_id || wbcT("workbenchChat.subagents", "Subagents")),
+          preview: wbcSubagentStatusText(event.status),
+        };
       }
       if (!entry) return;
       updateRuntime(chatId, function (latest) {
@@ -836,6 +928,9 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         project={project}
         chat={activeChat}
         runtime={activeRuntime}
+        subagentData={subagentData}
+        subagentLoading={subagentLoading}
+        onSelectSubagentRound={function (roundId) { loadSubagents(activeChatId, roundId); }}
         tab={sideTab}
         onTabChange={setSideTab}
         viewerFile={viewerFile}
@@ -1540,13 +1635,36 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
 // Right context panel (column 4)
 // ---------------------------------------------------------------------------
 
-function WbcSide({ project, chat, runtime, tab, onTabChange, viewerFile, onOpenFile, onRename, onDelete, onToTask, toTaskBusy }) {
+function WbcSide({
+  project,
+  chat,
+  runtime,
+  subagentData,
+  subagentLoading,
+  onSelectSubagentRound,
+  tab,
+  onTabChange,
+  viewerFile,
+  onOpenFile,
+  onRename,
+  onDelete,
+  onToTask,
+  toTaskBusy,
+}) {
   var hasMap = wbcChatUsedMap(chat, runtime);
   var pendingPlan = wbcPendingPlan(chat);
+  var hasSubagents = !!(
+    subagentData
+    && (
+      (Array.isArray(subagentData.rounds) && subagentData.rounds.length)
+      || (Array.isArray(subagentData.agents) && subagentData.agents.length)
+    )
+  );
   var tabs = [
     { id: "overview", label: wbcT("chat.side.overview", "Overview") },
   ];
   if (pendingPlan) tabs.push({ id: "plan", label: wbcT("chat.side.plan", "Plan") });
+  if (hasSubagents) tabs.push({ id: "subagents", label: wbcT("workbenchChat.subagents", "Subagents") });
   tabs.push({ id: "context", label: wbcT("workbenchChat.context", "Context") });
   tabs.push({ id: "artifacts", label: wbcT("workbenchChat.artifacts", "Artifacts") });
   if (viewerFile) tabs.push({ id: "viewer", label: wbcT("workbenchChat.viewer", "Viewer") });
@@ -1567,12 +1685,163 @@ function WbcSide({ project, chat, runtime, tab, onTabChange, viewerFile, onOpenF
       <div className={"wbc-side-body" + (flush ? " flush" : "")}>
         {activeTab === "overview" && <WbcOverviewTab chat={chat} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} />}
         {activeTab === "plan" && <WbcPlanTab plan={pendingPlan} />}
+        {activeTab === "subagents" && (
+          <WbcSubagentsTab
+            data={subagentData}
+            loading={subagentLoading}
+            onSelectRound={onSelectSubagentRound}
+          />
+        )}
         {activeTab === "context" && <WbcContextTab project={project} chat={chat} />}
         {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} onOpenFile={onOpenFile} />}
         {activeTab === "viewer" && <WbcViewerTab file={viewerFile} />}
         {activeTab === "map" && <WbcMapTab chatId={chat ? chat.id : ""} active={true} />}
       </div>
     </aside>
+  );
+}
+
+function WbcSubagentsTab({ data, loading, onSelectRound }) {
+  var rounds = data && Array.isArray(data.rounds) ? data.rounds : [];
+  var agents = data && Array.isArray(data.agents) ? data.agents : [];
+  var messages = data && Array.isArray(data.messages) ? data.messages : [];
+  var activeRoundId = String((data && data.activeRoundId) || "");
+  var [selectedAgentId, setSelectedAgentId] = useWbcState("");
+
+  useWbcEffect(function () {
+    if (!agents.some(function (agent) { return agent.id === selectedAgentId; })) {
+      setSelectedAgentId(agents[0] ? agents[0].id : "");
+    }
+  }, [activeRoundId, agents.map(function (agent) { return agent.id; }).join("|")]);
+
+  var selectedAgent = agents.find(function (agent) { return agent.id === selectedAgentId; }) || agents[0] || null;
+  var activeCount = agents.filter(function (agent) {
+    return ["running", "resumed", "waiting"].indexOf(String(agent.status || "")) >= 0;
+  }).length;
+
+  if (loading && !rounds.length && !agents.length) {
+    return (
+      <div className="wbc-subagent-empty">
+        <span className="wbc-spinner" aria-hidden="true"></span>
+        <p>{wbcT("workbenchChat.subagent.loading", "Loading subagents...")}</p>
+      </div>
+    );
+  }
+  if (!rounds.length && !agents.length) {
+    return (
+      <div className="wbc-subagent-empty">
+        <b>{wbcT("workbenchChat.subagent.emptyTitle", "No subagents in this chat")}</b>
+        <p>{wbcT("workbenchChat.subagent.emptyBody", "When the main agent delegates work, subagents and their results will appear here.")}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="wbc-subagent-page">
+      <section className="wbc-subagent-hero">
+        <div>
+          <span className="wbc-subagent-eyebrow">{wbcT("workbenchChat.subagent.workspace", "Agent workspace")}</span>
+          <b>{wbcT("workbenchChat.subagent.title", "Subagent activity")}</b>
+        </div>
+        {loading ? <span className="wbc-spinner" aria-hidden="true"></span> : null}
+      </section>
+
+      <div className="wbc-subagent-metrics">
+        <div><b>{agents.length}</b><span>{wbcT("workbenchChat.subagent.total", "Total")}</span></div>
+        <div><b>{activeCount}</b><span>{wbcT("workbenchChat.subagent.active", "Active")}</span></div>
+        <div><b>{messages.length}</b><span>{wbcT("workbenchChat.subagent.updates", "Updates")}</span></div>
+      </div>
+
+      {rounds.length > 1 ? (
+        <label className="wbc-subagent-round">
+          <span>{wbcT("workbenchChat.subagent.round", "Round")}</span>
+          <select value={activeRoundId} onChange={function (event) { onSelectRound && onSelectRound(event.target.value); }}>
+            {rounds.map(function (round) {
+              return <option key={round.id} value={round.id}>{round.title}</option>;
+            })}
+          </select>
+        </label>
+      ) : null}
+
+      <section className="workbench-side-section wbc-subagent-section">
+        <div className="wbc-subagent-section-head">
+          <h3>{wbcT("workbenchChat.subagent.agents", "Agents")}</h3>
+          <span>{agents.length}</span>
+        </div>
+        <div className="wbc-subagent-list">
+          {agents.map(function (agent) {
+            var selected = selectedAgent && selectedAgent.id === agent.id;
+            return (
+              <button
+                key={agent.id}
+                type="button"
+                className={"wbc-subagent-card" + (selected ? " active" : "")}
+                onClick={function () { setSelectedAgentId(agent.id); }}
+              >
+                <span className={"wbc-subagent-status-dot " + wbcSubagentStatusClass(agent.status)}></span>
+                <span className="wbc-subagent-card-copy">
+                  <b title={agent.name}>{agent.name}</b>
+                  <small>{agent.task || wbcT("workbenchChat.subagent.noTask", "No task description")}</small>
+                </span>
+                <span className={"wbc-subagent-status " + wbcSubagentStatusClass(agent.status)}>
+                  {wbcSubagentStatusText(agent.status)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {selectedAgent ? (
+        <section className="workbench-side-section wbc-subagent-section">
+          <div className="wbc-subagent-section-head">
+            <h3>{wbcT("workbenchChat.subagent.details", "Agent details")}</h3>
+            <span className={"wbc-subagent-status " + wbcSubagentStatusClass(selectedAgent.status)}>
+              {wbcSubagentStatusText(selectedAgent.status)}
+            </span>
+          </div>
+          <div className="wbc-subagent-detail">
+            <label>{wbcT("workbenchChat.subagent.task", "Task")}</label>
+            <p>{selectedAgent.task || "—"}</p>
+            <label>{wbcT("workbenchChat.subagent.result", "Result")}</label>
+            {selectedAgent.result ? (
+              <div className="markdown wbc-subagent-result" dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(selectedAgent.result) }} />
+            ) : (
+              <p className="workbench-muted">{wbcT("workbenchChat.subagent.resultPending", "No result yet.")}</p>
+            )}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="workbench-side-section wbc-subagent-section">
+        <div className="wbc-subagent-section-head">
+          <h3>{wbcT("workbenchChat.subagent.timeline", "Activity")}</h3>
+          <span>{messages.length}</span>
+        </div>
+        {messages.length ? (
+          <div className="wbc-subagent-timeline">
+            {messages.map(function (message, index) {
+              var isResult = message.type === "result";
+              return (
+                <article className={"wbc-subagent-event" + (isResult ? " result" : "")} key={message.id || index}>
+                  <span className="wbc-subagent-event-mark"></span>
+                  <div>
+                    <header>
+                      <b>{message.from || wbcT("workbenchChat.subagent.system", "System")}</b>
+                      {message.to ? <span>→ {message.to}</span> : null}
+                      <time>{wbcFormatTime(message.timestamp)}</time>
+                    </header>
+                    <div className="markdown" dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(message.content || "") }} />
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="workbench-muted">{wbcT("workbenchChat.subagent.noActivity", "No messages recorded for this round.")}</p>
+        )}
+      </section>
+    </div>
   );
 }
 

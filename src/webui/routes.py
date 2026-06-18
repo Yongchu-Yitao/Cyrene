@@ -282,19 +282,29 @@ def _workbench_derive_title(text: str) -> str:
     return head[:24] or "新任务"
 
 
-def set_task_goal_for_session(session_id: str, goal: str, title: str = "") -> dict[str, Any]:
-    """Set/correct a Workbench task session's goal (+ optional short title).
+def set_task_goal_for_session(
+    session_id: str, goal: str, title: str = "", summary: str = ""
+) -> dict[str, Any]:
+    """Set/correct a Workbench task session's goal, short title, and/or one-line
+    summary (简介).
 
     Backs the ``set_task_goal`` agent tool: the agent may call it once it actually
     understands what the task is (e.g. after exploring the project, or when the
-    user's opener was a question rather than a goal). Returns a small status dict.
+    user's opener was a question rather than a goal). At least one of goal/title/
+    summary must be provided. The title is LOCKED once the user has manually edited
+    it (``titleLocked``) — the agent can no longer change the title, though goal and
+    summary still update. Returns a small status dict.
     """
     sid = str(session_id or "").strip()
     new_goal = str(goal or "").strip()
+    new_title = str(title or "").strip()
+    new_summary = str(summary or "").strip()
     if not sid:
         return {"ok": False, "error": "no active task session"}
-    if len(new_goal) < 3:
-        return {"ok": False, "error": "goal is empty or too short"}
+    if not new_goal and not new_title and not new_summary:
+        return {"ok": False, "error": "nothing to update (provide goal, title or summary)"}
+    if new_goal and len(new_goal) < 3:
+        return {"ok": False, "error": "goal is too short"}
     payload = _read_workbench_store()
     project, session = _workbench_find_session(payload, sid)
     if not session or not project:
@@ -302,19 +312,38 @@ def set_task_goal_for_session(session_id: str, goal: str, title: str = "") -> di
     if str(session.get("kind") or "") == "init":
         return {"ok": False, "error": "cannot set goal on an init session"}
     now = _utc_now_iso()
-    session["goal"] = new_goal
-    new_title = str(title or "").strip()
-    if new_title or _workbench_is_default_title(session.get("title")):
-        session["title"] = (new_title or _workbench_derive_title(new_goal))[:80]
-    merged = list(session.get("constraints") or [])
-    for item in _workbench_extract_constraints(new_goal):
-        if item not in merged:
-            merged.append(item)
-    session["constraints"] = merged
+    if new_goal:
+        session["goal"] = new_goal
+        merged = list(session.get("constraints") or [])
+        for item in _workbench_extract_constraints(new_goal):
+            if item not in merged:
+                merged.append(item)
+        session["constraints"] = merged
+    # Title: the user owns it once they've edited it (titleLocked) — never override.
+    title_locked = bool(session.get("titleLocked"))
+    title_blocked = False
+    if new_title:
+        if title_locked:
+            title_blocked = True
+        else:
+            session["title"] = new_title[:80]
+    elif new_goal and not title_locked and _workbench_is_default_title(session.get("title")):
+        derived = _workbench_derive_title(new_goal)
+        if derived:
+            session["title"] = derived[:80]
+    if new_summary:
+        session["summary"] = new_summary
     session["updatedAt"] = now
     project["updatedAt"] = now
     _write_workbench_store(payload)
-    return {"ok": True, "goal": session["goal"], "title": session.get("title") or ""}
+    return {
+        "ok": True,
+        "goal": session.get("goal") or "",
+        "title": session.get("title") or "",
+        "summary": _workbench_session_summary_text(session),
+        "titleLocked": title_locked,
+        "titleBlocked": title_blocked,
+    }
 
 
 def _workbench_new_session(
@@ -346,6 +375,7 @@ def _workbench_new_session(
         "artifacts": [],
         "acceptanceCriteria": [],
         "summary": None,
+        "titleLocked": False,
     }
 
 
@@ -1423,6 +1453,7 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> None:
             session.setdefault("artifacts", [])
             session.setdefault("acceptanceCriteria", [])
             session.setdefault("summary", None)
+            session.setdefault("titleLocked", False)
             if _workbench_backfill_file_artifacts(session, now):
                 changed = True
     if projects and not payload.get("activeProjectId"):
@@ -1565,6 +1596,60 @@ def _workbench_existing_plan_block(session: dict[str, Any]) -> str:
     if not rows:
         return ""
     return "\n当前已有执行计划（除非用户明确要求删除/重排，请保留并在此基础上调整）：\n" + "\n".join(rows)
+
+
+def _workbench_session_summary_text(session: dict[str, Any]) -> str:
+    """Extract the task's one-line summary (简介), tolerating the dict form the
+    store sometimes holds (mirrors the frontend's sessionSummaryText)."""
+    raw = session.get("summary")
+    if isinstance(raw, dict):
+        return str(
+            raw.get("text") or raw.get("body") or raw.get("content") or raw.get("summary") or ""
+        ).strip()
+    return str(raw or "").strip()
+
+
+def _workbench_render_task_brief_block(session: dict[str, Any]) -> str:
+    """Render the task's identity (title / goal / summary / acceptance) + current
+    plan as a prompt block for the agent run.
+
+    These live ONLY in the Workbench store, not in the agent's conversation
+    history — without this the agent literally cannot see the plan or goal the UI
+    shows, and ends up asking "我没看到执行计划". Injected via ``ephemeral_system``
+    (prompt tail), so it stays cache-safe.
+    """
+    title = str(session.get("title") or "").strip()
+    goal = str(session.get("goal") or "").strip()
+    summary = _workbench_session_summary_text(session)
+    lines: list[str] = ["## 当前任务"]
+    if title:
+        lines.append(f"- 标题：{title}")
+    if goal:
+        lines.append(f"- 目标：{goal}")
+    if summary:
+        lines.append(f"- 简介：{summary}")
+    acceptance = session.get("acceptanceCriteria")
+    if isinstance(acceptance, list):
+        accept_texts = [
+            str((a.get("text") if isinstance(a, dict) else a) or "").strip() for a in acceptance
+        ]
+        accept_texts = [t for t in accept_texts if t][:8]
+        if accept_texts:
+            lines.append("- 验收标准：" + "；".join(accept_texts))
+    body = "\n".join(lines)
+    plan_block = _workbench_existing_plan_block(session)
+    if plan_block:
+        body += "\n" + plan_block.lstrip("\n")
+    if session.get("titleLocked"):
+        body += (
+            "\n（用户已手动设置任务标题，你不能修改标题；如标题/简介与实际工作不符，"
+            "可用 set_task_goal 更新简介或目标。）"
+        )
+    else:
+        body += (
+            "\n（标题与简介都会显示在任务卡上；若与你实际要做的事不符，可用 set_task_goal 更新。）"
+        )
+    return body
 
 
 def _workbench_reconcile_revised_plan(
@@ -2488,6 +2573,12 @@ def _workbench_compose_ephemeral_system(
         "- 如果这个任务还没有明确目标，或现有目标/标题与你实际要做的事不符（例如用户开场只是提了个"
         "问题），就调用 set_task_goal 设定一个简洁的目标和短标题。"
     )
+    # The task's goal/title/summary/plan live only in the Workbench store, never in
+    # the agent's conversation history — inject them so the agent actually sees the
+    # plan + context the UI shows (otherwise it asks "我没看到执行计划").
+    brief_block = _workbench_render_task_brief_block(session)
+    if brief_block:
+        parts.append(brief_block)
     try:
         mem_block = render_memory_for_injection(_workbench_project_data_key(project))
     except Exception:
@@ -2792,6 +2883,40 @@ def _workbench_apply_pending(session: dict[str, Any], session_id: str, agent_rep
         return "我需要你的确认才能继续，但没能取到具体问题，请重试。", False
     session.pop("pendingQuestion", None)
     return agent_reply, False
+
+
+# Task-meta fields the agent may edit mid-run via the set_task_goal tool.
+_WORKBENCH_AGENT_EDITABLE_META = ("goal", "title", "summary", "titleLocked")
+
+
+def _workbench_capture_task_meta(session: dict[str, Any]) -> dict[str, Any]:
+    """Snapshot the task-meta the agent may change mid-run, so afterwards the
+    handler can tell which fields the agent actually touched."""
+    return {field: session.get(field) for field in _WORKBENCH_AGENT_EDITABLE_META}
+
+
+def _workbench_sync_agent_task_meta(
+    session: dict[str, Any], session_id: str, before: dict[str, Any]
+) -> None:
+    """Merge task-meta the agent changed mid-run (via ``set_task_goal``, which
+    writes the store on its own separate read) back into this handler's in-memory
+    session, so the handler's end-of-run write doesn't clobber it.
+
+    Only fields that actually changed on disk during the run are pulled — values
+    the handler seeded pre-run (e.g. goal copied from the user's input) are left
+    intact when the agent didn't touch them.
+    """
+    try:
+        fresh_payload = _read_workbench_store()
+    except Exception:
+        logger.exception("Failed to re-read workbench store for agent meta sync")
+        return
+    _, fresh = _workbench_find_session(fresh_payload, session_id)
+    if not isinstance(fresh, dict):
+        return
+    for field in _WORKBENCH_AGENT_EDITABLE_META:
+        if fresh.get(field) != before.get(field):
+            session[field] = fresh.get(field)
 
 
 async def _workbench_answer_pending(
@@ -5956,6 +6081,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
         prev_status = str(session.get("status") or "")
+        # A title coming through this user-facing endpoint is a manual edit (the
+        # agent uses the set_task_goal tool, never HTTP) — lock it so the agent can
+        # no longer override the title the user chose.
+        if "title" in body and str(body.get("title") or "").strip():
+            session["titleLocked"] = True
         for field in ("title", "goal", "status", "priority", "agentReply", "summary", "kind"):
             if field in body:
                 session[field] = body[field]
@@ -6328,6 +6458,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
 
+        # Snapshot task-meta before any mutation so we can later detect what the
+        # agent changed mid-run via set_task_goal and avoid clobbering it.
+        task_meta_before = _workbench_capture_task_meta(session)
         # A per-step run (from runStep) executes one already-planned step — it must
         # NOT rebuild the plan / acceptance / goal / status; the client drives those.
         step_id = str(body.get("stepId") or "").strip()
@@ -6357,6 +6490,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         # A run that hit a permission / clarification boundary pauses awaiting the
         # user's answer — surface the question on the card instead of the sentinel.
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
+        # Preserve any title/goal/summary the agent changed mid-run via set_task_goal.
+        _workbench_sync_agent_task_meta(session, session_id, task_meta_before)
         session["agentReply"] = agent_reply
         # Sink durable memories from this exchange into the project's workspace store.
         if not command and not awaiting_user:
@@ -6443,10 +6578,13 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
+        task_meta_before = _workbench_capture_task_meta(session)
         chat_run_start_ts = _utc_now_iso()
         ephemeral_system = _workbench_compose_ephemeral_system(project, session)
         agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
+        # Preserve any title/goal/summary the agent changed mid-run via set_task_goal.
+        _workbench_sync_agent_task_meta(session, session_id, task_meta_before)
         session["agentReply"] = agent_reply
         # Sink durable memories from this exchange into the project's workspace store.
         if not command and not awaiting_user:
@@ -6497,6 +6635,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
 
+        # Snapshot task-meta before any mutation so we can later detect what the
+        # agent changed mid-run via set_task_goal and avoid clobbering it.
+        task_meta_before = _workbench_capture_task_meta(session)
         # A slash command or attachment-only message is already a concrete action —
         # skip classification and treat it as a direct instruction.
         if command or (not user_input and attachments):
@@ -6609,6 +6750,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
+        # Preserve any title/goal/summary the agent changed mid-run via set_task_goal.
+        _workbench_sync_agent_task_meta(session, session_id, task_meta_before)
         session["agentReply"] = agent_reply
         if not command and not awaiting_user:
             schedule_capture(_workbench_project_data_key(project), user_input, agent_reply)

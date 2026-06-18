@@ -43,6 +43,21 @@ function normalizeModel(raw, idx, fbBaseUrl, fbKey) {
   };
 }
 
+async function readSettingsResponse(response) {
+  var payload = {};
+  try {
+    payload = await response.json();
+  } catch (e) {
+    if (response.ok) throw new Error("Invalid JSON response");
+  }
+  if (!response.ok) {
+    throw new Error(
+      String(payload.detail || payload.error || ("HTTP " + response.status))
+    );
+  }
+  return payload;
+}
+
 // ── Tab definitions ──
 var TABS = [
   { id: "general", labelKey: "settings.general" },
@@ -78,9 +93,9 @@ function SettingsOverlay({
   var [amapKeySaved, setAmapKeySaved] = useStateSt("");
 
   // ── Models state ──
-  var [models, setModels] = useStateSt([]);
+  var [models, setModels] = useStateSt(function () { return [createEmptyModel()]; });
   var [draftModel, setDraftModel] = useStateSt(createEmptyModel());
-  var [visionModels, setVisionModels] = useStateSt([]);
+  var [visionModels, setVisionModels] = useStateSt(function () { return [createEmptyModel()]; });
   var [draftVision, setDraftVision] = useStateSt(createEmptyModel());
   var [secondaryModel, setSecondaryModel] = useStateSt(null);
   var [modelsSaved, setModelsSaved] = useStateSt("");
@@ -179,7 +194,7 @@ function SettingsOverlay({
         setConfigLoading(false);
       }).catch(function () { setConfigLoading(false); });
 
-    fetch("/api/settings/models").then(function (r) { return r.json(); }).then(function (p) {
+    fetch("/api/settings/models").then(readSettingsResponse).then(function (p) {
       var fb = p.base_url || DEFAULT_MODEL_BASE_URL;
       var norm = function (raw, i) { return normalizeModel(raw, i, fb, ""); };
       var ms = (p.models || p.primary_candidates || []).map(norm);
@@ -196,7 +211,9 @@ function SettingsOverlay({
         ctx_limit: (p.secondary_model && Number(p.secondary_model.ctx_limit)) || 0,
         max_concurrency: (p.secondary_model && Number(p.secondary_model.max_concurrency)) || 0,
       });
-    }).catch(function () {});
+    }).catch(function (e) {
+      setModelsSaved(t("settings.error") + ": " + (e.message || ""));
+    });
 
     fetch("/api/settings/tools").then(function (r) { return r.json(); }).then(function (p) {
       var tools = p.tools || [];
@@ -244,10 +261,10 @@ function SettingsOverlay({
           max_concurrency: Number(secondaryModel.max_concurrency) || 0,
         } : null,
       }),
-    }).then(function (r) { return r.json(); }).then(function (p) {
+    }).then(readSettingsResponse).then(function (p) {
       var fb = p.base_url || config.base_url || DEFAULT_MODEL_BASE_URL;
-      setModels(((p.models || p.primary_candidates || [])).map(function (m, i) { return normalizeModel(m, i, fb, ""); }));
-      setVisionModels(((p.vision_models || p.vision_candidates || [])).map(function (m, i) { return normalizeModel(m, i, fb, ""); }));
+      setModels(((p.models || p.primary_candidates || norm)).map(function (m, i) { return normalizeModel(m, i, fb, ""); }));
+      setVisionModels(((p.vision_models || p.vision_candidates || vNorm)).map(function (m, i) { return normalizeModel(m, i, fb, ""); }));
       setSecondaryModel({
         id: "secondary", model: (p.secondary_model && p.secondary_model.model) || "",
         api_key: (p.secondary_model && p.secondary_model.api_key) || "",

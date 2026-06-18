@@ -629,6 +629,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       <div className="workbench-shell wb-ob-shell" data-screen-label="Cyrene · onboarding">
         <div className="wb-ob-topbar">
           <div className="workbench-brand">
+            <div className="workbench-traffic-space"></div>
             <div className="brand-mark"></div>
             <strong>Cyrene</strong>
           </div>
@@ -1230,7 +1231,7 @@ function ProjectRail({ projects, activeProjectId, activePage, onSelectProject, o
           <span>{t("rail.newProject")}</span>
         </button>
       </div>
-      <div className="workbench-project-list">
+      <div className={"workbench-project-list" + (menuProjectId ? " has-open-menu" : "")}>
         {projects.map(function (project) {
           var active = project.id === activeProjectId;
           var isCyrene = project.dataKey === "default" || project.name === "Cyrene";
@@ -2533,10 +2534,11 @@ function ConfirmCard({ session, controller, onRightTab }) {
   );
 }
 
-// running / busy — Agent 正在处理. Streams the agent's live tool calls and
-// thinking rounds (from the running step's progressEvents, or the session-level
-// feed for non-step ops like 规划 / 反思 / 验收) so background work is visible
-// instead of a silent spinner.
+// running / busy — Agent 正在处理. For a running plan step the detailed call
+// trace is shown in the expanded subtask below (执行计划), so this top card omits
+// the inline feed to avoid duplication and instead shows the progress bar + mini
+// step list. Non-step background ops (规划 / 反思 / 验收) have no subtask row, so
+// they keep streaming the session-level live feed here instead of a silent spinner.
 function AgentActivityCard({ session, controller, onRightTab }) {
   var plan = Array.isArray(session.plan) ? session.plan : [];
   var done = plan.filter(function (s) { return s.status === "completed" || s.status === "done"; }).length;
@@ -2557,20 +2559,24 @@ function AgentActivityCard({ session, controller, onRightTab }) {
         ? <span className="wb-progress-badge">{done} / {plan.length}</span>
         : <span className="wb-progress-badge live">{wbT("task.processing", "Processing")}</span>}>
       <p className="wb-running-stage">{wbT("task.currentStage", "Current stage: {stage}", { stage: stage })}</p>
-      {lines.length > 0 ? (
-        <ul className="wb-live-feed" ref={feedRef}>
-          {lines.map(function (ln, i) {
-            var last = i === lines.length - 1;
-            return (
-              <li key={ln.id || i} className={"wb-live-line" + (last ? " latest" : "")}>
-                <span className="wb-live-dot" />
-                <span className="wb-live-body">{ln.body}</span>
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <AgentReplyBlock text={session.agentReply || wbT("task.workingFallback", "Processing the current task. Please wait...")} />
+      {/* A running plan step shows its call details in the expanded subtask below,
+          so we omit the inline feed here. Non-step ops (no runningStep) keep it. */}
+      {!runningStep && (
+        lines.length > 0 ? (
+          <ul className="wb-live-feed" ref={feedRef}>
+            {lines.map(function (ln, i) {
+              var last = i === lines.length - 1;
+              return (
+                <li key={ln.id || i} className={"wb-live-line" + (last ? " latest" : "")}>
+                  <span className="wb-live-dot" />
+                  <span className="wb-live-body">{ln.body}</span>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <AgentReplyBlock text={session.agentReply || wbT("task.workingFallback", "Processing the current task. Please wait...")} />
+        )
       )}
       {runningStep && plan.length > 0 && (
         <div className="wb-progress"><span style={{ width: pct + "%" }} /></div>

@@ -66,35 +66,43 @@ def _generate_icns(img: "Image.Image", out_path: Path) -> None:
 def _load_logo_image() -> "Image.Image | None":
     try:
         from PIL import Image, ImageDraw
+        import numpy as np
     except ImportError:
         print("  [warn] Pillow not installed, skipping icon generation")
         return None
 
     logo_src = BUILD_DIR / "logo-source.png"
     if logo_src.exists():
-        raw = Image.open(logo_src).convert("RGBA")
-        # Source artwork includes a wordmark below the emblem; crop it out and
-        # turn the near-white background transparent so platform icons stay clean.
-        crop = raw.crop((260, 140, 1015, 800))
-        pixels = crop.load()
-        for y in range(crop.height):
-            for x in range(crop.width):
-                r, g, b, a = pixels[x, y]
-                if r > 245 and g > 245 and b > 245:
-                    pixels[x, y] = (255, 255, 255, 0)
-        bbox = crop.getbbox()
-        if not bbox:
-            return crop
-        trimmed = crop.crop(bbox)
-        size = 1024
-        padding = 110
-        scale = min((size - 2 * padding) / trimmed.width, (size - 2 * padding) / trimmed.height)
-        resized = trimmed.resize((int(trimmed.width * scale), int(trimmed.height * scale)), Image.LANCZOS)
-        canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-        left = (size - resized.width) // 2
-        top = (size - resized.height) // 2
-        canvas.alpha_composite(resized, (left, top))
-        return canvas
+        img = Image.open(logo_src).convert("RGBA")
+        arr = np.array(img)
+        h, w, _ = arr.shape
+
+        # If the corners are near-white, treat the surrounding margin as
+        # background and flood-fill it transparent so the rounded-rectangle
+        # icon keeps its shape on macOS / other platforms.
+        tol = 15
+        near_white = (
+            (arr[:, :, 0] >= 255 - tol) &
+            (arr[:, :, 1] >= 255 - tol) &
+            (arr[:, :, 2] >= 255 - tol)
+        )
+        corners = [(0, 0), (0, w - 1), (h - 1, 0), (h - 1, w - 1)]
+        if all(near_white[y, x] for y, x in corners):
+            visited = np.zeros((h, w), dtype=bool)
+            stack = [(y, x) for y, x in corners if near_white[y, x]]
+            for y, x in stack:
+                visited[y, x] = True
+            while stack:
+                y, x = stack.pop()
+                for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    ny, nx = y + dy, x + dx
+                    if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx] and near_white[ny, nx]:
+                        visited[ny, nx] = True
+                        stack.append((ny, nx))
+            arr[visited, 3] = 0
+            img = Image.fromarray(arr)
+
+        return img.resize((1024, 1024), Image.LANCZOS)
 
     size = 512
     img = Image.new("RGBA", (size, size), (30, 30, 50, 255))

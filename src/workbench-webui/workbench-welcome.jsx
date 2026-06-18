@@ -199,10 +199,15 @@
         <div className="wb-wel-prefs">
           {rows.map(function (row) {
             return (
-              <button key={row.id} type="button" className="wb-wel-pref" onClick={row.action}>
+              <button
+                key={row.id}
+                type="button"
+                className={"wb-wel-pref" + (row.id === "timezone" ? " is-long-value" : "")}
+                onClick={row.action}
+              >
                 <span className="wb-wel-pref-ico">{row.icon}</span>
                 <span className="wb-wel-pref-label">{row.label}</span>
-                <span className="wb-wel-pref-value">{row.value}</span>
+                <span className="wb-wel-pref-value" title={row.value}>{row.value}</span>
                 <span className="wb-wel-pref-caret">{ICON.chevron}</span>
               </button>
             );

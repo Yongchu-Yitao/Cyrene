@@ -1909,13 +1909,15 @@ TOOL_DEFS = [
         "function": {
             "name": "set_task_goal",
             "description": (
-                "Set or correct the goal (and optionally a short title) of THE CURRENT Workbench task. "
-                "Use this when the task has no real goal yet, or when its goal/title doesn't match what "
-                "the work is actually about — for example after you've explored the project and understood "
-                "what should be done, or when the user's first message was a question rather than a goal. "
-                "The goal should be one concise sentence describing the objective; the title a few words. "
-                "This updates the goal shown on the task card and in the task list. Only valid inside a "
-                "Workbench task; it does nothing in a plain chat."
+                "Set or correct THE CURRENT Workbench task's goal, short title, and/or one-line summary "
+                "(简介 — the brief shown under the title on the task card). Provide at least one of them. "
+                "Use this when the task's goal/title/summary don't match what the work is actually about — "
+                "for example after you've explored the project and understood what should be done, or when "
+                "the user's first message was a question rather than a goal. These are shown on the task "
+                "card and in the task list. IMPORTANT: once the user has manually edited the title, you can "
+                "no longer change the title (the call keeps the user's title and tells you so) — you can "
+                "still update the goal and summary. Only valid inside a Workbench task; does nothing in a "
+                "plain chat."
             ),
             "parameters": {
                 "type": "object",
@@ -1926,10 +1928,14 @@ TOOL_DEFS = [
                     },
                     "title": {
                         "type": "string",
-                        "description": "Optional short task title (a few words, <= 24 chars). Defaults to a trimmed form of the goal.",
+                        "description": "Short task title, a few words (<= 24 chars). Ignored if the user has manually edited the title.",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "One short sentence (简介) shown as the task's subtitle, summarizing what this task is about.",
                     },
                 },
-                "required": ["goal"],
+                "required": [],
             },
         },
     },
