@@ -188,7 +188,7 @@ async def search_knowledge(
     # Sort by score descending
     merged.sort(reverse=True, key=lambda x: x["score"])
 
-    # Fetch document names and take top k
+    # Fetch document names and take top k.
     final_results = []
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row

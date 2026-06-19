@@ -975,6 +975,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
 
   function handleDeleteChat(chatId) {
     if (!chatId) return;
+    var deletingActiveChat = activeChatId === chatId;
     window.confirmModal({
       body: wbcT("workbenchChat.confirmDelete", "Delete this chat? Its messages cannot be recovered."),
       confirmLabel: wbcT("common.delete", "Delete"),
@@ -986,10 +987,10 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         runtimeEngine.clear(chatId);
         setChats(function (prev) {
           var next = prev.filter(function (item) { return item.id !== chatId; });
-          if (activeChatId === chatId) setActiveChatId(next[0] ? next[0].id : "");
+          if (deletingActiveChat) setActiveChatId(next[0] ? next[0].id : "");
           return next;
         });
-        if (activeChatId === chatId) setActiveChat(null);
+        if (deletingActiveChat) setActiveChat(null);
       }).catch(function (err) { setError(wbcErrorText(err)); });
     });
   }

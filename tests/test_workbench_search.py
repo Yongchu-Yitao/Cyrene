@@ -171,6 +171,48 @@ def client(search_env):
     return TestClient(app)
 
 
+def test_delete_workbench_legacy_chat_uses_session_delete(client, search_env, monkeypatch):
+    routes_mod = search_env["routes_mod"]
+    deleted = []
+
+    async def fake_delete_chat_session(session_id):
+        deleted.append(session_id)
+        return {"ok": True, "sessions": []}, 200
+
+    monkeypatch.setattr(routes_mod, "_delete_chat_session", fake_delete_chat_session)
+    monkeypatch.setattr(
+        routes_mod, "_workbench_project_data_key", lambda project: "default"
+    )
+
+    response = client.delete(
+        "/api/workbench/chats/legacy%3Aproject_1%3Aarchive_2026-01-01_session_1"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert deleted == ["archive_2026-01-01_session_1"]
+
+
+def test_delete_regular_workbench_chat_still_removes_store(
+    client, search_env, monkeypatch,
+):
+    import cyrene.agent as agent
+
+    async def fake_clear_session_id(session_id=""):
+        return None
+
+    monkeypatch.setattr(agent, "clear_session_id", fake_clear_session_id)
+    monkeypatch.setattr(agent, "interrupt_active_run", lambda session_id="": False)
+
+    response = client.delete("/api/workbench/chats/chat_1")
+
+    assert response.status_code == 200
+    payload = json.loads(
+        (search_env["data_dir"] / "workbench_chats.json").read_text(encoding="utf-8")
+    )
+    assert payload["chats"] == []
+
+
 @pytest.mark.asyncio
 async def test_search_workbench_items_project_and_task(search_env):
     groups = await _search_workbench_items("Alpha", {"project", "task"}, 10)

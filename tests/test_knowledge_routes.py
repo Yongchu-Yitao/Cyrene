@@ -359,3 +359,50 @@ class TestKnowledgeToolSearchKnowledge:
         assert isinstance(result, str)
         # Should find the document
         assert "test.md" in result or "Found" in result
+
+
+class TestKnowledgeToolListDocuments:
+    """Test the ListKnowledgeDocuments tool handler."""
+
+    @pytest.mark.asyncio
+    async def test_lists_all_documents_and_searchability(self, temp_db):
+        from cyrene.knowledge import store
+        from cyrene.tools import _tool_list_knowledge_documents
+
+        searchable = await store.create_document(
+            temp_db,
+            name="searchable.md",
+            path="/tmp/searchable.md",
+        )
+        await store.replace_chunks(
+            temp_db,
+            searchable["id"],
+            [{
+                "content": "searchable content",
+                "char_start": 0,
+                "char_end": 18,
+            }],
+        )
+        await store.update_document(
+            temp_db,
+            searchable["id"],
+            status="indexed",
+            chunk_count=1,
+        )
+        await store.create_document(
+            temp_db,
+            name="empty.pdf",
+            path="/tmp/empty.pdf",
+        )
+
+        result = await _tool_list_knowledge_documents(
+            {"limit": 100},
+            _bot=None,
+            _chat_id=-1,
+            _db_path=temp_db,
+            _notify_state=None,
+        )
+
+        assert "searchable.md" in result
+        assert "empty.pdf" in result
+        assert "1 searchable and 1 without searchable text" in result

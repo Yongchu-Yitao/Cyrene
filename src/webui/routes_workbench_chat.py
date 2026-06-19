@@ -804,7 +804,13 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
     async def api_workbench_delete_chat(chat_id: str):
         from cyrene.agent import clear_session_id, interrupt_active_run
         if chat_id.startswith("legacy:"):
-            return JSONResponse({"error": "delete legacy sessions from the legacy session view"}, status_code=403)
+            _prefix, project_id, session_id = (chat_id.split(":", 2) + ["", ""])[:3]
+            if not project_id or not session_id or _project_data_key(project_id) != "default":
+                return JSONResponse({"error": "chat not found"}, status_code=404)
+            payload, status_code = await _routes()._delete_chat_session(session_id)
+            if status_code != 200:
+                return JSONResponse(payload, status_code=status_code)
+            return {"ok": True}
         payload = _read_chats_store()
         chats = payload.get("chats", [])
         next_chats = [chat for chat in chats if str(chat.get("id") or "") != chat_id]

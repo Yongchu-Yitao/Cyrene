@@ -671,7 +671,6 @@ class TestSearch:
         results = await search_knowledge(temp_db, "fox")
         assert len(results) > 0
 
-
 class TestStats:
     """Test statistics function."""
 

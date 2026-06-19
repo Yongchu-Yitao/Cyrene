@@ -2085,8 +2085,23 @@ TOOL_DEFS = [
     {
         "type": "function",
         "function": {
+            "name": "ListKnowledgeDocuments",
+            "description": "List files in the current Workbench project's knowledge base, including whether each file has searchable chunks. Use this to inspect which files are available before searching across them.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Maximum number of files to return (default: 100, maximum: 500)."},
+                    "status": {"type": "string", "description": "Optional document status filter, such as indexed, pending, or error."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "SearchKnowledge",
-            "description": "Search the user's knowledge base (uploaded/imported/generated documents) for relevant passages via hybrid keyword+vector retrieval. Use this whenever the user references their documents, files, notes, or materials.",
+            "description": "Search the current Workbench project's knowledge base for the most relevant passages via hybrid keyword+vector retrieval. Use ListKnowledgeDocuments first when the user asks what files are available or requests coverage of all files.",
             "parameters": {
                 "type": "object",
                 "properties": {

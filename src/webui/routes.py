@@ -5384,31 +5384,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         - run_live: same as create (clear current state).
         - archive_YYYY-MM-DD_<session_id>: deletes one archived session from that day.
         """
-        if session_id == "run_live":
-            await clear_session_id()
-            return {"ok": True, "sessions": _build_sessions()}
-
-        if session_id.startswith("archive_"):
-            suffix = session_id[len("archive_"):]
-            date_str, _, archive_session_id = suffix.partition("_")
-            filepath = CONVERSATIONS_DIR / f"{date_str}.md"
-            if not filepath.exists():
-                return JSONResponse({"error": "session not found"}, status_code=404)
-            try:
-                content = filepath.read_text(encoding="utf-8")
-                sections = _parse_archive_sections(content)
-                kept_sections = [
-                    section for section in sections
-                    if str(section.get("archive_session_id", "")).strip() != archive_session_id
-                ]
-                if len(kept_sections) == len(sections):
-                    return JSONResponse({"error": "session not found"}, status_code=404)
-                _write_archive_sections(filepath, date_str, kept_sections)
-            except Exception as e:
-                return JSONResponse({"error": str(e)}, status_code=500)
-            return {"ok": True, "sessions": _build_sessions()}
-
-        return JSONResponse({"error": "unknown session id"}, status_code=400)
+        payload, status_code = await _delete_chat_session(session_id)
+        if status_code != 200:
+            return JSONResponse(payload, status_code=status_code)
+        return payload
 
     @router.get("/api/sessions/{session_id}/export")
     async def api_export_session(session_id: str, format: str = "markdown"):
@@ -8510,6 +8489,37 @@ def _resolve_local_username() -> str:
 
 # Per-session CC preview cache — archived sessions keep their initial snapshot
 _cc_preview_cache: dict[str, list] = {}
+
+
+async def _delete_chat_session(session_id: str) -> tuple[dict[str, Any], int]:
+    """Delete/reset a legacy chat session and return its API payload/status."""
+    if session_id == "run_live":
+        await clear_session_id()
+        return {"ok": True, "sessions": _build_sessions()}, 200
+
+    if session_id.startswith("archive_"):
+        suffix = session_id[len("archive_"):]
+        date_str, _, archive_session_id = suffix.partition("_")
+        filepath = CONVERSATIONS_DIR / f"{date_str}.md"
+        if not filepath.exists():
+            return {"error": "session not found"}, 404
+        try:
+            content = filepath.read_text(encoding="utf-8")
+            sections = _parse_archive_sections(content)
+            kept_sections = [
+                section
+                for section in sections
+                if str(section.get("archive_session_id", "")).strip() != archive_session_id
+            ]
+            if len(kept_sections) == len(sections):
+                return {"error": "session not found"}, 404
+            _write_archive_sections(filepath, date_str, kept_sections)
+        except Exception as exc:
+            return {"error": str(exc)}, 500
+        return {"ok": True, "sessions": _build_sessions()}, 200
+
+    return {"error": "unknown session id"}, 400
+
 
 def _build_sessions() -> list[dict]:
     """Build session list — current state.json + parsed conversation archives."""
