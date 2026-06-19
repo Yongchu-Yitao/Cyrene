@@ -2680,6 +2680,76 @@ def _workbench_backfill_file_artifacts(session: dict[str, Any], now: str) -> int
     return _workbench_promote_file_artifacts(session, _workbench_merge_file_changes(changes), now)
 
 
+async def _workbench_archive_run_knowledge(
+    project: dict[str, Any],
+    session: dict[str, Any],
+    run: dict[str, Any],
+    workspace_root: Path | None,
+    now: str,
+) -> list[dict[str, Any]]:
+    """Best-effort durable archive of a completed Workbench run."""
+    try:
+        from cyrene.knowledge.workbench import archive_workbench_run
+
+        archive_root = workspace_root or WORKSPACE_DIR.resolve()
+        documents = await archive_workbench_run(
+            data_key=_workbench_project_data_key(project),
+            session_id=str(session.get("id") or ""),
+            run_id=str(run.get("id") or ""),
+            title=str(session.get("title") or "Workbench task"),
+            goal=str(session.get("goal") or ""),
+            user_input=str(run.get("userInput") or ""),
+            agent_response=str(run.get("agentResponse") or ""),
+            file_changes=run.get("fileChanges") if isinstance(run.get("fileChanges"), list) else [],
+            workspace_root=archive_root,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to archive Workbench run %s into project knowledge",
+            run.get("id"),
+        )
+        return []
+
+    document_ids = [
+        str(document.get("id") or "")
+        for document in documents
+        if isinstance(document, dict) and str(document.get("id") or "")
+    ]
+    if not document_ids:
+        return documents
+
+    run["knowledgeDocumentIds"] = document_ids
+    context = project.get("context") if isinstance(project.get("context"), dict) else {}
+    known_ids = context.get("knowledgeDocumentIds")
+    known_ids = list(known_ids) if isinstance(known_ids, list) else []
+    for document_id in document_ids:
+        if document_id not in known_ids:
+            known_ids.append(document_id)
+    context["knowledgeDocumentIds"] = known_ids
+    project["context"] = context
+
+    artifacts = session.get("artifacts") if isinstance(session.get("artifacts"), list) else []
+    known_doc_ids = {
+        str(artifact.get("documentId") or "")
+        for artifact in artifacts
+        if isinstance(artifact, dict)
+    }
+    summary_doc = documents[0] if documents else {}
+    summary_id = str(summary_doc.get("id") or "")
+    if summary_id and summary_id not in known_doc_ids:
+        artifacts.append({
+            "id": _short_id("artifact"),
+            "type": "knowledge_document",
+            "name": str(summary_doc.get("name") or "Task result"),
+            "documentId": summary_id,
+            "status": str(summary_doc.get("status") or "indexed"),
+            "createdAt": now,
+            "summary": "任务结果已归档到当前项目知识库。",
+        })
+    session["artifacts"] = artifacts
+    return documents
+
+
 def _collect_run_tool_events(session_id: str, run_start_ts: str, run_id: str, workspace_root: Path | None = None) -> list[dict[str, Any]]:
     """Return ToolCallEvent dicts for tool calls published during an agent run."""
     return [
@@ -7029,6 +7099,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 }
             ]
         _workbench_promote_file_artifacts(session, file_changes, now)
+        if not awaiting_user:
+            await _workbench_archive_run_knowledge(
+                project, session, run, workspace_root, now,
+            )
         payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
@@ -7271,6 +7345,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
         _workbench_promote_file_artifacts(session, file_changes, now)
+        if not awaiting_user:
+            await _workbench_archive_run_knowledge(
+                project, session, run, workspace_root, now,
+            )
         session["updatedAt"] = now
         project["updatedAt"] = now
         payload["activeProjectId"] = project.get("id")
@@ -7360,6 +7438,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
         _workbench_promote_file_artifacts(session, file_changes, now)
+        if not awaiting_user:
+            await _workbench_archive_run_knowledge(
+                project, session, run, workspace_root, now,
+            )
         session["updatedAt"] = now
         project["updatedAt"] = now
         payload["activeProjectId"] = project.get("id")

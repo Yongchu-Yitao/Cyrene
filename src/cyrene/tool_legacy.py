@@ -633,7 +633,12 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
     if not path_arg:
         return "Error: 'path' is required."
 
-    from cyrene.agent.state import _current_agent_id, _current_client_request_id, _current_round_id
+    from cyrene.agent.state import (
+        _current_agent_id,
+        _current_client_request_id,
+        _current_round_id,
+        _current_session_id,
+    )
     from cyrene.agent.session import append_system_message
     from cyrene.agent.message import _insert_intermediate_user_reply
 
@@ -650,8 +655,8 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
 
     # Register in knowledge base
     try:
-        from cyrene.config import get_knowledge_db_path
         from cyrene.knowledge import store, ingest
+        from cyrene.workbench_context import ensure_knowledge_db_for_session
         import mimetypes
         doc_path = registered.get("path", "")
         if doc_path:
@@ -662,7 +667,7 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
             from cyrene.attachments import attachment_kind_from_meta
             kind = attachment_kind_from_meta(content_type, doc_file.name)
             content_hash = store.content_hash_file(doc_file)
-            _kb_db_path = str(get_knowledge_db_path())
+            _kb_db_path = await ensure_knowledge_db_for_session(_current_session_id.get())
             doc = await store.upsert_document_by_path(
                 _kb_db_path,
                 path=str(doc_file.resolve()),
@@ -1326,10 +1331,12 @@ async def _tool_search_knowledge(args: dict[str, Any], _bot: Any, _chat_id: int,
     k = max(1, int(args.get("k", 6) or 6))
 
     try:
-        from cyrene.config import get_knowledge_db_path
         from cyrene.knowledge import retrieve
+        from cyrene.workbench_context import ensure_knowledge_db_for_session
+        from cyrene.agent.state import _current_session_id
 
-        results = await retrieve.search_knowledge(str(get_knowledge_db_path()), query, k=k)
+        db_path = await ensure_knowledge_db_for_session(_current_session_id.get())
+        results = await retrieve.search_knowledge(db_path, query, k=k)
         if not results:
             return "No matching documents found in the knowledge base."
 

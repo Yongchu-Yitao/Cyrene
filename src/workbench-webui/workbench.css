@@ -8694,74 +8694,7 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   overflow: hidden;
 }
 
-.wb-wel-create-art {
-  position: absolute;
-  top: 18px;
-  right: 18px;
-  width: 96px;
-  height: 78px;
-  opacity: 0.92;
-  pointer-events: none;
-}
-
-.wb-wel-art-folder {
-  position: absolute;
-  left: 8px;
-  bottom: 4px;
-  width: 74px;
-  height: 54px;
-  border-radius: 10px;
-  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 55%, #fff), color-mix(in srgb, var(--accent) 30%, #fff));
-  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 24%, transparent);
-}
-
-.wb-wel-art-folder::before {
-  content: "";
-  position: absolute;
-  left: 10px;
-  top: -9px;
-  width: 30px;
-  height: 12px;
-  border-radius: 6px 6px 0 0;
-  background: color-mix(in srgb, var(--accent) 45%, #fff);
-}
-
-.wb-wel-art-doc {
-  position: absolute;
-  left: 22px;
-  bottom: 14px;
-  width: 40px;
-  height: 50px;
-  border-radius: 7px;
-  background: #fff;
-  box-shadow: 0 4px 12px rgba(20, 28, 45, 0.14);
-}
-
-.wb-wel-art-doc::before,
-.wb-wel-art-doc::after {
-  content: "";
-  position: absolute;
-  left: 8px;
-  height: 4px;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--accent) 32%, #e6e9ef);
-}
-
-.wb-wel-art-doc::before { top: 12px; width: 24px; }
-.wb-wel-art-doc::after { top: 22px; width: 16px; }
-
-.wb-wel-art-spark {
-  position: absolute;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 70%, #fff);
-}
-
-.wb-wel-art-spark-a { width: 7px; height: 7px; right: 4px; top: 8px; opacity: 0.8; }
-.wb-wel-art-spark-b { width: 5px; height: 5px; right: 16px; bottom: 2px; opacity: 0.6; }
-
 .wb-wel-create-main { position: relative; z-index: 1; }
-
-.wb-wel-create-main h2 { padding-right: 96px; }
 
 .wb-wel-create-desc {
   margin: 0 0 14px;
@@ -9063,7 +8996,6 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
 @media (max-width: 1080px) {
   .wb-wel-cards { grid-template-columns: 1fr; }
   .wb-wel-bottom { grid-template-columns: 1fr; }
-  .wb-wel-create-main h2 { padding-right: 96px; }
 }
 
 @media (max-width: 560px) {

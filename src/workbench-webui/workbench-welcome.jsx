@@ -123,12 +123,6 @@
     ];
     return (
       <section className="wb-wel-card wb-wel-card-create">
-        <div className="wb-wel-create-art" aria-hidden="true">
-          <span className="wb-wel-art-folder" />
-          <span className="wb-wel-art-doc" />
-          <span className="wb-wel-art-spark wb-wel-art-spark-a" />
-          <span className="wb-wel-art-spark wb-wel-art-spark-b" />
-        </div>
         <div className="wb-wel-create-main">
           <h2>{T("welcome.create.title", null, "Create your first project")}</h2>
           <p className="wb-wel-create-desc">{T("welcome.create.desc", null, "Projects are the container for all your work in Cyrene. Once created, you can:")}</p>

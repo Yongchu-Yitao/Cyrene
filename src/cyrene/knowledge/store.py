@@ -481,6 +481,18 @@ async def upsert_document_by_path(
                 title = excluded.title,
                 tags = excluded.tags,
                 metadata = excluded.metadata,
+                status = CASE
+                    WHEN kb_documents.content_hash != excluded.content_hash THEN 'pending'
+                    ELSE kb_documents.status
+                END,
+                error = CASE
+                    WHEN kb_documents.content_hash != excluded.content_hash THEN ''
+                    ELSE kb_documents.error
+                END,
+                indexed_at = CASE
+                    WHEN kb_documents.content_hash != excluded.content_hash THEN NULL
+                    ELSE kb_documents.indexed_at
+                END,
                 updated_at = ?
             """,
             (

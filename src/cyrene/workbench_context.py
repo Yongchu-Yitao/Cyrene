@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from cyrene.config import DATA_DIR
@@ -63,4 +64,16 @@ def resolve_project_data_key_for_session(session_id: str | None) -> str:
     return _safe_workbench_data_key(project_id)
 
 
-__all__ = ["resolve_project_data_key_for_session"]
+async def ensure_knowledge_db_for_session(session_id: str | None) -> str:
+    """Return the initialized knowledge DB scoped to a Workbench session."""
+    from cyrene.config import get_knowledge_db_path
+    from cyrene.db import init_knowledge_db
+
+    data_key = resolve_project_data_key_for_session(session_id)
+    db_path = str(get_knowledge_db_path(data_key))
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    await init_knowledge_db(db_path)
+    return db_path
+
+
+__all__ = ["ensure_knowledge_db_for_session", "resolve_project_data_key_for_session"]

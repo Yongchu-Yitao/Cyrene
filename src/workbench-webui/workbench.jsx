@@ -283,7 +283,12 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
 
   useWorkbenchEffect(function () {
     try {
-      if (fullPage) localStorage.setItem("wb-active-page", fullPage);
+      // "welcome" is a one-time get-started page gated by `cyrene-workbench-welcomed`,
+      // not a resumable work page. Persisting it as the active page would drag the
+      // user back into the welcome screen on every relaunch (and an existing user
+      // whose first session started on welcome would never escape it). Keep it out
+      // of wb-active-page so relaunch falls through to the normal workspace.
+      if (fullPage && fullPage !== "welcome") localStorage.setItem("wb-active-page", fullPage);
       else localStorage.removeItem("wb-active-page");
     } catch (e) {}
   }, [fullPage]);

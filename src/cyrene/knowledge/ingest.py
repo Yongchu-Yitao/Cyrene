@@ -5,8 +5,10 @@ Handles text extraction, chunking, embedding, and indexing.
 
 import asyncio
 import re
+import zipfile
 import aiosqlite
 from pathlib import Path
+from xml.etree import ElementTree
 
 from cyrene.attachments import (
     is_pdf_path,
@@ -15,6 +17,45 @@ from cyrene.attachments import (
 )
 from cyrene.call_llm import _approx_token_count
 from cyrene.knowledge import store, embeddings
+
+
+def _extract_office_xml_text(path: Path) -> str:
+    """Extract readable text from DOCX/PPTX/XLSX using only the stdlib."""
+    suffix = path.suffix.lower()
+    if suffix not in {".docx", ".pptx", ".xlsx"}:
+        return ""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            if suffix == ".docx":
+                targets = [name for name in names if name == "word/document.xml"]
+            elif suffix == ".pptx":
+                targets = sorted(
+                    name for name in names
+                    if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
+                )
+            else:
+                targets = [
+                    name for name in names
+                    if name == "xl/sharedStrings.xml"
+                    or re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
+                ]
+            blocks: list[str] = []
+            for name in targets:
+                try:
+                    root = ElementTree.fromstring(archive.read(name))
+                except Exception:
+                    continue
+                text = " ".join(
+                    node.text.strip()
+                    for node in root.iter()
+                    if node.text and node.text.strip()
+                )
+                if text:
+                    blocks.append(text)
+            return "\n\n".join(blocks)
+    except (OSError, zipfile.BadZipFile):
+        return ""
 
 
 async def extract_document_text(path: Path, kind: str) -> str:
@@ -57,6 +98,10 @@ async def extract_document_text(path: Path, kind: str) -> str:
                 return result.get("vision_text", "").strip()
             except Exception:
                 return ""
+
+        office_text = _extract_office_xml_text(path)
+        if office_text:
+            return office_text
 
         # Everything else: read as text, but guard against binaries. Files whose
         # kind is "file" (unknown) may be real text (e.g. .html) or binary
