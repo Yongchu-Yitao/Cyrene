@@ -51,6 +51,7 @@ from cyrene.attachments import (
     build_public_attachment_payload,
     model_supports_multimodal,
     run_vision_chat,
+    safe_attachment_filename,
 )
 from cyrene.config import _strip_wrapping_quotes
 from cyrene.agent.state import _conversation_source, _attachment_paths_by_name
@@ -4071,9 +4072,7 @@ def _stream_agent_reply(run_coro_factory, user_message: str) -> StreamingRespons
 
 
 def _safe_upload_name(filename: str) -> str:
-    raw = Path(str(filename or "upload.bin")).name
-    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._")
-    return sanitized or "upload.bin"
+    return safe_attachment_filename(filename, fallback_stem="upload")
 
 
 def _retry_safe_guide_round_id(guide_round_id: str, retry: bool) -> str:

@@ -406,3 +406,4 @@ class TestKnowledgeToolListDocuments:
         assert "searchable.md" in result
         assert "empty.pdf" in result
         assert "1 searchable and 1 without searchable text" in result
+        assert "path=/tmp/searchable.md" in result

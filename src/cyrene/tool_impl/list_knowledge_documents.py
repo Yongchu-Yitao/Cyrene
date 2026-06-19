@@ -43,7 +43,9 @@ async def _tool_list_knowledge_documents(
             lines.append(
                 f"[{index}] {document.get('name') or 'Untitled'} "
                 f"(status={document.get('status') or 'unknown'}, "
-                f"chunks={chunk_count}, {availability}, id={document.get('id')})"
+                f"chunks={chunk_count}, size={int(document.get('size') or 0)}, "
+                f"{availability}, id={document.get('id')}, "
+                f"path={document.get('path') or ''})"
             )
         return "\n".join(lines)
     except Exception as exc:

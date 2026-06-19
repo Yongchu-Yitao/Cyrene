@@ -28,6 +28,7 @@ from cyrene.attachments import (
     attachment_kind_from_meta,
     is_uploaded_attachment_path,
     is_exported_attachment_path,
+    safe_attachment_filename,
 )
 from webui.workbench_notifications import append_notification
 
@@ -63,9 +64,7 @@ def _resolve_workspace_id(workspace_id: str | None) -> str:
 
 def _safe_upload_name(filename: str) -> str:
     """Sanitize a filename for upload."""
-    raw = Path(str(filename or "upload.bin")).name
-    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._")
-    return sanitized or "upload.bin"
+    return safe_attachment_filename(filename, fallback_stem="upload")
 
 
 async def _ensure_kb_db(workspace_id: str | None) -> str:

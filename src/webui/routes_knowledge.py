@@ -14,16 +14,14 @@ from cyrene.attachments import (
     attachment_kind_from_meta,
     is_uploaded_attachment_path,
     is_exported_attachment_path,
+    safe_attachment_filename,
 )
 from cyrene.tools import _resolve_workspace_path
 
 
 def _safe_upload_name(filename: str) -> str:
     """Sanitize a filename for upload."""
-    import re
-    raw = Path(str(filename or "upload.bin")).name
-    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._")
-    return sanitized or "upload.bin"
+    return safe_attachment_filename(filename, fallback_stem="upload")
 
 
 def register_knowledge_routes(router: APIRouter, workspace_id: str = "default") -> None:

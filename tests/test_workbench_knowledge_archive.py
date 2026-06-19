@@ -98,6 +98,27 @@ async def test_docx_text_is_extracted_for_knowledge_indexing(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_extensionless_docx_text_is_detected_from_zip_structure(tmp_path):
+    from cyrene.knowledge.ingest import extract_document_text
+
+    uploaded = tmp_path / "upload_without_extension"
+    with zipfile.ZipFile(uploaded, "w") as archive:
+        archive.writestr(
+            "word/document.xml",
+            (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                "<w:body><w:p><w:r><w:t>Recovered DOCX content</w:t></w:r></w:p></w:body>"
+                "</w:document>"
+            ),
+        )
+
+    text = await extract_document_text(uploaded, "file")
+
+    assert "Recovered DOCX content" in text
+
+
+@pytest.mark.asyncio
 async def test_changed_document_is_marked_pending_for_reindex(tmp_path):
     from cyrene import db
     from cyrene.knowledge import store

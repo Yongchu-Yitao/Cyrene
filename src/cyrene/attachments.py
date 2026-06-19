@@ -22,7 +22,7 @@ ANALYSIS_CACHE_DIR = DATA_DIR / "attachment_cache"
 
 # Bump when the parsing/analysis logic changes in a way that should invalidate
 # every previously cached result.
-_ANALYSIS_PARSER_VERSION = "2"
+_ANALYSIS_PARSER_VERSION = "3"
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff"}
 _PDF_EXTENSIONS = {".pdf"}
@@ -130,10 +130,23 @@ def model_supports_multimodal(model: str | None = None) -> bool:
         return False
     return any(hint in model_name for hint in _MULTIMODAL_MODEL_HINTS)
 
+def safe_attachment_filename(filename: str, fallback_stem: str = "file") -> str:
+    """Return an ASCII-safe filename while preserving its original extension."""
+    raw = Path(str(filename or f"{fallback_stem}.bin")).name
+    suffix = Path(raw).suffix
+    stem = raw[:-len(suffix)] if suffix else raw
+    safe_stem = "".join(
+        ch if (ch.isascii() and (ch.isalnum() or ch in "._-")) else "_"
+        for ch in stem
+    ).strip("._")
+    safe_suffix = "".join(
+        ch for ch in suffix if ch.isascii() and (ch.isalnum() or ch == ".")
+    ).lower()
+    return f"{safe_stem or fallback_stem}{safe_suffix}" or f"{fallback_stem}.bin"
+
+
 def _safe_attachment_name(filename: str) -> str:
-    raw = Path(str(filename or "file.bin")).name
-    sanitized = "".join(ch if (ch.isascii() and (ch.isalnum() or ch in "._-")) else "_" for ch in raw).strip("._")
-    return sanitized or "file.bin"
+    return safe_attachment_filename(filename)
 
 
 def attachment_kind_from_meta(content_type: str, filename: str) -> str:
@@ -226,6 +239,9 @@ def _build_attachment_preview(result: dict[str, Any]) -> str:
         if width and height:
             return f"Image metadata only: {fmt}, {width}x{height}."
         return "Image uploaded."
+    if kind == "document":
+        preview = str(result.get("text_preview") or "").strip()
+        return preview or "Document detected, but no text could be extracted."
     return str(result.get("note") or "File uploaded.")
 
 
@@ -309,6 +325,8 @@ async def run_vision_chat(content: list[dict[str, Any]], content_prompt: str = "
 
 async def analyze_attachment(path_str: str, prompt: str = "", force_refresh: bool = False) -> dict[str, Any]:
     path = Path(path_str).resolve()
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"Attachment file not found: {path}")
     cache_key = _analysis_cache_key(path, prompt)
     cached = None if force_refresh else _read_cache(cache_key)
     if cached:
@@ -333,8 +351,18 @@ async def analyze_attachment(path_str: str, prompt: str = "", force_refresh: boo
                 raise
             payload["note"] = "Current model does not appear to support vision input."
     else:
-        payload["kind"] = "file"
-        payload["note"] = "No built-in parser for this file type."
+        # Import lazily because the knowledge ingestion module imports image
+        # helpers from this module.
+        from cyrene.knowledge.ingest import _extract_office_xml_text
+
+        text = _extract_office_xml_text(path)
+        if text.strip():
+            payload["kind"] = "document"
+            payload["text_chars"] = len(text)
+            payload["text_preview"] = _truncate(text, 12000)
+        else:
+            payload["kind"] = "file"
+            payload["note"] = "No readable text could be extracted from this file type."
 
     payload["preview"] = _build_attachment_preview(payload)
     _write_cache(cache_key, payload)

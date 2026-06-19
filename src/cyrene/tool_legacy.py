@@ -2079,7 +2079,7 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "AnalyzeAttachment",
-            "description": "Analyze an uploaded attachment or workspace file. PDFs are parsed to text locally. Images return metadata and, when the current model appears multimodal, a vision-based description/OCR. Use this whenever the user uploaded a PDF or image and you need its contents.",
+            "description": "Analyze an uploaded attachment or workspace file. PDFs and Office documents (DOCX/PPTX/XLSX, including extensionless uploads) are parsed to text locally. Images return metadata and, when supported, a vision-based description/OCR. Use the exact path returned by ListKnowledgeDocuments for knowledge-base files.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2150,7 +2150,7 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "ListKnowledgeDocuments",
-            "description": "List files in the current Workbench project's knowledge base, including whether each file has searchable chunks. Use this to inspect which files are available before searching across them.",
+            "description": "List files in the current Workbench project's knowledge base, including size, searchable-chunk status, document ID, and exact readable path. Use SearchKnowledge for indexed passages or AnalyzeAttachment with the returned path to inspect a specific file.",
             "parameters": {
                 "type": "object",
                 "properties": {

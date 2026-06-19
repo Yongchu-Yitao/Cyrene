@@ -20,26 +20,28 @@ from cyrene.knowledge import store, embeddings
 
 
 def _extract_office_xml_text(path: Path) -> str:
-    """Extract readable text from DOCX/PPTX/XLSX using only the stdlib."""
+    """Extract Office XML text, including uploads whose extension was lost."""
     suffix = path.suffix.lower()
-    if suffix not in {".docx", ".pptx", ".xlsx"}:
-        return ""
     try:
         with zipfile.ZipFile(path) as archive:
             names = archive.namelist()
-            if suffix == ".docx":
+            slide_names = sorted(
+                name for name in names
+                if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
+            )
+            sheet_names = [
+                name for name in names
+                if name == "xl/sharedStrings.xml"
+                or re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
+            ]
+            if suffix == ".docx" or "word/document.xml" in names:
                 targets = [name for name in names if name == "word/document.xml"]
-            elif suffix == ".pptx":
-                targets = sorted(
-                    name for name in names
-                    if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
-                )
+            elif suffix == ".pptx" or slide_names:
+                targets = slide_names
+            elif suffix == ".xlsx" or sheet_names:
+                targets = sheet_names
             else:
-                targets = [
-                    name for name in names
-                    if name == "xl/sharedStrings.xml"
-                    or re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
-                ]
+                return ""
             blocks: list[str] = []
             for name in targets:
                 try:

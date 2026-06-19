@@ -200,6 +200,42 @@ async def test_analyze_attachment_reuses_and_invalidates_cache(tmp_path, monkeyp
     assert calls["n"] == 2  # content change busts the cache
 
 
+async def test_analyze_attachment_reports_missing_file(tmp_path):
+    from cyrene import attachments
+
+    with pytest.raises(FileNotFoundError, match="Attachment file not found"):
+        await attachments.analyze_attachment(str(tmp_path / "missing.docx"))
+
+
+async def test_analyze_attachment_extracts_extensionless_docx(tmp_path, monkeypatch):
+    import zipfile
+    from cyrene import attachments
+
+    monkeypatch.setattr(attachments, "ANALYSIS_CACHE_DIR", tmp_path / "cache")
+    uploaded = tmp_path / "uuid_docx"
+    with zipfile.ZipFile(uploaded, "w") as archive:
+        archive.writestr(
+            "word/document.xml",
+            (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                "<w:body><w:p><w:r><w:t>Attachment DOCX content</w:t></w:r></w:p></w:body>"
+                "</w:document>"
+            ),
+        )
+
+    result = await attachments.analyze_attachment(str(uploaded))
+
+    assert result["kind"] == "document"
+    assert "Attachment DOCX content" in result["text_preview"]
+
+
+def test_safe_attachment_filename_preserves_extension():
+    from cyrene.attachments import safe_attachment_filename
+
+    assert safe_attachment_filename("毕业事情.docx", fallback_stem="upload") == "upload.docx"
+
+
 # ---------------------------------------------------------------------------
 # #45 — notification auto mode stops after the first success
 # ---------------------------------------------------------------------------
