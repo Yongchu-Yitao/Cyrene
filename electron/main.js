@@ -32,6 +32,7 @@ function appendErrorLog(text) {
 const AUTH_TOKEN = require('crypto').randomBytes(32).toString('hex');
 
 const isDev = process.env.ELECTRON_DEV === '1';
+const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
 const supportsLoginItem = process.platform === 'darwin' || process.platform === 'win32';
@@ -356,9 +357,10 @@ async function createMainWindow(shellOverride) {
   // (default) title bar there. Unknown mode falls back to the workbench style.
   const uiShell = shellOverride || backendUiMode || 'workbench';
   const isLegacyShell = uiShell === 'legacy' || uiShell === 'agent';
-  // Linux window managers need the native frame to provide reliable window
-  // controls. Preserve the existing inset title bar behavior on macOS/Windows.
-  const useInsetTitleBar = !isLegacyShell && !isLinux;
+  // The inset title bar and traffic-light positioning are macOS-specific.
+  // Windows and Linux keep their native frame so close/minimize/maximize
+  // controls remain available.
+  const useInsetTitleBar = !isLegacyShell && isMac;
   const windowOptions = {
     width: 1200,
     height: 800,

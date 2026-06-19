@@ -367,6 +367,62 @@ def _check_command_substitution(command: str) -> None:
         )
 
 
+# Commands/cmdlets that write or delete under PowerShell or cmd. The workspace
+# write/delete guards assume POSIX syntax and command names, so under a non-bash
+# shell they cannot reason about a command — we fail closed instead. This list is
+# deliberately over-broad: a false positive only costs a clear "install bash"
+# message, whereas a false negative is a workspace sandbox escape.
+_NONBASH_WRITE_TOKENS = (
+    # PowerShell cmdlets
+    "remove-item", "set-content", "add-content", "out-file", "new-item",
+    "move-item", "copy-item", "clear-content", "set-itemproperty", "rename-item",
+    "export-csv", "export-clixml", "tee-object",
+    # cmd builtins / Windows utilities
+    "del", "erase", "copy", "move", "ren", "rename", "md", "mkdir",
+    "rd", "rmdir", "xcopy", "robocopy", "fsutil", "takeown", "icacls", "attrib",
+    # POSIX names (also aliased inside PowerShell, and valid in Git-less setups)
+    "rm", "mv", "cp", "tee", "touch", "dd", "truncate", "ln",
+)
+
+
+def _nonbash_command_writes(command: str) -> bool:
+    """Heuristically detect a write/delete command under a non-POSIX shell."""
+    raw = str(command or "")
+    if not raw.strip():
+        return False
+    lowered = raw.lower()
+    for token in _NONBASH_WRITE_TOKENS:
+        if re.search(r'(?:^|[\s;&|(])' + re.escape(token) + r'(?=[\s;&|)]|$)', lowered):
+            return True
+    # File redirect (> / >>) writes a file in every shell. Skip handle dups (2>&1).
+    for match in re.finditer(r'>>?\s*(\S)', raw):
+        if match.group(1) != "&":
+            return True
+    return False
+
+
+def _guard_nonbash_shell_command(command: str, shell_kind: str) -> str | None:
+    """Fail-closed guard for non-POSIX shells (PowerShell/cmd).
+
+    Returns a refusal payload if the command looks like it writes or deletes, or
+    ``None`` to allow it (read-only commands pass through). The POSIX workspace
+    guards cannot protect a PowerShell/cmd command, so rather than run it
+    unguarded — which would bypass the workspace sandbox — we refuse.
+    """
+    if not _nonbash_command_writes(command):
+        return None
+    return _json_result({
+        "exit_code": -1,
+        "stdout": "",
+        "stderr": (
+            f"⛔ 已拒绝：当前系统 shell 是 {shell_kind}(非 bash)，"
+            f"workspace 写入/删除保护依赖 POSIX 语义，无法验证此命令是否越界。\n"
+            f"  命令：{command[:200]}\n"
+            f"  请安装 Git Bash 或启用 WSL 后重试；只读命令不受此限制。"
+        ),
+    })
+
+
 def _expand_shell_path(token: str) -> str:
     """Expand $VAR, ~, and ~user in a path token so the workspace guard sees the real path."""
     expanded = os.path.expandvars(token)
@@ -1060,23 +1116,31 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
             options=["允许执行", "拒绝"],
             scope_hint="",
         )
+    from cyrene.shell_runtime import command_argv, resolve_shell
     try:
-        _guard_shell_command_workspace_write(command)
-    except ValueError:
-        return await _request_write_elevation(tool_name="Bash", path_hint="", reason=command[:240])
-    # 即使是 workspace 内的文件删除操作，也需要用户确认
-    if _command_is_file_deletion(command):
-        delete_result = await _request_delete_confirmation(tool_name="Bash", command=command)
-        status = json.loads(delete_result)
-        if str(status.get("status", "")).strip() == "awaiting_user":
-            return delete_result
+        shell_kind = resolve_shell()[0]
+    except Exception:
+        shell_kind = "bash"
+    if shell_kind == "bash":
+        try:
+            _guard_shell_command_workspace_write(command)
+        except ValueError:
+            return await _request_write_elevation(tool_name="Bash", path_hint="", reason=command[:240])
+        # 即使是 workspace 内的文件删除操作，也需要用户确认
+        if _command_is_file_deletion(command):
+            delete_result = await _request_delete_confirmation(tool_name="Bash", command=command)
+            status = json.loads(delete_result)
+            if str(status.get("status", "")).strip() == "awaiting_user":
+                return delete_result
+    else:
+        # 非 POSIX shell：POSIX 护栏无法验证路径，对写/删一律 fail-closed 拒绝
+        refusal = _guard_nonbash_shell_command(command, shell_kind)
+        if refusal is not None:
+            return refusal
     timeout_ms = int(args.get("timeout_ms", 120000))
     timeout_sec = timeout_ms / 1000
-    shell = os.environ.get("SHELL") or "/bin/sh"
     proc = await asyncio.create_subprocess_exec(
-        shell,
-        "-lc",
-        command,
+        *command_argv(command),
         cwd=str(WORKSPACE_DIR),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

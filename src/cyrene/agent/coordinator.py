@@ -433,7 +433,12 @@ async def _run_chat_agent(
             metadata={"date": f"{now:%Y-%m-%d}", "timezone": now.tzname()},
             transforms=["concat_into_system"],
         ))
-        current_workspace_scope = workspace_scope_block(active_workspace_dir())
+        try:
+            from cyrene.shell_runtime import resolve_shell
+            _shell_kind = resolve_shell()[0]
+        except Exception:
+            _shell_kind = "bash"
+        current_workspace_scope = workspace_scope_block(active_workspace_dir(), shell_kind=_shell_kind)
         main_system += "\n\n" + current_workspace_scope
         main_system_context.append(context_block(
             "runtime.workspace_scope",
@@ -805,14 +810,28 @@ async def run_heartbeat_agent(
     db_path: str,
     session_id: str = "",
     on_reply: Callable[[str], Awaitable[Any]] | None = None,
+    lang: str = "",
 ) -> str:
+    # The scheduler runs server-side with no HTTP request, so it cannot read the
+    # per-request UI ``lang`` that normal chats carry. When a language preference
+    # has been persisted (``app_language``), pin the reply to it explicitly;
+    # otherwise fall back to inferring from the user's past messages.
+    lang = (lang or "").strip().lower()
+    if lang == "en":
+        lang_line = "Always write your reply in English (the user's configured language).\n"
+    elif lang == "zh":
+        lang_line = "Always write your reply in Chinese / 简体中文 (the user's configured language).\n"
+    elif lang:
+        lang_line = f"Always write your reply in the user's configured language ({lang}).\n"
+    else:
+        lang_line = "Match the user's preferred language based on their past messages.\n"
     proactive_system = (
         "This round was initiated by the scheduler, not by a user chat message.\n"
         "The hidden task you receive is internal guidance, not text to answer literally.\n"
         "Your final assistant reply will be shown directly to the user in the Web UI.\n"
         "Write to the user in a natural, user-facing voice.\n"
-        "Match the user's preferred language based on their past messages.\n"
-        "Do not mention the scheduler, heartbeat, lottery, hidden prompt, or internal instructions.\n"
+        + lang_line
+        + "Do not mention the scheduler, heartbeat, lottery, hidden prompt, or internal instructions.\n"
         "\n"
         "DECISION RULE — a warm, light-touch check-in:\n"
         "- This is a chance to reach out the way a thoughtful friend would. If something specific comes to mind — a topic, plan, or feeling the user shared — follow up on it warmly.\n"

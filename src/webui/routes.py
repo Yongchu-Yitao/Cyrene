@@ -4593,6 +4593,15 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         client_request_id = str(body.get("client_request_id") or "").strip()
         wants_stream = bool(body.get("stream"))
         lang = str(body.get("lang") or "").strip()
+        # Persist the user's UI language so server-side flows with no HTTP request
+        # (notably the proactive scheduler) can reply in the same language.
+        if lang in {"en", "zh"}:
+            try:
+                from cyrene.settings_store import get as _get_setting, set_ as _set_setting
+                if str(_get_setting("app_language", "") or "") != lang:
+                    _set_setting("app_language", lang)
+            except Exception:
+                pass
         command = str(body.get("command") or "").strip()
         from cyrene.agent.state import PERMISSION_MODES
         permission_mode = str(body.get("mode") or "default").strip().lower()
@@ -6449,6 +6458,12 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if "agent_proactive" in body:
             set_setting("agent_proactive", bool(body["agent_proactive"]))
             changed.append("agent_proactive")
+        if "app_language" in body:
+            value = str(body.get("app_language") or "").strip().lower()
+            if value not in {"", "en", "zh"}:
+                return JSONResponse({"error": "invalid app_language"}, status_code=400)
+            set_setting("app_language", value)
+            changed.append("app_language")
         if "max_tool_rounds" in body:
             value = int(body.get("max_tool_rounds") or 15)
             if value < 5 or value > 200:
@@ -10398,6 +10413,7 @@ def _build_config() -> dict:
         "spawn_policy": settings.get("spawn_policy", "conservative"),
         "heartbeat_interval": settings.get("heartbeat_interval", 1800),
         "agent_proactive": settings.get("agent_proactive", True),
+        "app_language": settings.get("app_language", ""),
         "max_tool_rounds": settings.get("max_tool_rounds", 15),
         "notify_telegram": settings.get("notify_telegram", True),
         "notify_wechat": settings.get("notify_wechat", True),

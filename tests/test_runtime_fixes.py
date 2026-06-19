@@ -985,7 +985,7 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
     async def fake_context(_db_path=""):
         return "## Recent memories about the user\n- user is preparing a launch"
 
-    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path):
+    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path, lang=""):
         seen["prompt"] = prompt
         seen["chat_id"] = chat_id
         seen["db_path"] = db_path
@@ -1024,7 +1024,7 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
     async def fake_context(_db_path):
         return "## Recent conversation\n- user already closed the loop"
 
-    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path):
+    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path, lang=""):
         seen["prompt"] = prompt
         return ""
 
@@ -1072,7 +1072,7 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
     # Deliver exactly one message on the first tick; stay silent ever after.
     calls = {"n": 0}
 
-    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path):
+    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path, lang=""):
         calls["n"] += 1
         return "hey, how did the launch go?" if calls["n"] == 1 else ""
 
@@ -1113,7 +1113,7 @@ async def test_proactive_cooldown_arms_when_streak_reaches_threshold(monkeypatch
     async def fake_context(_db_path=""):
         return ""
 
-    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path):
+    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path, lang=""):
         sent["count"] += 1
         return "hi"
 

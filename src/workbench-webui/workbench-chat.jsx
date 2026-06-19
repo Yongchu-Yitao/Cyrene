@@ -102,6 +102,7 @@ var WorkbenchChatModel = (function () {
         command: input.command || "",
         retry: !!input.retry,
         stream: true,
+        lang: (window.WorkbenchI18n && window.WorkbenchI18n.getLang ? window.WorkbenchI18n.getLang() : ""),
       }),
       signal: signal,
     }).then(function (response) {

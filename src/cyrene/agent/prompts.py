@@ -16,10 +16,15 @@ logger = logging.getLogger(__name__)
 # Workspace scope block (injected into every agent system prompt)
 # ---------------------------------------------------------------------------
 
-def workspace_scope_block(workspace_dir: Any = WORKSPACE_DIR) -> str:
-    """Build workspace instructions for the current agent run."""
+def workspace_scope_block(workspace_dir: Any = WORKSPACE_DIR, shell_kind: str = "bash") -> str:
+    """Build workspace instructions for the current agent run.
+
+    ``shell_kind`` is the kind reported by :func:`cyrene.shell_runtime.resolve_shell`.
+    When it is not ``bash`` (e.g. PowerShell/cmd on a Windows host without Git Bash),
+    a dialect warning is appended so the agent stops emitting POSIX commands.
+    """
     workspace = str(workspace_dir or WORKSPACE_DIR)
-    return (
+    block = (
         f"## Workspace Scope\n\n"
         f"Your workspace is at `{workspace}`.\n\n"
         f"- **Default to workspace paths** for all `Read`, `Write`, `Edit`, `Glob`, `Grep` calls. "
@@ -35,6 +40,16 @@ def workspace_scope_block(workspace_dir: Any = WORKSPACE_DIR) -> str:
         f"- **Avoid `rm` unless deletion is part of the task** — even workspace deletions prompt for user confirmation.\n"
         f"- **Write output files into the workspace** (reports, exports, downloads), not `/tmp` or `~`."
     )
+    if shell_kind and shell_kind != "bash":
+        block += (
+            f"\n- **⚠️ The system shell is `{shell_kind}`, not bash.** POSIX commands "
+            f"(`cp`, `mv`, `rm`, `ls`, `cat`, `grep`, `sed`, …) may not run, and `&&` chaining "
+            f"may be unsupported. Any write/delete command will be **refused** because the "
+            f"workspace guard cannot verify paths under a non-POSIX shell. Prefer read-only "
+            f"`{shell_kind}`-native commands; for file edits use the `Write`/`Edit` tools instead "
+            f"of shell redirects."
+        )
+    return block
 
 
 _WORKSPACE_SCOPE_BLOCK = workspace_scope_block()

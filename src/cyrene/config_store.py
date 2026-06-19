@@ -147,6 +147,7 @@ _DEFAULT_SETTINGS: dict = {
     "workspace_active": True,
     "soul_active": True,
     "agent_proactive": True,
+    "app_language": "",
     "max_tool_rounds": 15,
     "redact_secrets": True,
     "notify_telegram": True,

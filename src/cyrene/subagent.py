@@ -1149,7 +1149,12 @@ You are a **participant** in this discussion. Rules:
 5. **Stay in character.** Focus on delivering value through the substance of your contributions.
 """
 
-    subagent_prompt += "\n\n" + temporal_context + "\n\n" + workspace_scope_block(active_workspace_dir())
+    try:
+        from cyrene.shell_runtime import resolve_shell
+        _shell_kind = resolve_shell()[0]
+    except Exception:
+        _shell_kind = "bash"
+    subagent_prompt += "\n\n" + temporal_context + "\n\n" + workspace_scope_block(active_workspace_dir(), shell_kind=_shell_kind)
 
     if resume_messages:
         # 被唤醒：从已有历史续跑，注入一条提示让 LLM 知道发生了什么

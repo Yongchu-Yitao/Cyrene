@@ -455,6 +455,17 @@ def _legacy_chats(project_id: str, *, full_id: str = "") -> list[dict[str, Any]]
 
         out: list[dict[str, Any]] = []
         for session in R._build_sessions():
+            # ``_build_current_session`` always returns a ``run_live`` placeholder,
+            # even after the user clears that legacy session. Do not surface the
+            # empty placeholder as a Workbench chat, otherwise it immediately
+            # reappears after deletion and looks impossible to remove.
+            raw_messages = (
+                (session.get("chat") or {}).get("messages") or []
+                if isinstance(session.get("chat"), dict)
+                else []
+            )
+            if str(session.get("id") or "") == "run_live" and not raw_messages:
+                continue
             chat_id = "legacy:" + project_id + ":" + str(session.get("id") or "")
             if full_id and chat_id != full_id:
                 continue
@@ -839,6 +850,16 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         mode = str(body.get("mode") or "auto").strip().lower()
         if mode not in PERMISSION_MODES:
             mode = "auto"
+        lang = str(body.get("lang") or "").strip().lower()
+        # Persist the UI language so server-side flows (the proactive scheduler)
+        # can reply in the same language even with no HTTP request to read.
+        if lang in {"en", "zh"}:
+            try:
+                from cyrene.settings_store import get as _get_setting, set_ as _set_setting
+                if str(_get_setting("app_language", "") or "") != lang:
+                    _set_setting("app_language", lang)
+            except Exception:
+                pass
 
         R = _routes()
         normalized = R._workbench_normalize_attachments(attachments)

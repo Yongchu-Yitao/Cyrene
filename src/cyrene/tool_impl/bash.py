@@ -7,6 +7,7 @@ from typing import Any
 from cyrene import tool_legacy as _legacy
 from cyrene.tool_legacy import (
     _command_is_file_deletion,
+    _guard_nonbash_shell_command,
     _guard_shell_command_workspace_write,
     _is_dangerous_subshell,
     _json_result,
@@ -16,7 +17,6 @@ from cyrene.tool_legacy import (
     _truncate,
     asyncio,
     json,
-    os,
 )
 
 TOOL_NAME = 'Bash'
@@ -40,25 +40,33 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
         )
         if elev is not None:
             return elev
+    from cyrene.shell_runtime import command_argv, resolve_shell
     try:
-        _guard_shell_command_workspace_write(command)
-    except ValueError:
-        elev = await _request_write_elevation(tool_name="Bash", path_hint="", reason=command[:240])
-        if elev is not None:
-            return elev
-    # 即使是 workspace 内的文件删除操作，也需要确认（自动模式由审核 agent 裁决）
-    if _command_is_file_deletion(command) and not _temporary_full_access.get():
-        delete_result = await _request_delete_confirmation(tool_name="Bash", command=command)
-        if delete_result is not None:
-            return delete_result
+        shell_kind = resolve_shell()[0]
+    except Exception:
+        shell_kind = "bash"
+    if shell_kind == "bash":
+        try:
+            _guard_shell_command_workspace_write(command)
+        except ValueError:
+            elev = await _request_write_elevation(tool_name="Bash", path_hint="", reason=command[:240])
+            if elev is not None:
+                return elev
+        # 即使是 workspace 内的文件删除操作，也需要确认（自动模式由审核 agent 裁决）
+        if _command_is_file_deletion(command) and not _temporary_full_access.get():
+            delete_result = await _request_delete_confirmation(tool_name="Bash", command=command)
+            if delete_result is not None:
+                return delete_result
+    else:
+        # 非 POSIX shell：POSIX 护栏无法验证路径，对写/删一律 fail-closed 拒绝
+        refusal = _guard_nonbash_shell_command(command, shell_kind)
+        if refusal is not None:
+            return refusal
     timeout_ms = int(args.get("timeout_ms", 120000))
     timeout_sec = timeout_ms / 1000
-    shell = os.environ.get("SHELL") or "/bin/sh"
     from cyrene.agent.state import active_workspace_dir
     proc = await asyncio.create_subprocess_exec(
-        shell,
-        "-lc",
-        command,
+        *command_argv(command),
         cwd=str(active_workspace_dir()),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

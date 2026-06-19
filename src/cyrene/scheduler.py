@@ -798,6 +798,14 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
             return
 
         # -------- Generate proactive reply via the full main-agent loop --------
+        # The UI language is persisted server-side as ``app_language`` from real
+        # chat traffic; the scheduler has no HTTP request to read it from, so
+        # pull it from settings and pin the proactive reply to it.
+        try:
+            from cyrene.settings_store import get as _get_setting
+            proactive_lang = str(_get_setting("app_language", "") or "").strip()
+        except Exception:
+            proactive_lang = ""
         context = await _assemble_proactive_context(db_path)
         proactive_prompt = (
             "This is a scheduler-initiated proactive check-in.\n"
@@ -823,12 +831,13 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
                     db_path,
                     session_id=target_session_id,
                     on_reply=_persist_workbench_reply,
+                    lang=proactive_lang,
                 ),
                 timeout=120.0,
             )
         else:
             text = await asyncio.wait_for(
-                run_heartbeat_agent(proactive_prompt, bot, owner_id, db_path),
+                run_heartbeat_agent(proactive_prompt, bot, owner_id, db_path, lang=proactive_lang),
                 timeout=120.0,
             )
 

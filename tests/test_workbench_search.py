@@ -213,6 +213,74 @@ def test_delete_regular_workbench_chat_still_removes_store(
     assert payload["chats"] == []
 
 
+def test_empty_legacy_live_session_is_not_listed(search_env, monkeypatch):
+    from webui import routes_workbench_chat as chat_mod
+
+    monkeypatch.setattr(
+        search_env["routes_mod"],
+        "_build_sessions",
+        lambda: [
+            {
+                "id": "run_live",
+                "title": "new session",
+                "status": "idle",
+                "chat": {"messages": []},
+            },
+            {
+                "id": "archive_2026-01-01_session_1",
+                "title": "Archived chat",
+                "status": "done",
+                "chat": {"messages": [{"role": "user", "body": "hello"}]},
+            },
+        ],
+    )
+
+    chats = chat_mod._legacy_chats("project_1")
+
+    assert [chat["id"] for chat in chats] == [
+        "legacy:project_1:archive_2026-01-01_session_1"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delete_archived_chat_session_removes_real_archive_sections(
+    search_env, monkeypatch, tmp_path,
+):
+    routes_mod = search_env["routes_mod"]
+    conversations_dir = tmp_path / "conversations"
+    conversations_dir.mkdir()
+    archive = conversations_dir / "2026-01-01.md"
+    archive.write_text(
+        "# Conversations - 2026-01-01\n\n"
+        "## 10:00:00 UTC\n"
+        "<!-- archive_session_id: session_keep -->\n\n"
+        "**User**: keep\n\n"
+        "**Cyrene**: kept\n\n"
+        "---\n\n"
+        "## 11:00:00 UTC\n"
+        "<!-- archive_session_id: session_delete -->\n\n"
+        "**User**: delete\n\n"
+        "**Cyrene**: deleted\n\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(routes_mod, "CONVERSATIONS_DIR", conversations_dir)
+    monkeypatch.setattr(routes_mod, "_build_sessions", lambda: [])
+
+    payload, status_code = await routes_mod._delete_chat_session(
+        "archive_2026-01-01_session_delete"
+    )
+
+    assert status_code == 200
+    assert payload["ok"] is True
+    remaining = routes_mod._parse_archive_sections(
+        archive.read_text(encoding="utf-8")
+    )
+    assert [section["archive_session_id"] for section in remaining] == [
+        "session_keep"
+    ]
+
+
 @pytest.mark.asyncio
 async def test_search_workbench_items_project_and_task(search_env):
     groups = await _search_workbench_items("Alpha", {"project", "task"}, 10)

@@ -10,6 +10,7 @@ from typing import Any
 
 from cyrene import debug
 from cyrene.config import WORKSPACE_DIR
+from cyrene.shell_runtime import interactive_argv
 
 _shells: dict[str, dict[str, Any]] = {}
 _shell_lock = asyncio.Lock()
@@ -116,14 +117,13 @@ async def _watch_shell(shell_id: str) -> None:
 async def start_shell(command: str = "", cwd: str = ".", title: str = "", round_id: str = "") -> dict[str, Any]:
     """Start an independent persistent shell session."""
     global _shell_counter
-    shell_bin = os.environ.get("SHELL") or "/bin/bash"
+    shell_kind, shell_argv = interactive_argv()
     resolved_cwd = _resolve_cwd(cwd)
     env = dict(os.environ)
     env["PS1"] = ""
     env.setdefault("TERM", "dumb")
     proc = await asyncio.create_subprocess_exec(
-        shell_bin,
-        "-i",
+        *shell_argv,
         cwd=str(resolved_cwd),
         env=env,
         stdin=asyncio.subprocess.PIPE,
@@ -151,7 +151,7 @@ async def start_shell(command: str = "", cwd: str = ".", title: str = "", round_
         _shells[shell_id]["stdout_task"] = asyncio.create_task(_pump_stream(shell_id, proc.stdout, "out"))
         _shells[shell_id]["stderr_task"] = asyncio.create_task(_pump_stream(shell_id, proc.stderr, "err"))
         _shells[shell_id]["watch_task"] = asyncio.create_task(_watch_shell(shell_id))
-    await _append_lines(shell_id, "meta", f"[shell started: {shell_bin}]")
+    await _append_lines(shell_id, "meta", f"[shell started: {shell_kind} ({shell_argv[0]})]")
     if command.strip():
         await send_shell(shell_id, command)
     return get_shell_snapshot(shell_id) or {}

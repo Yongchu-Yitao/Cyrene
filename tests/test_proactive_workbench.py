@@ -142,12 +142,20 @@ async def test_proactive_is_persisted_to_latest_workbench_chat(
     async def publish(event):
         events.append(event)
 
-    async def run_agent(prompt, bot, chat_id, db_path, session_id="", on_reply=None):
+    captured = {}
+
+    async def run_agent(prompt, bot, chat_id, db_path, session_id="", on_reply=None, lang=""):
         assert session_id == "chat_latest"
         assert on_reply is not None
+        captured["lang"] = lang
         await on_reply("How did the launch go?")
         return "How did the launch go?"
 
+    import cyrene.settings_store as settings_store
+    monkeypatch.setattr(
+        settings_store, "get",
+        lambda key, default=None: "zh" if key == "app_language" else default,
+    )
     monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
     monkeypatch.setattr(routes_workbench_chat, "_CHATS_STORE", chats_path)
     monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
@@ -177,6 +185,8 @@ async def test_proactive_is_persisted_to_latest_workbench_chat(
     assert events[-1]["type"] == "workbench_proactive_message"
     assert events[-1]["chat_id"] == "chat_latest"
     assert scheduler._LOTTERY_STATE["consecutive_unanswered"] == 1
+    # The persisted UI language must be threaded into the proactive agent run.
+    assert captured["lang"] == "zh"
 
 
 async def test_heartbeat_agent_does_not_preempt_busy_target_session():
@@ -197,6 +207,31 @@ async def test_heartbeat_agent_does_not_preempt_busy_target_session():
         ctx.lock.release()
 
     assert result == ""
+
+
+async def test_proactive_lang_is_pinned_in_ephemeral_system(monkeypatch):
+    from cyrene.agent import coordinator
+
+    captured = {}
+
+    async def fake_run_chat_agent(prompt, bot, chat_id, db_path, **kwargs):
+        captured["ephemeral_system"] = kwargs.get("ephemeral_system", "")
+        return ""
+
+    monkeypatch.setattr(coordinator, "_run_chat_agent", fake_run_chat_agent)
+
+    # An explicit language pins the reply; no soft "guess from past messages".
+    await coordinator.run_heartbeat_agent(
+        "hidden", None, 0, "db.sqlite3", session_id="lang_pin_zh", lang="zh",
+    )
+    assert "简体中文" in captured["ephemeral_system"]
+    assert "based on their past messages" not in captured["ephemeral_system"]
+
+    # No persisted language falls back to inferring from past messages.
+    await coordinator.run_heartbeat_agent(
+        "hidden", None, 0, "db.sqlite3", session_id="lang_pin_none", lang="",
+    )
+    assert "based on their past messages" in captured["ephemeral_system"]
 
 
 def test_workbench_frontend_handles_proactive_sse():
