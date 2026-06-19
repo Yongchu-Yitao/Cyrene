@@ -14,6 +14,7 @@ def _patch_paths(monkeypatch, tmp_path, soul_content, default_content):
     soul_path.write_text(soul_content, encoding="utf-8")
 
     monkeypatch.setattr(onboarding, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(onboarding, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(onboarding, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(onboarding, "get_soul_path", lambda: soul_path)
     monkeypatch.setattr(onboarding, "read_soul", lambda: soul_path.read_text(encoding="utf-8"))

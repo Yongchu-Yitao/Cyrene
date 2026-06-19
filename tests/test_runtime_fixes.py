@@ -1203,6 +1203,7 @@ def test_last_user_time_prefers_archive_over_state_mtime(tmp_path, monkeypatch):
 
     monkeypatch.setattr(scheduler, "CONVERSATIONS_DIR", conv_dir)
     monkeypatch.setattr(scheduler, "STATE_FILE", state_file)
+    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
 
     result = scheduler._last_user_message_time()
 
@@ -1222,6 +1223,7 @@ def test_last_user_time_mtime_fallback_requires_user_spoke_last(tmp_path, monkey
     state_file = tmp_path / "state.json"
     monkeypatch.setattr(scheduler, "CONVERSATIONS_DIR", conv_dir)
     monkeypatch.setattr(scheduler, "STATE_FILE", state_file)
+    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
 
     # (a) User spoke last → mtime is a valid proxy.
     state_file.write_text(
@@ -1280,6 +1282,7 @@ async def test_execute_task_fallback_persists_webui_reminder(monkeypatch, tmp_pa
     monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
     monkeypatch.setattr(debug, "publish_event", fake_publish_event)
     monkeypatch.setattr(scheduler, "run_task_agent", fake_run_task_agent)
+    monkeypatch.setattr(scheduler, "notify", AsyncMock())
     monkeypatch.setattr(scheduler.db, "log_task_run", fake_log_task_run)
     monkeypatch.setattr(scheduler.db, "update_task_after_run", fake_update_task_after_run)
 

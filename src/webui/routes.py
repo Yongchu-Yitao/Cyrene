@@ -9287,23 +9287,6 @@ def _build_simple_flow(messages: list[dict]) -> dict:
                     "content": (last_agent["body"][:600] if last_agent else "—"),
                 },
             },
-            {
-                "type": "function",
-                "function": {
-                    "name": "glob",
-                    "description": "按通配符模式搜索工作区中的文件路径。例如：'**/*.py' 查找所有 Python 文件，'**/*.tsx' 查找所有 React 组件。自动跳过 node_modules、.git、__pycache__ 等目录。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "pattern": {
-                                "type": "string",
-                                "description": "glob 搜索模式，相对于工作区根目录，例如 '**/*.py' 或 'src/**/*.ts'",
-                            },
-                        },
-                        "required": ["pattern"],
-                    },
-                },
-            },
         ])
         edges.extend([
             {"from": user_id, "to": main_id},

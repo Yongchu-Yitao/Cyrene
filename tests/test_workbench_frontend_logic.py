@@ -137,10 +137,15 @@ def test_workbench_chat_supports_parallel_conversation_runtimes():
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
     i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
-    assert "var [runtimes, setRuntimes] = useWbcState({});" in source
-    assert "var abortRefs = useWbcRef({});" in source
+    assert "var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {" in source
+    assert "var runtimes = {};" in source
+    assert "var aborts = {};" in source
+    assert "window.WorkbenchChatRuntimes = WorkbenchChatRuntimes;" in source
+    assert "var runtimeEngine = window.WorkbenchChatRuntimes;" in source
+    assert "runtimeEngine.subscribe(function (snap) { setRuntimes(snap); })" in source
+    assert "runtimeEngine.start(chatId, input || {}, model)" in source
     assert "var activeRuntime = runtimes[activeChatId] || null;" in source
-    assert "if (runtimesRef.current[chatId]) return;" in source
+    assert "if (!chatId || runtimes[chatId]) return null;" in source
     assert "otherRunning" not in source
     assert "workbenchChat.lockedByOther" not in source
     assert "workbenchChat.lockedByOther" not in i18n
@@ -250,7 +255,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.models || p.primary_candidates || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=20260618-model-save-fix1" in index
+    assert "settings-overlay.js?v=20260619-toast1" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
