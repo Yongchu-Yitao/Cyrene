@@ -240,6 +240,15 @@ async def _run_main_agent(
                 await _emit_reply_stream_event({"type": "reply_delta", "delta": text})
                 await _emit_reply_stream_event({"type": "reply_done", "response": text})
             return text
+        # System-initiated rounds (e.g. the proactive heartbeat) must honor the
+        # agent's choice to stay silent. When the terminal turn carried no genuine
+        # user-facing text — typically because it called `quit` with only internal
+        # reasoning — never reconstruct a reply it didn't write: the reconstruction
+        # below re-prompts the model to "answer directly" and would manufacture an
+        # unsolicited check-in, overriding the quit. Deliver nothing instead.
+        meta = _ui_round_assistant_meta.get()
+        if isinstance(meta, dict) and meta.get("system_initiated"):
+            return ""
         llm_base_messages = project_history_for_llm(base_messages)
         if has_tool_results:
             final_user_text = (await _final_user_reply_from_history(llm_base_messages, max_tokens=None)).strip()
@@ -255,12 +264,6 @@ async def _run_main_agent(
         final_text = (await _final_reply_from_history(llm_base_messages, max_tokens=None)).strip()
         if final_text and not _is_placeholder_reply(final_text):
             return final_text
-        meta = _ui_round_assistant_meta.get()
-        if isinstance(meta, dict) and meta.get("system_initiated"):
-            # System-initiated rounds (e.g. the proactive heartbeat) stay silent
-            # when the agent has nothing real to say: return empty so the caller
-            # delivers nothing instead of a fabricated "Done." placeholder.
-            return ""
         return fallback
 
     def _session_messages_to_save(current_messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

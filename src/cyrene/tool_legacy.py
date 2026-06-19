@@ -207,7 +207,7 @@ async def _request_scope_elevation(
     effective_options = options or ["允许这次", "拒绝"]
     question = await _upsert_pending_question({
         "text": (
-            f"⚠️ **Agent 尝试执行 {scope_hint}{operation}**\n\n"
+            f"⚠️ Agent 尝试执行 {scope_hint}{operation}\n\n"
             f"工具：{tool_name}{detail}{why}\n\n"
             f"请确认是否允许此操作。如果不允许，Agent 将仅能在当前 workspace 内工作。"
         ),

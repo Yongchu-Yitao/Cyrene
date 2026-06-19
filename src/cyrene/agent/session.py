@@ -796,7 +796,14 @@ def _normalize_pending_question(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(raw_options, list):
         for index, item in enumerate(raw_options, start=1):
             if isinstance(item, dict):
-                label = str(item.get("label", "") or "").strip()
+                # Models sometimes emit option objects despite the string schema;
+                # accept the common label-bearing keys rather than stringifying the
+                # whole dict (which would leak `{'id':.., 'label':..}` to the UI).
+                label = ""
+                for key in ("label", "text", "value", "title", "name"):
+                    label = str(item.get(key, "") or "").strip()
+                    if label:
+                        break
                 option_id = str(item.get("id", "") or "").strip() or f"option_{index}"
             else:
                 label = str(item or "").strip()

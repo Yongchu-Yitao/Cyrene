@@ -2990,10 +2990,69 @@ var ICON_FILE = (
 // command (the exact prompt handed to the subagent) + a context-file list the
 // user can grow by referencing workspace paths or uploading files. Both persist
 // onto the step (promptOverride / contextFiles) via controller.patchStep.
-function StepCommandEditor({ session, step, controller }) {
+// Compact read-only summary for a not-yet-run step expanded in view mode —
+// description, prerequisites, command and context files, no editing affordances.
+function StepSummary({ session, step, steps }) {
+  var prereqTitles = (Array.isArray(step.dependsOn) ? step.dependsOn : []).map(function (id) {
+    var dep = steps.find(function (candidate) { return candidate.id === id; });
+    return dep ? dep.title : id;
+  });
+  var ctxFiles = Array.isArray(step.contextFiles) ? step.contextFiles : [];
+  var command = (typeof step.promptOverride === "string" && step.promptOverride.length > 0)
+    ? step.promptOverride
+    : stepExecutionPrompt(session, step);
+  return (
+    <div className="wbp-summary">
+      {step.description ? (
+        <div className="wbp-summary-row">
+          <span className="wbp-summary-k">说明</span>
+          <span className="wbp-summary-v">{step.description}</span>
+        </div>
+      ) : null}
+      <div className="wbp-summary-row">
+        <span className="wbp-summary-k">前置</span>
+        <span className="wbp-summary-v">
+          {prereqTitles.length ? (
+            <span className="wbp-summary-chips">
+              {prereqTitles.map(function (title, i) { return <span key={i}>{title}</span>; })}
+            </span>
+          ) : <em className="wbp-summary-none">无</em>}
+        </span>
+      </div>
+      <div className="wbp-summary-row">
+        <span className="wbp-summary-k">命令</span>
+        <span className="wbp-summary-v wbp-summary-cmd">{command || "—"}</span>
+      </div>
+      {ctxFiles.length > 0 ? (
+        <div className="wbp-summary-row">
+          <span className="wbp-summary-k">文件</span>
+          <span className="wbp-summary-v">
+            <span className="wbp-summary-chips">
+              {ctxFiles.map(function (f, i) {
+                var isUpload = f && f.source === "upload";
+                var label = isUpload ? (f.name || "file") : String((f && (f.path || f.name)) || "").split("/").pop();
+                return <span key={i} className="wbp-summary-file">{label}</span>;
+              })}
+            </span>
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// Unified compact editor for a not-yet-run step (edit mode). Mirrors the
+// read-only StepSummary's label/value layout so view and edit modes look
+// consistent. Plan fields (title/description/prerequisites) save together via
+// the Save button; the command persists on blur and context files on change.
+function StepEditor({ session, step, steps, controller }) {
   var model = window.WorkbenchModel;
   var defaultPrompt = stepExecutionPrompt(session, step);
   function overrideOf(s) { return (s && typeof s.promptOverride === "string" && s.promptOverride.length > 0) ? s.promptOverride : ""; }
+  var [title, setTitle] = useWorkbenchState(step.title || "");
+  var [description, setDescription] = useWorkbenchState(step.description || "");
+  var [dependsOn, setDependsOn] = useWorkbenchState(Array.isArray(step.dependsOn) ? step.dependsOn : []);
+  var [saving, setSaving] = useWorkbenchState(false);
   var [draft, setDraft] = useWorkbenchState(overrideOf(step) || defaultPrompt);
   var [pathInput, setPathInput] = useWorkbenchState("");
   var [adding, setAdding] = useWorkbenchState(false);
@@ -3001,17 +3060,51 @@ function StepCommandEditor({ session, step, controller }) {
   var [hint, setHint] = useWorkbenchState("");
   var fileRef = useWorkbenchRef(null);
 
-  // Re-sync the textarea when the expanded step changes (the editor instance is
-  // reused across steps because the key is stable at the .wbp-detail level).
+  var stepIndex = steps.findIndex(function (item) { return item && item.id === step.id; });
+  var dependencyOptions = steps.slice(0, Math.max(0, stepIndex));
+  var contextFiles = Array.isArray(step.contextFiles) ? step.contextFiles : [];
+  var hasOverride = overrideOf(step).length > 0;
+
+  useWorkbenchEffect(function () {
+    setTitle(step.title || "");
+    setDescription(step.description || "");
+    setDependsOn(Array.isArray(step.dependsOn) ? step.dependsOn : []);
+  }, [step.id, step.title, step.description, JSON.stringify(step.dependsOn || [])]);
+
+  // Re-sync the command textarea when the expanded step changes (the editor
+  // instance is reused across steps — the key is stable at .wbp-detail).
   useWorkbenchEffect(function () {
     setDraft(overrideOf(step) || stepExecutionPrompt(session, step));
     setPathInput("");
     setHint("");
   }, [step.id]);
 
-  var contextFiles = Array.isArray(step.contextFiles) ? step.contextFiles : [];
-  var hasOverride = overrideOf(step).length > 0;
-
+  function toggleDependency(stepId) {
+    setDependsOn(function (current) {
+      return current.indexOf(stepId) >= 0
+        ? current.filter(function (id) { return id !== stepId; })
+        : current.concat([stepId]);
+    });
+  }
+  function save() {
+    var nextTitle = String(title || "").trim();
+    if (!nextTitle || saving) return;
+    setSaving(true);
+    controller.patchStep(step.id, {
+      title: nextTitle,
+      description: String(description || "").trim(),
+      dependsOn: dependsOn,
+    }).finally(function () { setSaving(false); });
+  }
+  function remove() {
+    window.confirmModal({
+      body: wbT("task.plan.confirmDeleteStep", "Delete step \"{name}\"?", { name: step.title }),
+      confirmLabel: wbT("common.delete", "Delete"),
+      danger: true,
+    }).then(function (ok) {
+      if (ok) controller.deleteStep(step.id);
+    });
+  }
   function persistPrompt() {
     // Store an override only when it diverges from the default, so a step still
     // tracks a regenerated default prompt until the user actually edits it.
@@ -3062,169 +3155,99 @@ function StepCommandEditor({ session, step, controller }) {
   }
 
   return (
-    <div className="wbp-detail-grid">
-      <div className="wbp-detail-card">
-        <div className="wbp-detail-label">
-          <span>命令</span>
-          <span className="wbp-cmd-hint">运行前可编辑，将原样交给 subagent</span>
-        </div>
-        <textarea
-          className="wbp-cmd-textarea"
-          value={draft}
-          rows={6}
-          spellCheck={false}
-          placeholder="描述要交给 subagent 执行的指令…"
-          onChange={function (e) { setDraft(e.target.value); }}
-          onBlur={persistPrompt}
-        />
-        {hasOverride && (
-          <div className="wbp-cmd-actions">
-            <button type="button" className="wbp-tiny-btn" onClick={resetPrompt}>恢复默认</button>
-          </div>
-        )}
-      </div>
-      <div className="wbp-detail-card">
-        <div className="wbp-detail-label">
-          {ICON_FILE}<span>相关文件</span>
-          {contextFiles.length > 0 && <span className="wbp-file-count">{contextFiles.length}</span>}
-        </div>
-        {contextFiles.length > 0 ? (
-          <div className="wbp-ctx-list">
-            {contextFiles.map(function (f, i) {
-              var isUpload = f && f.source === "upload";
-              var label = isUpload ? (f.name || "file") : String((f && (f.path || f.name)) || "").split("/").pop();
-              return (
-                <span key={(f && (f.path || f.id || f.name) || "") + "_" + i} className={"wbp-ctx-chip" + (isUpload ? " upload" : "")} title={(f && (f.path || f.name)) || ""}>
-                  <span className="wbp-ctx-tag">{isUpload ? "上传" : "工作区"}</span>
-                  <span className="wbp-ctx-name">{label}</span>
-                  <button type="button" className="wbp-ctx-x" onClick={function () { removeFile(f); }} aria-label="移除文件">{ICONS.x}</button>
-                </span>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="wbp-detail-empty">添加要交给 subagent 的上下文文件。</p>
-        )}
-        <div className="wbp-ctx-add">
-          <div className="wbp-ctx-add-row">
-            <input
-              type="text"
-              className="wbp-ctx-input"
-              value={pathInput}
-              placeholder="工作区相对路径，如 src/app.py"
-              onChange={function (e) { setPathInput(e.target.value); }}
-              onKeyDown={function (e) { if (e.key === "Enter") { e.preventDefault(); addWorkspaceFile(); } }}
-            />
-            <button type="button" className="wbp-tiny-btn" disabled={adding || !pathInput.trim()} onClick={addWorkspaceFile}>{adding ? "校验中…" : "添加"}</button>
-          </div>
-          <button type="button" className="wbp-tiny-btn wbp-ctx-upload" disabled={uploading} onClick={pickUpload}>
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 10.5V3.5" /><path d="M5 6l3-3 3 3" /><path d="M3 11v1.5A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V11" /></svg>
-            {uploading ? "上传中…" : "上传文件"}
-          </button>
-          <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onUploadPick} />
-        </div>
-        {hint && <p className="wbp-ctx-hint">{hint}</p>}
-      </div>
-    </div>
-  );
-}
-
-function StepPlanEditor({ steps, step, controller, canEditStructure }) {
-  var [title, setTitle] = useWorkbenchState(step.title || "");
-  var [description, setDescription] = useWorkbenchState(step.description || "");
-  var [dependsOn, setDependsOn] = useWorkbenchState(Array.isArray(step.dependsOn) ? step.dependsOn : []);
-  var [saving, setSaving] = useWorkbenchState(false);
-  var stepIndex = steps.findIndex(function (item) { return item && item.id === step.id; });
-  var dependencyOptions = steps.slice(0, Math.max(0, stepIndex));
-
-  useWorkbenchEffect(function () {
-    setTitle(step.title || "");
-    setDescription(step.description || "");
-    setDependsOn(Array.isArray(step.dependsOn) ? step.dependsOn : []);
-  }, [step.id, step.title, step.description, JSON.stringify(step.dependsOn || [])]);
-
-  function toggleDependency(stepId) {
-    setDependsOn(function (current) {
-      return current.indexOf(stepId) >= 0
-        ? current.filter(function (id) { return id !== stepId; })
-        : current.concat([stepId]);
-    });
-  }
-
-  function save() {
-    var nextTitle = String(title || "").trim();
-    if (!nextTitle || saving) return;
-    setSaving(true);
-    controller.patchStep(step.id, {
-      title: nextTitle,
-      description: String(description || "").trim(),
-      dependsOn: dependsOn,
-    }).finally(function () { setSaving(false); });
-  }
-
-  function remove() {
-    window.confirmModal({
-      body: wbT("task.plan.confirmDeleteStep", "Delete step \"{name}\"?", { name: step.title }),
-      confirmLabel: wbT("common.delete", "Delete"),
-      danger: true,
-    }).then(function (ok) {
-      if (ok) controller.deleteStep(step.id);
-    });
-  }
-
-  return (
-    <div className="wbp-plan-editor">
-      <div className="wbp-plan-editor-head">
-        <div>
-          <b>{wbT("task.plan.stepSettings", "Step settings")}</b>
-          <p>{canEditStructure
-            ? wbT("task.plan.stepSettingsHint", "Edit the task and choose prerequisite steps.")
-            : wbT("task.plan.structureLocked", "Plan structure is locked after execution starts.")}</p>
-        </div>
-        {canEditStructure && (
-          <button type="button" className="wbp-tiny-btn danger" onClick={remove}>
-            {wbT("common.delete", "Delete")}
-          </button>
-        )}
-      </div>
-      <label className="wbp-plan-field">
-        <span>{wbT("task.plan.stepTitle", "Step title")}</span>
-        <input value={title} disabled={!canEditStructure || saving} onChange={function (e) { setTitle(e.target.value); }} />
+    <div className="wbp-summary wbp-summary-edit">
+      <label className="wbp-summary-row">
+        <span className="wbp-summary-k">标题</span>
+        <input className="wbp-edit-input" value={title} disabled={saving} placeholder="步骤标题" onChange={function (e) { setTitle(e.target.value); }} />
       </label>
-      <label className="wbp-plan-field">
-        <span>{wbT("task.plan.stepDescription", "Description")}</span>
-        <textarea rows={2} value={description} disabled={!canEditStructure || saving} onChange={function (e) { setDescription(e.target.value); }} />
+      <label className="wbp-summary-row">
+        <span className="wbp-summary-k">说明</span>
+        <textarea className="wbp-edit-input" rows={2} value={description} disabled={saving} placeholder="说明这个步骤要完成什么" onChange={function (e) { setDescription(e.target.value); }} />
       </label>
-      <div className="wbp-plan-field">
-        <span>{wbT("task.plan.prerequisites", "Prerequisites")}</span>
-        {dependencyOptions.length ? (
-          <div className="wbp-dependency-options">
-            {dependencyOptions.map(function (candidate) {
-              var checked = dependsOn.indexOf(candidate.id) >= 0;
-              return (
-                <label key={candidate.id} className={"wbp-dependency-option" + (checked ? " selected" : "")}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={!canEditStructure || saving}
-                    onChange={function () { toggleDependency(candidate.id); }}
-                  />
-                  <span>{candidate.title}</span>
-                </label>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="wbp-detail-empty">{wbT("task.plan.noEarlierSteps", "No earlier steps are available.")}</p>
-        )}
-      </div>
-      {canEditStructure && (
-        <div className="wbp-plan-editor-actions">
-          <button type="button" className="wb-btn primary" disabled={saving || !String(title || "").trim()} onClick={save}>
-            {saving ? wbT("common.saving", "Saving...") : wbT("common.save", "Save")}
-          </button>
+      <div className="wbp-summary-row">
+        <span className="wbp-summary-k">前置</span>
+        <div className="wbp-summary-v">
+          {dependencyOptions.length ? (
+            <div className="wbp-dependency-options">
+              {dependencyOptions.map(function (candidate) {
+                var checked = dependsOn.indexOf(candidate.id) >= 0;
+                return (
+                  <label key={candidate.id} className={"wbp-dependency-option" + (checked ? " selected" : "")}>
+                    <input type="checkbox" checked={checked} disabled={saving} onChange={function () { toggleDependency(candidate.id); }} />
+                    <span>{candidate.title}</span>
+                  </label>
+                );
+              })}
+            </div>
+          ) : (
+            <em className="wbp-summary-none">{wbT("task.plan.noEarlierSteps", "No earlier steps are available.")}</em>
+          )}
         </div>
-      )}
+      </div>
+      <div className="wbp-summary-row">
+        <span className="wbp-summary-k">命令</span>
+        <div className="wbp-summary-v">
+          <textarea
+            className="wbp-edit-input wbp-edit-cmd"
+            value={draft}
+            rows={5}
+            spellCheck={false}
+            placeholder="描述要交给 subagent 执行的指令…"
+            onChange={function (e) { setDraft(e.target.value); }}
+            onBlur={persistPrompt}
+          />
+          {hasOverride && (
+            <div className="wbp-edit-cmd-actions">
+              <button type="button" className="wbp-tiny-btn" onClick={resetPrompt}>恢复默认</button>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="wbp-summary-row">
+        <span className="wbp-summary-k">文件</span>
+        <div className="wbp-summary-v">
+          {contextFiles.length > 0 && (
+            <div className="wbp-ctx-list">
+              {contextFiles.map(function (f, i) {
+                var isUpload = f && f.source === "upload";
+                var label = isUpload ? (f.name || "file") : String((f && (f.path || f.name)) || "").split("/").pop();
+                return (
+                  <span key={(f && (f.path || f.id || f.name) || "") + "_" + i} className={"wbp-ctx-chip" + (isUpload ? " upload" : "")} title={(f && (f.path || f.name)) || ""}>
+                    <span className="wbp-ctx-tag">{isUpload ? "上传" : "工作区"}</span>
+                    <span className="wbp-ctx-name">{label}</span>
+                    <button type="button" className="wbp-ctx-x" onClick={function () { removeFile(f); }} aria-label="移除文件">{ICONS.x}</button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          <div className="wbp-ctx-add">
+            <div className="wbp-ctx-add-row">
+              <input
+                type="text"
+                className="wbp-ctx-input"
+                value={pathInput}
+                placeholder="工作区相对路径，如 src/app.py"
+                onChange={function (e) { setPathInput(e.target.value); }}
+                onKeyDown={function (e) { if (e.key === "Enter") { e.preventDefault(); addWorkspaceFile(); } }}
+              />
+              <button type="button" className="wbp-tiny-btn" disabled={adding || !pathInput.trim()} onClick={addWorkspaceFile}>{adding ? "校验中…" : "添加"}</button>
+            </div>
+            <button type="button" className="wbp-tiny-btn wbp-ctx-upload" disabled={uploading} onClick={pickUpload}>
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 10.5V3.5" /><path d="M5 6l3-3 3 3" /><path d="M3 11v1.5A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V11" /></svg>
+              {uploading ? "上传中…" : "上传文件"}
+            </button>
+            <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onUploadPick} />
+          </div>
+          {hint && <p className="wbp-ctx-hint">{hint}</p>}
+        </div>
+      </div>
+      <div className="wbp-summary-actions">
+        <button type="button" className="wbp-tiny-btn danger" onClick={remove}>{wbT("common.delete", "Delete")}</button>
+        <button type="button" className="wb-btn primary compact" disabled={saving || !String(title || "").trim()} onClick={save}>
+          {saving ? wbT("common.saving", "Saving...") : wbT("common.save", "Save")}
+        </button>
+      </div>
     </div>
   );
 }
@@ -3238,6 +3261,7 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
   var [newTitle, setNewTitle] = useWorkbenchState("");
   var [newDescription, setNewDescription] = useWorkbenchState("");
   var [savingNew, setSavingNew] = useWorkbenchState(false);
+  var [planEditing, setPlanEditing] = useWorkbenchState(false);
   var planStarted = steps.some(function (step) {
     return step && (
       String(step.status || "pending") !== "pending"
@@ -3250,6 +3274,16 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
   var canEditStructure = !controller.busy
     && !planStarted
     && ["running", "waiting_for_user"].indexOf(String(session.status || "")) < 0;
+  // Adding / deleting / editing a step is gated behind an explicit Edit toggle;
+  // reordering by drag stays available even in the read-only (view) mode.
+  var editing = canEditStructure && planEditing;
+
+  // Drop out of edit mode the moment the structure locks (execution begins).
+  useWorkbenchEffect(function () {
+    if (!canEditStructure && (planEditing || adding)) { setPlanEditing(false); setAdding(false); }
+  }, [canEditStructure]);
+
+  function exitEditMode() { setPlanEditing(false); setAdding(false); }
 
   function persistOrder(nextSteps) {
     var validation = WorkbenchModel.validatePlanGraph(nextSteps);
@@ -3305,9 +3339,22 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
           <span>{steps.length}</span>
         </div>
         {canEditStructure && (
-          <button type="button" className="wb-btn ghost compact" onClick={function () { setAdding(!adding); }}>
-            {adding ? wbT("common.cancel", "Cancel") : wbT("task.plan.addStep", "Add step")}
-          </button>
+          <div className="wbp-head-actions">
+            {planEditing ? (
+              <>
+                <button type="button" className="wb-btn ghost compact" onClick={function () { setAdding(!adding); }}>
+                  {adding ? wbT("common.cancel", "Cancel") : wbT("task.plan.addStep", "Add step")}
+                </button>
+                <button type="button" className="wb-btn ghost compact" onClick={exitEditMode}>
+                  {wbT("common.done", "Done")}
+                </button>
+              </>
+            ) : (
+              <button type="button" className="wb-btn ghost compact wbp-edit-toggle" onClick={function () { setPlanEditing(true); }}>
+                {ICONS.edit}<span>{wbT("common.edit", "Edit")}</span>
+              </button>
+            )}
+          </div>
         )}
       </div>
       {adding && (
@@ -3356,10 +3403,6 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
           var progressText = step.currentAction || step.description || "";
           var beforeRun = !step.status || step.status === "pending";
           var isLast = index === steps.length - 1;
-          var dependencyTitles = (Array.isArray(step.dependsOn) ? step.dependsOn : []).map(function (dependencyId) {
-            var dependency = steps.find(function (candidate) { return candidate.id === dependencyId; });
-            return dependency ? dependency.title : dependencyId;
-          });
           return (
             <div
               key={step.id}
@@ -3419,19 +3462,14 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
                   <span className="wbp-dur">{duration ? <>{ICON_CLOCK}<span>{duration}</span></> : estimate ? <span className="wbp-estimate">预计 {estimate}</span> : null}</span>
                   <span className={"wbp-caret" + (expanded ? " open" : "")}>{ICON_CHEVRON}</span>
                 </div>
-                {dependencyTitles.length > 0 && (
-                  <div className="wbp-dependency-summary">
-                    <span>{wbT("task.plan.after", "After")}</span>
-                    {dependencyTitles.map(function (title, i) { return <em key={i}>{title}</em>; })}
-                  </div>
-                )}
                 {expanded && (
                   <div className="wbp-detail" onClick={function (e) { e.stopPropagation(); }}>
                     {beforeRun ? (
-                      <>
-                        <StepPlanEditor steps={steps} step={step} controller={controller} canEditStructure={canEditStructure} />
-                        <StepCommandEditor session={session} step={step} controller={controller} />
-                      </>
+                      editing ? (
+                        <StepEditor session={session} step={step} steps={steps} controller={controller} />
+                      ) : (
+                        <StepSummary session={session} step={step} steps={steps} />
+                      )
                     ) : (
                       <div className="wbp-detail-grid">
                         <div className="wbp-detail-card">

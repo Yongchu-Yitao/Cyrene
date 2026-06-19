@@ -927,7 +927,14 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
       if (!prev || prev.id !== chatId) return prev;
       return { ...prev, pendingQuestion: null, status: "running" };
     });
+    // Drive a live runtime for the resume so the thread streams the same feedback
+    // as a normal send: the "Thinking..." card renders immediately and SSE tool
+    // progress folds into it (onSseEvent only fills a runtime that already exists).
+    // Without it the resume ran invisibly — an empty thread while the side panel
+    // showed a frozen "Replying" — and the composer offered no way to stop it.
+    runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], startedAt: Date.now(), replying: true });
     model.answerChat(chatId, questionId, optionText).then(function (res) {
+      runtimeEngine.update(chatId, null);
       setActiveChat(function (prev) {
         if (!prev || prev.id !== chatId) return prev;
         if (res && res.awaitingUser) {
@@ -939,6 +946,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
       });
       refreshChats();
     }).catch(function (err) {
+      runtimeEngine.update(chatId, null);
       setError(wbcErrorText(err));
       // Restore the prompt so the user can retry.
       model.getChat(chatId).then(setActiveChat).catch(function () {});
@@ -1488,13 +1496,19 @@ function WbcTraceCard({ trace, live, label }) {
 
 function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
   var [copied, setCopied] = useWbcState(false);
-  function copyText() {
+  async function copyText() {
     try {
-      navigator.clipboard.writeText(String(msg.content || "")).then(function () {
-        setCopied(true);
-        setTimeout(function () { setCopied(false); }, 1600);
-      });
-    } catch (e) {}
+      var text = String(msg.content || "");
+      if (window.cyrene && typeof window.cyrene.writeClipboardText === "function") {
+        window.cyrene.writeClipboardText(text);
+      } else {
+        await navigator.clipboard.writeText(text);
+      }
+      setCopied(true);
+      setTimeout(function () { setCopied(false); }, 1600);
+    } catch (e) {
+      console.error("Failed to copy workbench message:", e);
+    }
   }
   return (
     <div className="wbc-msg assistant">

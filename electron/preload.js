@@ -1,5 +1,4 @@
-const { contextBridge } = require('electron');
-const { ipcRenderer } = require('electron');
+const { clipboard, contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('cyrene', {
   platform: process.platform,
@@ -7,6 +6,10 @@ contextBridge.exposeInMainWorld('cyrene', {
   getDesktopSettings: () => ipcRenderer.invoke('desktop-settings:get'),
   updateDesktopSettings: (updates) => ipcRenderer.invoke('desktop-settings:update', updates),
   showNotification: ({ title, body }) => ipcRenderer.invoke('notification:show', { title, body }),
+  writeClipboardText: (text) => {
+    clipboard.writeText(String(text == null ? '' : text));
+    return true;
+  },
   pickDirectory: () => {
     if (process.platform !== 'linux') return Promise.resolve(null);
     return ipcRenderer.invoke('dialog:pick-directory');

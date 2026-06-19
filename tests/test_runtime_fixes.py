@@ -1173,6 +1173,80 @@ async def test_system_initiated_silent_quit_yields_no_message(tmp_path, monkeypa
     assert result == ""
 
 
+def test_assistant_text_ignores_reasoning_when_tool_calls_present():
+    """Regression: a turn that emits tool_calls (e.g. ``quit``) with empty
+    content must NOT surface ``reasoning_content`` as user-facing text — that
+    leaked the model's chain-of-thought into proactive messages. Pure-text
+    turns (no tool_calls) still fall back to reasoning for Qwen-style models."""
+    from cyrene.llm import _assistant_text
+
+    quit_turn = {
+        "role": "assistant",
+        "content": "",
+        "reasoning_content": "The user hasn't replied yet... Let me just quit.",
+        "tool_calls": [{"id": "c1", "function": {"name": "quit", "arguments": "{}"}}],
+    }
+    assert _assistant_text(quit_turn) == ""
+
+    # No tool_calls: the reasoning fallback is still honored (Qwen-style models).
+    plain_turn = {"role": "assistant", "content": "", "reasoning_content": "final answer"}
+    assert _assistant_text(plain_turn) == "final answer"
+
+    # Real content always wins, even alongside tool_calls.
+    spoke_turn = {
+        "role": "assistant",
+        "content": "scheduled task completed",
+        "reasoning_content": "scratch",
+        "tool_calls": [{"id": "c2", "function": {"name": "quit", "arguments": "{}"}}],
+    }
+    assert _assistant_text(spoke_turn) == "scheduled task completed"
+
+
+async def test_system_initiated_quit_does_not_leak_reasoning(tmp_path, monkeypatch):
+    """A proactive round where the agent quits with only ``reasoning_content``
+    (its internal deliberation) and no ``content`` must stay silent — the
+    reasoning must never be delivered to the user as the proactive message."""
+    from cyrene import agent
+    from cyrene.agent import session as _agent_session
+    from cyrene import debug
+
+    async def fake_publish_event(event):
+        return None
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+        return {
+            "content": "",
+            "reasoning_content": (
+                "The user hasn't replied to my last proactive check-in yet. "
+                "Reaching out again would feel pushy. Let me just quit."
+            ),
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "quit", "arguments": "{}"}},
+            ],
+        }
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(_agent_session, "_refresh_session_labels", AsyncMock())
+    monkeypatch.setattr(agent, "get_memory_context", lambda include_short_term=True: "")
+    _patch_call_llm(monkeypatch, fake_call_llm)
+    monkeypatch.setattr(debug, "publish_event", fake_publish_event)
+
+    result = await agent._run_chat_agent(
+        "internal proactive instruction",
+        None,
+        0,
+        "db.sqlite3",
+        persist_user_message=False,
+        public_prompt="",
+        refresh_labels=False,
+        hide_initial_detail=True,
+        assistant_message_meta={"proactive": True, "system_initiated": True},
+    )
+
+    assert result == ""
+
+
 def test_last_user_time_prefers_archive_over_state_mtime(tmp_path, monkeypatch):
     """Silence detection must read the real user-turn timestamp from the
     conversation archive, not state.json's mtime. The agent rewrites state.json
@@ -4090,6 +4164,7 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
     # and proceeds to the summary phase (it no longer returns an early "still working
     # in the background" notice — that path was removed).
     from cyrene import agent
+    from cyrene import behavior_learning
     from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
@@ -4142,6 +4217,7 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
     _patch_call_llm(monkeypatch, fake_call_llm)
     _patch_execute_tool(monkeypatch, fake_execute_tool)
     _patch_save_session(monkeypatch, fake_save)
+    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
     monkeypatch.setattr(subagent, "get_snapshot", fake_snapshot)
     monkeypatch.setattr(subagent, "cancel_subagent_tasks", fake_cancel_subagent_tasks)
     monkeypatch.setattr(subagent, "run_summary_subagent", fake_summary)

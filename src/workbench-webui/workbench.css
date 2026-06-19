@@ -2076,20 +2076,29 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   background: color-mix(in srgb, var(--wb-muted) 4%, transparent);
 }
 
-/* Main line: title | status | time | duration | caret */
+/* Main line: title (flexes) | status | time | duration | caret. Flex (not a
+   fixed grid) so empty time/duration columns don't leave gaps on pending steps. */
 .wbp-line-main {
   min-width: 0;
   min-height: 26px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 64px 46px 90px 16px;
+  display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
 
+.wbp-line-main > .wbp-status,
+.wbp-line-main > .wbp-time,
+.wbp-line-main > .wbp-dur,
+.wbp-line-main > .wbp-caret { flex: 0 0 auto; }
+
+.wbp-time:empty,
+.wbp-dur:empty { display: none; }
+
 .wbp-copy {
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
 }
 
@@ -2223,6 +2232,70 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   border-top: 1px solid var(--wb-line);
 }
 
+/* Compact read-only summary (view mode) — label/value rows, one light panel */
+.wbp-summary {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--wb-line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-muted) 3%, transparent);
+}
+
+.wbp-summary-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.wbp-summary-k {
+  color: var(--wb-faint);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.wbp-summary-v {
+  min-width: 0;
+  color: var(--wb-text);
+  font-size: 12.5px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.wbp-summary-none { color: var(--wb-faint); font-style: normal; }
+
+.wbp-summary-cmd {
+  white-space: pre-wrap;
+  color: var(--wb-muted);
+  font-size: 12px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.wbp-summary-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.wbp-summary-chips > span {
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-accent) 9%, transparent);
+  color: color-mix(in srgb, var(--wb-accent) 82%, var(--wb-text));
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbp-summary-chips > .wbp-summary-file {
+  background: color-mix(in srgb, var(--wb-muted) 10%, transparent);
+  color: var(--wb-muted);
+}
+
 .wbp-plan-editor {
   margin-bottom: 12px;
   padding: 12px;
@@ -2300,6 +2373,7 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
 .wbp-plan-editor-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
 }
 
 .wbp-plan-editor .wbp-tiny-btn {
@@ -2311,9 +2385,70 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+  transition: background 110ms, border-color 110ms, color 110ms;
 }
 
+.wbp-plan-editor .wbp-tiny-btn:hover:not(:disabled) {
+  background: var(--wb-control-hover-bg);
+  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line));
+  color: var(--wb-text);
+}
+
+.wbp-plan-editor .wbp-tiny-btn:disabled { opacity: 0.5; cursor: default; }
+
 .wbp-plan-editor .wbp-tiny-btn.danger { color: var(--wb-red); }
+.wbp-plan-editor .wbp-tiny-btn.danger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--wb-red) 38%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-red) 8%, var(--wb-control-bg));
+  color: var(--wb-red);
+}
+
+/* Plan header: Edit toggle in view mode, Add step + Done while editing */
+.wbp-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wbp-edit-toggle svg { width: 14px; height: 14px; }
+
+/* Read-only field values shown before the user enters edit mode */
+.wbp-plan-readonly {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-muted) 4%, transparent);
+  color: var(--wb-text);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wbp-plan-readonly.muted {
+  color: var(--wb-faint);
+  font-style: italic;
+}
+
+.wbp-readonly-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wbp-readonly-chips span {
+  max-width: 100%;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-accent) 9%, transparent);
+  color: color-mix(in srgb, var(--wb-accent) 82%, var(--wb-text));
+  font-size: 11.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .wbp-blocked-hint {
   align-self: center;
@@ -2485,6 +2620,21 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   display: flex;
   justify-content: flex-end;
   margin-top: 8px;
+}
+
+/* Read-only command shown in view mode (before the user turns on Edit) */
+.wbp-detail-card .wbp-cmd-readonly {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-muted) 4%, transparent);
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 /* `.wbp-detail-card` prefix beats `.workbench-shell button { font: inherit }`

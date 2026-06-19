@@ -151,6 +151,20 @@ def test_workbench_chat_supports_parallel_conversation_runtimes():
     assert "workbenchChat.lockedByOther" not in i18n
 
 
+def test_workbench_copy_uses_electron_clipboard_bridge():
+    root = Path(__file__).resolve().parent.parent
+    preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
+    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+
+    assert "clipboard, contextBridge, ipcRenderer" in preload
+    assert "writeClipboardText: (text) =>" in preload
+    assert "clipboard.writeText(" in preload
+    assert 'typeof window.cyrene.writeClipboardText === "function"' in chat
+    assert "window.cyrene.writeClipboardText(text);" in chat
+    assert "await navigator.clipboard.writeText(text);" in chat
+    assert 'console.error("Failed to copy workbench message:", e);' in chat
+
+
 def test_workbench_acceptance_button_calls_agent_endpoint():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")

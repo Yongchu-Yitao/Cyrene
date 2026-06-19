@@ -796,7 +796,7 @@ def _workbench_coerce_init_form(raw: Any, base: dict[str, Any]) -> dict[str, Any
             if placeholder:
                 item["placeholder"] = placeholder[:160]
             if qtype in ("single", "multi"):
-                options = [str(o).strip() for o in question.get("options", []) if str(o).strip()]
+                options = [lbl for o in question.get("options", []) if (lbl := _option_label(o))]
                 if not options:
                     qtype = "text"
                     item["type"] = "text"
@@ -3553,6 +3553,21 @@ async def _workbench_verify_acceptance(
     }
 
 
+def _option_label(option: Any) -> str:
+    """Flatten an option to its display label. Options should be plain strings,
+    but models sometimes emit objects despite the schema (and normalized
+    pending-question options are stored as ``{"id", "label"}`` dicts). ``str()`` on
+    such a dict would leak ``{'id': ..., 'label': ...}`` into the UI, so pull the
+    first label-bearing field instead."""
+    if isinstance(option, dict):
+        for key in ("label", "text", "value", "title", "name"):
+            val = str(option.get(key, "") or "").strip()
+            if val:
+                return val
+        return ""
+    return str(option or "").strip()
+
+
 def _public_pending_question(q: dict[str, Any] | None) -> dict[str, Any] | None:
     """Public (camelCase) shape of a paused-round pending question for the UI.
 
@@ -3564,7 +3579,7 @@ def _public_pending_question(q: dict[str, Any] | None) -> dict[str, Any] | None:
     public: dict[str, Any] = {
         "id": str(q.get("id") or ""),
         "text": str(q.get("text") or ""),
-        "options": [str(o) for o in (q.get("options") or [])],
+        "options": [lbl for o in (q.get("options") or []) if (lbl := _option_label(o))],
         "roundId": str(q.get("round_id") or ""),
         "clientRequestId": str(q.get("client_request_id") or ""),
         "allowCustom": bool(q.get("allow_custom", True)),
