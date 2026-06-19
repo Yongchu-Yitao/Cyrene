@@ -362,10 +362,12 @@
         .finally(function () { setBusy(false); });
     }
     function handleDelete(m) {
-      if (!window.confirm("确定删除这条记忆吗？此操作不可撤销。")) return;
-      client.remove(m.id)
-        .then(function (p) { applyPayload(p); if (selectedId === m.id) setSelectedId(""); })
-        .catch(function (e) { setError(e.message || String(e)); });
+      window.confirmModal({ body: "确定删除这条记忆吗？此操作不可撤销。", confirmLabel: "删除", danger: true }).then(function (ok) {
+        if (!ok) return;
+        client.remove(m.id)
+          .then(function (p) { applyPayload(p); if (selectedId === m.id) setSelectedId(""); })
+          .catch(function (e) { setError(e.message || String(e)); });
+      });
     }
     // Retire / revive a memory: stale entries stay listed but are no longer
     // injected into agent runs.

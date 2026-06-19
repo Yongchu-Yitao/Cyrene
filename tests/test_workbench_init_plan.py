@@ -197,6 +197,362 @@ def test_workbench_plan_revision_preserves_existing_steps_when_feedback_is_suppl
     assert merged[2]["status"] == "pending"
 
 
+def test_workbench_plan_graph_rejects_cycles_missing_dependencies_and_invalid_order():
+    from webui.routes import _workbench_validate_plan_graph
+
+    valid, _, code = _workbench_validate_plan_graph([
+        {"id": "a", "title": "A", "dependsOn": []},
+        {"id": "b", "title": "B", "dependsOn": ["a"]},
+    ])
+    assert valid is True
+    assert code == ""
+
+    valid, _, code = _workbench_validate_plan_graph([
+        {"id": "a", "title": "A", "dependsOn": ["missing"]},
+    ])
+    assert valid is False
+    assert code == "missing_dependency"
+
+    valid, _, code = _workbench_validate_plan_graph([
+        {"id": "b", "title": "B", "dependsOn": ["a"]},
+        {"id": "a", "title": "A", "dependsOn": []},
+    ])
+    assert valid is False
+    assert code == "dependency_order"
+
+    valid, _, code = _workbench_validate_plan_graph([
+        {"id": "a", "title": "A", "dependsOn": ["b"]},
+        {"id": "b", "title": "B", "dependsOn": ["a"]},
+    ], require_dependency_order=False)
+    assert valid is False
+    assert code == "dependency_cycle"
+
+
+def test_workbench_plan_coercion_resolves_dependency_indexes():
+    from webui.routes import _workbench_coerce_plan_steps
+
+    steps = _workbench_coerce_plan_steps(
+        {
+            "steps": [
+                {"title": "读取上下文", "dependsOnStepIndexes": []},
+                {"title": "实现功能", "dependsOnStepIndexes": [1]},
+                {"title": "运行测试", "dependsOnStepIndexes": [1, 2, 9]},
+            ]
+        },
+        {"id": "task_1"},
+    )
+
+    assert steps[0]["dependsOn"] == []
+    assert steps[1]["dependsOn"] == [steps[0]["id"]]
+    assert steps[2]["dependsOn"] == [steps[0]["id"], steps[1]["id"]]
+
+
+def test_workbench_plan_mutation_endpoint_validates_revision_dependencies_and_started_state(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from webui import routes
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "workbench_projects.json"
+    store_path.write_text(json.dumps({
+        "projects": [{
+            "id": "project_1",
+            "name": "Cyrene",
+            "sessions": [{
+                "id": "session_1",
+                "projectId": "project_1",
+                "kind": "task",
+                "title": "依赖计划",
+                "goal": "验证依赖计划",
+                "status": "planning",
+                "priority": "medium",
+                "constraints": [],
+                "planRevision": 8,
+                "planDefinitionRevision": 3,
+                "approvedPlanDefinitionRevision": 3,
+                "plan": [
+                    {"id": "step_a", "title": "A", "status": "pending", "order": 1, "dependsOn": []},
+                    {"id": "step_b", "title": "B", "status": "pending", "order": 2, "dependsOn": ["step_a"]},
+                ],
+                "events": [],
+                "runs": [],
+                "artifacts": [],
+                "acceptanceCriteria": [],
+                "createdAt": "2026-06-19T00:00:00+00:00",
+                "updatedAt": "2026-06-19T00:00:00+00:00",
+            }],
+            "createdAt": "2026-06-19T00:00:00+00:00",
+            "updatedAt": "2026-06-19T00:00:00+00:00",
+        }],
+        "activeProjectId": "project_1",
+        "activeSessionId": "session_1",
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+    monkeypatch.setattr(routes, "is_session_running", lambda _session_id: False)
+    app = FastAPI()
+    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    client = TestClient(app)
+
+    stale = client.patch("/api/task-sessions/session_1/plan", json={
+        "operation": "reorder",
+        "basePlanRevision": 2,
+        "orderedStepIds": ["step_a", "step_b"],
+    })
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "stale_plan_revision"
+
+    invalid = client.patch("/api/task-sessions/session_1/plan", json={
+        "operation": "reorder",
+        "basePlanRevision": 3,
+        "orderedStepIds": ["step_b", "step_a"],
+    })
+    assert invalid.status_code == 400
+    assert invalid.json()["code"] == "dependency_order"
+
+    has_dependents = client.patch("/api/task-sessions/session_1/plan", json={
+        "operation": "delete",
+        "basePlanRevision": 3,
+        "stepId": "step_a",
+    })
+    assert has_dependents.status_code == 409
+    assert has_dependents.json()["code"] == "step_has_dependents"
+
+    updated = client.patch("/api/task-sessions/session_1/plan", json={
+        "operation": "update",
+        "basePlanRevision": 3,
+        "stepId": "step_b",
+        "fields": {"title": "B2", "description": "changed", "dependsOn": ["step_a"]},
+    })
+    assert updated.status_code == 200
+    session = updated.json()["session"]
+    assert session["plan"][1]["title"] == "B2"
+    assert session["planDefinitionRevision"] == 4
+    assert session["approvedPlanDefinitionRevision"] is None
+
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    stored["projects"][0]["sessions"][0]["plan"][0]["status"] = "completed"
+    store_path.write_text(json.dumps(stored), encoding="utf-8")
+    locked = client.patch("/api/task-sessions/session_1/plan", json={
+        "operation": "delete",
+        "basePlanRevision": 4,
+        "stepId": "step_b",
+    })
+    assert locked.status_code == 409
+    assert locked.json()["code"] == "plan_started"
+
+
+def test_workbench_step_run_rejects_unmet_dependencies_before_agent_call(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from webui import routes
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "workbench_projects.json"
+    store_path.write_text(json.dumps({
+        "projects": [{
+            "id": "project_1",
+            "name": "Cyrene",
+            "workspacePath": str(tmp_path),
+            "sessions": [{
+                "id": "session_1",
+                "projectId": "project_1",
+                "kind": "task",
+                "title": "依赖执行",
+                "goal": "验证执行守卫",
+                "status": "running",
+                "priority": "medium",
+                "constraints": [],
+                "planRevision": 2,
+                "planDefinitionRevision": 1,
+                "approvedPlanDefinitionRevision": 1,
+                "plan": [
+                    {"id": "step_a", "title": "A", "status": "pending", "order": 1, "dependsOn": []},
+                    {"id": "step_b", "title": "B", "status": "running", "order": 2, "dependsOn": ["step_a"]},
+                ],
+                "events": [],
+                "runs": [],
+                "artifacts": [],
+                "acceptanceCriteria": [],
+                "createdAt": "2026-06-19T00:00:00+00:00",
+                "updatedAt": "2026-06-19T00:00:00+00:00",
+            }],
+            "createdAt": "2026-06-19T00:00:00+00:00",
+            "updatedAt": "2026-06-19T00:00:00+00:00",
+        }],
+        "activeProjectId": "project_1",
+        "activeSessionId": "session_1",
+    }), encoding="utf-8")
+    called = False
+
+    async def fake_reply(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return "should not run"
+
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "_workbench_agent_reply", fake_reply)
+    app = FastAPI()
+    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+
+    client = TestClient(app)
+    stale = client.post("/api/task-sessions/session_1/runs", json={
+        "input": "run A",
+        "stepId": "step_a",
+        "stepTitle": "A",
+        "action": "spawn_subagent",
+        "planDefinitionRevision": 0,
+    })
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "stale_plan_revision"
+
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    stored["projects"][0]["sessions"][0]["approvedPlanDefinitionRevision"] = None
+    store_path.write_text(json.dumps(stored), encoding="utf-8")
+    unapproved = client.post("/api/task-sessions/session_1/runs", json={
+        "input": "run A",
+        "stepId": "step_a",
+        "stepTitle": "A",
+        "action": "spawn_subagent",
+        "planDefinitionRevision": 1,
+    })
+    assert unapproved.status_code == 409
+    assert unapproved.json()["code"] == "plan_not_approved"
+
+    stored["projects"][0]["sessions"][0]["approvedPlanDefinitionRevision"] = 1
+    store_path.write_text(json.dumps(stored), encoding="utf-8")
+    response = client.post("/api/task-sessions/session_1/runs", json={
+        "input": "run B",
+        "stepId": "step_b",
+        "stepTitle": "B",
+        "action": "spawn_subagent",
+        "planDefinitionRevision": 1,
+    })
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "unmet_dependencies"
+    assert called is False
+
+
+def test_workbench_plan_revision_drops_only_invalid_dependency_edges():
+    from webui.routes import _workbench_new_plan_step, _workbench_reconcile_revised_plan
+
+    existing = [
+        _workbench_new_plan_step("A", "", 1, "task_1"),
+        _workbench_new_plan_step("B", "", 2, "task_1"),
+        _workbench_new_plan_step("C", "", 3, "task_1"),
+    ]
+    existing[1]["dependsOn"] = [existing[0]["id"]]
+    existing[2]["dependsOn"] = [existing[1]["id"]]
+    generated = [
+        _workbench_new_plan_step("B", "move first", 1, "task_1"),
+        _workbench_new_plan_step("A", "move second", 2, "task_1"),
+        _workbench_new_plan_step("C", "keep last", 3, "task_1"),
+    ]
+    generated[0]["sourceStepId"] = existing[1]["id"]
+    generated[1]["sourceStepId"] = existing[0]["id"]
+    generated[2]["sourceStepId"] = existing[2]["id"]
+
+    merged = _workbench_reconcile_revised_plan(
+        existing, generated, "把 B 移到 A 前面", operation="revise"
+    )
+
+    assert [step["title"] for step in merged] == ["B", "A", "C"]
+    assert merged[0]["dependsOn"] == []
+    assert merged[2]["dependsOn"] == [existing[1]["id"]]
+
+
+def test_workbench_permission_denial_returns_plan_step_to_pending(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from webui import routes
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "workbench_projects.json"
+    store_path.write_text(json.dumps({
+        "projects": [{
+            "id": "project_1",
+            "name": "Cyrene",
+            "workspacePath": str(tmp_path),
+            "sessions": [{
+                "id": "session_1",
+                "projectId": "project_1",
+                "kind": "task",
+                "title": "权限处理",
+                "goal": "验证权限拒绝",
+                "status": "waiting_for_user",
+                "priority": "medium",
+                "constraints": [],
+                "planRevision": 2,
+                "planDefinitionRevision": 1,
+                "approvedPlanDefinitionRevision": 1,
+                "plan": [{
+                    "id": "step_a",
+                    "title": "执行写入",
+                    "status": "running",
+                    "order": 1,
+                    "dependsOn": [],
+                    "startedAt": "2026-06-19T00:00:00+00:00",
+                }],
+                "pendingQuestion": {
+                    "id": "question_1",
+                    "kind": "write_permission_request",
+                    "options": [],
+                },
+                "pendingPlanStep": {"stepId": "step_a", "continueAll": True},
+                "events": [],
+                "runs": [],
+                "artifacts": [],
+                "acceptanceCriteria": [],
+                "createdAt": "2026-06-19T00:00:00+00:00",
+                "updatedAt": "2026-06-19T00:00:00+00:00",
+            }],
+            "createdAt": "2026-06-19T00:00:00+00:00",
+            "updatedAt": "2026-06-19T00:00:00+00:00",
+        }],
+        "activeProjectId": "project_1",
+        "activeSessionId": "session_1",
+    }), encoding="utf-8")
+
+    async def fake_answer(*_args, **_kwargs):
+        return "已拒绝权限请求。"
+
+    async def fake_archive(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "_workbench_answer_pending", fake_answer)
+    monkeypatch.setattr(
+        routes,
+        "_workbench_apply_pending",
+        lambda *_args: ("已拒绝权限请求。", False),
+    )
+    monkeypatch.setattr(routes, "_workbench_archive_run_knowledge", fake_archive)
+    monkeypatch.setattr(routes, "schedule_capture", lambda *_args, **_kwargs: None)
+
+    app = FastAPI()
+    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    response = TestClient(app).post(
+        "/api/task-sessions/session_1/answer",
+        json={"question_id": "question_1", "answer": "拒绝"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["continuePlanExecution"] is False
+    assert payload["session"]["status"] == "paused"
+    assert payload["session"]["plan"][0]["status"] == "pending"
+    assert payload["session"]["plan"][0]["startedAt"] is None
+    assert "pendingPlanStep" not in payload["session"]
+
+
 def test_workbench_plan_revision_allows_explicit_replacement():
     from webui.routes import _workbench_new_plan_step, _workbench_reconcile_revised_plan
 

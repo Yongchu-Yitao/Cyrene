@@ -1058,12 +1058,16 @@
       API.update(ev.task_id, { status: next }).then(function () { load(); }).catch(function (e) { setError(e.message || String(e)); });
     }
     function removeTask(ev) {
-      if (!window.confirm(T("schedule.confirmDeleteTask"))) return;
-      API.remove(ev.task_id).then(function () { setSelectedId(null); load(); }).catch(function (e) { setError(e.message || String(e)); });
+      window.confirmModal({ body: T("schedule.confirmDeleteTask"), confirmLabel: T("common.delete"), danger: true }).then(function (ok) {
+        if (!ok) return;
+        API.remove(ev.task_id).then(function () { setSelectedId(null); load(); }).catch(function (e) { setError(e.message || String(e)); });
+      });
     }
     function removeEntity(ev) {
-      if (!window.confirm(T("schedule.confirmDeleteEvent"))) return;
-      API.removeEntity(ev.entity_id).then(function () { setSelectedId(null); setEntityDetail(null); load(); }).catch(function (e) { setError(e.message || String(e)); });
+      window.confirmModal({ body: T("schedule.confirmDeleteEvent"), confirmLabel: T("common.delete"), danger: true }).then(function (ok) {
+        if (!ok) return;
+        API.removeEntity(ev.entity_id).then(function () { setSelectedId(null); setEntityDetail(null); load(); }).catch(function (e) { setError(e.message || String(e)); });
+      });
     }
     function openEdit(ev) {
       if (ev.source === "task") {

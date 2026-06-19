@@ -523,14 +523,16 @@
     }
 
     function handleDelete(doc) {
-      if (!window.confirm("确定删除「" + docTitle(doc) + "」？此操作不可撤销。")) return;
       setOpenMenu(null);
-      client.remove(doc.id)
-        .then(function () {
-          if (selectedId === doc.id) { setSelectedId(""); setDetail(null); }
-          return loadDocuments();
-        })
-        .catch(function (err) { setError(err.message || String(err)); });
+      window.confirmModal({ body: "确定删除「" + docTitle(doc) + "」？此操作不可撤销。", confirmLabel: "删除", danger: true }).then(function (ok) {
+        if (!ok) return;
+        client.remove(doc.id)
+          .then(function () {
+            if (selectedId === doc.id) { setSelectedId(""); setDetail(null); }
+            return loadDocuments();
+          })
+          .catch(function (err) { setError(err.message || String(err)); });
+      });
     }
 
     function handleReindex(doc) {

@@ -57,6 +57,12 @@ var WorkbenchModel = (function () {
         if (!Array.isArray(session.constraints)) session.constraints = [];
         if (!Array.isArray(session.plan)) session.plan = [];
         if (!Number.isFinite(Number(session.planRevision))) session.planRevision = 0;
+        if (!Number.isFinite(Number(session.planDefinitionRevision))) session.planDefinitionRevision = 0;
+        session.plan.forEach(function (step, index) {
+          if (!step || typeof step !== "object") return;
+          if (!Array.isArray(step.dependsOn)) step.dependsOn = [];
+          step.order = index + 1;
+        });
         if (!Array.isArray(session.events)) session.events = [];
         if (!Array.isArray(session.runs)) session.runs = [];
         if (!Array.isArray(session.artifacts)) session.artifacts = [];
@@ -120,8 +126,13 @@ var WorkbenchModel = (function () {
     }).then(normalizeStore);
   }
 
-  function fetchNotifications(tab, limit) {
+  function fetchNotifications(tab, limit, visibleView) {
     var qs = "?tab=" + encodeURIComponent(tab || "all") + "&limit=" + encodeURIComponent(limit || 80);
+    if (visibleView && visibleView.chatId) {
+      qs += "&visible_chat_id=" + encodeURIComponent(visibleView.chatId);
+    } else if (visibleView && visibleView.sessionId) {
+      qs += "&visible_session_id=" + encodeURIComponent(visibleView.sessionId);
+    }
     return apiJson("/api/workbench/notifications" + qs);
   }
 
@@ -191,6 +202,7 @@ var WorkbenchModel = (function () {
         stepTitle: options.stepTitle || undefined,
         action: options.action || undefined,
         meta: options.meta || undefined,
+        planDefinitionRevision: options.planDefinitionRevision,
       }),
     };
     if (options.signal) init.signal = options.signal;
@@ -379,6 +391,14 @@ var WorkbenchModel = (function () {
     }).then(normalizeStore);
   }
 
+  function mutatePlan(sessionId, input) {
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/plan", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input || {}),
+    }).then(normalizeStore);
+  }
+
   function statusText(status) {
     var raw = String(status || "idle");
     var map = {
@@ -543,6 +563,7 @@ var WorkbenchModel = (function () {
         description: "",
         status: "pending",
         order: index + 1,
+        dependsOn: [],
         currentAction: "",
         relatedFiles: [],
         progressEvents: [],
@@ -619,6 +640,72 @@ var WorkbenchModel = (function () {
       });
       return applyStepTiming(next, status, now);
     });
+  }
+
+  function markStepById(plan, stepId, status, action) {
+    if (!Array.isArray(plan)) return [];
+    var now = new Date().toISOString();
+    return plan.map(function (step) {
+      if (!step || step.id !== stepId) return step;
+      var next = Object.assign({}, step, {
+        status: status,
+        currentAction: action != null ? action : step.currentAction,
+        updatedAt: now,
+      });
+      return applyStepTiming(next, status, now);
+    });
+  }
+
+  function doneDependencyStatus(status) {
+    return status === "completed" || status === "done";
+  }
+
+  function unmetDependencyIds(plan, step) {
+    if (!step) return [];
+    var byId = {};
+    (Array.isArray(plan) ? plan : []).forEach(function (item) {
+      if (item && item.id) byId[item.id] = item;
+    });
+    return (Array.isArray(step.dependsOn) ? step.dependsOn : []).filter(function (dependencyId) {
+      var dependency = byId[dependencyId];
+      return !dependency || !doneDependencyStatus(dependency.status);
+    });
+  }
+
+  function validatePlanGraph(plan) {
+    var items = Array.isArray(plan) ? plan : [];
+    var ids = {};
+    var positions = {};
+    for (var i = 0; i < items.length; i++) {
+      var step = items[i];
+      var stepId = String(step && step.id || "");
+      if (!stepId || ids[stepId]) return { valid: false, code: "duplicate_step_id" };
+      ids[stepId] = step;
+      positions[stepId] = i;
+    }
+    for (var j = 0; j < items.length; j++) {
+      var current = items[j];
+      var dependencies = Array.isArray(current.dependsOn) ? current.dependsOn : [];
+      for (var d = 0; d < dependencies.length; d++) {
+        var dependencyId = dependencies[d];
+        if (dependencyId === current.id) return { valid: false, code: "self_dependency", stepId: current.id };
+        if (!ids[dependencyId]) return { valid: false, code: "missing_dependency", stepId: current.id };
+        if (positions[dependencyId] >= j) {
+          return { valid: false, code: "dependency_order", stepId: current.id, dependencyId: dependencyId };
+        }
+      }
+    }
+    return { valid: true };
+  }
+
+  function findNextRunnableStep(plan) {
+    var items = Array.isArray(plan) ? plan : [];
+    for (var i = 0; i < items.length; i++) {
+      var step = items[i];
+      if (!step || isResolvedStepStatus(step.status) || step.status === "running") continue;
+      if (unmetDependencyIds(items, step).length === 0) return step;
+    }
+    return null;
   }
 
   function markAllSteps(plan, status) {
@@ -702,6 +789,7 @@ var WorkbenchModel = (function () {
     fetchFileDiff: fetchFileDiff,
     checkWorkspacePath: checkWorkspacePath,
     patchSession: patchSession,
+    mutatePlan: mutatePlan,
     setActiveProject: setActiveProject,
     interruptSession: interruptSession,
     uploadAttachments: uploadAttachments,
@@ -720,9 +808,13 @@ var WorkbenchModel = (function () {
     makeEvent: makeEvent,
     withEvent: withEvent,
     markStep: markStep,
+    markStepById: markStepById,
     markAllSteps: markAllSteps,
     markAllAcceptance: markAllAcceptance,
     hasUnresolvedStartedSteps: hasUnresolvedStartedSteps,
+    unmetDependencyIds: unmetDependencyIds,
+    validatePlanGraph: validatePlanGraph,
+    findNextRunnableStep: findNextRunnableStep,
     ensureArtifacts: ensureArtifacts,
     looksOutOfScope: looksOutOfScope,
   };

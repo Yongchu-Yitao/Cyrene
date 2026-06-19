@@ -975,17 +975,23 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
 
   function handleDeleteChat(chatId) {
     if (!chatId) return;
-    if (!window.confirm(wbcT("workbenchChat.confirmDelete", "Delete this chat? Its messages cannot be recovered."))) return;
-    model.deleteChat(chatId).then(function () {
-      runtimeEngine.abort(chatId);
-      runtimeEngine.clear(chatId);
-      setChats(function (prev) {
-        var next = prev.filter(function (item) { return item.id !== chatId; });
-        if (activeChatId === chatId) setActiveChatId(next[0] ? next[0].id : "");
-        return next;
-      });
-      if (activeChatId === chatId) setActiveChat(null);
-    }).catch(function (err) { setError(wbcErrorText(err)); });
+    window.confirmModal({
+      body: wbcT("workbenchChat.confirmDelete", "Delete this chat? Its messages cannot be recovered."),
+      confirmLabel: wbcT("common.delete", "Delete"),
+      danger: true,
+    }).then(function (ok) {
+      if (!ok) return;
+      model.deleteChat(chatId).then(function () {
+        runtimeEngine.abort(chatId);
+        runtimeEngine.clear(chatId);
+        setChats(function (prev) {
+          var next = prev.filter(function (item) { return item.id !== chatId; });
+          if (activeChatId === chatId) setActiveChatId(next[0] ? next[0].id : "");
+          return next;
+        });
+        if (activeChatId === chatId) setActiveChat(null);
+      }).catch(function (err) { setError(wbcErrorText(err)); });
+    });
   }
 
   function handleToTask() {
@@ -1327,7 +1333,7 @@ function WbcHeader({ project, chat, running, onRename, onDelete, onToTask, toTas
     setEditing(false);
     if (!next || next === chat.title) { setDraft(chat.title || ""); return; }
     onRename(next).catch(function (err) {
-      window.alert(err.message || String(err));
+      window.showToast(err.message || String(err), "error");
       setDraft(chat.title || "");
     });
   }
@@ -1600,7 +1606,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
     setUploading(true);
     model.uploadFiles(files)
       .then(function (uploaded) { setAttachments(function (prev) { return prev.concat(uploaded); }); })
-      .catch(function (err) { window.alert(wbcT("workbenchChat.uploadFailed", "Upload failed: {error}", { error: wbcErrorText(err) })); })
+      .catch(function (err) { window.showToast(wbcT("workbenchChat.uploadFailed", "Upload failed: {error}", { error: wbcErrorText(err) }), "error"); })
       .finally(function () { setUploading(false); if (fileRef.current) fileRef.current.value = ""; });
   }
 

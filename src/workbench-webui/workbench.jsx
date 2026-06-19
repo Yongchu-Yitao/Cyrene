@@ -6,6 +6,159 @@ var {
   useRef: useWorkbenchRef,
 } = React;
 
+// ---------------------------------------------------------------------------
+// Non-blocking feedback: toasts + confirm dialogs that replace window.alert /
+// window.confirm. Native dialogs freeze the page (fatal while a task streams)
+// and ignore the workbench dark theme. The store lives outside React so it can
+// be driven imperatively from anywhere — including promise .catch() handlers
+// far from any component — through window.showToast() / window.confirmModal().
+// A single <WorkbenchFeedbackHost/> mounted in the shell renders the queue.
+// ---------------------------------------------------------------------------
+var WorkbenchFeedbackStore = (function () {
+  var toasts = [];
+  var confirms = [];
+  var listeners = [];
+  var seq = 0;
+  function emit() {
+    for (var i = 0; i < listeners.length; i++) {
+      try { listeners[i](); } catch (e) { /* host unmounted */ }
+    }
+  }
+  function subscribe(fn) {
+    listeners.push(fn);
+    return function () { listeners = listeners.filter(function (l) { return l !== fn; }); };
+  }
+  function showToast(message, type, opts) {
+    opts = opts || {};
+    var id = ++seq;
+    var kind = type || "info";
+    var duration = opts.duration != null ? opts.duration : (kind === "error" ? 6000 : 3200);
+    toasts = toasts.concat([{ id: id, message: message == null ? "" : String(message), type: kind, duration: duration }]);
+    emit();
+    if (duration > 0) setTimeout(function () { dismissToast(id); }, duration);
+    return id;
+  }
+  function dismissToast(id) {
+    var next = toasts.filter(function (toast) { return toast.id !== id; });
+    if (next.length !== toasts.length) { toasts = next; emit(); }
+  }
+  function confirmModal(opts) {
+    if (typeof opts === "string") opts = { body: opts };
+    opts = opts || {};
+    return new Promise(function (resolve) {
+      var id = ++seq;
+      confirms = confirms.concat([{
+        id: id,
+        title: opts.title || "",
+        body: opts.body || "",
+        confirmLabel: opts.confirmLabel || "",
+        cancelLabel: opts.cancelLabel || "",
+        danger: !!opts.danger,
+        resolve: resolve,
+      }]);
+      emit();
+    });
+  }
+  function resolveConfirm(id, value) {
+    var item = null;
+    confirms = confirms.filter(function (c) { if (c.id === id) { item = c; return false; } return true; });
+    if (item) { emit(); item.resolve(value); }
+  }
+  return {
+    subscribe: subscribe,
+    snapshot: function () { return { toasts: toasts, confirms: confirms }; },
+    showToast: showToast,
+    dismissToast: dismissToast,
+    confirmModal: confirmModal,
+    resolveConfirm: resolveConfirm,
+  };
+})();
+
+// Imperative entry points usable from any script / promise handler.
+window.showToast = function (message, type, opts) { return WorkbenchFeedbackStore.showToast(message, type, opts); };
+window.confirmModal = function (opts) { return WorkbenchFeedbackStore.confirmModal(opts); };
+
+function wbToastIcon(type) {
+  if (type === "error") {
+    return <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16.5v.01" /></svg>;
+  }
+  if (type === "success") {
+    return <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="m8.5 12 2.5 2.5 4.5-5" /></svg>;
+  }
+  if (type === "warning") {
+    return <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.3 4.3 2.5 18a1.8 1.8 0 0 0 1.6 2.7h15.8A1.8 1.8 0 0 0 21.5 18L13.7 4.3a1.9 1.9 0 0 0-3.4 0Z" /><path d="M12 9.5v4M12 17v.01" /></svg>;
+  }
+  return <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 7.5v.01" /></svg>;
+}
+
+function WorkbenchFeedbackHost() {
+  var [, setTick] = useWorkbenchState(0);
+  useWorkbenchEffect(function () {
+    return WorkbenchFeedbackStore.subscribe(function () { setTick(function (n) { return (n + 1) % 1000000; }); });
+  }, []);
+  var snap = WorkbenchFeedbackStore.snapshot();
+  var toasts = snap.toasts;
+  var active = snap.confirms.length ? snap.confirms[0] : null;
+
+  // Keyboard: Enter confirms, Esc cancels. Capture phase + stopImmediatePropagation
+  // so an underlying overlay (e.g. settings) can't also react to the same Esc.
+  useWorkbenchEffect(function () {
+    if (!active) return undefined;
+    function onKey(e) {
+      if (e.key === "Escape") {
+        e.preventDefault(); e.stopImmediatePropagation();
+        WorkbenchFeedbackStore.resolveConfirm(active.id, false);
+      } else if (e.key === "Enter") {
+        e.preventDefault(); e.stopImmediatePropagation();
+        WorkbenchFeedbackStore.resolveConfirm(active.id, true);
+      }
+    }
+    document.addEventListener("keydown", onKey, true);
+    return function () { document.removeEventListener("keydown", onKey, true); };
+  }, [active ? active.id : 0]);
+
+  return (
+    <>
+      {toasts.length ? (
+        <div className="workbench-toast-host" aria-live="polite">
+          {toasts.map(function (toast) {
+            return (
+              <div key={toast.id} className={"workbench-toast is-" + toast.type} role="status">
+                <span className="workbench-toast-icon">{wbToastIcon(toast.type)}</span>
+                <span className="workbench-toast-msg">{toast.message}</span>
+                <button
+                  type="button"
+                  className="workbench-toast-close"
+                  onClick={function () { WorkbenchFeedbackStore.dismissToast(toast.id); }}
+                  aria-label={wbT("common.close", "Close")}
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18" /></svg>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {active ? (
+        <div className="workbench-confirm-scrim" onMouseDown={function (e) { if (e.target === e.currentTarget) WorkbenchFeedbackStore.resolveConfirm(active.id, false); }}>
+          <div className="workbench-confirm-modal" role="alertdialog" aria-modal="true">
+            {active.title ? <div className="workbench-confirm-title">{active.title}</div> : null}
+            <div className="workbench-confirm-body">{active.body}</div>
+            <div className="workbench-confirm-foot">
+              <button type="button" className="wb-btn ghost" onClick={function () { WorkbenchFeedbackStore.resolveConfirm(active.id, false); }}>
+                {active.cancelLabel || wbT("common.cancel", "Cancel")}
+              </button>
+              <button type="button" className={"wb-btn " + (active.danger ? "danger" : "primary")} autoFocus onClick={function () { WorkbenchFeedbackStore.resolveConfirm(active.id, true); }}>
+                {active.confirmLabel || wbT("common.confirm", "Confirm")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 // Help center external destinations (kept in sync with the About section in
 // settings-overlay.jsx).
 var WB_HELP_DOCS_URL = "https://github.com/ikerrrrrrrrrrr/Cyrene#readme";
@@ -224,7 +377,11 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       // stored AND never welcomed) land on the welcome / get-started page — it
       // is auto-detected here rather than opened from a rail button.
       var stored = localStorage.getItem("wb-active-page");
-      if (stored) return stored;
+      // "welcome" must never be treated as a resumable page. Older builds wrongly
+      // persisted it here, trapping users on the welcome screen every relaunch —
+      // ignore a stale "welcome" value so those installs fall through to the
+      // workspace instead of re-opening onboarding's get-started page.
+      if (stored && stored !== "welcome") return stored;
       if (!localStorage.getItem("cyrene-workbench-welcomed")) return "welcome";
       return null;
     } catch (e) { return null; }
@@ -245,7 +402,16 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var activeViewRef = useWorkbenchRef({ page: null, chatId: "", sessionId: "" });
 
   function reloadNotifications(tab, limit) {
-    return model.fetchNotifications(tab || "all", limit || 80).then(function (payload) {
+    var activeView = activeViewRef.current;
+    var visibleView = null;
+    if (typeof document === "undefined" || !document.hidden) {
+      if (activeView.page === "chat" && activeView.chatId) {
+        visibleView = { chatId: activeView.chatId };
+      } else if (!activeView.page && activeView.sessionId) {
+        visibleView = { sessionId: activeView.sessionId };
+      }
+    }
+    return model.fetchNotifications(tab || "all", limit || 80, visibleView).then(function (payload) {
       payload = wbSuppressOnScreenNotifications(payload, activeViewRef.current, model);
       setNotifications({
         items: Array.isArray(payload.items) ? payload.items : [],
@@ -570,25 +736,37 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
 
   function handleDeleteSession(session) {
     if (!session) return;
-    if (!window.confirm(t("task.confirmDelete", { name: session.title || t("task.thisTask") }))) return;
-    model.deleteSession(session.id).then(function (next) {
-      setStore(next);
-      setExpandedStepId("");
-    }).catch(function (err) {
-      setError(err.message || String(err));
+    window.confirmModal({
+      body: t("task.confirmDelete", { name: session.title || t("task.thisTask") }),
+      confirmLabel: t("common.delete"),
+      danger: true,
+    }).then(function (ok) {
+      if (!ok) return;
+      model.deleteSession(session.id).then(function (next) {
+        setStore(next);
+        setExpandedStepId("");
+      }).catch(function (err) {
+        setError(err.message || String(err));
+      });
     });
   }
 
   function handleDeleteProject(project) {
     if (!project) return Promise.resolve();
-    if (!window.confirm(wbT("project.confirmDelete", "Delete project \"{name}\"? Data inside the project will also be deleted.", { name: project.name }))) return Promise.resolve();
-    return model.deleteProject(project.id).then(function (next) {
-      setStore(next);
-      setFullPage(null);
-      setExpandedStepId("");
-      return next;
-    }).catch(function (err) {
-      setError(err.message || String(err));
+    return window.confirmModal({
+      body: wbT("project.confirmDelete", "Delete project \"{name}\"? Data inside the project will also be deleted.", { name: project.name }),
+      confirmLabel: wbT("common.delete", "Delete"),
+      danger: true,
+    }).then(function (ok) {
+      if (!ok) return undefined;
+      return model.deleteProject(project.id).then(function (next) {
+        setStore(next);
+        setFullPage(null);
+        setExpandedStepId("");
+        return next;
+      }).catch(function (err) {
+        setError(err.message || String(err));
+      });
     });
   }
 
@@ -651,6 +829,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         {React.createElement(window.WorkbenchWelcomePage || function () { return <div className="workbench-empty">{t("workbench.welcomeLoading")}</div>; }, {
           onboarding: onboarding,
         })}
+        <WorkbenchFeedbackHost />
       </div>
     );
   }
@@ -823,6 +1002,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           },
         }
       )}
+      <WorkbenchFeedbackHost />
     </div>
   );
 }
@@ -1539,7 +1719,7 @@ function useTaskController(session, onRefresh, runtime) {
   var sid = session ? session.id : "";
 
   function apply(next) { if (onRefresh && next) onRefresh(next); return next; }
-  function fail(err) { window.alert((err && err.message) || String(err)); }
+  function fail(err) { window.showToast((err && err.message) || String(err), "error"); }
   function rethrowPlanConflict(err) {
     if (err && err.code === "stale_plan_revision") throw err;
   }
@@ -1560,30 +1740,54 @@ function useTaskController(session, onRefresh, runtime) {
     setAgentBusy(Object.assign({ startedAt: new Date().toISOString() }, op || {}));
     return promise.then(apply).catch(fail).finally(function () { setBusy(false); setAgentBusy(null); });
   }
-  function firstUnresolvedStepIndex(plan) {
+  function stepById(plan, stepId) {
     var items = Array.isArray(plan) ? plan : [];
-    for (var i = 0; i < items.length; i++) {
-      if (!isResolvedStepStatus(items[i] && items[i].status)) return i;
-    }
-    return -1;
+    return items.find(function (item) { return item && item.id === stepId; }) || null;
   }
-  function stepFailedPatch(baseSession, basePlan, index, stepTitle, stepId, msg) {
+  function ensurePlanApproved(baseSession) {
+    var current = baseSession || session;
+    var definitionRevision = Number(current && current.planDefinitionRevision || 0);
+    if (
+      current
+      && current.approvedPlanDefinitionRevision != null
+      && Number(current.approvedPlanDefinitionRevision) === definitionRevision
+    ) {
+      return Promise.resolve(current);
+    }
+    return model.patchSession(sid, {
+      approvedPlanDefinitionRevision: definitionRevision,
+      events: model.withEvent(current, "PlanApproved", "用户确认执行当前版本的计划。"),
+    })
+      .then(function (store) {
+        apply(store);
+        return (store && store.activeSession) || current;
+      });
+  }
+  function requirePlan(baseSession) {
+    var plan = baseSession && Array.isArray(baseSession.plan) ? baseSession.plan : [];
+    if (plan.length) return true;
+    window.showToast(wbT("task.plan.addAtLeastOneStep", "Add at least one step before approval or execution."), "warning");
+    return false;
+  }
+  function stepFailedPatch(baseSession, basePlan, stepTitle, stepId, msg) {
     return model.patchSession(sid, {
       status: "failed",
-      plan: model.markStep(basePlan, index, "failed", msg),
+      plan: model.markStepById(basePlan, stepId, "failed", msg),
       agentReply: "步骤执行失败：" + msg,
       events: model.withEvent(baseSession, "ExecutionFailed", "步骤「" + stepTitle + "」执行失败：" + msg, { stepId: stepId || "" }),
     }).then(apply);
   }
-  function runStepCore(baseSession, step, index, options) {
+  function runStepCore(baseSession, stepId, options) {
     options = options || {};
-    if (!baseSession || !step || index < 0) return Promise.resolve(null);
+    var basePlan = Array.isArray(baseSession && baseSession.plan) ? baseSession.plan : [];
+    var step = stepById(basePlan, stepId);
+    if (!baseSession || !step || !stepId) return Promise.resolve(null);
     interruptedRef.current = false;
-    var basePlan = Array.isArray(baseSession.plan) ? baseSession.plan : [];
     var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
     runAbortRef.current = ac;
+    var index = basePlan.findIndex(function (item) { return item && item.id === stepId; });
     var stepTitle = String(step.title || ("步骤 " + (index + 1))).trim();
-    var startPlan = model.markStep(basePlan, index, "running", "正在启动 subagent，等待模型思考…");
+    var startPlan = model.markStepById(basePlan, stepId, "running", "正在启动 subagent，等待模型思考…");
     var startEvents = model.withEvent(baseSession, "ExecutionStarted", "开始执行步骤：" + stepTitle, { stepId: step.id || "" });
     return model.patchSession(sid, { status: "running", plan: startPlan, agentReply: "正在执行步骤：" + stepTitle, events: startEvents })
       .then(apply)
@@ -1596,19 +1800,21 @@ function useTaskController(session, onRefresh, runtime) {
           stepId: step.id || undefined,
           stepTitle: stepTitle,
           action: "spawn_subagent",
-          meta: { scope: "plan_step" },
+          meta: { scope: "plan_step", continueAll: !!options.continueAll },
+          planDefinitionRevision: Number(patchedSession.planDefinitionRevision || 0),
           signal: ac ? ac.signal : undefined,
         });
       })
       .then(function (next) {
         var s2 = (next && next.activeSession) || baseSession;
+        if (String(s2.status || "") === "waiting_for_user") return next;
         var returnedPlan = Array.isArray(s2.plan) && s2.plan.length ? s2.plan : basePlan;
         // Real tool activity from this step's run → show it on the step.
         var latestRun = (Array.isArray(s2.runs) && s2.runs.length) ? s2.runs[s2.runs.length - 1] : null;
         var stepToolCalls = (latestRun && Array.isArray(latestRun.toolCalls)) ? latestRun.toolCalls : [];
         var doneAction = stepToolCalls.length ? ("已完成，本步调用工具 " + stepToolCalls.length + " 次。") : "已完成该步骤。";
-        var completedPlan = model.markStep(returnedPlan, index, "completed", doneAction).map(function (st, i) {
-          return i === index ? Object.assign({}, st, { toolCalls: stepToolCalls }) : st;
+        var completedPlan = model.markStepById(returnedPlan, stepId, "completed", doneAction).map(function (st) {
+          return st && st.id === stepId ? Object.assign({}, st, { toolCalls: stepToolCalls }) : st;
         });
         var doneCount = completedPlan.filter(function (item) { return isResolvedStepStatus(item && item.status); }).length;
         var fullyDone = doneCount >= completedPlan.length && completedPlan.length > 0;
@@ -1632,8 +1838,11 @@ function useTaskController(session, onRefresh, runtime) {
       .then(apply)
       .catch(function (err) {
         if (interruptedRef.current || (err && err.name === "AbortError")) return null;
+        if (err && ["stale_plan_revision", "plan_not_approved", "unmet_dependencies", "step_not_found"].indexOf(err.code) >= 0) {
+          throw err;
+        }
         var msg = (err && err.message) || String(err);
-        return stepFailedPatch(baseSession, basePlan, index, stepTitle, step.id || "", msg).then(function (next) {
+        return stepFailedPatch(baseSession, basePlan, stepTitle, step.id || "", msg).then(function (next) {
           throw err;
         });
       })
@@ -1681,7 +1890,13 @@ function useTaskController(session, onRefresh, runtime) {
       var qid = String(questionId || "").trim();
       var ans = String(optionText || "").trim();
       if (!qid || !ans) return Promise.resolve();
-      return runAgentic({ kind: "answer", label: "正在继续…" }, model.answer(sid, qid, ans));
+      return runAgentic({ kind: "answer", label: "正在继续…" }, model.answer(sid, qid, ans))
+        .then(function (store) {
+          if (store && store.continuePlanExecution) {
+            return ctrl.executeAll({ continuing: true, baseSession: store.activeSession });
+          }
+          return store;
+        });
     },
 
     // answered / acted → promote this exchange into a real, planned task.
@@ -1782,14 +1997,25 @@ function useTaskController(session, onRefresh, runtime) {
 
     // planning → waiting_for_approval — the 需要你确认 gate before any change.
     approvePlan: function () {
+      if (!requirePlan(session)) return Promise.resolve();
       var events = model.withEvent(session, "PlanApproved", "用户批准执行计划。");
-      return run(patch({ status: "waiting_for_approval", agentReply: "执行前请确认下面的操作。", events: events }));
+      return run(patch({
+        status: "waiting_for_approval",
+        approvedPlanDefinitionRevision: Number(session.planDefinitionRevision || 0),
+        agentReply: "执行前请确认下面的操作。",
+        events: events,
+      }));
     },
 
     // planning → 跳过单独确认，直接连续执行全部步骤。
     approveAndRunAll: function () {
-      return model.patchSession(sid, { events: model.withEvent(session, "PlanApproved", "用户批准计划并连续执行全部步骤。") })
-        .then(apply).then(function () { return ctrl.executeAll(); });
+      if (!requirePlan(session)) return Promise.resolve();
+      return model.patchSession(sid, {
+        approvedPlanDefinitionRevision: Number(session.planDefinitionRevision || 0),
+        events: model.withEvent(session, "PlanApproved", "用户批准计划并连续执行全部步骤。"),
+      }).then(apply).then(function (store) {
+        return ctrl.executeAll({ baseSession: (store && store.activeSession) || session });
+      });
     },
 
     reject: function () {
@@ -1797,39 +2023,71 @@ function useTaskController(session, onRefresh, runtime) {
       return run(patch({ status: "planning", agentReply: "操作已取消。你可以修改要求，或让我重新规划。", events: events }));
     },
 
-    // Honest execution: run the NEXT pending step for real. Delegates to the
-    // per-step run, which executes one step and marks ONLY that step done, with
-    // real timing + real tool data. The user can also run any step directly via
-    // its 执行此步骤 button, in any order. Reused by resume / retry.
+    // Honest execution: run the NEXT dependency-ready step for real. Delegates
+    // to the per-step run, which executes one step and marks ONLY that step
+    // done, with real timing + real tool data. Reused by resume / retry.
     execute: function () {
-      var plan = Array.isArray(session.plan) ? session.plan : [];
-      var nextIndex = firstUnresolvedStepIndex(plan);
-      if (nextIndex < 0) {
-        return run(patch({
-          status: "review",
-          agentReply: "所有步骤已完成，请验收。",
-          events: model.withEvent(session, "ExecutionFinished", "全部步骤已完成，等待你验收。"),
-        }));
-      }
-      return ctrl.runStep(plan[nextIndex], nextIndex);
+      if (!requirePlan(session)) return Promise.resolve();
+      return ensurePlanApproved(session).then(function (approvedSession) {
+        var plan = Array.isArray(approvedSession.plan) ? approvedSession.plan : [];
+        var nextStep = model.findNextRunnableStep(plan);
+        if (!nextStep) {
+          var remaining = plan.filter(function (item) { return !isResolvedStepStatus(item && item.status); });
+          if (!remaining.length) {
+            return run(model.patchSession(sid, {
+              status: "review",
+              agentReply: "所有步骤已完成，请验收。",
+              events: model.withEvent(approvedSession, "ExecutionFinished", "全部步骤已完成，等待你验收。"),
+            }));
+          }
+          return run(model.patchSession(sid, {
+            status: "blocked",
+            agentReply: "没有可执行的步骤，请先完成或调整被阻塞步骤的前置依赖。",
+            events: model.withEvent(approvedSession, "ExecutionBlocked", "步骤依赖尚未满足，任务已阻塞。"),
+          }));
+        }
+        setBusy(true);
+        return runStepCore(approvedSession, nextStep.id)
+          .catch(function (err) {
+            if (interruptedRef.current || (err && err.name === "AbortError")) return;
+            fail(err);
+          })
+          .finally(function () { setBusy(false); });
+      });
     },
 
     // Run every unresolved step in order. Each iteration starts from the latest
     // server-returned session so completed/failed/skipped state is preserved.
-    executeAll: function () {
+    executeAll: function (options) {
+      options = options || {};
+      var initialSession = options.baseSession || session;
+      if (!requirePlan(initialSession)) return Promise.resolve();
       setBusy(true);
       interruptedRef.current = false;
-      var currentSession = session;
-      var startedEvents = model.withEvent(session, "ExecutionStarted", "开始连续执行全部剩余步骤。");
-      return model.patchSession(sid, { status: "running", agentReply: "正在按顺序执行全部剩余步骤。", events: startedEvents })
+      var currentSession = initialSession;
+      var approvalPromise = options.continuing ? Promise.resolve(initialSession) : ensurePlanApproved(initialSession);
+      return approvalPromise.then(function (approvedSession) {
+        currentSession = approvedSession;
+        if (options.continuing) return { activeSession: approvedSession };
+        var startedEvents = model.withEvent(approvedSession, "ExecutionStarted", "开始连续执行全部剩余步骤。");
+        return model.patchSession(sid, { status: "running", agentReply: "正在按依赖顺序执行全部剩余步骤。", events: startedEvents });
+      })
         .then(apply)
         .then(function (next) {
           currentSession = (next && next.activeSession) || currentSession;
           function loop() {
             if (interruptedRef.current) return null;
             var plan = Array.isArray(currentSession.plan) ? currentSession.plan : [];
-            var nextIndex = firstUnresolvedStepIndex(plan);
-            if (nextIndex < 0) {
+            var nextStep = model.findNextRunnableStep(plan);
+            if (!nextStep) {
+              var remaining = plan.filter(function (item) { return !isResolvedStepStatus(item && item.status); });
+              if (remaining.length) {
+                return model.patchSession(sid, {
+                  status: "blocked",
+                  agentReply: "没有可执行的步骤，请先完成或调整被阻塞步骤的前置依赖。",
+                  events: model.withEvent(currentSession, "ExecutionBlocked", "步骤依赖尚未满足，连续执行已停止。"),
+                }).then(apply);
+              }
               return model.patchSession(sid, {
                 status: "review",
                 agentReply: "所有步骤已完成，请验收。",
@@ -1837,12 +2095,14 @@ function useTaskController(session, onRefresh, runtime) {
                 events: model.withEvent(currentSession, "ExecutionFinished", "全部步骤已完成，等待你验收。"),
               }).then(apply);
             }
-            return runStepCore(currentSession, plan[nextIndex], nextIndex, { continueAll: true })
+            return runStepCore(currentSession, nextStep.id, { continueAll: true })
               .then(function (nextStore) {
                 if (interruptedRef.current || !nextStore) return null;
                 currentSession = (nextStore && nextStore.activeSession) || currentSession;
                 if (String(currentSession.status || "") === "failed") return nextStore;
                 if (String(currentSession.status || "") === "review") return nextStore;
+                if (String(currentSession.status || "") === "waiting_for_user") return nextStore;
+                if (String(currentSession.status || "") === "blocked") return nextStore;
                 return loop();
               });
           }
@@ -1880,10 +2140,13 @@ function useTaskController(session, onRefresh, runtime) {
       return run(patch({ status: "paused", events: model.withEvent(session, "Paused", "任务已暂停。") }));
     },
 
-    runStep: function (step, index) {
-      if (!step || index < 0) return Promise.resolve();
+    runStep: function (step) {
+      if (!step || !step.id) return Promise.resolve();
       setBusy(true);
-      return runStepCore(session, step, index)
+      return ensurePlanApproved(session)
+        .then(function (approvedSession) {
+          return runStepCore(approvedSession, step.id);
+        })
         .catch(function (err) {
           if (interruptedRef.current || (err && err.name === "AbortError")) return;
           fail(err);
@@ -1894,13 +2157,32 @@ function useTaskController(session, onRefresh, runtime) {
     // Merge fields into a single plan step and persist (used by the pre-run
     // command editor: prompt override + context files). Does not toggle busy —
     // these are lightweight edits that shouldn't disable the run buttons.
-    patchStep: function (index, fields) {
-      var plan = Array.isArray(session.plan) ? session.plan : [];
-      if (index < 0 || index >= plan.length) return Promise.resolve();
-      var nextPlan = plan.map(function (s, i) {
-        return i === index ? Object.assign({}, s, fields) : s;
+    mutatePlan: function (operation, input) {
+      var payload = Object.assign({}, input || {}, {
+        operation: operation,
+        basePlanRevision: Number(session.planDefinitionRevision || 0),
       });
-      return model.patchSession(sid, { plan: nextPlan }).then(apply).catch(fail);
+      return model.mutatePlan(sid, payload).then(apply).catch(function (err) {
+        fail(err);
+        return null;
+      });
+    },
+
+    patchStep: function (stepId, fields) {
+      if (!stepId) return Promise.resolve();
+      return ctrl.mutatePlan("update", { stepId: stepId, fields: fields });
+    },
+
+    addStep: function (step) {
+      return ctrl.mutatePlan("add", { step: step || {} });
+    },
+
+    deleteStep: function (stepId) {
+      return ctrl.mutatePlan("delete", { stepId: stepId });
+    },
+
+    reorderSteps: function (orderedStepIds) {
+      return ctrl.mutatePlan("reorder", { orderedStepIds: orderedStepIds });
     },
 
     resume: function () {
@@ -1923,13 +2205,17 @@ function useTaskController(session, onRefresh, runtime) {
           if (!isResolvedStepStatus(plan[j] && plan[j].status)) { idx = j; break; }
         }
       }
-      var skipped = (idx >= 0) ? model.markStep(plan, idx, "skipped", "已跳过该步骤。") : plan;
+      var skippedStepId = idx >= 0 && plan[idx] ? plan[idx].id : "";
+      var skipped = skippedStepId ? model.markStepById(plan, skippedStepId, "skipped", "已跳过该步骤。") : plan;
       var remaining = skipped.filter(function (s) { return !isResolvedStepStatus(s && s.status); }).length;
+      var runnable = model.findNextRunnableStep(skipped);
       var events = model.withEvent(session, "StepSkipped", "跳过该步骤。");
       return run(patch({
-        status: remaining > 0 ? "paused" : "review",
+        status: remaining > 0 ? (runnable ? "paused" : "blocked") : "review",
         plan: skipped,
-        agentReply: remaining > 0 ? "已跳过该步骤，可继续执行剩余步骤。" : "已跳过该步骤，剩余步骤已处理完，请验收。",
+        agentReply: remaining > 0
+          ? (runnable ? "已跳过该步骤，可继续执行不依赖它的剩余步骤。" : "该步骤已跳过，其后续依赖步骤已被阻塞。")
+          : "已跳过该步骤，剩余步骤已处理完，请验收。",
         events: events,
       }));
     },
@@ -1972,8 +2258,10 @@ function useTaskController(session, onRefresh, runtime) {
     },
 
     cancel: function () {
-      if (!window.confirm("确定取消这个任务吗？当前进度会被保留。")) return Promise.resolve();
-      return run(patch({ status: "cancelled", events: model.withEvent(session, "Cancelled", "任务已取消。") }));
+      return window.confirmModal({ body: "确定取消这个任务吗？当前进度会被保留。", danger: true }).then(function (ok) {
+        if (!ok) return undefined;
+        return run(patch({ status: "cancelled", events: model.withEvent(session, "Cancelled", "任务已取消。") }));
+      });
     },
 
     createFollowUp: function (input) {
@@ -2020,8 +2308,8 @@ function TaskWorkArea(props) {
     );
   }
   var status = String(session.status || "idle");
-  var showPlan = ["planning", "waiting_for_approval", "waiting_for_user", "running", "review", "paused", "failed", "done", "completed"].indexOf(status) >= 0
-    && Array.isArray(session.plan) && session.plan.length > 0;
+  var showPlan = ["planning", "waiting_for_approval", "waiting_for_user", "running", "review", "paused", "failed", "blocked", "done", "completed"].indexOf(status) >= 0
+    && Array.isArray(session.plan);
   return (
     <main className="workbench-main">
       <TaskHeader project={project} session={session} controller={controller} onRightTab={props.onRightTab} onSelectSession={props.onSelectSession} />
@@ -2107,9 +2395,10 @@ function StateCard(props) {
   if (status === "planning") return <AgentPlanCard {...props} />;
   if (status === "answered") return <AgentReplyCard {...props} />;
   if (status === "acted") return <AgentReplyCard {...props} acted={true} />;
-  if (status === "waiting_for_approval" || status === "waiting_for_user" || status === "blocked") return <ConfirmCard {...props} />;
+  if (status === "waiting_for_approval" || status === "waiting_for_user") return <ConfirmCard {...props} />;
   if (status === "running") return <AgentActivityCard {...props} />;
   if (status === "paused") return <PausedCard {...props} />;
+  if (status === "blocked") return <BlockedCard {...props} />;
   if (status === "failed") return <FailedCard {...props} />;
   if (status === "review" || status === "done") return <CompletionCard {...props} />;
   if (status === "completed") return <CompletionCard {...props} confirmed={true} />;
@@ -2185,7 +2474,7 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession 
         if (controller && controller.applyStore) controller.applyStore(next);
       })
       .catch(function (err) {
-        window.alert((err && err.message) || String(err));
+        window.showToast((err && err.message) || String(err), "error");
         setDraftTitle(session.title || "");
       })
       .finally(function () {
@@ -2285,10 +2574,17 @@ function headerMenuActions(status, controller, session, project, onSelectSession
       { label: wbT("common.cancel", "Cancel"), onClick: function () { controller.cancel(); } },
     ];
   }
-  if (status === "waiting_for_approval" || status === "waiting_for_user" || status === "blocked") {
+  if (status === "waiting_for_approval" || status === "waiting_for_user") {
     return [
       { label: wbT("task.action.approveExecution", "Approve"), onClick: function () { controller.execute(); } },
       { label: wbT("task.action.reject", "Reject"), onClick: function () { controller.reject(); } },
+    ];
+  }
+  if (status === "blocked") {
+    return [
+      { label: wbT("task.action.viewDetails", "View details"), guard: false, onClick: function () { onRightTab && onRightTab("context"); } },
+      { label: wbT("task.action.viewLogs", "View logs"), guard: false, onClick: function () { onRightTab && onRightTab("logs"); } },
+      { label: wbT("task.action.cancelTask", "Cancel task"), onClick: function () { controller.cancel(); } },
     ];
   }
   if (status === "paused") {
@@ -2600,10 +2896,30 @@ function AgentActivityCard({ session, controller, onRightTab }) {
 function PausedCard({ session, controller }) {
   var plan = Array.isArray(session.plan) ? session.plan : [];
   var done = plan.filter(function (s) { return s.status === "completed" || s.status === "done"; }).length;
-  var current = plan[done] || plan[plan.length - 1] || null;
+  var current = WorkbenchModel.findNextRunnableStep(plan)
+    || plan.find(function (step) { return !isResolvedStepStatus(step && step.status); })
+    || plan[plan.length - 1]
+    || null;
   return (
     <WbCard tone="paused" icon={ICONS.pause} title={wbT("task.card.paused", "Task paused")}>
       <p className="wb-card-hint">{wbT("task.pausedAt", "Paused at step {n}{title}.", { n: Math.min(done + 1, plan.length || 1), title: current ? ": " + current.title : "" })}</p>
+    </WbCard>
+  );
+}
+
+function BlockedCard({ session }) {
+  var plan = Array.isArray(session.plan) ? session.plan : [];
+  var blocked = plan.filter(function (step) {
+    return step && !isResolvedStepStatus(step.status) && WorkbenchModel.unmetDependencyIds(plan, step).length > 0;
+  });
+  return (
+    <WbCard tone="confirm" icon={ICONS.alert} title={wbT("task.card.blocked", "Task blocked")}>
+      <AgentReplyBlock text={session.agentReply || wbT("task.plan.blockedHint", "Complete or rerun the prerequisite steps before continuing.")} />
+      {blocked.length > 0 && (
+        <ul className="wb-bullet">
+          {blocked.slice(0, 5).map(function (step) { return <li key={step.id}>{step.title}</li>; })}
+        </ul>
+      )}
     </WbCard>
   );
 }
@@ -2674,7 +2990,7 @@ var ICON_FILE = (
 // command (the exact prompt handed to the subagent) + a context-file list the
 // user can grow by referencing workspace paths or uploading files. Both persist
 // onto the step (promptOverride / contextFiles) via controller.patchStep.
-function StepCommandEditor({ session, step, index, controller }) {
+function StepCommandEditor({ session, step, controller }) {
   var model = window.WorkbenchModel;
   var defaultPrompt = stepExecutionPrompt(session, step);
   function overrideOf(s) { return (s && typeof s.promptOverride === "string" && s.promptOverride.length > 0) ? s.promptOverride : ""; }
@@ -2702,11 +3018,11 @@ function StepCommandEditor({ session, step, index, controller }) {
     var trimmed = draft.trim();
     var nextOverride = (trimmed && trimmed !== defaultPrompt.trim()) ? draft : "";
     if ((step.promptOverride || "") === nextOverride) return;
-    controller.patchStep(index, { promptOverride: nextOverride });
+    controller.patchStep(step.id, { promptOverride: nextOverride });
   }
   function resetPrompt() {
     setDraft(defaultPrompt);
-    if (step.promptOverride) controller.patchStep(index, { promptOverride: "" });
+    if (step.promptOverride) controller.patchStep(step.id, { promptOverride: "" });
   }
   function addWorkspaceFile() {
     var p = pathInput.trim();
@@ -2722,7 +3038,7 @@ function StepCommandEditor({ session, step, index, controller }) {
         var rel = res.path || p;
         var dup = contextFiles.some(function (f) { return f && f.source !== "upload" && f.path === rel; });
         if (dup) { setHint("该文件已添加"); return; }
-        controller.patchStep(index, { contextFiles: contextFiles.concat([{ source: "workspace", path: rel, name: rel.split("/").pop() }]) });
+        controller.patchStep(step.id, { contextFiles: contextFiles.concat([{ source: "workspace", path: rel, name: rel.split("/").pop() }]) });
         setPathInput("");
       })
       .finally(function () { setAdding(false); });
@@ -2736,13 +3052,13 @@ function StepCommandEditor({ session, step, index, controller }) {
     model.uploadAttachments(files)
       .then(function (uploaded) {
         var tagged = (uploaded || []).map(function (u) { return Object.assign({}, u, { source: "upload" }); });
-        controller.patchStep(index, { contextFiles: contextFiles.concat(tagged) });
+        controller.patchStep(step.id, { contextFiles: contextFiles.concat(tagged) });
       })
       .catch(function (err) { setHint("上传失败：" + ((err && err.message) || String(err))); })
       .finally(function () { setUploading(false); if (fileRef.current) fileRef.current.value = ""; });
   }
   function removeFile(target) {
-    controller.patchStep(index, { contextFiles: contextFiles.filter(function (f) { return f !== target; }) });
+    controller.patchStep(step.id, { contextFiles: contextFiles.filter(function (f) { return f !== target; }) });
   }
 
   return (
@@ -2813,16 +3129,209 @@ function StepCommandEditor({ session, step, index, controller }) {
   );
 }
 
-// The 执行计划 list — collapsible steps with per-step status + progress.
-// Visual: timeline rail (done = green check, running = spinner ring, idle =
-// hollow dot) + a status / time / duration row. Click a row to expand detail.
+function StepPlanEditor({ steps, step, controller, canEditStructure }) {
+  var [title, setTitle] = useWorkbenchState(step.title || "");
+  var [description, setDescription] = useWorkbenchState(step.description || "");
+  var [dependsOn, setDependsOn] = useWorkbenchState(Array.isArray(step.dependsOn) ? step.dependsOn : []);
+  var [saving, setSaving] = useWorkbenchState(false);
+  var stepIndex = steps.findIndex(function (item) { return item && item.id === step.id; });
+  var dependencyOptions = steps.slice(0, Math.max(0, stepIndex));
+
+  useWorkbenchEffect(function () {
+    setTitle(step.title || "");
+    setDescription(step.description || "");
+    setDependsOn(Array.isArray(step.dependsOn) ? step.dependsOn : []);
+  }, [step.id, step.title, step.description, JSON.stringify(step.dependsOn || [])]);
+
+  function toggleDependency(stepId) {
+    setDependsOn(function (current) {
+      return current.indexOf(stepId) >= 0
+        ? current.filter(function (id) { return id !== stepId; })
+        : current.concat([stepId]);
+    });
+  }
+
+  function save() {
+    var nextTitle = String(title || "").trim();
+    if (!nextTitle || saving) return;
+    setSaving(true);
+    controller.patchStep(step.id, {
+      title: nextTitle,
+      description: String(description || "").trim(),
+      dependsOn: dependsOn,
+    }).finally(function () { setSaving(false); });
+  }
+
+  function remove() {
+    window.confirmModal({
+      body: wbT("task.plan.confirmDeleteStep", "Delete step \"{name}\"?", { name: step.title }),
+      confirmLabel: wbT("common.delete", "Delete"),
+      danger: true,
+    }).then(function (ok) {
+      if (ok) controller.deleteStep(step.id);
+    });
+  }
+
+  return (
+    <div className="wbp-plan-editor">
+      <div className="wbp-plan-editor-head">
+        <div>
+          <b>{wbT("task.plan.stepSettings", "Step settings")}</b>
+          <p>{canEditStructure
+            ? wbT("task.plan.stepSettingsHint", "Edit the task and choose prerequisite steps.")
+            : wbT("task.plan.structureLocked", "Plan structure is locked after execution starts.")}</p>
+        </div>
+        {canEditStructure && (
+          <button type="button" className="wbp-tiny-btn danger" onClick={remove}>
+            {wbT("common.delete", "Delete")}
+          </button>
+        )}
+      </div>
+      <label className="wbp-plan-field">
+        <span>{wbT("task.plan.stepTitle", "Step title")}</span>
+        <input value={title} disabled={!canEditStructure || saving} onChange={function (e) { setTitle(e.target.value); }} />
+      </label>
+      <label className="wbp-plan-field">
+        <span>{wbT("task.plan.stepDescription", "Description")}</span>
+        <textarea rows={2} value={description} disabled={!canEditStructure || saving} onChange={function (e) { setDescription(e.target.value); }} />
+      </label>
+      <div className="wbp-plan-field">
+        <span>{wbT("task.plan.prerequisites", "Prerequisites")}</span>
+        {dependencyOptions.length ? (
+          <div className="wbp-dependency-options">
+            {dependencyOptions.map(function (candidate) {
+              var checked = dependsOn.indexOf(candidate.id) >= 0;
+              return (
+                <label key={candidate.id} className={"wbp-dependency-option" + (checked ? " selected" : "")}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={!canEditStructure || saving}
+                    onChange={function () { toggleDependency(candidate.id); }}
+                  />
+                  <span>{candidate.title}</span>
+                </label>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="wbp-detail-empty">{wbT("task.plan.noEarlierSteps", "No earlier steps are available.")}</p>
+        )}
+      </div>
+      {canEditStructure && (
+        <div className="wbp-plan-editor-actions">
+          <button type="button" className="wb-btn primary" disabled={saving || !String(title || "").trim()} onClick={save}>
+            {saving ? wbT("common.saving", "Saving...") : wbT("common.save", "Save")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The 执行计划 list — editable, dependency-aware and sortable before execution.
 function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, controller }) {
   var steps = Array.isArray(session.plan) ? session.plan : [];
+  var [dragStepId, setDragStepId] = useWorkbenchState("");
+  var [dragOverId, setDragOverId] = useWorkbenchState("");
+  var [adding, setAdding] = useWorkbenchState(false);
+  var [newTitle, setNewTitle] = useWorkbenchState("");
+  var [newDescription, setNewDescription] = useWorkbenchState("");
+  var [savingNew, setSavingNew] = useWorkbenchState(false);
+  var planStarted = steps.some(function (step) {
+    return step && (
+      String(step.status || "pending") !== "pending"
+      || step.startedAt
+      || step.completedAt
+      || (Array.isArray(step.progressEvents) && step.progressEvents.length)
+      || (Array.isArray(step.toolCalls) && step.toolCalls.length)
+    );
+  });
+  var canEditStructure = !controller.busy
+    && !planStarted
+    && ["running", "waiting_for_user"].indexOf(String(session.status || "")) < 0;
+
+  function persistOrder(nextSteps) {
+    var validation = WorkbenchModel.validatePlanGraph(nextSteps);
+    if (!validation.valid) {
+      window.showToast(wbT("task.plan.invalidOrder", "This move would place a step before one of its prerequisites."), "warning");
+      return;
+    }
+    controller.reorderSteps(nextSteps.map(function (step) { return step.id; }));
+  }
+
+  function moveStep(sourceId, targetId, placeAfter) {
+    if (!canEditStructure || !sourceId || !targetId || sourceId === targetId) return;
+    var next = steps.slice();
+    var sourceIndex = next.findIndex(function (step) { return step.id === sourceId; });
+    if (sourceIndex < 0) return;
+    var moved = next.splice(sourceIndex, 1)[0];
+    var targetIndex = next.findIndex(function (step) { return step.id === targetId; });
+    if (targetIndex < 0) return;
+    if (placeAfter) targetIndex += 1;
+    next.splice(targetIndex, 0, moved);
+    persistOrder(next);
+  }
+
+  function moveBy(stepId, delta) {
+    var index = steps.findIndex(function (step) { return step.id === stepId; });
+    var target = steps[index + delta];
+    if (index < 0 || !target) return;
+    var next = steps.slice();
+    var moved = next.splice(index, 1)[0];
+    next.splice(index + delta, 0, moved);
+    persistOrder(next);
+  }
+
+  function addStep() {
+    var title = String(newTitle || "").trim();
+    if (!title || savingNew) return;
+    setSavingNew(true);
+    controller.addStep({ title: title, description: String(newDescription || "").trim(), dependsOn: [] })
+      .then(function (store) {
+        if (!store) return;
+        setNewTitle("");
+        setNewDescription("");
+        setAdding(false);
+      })
+      .finally(function () { setSavingNew(false); });
+  }
+
   return (
     <section className="workbench-flow wbp">
       <div className="wbp-head">
-        <b>执行计划</b>
+        <div>
+          <b>{wbT("task.plan.title", "Execution plan")}</b>
+          <span>{steps.length}</span>
+        </div>
+        {canEditStructure && (
+          <button type="button" className="wb-btn ghost compact" onClick={function () { setAdding(!adding); }}>
+            {adding ? wbT("common.cancel", "Cancel") : wbT("task.plan.addStep", "Add step")}
+          </button>
+        )}
       </div>
+      {adding && (
+        <div className="wbp-add-step">
+          <input
+            autoFocus
+            value={newTitle}
+            placeholder={wbT("task.plan.newStepTitle", "New step title")}
+            onChange={function (e) { setNewTitle(e.target.value); }}
+            onKeyDown={function (e) { if (e.key === "Enter") { e.preventDefault(); addStep(); } }}
+          />
+          <textarea
+            rows={2}
+            value={newDescription}
+            placeholder={wbT("task.plan.newStepDescription", "What should this step accomplish?")}
+            onChange={function (e) { setNewDescription(e.target.value); }}
+          />
+          <div>
+            <button type="button" className="wb-btn primary" disabled={savingNew || !String(newTitle || "").trim()} onClick={addStep}>
+              {savingNew ? wbT("common.saving", "Saving...") : wbT("task.plan.addStep", "Add step")}
+            </button>
+          </div>
+        </div>
+      )}
       <div className="wbp-list">
         {steps.map(function (step, index) {
           var expanded = expandedStepId === step.id;
@@ -2830,106 +3339,133 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
           var runningStep = isRunningStepStatus(step.status);
           var failedStep = step.status === "failed";
           var skippedStep = step.status === "skipped";
-          var state = doneStep ? "done" : runningStep ? "current" : failedStep ? "failed" : skippedStep ? "skipped" : "idle";
-          var statusLabel = doneStep ? "已完成" : runningStep ? "进行中" : failedStep ? "需处理" : skippedStep ? "已跳过" : "等待执行";
+          var unmetDependencyIds = WorkbenchModel.unmetDependencyIds(steps, step);
+          var blockedStep = !doneStep && !runningStep && !failedStep && !skippedStep && unmetDependencyIds.length > 0;
+          var state = doneStep ? "done" : runningStep ? "current" : failedStep ? "failed" : skippedStep ? "skipped" : blockedStep ? "blocked" : "idle";
+          var statusLabel = doneStep ? wbT("status.done", "Done")
+            : runningStep ? wbT("status.running", "Running")
+            : failedStep ? wbT("status.failed", "Failed")
+            : skippedStep ? wbT("status.skipped", "Skipped")
+            : blockedStep ? wbT("task.plan.waitingPrerequisites", "Waiting for prerequisites")
+            : wbT("status.pending", "Pending");
           var doneStamp = step.completedAt || step.updatedAt || "";
           var time = doneStep && doneStamp ? WorkbenchModel.formatTime(doneStamp) : "";
           var duration = doneStep ? stepDurationText(step) : "";
           var estimate = runningStep && step.estimate ? String(step.estimate) : "";
           var hasFiles = Array.isArray(step.relatedFiles) && step.relatedFiles.length > 0;
           var progressText = step.currentAction || step.description || "";
-          // Before a step has started, the detail shows an editable command card
-          // + context-file editor instead of the (empty) progress view.
           var beforeRun = !step.status || step.status === "pending";
           var isLast = index === steps.length - 1;
+          var dependencyTitles = (Array.isArray(step.dependsOn) ? step.dependsOn : []).map(function (dependencyId) {
+            var dependency = steps.find(function (candidate) { return candidate.id === dependencyId; });
+            return dependency ? dependency.title : dependencyId;
+          });
           return (
-            <div key={step.id} className={"wbp-step " + state + (expanded ? " expanded" : "")}>
-              {/* Timeline rail: node + connector line */}
+            <div
+              key={step.id}
+              className={"wbp-step " + state + (expanded ? " expanded" : "") + (dragStepId === step.id ? " dragging" : "") + (dragOverId === step.id ? " drag-over" : "")}
+              onDragOver={function (e) { if (canEditStructure && dragStepId) { e.preventDefault(); setDragOverId(step.id); } }}
+              onDragLeave={function () { if (dragOverId === step.id) setDragOverId(""); }}
+              onDrop={function (e) {
+                e.preventDefault();
+                var sourceId = dragStepId || e.dataTransfer.getData("text/plain");
+                var dropLine = e.currentTarget.querySelector(".wbp-line-main");
+                var bounds = dropLine ? dropLine.getBoundingClientRect() : e.currentTarget.getBoundingClientRect();
+                var placeAfter = e.clientY > bounds.top + bounds.height / 2;
+                setDragStepId("");
+                setDragOverId("");
+                moveStep(sourceId, step.id, placeAfter);
+              }}
+            >
               <div className="wbp-rail">
-                <button
-                  type="button"
-                  className={"wbp-node " + state}
-                  onClick={function () { onToggleStep(step.id); }}
-                  aria-label={expanded ? "收起步骤" : "展开步骤"}
-                >
+                <button type="button" className={"wbp-node " + state} onClick={function () { onToggleStep(step.id); }} aria-label={expanded ? "收起步骤" : "展开步骤"}>
                   {doneStep ? ICONS.checkSmall : null}
                 </button>
                 {!isLast && <span className={"wbp-line" + (doneStep ? " done" : "")} />}
               </div>
-
-              {/* Row (click to expand) */}
-              <div
-                className="wbp-row"
-                onClick={function () { onToggleStep(step.id); }}
-                role="button"
-                tabIndex={0}
-                onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggleStep(step.id); } }}
-              >
+              <div className="wbp-row" onClick={function () { onToggleStep(step.id); }} role="button" tabIndex={0}
+                onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggleStep(step.id); } }}>
                 <div className="wbp-line-main">
                   <div className="wbp-copy">
+                    {canEditStructure && (
+                      <button
+                        type="button"
+                        draggable
+                        className="wbp-drag-handle"
+                        title={wbT("task.plan.dragToReorder", "Drag to reorder")}
+                        aria-label={wbT("task.plan.dragToReorder", "Drag to reorder")}
+                        onClick={function (e) { e.stopPropagation(); }}
+                        onKeyDown={function (e) {
+                          e.stopPropagation();
+                          if (e.altKey && e.key === "ArrowUp") { e.preventDefault(); moveBy(step.id, -1); }
+                          if (e.altKey && e.key === "ArrowDown") { e.preventDefault(); moveBy(step.id, 1); }
+                        }}
+                        onDragStart={function (e) {
+                          e.stopPropagation();
+                          setDragStepId(step.id);
+                          e.dataTransfer.effectAllowed = "move";
+                          e.dataTransfer.setData("text/plain", step.id);
+                        }}
+                        onDragEnd={function () { setDragStepId(""); setDragOverId(""); }}
+                      >
+                        {ICONS.dots}
+                      </button>
+                    )}
                     <span className="wbp-idx">{index + 1}.</span>
                     <span className="wbp-title">{step.title}</span>
                   </div>
                   <span className={"wbp-status " + state}>{statusLabel}</span>
                   <time className="wbp-time">{time}</time>
-                  <span className="wbp-dur">
-                    {duration ? <>{ICON_CLOCK}<span>{duration}</span></> : estimate ? <span className="wbp-estimate">预计 {estimate}</span> : null}
-                  </span>
+                  <span className="wbp-dur">{duration ? <>{ICON_CLOCK}<span>{duration}</span></> : estimate ? <span className="wbp-estimate">预计 {estimate}</span> : null}</span>
                   <span className={"wbp-caret" + (expanded ? " open" : "")}>{ICON_CHEVRON}</span>
                 </div>
-
-                {/* Expanded detail */}
+                {dependencyTitles.length > 0 && (
+                  <div className="wbp-dependency-summary">
+                    <span>{wbT("task.plan.after", "After")}</span>
+                    {dependencyTitles.map(function (title, i) { return <em key={i}>{title}</em>; })}
+                  </div>
+                )}
                 {expanded && (
                   <div className="wbp-detail" onClick={function (e) { e.stopPropagation(); }}>
                     {beforeRun ? (
-                      <StepCommandEditor session={session} step={step} index={index} controller={controller} />
+                      <>
+                        <StepPlanEditor steps={steps} step={step} controller={controller} canEditStructure={canEditStructure} />
+                        <StepCommandEditor session={session} step={step} controller={controller} />
+                      </>
                     ) : (
-                    <div className="wbp-detail-grid">
-                      <div className="wbp-detail-card">
-                        <div className="wbp-detail-label">步骤进展</div>
-                        <p className="wbp-detail-body">{progressText || "等待 Agent 更新这个步骤的进展。"}</p>
-                        {Array.isArray(step.progressEvents) && step.progressEvents.length > 0 && (
-                          <ul className="wbp-events">
-                            {step.progressEvents.slice(-3).map(function (ev, i) {
-                              return <li key={i}>{ev.body || ev.text || ev.message || String(ev)}</li>;
-                            })}
-                          </ul>
-                        )}
-                      </div>
-                      <div className="wbp-detail-card">
-                        <div className="wbp-detail-label">
-                          {ICON_FILE}<span>相关文件</span>
-                          {hasFiles && <span className="wbp-file-count">{step.relatedFiles.length}</span>}
+                      <div className="wbp-detail-grid">
+                        <div className="wbp-detail-card">
+                          <div className="wbp-detail-label">步骤进展</div>
+                          <p className="wbp-detail-body">{progressText || "等待 Agent 更新这个步骤的进展。"}</p>
+                          {Array.isArray(step.progressEvents) && step.progressEvents.length > 0 && (
+                            <ul className="wbp-events">
+                              {step.progressEvents.slice(-3).map(function (ev, i) {
+                                return <li key={i}>{ev.body || ev.text || ev.message || String(ev)}</li>;
+                              })}
+                            </ul>
+                          )}
                         </div>
-                        {hasFiles ? (
-                          <div className="wbp-file-chips">
-                            {step.relatedFiles.map(function (file) {
-                              return (
-                                <button
-                                  key={file.path || file.name}
-                                  type="button"
-                                  className="wbp-file-chip"
-                                  onClick={function () { onRightTab("files"); }}
-                                >
-                                  {(file.path || file.name || "").split("/").pop()}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <p className="wbp-detail-empty">暂无相关文件</p>
-                        )}
+                        <div className="wbp-detail-card">
+                          <div className="wbp-detail-label">{ICON_FILE}<span>相关文件</span>{hasFiles && <span className="wbp-file-count">{step.relatedFiles.length}</span>}</div>
+                          {hasFiles ? (
+                            <div className="wbp-file-chips">
+                              {step.relatedFiles.map(function (file) {
+                                return <button key={file.path || file.name} type="button" className="wbp-file-chip" onClick={function () { onRightTab("files"); }}>{(file.path || file.name || "").split("/").pop()}</button>;
+                              })}
+                            </div>
+                          ) : <p className="wbp-detail-empty">暂无相关文件</p>}
+                        </div>
                       </div>
-                    </div>
                     )}
                     {!doneStep && (
                       <div className="wbp-detail-actions">
                         {runningStep ? (
                           <button type="button" className="wb-btn danger" onClick={function () { controller.interrupt(); }}>停止执行</button>
                         ) : (
-                          <button type="button" className="wb-btn primary" disabled={controller.busy} onClick={function () { controller.runStep(step, index); }}>执行此步骤</button>
+                          <button type="button" className="wb-btn primary" disabled={controller.busy || unmetDependencyIds.length > 0} onClick={function () { controller.runStep(step); }}>执行此步骤</button>
                         )}
                         <button type="button" className="wb-btn ghost" onClick={function () { onRightTab("logs"); }}>查看日志</button>
+                        {unmetDependencyIds.length > 0 && <span className="wbp-blocked-hint">{wbT("task.plan.completePrerequisitesFirst", "Complete prerequisite steps first.")}</span>}
                       </div>
                     )}
                   </div>
@@ -3104,7 +3640,7 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
     setUploading(true);
     model.uploadAttachments(files)
       .then(function (uploaded) { onAttachmentsChange(attachments.concat(uploaded)); })
-      .catch(function (err) { window.alert(wbT("workbenchChat.uploadFailed", "Upload failed: {error}", { error: err.message || String(err) })); })
+      .catch(function (err) { window.showToast(wbT("workbenchChat.uploadFailed", "Upload failed: {error}", { error: err.message || String(err) }), "error"); })
       .finally(function () { setUploading(false); if (fileRef.current) fileRef.current.value = ""; });
   }
   function removeAttachment(index) {
@@ -3287,6 +3823,18 @@ function ReflectionSection({ session }) {
 
 function ContextTab({ project, session, activeStep }) {
   var constraints = (session && session.constraints) || [];
+  var plan = session && Array.isArray(session.plan) ? session.plan : [];
+  var planById = {};
+  plan.forEach(function (step) { if (step && step.id) planById[step.id] = step; });
+  var prerequisites = activeStep
+    ? (Array.isArray(activeStep.dependsOn) ? activeStep.dependsOn : []).map(function (id) { return planById[id]; }).filter(Boolean)
+    : [];
+  var dependents = activeStep
+    ? plan.filter(function (step) { return step && Array.isArray(step.dependsOn) && step.dependsOn.indexOf(activeStep.id) >= 0; })
+    : [];
+  var dependencyCount = plan.reduce(function (count, step) {
+    return count + (step && Array.isArray(step.dependsOn) ? step.dependsOn.length : 0);
+  }, 0);
   var parentSession = project && session && session.parentSessionId
     ? (project.sessions || []).find(function (item) { return item.id === session.parentSessionId; })
     : null;
@@ -3321,7 +3869,7 @@ function ContextTab({ project, session, activeStep }) {
           {React.createElement(window.WorkbenchInitProgress, { session: session })}
         </SideSection>
       ) : (
-        <SideSection title={wbT("task.side.dependencies", "Dependencies")}>
+        <SideSection title={wbT("task.side.taskRelations", "Task relations")}>
           {parentSession ? (
             <div className="wb-brief-row">
               <label>{wbT("task.followUpSource", "Source task")}</label>
@@ -3329,6 +3877,36 @@ function ContextTab({ project, session, activeStep }) {
             </div>
           ) : (
             <p className="workbench-muted">{wbT("task.noDependencies", "No dependent tasks yet.")}</p>
+          )}
+        </SideSection>
+      )}
+      {!isInit && (
+        <SideSection title={wbT("task.side.stepDependencies", "Step dependencies")}>
+          {activeStep ? (
+            <div className="wb-step-dependency-side">
+              <div className="wb-brief-row">
+                <label>{wbT("task.plan.selectedStep", "Selected step")}</label>
+                <p>{activeStep.title}</p>
+              </div>
+              <div className="wb-brief-row">
+                <label>{wbT("task.plan.prerequisites", "Prerequisites")}</label>
+                {prerequisites.length
+                  ? <ul className="wb-bullet">{prerequisites.map(function (step) { return <li key={step.id}>{step.title}</li>; })}</ul>
+                  : <p className="workbench-muted">{wbT("task.plan.noPrerequisites", "No prerequisite steps.")}</p>}
+              </div>
+              <div className="wb-brief-row">
+                <label>{wbT("task.plan.dependents", "Dependent steps")}</label>
+                {dependents.length
+                  ? <ul className="wb-bullet">{dependents.map(function (step) { return <li key={step.id}>{step.title}</li>; })}</ul>
+                  : <p className="workbench-muted">{wbT("task.plan.noDependents", "No steps depend on this step.")}</p>}
+              </div>
+            </div>
+          ) : (
+            <p className="workbench-muted">
+              {dependencyCount
+                ? wbT("task.plan.dependencySummary", "{count} dependencies. Select a step to inspect them.", { count: dependencyCount })
+                : wbT("task.noDependencies", "No dependent tasks yet.")}
+            </p>
           )}
         </SideSection>
       )}
@@ -3471,7 +4049,7 @@ function AcceptanceTab({ session, onRefresh }) {
     setBusy(true);
     window.WorkbenchModel.generateAcceptance(session.id)
       .then(function (next) { onRefresh && onRefresh(next); })
-      .catch(function (err) { window.alert(err.message || String(err)); })
+      .catch(function (err) { window.showToast(err.message || String(err), "error"); })
       .finally(function () { setBusy(false); });
   }
   // Verify a criterion by clicking it — cycle 待验证 → 已通过 → 未通过 → 待验证.
@@ -3483,7 +4061,7 @@ function AcceptanceTab({ session, onRefresh }) {
     setBusy(true);
     window.WorkbenchModel.patchSession(session.id, { acceptanceCriteria: next })
       .then(function (n) { onRefresh && onRefresh(n); })
-      .catch(function (err) { window.alert(err.message || String(err)); })
+      .catch(function (err) { window.showToast(err.message || String(err), "error"); })
       .finally(function () { setBusy(false); });
   }
   return (

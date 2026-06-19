@@ -102,12 +102,55 @@ def append_notification(
     return item
 
 
-def list_notifications(*, tab: str = "all", limit: int = 80) -> dict[str, Any]:
+def _remove_visible_unread(
+    payload: dict[str, Any],
+    *,
+    visible_chat_id: str = "",
+    visible_session_id: str = "",
+) -> int:
+    """Drop unread notifications whose underlying message is already on screen."""
+    chat_id = str(visible_chat_id or "").strip()
+    session_id = str(visible_session_id or "").strip()
+    if not chat_id and not session_id:
+        return 0
+
+    items = payload.get("items", [])
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    for item in items:
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        is_visible = (
+            (bool(chat_id) and str(meta.get("chatId") or "") == chat_id)
+            or (bool(session_id) and str(meta.get("sessionId") or "") == session_id)
+        )
+        if not item.get("read") and is_visible:
+            removed += 1
+            continue
+        kept.append(item)
+
+    if removed:
+        payload["items"] = kept
+        _write_store(payload)
+    return removed
+
+
+def list_notifications(
+    *,
+    tab: str = "all",
+    limit: int = 80,
+    visible_chat_id: str = "",
+    visible_session_id: str = "",
+) -> dict[str, Any]:
     tab = str(tab or "all").strip().lower()
     if tab not in _VALID_TABS:
         tab = "all"
     limit = max(1, min(int(limit or 80), 200))
     payload = _read_store()
+    _remove_visible_unread(
+        payload,
+        visible_chat_id=visible_chat_id,
+        visible_session_id=visible_session_id,
+    )
     items = payload.get("items", [])
     filtered = [item for item in items if tab == "all" or str(item.get("tab") or "") == tab]
     unread_total = 0

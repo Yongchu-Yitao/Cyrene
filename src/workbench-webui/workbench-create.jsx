@@ -650,7 +650,7 @@
       setGenerating(true);
       model.generateInitForm(project.id)
         .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { window.alert((e && e.message) || String(e)); })
+        .catch(function (e) { window.showToast((e && e.message) || String(e), "error"); })
         .finally(function () { setGenerating(false); });
     }
     function complete() {
@@ -659,7 +659,7 @@
       if (saveTimer.current) clearTimeout(saveTimer.current);
       model.submitInit(sid, answers)
         .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { window.alert((e && e.message) || String(e)); })
+        .catch(function (e) { window.showToast((e && e.message) || String(e), "error"); })
         .finally(function () { setBusy(false); });
     }
     function saveCompletedAnswers() {
@@ -668,7 +668,7 @@
       if (saveTimer.current) clearTimeout(saveTimer.current);
       model.patchSession(sid, { init: { answers: answers } })
         .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { window.alert((e && e.message) || String(e)); })
+        .catch(function (e) { window.showToast((e && e.message) || String(e), "error"); })
         .finally(function () { setBusy(false); });
     }
     function revisePlan() {
@@ -676,7 +676,7 @@
       setPlanning(true);
       model.reviseInitPlan(sid, feedback, taskPlan)
         .then(function (next) { setFeedback(""); props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { window.alert((e && e.message) || String(e)); })
+        .catch(function (e) { window.showToast((e && e.message) || String(e), "error"); })
         .finally(function () { setPlanning(false); });
     }
     function confirmPlan() {
@@ -684,7 +684,7 @@
       setBusy(true);
       model.confirmInitPlan(sid, taskPlan)
         .then(function (next) { props.onRefresh && props.onRefresh(next); })
-        .catch(function (e) { window.alert((e && e.message) || String(e)); })
+        .catch(function (e) { window.showToast((e && e.message) || String(e), "error"); })
         .finally(function () { setBusy(false); });
     }
 

@@ -1109,19 +1109,25 @@ function SkillsPanel(p) {
 
   function handleUninstall(id, name) {
     if (busy) return;
-    if (!window.confirm(t("settings.uninstallSkillConfirm", { name: name || id }))) return;
-    setBusy(true);
-    fetch("/api/skills/" + id + "/uninstall", { method: "POST" })
-      .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
-      .then(function (data) {
-        if (data && data.ok) {
-          loadSkills().then(function () { setBusy(false); });
-        } else {
-          setNotice(t("settings.uninstallFailed"), "error");
-          setBusy(false);
-        }
-      })
-      .catch(function () { setNotice(t("settings.uninstallFailed"), "error"); setBusy(false); });
+    window.confirmModal({
+      body: t("settings.uninstallSkillConfirm", { name: name || id }),
+      confirmLabel: t("settings.uninstallSkill"),
+      danger: true,
+    }).then(function (ok) {
+      if (!ok) return;
+      setBusy(true);
+      fetch("/api/skills/" + id + "/uninstall", { method: "POST" })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+        .then(function (data) {
+          if (data && data.ok) {
+            loadSkills().then(function () { setBusy(false); });
+          } else {
+            setNotice(t("settings.uninstallFailed"), "error");
+            setBusy(false);
+          }
+        })
+        .catch(function () { setNotice(t("settings.uninstallFailed"), "error"); setBusy(false); });
+    });
   }
 
   function handleFileSelected(e) {

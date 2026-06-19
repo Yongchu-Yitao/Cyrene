@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -67,6 +68,7 @@ from cyrene.agent import (
     get_live_rounds,
     get_session_labels,
     interrupt_active_run,
+    is_session_running,
     queue_round_guidance,
     run_agent,
 )
@@ -118,6 +120,7 @@ _STATIC_DIR = Path(__file__).parent / "static"
 _APP_DIR = _STATIC_DIR / "app"
 _UPLOADS_DIR = DATA_DIR / "webui_uploads"
 _WORKBENCH_STORE = DATA_DIR / "workbench_projects.json"
+_WORKBENCH_STORE_LOCK = threading.RLock()
 _SERVER_STARTED_AT = time.time()
 _WORKBENCH_LEGACY_DATA_KEY = "default"
 
@@ -370,6 +373,9 @@ def _workbench_new_session(
         "updatedAt": now,
         "agentReply": "",
         "plan": [],
+        "planRevision": 0,
+        "planDefinitionRevision": 0,
+        "approvedPlanDefinitionRevision": None,
         "events": [],
         "runs": [],
         "artifacts": [],
@@ -1615,32 +1621,45 @@ def _workbench_create_sessions_from_init_plan(
 
 
 def _read_workbench_store() -> dict[str, Any]:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not _WORKBENCH_STORE.exists():
+    with _WORKBENCH_STORE_LOCK:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        if not _WORKBENCH_STORE.exists():
+            payload = _workbench_default_project()
+            _write_workbench_store(payload)
+            return payload
+        try:
+            raw = json.loads(_WORKBENCH_STORE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and isinstance(raw.get("projects"), list):
+                if not raw["projects"]:
+                    payload = _workbench_default_project()
+                    _write_workbench_store(payload)
+                    return payload
+                _workbench_ensure_invariants(raw)
+                return raw
+        except Exception:
+            logger.exception("Failed to read workbench store")
         payload = _workbench_default_project()
         _write_workbench_store(payload)
         return payload
-    try:
-        raw = json.loads(_WORKBENCH_STORE.read_text(encoding="utf-8"))
-        if isinstance(raw, dict) and isinstance(raw.get("projects"), list):
-            if not raw["projects"]:
-                payload = _workbench_default_project()
-                _write_workbench_store(payload)
-                return payload
-            _workbench_ensure_invariants(raw)
-            return raw
-    except Exception:
-        logger.exception("Failed to read workbench store")
-    payload = _workbench_default_project()
-    _write_workbench_store(payload)
-    return payload
 
 
 def _write_workbench_store(payload: dict[str, Any]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp_path = _WORKBENCH_STORE.with_suffix(".json.tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(_WORKBENCH_STORE)
+    with _WORKBENCH_STORE_LOCK:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp_path = _WORKBENCH_STORE.with_name(
+            f"{_WORKBENCH_STORE.name}.{uuid.uuid4().hex}.tmp"
+        )
+        try:
+            tmp_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            tmp_path.replace(_WORKBENCH_STORE)
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _workbench_ensure_invariants(payload: dict[str, Any]) -> None:
@@ -1691,12 +1710,24 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> None:
             session.setdefault("agentReply", "")
             session.setdefault("plan", [])
             session.setdefault("planRevision", 0)
+            session.setdefault("planDefinitionRevision", 0)
+            session.setdefault("approvedPlanDefinitionRevision", None)
             session.setdefault("events", [])
             session.setdefault("runs", [])
             session.setdefault("artifacts", [])
             session.setdefault("acceptanceCriteria", [])
             session.setdefault("summary", None)
             session.setdefault("titleLocked", False)
+            plan = session.get("plan") if isinstance(session.get("plan"), list) else []
+            for index, step in enumerate(plan):
+                if not isinstance(step, dict):
+                    continue
+                if not isinstance(step.get("dependsOn"), list):
+                    step["dependsOn"] = []
+                    changed = True
+                if step.get("order") != index + 1:
+                    step["order"] = index + 1
+                    changed = True
             if _workbench_backfill_file_artifacts(session, now):
                 changed = True
     if projects and not payload.get("activeProjectId"):
@@ -1750,6 +1781,7 @@ def _workbench_new_plan_step(title: str, description: str, order: int, task_id: 
         "description": str(description or "").strip(),
         "status": "pending",
         "order": order,
+        "dependsOn": [],
         "currentAction": "",
         "relatedFiles": [],
         "progressEvents": [],
@@ -1780,6 +1812,166 @@ def _workbench_plan_from_input(user_input: str, session: dict[str, Any]) -> list
     ]
 
 
+def _workbench_dependency_ids(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        step_id = str(item or "").strip()
+        if step_id and step_id not in result:
+            result.append(step_id)
+    return result
+
+
+def _workbench_plan_has_started(plan: Any) -> bool:
+    if not isinstance(plan, list):
+        return False
+    for step in plan:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("status") or "pending") != "pending":
+            return True
+        if step.get("startedAt") or step.get("completedAt") or step.get("durationSec") is not None:
+            return True
+        if step.get("progressEvents") or step.get("toolCalls"):
+            return True
+    return False
+
+
+def _workbench_validate_plan_graph(
+    plan: Any,
+    *,
+    require_dependency_order: bool = True,
+) -> tuple[bool, str, str]:
+    if not isinstance(plan, list):
+        return False, "计划格式无效。", "invalid_plan"
+    step_ids: list[str] = []
+    titles: dict[str, str] = {}
+    for index, step in enumerate(plan):
+        if not isinstance(step, dict):
+            return False, f"第 {index + 1} 个步骤格式无效。", "invalid_step"
+        step_id = str(step.get("id") or "").strip()
+        title = str(step.get("title") or "").strip()
+        if not step_id:
+            return False, f"第 {index + 1} 个步骤缺少 id。", "missing_step_id"
+        if step_id in titles:
+            return False, "计划中存在重复的步骤 id。", "duplicate_step_id"
+        if not title:
+            return False, f"第 {index + 1} 个步骤标题不能为空。", "empty_step_title"
+        step_ids.append(step_id)
+        titles[step_id] = title
+
+    known = set(step_ids)
+    positions = {step_id: index for index, step_id in enumerate(step_ids)}
+    indegree = {step_id: 0 for step_id in step_ids}
+    followers: dict[str, list[str]] = {step_id: [] for step_id in step_ids}
+    for step in plan:
+        step_id = str(step.get("id") or "").strip()
+        for dependency_id in _workbench_dependency_ids(step.get("dependsOn")):
+            if dependency_id == step_id:
+                return False, f"步骤「{titles[step_id]}」不能依赖自身。", "self_dependency"
+            if dependency_id not in known:
+                return False, f"步骤「{titles[step_id]}」引用了不存在的前置步骤。", "missing_dependency"
+            if require_dependency_order and positions[dependency_id] >= positions[step_id]:
+                return (
+                    False,
+                    f"步骤「{titles[step_id]}」必须排在前置步骤「{titles[dependency_id]}」之后。",
+                    "dependency_order",
+                )
+            indegree[step_id] += 1
+            followers[dependency_id].append(step_id)
+
+    queue = [step_id for step_id in step_ids if indegree[step_id] == 0]
+    visited = 0
+    while queue:
+        current = queue.pop(0)
+        visited += 1
+        for follower in followers[current]:
+            indegree[follower] -= 1
+            if indegree[follower] == 0:
+                queue.append(follower)
+    if visited != len(step_ids):
+        return False, "步骤依赖形成了循环，请移除循环依赖。", "dependency_cycle"
+    return True, "", ""
+
+
+def _workbench_normalize_plan(
+    plan: Any,
+    *,
+    task_id: str = "",
+) -> list[dict[str, Any]]:
+    if not isinstance(plan, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, raw_step in enumerate(plan):
+        if not isinstance(raw_step, dict):
+            continue
+        step = dict(raw_step)
+        step["id"] = str(step.get("id") or "").strip() or _short_id("step")
+        step["taskId"] = str(step.get("taskId") or task_id or "").strip()
+        step["title"] = str(step.get("title") or "").strip()[:160]
+        step["description"] = str(step.get("description") or "").strip()[:4000]
+        step["order"] = index + 1
+        step["dependsOn"] = _workbench_dependency_ids(step.get("dependsOn"))
+        step.pop("_dependsOnProvided", None)
+        normalized.append(step)
+    return normalized[:12]
+
+
+def _workbench_keep_ordered_dependencies(plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only dependency edges that still point to an earlier retained step."""
+    seen: set[str] = set()
+    for step in plan:
+        step_id = str(step.get("id") or "").strip()
+        step["dependsOn"] = [
+            dependency_id
+            for dependency_id in _workbench_dependency_ids(step.get("dependsOn"))
+            if dependency_id in seen
+        ]
+        if step_id:
+            seen.add(step_id)
+    return plan
+
+
+def _workbench_step_dependencies_satisfied(
+    plan: Any,
+    step_id: str,
+) -> tuple[bool, list[str]]:
+    if not isinstance(plan, list):
+        return False, []
+    by_id = {
+        str(step.get("id") or ""): step
+        for step in plan
+        if isinstance(step, dict) and str(step.get("id") or "")
+    }
+    step = by_id.get(str(step_id or ""))
+    if not step:
+        return False, []
+    unmet: list[str] = []
+    for dependency_id in _workbench_dependency_ids(step.get("dependsOn")):
+        dependency = by_id.get(dependency_id)
+        if not dependency or str(dependency.get("status") or "") not in ("completed", "done"):
+            unmet.append(dependency_id)
+    return not unmet, unmet
+
+
+def _workbench_plan_definition_signature(plan: Any) -> str:
+    rows: list[dict[str, Any]] = []
+    for step in plan if isinstance(plan, list) else []:
+        if not isinstance(step, dict):
+            continue
+        context_files = step.get("contextFiles") if isinstance(step.get("contextFiles"), list) else []
+        rows.append({
+            "id": str(step.get("id") or ""),
+            "title": str(step.get("title") or ""),
+            "description": str(step.get("description") or ""),
+            "dependsOn": _workbench_dependency_ids(step.get("dependsOn")),
+            "promptOverride": str(step.get("promptOverride") or ""),
+            "contextFiles": context_files,
+        })
+    return json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def _workbench_coerce_plan_steps(raw: Any, session: dict[str, Any]) -> list[dict[str, Any]]:
     """Normalize an LLM plan reply (``{"steps": [...]}`` or a bare list) into
     execution-plan steps. All steps start ``pending``."""
@@ -1790,23 +1982,47 @@ def _workbench_coerce_plan_steps(raw: Any, session: dict[str, Any]) -> list[dict
         items = raw
     task_id = session.get("id", "")
     steps: list[dict[str, Any]] = []
+    dependency_indexes: list[list[int]] = []
     for item in items:
         if isinstance(item, dict):
             title = str(item.get("title") or item.get("name") or "").strip()
             description = str(item.get("description") or item.get("detail") or "").strip()
             source_step_id = str(item.get("sourceStepId") or item.get("source_step_id") or "").strip()
+            raw_dependencies = item.get("dependsOnStepIndexes")
+            if not isinstance(raw_dependencies, list):
+                raw_dependencies = item.get("depends_on_step_indexes")
+            dependencies_provided = isinstance(raw_dependencies, list)
+            dependency_indices: list[int] = []
+            if dependencies_provided:
+                for value in raw_dependencies:
+                    try:
+                        dependency_index = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if dependency_index > 0 and dependency_index not in dependency_indices:
+                        dependency_indices.append(dependency_index)
         else:
             title = str(item or "").strip()
             description = ""
             source_step_id = ""
+            dependencies_provided = False
+            dependency_indices = []
         if not title:
             continue
         step = _workbench_new_plan_step(title, description, len(steps) + 1, task_id)
         if source_step_id:
             step["sourceStepId"] = source_step_id
+        step["_dependsOnProvided"] = dependencies_provided
         steps.append(step)
+        dependency_indexes.append(dependency_indices)
         if len(steps) >= 12:
             break
+    for index, step in enumerate(steps):
+        step["dependsOn"] = [
+            steps[dependency_index - 1]["id"]
+            for dependency_index in dependency_indexes[index]
+            if 0 < dependency_index <= len(steps) and dependency_index - 1 < index
+        ]
     return steps
 
 
@@ -1824,6 +2040,11 @@ def _workbench_plan_reset_requested(feedback: str) -> bool:
 
 def _workbench_existing_plan_block(session: dict[str, Any]) -> str:
     plan = session.get("plan") if isinstance(session.get("plan"), list) else []
+    titles_by_id = {
+        str(step.get("id") or ""): str(step.get("title") or "").strip()
+        for step in plan
+        if isinstance(step, dict) and str(step.get("id") or "")
+    }
     rows: list[str] = []
     for index, step in enumerate(plan[:12], 1):
         if not isinstance(step, dict):
@@ -1835,7 +2056,15 @@ def _workbench_existing_plan_block(session: dict[str, Any]) -> str:
         description = str(step.get("description") or "").strip()
         suffix = f" — {description}" if description else ""
         step_id = str(step.get("id") or "").strip()
-        rows.append(f"{index}. id={step_id} [{status}] {title}{suffix}")
+        dependency_titles = [
+            titles_by_id.get(dependency_id, dependency_id)
+            for dependency_id in _workbench_dependency_ids(step.get("dependsOn"))
+        ]
+        dependency_suffix = (
+            "；前置步骤：" + "、".join(dependency_titles)
+            if dependency_titles else ""
+        )
+        rows.append(f"{index}. id={step_id} [{status}] {title}{suffix}{dependency_suffix}")
     if not rows:
         return ""
     return "\n当前已有执行计划（除非用户明确要求删除/重排，请保留并在此基础上调整）：\n" + "\n".join(rows)
@@ -2011,9 +2240,9 @@ def _workbench_reconcile_revised_plan(
     if mode not in ("revise", "replace"):
         mode = "replace" if _workbench_plan_reset_requested(feedback) else "revise"
     if not existing or not feedback or mode == "replace":
-        return generated
+        return _workbench_normalize_plan(generated)
     if not generated:
-        return existing
+        return _workbench_normalize_plan(existing)
 
     existing_steps = [dict(step) for step in existing if isinstance(step, dict)]
     by_id = {str(step.get("id") or ""): step for step in existing_steps if str(step.get("id") or "")}
@@ -2024,9 +2253,11 @@ def _workbench_reconcile_revised_plan(
     }
     merged_generated: list[dict[str, Any]] = []
     matched_ids: set[str] = set()
+    generated_to_final_id: dict[str, str] = {}
     for index, step in enumerate(generated):
         if not isinstance(step, dict):
             continue
+        generated_id = str(step.get("id") or "").strip()
         source_id = str(step.get("sourceStepId") or "").strip()
         original = by_id.get(source_id)
         if original is None:
@@ -2036,13 +2267,26 @@ def _workbench_reconcile_revised_plan(
             next_step["title"] = str(step.get("title") or original.get("title") or "").strip()
             next_step["description"] = str(step.get("description") or "").strip()
             next_step["order"] = index + 1
+            if step.get("_dependsOnProvided"):
+                next_step["dependsOn"] = _workbench_dependency_ids(step.get("dependsOn"))
             next_step.pop("sourceStepId", None)
+            next_step.pop("_dependsOnProvided", None)
             matched_ids.add(str(original.get("id") or ""))
         else:
             next_step = dict(step)
             next_step["order"] = index + 1
             next_step.pop("sourceStepId", None)
+            next_step.pop("_dependsOnProvided", None)
+        if generated_id:
+            generated_to_final_id[generated_id] = str(next_step.get("id") or "")
         merged_generated.append(next_step)
+
+    for step in merged_generated:
+        step["dependsOn"] = [
+            generated_to_final_id.get(dependency_id, dependency_id)
+            for dependency_id in _workbench_dependency_ids(step.get("dependsOn"))
+            if generated_to_final_id.get(dependency_id, dependency_id)
+        ]
 
     # A revise response is expected to contain the complete revised plan. Some
     # models still return only the changed/new steps. In that partial-response
@@ -2059,7 +2303,9 @@ def _workbench_reconcile_revised_plan(
                 seen.add(key)
         for index, step in enumerate(merged):
             step["order"] = index + 1
-        return merged[:12]
+        return _workbench_keep_ordered_dependencies(
+            _workbench_normalize_plan(merged[:12])
+        )
 
     for original in existing_steps:
         original_id = str(original.get("id") or "")
@@ -2067,7 +2313,8 @@ def _workbench_reconcile_revised_plan(
             merged_generated.append(original)
     for index, step in enumerate(merged_generated):
         step["order"] = index + 1
-    return merged_generated[:12]
+    final_plan = _workbench_normalize_plan(merged_generated[:12])
+    return _workbench_keep_ordered_dependencies(final_plan)
 
 
 async def _workbench_generate_plan_steps(
@@ -2140,13 +2387,15 @@ async def _workbench_generate_plan_steps(
             '  "goal": "一句话、具体、贴合本项目实际的任务目标（中文）",\n'
             '  "title": "几个字的短标题（中文，<=20字）",\n'
             '  "steps": [\n'
-            '    {"sourceStepId": null, "title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块"}\n'
+            '    {"sourceStepId": null, "title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块", "dependsOnStepIndexes": [1]}\n'
             "  ],\n"
             '  "acceptanceCriteria": ["任务完成后可独立核验的结果标准"]\n'
             "}\n\n"
             "要求：goal 必须具体到这个项目、不要泛泛而谈；生成 3-7 个步骤、顺序合理、"
             "尽量引用真实文件/目录/模块；同时生成 3-8 条具体、可验证的验收标准，"
             "避免“目标清晰”这类过程性描述；全部使用简体中文。"
+            "dependsOnStepIndexes 使用当前返回列表中的 1-based 序号，只能引用排在当前步骤之前的步骤；"
+            "没有前置依赖时必须返回空数组。"
         )
     else:
         prompt = (
@@ -2158,7 +2407,7 @@ async def _workbench_generate_plan_steps(
             "{\n"
             '  "revisionMode": "revise|replace",\n'
             '  "steps": [\n'
-            '    {"sourceStepId": "保留/修改的原步骤 id；新增步骤填 null", "title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块"}\n'
+            '    {"sourceStepId": "保留/修改的原步骤 id；新增步骤填 null", "title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块", "dependsOnStepIndexes": [1]}\n'
             "  ],\n"
             '  "acceptanceCriteria": ["任务完成后可独立核验的结果标准"]\n'
             "}\n\n"
@@ -2169,6 +2418,8 @@ async def _workbench_generate_plan_steps(
             "用户要求完全不同、全新、换一套、从头重做，或新要求与原目标明显不同且旧计划不再适用时用 replace。"
             "revise 时必须返回完整修订计划，并用 sourceStepId 标明保留或修改的是哪个原步骤；"
             "replace 时不要保留旧步骤，所有 sourceStepId 填 null。验收标准必须对应最终完整计划。"
+            "每个步骤都必须返回 dependsOnStepIndexes；它使用当前返回列表中的 1-based 序号，"
+            "只能引用排在当前步骤之前的步骤，没有前置依赖时返回空数组。"
         )
         if requested_operation == "replace":
             prompt += (
@@ -2197,6 +2448,12 @@ async def _workbench_generate_plan_steps(
         else:
             operation = "replace" if _workbench_plan_reset_requested(feedback) else "revise"
         steps = _workbench_reconcile_revised_plan(existing_plan, steps, feedback, operation)
+    else:
+        steps = _workbench_normalize_plan(steps, task_id=str(session.get("id") or ""))
+    valid_plan, _, _ = _workbench_validate_plan_graph(steps)
+    if not valid_plan:
+        for step in steps:
+            step["dependsOn"] = []
     # 直接开始: back-fill the LLM-proposed goal/title onto the session (only while
     # still blank) so the task gets a real identity rather than filler.
     if auto_start:
@@ -6276,8 +6533,18 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return _read_workbench_store()
 
     @router.get("/api/workbench/notifications")
-    async def api_workbench_notifications(tab: str = "all", limit: int = 80):
-        return list_notifications(tab=tab, limit=limit)
+    async def api_workbench_notifications(
+        tab: str = "all",
+        limit: int = 80,
+        visible_chat_id: str = "",
+        visible_session_id: str = "",
+    ):
+        return list_notifications(
+            tab=tab,
+            limit=limit,
+            visible_chat_id=visible_chat_id,
+            visible_session_id=visible_session_id,
+        )
 
     @router.post("/api/workbench/notifications/read")
     async def api_workbench_notifications_read(request: Request):
@@ -6600,6 +6867,162 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         exists = resolved.exists()
         return {"exists": exists, "path": rel, "isDir": resolved.is_dir() if exists else False}
 
+    @router.patch("/api/task-sessions/{session_id}/plan")
+    async def api_workbench_mutate_plan(session_id: str, request: Request):
+        body = await request.json()
+        operation = str(body.get("operation") or "").strip().lower()
+        try:
+            requested_revision = int(body.get("basePlanRevision"))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "invalid basePlanRevision"}, status_code=400)
+
+        with _WORKBENCH_STORE_LOCK:
+            payload = _read_workbench_store()
+            project, session = _workbench_find_session(payload, session_id)
+            if not session or not project:
+                return JSONResponse({"error": "session not found"}, status_code=404)
+            current_revision = int(session.get("planDefinitionRevision") or 0)
+            if requested_revision != current_revision:
+                return JSONResponse(
+                    {"error": "计划已发生变化，请刷新后重试。", "code": "stale_plan_revision"},
+                    status_code=409,
+                )
+            if is_session_running(session_id) or str(session.get("status") or "") in ("running", "waiting_for_user"):
+                return JSONResponse(
+                    {"error": "Agent 正在执行，暂时不能修改计划。", "code": "plan_running"},
+                    status_code=409,
+                )
+
+            plan = _workbench_normalize_plan(
+                session.get("plan"),
+                task_id=session_id,
+            )
+            by_id = {
+                str(step.get("id") or ""): step
+                for step in plan
+                if isinstance(step, dict)
+            }
+            structure_operation = operation in ("add", "delete", "reorder", "set_dependencies")
+            fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
+            if operation == "update" and any(
+                field in fields for field in ("title", "description", "dependsOn")
+            ):
+                structure_operation = True
+            if structure_operation and _workbench_plan_has_started(plan):
+                return JSONResponse(
+                    {"error": "计划已经开始执行，只能编辑尚未运行步骤的命令和上下文。", "code": "plan_started"},
+                    status_code=409,
+                )
+
+            if operation == "add":
+                step_input = body.get("step") if isinstance(body.get("step"), dict) else {}
+                title = str(step_input.get("title") or "").strip()
+                if not title:
+                    return JSONResponse({"error": "步骤标题不能为空。", "code": "empty_step_title"}, status_code=400)
+                if len(plan) >= 12:
+                    return JSONResponse({"error": "执行计划最多包含 12 个步骤。", "code": "plan_too_large"}, status_code=400)
+                new_step = _workbench_new_plan_step(
+                    title[:160],
+                    str(step_input.get("description") or "").strip()[:4000],
+                    len(plan) + 1,
+                    session_id,
+                )
+                new_step["dependsOn"] = _workbench_dependency_ids(step_input.get("dependsOn"))
+                plan.append(new_step)
+            elif operation == "update":
+                step_id = str(body.get("stepId") or "").strip()
+                target = by_id.get(step_id)
+                if not target:
+                    return JSONResponse({"error": "步骤不存在。", "code": "step_not_found"}, status_code=404)
+                allowed_fields = {"title", "description", "dependsOn", "promptOverride", "contextFiles"}
+                if any(field not in allowed_fields for field in fields):
+                    return JSONResponse({"error": "包含不允许修改的步骤字段。", "code": "invalid_step_fields"}, status_code=400)
+                if str(target.get("status") or "pending") != "pending":
+                    return JSONResponse({"error": "只能编辑尚未运行的步骤。", "code": "step_started"}, status_code=409)
+                if "title" in fields:
+                    title = str(fields.get("title") or "").strip()
+                    if not title:
+                        return JSONResponse({"error": "步骤标题不能为空。", "code": "empty_step_title"}, status_code=400)
+                    target["title"] = title[:160]
+                if "description" in fields:
+                    target["description"] = str(fields.get("description") or "").strip()[:4000]
+                if "dependsOn" in fields:
+                    target["dependsOn"] = _workbench_dependency_ids(fields.get("dependsOn"))
+                if "promptOverride" in fields:
+                    target["promptOverride"] = str(fields.get("promptOverride") or "")[:12000]
+                if "contextFiles" in fields:
+                    context_files = fields.get("contextFiles")
+                    if not isinstance(context_files, list):
+                        return JSONResponse({"error": "contextFiles must be a list"}, status_code=400)
+                    target["contextFiles"] = context_files[:30]
+            elif operation == "set_dependencies":
+                step_id = str(body.get("stepId") or "").strip()
+                target = by_id.get(step_id)
+                if not target:
+                    return JSONResponse({"error": "步骤不存在。", "code": "step_not_found"}, status_code=404)
+                target["dependsOn"] = _workbench_dependency_ids(body.get("dependsOn"))
+            elif operation == "delete":
+                step_id = str(body.get("stepId") or "").strip()
+                if step_id not in by_id:
+                    return JSONResponse({"error": "步骤不存在。", "code": "step_not_found"}, status_code=404)
+                dependent_titles = [
+                    str(step.get("title") or "")
+                    for step in plan
+                    if step_id in _workbench_dependency_ids(step.get("dependsOn"))
+                ]
+                if dependent_titles:
+                    return JSONResponse(
+                        {
+                            "error": "该步骤仍被以下步骤依赖：" + "、".join(dependent_titles),
+                            "code": "step_has_dependents",
+                        },
+                        status_code=409,
+                    )
+                plan = [step for step in plan if str(step.get("id") or "") != step_id]
+            elif operation == "reorder":
+                ordered_ids = _workbench_dependency_ids(body.get("orderedStepIds"))
+                current_ids = [str(step.get("id") or "") for step in plan]
+                if len(ordered_ids) != len(current_ids) or set(ordered_ids) != set(current_ids):
+                    return JSONResponse({"error": "步骤顺序与当前计划不一致。", "code": "invalid_reorder"}, status_code=400)
+                plan = [by_id[step_id] for step_id in ordered_ids]
+            else:
+                return JSONResponse({"error": "unsupported plan operation"}, status_code=400)
+
+            plan = _workbench_normalize_plan(plan, task_id=session_id)
+            valid, error_message, error_code = _workbench_validate_plan_graph(plan)
+            if not valid:
+                return JSONResponse(
+                    {"error": error_message, "code": error_code},
+                    status_code=400,
+                )
+
+            now = _utc_now_iso()
+            session["plan"] = plan
+            session["planRevision"] = int(session.get("planRevision") or 0) + 1
+            session["planDefinitionRevision"] = current_revision + 1
+            session["approvedPlanDefinitionRevision"] = None
+            if str(session.get("status") or "") == "waiting_for_approval":
+                session["status"] = "planning"
+                session["agentReply"] = "计划已修改，请重新确认后执行。"
+            session["events"] = list(session.get("events") or []) + [{
+                "id": _short_id("event"),
+                "type": "PlanUpdatedEvent",
+                "createdAt": now,
+                "body": {
+                    "add": "新增执行步骤。",
+                    "update": "更新执行步骤。",
+                    "set_dependencies": "更新步骤依赖。",
+                    "delete": "删除执行步骤。",
+                    "reorder": "调整执行步骤顺序。",
+                }.get(operation, "更新执行计划。"),
+            }]
+            session["updatedAt"] = now
+            project["updatedAt"] = now
+            payload["activeProjectId"] = project.get("id")
+            payload["activeSessionId"] = session_id
+            _write_workbench_store(payload)
+            return {"ok": True, "project": project, "session": session, **payload}
+
     @router.patch("/api/task-sessions/{session_id}")
     async def api_workbench_update_session(session_id: str, request: Request):
         body = await request.json()
@@ -6613,15 +7036,31 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         # no longer override the title the user chose.
         if "title" in body and str(body.get("title") or "").strip():
             session["titleLocked"] = True
-        for field in ("title", "goal", "status", "priority", "agentReply", "summary", "kind"):
+        for field in (
+            "title", "goal", "status", "priority", "agentReply", "summary", "kind",
+            "approvedPlanDefinitionRevision",
+        ):
             if field in body:
                 session[field] = body[field]
         for field in ("constraints", "events", "runs", "artifacts", "acceptanceCriteria"):
             if isinstance(body.get(field), list):
                 session[field] = body[field]
         if isinstance(body.get("plan"), list):
-            session["plan"] = body["plan"]
+            previous_definition = _workbench_plan_definition_signature(session.get("plan"))
+            next_plan = _workbench_normalize_plan(body["plan"], task_id=session_id)
+            valid, error_message, error_code = _workbench_validate_plan_graph(next_plan)
+            if not valid:
+                return JSONResponse(
+                    {"error": error_message, "code": error_code},
+                    status_code=400,
+                )
+            session["plan"] = next_plan
             session["planRevision"] = int(session.get("planRevision") or 0) + 1
+            if _workbench_plan_definition_signature(next_plan) != previous_definition:
+                session["planDefinitionRevision"] = int(
+                    session.get("planDefinitionRevision") or 0
+                ) + 1
+                session["approvedPlanDefinitionRevision"] = None
         if isinstance(body.get("init"), dict):
             session["init"] = {**(session.get("init") or {}), **body["init"]}
         now = _utc_now_iso()
@@ -6749,6 +7188,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if not (feedback and not from_llm):
             latest_session["plan"] = steps
             latest_session["planRevision"] = base_plan_revision + 1
+            latest_session["planDefinitionRevision"] = int(
+                latest_session.get("planDefinitionRevision") or 0
+            ) + 1
+            latest_session["approvedPlanDefinitionRevision"] = None
             latest_session["acceptanceCriteria"] = acceptance
         for field in ("goal", "title", "constraints", "reflection"):
             if field in session:
@@ -6760,7 +7203,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 if operation == "replace" else
                 "我已结合你的要求修订执行计划，并保留了可对应步骤的执行状态。"
                 if operation == "revise" else
-                "我已结合工作区里的实际内容拆解出执行计划。你可以直接编辑，或逐步执行（顺序由你决定）。"
+                "我已结合工作区里的实际内容拆解出执行计划。你可以编辑步骤、顺序和依赖后再执行。"
             )
         else:
             latest_session["agentReply"] = (
@@ -7015,7 +7458,59 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         # NOT rebuild the plan / acceptance / goal / status; the client drives those.
         step_id = str(body.get("stepId") or "").strip()
         action = str(body.get("action") or "").strip()
+        run_meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
         is_step_run = bool(step_id) or action == "spawn_subagent"
+        if is_step_run:
+            plan = session.get("plan") if isinstance(session.get("plan"), list) else []
+            step = next(
+                (
+                    item for item in plan
+                    if isinstance(item, dict) and str(item.get("id") or "") == step_id
+                ),
+                None,
+            )
+            if not step:
+                return JSONResponse({"error": "步骤不存在。", "code": "step_not_found"}, status_code=404)
+            try:
+                requested_definition_revision = int(body.get("planDefinitionRevision"))
+            except (TypeError, ValueError):
+                return JSONResponse({"error": "invalid planDefinitionRevision"}, status_code=400)
+            current_definition_revision = int(session.get("planDefinitionRevision") or 0)
+            if requested_definition_revision != current_definition_revision:
+                return JSONResponse(
+                    {"error": "计划已发生变化，请重新确认后执行。", "code": "stale_plan_revision"},
+                    status_code=409,
+                )
+            approved_definition_revision = session.get("approvedPlanDefinitionRevision")
+            try:
+                approved_definition_revision = (
+                    int(approved_definition_revision)
+                    if approved_definition_revision is not None
+                    else -1
+                )
+            except (TypeError, ValueError):
+                approved_definition_revision = -1
+            if approved_definition_revision != current_definition_revision:
+                return JSONResponse(
+                    {"error": "当前计划尚未获得执行确认。", "code": "plan_not_approved"},
+                    status_code=409,
+                )
+            dependencies_ready, unmet_dependency_ids = _workbench_step_dependencies_satisfied(plan, step_id)
+            if not dependencies_ready:
+                titles_by_id = {
+                    str(item.get("id") or ""): str(item.get("title") or "")
+                    for item in plan if isinstance(item, dict)
+                }
+                return JSONResponse(
+                    {
+                        "error": "前置步骤尚未完成：" + "、".join(
+                            titles_by_id.get(dependency_id, dependency_id)
+                            for dependency_id in unmet_dependency_ids
+                        ),
+                        "code": "unmet_dependencies",
+                    },
+                    status_code=409,
+                )
 
         now = _utc_now_iso()
         if not is_step_run:
@@ -7040,6 +7535,13 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         # A run that hit a permission / clarification boundary pauses awaiting the
         # user's answer — surface the question on the card instead of the sentinel.
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
+        if is_step_run and awaiting_user:
+            session["pendingPlanStep"] = {
+                "stepId": step_id,
+                "continueAll": bool(run_meta.get("continueAll")),
+            }
+        elif is_step_run:
+            session.pop("pendingPlanStep", None)
         # Preserve any title/goal/summary the agent changed mid-run via set_task_goal.
         _workbench_sync_agent_task_meta(session, session_id, task_meta_before)
         session["agentReply"] = agent_reply
@@ -7247,6 +7749,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             if not (revising and not from_llm):
                 latest_session["plan"] = steps
                 latest_session["planRevision"] = base_plan_revision + 1
+                latest_session["planDefinitionRevision"] = int(
+                    latest_session.get("planDefinitionRevision") or 0
+                ) + 1
+                latest_session["approvedPlanDefinitionRevision"] = None
                 latest_session["acceptanceCriteria"] = acceptance
             for field in ("goal", "title", "constraints", "reflection"):
                 if field in session:
@@ -7262,7 +7768,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 )
             else:
                 latest_session["agentReply"] = (
-                    "我已结合工作区里的实际内容拆解出执行计划。你可以直接编辑，或逐步执行（顺序由你决定）。"
+                    "我已结合工作区里的实际内容拆解出执行计划。你可以编辑步骤、顺序和依赖后再执行。"
                     if from_llm else
                     "计划生成服务暂时不可用，我先给出一份基础计划，你可以编辑后逐步执行，或稍后让我重新拆解。"
                 )
@@ -7384,6 +7890,31 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         pending = session.get("pendingQuestion") if isinstance(session.get("pendingQuestion"), dict) else None
         if not pending or str(pending.get("id") or "") != question_id:
             return JSONResponse({"error": "no matching pending question"}, status_code=409)
+        pending_plan_step = (
+            dict(session.get("pendingPlanStep"))
+            if isinstance(session.get("pendingPlanStep"), dict)
+            else None
+        )
+        permission_kinds = {
+            "scope_elevation",
+            "write_permission_request",
+            "read_elevation",
+            "subshell_elevation",
+            "delete_confirmation",
+            "task_permission_request",
+            "git_commit",
+        }
+        pending_options = pending.get("options") if isinstance(pending.get("options"), list) else []
+        normalized_answer = answer_text.strip().casefold()
+        explicit_denial = (
+            normalized_answer == str(pending_options[-1]).strip().casefold()
+            if pending_options
+            else normalized_answer in {"拒绝", "不允许", "否", "reject", "deny", "no"}
+        )
+        permission_denied = (
+            str(pending.get("kind") or "") in permission_kinds
+            and explicit_denial
+        )
 
         now = _utc_now_iso()
         run_start_ts = now
@@ -7438,6 +7969,64 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
         _workbench_promote_file_artifacts(session, file_changes, now)
+        continue_plan_execution = False
+        if pending_plan_step and not awaiting_user:
+            pending_step_id = str(pending_plan_step.get("stepId") or "").strip()
+            target_step = next(
+                (
+                    step for step in (session.get("plan") or [])
+                    if isinstance(step, dict) and str(step.get("id") or "") == pending_step_id
+                ),
+                None,
+            )
+            if target_step:
+                session["planRevision"] = int(session.get("planRevision") or 0) + 1
+                target_step["updatedAt"] = now
+                if permission_denied:
+                    # The session pauses for user action, but the denied step
+                    # remains pending so its command can be edited and retried.
+                    target_step["status"] = "pending"
+                    target_step["startedAt"] = None
+                    target_step["currentAction"] = "权限请求被拒绝，可调整命令后重新执行。"
+                    session["status"] = "paused"
+                else:
+                    target_step["status"] = "completed"
+                    target_step["completedAt"] = now
+                    target_step["currentAction"] = (
+                        f"已完成，本步调用工具 {len(tool_call_events)} 次。"
+                        if tool_call_events else "已完成该步骤。"
+                    )
+                    target_step["toolCalls"] = [
+                        {"tool": event["tool"], "argsPreview": event["argsPreview"]}
+                        for event in tool_call_events
+                    ]
+                    start_ms = target_step.get("startedAt")
+                    if start_ms and target_step.get("durationSec") is None:
+                        try:
+                            seconds = round(
+                                (
+                                    datetime.fromisoformat(now)
+                                    - datetime.fromisoformat(str(start_ms))
+                                ).total_seconds()
+                            )
+                            if seconds >= 1:
+                                target_step["durationSec"] = seconds
+                        except (TypeError, ValueError):
+                            pass
+                    _workbench_apply_step_file_changes(session, pending_step_id, file_changes)
+                    remaining = [
+                        step for step in (session.get("plan") or [])
+                        if isinstance(step, dict)
+                        and str(step.get("status") or "pending") not in ("completed", "done", "skipped")
+                    ]
+                    if not remaining:
+                        session["status"] = "review"
+                    elif bool(pending_plan_step.get("continueAll")):
+                        session["status"] = "running"
+                        continue_plan_execution = True
+                    else:
+                        session["status"] = "paused"
+            session.pop("pendingPlanStep", None)
         if not awaiting_user:
             await _workbench_archive_run_knowledge(
                 project, session, run, workspace_root, now,
@@ -7447,7 +8036,15 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
-        return {"ok": True, "awaitingUser": awaiting_user, "project": project, "session": session, "run": run, **payload}
+        return {
+            "ok": True,
+            "awaitingUser": awaiting_user,
+            "continuePlanExecution": continue_plan_execution,
+            "project": project,
+            "session": session,
+            "run": run,
+            **payload,
+        }
 
     @router.post("/api/task-sessions/{session_id}/init/submit")
     async def api_workbench_submit_init(session_id: str, request: Request):

@@ -60,6 +60,48 @@ def test_workbench_plan_revision_guard_only_blocks_unresolved_started_steps():
     assert result == [False, True, False]
 
 
+def test_workbench_dependency_helpers_preserve_visible_order_and_block_unmet_steps():
+    result = _run_workbench_model_js(
+        """
+(() => {
+  const plan = [
+    { id: "a", title: "A", status: "completed", dependsOn: [] },
+    { id: "b", title: "B", status: "pending", dependsOn: ["a"] },
+    { id: "c", title: "C", status: "pending", dependsOn: ["b"] }
+  ];
+  const invalid = [plan[1], plan[0], plan[2]];
+  return {
+    valid: window.WorkbenchModel.validatePlanGraph(plan),
+    invalid: window.WorkbenchModel.validatePlanGraph(invalid),
+    next: window.WorkbenchModel.findNextRunnableStep(plan).id,
+    unmetC: window.WorkbenchModel.unmetDependencyIds(plan, plan[2]),
+    marked: window.WorkbenchModel.markStepById(plan, "b", "running", "go").map(s => s.status)
+  };
+})()
+"""
+    )
+
+    assert result["valid"] == {"valid": True}
+    assert result["invalid"]["code"] == "dependency_order"
+    assert result["next"] == "b"
+    assert result["unmetC"] == ["b"]
+    assert result["marked"] == ["completed", "running", "pending"]
+
+
+def test_workbench_plan_ui_uses_step_ids_and_operation_endpoint():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
+
+    assert "function markStepById" in model
+    assert '"/plan"' in model
+    assert "model.markStepById(basePlan, stepId" in source
+    assert "controller.reorderSteps" in source
+    assert "dependsOn" in source
+    assert "function requirePlan(baseSession)" in source
+    assert "firstUnresolvedStepIndex" not in source
+
+
 def test_workbench_chat_overview_i18n_has_zh_labels():
     result = _run_workbench_i18n_js(
         """
@@ -145,8 +187,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=20260619-followup1" in index
-    assert "workbench.js?v=20260619-followup1" in index
+    assert "workbench-model.js?v=20260619-plan-deps1" in index
+    assert "workbench.js?v=20260619-plan-deps1" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
