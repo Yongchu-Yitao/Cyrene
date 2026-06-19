@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.0b3] - 2026-06-19
+
+### Added
+
+- **ListKnowledgeDocuments 工具** — Agent 现在可以通过 `ListKnowledgeDocuments` 工具枚举当前 Workbench 会话的知识库文档，返回每个文件的名称、索引状态（可检索/未检索）和 chunk 数量，支持按 status 过滤与数量限制。
+- **Workbench run 结果自动归档知识库** — 每次 Agent 完成一个 Workbench 步骤，任务摘要（目标、请求、结果、产出文件列表）将自动以 Markdown 形式归档到项目知识库，Agent 后续可通过 `SearchKnowledge` 检索历史执行记录。
+- **Linux 原生目录选择器** — Electron `dialog.showOpenDialog` IPC 接口，Linux 用户在 Chat 和 Create 界面现在可以使用系统原生文件夹选择对话框（macOS/Windows 不受影响）。
+
+### Changed
+
+- **流式运行引擎 (module-level runtime engine)** — `WorkbenchChatRuntimes` 提升到模块级别，对话流在用户切换页面或视图时不再中断：streaming 状态（文本、工具进度、中断句柄）跨组件 mount/unmount 完整保留，切回时自动追上最新内容。
+- **Follow-up 任务上下文传递** — 追踪任务通过新 API 端点创建，携带当前会话的完整 context，避免 follow-up 任务缺少背景信息导致重复探索。
+- **聊天会话删除** — `DELETE /api/chats/:session_id` 正确处理 `run_live`（重置实时会话）和 `archive_*`（按日期和 session ID 定位历史会话）两类特殊会话，不再返回 400。
+
+### Fixed
+
+- **Workbench 依赖校验** — 计划步骤依赖图现在拒绝循环依赖、缺失依赖和非法顺序；依赖辅助函数保留可见顺序，阻止未满足依赖的步骤执行。
+- **通知已读状态** — 未读通知按可见性正确管理，切换视图不再误重置已读状态。
+
 ## [0.6.0b2] - 2026-06-19
 
 ### Fixed
