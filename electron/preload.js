@@ -7,5 +7,9 @@ contextBridge.exposeInMainWorld('cyrene', {
   getDesktopSettings: () => ipcRenderer.invoke('desktop-settings:get'),
   updateDesktopSettings: (updates) => ipcRenderer.invoke('desktop-settings:update', updates),
   showNotification: ({ title, body }) => ipcRenderer.invoke('notification:show', { title, body }),
+  pickDirectory: () => {
+    if (process.platform !== 'linux') return Promise.resolve(null);
+    return ipcRenderer.invoke('dialog:pick-directory');
+  },
   switchUiShell: (mode) => ipcRenderer.invoke('window:switch-shell', mode),
 });

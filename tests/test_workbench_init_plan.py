@@ -1,5 +1,6 @@
 import sys
 import subprocess
+import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -62,6 +63,120 @@ def test_workbench_init_tool_creates_task_sessions_from_major_plan():
     assert created[0]["constraints"] == ["范围限制：不做移动端"]
     assert created[0]["acceptanceCriteria"][0]["text"] == "需求边界已确认"
     assert created[0]["events"][0]["type"] == "CreatedFromInitPlan"
+
+
+def test_workbench_follow_up_seed_uses_current_task_state():
+    from webui.routes import _workbench_follow_up_seed
+
+    seed = _workbench_follow_up_seed({
+        "title": "修复登录流程",
+        "goal": "让用户可以稳定登录",
+        "status": "failed",
+        "priority": "high",
+        "summary": {"text": "接口已完成，浏览器回归仍失败"},
+        "constraints": ["不要修改认证协议"],
+        "plan": [
+            {"title": "实现登录接口", "status": "completed"},
+            {"title": "修复浏览器回归", "status": "failed"},
+        ],
+        "acceptanceCriteria": [
+            {"text": "接口测试通过", "status": "passed"},
+            {"text": "浏览器登录成功", "status": "failed"},
+        ],
+        "reflection": {"packet": {"next_step": "检查登录页事件处理"}},
+    })
+
+    assert seed["title"] == "修复登录流程 · 后续"
+    assert seed["priority"] == "high"
+    assert seed["constraints"] == ["不要修改认证协议"]
+    assert "来源任务当前状态：失败" in seed["goal"]
+    assert "尚未解决的步骤：修复浏览器回归" in seed["goal"]
+    assert "尚未满足的验收项：浏览器登录成功" in seed["goal"]
+    assert "反思建议的下一步：检查登录页事件处理" in seed["goal"]
+    assert seed["unresolvedAcceptance"] == ["浏览器登录成功"]
+
+
+def test_workbench_follow_up_seed_keeps_explicit_request_with_source_context():
+    from webui.routes import _workbench_follow_up_seed
+
+    seed = _workbench_follow_up_seed(
+        {
+            "title": "整理发布说明",
+            "goal": "输出版本发布说明",
+            "status": "completed",
+            "constraints": [],
+        },
+        requested_title="补充英文版本",
+        requested_goal="另外制作一份英文发布说明",
+    )
+
+    assert seed["title"] == "补充英文版本"
+    assert "本次后续要求：另外制作一份英文发布说明" in seed["goal"]
+    assert "来源任务目标：输出版本发布说明" in seed["goal"]
+    assert "来源任务当前状态：已完成" in seed["goal"]
+
+
+def test_workbench_follow_up_endpoint_creates_linked_session(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from webui import routes
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "workbench_projects.json"
+    source_session = {
+        "id": "session_source",
+        "projectId": "project_1",
+        "kind": "task",
+        "title": "修复登录流程",
+        "goal": "让用户可以稳定登录",
+        "status": "failed",
+        "priority": "high",
+        "constraints": ["不要修改认证协议"],
+        "plan": [{"id": "step_1", "title": "修复浏览器回归", "status": "failed"}],
+        "acceptanceCriteria": [{"id": "accept_1", "text": "浏览器登录成功", "status": "failed"}],
+        "events": [],
+        "runs": [],
+        "artifacts": [],
+        "agentReply": "登录接口完成，但页面点击没有响应。",
+        "summary": "浏览器回归仍失败",
+        "createdAt": "2026-06-19T00:00:00+00:00",
+        "updatedAt": "2026-06-19T00:00:00+00:00",
+    }
+    store_path.write_text(json.dumps({
+        "projects": [{
+            "id": "project_1",
+            "name": "Cyrene",
+            "sessions": [source_session],
+            "createdAt": "2026-06-19T00:00:00+00:00",
+            "updatedAt": "2026-06-19T00:00:00+00:00",
+        }],
+        "activeProjectId": "project_1",
+        "activeSessionId": "session_source",
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+
+    app = FastAPI()
+    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    response = TestClient(app).post(
+        "/api/task-sessions/session_source/follow-up",
+        json={},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    created = payload["session"]
+    assert created["title"] == "修复登录流程 · 后续"
+    assert created["parentSessionId"] == "session_source"
+    assert created["priority"] == "high"
+    assert created["constraints"] == ["不要修改认证协议"]
+    assert created["acceptanceCriteria"][0]["text"] == "浏览器登录成功"
+    assert created["events"][0]["type"] == "CreatedAsFollowUp"
+    assert payload["activeSessionId"] == created["id"]
+    assert payload["projects"][0]["sessions"][0]["id"] == created["id"]
 
 
 def test_workbench_plan_revision_preserves_existing_steps_when_feedback_is_supplemental():

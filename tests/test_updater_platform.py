@@ -128,3 +128,35 @@ def test_filter_token_is_substring_of_real_asset_name(monkeypatch):
         _set_platform(monkeypatch, platform_name, machine)
         token = updater._platform_filter()
         assert token in asset_name.lower(), f"{token!r} not in {asset_name.lower()!r}"
+
+
+# --- #47: missing platform assets must never fall back to another package -----
+
+def test_no_compatible_asset_does_not_fall_back(monkeypatch):
+    """New version exists but no asset matches this platform → no fallback, clear error.
+
+    Pins #47's acceptance criterion "Missing platform assets never fall back to
+    another package." The release deliberately ships only macOS + Linux assets
+    while we check from Windows: the old ``assets[0]`` fallback would have handed
+    back the macOS .dmg.
+    """
+    import asyncio
+
+    assets = [
+        {"name": f"Cyrene-{VERSION}-mac.dmg", "browser_download_url": "https://dl/mac.dmg", "size": 11},
+        {"name": f"Cyrene-{VERSION}-x64.AppImage", "browser_download_url": "https://dl/x64.AppImage", "size": 44},
+    ]
+
+    async def _fetch(client, include_prerelease):
+        return {"tag_name": "v99.0.0", "assets": assets, "body": "notes"}
+
+    monkeypatch.setattr(updater, "_fetch_target_release", _fetch)
+    _set_platform(monkeypatch, "win32", "AMD64")
+
+    info = asyncio.run(updater.check_for_update(include_prerelease=False))
+
+    assert info.available is True          # there really is a newer version
+    assert info.download_url == ""         # but nothing installable for this platform
+    assert info.asset_name == ""           # no asset was selected
+    assert info.error                       # and a clear unsupported-platform error
+    assert "win32" in info.error            # naming the platform that has no package

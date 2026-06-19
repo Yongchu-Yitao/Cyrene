@@ -1971,10 +1971,9 @@ function useTaskController(session, onRefresh, runtime) {
       return run(patch({ status: "cancelled", events: model.withEvent(session, "Cancelled", "任务已取消。") }));
     },
 
-    createFollowUp: function (title) {
-      var name = title || window.prompt("后续任务标题", (session.title || "任务") + " · 后续");
-      if (!name) return Promise.resolve();
-      return run(model.createSession(session.projectId, { title: name, goal: "" }));
+    createFollowUp: function (input) {
+      var options = (input && typeof input === "object") ? input : {};
+      return run(model.createFollowUp(sid, options));
     },
   };
   return ctrl;
@@ -3124,7 +3123,12 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
         <div className="wb-scope-prompt">
           <p>{wbT("task.scopePrompt", "This is outside the current task. Create it as a new follow-up task?")}</p>
           <div className="wb-card-actions">
-            <button type="button" className="wb-btn primary" onClick={function () { controller.createFollowUp(scopePrompt.text.slice(0, 40)); setScopePrompt(null); resetDraft(); }}>{wbT("task.createNewTask", "Create new task")}</button>
+            <button type="button" className="wb-btn primary" onClick={function () {
+              var goal = scopePrompt.text.trim();
+              controller.createFollowUp({ title: goal.slice(0, 40), goal: goal });
+              setScopePrompt(null);
+              resetDraft();
+            }}>{wbT("task.createNewTask", "Create new task")}</button>
             <button type="button" className="wb-btn ghost" onClick={function () { var t = scopePrompt.text; setScopePrompt(null); dispatch(t); }}>{wbT("task.mergeCurrent", "Merge into current task")}</button>
             <button type="button" className="wb-btn ghost" onClick={function () { setScopePrompt(null); }}>{wbT("common.cancel", "Cancel")}</button>
           </div>
@@ -3278,6 +3282,9 @@ function ReflectionSection({ session }) {
 
 function ContextTab({ project, session, activeStep }) {
   var constraints = (session && session.constraints) || [];
+  var parentSession = project && session && session.parentSessionId
+    ? (project.sessions || []).find(function (item) { return item.id === session.parentSessionId; })
+    : null;
   var isInit = !!(session && session.kind === "init");
   if (isInit && window.WorkbenchInitProgress) {
     return (
@@ -3310,7 +3317,14 @@ function ContextTab({ project, session, activeStep }) {
         </SideSection>
       ) : (
         <SideSection title={wbT("task.side.dependencies", "Dependencies")}>
-          <p className="workbench-muted">{wbT("task.noDependencies", "No dependent tasks yet.")}</p>
+          {parentSession ? (
+            <div className="wb-brief-row">
+              <label>{wbT("task.followUpSource", "Source task")}</label>
+              <p>{parentSession.title || wbT("task.thisTask", "this task")}</p>
+            </div>
+          ) : (
+            <p className="workbench-muted">{wbT("task.noDependencies", "No dependent tasks yet.")}</p>
+          )}
         </SideSection>
       )}
     </div>

@@ -113,6 +113,42 @@ def test_workbench_acceptance_button_calls_agent_endpoint():
     assert '"/acceptance/generate"' in model
 
 
+def test_linux_desktop_uses_native_frame_and_directory_picker():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
+    create = (root / "src" / "workbench-webui" / "workbench-create.jsx").read_text(encoding="utf-8")
+    chat = (root / "src" / "webui" / "static" / "app" / "chat.jsx").read_text(encoding="utf-8")
+
+    assert "const isLinux = process.platform === 'linux';" in main
+    assert "const useInsetTitleBar = !isLegacyShell && !isLinux;" in main
+    assert "ipcMain.handle('dialog:pick-directory'" in main
+    assert "properties: ['openDirectory', 'createDirectory']" in main
+    assert "if (process.platform !== 'linux') return Promise.resolve(null);" in preload
+    assert "ipcRenderer.invoke('dialog:pick-directory')" in preload
+    assert 'window.cyrene.platform === "linux"' in create
+    assert "await window.cyrene.pickDirectory()" in create
+    assert 'window.cyrene.platform === "linux"' in chat
+    assert "await window.cyrene.pickDirectory()" in chat
+
+
+def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
+    routes = (root / "src" / "webui" / "routes.py").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+
+    assert 'window.prompt("后续任务标题"' not in source
+    assert "model.createFollowUp(sid, options)" in source
+    assert '"/follow-up"' in model
+    assert '"/api/task-sessions/{session_id}/follow-up"' in routes
+    assert 'session["parentSessionId"] = session_id' in routes
+    assert "followUpContext" in routes
+    assert "workbench-model.js?v=20260619-followup1" in index
+    assert "workbench.js?v=20260619-followup1" in index
+
+
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")

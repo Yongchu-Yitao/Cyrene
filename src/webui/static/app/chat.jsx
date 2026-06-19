@@ -924,6 +924,17 @@ function ChatPage({ selectedSessionId, onSelectSession, rightSidebarCollapsed = 
 
   async function pickWorkspaceDir() {
     try {
+      if (
+        window.cyrene &&
+        window.cyrene.platform === "linux" &&
+        typeof window.cyrene.pickDirectory === "function"
+      ) {
+        var nativeData = await window.cyrene.pickDirectory();
+        if (nativeData && nativeData.path) {
+          await addContext("workspace", nativeData.path);
+        }
+        return;
+      }
       var r = await fetch("/api/context/pick-directory", { method: "POST" });
       var data = await r.json();
       if (data.path) {

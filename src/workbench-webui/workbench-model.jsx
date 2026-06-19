@@ -112,6 +112,14 @@ var WorkbenchModel = (function () {
     }).then(normalizeStore);
   }
 
+  function createFollowUp(sessionId, input) {
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/follow-up", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input || {}),
+    }).then(normalizeStore);
+  }
+
   function fetchNotifications(tab, limit) {
     var qs = "?tab=" + encodeURIComponent(tab || "all") + "&limit=" + encodeURIComponent(limit || 80);
     return apiJson("/api/workbench/notifications" + qs);
@@ -672,6 +680,7 @@ var WorkbenchModel = (function () {
     updateProject: updateProject,
     deleteProject: deleteProject,
     createSession: createSession,
+    createFollowUp: createFollowUp,
     deleteSession: deleteSession,
     fetchNotifications: fetchNotifications,
     markNotificationsRead: markNotificationsRead,

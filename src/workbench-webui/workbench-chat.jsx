@@ -368,6 +368,167 @@ function wbcCommandMeta(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Streaming runtime engine (module-level — survives view switches)
+// ---------------------------------------------------------------------------
+// The chat page unmounts whenever the user switches to another workbench module
+// (任务 / 知识 / 记忆 …). A run started here keeps going on the server, so its
+// live state — streaming reply text, tool-call progress, the abort handle — must
+// live OUTSIDE the component or it is lost on unmount: the page would come back
+// with an idle composer sitting over a conversation the status panel still shows
+// as "running", and the tool-call trace would vanish. This singleton owns that
+// state, drives the send stream, and folds in SSE tool progress even while no
+// page is mounted. The mounted page subscribes for re-renders and registers
+// transcript hooks; when it unmounts the hooks fall away and the run streams on,
+// with the transcript re-pulled from the server on remount.
+var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
+  var runtimes = {};            // chatId -> { chatId, text, progress, startedAt, replying }
+  var aborts = {};              // chatId -> AbortController
+  var subscribers = new Set();
+  var hooks = null;             // live transcript hooks from the mounted page
+
+  function emit() {
+    subscribers.forEach(function (fn) { try { fn(runtimes); } catch (e) {} });
+  }
+
+  function subscribe(fn) {
+    subscribers.add(fn);
+    return function () { subscribers.delete(fn); };
+  }
+
+  function snapshot() { return runtimes; }
+  function get(chatId) { return (chatId && runtimes[chatId]) || null; }
+  function isRunning(chatId) { return !!(chatId && runtimes[chatId]); }
+
+  function update(chatId, updater) {
+    if (!chatId) return null;
+    var current = runtimes[chatId] || null;
+    var next = typeof updater === "function" ? updater(current) : updater;
+    var nextMap = {};
+    Object.keys(runtimes).forEach(function (key) { nextMap[key] = runtimes[key]; });
+    if (next) nextMap[chatId] = next; else delete nextMap[chatId];
+    runtimes = nextMap;
+    emit();
+    return next;
+  }
+
+  function clear(chatId) { update(chatId, null); }
+
+  function abort(chatId) {
+    var ac = aborts[chatId];
+    if (ac) { try { ac.abort(); } catch (e) {} }
+    delete aborts[chatId];
+  }
+
+  function interrupt(chatId, model) {
+    if (!chatId) return;
+    if (runtimes[chatId] && model && model.interrupt) model.interrupt(chatId);
+    abort(chatId);
+  }
+
+  // The mounted page registers transcript hooks so a streaming run patches its
+  // local transcript / chat list. All are optional and guarded by chatId; when
+  // no page is mounted they are simply absent and the page re-pulls on remount.
+  function setHooks(next) { hooks = next || null; }
+  function fire(name, a, b) {
+    if (hooks && typeof hooks[name] === "function") {
+      try { hooks[name](a, b); } catch (e) {}
+    }
+  }
+
+  // Begin a streamed send for `chatId`. No-op (returns null) when a run is
+  // already in flight for that conversation, keeping message ordering
+  // deterministic; returns the send promise otherwise.
+  function start(chatId, input, model) {
+    if (!chatId || runtimes[chatId]) return null;
+    var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    if (ac) aborts[chatId] = ac;
+    update(chatId, { chatId: chatId, text: "", progress: [], startedAt: Date.now(), replying: false });
+    return model.sendMessage(chatId, input, {
+      onAck: function (event) {
+        if (event.retry) {
+          // Regenerating: drop the previous reply from the local transcript.
+          fire("onRetryTruncate", chatId, String(event.truncateAfterMessageId || ""));
+          return;
+        }
+        if (event.userMessage) fire("onUserMessage", chatId, event.userMessage);
+      },
+      onReplyStart: function () {
+        update(chatId, function (cur) { return cur ? { ...cur, replying: true } : null; });
+      },
+      onReplyDelta: function (delta) {
+        update(chatId, function (cur) { return cur ? { ...cur, replying: true, text: cur.text + delta } : null; });
+      },
+      onReplyDone: function (text) {
+        update(chatId, function (cur) { return cur ? { ...cur, text: text || cur.text } : null; });
+      },
+      onSaved: function (event) {
+        if (event.assistantMessage) fire("onAssistantSaved", chatId, event.assistantMessage);
+        update(chatId, null);
+        fire("onSettled", chatId);
+      },
+      onAwaitingUser: function (event) {
+        // The run paused for a permission / clarification answer.
+        fire("onAwaitingUser", chatId, event.pending_question || null);
+        update(chatId, null);
+        fire("onSettled", chatId);
+      },
+      onError: function (err) {
+        // Keep the runtime until the stream closes so `finally` performs the
+        // same server re-sync used for interrupts and transport failures.
+        fire("onError", chatId, err);
+      },
+    }, ac ? ac.signal : undefined).catch(function (err) {
+      if (err && err.name === "AbortError") return;
+      fire("onError", chatId, err);
+    }).finally(function () {
+      if (aborts[chatId] === ac) delete aborts[chatId];
+      if (runtimes[chatId]) {
+        // Stream ended without a `saved` / `awaiting` event (interrupted or a
+        // transport failure) — drop the runtime and let the page re-pull.
+        update(chatId, null);
+        fire("onResync", chatId);
+      }
+    });
+  }
+
+  // Persistent SSE subscription: fold live tool / phase / subagent progress into
+  // the running conversation's runtime regardless of whether its page is
+  // mounted. Mirrors the legacy per-component handler but never tears down.
+  function onSseEvent(event) {
+    if (!event) return;
+    var chatId = String(event.session_id || "");
+    if (!chatId || !runtimes[chatId]) return;
+    var entry = null;
+    if (event.type === "tool_call") {
+      var args = event.args || {};
+      var preview = Object.values(args).filter(Boolean).map(String).join(", ").slice(0, 60);
+      entry = { kind: "tool", text: String(event.tool || wbcT("settings.tools", "Tools")), preview: preview };
+    } else if (event.type === "phase_transition" && event.detail) {
+      entry = { kind: "phase", text: String(event.detail).slice(0, 80), preview: "" };
+    } else if (event.type === "subagent_update") {
+      entry = {
+        kind: "subagent",
+        text: String(event.agent_id || wbcT("workbenchChat.subagents", "Subagents")),
+        preview: wbcSubagentStatusText(event.status),
+      };
+    }
+    if (!entry) return;
+    update(chatId, function (latest) {
+      if (!latest) return null;
+      return { ...latest, progress: latest.progress.concat([entry]).slice(-30) };
+    });
+  }
+  if (window.__sseHandlers && window.__sseHandlers.add) window.__sseHandlers.add(onSseEvent);
+
+  return {
+    subscribe: subscribe, snapshot: snapshot, get: get, isRunning: isRunning,
+    update: update, clear: clear, abort: abort, interrupt: interrupt,
+    start: start, setHooks: setHooks,
+  };
+})();
+window.WorkbenchChatRuntimes = WorkbenchChatRuntimes;
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -388,6 +549,13 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   }, [chats]);
   useWbcEffect(function () {
     activeChatIdRef.current = activeChatId;
+    // Remember the open conversation per project so switching to another module
+    // and back restores it (rather than snapping to the most-recent chat) — key
+    // for not "losing" a conversation whose run is streaming in the background.
+    if (activeChatId) {
+      if (!window.__workbenchLastChat) window.__workbenchLastChat = {};
+      window.__workbenchLastChat[projectId] = activeChatId;
+    }
   }, [activeChatId]);
   useWbcEffect(function () {
     projectIdRef.current = projectId;
@@ -401,11 +569,15 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   var revealedSubagentRoundRef = useWbcRef("");
   // True while the backend reads the whole conversation and synthesizes a task.
   var [toTaskBusy, setToTaskBusy] = useWbcState(false);
-  // Streaming runtimes are isolated per conversation so different chats can
-  // run concurrently without overwriting each other's reply/progress state.
-  var [runtimes, setRuntimes] = useWbcState({}); // chatId -> runtime
-  var runtimesRef = useWbcRef({});
-  var abortRefs = useWbcRef({}); // chatId -> AbortController
+  // Streaming runtimes live in the module-level engine so a run survives this
+  // page unmounting when the user switches modules mid-reply. We mirror its
+  // snapshot into local state only to drive re-renders.
+  var runtimeEngine = window.WorkbenchChatRuntimes;
+  var [runtimes, setRuntimes] = useWbcState(function () { return runtimeEngine.snapshot(); });
+  useWbcEffect(function () {
+    setRuntimes(runtimeEngine.snapshot());
+    return runtimeEngine.subscribe(function (snap) { setRuntimes(snap); });
+  }, []);
   // Tracks the pending-question id whose plan we've already auto-revealed, so we
   // switch to the 计划 tab once per plan rather than fighting manual tab changes.
   var revealedPlanQidRef = useWbcRef("");
@@ -416,19 +588,6 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     if (!file) return;
     setViewerFile(file);
     setSideTab("viewer");
-  }
-
-  function updateRuntime(chatId, updater) {
-    if (!chatId) return null;
-    var currentMap = runtimesRef.current;
-    var current = currentMap[chatId] || null;
-    var next = typeof updater === "function" ? updater(current) : updater;
-    var nextMap = { ...currentMap };
-    if (next) nextMap[chatId] = next;
-    else delete nextMap[chatId];
-    runtimesRef.current = nextMap;
-    setRuntimes(nextMap);
-    return next;
   }
 
   function loadSubagents(chatId, roundId) {
@@ -481,7 +640,13 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         if (pendingChatId && list.some(function (c) { return c.id === pendingChatId; })) {
           pendingChatIdRef.current = pendingChatId;
         } else {
-          setActiveChatId(list[0] ? list[0].id : "");
+          // Restore the conversation last open for this project (e.g. a chat the
+          // user left mid-run); fall back to the most-recent one.
+          var remembered = (window.__workbenchLastChat || {})[projectId];
+          var restoreId = remembered && list.some(function (c) { return c.id === remembered; })
+            ? remembered
+            : (list[0] ? list[0].id : "");
+          setActiveChatId(restoreId);
         }
       })
       .catch(function (err) { setError(wbcErrorText(err)); })
@@ -642,30 +807,9 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
           });
         }, 120);
       }
-      var current = runtimesRef.current[chatId];
-      if (!current) return;
-      var entry = null;
-      if (event.type === "tool_call") {
-        var args = event.args || {};
-        var preview = Object.values(args).filter(Boolean).map(String).join(", ").slice(0, 60);
-        entry = { kind: "tool", text: String(event.tool || wbcT("settings.tools", "Tools")), preview: preview };
-      } else if (event.type === "phase_transition" && event.detail) {
-        entry = { kind: "phase", text: String(event.detail).slice(0, 80), preview: "" };
-      } else if (event.type === "subagent_update") {
-        entry = {
-          kind: "subagent",
-          text: String(event.agent_id || wbcT("workbenchChat.subagents", "Subagents")),
-          preview: wbcSubagentStatusText(event.status),
-        };
-      }
-      if (!entry) return;
-      updateRuntime(chatId, function (latest) {
-        if (!latest) return null;
-        return {
-          ...latest,
-          progress: latest.progress.concat([entry]).slice(-30),
-        };
-      });
+      // Live tool/phase/subagent progress is folded into the runtime by the
+      // module-level engine (WorkbenchChatRuntimes) so it keeps accumulating even
+      // when this page is unmounted; nothing to do here.
     }
     window.__sseHandlers.add(onEvent);
     return function () { window.__sseHandlers.delete(onEvent); };
@@ -702,105 +846,73 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
       .finally(function () { setLoading(false); });
   }
 
+  // Register transcript hooks with the streaming engine so a run patches THIS
+  // page's local transcript / chat list while it is mounted. Re-registered every
+  // render so the closures (refreshChats, model …) never go stale; on unmount the
+  // cleanup clears them and the run streams on, with the transcript re-pulled
+  // from the server on remount. Each hook guards by chatId so a background run
+  // only touches the conversation it belongs to.
+  useWbcEffect(function () {
+    runtimeEngine.setHooks({
+      onUserMessage: function (chatId, userMessage) {
+        setActiveChat(function (prev) {
+          if (!prev || prev.id !== chatId) return prev;
+          return { ...prev, messages: (prev.messages || []).concat([userMessage]) };
+        });
+      },
+      onRetryTruncate: function (chatId, afterId) {
+        // Regenerating: drop everything after the replayed user message.
+        setActiveChat(function (prev) {
+          if (!prev || prev.id !== chatId) return prev;
+          var list = prev.messages || [];
+          var cut = -1;
+          for (var i = 0; i < list.length; i++) {
+            if (String(list[i].id) === afterId) { cut = i; break; }
+          }
+          if (cut < 0) return prev;
+          return { ...prev, messages: list.slice(0, cut + 1) };
+        });
+      },
+      onAssistantSaved: function (chatId, assistantMessage) {
+        setActiveChat(function (prev) {
+          if (!prev || prev.id !== chatId) return prev;
+          return { ...prev, status: "idle", messages: (prev.messages || []).concat([assistantMessage]) };
+        });
+      },
+      onAwaitingUser: function (chatId, pendingQuestion) {
+        // The run paused for a permission / clarification answer — stash the
+        // question so the composer shows an answer prompt instead of a reply.
+        setActiveChat(function (prev) {
+          if (!prev || prev.id !== chatId) return prev;
+          return { ...prev, status: "idle", pendingQuestion: pendingQuestion || null };
+        });
+      },
+      onError: function (chatId, err) { setError(wbcErrorText(err)); },
+      onSettled: function () { refreshChats(); },
+      onResync: function (chatId) {
+        // Stream ended without a `saved` event (e.g. interrupted) — re-pull.
+        model.getChat(chatId).then(function (chat) {
+          if (activeChatIdRef.current === chatId) setActiveChat(chat);
+        }).catch(function () {});
+        refreshChats();
+      },
+    });
+    return function () { runtimeEngine.setHooks(null); };
+  });
+
   function handleSend(input) {
     setError("");
     return ensureChat().then(function (chatId) {
-      // Keep message ordering deterministic within one conversation. Other
-      // conversation ids remain free to start their own run in parallel.
-      if (runtimesRef.current[chatId]) return;
-      var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
-      if (ac) abortRefs.current[chatId] = ac;
-      updateRuntime(chatId, { chatId: chatId, text: "", progress: [], startedAt: Date.now(), replying: false });
-      return model.sendMessage(chatId, input, {
-        onAck: function (event) {
-          if (event.retry) {
-            // Regenerating: drop the previous reply (everything after the
-            // replayed user message) from the local transcript.
-            var afterId = String(event.truncateAfterMessageId || "");
-            setActiveChat(function (prev) {
-              if (!prev || prev.id !== chatId) return prev;
-              var list = prev.messages || [];
-              var cut = -1;
-              for (var i = 0; i < list.length; i++) {
-                if (String(list[i].id) === afterId) { cut = i; break; }
-              }
-              if (cut < 0) return prev;
-              return { ...prev, messages: list.slice(0, cut + 1) };
-            });
-            return;
-          }
-          if (!event.userMessage) return;
-          setActiveChat(function (prev) {
-            if (!prev || prev.id !== chatId) return prev;
-            return { ...prev, messages: (prev.messages || []).concat([event.userMessage]) };
-          });
-        },
-        onReplyStart: function () {
-          updateRuntime(chatId, function (current) {
-            return current ? { ...current, replying: true } : null;
-          });
-        },
-        onReplyDelta: function (delta) {
-          updateRuntime(chatId, function (current) {
-            return current ? { ...current, replying: true, text: current.text + delta } : null;
-          });
-        },
-        onReplyDone: function (text) {
-          updateRuntime(chatId, function (current) {
-            return current ? { ...current, text: text || current.text } : null;
-          });
-        },
-        onSaved: function (event) {
-          if (event.assistantMessage) {
-            setActiveChat(function (prev) {
-              if (!prev || prev.id !== chatId) return prev;
-              return { ...prev, status: "idle", messages: (prev.messages || []).concat([event.assistantMessage]) };
-            });
-          }
-          updateRuntime(chatId, null);
-          refreshChats();
-        },
-        onAwaitingUser: function (event) {
-          // The run paused for a permission / clarification answer — stash the
-          // question so the composer shows an answer prompt instead of a reply.
-          setActiveChat(function (prev) {
-            if (!prev || prev.id !== chatId) return prev;
-            return { ...prev, status: "idle", pendingQuestion: event.pending_question || null };
-          });
-          updateRuntime(chatId, null);
-          refreshChats();
-        },
-        onError: function (err) {
-          setError(wbcErrorText(err));
-          // Keep the runtime until the stream closes so `finally` performs the
-          // same server re-sync used for interrupts and transport failures.
-        },
-      }, ac ? ac.signal : undefined).catch(function (err) {
-        if (err && err.name === "AbortError") return;
-        setError(wbcErrorText(err));
-      }).finally(function () {
-        if (abortRefs.current[chatId] === ac) delete abortRefs.current[chatId];
-        var current = runtimesRef.current[chatId];
-        if (current) {
-          // Stream ended without a `saved` event (e.g. interrupted) — re-pull.
-          updateRuntime(chatId, null);
-          model.getChat(chatId).then(function (chat) {
-            if (activeChatIdRef.current === chatId) setActiveChat(chat);
-          }).catch(function () {});
-          refreshChats();
-        }
-      });
+      // The engine owns the stream (so it outlives this page) and enforces a
+      // single in-flight run per conversation.
+      return runtimeEngine.start(chatId, input || {}, model);
     }).catch(function (err) {
       setError(wbcErrorText(err));
     });
   }
 
   function handleInterrupt() {
-    var chatId = activeChatIdRef.current;
-    var current = runtimesRef.current[chatId];
-    if (current) model.interrupt(chatId);
-    var controller = abortRefs.current[chatId];
-    if (controller) { try { controller.abort(); } catch (e) {} }
+    runtimeEngine.interrupt(activeChatIdRef.current, model);
   }
 
   // Answer the pending permission / clarification question → resume the round.
@@ -834,7 +946,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
 
   // Regenerate the last assistant reply (replays the last user message).
   function handleRetryMessage() {
-    if (!activeChat || activeChat.legacy || runtimesRef.current[activeChat.id]) return;
+    if (!activeChat || activeChat.legacy || runtimeEngine.isRunning(activeChat.id)) return;
     handleSend({ retry: true });
   }
 
@@ -865,10 +977,8 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     if (!chatId) return;
     if (!window.confirm(wbcT("workbenchChat.confirmDelete", "Delete this chat? Its messages cannot be recovered."))) return;
     model.deleteChat(chatId).then(function () {
-      var controller = abortRefs.current[chatId];
-      if (controller) { try { controller.abort(); } catch (e) {} }
-      delete abortRefs.current[chatId];
-      updateRuntime(chatId, null);
+      runtimeEngine.abort(chatId);
+      runtimeEngine.clear(chatId);
       setChats(function (prev) {
         var next = prev.filter(function (item) { return item.id !== chatId; });
         if (activeChatId === chatId) setActiveChatId(next[0] ? next[0].id : "");

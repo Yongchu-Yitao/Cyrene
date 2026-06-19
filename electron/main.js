@@ -33,6 +33,7 @@ const AUTH_TOKEN = require('crypto').randomBytes(32).toString('hex');
 
 const isDev = process.env.ELECTRON_DEV === '1';
 const isWindows = process.platform === 'win32';
+const isLinux = process.platform === 'linux';
 const supportsLoginItem = process.platform === 'darwin' || process.platform === 'win32';
 
 let mainWindow = null;
@@ -355,7 +356,9 @@ async function createMainWindow(shellOverride) {
   // (default) title bar there. Unknown mode falls back to the workbench style.
   const uiShell = shellOverride || backendUiMode || 'workbench';
   const isLegacyShell = uiShell === 'legacy' || uiShell === 'agent';
-  const useInsetTitleBar = !isLegacyShell;
+  // Linux window managers need the native frame to provide reliable window
+  // controls. Preserve the existing inset title bar behavior on macOS/Windows.
+  const useInsetTitleBar = !isLegacyShell && !isLinux;
   const windowOptions = {
     width: 1200,
     height: 800,
@@ -501,6 +504,20 @@ if (!gotSingleInstanceLock) {
     ipcMain.handle('notification:show', (_event, { title, body }) => {
       const icon = getNotificationIconPath();
       new Notification({ title, body, ...(icon ? { icon } : {}) }).show();
+    });
+    ipcMain.handle('dialog:pick-directory', async (event) => {
+      if (!isLinux) {
+        return { path: '', error: 'Native directory picker is only enabled on Linux' };
+      }
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const result = await dialog.showOpenDialog(owner || mainWindow, {
+        title: 'Select workspace directory',
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      if (result.canceled || !result.filePaths.length) {
+        return { path: '', cancelled: true };
+      }
+      return { path: result.filePaths[0] };
     });
     ipcMain.handle('window:switch-shell', (_event, mode) => {
       const target = (mode === 'legacy' || mode === 'agent') ? 'legacy' : 'workbench';

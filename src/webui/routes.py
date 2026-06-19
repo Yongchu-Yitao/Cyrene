@@ -1852,6 +1852,112 @@ def _workbench_session_summary_text(session: dict[str, Any]) -> str:
     return str(raw or "").strip()
 
 
+def _workbench_follow_up_seed(
+    session: dict[str, Any],
+    *,
+    requested_title: str = "",
+    requested_goal: str = "",
+) -> dict[str, Any]:
+    """Build a deterministic follow-up task from the source task's live state."""
+    source_title = str(session.get("title") or "任务").strip() or "任务"
+    explicit_goal = str(requested_goal or "").strip()
+    title = str(requested_title or "").strip()
+    if not title:
+        title = f"{source_title} · 后续"
+
+    status_labels = {
+        "idle": "未开始",
+        "answered": "已回答",
+        "acted": "已执行",
+        "planning": "规划中",
+        "waiting_for_approval": "等待确认",
+        "waiting_for_user": "等待用户",
+        "running": "执行中",
+        "review": "待验收",
+        "done": "已完成",
+        "completed": "已完成",
+        "failed": "失败",
+        "blocked": "阻塞",
+        "paused": "已暂停",
+        "cancelled": "已取消",
+    }
+    source_status = str(session.get("status") or "idle").strip()
+    source_goal = str(session.get("goal") or "").strip()
+    source_summary = _workbench_session_summary_text(session)
+    source_result = str(session.get("agentReply") or "").strip()
+
+    unresolved_steps: list[str] = []
+    for step in session.get("plan") or []:
+        if not isinstance(step, dict):
+            continue
+        status = str(step.get("status") or "pending").strip()
+        if status in ("completed", "done", "skipped"):
+            continue
+        step_title = str(step.get("title") or "").strip()
+        if step_title:
+            unresolved_steps.append(step_title)
+        if len(unresolved_steps) >= 6:
+            break
+
+    unresolved_acceptance: list[str] = []
+    for item in session.get("acceptanceCriteria") or []:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "pending").strip()
+        if status in ("passed", "done", "completed"):
+            continue
+        text = str(item.get("text") or "").strip()
+        if text:
+            unresolved_acceptance.append(text)
+        if len(unresolved_acceptance) >= 6:
+            break
+
+    reflection = session.get("reflection")
+    packet = reflection.get("packet") if isinstance(reflection, dict) else None
+    next_step = str(packet.get("next_step") or "").strip() if isinstance(packet, dict) else ""
+
+    lines = [f"这是任务「{source_title}」的后续任务。"]
+    if explicit_goal:
+        lines.append(f"本次后续要求：{explicit_goal}")
+    if source_goal:
+        lines.append(f"来源任务目标：{source_goal}")
+    lines.append(f"来源任务当前状态：{status_labels.get(source_status, source_status or '未知')}")
+    if source_summary:
+        lines.append(f"来源任务摘要：{source_summary}")
+    elif source_result:
+        lines.append(f"来源任务当前结果：{source_result[:1200]}")
+    if unresolved_steps:
+        lines.append("尚未解决的步骤：" + "；".join(unresolved_steps))
+    if unresolved_acceptance:
+        lines.append("尚未满足的验收项：" + "；".join(unresolved_acceptance))
+    if next_step:
+        lines.append(f"反思建议的下一步：{next_step}")
+
+    return {
+        "title": title[:80],
+        "goal": "\n".join(lines),
+        "constraints": [
+            str(value).strip()
+            for value in (session.get("constraints") or [])
+            if str(value).strip()
+        ],
+        "priority": (
+            str(session.get("priority") or "medium").strip()
+            if str(session.get("priority") or "").strip() in ("high", "medium", "low")
+            else "medium"
+        ),
+        "unresolvedAcceptance": unresolved_acceptance,
+        "context": {
+            "sourceTitle": source_title,
+            "sourceStatus": source_status,
+            "sourceSummary": source_summary,
+            "unresolvedSteps": unresolved_steps,
+            "unresolvedAcceptance": unresolved_acceptance,
+            "reflectionNextStep": next_step,
+        },
+    }
+
+
 def _workbench_render_task_brief_block(session: dict[str, Any]) -> str:
     """Render the task's identity (title / goal / summary / acceptance) + current
     plan as a prompt block for the agent run.
@@ -6274,6 +6380,62 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         )
         return {"ok": True, "session": session, **payload}
 
+    @router.post("/api/task-sessions/{session_id}/follow-up")
+    async def api_workbench_create_follow_up(session_id: str, request: Request):
+        body = await request.json()
+        payload = _read_workbench_store()
+        project, source_session = _workbench_find_session(payload, session_id)
+        if not source_session or not project:
+            return JSONResponse({"error": "session not found"}, status_code=404)
+
+        seed = _workbench_follow_up_seed(
+            source_session,
+            requested_title=str(body.get("title") or "").strip(),
+            requested_goal=str(body.get("goal") or "").strip(),
+        )
+        project_id = str(project.get("id") or "")
+        session = _workbench_new_session(project_id, seed["title"], seed["goal"])
+        session["parentSessionId"] = session_id
+        session["priority"] = seed["priority"]
+        session["constraints"] = seed["constraints"]
+        session["followUpContext"] = seed["context"]
+        session["agentReply"] = "已根据来源任务的当前进度创建后续任务。你可以直接交给 Agent，或继续补充要求。"
+        session["events"] = [{
+            "id": _short_id("event"),
+            "type": "CreatedAsFollowUp",
+            "createdAt": session["createdAt"],
+            "body": f"基于任务「{source_session.get('title') or '任务'}」的当前情况创建。",
+            "sourceSessionId": session_id,
+        }]
+        for text in seed["unresolvedAcceptance"]:
+            session["acceptanceCriteria"].append({
+                "id": _short_id("accept"),
+                "text": text,
+                "status": "pending",
+            })
+
+        project.setdefault("sessions", []).insert(0, session)
+        project["updatedAt"] = session["createdAt"]
+        payload["activeProjectId"] = project_id
+        payload["activeSessionId"] = session["id"]
+        _write_workbench_store(payload)
+        append_notification(
+            title="后续任务已创建",
+            body=f"已根据「{source_session.get('title') or '任务'}」的当前情况创建「{session['title']}」。",
+            tab="comment",
+            project_ref=project_id,
+            source="follow_up_created",
+            source_label="任务",
+            link_label=session["title"],
+            meta={"sessionId": session["id"], "sourceSessionId": session_id},
+        )
+        return {
+            "ok": True,
+            "session": session,
+            "sourceSessionId": session_id,
+            **payload,
+        }
+
     @router.post("/api/projects/{project_id}/init/generate")
     async def api_workbench_generate_init(project_id: str, request: Request):
         """(Re)generate the onboarding questions for a project's init session.
@@ -7496,6 +7658,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             "release_notes": info.release_notes,
             "asset_name": info.asset_name,
             "asset_size": info.asset_size,
+            # 有新版但无适配本平台的安装包时为非空，前端据此提示手动下载。
+            "error": info.error,
         }
 
     @router.post("/api/update/download")
@@ -7509,7 +7673,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
 
         info = get_cached_update_info()
         if not info or not info.download_url:
-            return {"ok": False, "error": "No update available"}
+            # 区分“没有更新”与“有更新但无适配本平台的包”（info.error）。
+            return {"ok": False, "error": (info.error if info and info.error else "No update available")}
 
         def _progress(downloaded: int, total: int) -> None:
             _download_progress["downloaded"] = downloaded

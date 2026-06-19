@@ -127,6 +127,19 @@
       if (busy) return;
       setError("");
       try {
+        if (
+          window.cyrene &&
+          window.cyrene.platform === "linux" &&
+          typeof window.cyrene.pickDirectory === "function"
+        ) {
+          var nativeData = await window.cyrene.pickDirectory();
+          if (nativeData && nativeData.path) {
+            setWorkspacePath(nativeData.path);
+          } else if (nativeData && nativeData.error) {
+            setError(nativeData.error);
+          }
+          return;
+        }
         var r = await fetch("/api/context/pick-directory", { method: "POST" });
         var data = await r.json().catch(function () { return {}; });
         if (!r.ok) throw new Error(data.error || data.detail || ("HTTP " + r.status));

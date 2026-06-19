@@ -49,6 +49,9 @@ class UpdateInfo:
     release_notes: str = ""
     asset_name: str = ""
     asset_size: int = 0
+    # 有新版本但找不到适配当前平台/架构的安装包时的明确错误。非空即表示
+    # “有更新但无法自动安装”，调用方据此提示用户手动下载，而不是装错平台的包。
+    error: str = ""
 
 
 def _platform_filter() -> str:
@@ -166,12 +169,23 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
                     asset_size = asset.get("size", 0)
                     break
 
-            # 如果没找到精确匹配，使用第一个 asset
-            if not asset_url and data.get("assets"):
-                first = data["assets"][0]
-                asset_url = first.get("browser_download_url", "")
-                asset_name = first.get("name", "")
-                asset_size = first.get("size", 0)
+            # 找不到本平台/架构对应的包时，绝不回退到 assets[0]——那正是把
+            # Windows 用户推去下载 macOS .dmg 的根因。返回明确的“无兼容包”错误，
+            # 由调用方提示用户手动下载。
+            if not asset_url:
+                arch = platform.machine() or "unknown"
+                msg = (
+                    f"该版本（{latest}）暂无适配当前平台的安装包"
+                    f"（{sys.platform}/{arch}，匹配关键词 {platform_key!r}）"
+                )
+                logger.warning("Update available but no matching asset: %s", msg)
+                return UpdateInfo(
+                    available=True,
+                    current_version=current,
+                    latest_version=latest,
+                    release_notes=data.get("body", ""),
+                    error=msg,
+                )
 
             return UpdateInfo(
                 available=True,
