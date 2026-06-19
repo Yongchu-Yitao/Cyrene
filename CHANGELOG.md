@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0b4] - 2026-06-19
+
+### Added
+
+- **跨平台 Shell 运行时** — 新增 `shell_runtime` 模块，自动检测用户 Shell 类型（bash/zsh/fish/PowerShell/cmd）并据此调整命令执行策略；非 POSIX Shell 下写入/删除类命令触发安全拦截，防止误操作。
+- **语言偏好持久化** — 新增 `app_language` 配置项；主动 Agent（心跳、proactive chat）现在以用户界面语言回复，语言设置跨重启保持一致。
+- **附件分析增强** — 改进附件类型识别与文件名处理；文档提取支持更多格式，提升知识库 ingest 稳定性。
+- **工作区搜索集成测试** — 新增 `test_workbench_search.py`、`test_shell_runtime.py`、`test_bash_nonbash_guard.py` 等测试套件，覆盖 Shell 守卫、proactive 语言、知识库归档流程。
+
+### Changed
+
+- **`workspace_scope_block` 增强** — 非 bash Shell 下自动追加额外警告提示，明确限制跨目录操作。
+- **Proactive Agent 上下文** — `_run_chat_agent` 和 `run_heartbeat_agent` 接入检测到的 Shell 类型与语言偏好，生成更符合用户环境的回复。
+- **知识库路由健壮性** — `routes_knowledge.py` / `routes_workbench_knowledge.py` 统一错误处理；`list_knowledge_documents` 工具返回更完整的文件元数据。
+
 ## [0.6.0b3] - 2026-06-19
 
 ### Added
