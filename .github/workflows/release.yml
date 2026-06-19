@@ -430,9 +430,19 @@ jobs:
             fi
           done
 
+      - name: Detect pre-release
+        id: pre
+        run: |
+          if echo "${{ github.ref_name }}" | grep -qE '(alpha|beta|[0-9]b[0-9]|rc)'; then
+            echo "is_pre=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_pre=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+          prerelease: ${{ steps.pre.outputs.is_pre == 'true' }}
