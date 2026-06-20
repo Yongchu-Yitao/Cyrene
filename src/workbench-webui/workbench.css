@@ -2523,51 +2523,6 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   gap: 12px;
 }
 
-.wbp-detail-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-}
-
-.wbp-detail-card {
-  border: 1px solid var(--wb-line);
-  border-radius: 10px;
-  background: var(--wb-card-bg);
-  padding: 12px 14px;
-}
-
-.wbp-detail-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--wb-muted);
-  margin-bottom: 9px;
-}
-
-.wbp-detail-label svg { opacity: 0.7; }
-
-.wbp-file-count {
-  margin-left: auto;
-  background: color-mix(in srgb, var(--wb-accent) 14%, transparent);
-  color: var(--wb-accent);
-  border-radius: 20px;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 1px 7px;
-  letter-spacing: 0;
-}
-
-.wbp-detail-body {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--wb-text);
-  overflow-wrap: anywhere;
-}
-
 .wbp-events {
   margin: 8px 0 0;
   padding: 0;
@@ -2595,13 +2550,6 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   height: 4px;
   border-radius: 50%;
   background: color-mix(in srgb, var(--wb-accent) 55%, transparent);
-}
-
-.wbp-detail-empty {
-  margin: 0;
-  font-size: 12.5px;
-  color: var(--wb-faint);
-  font-style: italic;
 }
 
 .wbp-file-chips {
@@ -2642,93 +2590,7 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   height: 30px;
 }
 
-/* ── Pre-run command + context-file editor ───────────────────── */
-
-.wbp-cmd-hint {
-  margin-left: auto;
-  font-weight: 400;
-  font-size: 11.5px;
-  color: var(--wb-faint);
-}
-
-/* `.wbp-detail-card` prefix lifts these above `.workbench-shell textarea
-   { font: inherit }` (0,1,1) so the field tracks the app body size + sans
-   font, not the inherited 16px. Keep the command + path fields on one scale. */
-.wbp-detail-card .wbp-cmd-textarea {
-  width: 100%;
-  box-sizing: border-box;
-  resize: vertical;
-  min-height: 104px;
-  border: 1px solid var(--wb-line);
-  border-radius: 8px;
-  background: var(--wb-bg-2);
-  color: var(--wb-text);
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 1.6;
-  padding: 10px 12px;
-  transition: border-color 110ms, box-shadow 110ms;
-}
-
-.wbp-detail-card .wbp-cmd-textarea::placeholder { color: var(--wb-faint); }
-
-.wbp-detail-card .wbp-cmd-textarea:focus {
-  outline: none;
-  border-color: color-mix(in srgb, var(--wb-accent) 55%, var(--wb-line));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 12%, transparent);
-}
-
-.wbp-cmd-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 8px;
-}
-
-/* Read-only command shown in view mode (before the user turns on Edit) */
-.wbp-detail-card .wbp-cmd-readonly {
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--wb-text);
-  background: color-mix(in srgb, var(--wb-muted) 4%, transparent);
-  border: 1px solid var(--wb-line);
-  border-radius: 8px;
-  padding: 10px 12px;
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-/* `.wbp-detail-card` prefix beats `.workbench-shell button { font: inherit }`
-   (0,1,1), keeping these on the 12px button scale instead of the 16px body. */
-.wbp-detail-card .wbp-tiny-btn {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  border: 1px solid var(--wb-line);
-  border-radius: 7px;
-  background: var(--wb-control-bg);
-  color: var(--wb-muted);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 560;
-  padding: 0 12px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 110ms, border-color 110ms, color 110ms;
-}
-
-.wbp-detail-card .wbp-tiny-btn:hover:not(:disabled) {
-  background: var(--wb-control-hover-bg);
-  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line));
-  color: var(--wb-text);
-}
-
-.wbp-detail-card .wbp-tiny-btn:disabled { opacity: 0.5; cursor: default; }
-
-.wbp-detail-card .wbp-tiny-btn svg { opacity: 0.8; }
+/* ── Pre-run context-file editor ─────────────────────────────── */
 
 .wbp-ctx-list {
   display: flex;
@@ -2813,29 +2675,6 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   gap: 6px;
 }
 
-.wbp-detail-card .wbp-ctx-input {
-  flex: 1 1 auto;
-  min-width: 0;
-  box-sizing: border-box;
-  height: 30px;
-  border: 1px solid var(--wb-line);
-  border-radius: 7px;
-  background: var(--wb-bg-2);
-  color: var(--wb-text);
-  font-family: inherit;
-  font-size: 12.5px;
-  padding: 0 10px;
-  transition: border-color 110ms, box-shadow 110ms;
-}
-
-.wbp-detail-card .wbp-ctx-input::placeholder { color: var(--wb-faint); }
-
-.wbp-detail-card .wbp-ctx-input:focus {
-  outline: none;
-  border-color: color-mix(in srgb, var(--wb-accent) 55%, var(--wb-line));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 12%, transparent);
-}
-
 .wbp-ctx-upload { align-self: flex-start; }
 
 .wbp-ctx-hint {
@@ -2844,20 +2683,8 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   color: var(--wb-red);
 }
 
-/* ── Dark mode ───────────────────────────────────────────────── */
-
-html[data-theme="dark"] .wbp-detail-card {
-  background: color-mix(in srgb, var(--wb-accent) 8%, var(--wb-card-bg));
-  border-color: color-mix(in srgb, var(--wb-accent) 20%, var(--wb-line));
-}
-
-html[data-theme="dark"] .wbp-detail-card .wbp-cmd-textarea,
-html[data-theme="dark"] .wbp-detail-card .wbp-ctx-input {
-  background: color-mix(in srgb, #000 22%, var(--wb-card-bg));
-}
-
 /* StepEditor (.wbp-summary-edit) reuses .wbp-tiny-btn / .wbp-ctx-input, which
-   were only styled inside .wbp-detail-card. Without this they fall back to bare
+   were previously styled inside the removed .wbp-detail-card. Without this they fall back to bare
    button/input defaults — bright and washed out in dark mode. Mirror the
    control styling, aligned to the panel's other inputs (var(--wb-control-bg)). */
 .wbp-summary-edit .wbp-tiny-btn {
@@ -2936,10 +2763,6 @@ html[data-theme="dark"] .wbp-detail-card .wbp-ctx-input {
   .wbp-time   { grid-area: meta; }
   .wbp-dur    { display: none; }
 
-  .wbp-detail-grid {
-    grid-template-columns: 1fr;
-  }
-
   .wbp-dependency-summary { margin-left: 0; }
 }
 
@@ -3014,9 +2837,19 @@ html[data-theme="dark"] .wbp-detail-card .wbp-ctx-input {
   gap: 6px;
   padding: 0 12px;
   border-bottom: 1px solid var(--wb-line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.workbench-right-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .workbench-right-tabs button {
+  flex: 0 0 auto;
   height: 38px;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -3024,7 +2857,9 @@ html[data-theme="dark"] .wbp-detail-card .wbp-ctx-input {
   color: var(--wb-muted);
   padding: 0 5px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12.5px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .workbench-right-tabs button.active,
@@ -3050,7 +2885,7 @@ html[data-theme="dark"] .wbp-detail-card .wbp-ctx-input {
 
 .workbench-side-section h3 {
   margin: 0 0 10px;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .workbench-side-section p {
@@ -3881,11 +3716,13 @@ html[data-theme="dark"] .wb-composer-disclaimer {
   text-align: left;
   cursor: pointer;
   font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
 }
 .wb-accept-toggle:hover { background: color-mix(in srgb, var(--wb-accent) 5%, transparent); }
 .wb-accept-toggle:disabled { cursor: default; opacity: 0.7; }
 .wb-accept-text { flex: 1; min-width: 0; color: var(--wb-text); overflow-wrap: anywhere; }
-.wb-accept-state { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.wb-accept-state { font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 .wb-accept-state.green { color: var(--wb-green); }
 .wb-accept-state.red { color: var(--wb-red); }
 .wb-accept-state.muted { color: var(--wb-faint); }
@@ -3895,6 +3732,26 @@ html[data-theme="dark"] .wb-composer-disclaimer {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.wb-artifact-download {
+  text-decoration: none;
+  cursor: pointer;
+  border-radius: 8px;
+  padding-left: 6px;
+  padding-right: 6px;
+  margin-left: -6px;
+  margin-right: -6px;
+}
+
+.wb-artifact-download:hover,
+.wb-artifact-download:focus-visible {
+  background: color-mix(in srgb, var(--wb-accent) 7%, transparent);
+}
+
+.wb-artifact-download:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 55%, transparent);
+  outline-offset: 1px;
 }
 
 .wb-file-diff-trigger {
@@ -5428,8 +5285,9 @@ html[data-theme="light"] .wb-tool-list .mono {
 }
 
 .wb-about-logo .brand-mark {
-  width: 38px;
-  height: 38px;
+  width: 72px;
+  height: 72px;
+  border-radius: 20px;
 }
 
 .wb-about-hero h3 {
@@ -9295,6 +9153,8 @@ html[data-theme="dark"] .wbc-trace {
 
 .wbc-viewer-embed {
   display: block;
+  width: 100%;
+  height: 100%;
   min-height: 100%;
   border: 0;
 }

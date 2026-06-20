@@ -319,16 +319,41 @@ var WBC_CODE_EXTS = ["py","js","ts","jsx","tsx","css","json","yaml","yml","toml"
 
 function wbcFileViewKind(file) {
   if (!file) return "";
-  var ct = String(file.content_type || "");
+  var ct = String(file.content_type || "").split(";", 1)[0].trim().toLowerCase();
   var ext = String(file.name || "").split(".").pop().toLowerCase();
   if (ct.indexOf("image/") === 0 || file.kind === "image") return "image";
   if (ct === "application/pdf" || ext === "pdf") return "pdf";
-  if (ct.indexOf("presentation") !== -1 || ct.indexOf("ms-powerpoint") !== -1 || ext === "ppt" || ext === "pptx") return "pdf";
-  if (ct.indexOf("wordprocessingml") !== -1 || ct === "application/msword" || ext === "doc" || ext === "docx") return "pdf";
   if (ct === "text/html" || ct === "application/xhtml+xml" || ext === "html" || ext === "htm") return "html";
   if (file.kind === "markdown" || ext === "md" || ext === "markdown") return "markdown";
   if (file.kind === "code" || WBC_CODE_EXTS.indexOf(ext) !== -1 || ct.indexOf("text/") === 0) return "code";
   return "download";
+}
+
+function wbcCanOpenExternally(file) {
+  // Opening user-controlled HTML in a normal Electron child window would give
+  // it the authenticated local-backend session. Keep HTML inside the sandboxed
+  // srcDoc viewer; source mode remains available beside it.
+  return !!(file && file.url && wbcFileViewKind(file) !== "html");
+}
+
+function wbcHtmlPreviewDocument(source, sourceUrl) {
+  var html = String(source || "");
+  if (!sourceUrl) return html;
+  var absoluteUrl = "";
+  try {
+    absoluteUrl = new URL(sourceUrl, window.location.href).href;
+  } catch (e) {
+    return html;
+  }
+  var escapedUrl = absoluteUrl.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  var baseTag = '<base href="' + escapedUrl + '">';
+  if (/<head(?:\s[^>]*)?>/i.test(html)) {
+    return html.replace(/<head(\s[^>]*)?>/i, function (match) { return match + baseTag; });
+  }
+  if (/<html(?:\s[^>]*)?>/i.test(html)) {
+    return html.replace(/<html(\s[^>]*)?>/i, function (match) { return match + "<head>" + baseTag + "</head>"; });
+  }
+  return "<head>" + baseTag + "</head>" + html;
 }
 
 // Map tools mark the conversation as having a 地图 tab (same tool set as the
@@ -1456,7 +1481,7 @@ function WbcAgentFiles({ files, onOpenFile }) {
             </span>
             <span className="wbc-agent-file-actions">
               <button type="button" className="wb-btn ghost" onClick={function () { onOpenFile && onOpenFile(file); }}>{wbcT("workbenchChat.viewer", "Viewer")}</button>
-              {file.url ? <a className="wb-btn ghost" href={file.url} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
+              {wbcCanOpenExternally(file) ? <a className="wb-btn ghost" href={file.url} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
             </span>
           </div>
         );
@@ -2141,6 +2166,8 @@ function WbcViewerTab({ file }) {
   var [failed, setFailed] = useWbcState(false);
   var codeRef = useWbcRef(null);
   var url = file && file.url;
+  var htmlPreview = kind === "html" ? wbcHtmlPreviewDocument(text, url) : "";
+  var pdfSrc = blobUrl ? blobUrl + "#zoom=" + Math.round(zoom * 100) : "";
 
   // text-ish contents are fetched; pdf goes through a blob URL (same as the
   // legacy viewer — <embed src=...> with a route URL re-downloads on zoom).
@@ -2201,7 +2228,7 @@ function WbcViewerTab({ file }) {
           <button type="button" onClick={function () { setZoom(function (z) { return Math.min(3, z + 0.2); }); }}>+</button>
         </span>
       )}
-      {url ? <a className="wbc-viewer-open" href={url} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
+      {wbcCanOpenExternally(file) ? <a className="wbc-viewer-open" href={url} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
     </div>
   );
 
@@ -2213,12 +2240,12 @@ function WbcViewerTab({ file }) {
   } else if (kind === "pdf") {
     body = blobUrl ? (
       <div className="wbc-viewer-scroll">
-        <embed className="wbc-viewer-embed" src={blobUrl} type="application/pdf" style={{ width: (zoom * 100) + "%", height: zoom >= 1 ? (zoom * 100) + "%" : "100%" }} />
+        <embed key={pdfSrc} className="wbc-viewer-embed" src={pdfSrc} type="application/pdf" />
       </div>
     ) : <p className="workbench-muted wbc-viewer-pad">{wbcT("settings.pathLoading", "Loading...")}</p>;
   } else if (kind === "html") {
     body = htmlMode === "rendered"
-      ? <iframe className="wbc-viewer-iframe" sandbox="allow-scripts" srcDoc={text} title={file.name || "HTML"} />
+      ? <iframe className="wbc-viewer-iframe" sandbox="allow-scripts" srcDoc={htmlPreview} title={file.name || "HTML"} />
       : <pre className="wbc-viewer-pre">{text}</pre>;
   } else if (kind === "markdown") {
     body = <div className="wbc-viewer-md wbc-msg-body markdown" dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(text) }} />;
@@ -2561,7 +2588,7 @@ function WbcArtifactsTab({ chat, onOpenFile }) {
                 <b>{file.name || "file"}</b>
                 <small>{item.role === "user" ? wbcT("workbenchChat.userUpload", "User upload") : wbcT("workbenchChat.agentGenerated", "Agent generated")}</small>
               </span>
-              {file.url ? (
+              {wbcCanOpenExternally(file) ? (
                 <a
                   className="wbc-file-open"
                   href={file.url}

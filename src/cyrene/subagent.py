@@ -1111,7 +1111,7 @@ async def _run_subagent(
 - You are a sub-agent. Complete the assigned task directly.
 - You can use regular work tools plus `send_agent_message` and `broadcast_agent_message` to coordinate with other sub-agents.
 - If you receive a [DIRECT_MESSAGE] from the user via your inbox, this is real-time guidance from the user. The user is steering your work — take it seriously. Use `send_message_to_user` ONCE to: (1) acknowledge the guidance, (2) briefly state what you will do differently. Then immediately continue working with your adjusted approach. Do NOT argue, ask follow-up questions, or chat — act on the guidance. The tool disables after one use.
-- You MUST NOT call `send_message`, `send_telegram`, `ask_user`, `spawn_subagent`, or `query_round`.
+- You MUST NOT call `send_message`, `send_telegram`, `ask_user`, `spawn_subagent`, or `query_round`. If your task produced a deliverable file for the user, write it INSIDE the workspace and report its path in your `quit` summary — do NOT try to `send_file` it yourself (only the main agent can deliver files; the main agent will send it after you finish).
 - For normal rounds, report your result via `quit` — the main agent collects it. Do NOT use `send_message_to_user` in normal rounds.
 - Active sub-agents and inbox context may be injected as separate user messages before each turn.
 - Your final text is collected by the parent agent. Do not invent a separate coordinator or try to send the final answer to a non-existent agent such as "main" or "danny".

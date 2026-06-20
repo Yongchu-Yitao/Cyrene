@@ -581,18 +581,20 @@ def _resolve_tool_path(path_str: str) -> Path:
 
 
 def _resolve_exportable_path(path_str: str) -> Path:
+    # The active project workspace (Workbench task) — falls back to the global
+    # WORKSPACE_DIR for legacy chat / scheduler runs, so behaviour there is
+    # unchanged. This is where the agent's file tools (Write/Bash) actually
+    # write, so a deliverable created inside the project workspace must be
+    # sendable even when that workspace lives outside the global WORKSPACE_DIR.
+    from cyrene.agent.state import active_workspace_dir
+    active_ws = active_workspace_dir().resolve()
     candidate = Path(path_str)
-    path = candidate if candidate.is_absolute() else WORKSPACE_DIR / candidate
+    path = candidate if candidate.is_absolute() else active_ws / candidate
     resolved = path.resolve()
-    workspace = WORKSPACE_DIR.resolve()
-    data_root = DATA_DIR.resolve()
-    if (
-        resolved == workspace
-        or workspace in resolved.parents
-        or resolved == data_root
-        or data_root in resolved.parents
-    ):
-        return resolved
+    allowed_roots = (active_ws, WORKSPACE_DIR.resolve(), DATA_DIR.resolve())
+    for root in allowed_roots:
+        if resolved == root or root in resolved.parents:
+            return resolved
     raise ValueError(f"Path cannot be sent to WebUI: {path_str}")
 
 

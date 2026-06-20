@@ -3279,12 +3279,6 @@ var ICON_CHEVRON = (
   </svg>
 );
 
-var ICON_FILE = (
-  <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-    <path d="M9 2H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6L9 2z" /><path d="M9 2v4h4" />
-  </svg>
-);
-
 // Pre-run editor shown in an expanded step BEFORE it executes: an editable
 // command (the exact prompt handed to the subagent) + a context-file list the
 // user can grow by referencing workspace paths or uploading files. Both persist
@@ -3770,27 +3764,31 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
                         <StepSummary session={session} step={step} steps={steps} />
                       )
                     ) : (
-                      <div className="wbp-detail-grid">
-                        <div className="wbp-detail-card">
-                          <div className="wbp-detail-label">步骤进展</div>
-                          <p className="wbp-detail-body">{progressText || "等待 Agent 更新这个步骤的进展。"}</p>
-                          {Array.isArray(step.progressEvents) && step.progressEvents.length > 0 && (
-                            <ul className="wbp-events">
-                              {step.progressEvents.slice(-3).map(function (ev, i) {
-                                return <li key={i}>{ev.body || ev.text || ev.message || String(ev)}</li>;
-                              })}
-                            </ul>
-                          )}
+                      <div className="wbp-summary">
+                        <div className="wbp-summary-row">
+                          <span className="wbp-summary-k">进展</span>
+                          <span className="wbp-summary-v">
+                            {progressText || "等待 Agent 更新这个步骤的进展。"}
+                            {Array.isArray(step.progressEvents) && step.progressEvents.length > 0 && (
+                              <ul className="wbp-events">
+                                {step.progressEvents.slice(-3).map(function (ev, i) {
+                                  return <li key={i}>{ev.body || ev.text || ev.message || String(ev)}</li>;
+                                })}
+                              </ul>
+                            )}
+                          </span>
                         </div>
-                        <div className="wbp-detail-card">
-                          <div className="wbp-detail-label">{ICON_FILE}<span>相关文件</span>{hasFiles && <span className="wbp-file-count">{step.relatedFiles.length}</span>}</div>
-                          {hasFiles ? (
-                            <div className="wbp-file-chips">
-                              {step.relatedFiles.map(function (file) {
-                                return <button key={file.path || file.name} type="button" className="wbp-file-chip" onClick={function () { onRightTab("files"); }}>{(file.path || file.name || "").split("/").pop()}</button>;
-                              })}
-                            </div>
-                          ) : <p className="wbp-detail-empty">暂无相关文件</p>}
+                        <div className="wbp-summary-row">
+                          <span className="wbp-summary-k">文件</span>
+                          <span className="wbp-summary-v">
+                            {hasFiles ? (
+                              <div className="wbp-file-chips">
+                                {step.relatedFiles.map(function (file) {
+                                  return <button key={file.path || file.name} type="button" className="wbp-file-chip" onClick={function () { onRightTab("files"); }}>{(file.path || file.name || "").split("/").pop()}</button>;
+                                })}
+                              </div>
+                            ) : <em className="wbp-summary-none">暂无相关文件</em>}
+                          </span>
                         </div>
                       </div>
                     )}
@@ -4456,7 +4454,23 @@ function ArtifactsTab({ session }) {
       <SideSection title={wbT("task.side.artifactsCount", "Artifacts ({count})", { count: artifacts.length })}>
         {artifacts.length ? artifacts.map(function (artifact, i) {
           var typeLabel = ARTIFACT_TYPE_LABELS[artifact.type] ? wbT(ARTIFACT_TYPE_LABELS[artifact.type], artifact.type) : artifact.type;
-          return <div className="workbench-artifact-row" key={artifact.id || i}><b>{artifact.name}</b><small>{typeLabel} · {WorkbenchModel.statusText(artifact.status)}</small><p>{artifact.summary || ""}</p></div>;
+          var canDownload = artifact.type === "file_change" && artifact.id && session && session.id;
+          var content = <React.Fragment><b>{artifact.name}</b><small>{typeLabel} · {WorkbenchModel.statusText(artifact.status)}</small><p>{artifact.summary || ""}</p></React.Fragment>;
+          if (!canDownload) {
+            return <div className="workbench-artifact-row" key={artifact.id || i}>{content}</div>;
+          }
+          var downloadUrl = "/api/task-sessions/" + encodeURIComponent(session.id) + "/artifacts/" + encodeURIComponent(artifact.id) + "/download";
+          return (
+            <a
+              className="workbench-artifact-row wb-artifact-download"
+              href={downloadUrl}
+              download={artifact.name || true}
+              title={wbT("task.artifact.download", "Download {name}", { name: artifact.name || "" })}
+              key={artifact.id || i}
+            >
+              {content}
+            </a>
+          );
         }) : <p className="workbench-muted">{wbT("task.artifacts.empty", "No artifacts generated for this task yet.")}</p>}
       </SideSection>
     </div>

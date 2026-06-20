@@ -1133,6 +1133,39 @@ def test_workbench_file_changes_parse_tool_result_fallback(tmp_path):
     assert changes[0]["status"] == "created/updated"
 
 
+def test_workbench_file_changes_reject_paths_outside_workspace(tmp_path):
+    from webui.routes import _workbench_file_changes_from_tool_event
+
+    outside = tmp_path.parent / "outside.md"
+    absolute = _workbench_file_changes_from_tool_event(
+        {"tool": "Write", "args": {"path": str(outside)}, "result": ""},
+        tmp_path,
+    )
+    traversal = _workbench_file_changes_from_tool_event(
+        {"tool": "Write", "args": {"path": "../outside.md"}, "result": ""},
+        tmp_path,
+    )
+
+    assert absolute == []
+    assert traversal == []
+
+
+def test_workbench_git_status_snapshot_is_scoped_to_nested_workspace(tmp_path):
+    from webui.routes import _workbench_git_status_snapshot
+
+    repo = tmp_path / "repo"
+    workspace = repo / "workspace"
+    workspace.mkdir(parents=True)
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    (repo / "outside.txt").write_text("before\n", encoding="utf-8")
+    (workspace / "inside.txt").write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "outside.txt", "workspace/inside.txt"], cwd=repo, check=True, capture_output=True)
+    (repo / "outside.txt").write_text("after\n", encoding="utf-8")
+    (workspace / "inside.txt").write_text("after\n", encoding="utf-8")
+
+    assert _workbench_git_status_snapshot(workspace) == {"inside.txt": "AM"}
+
+
 def test_workbench_git_status_delta_and_step_related_files():
     from webui.routes import _workbench_apply_step_file_changes, _workbench_git_status_delta
 
@@ -1273,24 +1306,22 @@ def test_workbench_promote_file_artifacts_promotes_and_dedups():
 
     session = {"artifacts": [{"id": "a1", "type": "task_brief", "name": "task-brief.md", "status": "draft"}]}
     changes = [
-        {"path": "cyrene/Cyrene_v1.py", "status": "modified"},
-        {"path": "cyrene/train.py", "status": "created/updated"},
-        {"path": "scan_channels.py", "status": "created"},
-        {"path": "old.py", "status": "deleted"},            # not a deliverable
-        {"path": "cyrene/Cyrene_v1.py", "status": "modified"},  # duplicate
+        {"path": "report.md", "status": "created/updated", "source": "Write"},
+        {"path": "existing.py", "status": "modified", "source": "Edit"},
+        {"path": "inferred.txt", "status": "created", "source": "git"},
+        {"path": "export.pdf", "status": "produced", "source": "send_file"},
+        {"path": "report.md", "status": "created/updated", "source": "Write"},
     ]
     added = _workbench_promote_file_artifacts(session, changes, "2026-06-14T00:00:00Z")
 
-    assert added == 3
+    assert added == 2
     file_arts = [a for a in session["artifacts"] if a["type"] == "file_change"]
     by_name = {a["name"]: a for a in file_arts}
-    assert set(by_name) == {"Cyrene_v1.py", "train.py", "scan_channels.py"}
-    assert by_name["Cyrene_v1.py"]["status"] == "modified"
-    assert by_name["train.py"]["status"] == "created"
-    assert by_name["train.py"]["path"] == "cyrene/train.py"
-    # task brief is preserved, deletions are not promoted
+    assert set(by_name) == {"report.md", "export.pdf"}
+    assert by_name["report.md"]["status"] == "created"
+    assert by_name["export.pdf"]["status"] == "ready"
+    assert by_name["report.md"]["source"] == "Write"
     assert any(a["type"] == "task_brief" for a in session["artifacts"])
-    assert "old.py" not in {a.get("path") for a in file_arts}
 
     # idempotent: re-running adds nothing
     assert _workbench_promote_file_artifacts(session, changes, "2026-06-14T01:00:00Z") == 0
@@ -1302,18 +1333,49 @@ def test_workbench_backfill_file_artifacts_from_runs_and_steps():
     session = {
         "artifacts": [{"id": "a1", "type": "task_brief", "name": "task-brief.md", "status": "draft"}],
         "runs": [{"fileChanges": [
-            {"path": "cyrene/train.py", "status": "created/updated"},
-            {"path": "old.py", "status": "deleted"},
+            {"path": "report.md", "status": "created/updated", "source": "Write"},
+            {"path": "inferred.txt", "status": "created", "source": "git"},
         ]}],
         "plan": [{"relatedFiles": [
-            {"path": "cyrene/Cyrene_v1.py", "status": "modified"},
-            {"path": "cyrene/train.py", "status": "modified"},  # also in a run -> merged
+            {"path": "existing.py", "status": "modified", "source": "Edit"},
+            {"path": "report.md", "status": "modified", "source": "git"},
         ]}],
     }
     added = _workbench_backfill_file_artifacts(session, "2026-06-14T00:00:00Z")
 
-    assert added == 2  # train.py + Cyrene_v1.py, dedup across run/step
+    assert added == 1
     names = {a["name"] for a in session["artifacts"] if a["type"] == "file_change"}
-    assert names == {"train.py", "Cyrene_v1.py"}
+    assert names == {"report.md"}
     # idempotent
     assert _workbench_backfill_file_artifacts(session, "2026-06-14T00:00:00Z") == 0
+
+
+def test_workbench_prunes_parent_repo_git_files_and_artifacts(tmp_path):
+    from webui.routes import _workbench_prune_invalid_file_records
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "report.md").write_text("ok", encoding="utf-8")
+    bad = {"path": "src/webui/index.html", "status": "modified", "source": "git"}
+    good = {"path": "report.md", "status": "created/updated", "source": "Write"}
+    session = {
+        "plan": [{"relatedFiles": [good, bad]}],
+        "runs": [{"fileChanges": [good, bad], "events": [{"fileChanges": [bad]}]}],
+        "events": [{"fileChanges": [bad]}],
+        "artifacts": [
+            {"type": "file_change", "name": "report.md", "path": "report.md"},
+            {"type": "file_change", "name": "index.html", "path": "src/webui/index.html"},
+        ],
+    }
+
+    changed = _workbench_prune_invalid_file_records(
+        {"workspacePath": str(workspace)},
+        session,
+    )
+
+    assert changed is True
+    assert [item["path"] for item in session["plan"][0]["relatedFiles"]] == ["report.md"]
+    assert [item["path"] for item in session["runs"][0]["fileChanges"]] == ["report.md"]
+    assert session["runs"][0]["events"][0]["fileChanges"] == []
+    assert session["events"][0]["fileChanges"] == []
+    assert [item["path"] for item in session["artifacts"]] == ["report.md"]

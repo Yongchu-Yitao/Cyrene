@@ -275,6 +275,12 @@ _TOPIC_STOPWORDS = {
 
 async def init_db(db_path: str) -> None:
     async with aiosqlite.connect(db_path) as db:
+        # WAL: readers and the writer no longer block each other, and the
+        # rollback-journal SHARED→EXCLUSIVE deadlock (seen as "database is
+        # locked" when the goal loop and tool/chat writes overlap) disappears.
+        # journal_mode is persisted in the DB header, so this one call applies
+        # to every later connection that opens this database.
+        await db.execute("PRAGMA journal_mode = WAL")
         await db.executescript(_CREATE_TABLES)
         # Migration: add permission_mode column to existing tables
         try:

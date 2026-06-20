@@ -43,6 +43,10 @@ _PERMISSION_MODES = {"auto", "full_access"}
 # same step until the runtime budget is burned.
 _STEP_FAILURE_CAP = 3
 _SQLITE_TIMEOUT_SECONDS = 15
+# db_paths whose schema + WAL pragma have already been ensured this process.
+# The durable goal-loop tables are created once instead of on every query,
+# which removes a write transaction from the hot path of every read/write.
+_SCHEMA_READY: set[str] = set()
 _MANAGERS: dict[str, "GoalLoopManager"] = {}
 
 
@@ -67,8 +71,11 @@ def _json_loads(value: Any, fallback: Any) -> Any:
 
 
 async def _ensure_schema(db_path: str) -> None:
+    if db_path in _SCHEMA_READY:
+        return
     async with aiosqlite.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS) as db:
         await db.execute(f"PRAGMA busy_timeout = {_SQLITE_TIMEOUT_SECONDS * 1000}")
+        await db.execute("PRAGMA journal_mode = WAL")
         await db.executescript(
             """
             CREATE TABLE IF NOT EXISTS goal_loop_drafts (
@@ -123,6 +130,7 @@ async def _ensure_schema(db_path: str) -> None:
             """
         )
         await db.commit()
+    _SCHEMA_READY.add(db_path)
 
 
 async def _fetch_one(db_path: str, sql: str, args: tuple[Any, ...] = ()) -> dict[str, Any] | None:
@@ -825,7 +833,6 @@ class GoalLoopManager:
                         if not isinstance(candidate, dict) or str(candidate.get("id") or "") != step_id:
                             continue
                         candidate["updatedAt"] = _utc_iso()
-                        candidate["relatedFiles"] = file_changes
                         candidate["toolCalls"] = run_record["toolCalls"]
                         candidate["stepVerification"] = verification
                         if passed:

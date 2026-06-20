@@ -1729,6 +1729,8 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> None:
                 if step.get("order") != index + 1:
                     step["order"] = index + 1
                     changed = True
+            if _workbench_prune_invalid_file_records(project, session):
+                changed = True
             if _workbench_backfill_file_artifacts(session, now):
                 changed = True
     if projects and not payload.get("activeProjectId"):
@@ -2677,21 +2679,18 @@ def _workbench_display_path(path_value: Any, workspace_root: Path | None = None)
         return ""
     try:
         path = Path(raw).expanduser()
+        if workspace_root:
+            root = workspace_root.resolve()
+            resolved = path.resolve() if path.is_absolute() else (root / path).resolve()
+            try:
+                return resolved.relative_to(root).as_posix()
+            except ValueError:
+                return ""
         if path.is_absolute():
-            resolved = path.resolve()
-            if workspace_root:
-                try:
-                    workspace_root = workspace_root.resolve()
-                except OSError:
-                    pass
-                try:
-                    return resolved.relative_to(workspace_root).as_posix()
-                except ValueError:
-                    pass
-            return resolved.as_posix()
+            return path.resolve().as_posix()
         return path.as_posix().lstrip("./")
     except Exception:
-        return raw
+        return ""
 
 
 def _workbench_file_change(path_value: Any, status: str, workspace_root: Path | None = None, source: str = "") -> dict[str, Any] | None:
@@ -2719,6 +2718,13 @@ def _workbench_file_changes_from_tool_event(event: dict[str, Any], workspace_roo
             changes.append(change)
     elif tool == "Edit" and isinstance(args, dict):
         change = _workbench_file_change(args.get("path"), "modified", workspace_root, tool)
+        if change:
+            changes.append(change)
+    elif tool == "send_file" and isinstance(args, dict):
+        # send_file is an explicit declaration that an existing workspace file
+        # is a user-facing deliverable. It may not mutate the file, but it is the
+        # strongest available artifact signal.
+        change = _workbench_file_change(args.get("path"), "produced", workspace_root, tool)
         if change:
             changes.append(change)
 
@@ -2752,7 +2758,13 @@ def _workbench_merge_file_changes(changes: list[dict[str, Any]]) -> list[dict[st
         old = merged[key]
         new_status = str(item.get("status") or item.get("changeType") or "")
         old_status = str(old.get("status") or old.get("changeType") or "")
-        if rank.get(new_status, 0) > rank.get(old_status, 0):
+        old_source = str(old.get("source") or "").strip().lower()
+        new_source = str(item.get("source") or "").strip().lower()
+        inferred_cannot_override_explicit = (
+            new_source == "git"
+            and old_source in {"write", "edit", "send_file"}
+        )
+        if not inferred_cannot_override_explicit and rank.get(new_status, 0) > rank.get(old_status, 0):
             old["status"] = new_status
             old["changeType"] = new_status
         if item.get("source") and not old.get("source"):
@@ -2760,12 +2772,46 @@ def _workbench_merge_file_changes(changes: list[dict[str, Any]]) -> list[dict[st
     return [merged[key] for key in order]
 
 
-def _workbench_git_status_snapshot(workspace_root: Path | None) -> dict[str, str]:
+def _workbench_git_context(workspace_root: Path | None) -> tuple[Path, str] | None:
     if not workspace_root:
-        return {}
+        return None
     try:
         proc = subprocess.run(
-            ["git", "-C", str(workspace_root), "status", "--porcelain=v1", "--untracked-files=all"],
+            ["git", "-C", str(workspace_root), "rev-parse", "--show-toplevel", "--show-prefix"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    lines = proc.stdout.splitlines()
+    if not lines:
+        return None
+    try:
+        repo_root = Path(lines[0]).expanduser().resolve()
+        prefix = (lines[1] if len(lines) > 1 else "").replace("\\", "/")
+        if prefix and not prefix.endswith("/"):
+            prefix += "/"
+        return repo_root, prefix
+    except OSError:
+        return None
+
+
+def _workbench_git_status_snapshot(workspace_root: Path | None) -> dict[str, str]:
+    context = _workbench_git_context(workspace_root)
+    if not workspace_root or context is None:
+        return {}
+    _, prefix = context
+    try:
+        proc = subprocess.run(
+            [
+                "git", "-C", str(workspace_root), "status",
+                "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all",
+                "--", ".",
+            ],
             capture_output=True,
             text=True,
             timeout=5,
@@ -2776,15 +2822,20 @@ def _workbench_git_status_snapshot(workspace_root: Path | None) -> dict[str, str
     if proc.returncode != 0:
         return {}
     snapshot: dict[str, str] = {}
-    for line in proc.stdout.splitlines():
-        if len(line) < 4:
+    for record in proc.stdout.split("\0"):
+        if len(record) < 4:
             continue
-        code = line[:2]
-        path = line[3:].strip()
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1].strip()
-        if path:
-            snapshot[path] = code
+        code = record[:2]
+        repo_path = record[3:].replace("\\", "/")
+        if prefix:
+            if not repo_path.startswith(prefix):
+                continue
+            path = repo_path[len(prefix):]
+        else:
+            path = repo_path
+        normalized = _workbench_display_path(path, workspace_root)
+        if normalized:
+            snapshot[normalized] = code
     return snapshot
 
 
@@ -2825,6 +2876,32 @@ def _workbench_resolve_workspace_file(workspace_root: Path | None, path_value: A
     return target
 
 
+def _workbench_artifact_download_target(
+    project: dict[str, Any],
+    session: dict[str, Any],
+    artifact_id: str,
+) -> tuple[dict[str, Any], Path]:
+    artifact = next(
+        (
+            item
+            for item in (session.get("artifacts") or [])
+            if isinstance(item, dict) and str(item.get("id") or "") == artifact_id
+        ),
+        None,
+    )
+    if artifact is None:
+        raise LookupError("artifact not found")
+    if artifact.get("type") != "file_change":
+        raise ValueError("artifact is not a downloadable file")
+    target = _workbench_resolve_workspace_file(
+        _workbench_workspace_root(project),
+        artifact.get("path") or artifact.get("name"),
+    )
+    if not target.exists() or not target.is_file():
+        raise FileNotFoundError("artifact file not found")
+    return artifact, target
+
+
 def _workbench_unified_diff(left_text: str, right_text: str, left_label: str, right_label: str) -> str:
     return "".join(difflib.unified_diff(
         left_text.splitlines(keepends=True),
@@ -2838,14 +2915,19 @@ async def _workbench_git_diff_for_path(workspace_root: Path | None, path_value: 
     target = _workbench_resolve_workspace_file(workspace_root, path_value)
     root = workspace_root.resolve() if workspace_root else None
     rel = target.relative_to(root).as_posix() if root else str(path_value)
+    context = _workbench_git_context(root)
+    if context is None:
+        return {"path": rel, "diff": "", "has_changes": False}
+    repo_root, prefix = context
+    git_rel = f"{prefix}{rel}" if prefix else rel
 
     try:
         proc = await asyncio.create_subprocess_exec(
             "git",
             "diff",
             "--",
-            rel,
-            cwd=str(root),
+            git_rel,
+            cwd=str(repo_root),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -2865,8 +2947,8 @@ async def _workbench_git_diff_for_path(workspace_root: Path | None, path_value: 
             "ls-files",
             "--error-unmatch",
             "--",
-            rel,
-            cwd=str(root),
+            git_rel,
+            cwd=str(repo_root),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -2894,13 +2976,22 @@ def _workbench_apply_step_file_changes(session: dict[str, Any], step_id: str, fi
         break
 
 
-def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: list[dict[str, Any]], now: str) -> int:
-    """Surface files the agent produced as task artifacts (dedup by path).
+def _workbench_is_artifact_change(change: dict[str, Any]) -> bool:
+    """Return whether a file event explicitly identifies a deliverable.
 
-    Created/modified files are real deliverables, so they belong in the 产物
-    panel alongside the task brief. Without this they only ever showed up under
-    文件变更. Deletions are not deliverables and are skipped. Returns the number
-    of artifacts added so callers can decide whether the store needs writing."""
+    Git/workspace diffs are useful for related-file tracking but do not prove
+    task ownership. Only an explicit file creation/write or send_file action is
+    strong enough to auto-promote a file into the artifact panel.
+    """
+    source = str(change.get("source") or "").strip().lower()
+    change_type = str(change.get("status") or change.get("changeType") or "").strip().lower()
+    if source == "send_file":
+        return change_type == "produced"
+    return source == "write" and change_type in {"created", "created/updated"}
+
+
+def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: list[dict[str, Any]], now: str) -> int:
+    """Surface explicitly produced files as task artifacts (dedup by path)."""
     if not file_changes:
         return 0
     artifacts = session.get("artifacts") if isinstance(session.get("artifacts"), list) else []
@@ -2922,9 +3013,13 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
         path = str(change.get("path") or change.get("name") or "").strip()
         if not path or path in known_paths:
             continue
+        if not _workbench_is_artifact_change(change):
+            continue
         change_type = str(change.get("status") or change.get("changeType") or "")
         status = status_map.get(change_type)
-        if not status:  # e.g. deleted — not a produced artifact
+        if change_type == "produced":
+            status = "ready"
+        if not status:
             continue
         known_paths.add(path)
         artifacts.append({
@@ -2935,6 +3030,7 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
             "status": status,
             "createdAt": now,
             "summary": path,
+            "source": change.get("source"),
         })
         added += 1
     session["artifacts"] = artifacts
@@ -2952,6 +3048,109 @@ def _workbench_backfill_file_artifacts(session: dict[str, Any], now: str) -> int
         if isinstance(step, dict):
             changes.extend(c for c in (step.get("relatedFiles") or []) if isinstance(c, dict))
     return _workbench_promote_file_artifacts(session, _workbench_merge_file_changes(changes), now)
+
+
+def _workbench_prune_invalid_file_records(
+    project: dict[str, Any],
+    session: dict[str, Any],
+) -> bool:
+    """Remove historical file records that cannot belong to this workspace.
+
+    Older builds ran ``git status`` from a nested workspace without a pathspec.
+    Git then reported changes from the parent repository, which were persisted
+    as step files and artifacts. Absolute paths outside the workspace and
+    inferred Git modifications that do not exist under the workspace are the
+    reliable signatures of that bug.
+    """
+    workspace_root = _workbench_workspace_root(project)
+    if workspace_root is None:
+        return False
+    try:
+        root = workspace_root.resolve()
+    except OSError:
+        return False
+
+    changed = False
+    rejected_paths: set[str] = set()
+
+    def valid(item: Any) -> bool:
+        if not isinstance(item, dict):
+            return False
+        raw = str(item.get("path") or item.get("name") or "").strip()
+        if not raw:
+            return False
+        path = Path(raw).expanduser()
+        try:
+            target = path.resolve() if path.is_absolute() else (root / path).resolve()
+            target.relative_to(root)
+        except (OSError, ValueError):
+            rejected_paths.add(raw)
+            return False
+        source = str(item.get("source") or "").strip().lower()
+        status = str(item.get("status") or item.get("changeType") or "").strip().lower()
+        if source == "git" and status != "deleted" and not target.exists():
+            rejected_paths.add(raw)
+            return False
+        return True
+
+    def prune(container: dict[str, Any], key: str) -> None:
+        nonlocal changed
+        items = container.get(key)
+        if not isinstance(items, list):
+            return
+        kept = [item for item in items if valid(item)]
+        if len(kept) != len(items):
+            container[key] = kept
+            changed = True
+
+    for step in session.get("plan") or []:
+        if isinstance(step, dict):
+            prune(step, "relatedFiles")
+    for run in session.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        prune(run, "fileChanges")
+        for event in run.get("events") or []:
+            if isinstance(event, dict):
+                prune(event, "fileChanges")
+    for event in session.get("events") or []:
+        if isinstance(event, dict):
+            prune(event, "fileChanges")
+
+    # Reconcile old auto-promoted artifacts with the remaining trustworthy
+    # provenance. Explicit legacy artifacts with no matching file-change record
+    # are preserved.
+    all_changes: list[dict[str, Any]] = []
+    for run in session.get("runs") or []:
+        if isinstance(run, dict):
+            all_changes.extend(item for item in (run.get("fileChanges") or []) if isinstance(item, dict))
+    for step in session.get("plan") or []:
+        if isinstance(step, dict):
+            all_changes.extend(item for item in (step.get("relatedFiles") or []) if isinstance(item, dict))
+    known_paths = {
+        str(item.get("path") or item.get("name") or "").strip()
+        for item in all_changes
+        if str(item.get("path") or item.get("name") or "").strip()
+    }
+    artifact_paths = {
+        str(item.get("path") or item.get("name") or "").strip()
+        for item in all_changes
+        if _workbench_is_artifact_change(item)
+    }
+    artifacts = session.get("artifacts")
+    if isinstance(artifacts, list):
+        kept_artifacts = []
+        for artifact in artifacts:
+            if not isinstance(artifact, dict) or artifact.get("type") != "file_change":
+                kept_artifacts.append(artifact)
+                continue
+            path = str(artifact.get("path") or artifact.get("name") or "").strip()
+            if path in rejected_paths or (path in known_paths and path not in artifact_paths):
+                changed = True
+                continue
+            kept_artifacts.append(artifact)
+        session["artifacts"] = kept_artifacts
+    return changed
 
 
 async def _workbench_archive_run_knowledge(
@@ -3278,6 +3477,19 @@ def _workbench_compose_ephemeral_system(
         "- 仅当用户只是提问、或一句话就能完成的小事时，才直接回答或执行、无需计划。\n"
         "- 如果这个任务还没有明确目标，或现有目标/标题与你实际要做的事不符（例如用户开场只是提了个"
         "问题），就调用 set_task_goal 设定一个简洁的目标和短标题。"
+    )
+    # Artifact delivery: only files written via Write (auto-promoted) or declared
+    # via send_file surface in the downloadable 「产物」 panel. A deliverable
+    # produced only through Bash/shell is caught as a weak git diff and stays
+    # invisible there, so spell out that the agent must declare it — otherwise it
+    # assumes a shell-produced file already reached the user.
+    parts.append(
+        "## 把产物交付给用户\n"
+        "任务的交付物（报告、数据、导出文件、生成的代码包等）要让用户能在「产物」面板下载：\n"
+        "- 用 Write 写入工作区的文件会自动登记为产物；用 Bash/脚本/命令行生成的文件不会——"
+        "必须在生成后调用 send_file 声明它，否则只算普通文件改动，用户无法下载。\n"
+        "- 只声明真正的交付物；不要声明依赖、缓存或构建中间产物（如 node_modules、dist、__pycache__）。\n"
+        "- 不要只在回复里写出文件路径就当作已经交付。"
     )
     # The task's goal/title/summary/plan live only in the Workbench store, never in
     # the agent's conversation history — inject them so the agent actually sees the
@@ -8317,6 +8529,24 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if not session:
             return JSONResponse({"error": "session not found"}, status_code=404)
         return {"artifacts": session.get("artifacts", [])}
+
+    @router.get("/api/task-sessions/{session_id}/artifacts/{artifact_id}/download")
+    async def api_workbench_download_artifact(session_id: str, artifact_id: str):
+        payload = _read_workbench_store()
+        project, session = _workbench_find_session(payload, session_id)
+        if not session or not project:
+            return JSONResponse({"error": "session not found"}, status_code=404)
+        try:
+            artifact, target = _workbench_artifact_download_target(project, session, artifact_id)
+        except LookupError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except FileNotFoundError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        filename = Path(str(artifact.get("name") or target.name)).name or target.name
+        media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        return FileResponse(target, filename=filename, media_type=media_type)
 
     # ---- Scheduled tasks ----
 

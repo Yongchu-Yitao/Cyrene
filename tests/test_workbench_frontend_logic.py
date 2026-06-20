@@ -165,6 +165,27 @@ def test_workbench_copy_uses_electron_clipboard_bridge():
     assert 'console.error("Failed to copy workbench message:", e);' in chat
 
 
+def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_native_pdf_zoom():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+
+    assert 'split(";", 1)[0].trim().toLowerCase()' in source
+    assert 'ext === "ppt"' not in source
+    assert 'ext === "doc"' not in source
+    assert 'wbcFileViewKind(file) !== "html"' in source
+    assert 'function wbcHtmlPreviewDocument(source, sourceUrl)' in source
+    assert '<base href="' in source
+    assert 'sandbox="allow-scripts"' in source
+    assert 'srcDoc={htmlPreview}' in source
+    assert 'blobUrl + "#zoom="' in source
+    assert 'key={pdfSrc}' in source
+    assert "width: 100%;" in styles
+    assert "height: 100%;" in styles
+    assert r"/\.html?$/i.test(target.pathname)" in main
+
+
 def test_workbench_acceptance_button_calls_agent_endpoint():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
@@ -172,6 +193,21 @@ def test_workbench_acceptance_button_calls_agent_endpoint():
 
     assert "window.WorkbenchModel.generateAcceptance(session.id)" in source
     assert '"/acceptance/generate"' in model
+
+
+def test_workbench_artifact_rows_download_registered_files():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    routes = (root / "src" / "webui" / "routes.py").read_text(encoding="utf-8")
+
+    assert 'artifact.type === "file_change"' in source
+    assert 'className="workbench-artifact-row wb-artifact-download"' in source
+    assert 'download={artifact.name || true}' in source
+    assert '"/artifacts/" + encodeURIComponent(artifact.id) + "/download"' in source
+    assert ".wb-artifact-download:hover" in styles
+    assert '@router.get("/api/task-sessions/{session_id}/artifacts/{artifact_id}/download")' in routes
+    assert "_workbench_artifact_download_target(project, session, artifact_id)" in routes
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():

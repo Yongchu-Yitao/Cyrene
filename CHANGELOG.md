@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.6.0b5] - 2026-06-20
+
+### Security
+
+- **HTML artifact 隔离** — 用户生成的 HTML 文件不再允许通过「↗」按钮在普通 Electron 子窗口中打开（子窗口会继承已认证的本地后端 session，存在 API 滥用风险）。HTML 预览保留在沙盒 `srcDoc` iframe 内；Artifacts 列表和 Viewer 中的「↗」外链按钮对 HTML 文件隐藏。
+
+### Added
+
+- **Artifact 一键下载** — Workbench 侧边栏 Artifacts 标签页中，`file_change` 类产物现在可直接点击行下载；路径在服务端校验不得逃逸项目 workspace。
+- **`send_file` 显式信号** — Agent 调用 `send_file` 工具时，该文件以 `produced` 状态记入 file-change 追踪，优先级高于 git 推断结果。
+- **HTML 查看器 base href 注入** — 内嵌 HTML 预览器自动在文档头部注入 `<base href>` 标签，使相对路径的脚本和资源能正确解析。
+- **Subagent 文件交付指引** — Subagent 系统提示明确：产物文件应写入 workspace 并在 `quit` 摘要中报告路径，由主 Agent 统一通过 `send_file` 交付，Subagent 不应自行调用该工具。
+
+### Fixed
+
+- **SQLite 并发锁死** — `behavior_learning.py`、`db.py`、`workbench_goal_loop.py` 均切换至 WAL journal 模式并设置 busy timeout（15 s），消除 goal loop 与工具/聊天写入并发时出现的 "database is locked" 错误。
+- **Schema 初始化幂等** — `_ensure_schema` 引入进程级 `_SCHEMA_READY` 缓存，避免每次读写都重复执行建表事务。
+- **文件路径显示** — `_workbench_display_path` 修复相对/绝对路径计算逻辑：workspace 外的路径返回空字符串而非泄漏绝对路径。
+- **Git 推断不覆盖工具写入** — `_workbench_merge_file_changes` 新增保护：git 推断的状态无法降级已由 Write/Edit/send_file 明确写入的文件记录。
+- **失效文件记录清理** — `_workbench_prune_invalid_file_records` 在每次状态不变量检查时移除 path 缺失或 name 为空的陈旧记录。
+- **`send_file` 路径解析** — `_resolve_exportable_path` 现在以当前 Workbench 任务的 `workspacePath` 为首选根目录，修复在项目 workspace 内写入的文件无法发送的问题。
+
+### Changed
+
+- **步骤进展 UI 精简** — 展开步骤的详情面板由卡片网格改为紧凑的摘要行布局（进展文本与相关文件并列显示）。
+- **PDF 缩放修复** — PDF embed 元素现在将缩放值编入 `key`，确保缩放变化时正确重新渲染。
+- **CI pre-release 自动检测** — release workflow 中 `is_pre` 标志改为从 tag 名自动匹配（`alpha/beta/[0-9]b[0-9]/rc`），无需手动维护。
+
+### Tests
+
+- 新增 `tests/test_workbench_artifact_download.py` — 覆盖 artifact 下载路径解析与路径穿越防护。
+- 更新 `tests/test_workbench_frontend_logic.py`、`tests/test_workbench_init_plan.py` — 补充 goal loop 及初始化计划场景。
+
 ## [0.6.0b4] - 2026-06-19
 
 ### Added

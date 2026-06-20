@@ -434,6 +434,12 @@ async function createMainWindow(shellOverride) {
     try {
       const target = new URL(url);
       if (target.hostname === '127.0.0.1' && target.port === String(port)) {
+        // User-provided HTML must stay in the renderer's sandboxed srcDoc
+        // viewer. A normal child window would inherit the authenticated
+        // default session and could call privileged local API endpoints.
+        if (/\.html?$/i.test(target.pathname)) {
+          return { action: 'deny' };
+        }
         return { action: 'allow' };
       }
       if (target.protocol === 'https:' || target.protocol === 'http:') {
