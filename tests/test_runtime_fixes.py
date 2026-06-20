@@ -94,6 +94,7 @@ async def test_execution_agent_returns_quit_text(monkeypatch):
 
 def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch):
     from cyrene import memory
+    from cyrene import settings_store
     from cyrene import short_term
 
     short_term.init_short_term(tmp_path)
@@ -107,6 +108,7 @@ def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch
             "emotional_valence": 0,
         }
     ])
+    monkeypatch.setattr(settings_store, "is_soul_active", lambda: True)
     monkeypatch.setattr(memory, "read_shallow_memory", lambda: "## SELF:IDENTITY\n- test memory")
     context = memory.get_memory_context()
 
@@ -117,6 +119,7 @@ def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch
 
 def test_get_memory_context_can_skip_short_term(tmp_path, monkeypatch):
     from cyrene import memory
+    from cyrene import settings_store
     from cyrene import short_term
 
     short_term.init_short_term(tmp_path)
@@ -130,6 +133,7 @@ def test_get_memory_context_can_skip_short_term(tmp_path, monkeypatch):
             "emotional_valence": 0,
         }
     ])
+    monkeypatch.setattr(settings_store, "is_soul_active", lambda: True)
     monkeypatch.setattr(memory, "read_shallow_memory", lambda: "## SELF:BELIEFS\n- test belief")
     context = memory.get_memory_context(include_short_term=False)
 
@@ -2581,6 +2585,7 @@ async def test_main_inbox_guidance_continuation_keeps_ack_before_final_reply(mon
     _patch_call_llm(monkeypatch, fake_call_llm)
     monkeypatch.setattr(_agent_guidance, "_generate_guidance_ack", AsyncMock(return_value=ack_text))
     monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
+    monkeypatch.setattr(behavior_learning, "begin_turn", AsyncMock(return_value=None))
     monkeypatch.setattr(conversations, "archive_exchange", fake_archive_exchange)
     events = []
     monkeypatch.setattr(debug, "publish_event", lambda event: events.append(event) or asyncio.sleep(0))

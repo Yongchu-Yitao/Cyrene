@@ -818,6 +818,42 @@ async def test_workbench_reconciled_plan_does_not_launch_second_acceptance_agent
     assert len(prompts) == 1
 
 
+async def test_workbench_plan_revision_updates_goal_used_by_goal_loop(monkeypatch):
+    from webui import routes
+
+    async def fake_agent(*args, **kwargs):
+        return {
+            "goal": "完成短信登录功能，并覆盖短信验证码测试",
+            "revisionMode": "replace",
+            "steps": [
+                {"title": "实现短信登录", "description": "接入短信验证码"},
+                {"title": "验证短信登录", "description": "运行短信登录测试"},
+            ],
+            "acceptanceCriteria": ["短信登录测试通过"],
+        }
+
+    monkeypatch.setattr(routes, "_workbench_run_explore_agent", fake_agent)
+    session = {
+        "id": "task_1",
+        "title": "实现登录",
+        "goal": "完成账号密码登录功能",
+        "constraints": [],
+        "plan": [{"id": "step_1", "title": "实现密码登录", "status": "pending"}],
+        "acceptanceCriteria": [],
+    }
+
+    steps, _acceptance, from_llm, operation = await routes._workbench_generate_plan_steps(
+        session,
+        {"workspacePath": ""},
+        feedback="改为短信验证码登录，并补充相关测试",
+    )
+
+    assert from_llm is True
+    assert operation == "replace"
+    assert [step["title"] for step in steps] == ["实现短信登录", "验证短信登录"]
+    assert session["goal"] == "完成短信登录功能，并覆盖短信验证码测试"
+
+
 async def test_workbench_plan_agent_can_choose_full_replacement(monkeypatch):
     from webui import routes
 
@@ -897,6 +933,48 @@ async def test_workbench_explicit_regeneration_hides_old_plan(monkeypatch):
     assert [item["text"] for item in acceptance] == ["替代方案通过验证"]
     assert len(prompts) == 1
     assert "当前已有执行计划" not in prompts[0]
+    assert "如果新目标仍涉及当前项目，应主动检查必要的工作区内容" in prompts[0]
+    assert "如果新目标明确与当前项目无关，则不要探索工作区" in prompts[0]
+
+
+async def test_workbench_plan_prompt_leaves_workspace_exploration_to_agent(monkeypatch, tmp_path):
+    from webui import routes
+
+    captured = {}
+
+    async def fake_agent(workspace_root, prompt, **kwargs):
+        captured["workspace_root"] = workspace_root
+        captured["prompt"] = prompt
+        return {
+            "steps": [
+                {"title": "明确目标", "description": "梳理计划目标"},
+                {"title": "安排阶段", "description": "制定阶段性行动"},
+                {"title": "复盘调整", "description": "根据结果调整计划"},
+            ],
+            "acceptanceCriteria": ["计划覆盖目标、行动和复盘"],
+        }
+
+    monkeypatch.setattr(routes, "_workbench_run_explore_agent", fake_agent)
+    session = {
+        "id": "task_non_file_plan",
+        "title": "制定学习计划",
+        "goal": "制定一个与当前本地项目无关的三个月学习计划",
+        "constraints": [],
+        "plan": [],
+        "acceptanceCriteria": [],
+    }
+
+    await routes._workbench_generate_plan_steps(
+        session,
+        {"workspacePath": str(tmp_path)},
+    )
+
+    prompt = captured["prompt"]
+    assert "新项目初始化、项目开发、代码修改、项目分析" in prompt
+    assert "应主动探索工作区" in prompt
+    assert "与当前项目或本地文件无关的计划" in prompt
+    assert "不要读取、列举或搜索工作区" in prompt
+    assert "根据目标、上下文和已有计划自行判断" in prompt
 
 
 async def test_workbench_auto_start_acceptance_uses_derived_goal(monkeypatch):

@@ -182,7 +182,7 @@ def test_linux_desktop_uses_native_frame_and_directory_picker():
     chat = (root / "src" / "webui" / "static" / "app" / "chat.jsx").read_text(encoding="utf-8")
 
     assert "const isLinux = process.platform === 'linux';" in main
-    assert "const useInsetTitleBar = !isLegacyShell && !isLinux;" in main
+    assert "const useInsetTitleBar = !isLegacyShell && isMac;" in main
     assert "ipcMain.handle('dialog:pick-directory'" in main
     assert "properties: ['openDirectory', 'createDirectory']" in main
     assert "if (process.platform !== 'linux') return Promise.resolve(null);" in preload
@@ -206,8 +206,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=20260619-plan-deps1" in index
-    assert "workbench.js?v=20260619-plan-deps1" in index
+    assert "workbench-model.js?v=20260620-goalloop1" in index
+    assert "workbench.js?v=20260620-goalloop2" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():

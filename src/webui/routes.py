@@ -2401,11 +2401,18 @@ async def _workbench_generate_plan_steps(
     else:
         prompt = (
             "你是任务执行规划 Agent。请把下面这个任务拆解成清晰、有顺序、可逐步执行的步骤。\n"
-            "工作区已有文件，你可以使用 list_directory、read_file、glob 工具先探索再规划，"
-            "让步骤贴合项目实际（尽量引用真实的文件/目录/模块），不要套用空泛模板。\n\n"
+            "你可以使用 list_directory、read_file、glob 工具了解当前工作区，并根据任务与"
+            "当前项目的关系自主决定是否探索：\n"
+            "- 如果这是新项目初始化、项目开发、代码修改、项目分析，或计划质量依赖已有内容，"
+            "应主动探索工作区，了解真实结构和关键文件后再规划；\n"
+            "- 如果用户明确要求制定与当前项目或本地文件无关的计划，应直接围绕该目标规划，"
+            "不要读取、列举或搜索工作区，也不要强行关联当前项目；\n"
+            "- 如果任务与项目的关系不明确，请根据目标、上下文和已有计划自行判断。"
+            "不要仅因为工作区存在就机械探索，也不要仅为了减少工具调用而跳过必要的项目了解。\n\n"
             f"任务目标：{goal}{constraints_block}{existing_plan_block}{feedback_block}{reflection_block}\n\n"
             "充分了解后再返回 JSON，只返回一个 JSON 对象，不要 Markdown 代码块标记。结构：\n"
             "{\n"
+            '  "goal": "应用本次修改后的最终任务目标；未改变目标时原样保留",\n'
             '  "revisionMode": "revise|replace",\n'
             '  "steps": [\n'
             '    {"sourceStepId": "保留/修改的原步骤 id；新增步骤填 null", "title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块", "dependsOnStepIndexes": [1]}\n'
@@ -2413,10 +2420,14 @@ async def _workbench_generate_plan_steps(
             '  "acceptanceCriteria": ["任务完成后可独立核验的结果标准"]\n'
             "}\n\n"
             "要求：生成 3-7 个步骤；顺序合理、彼此衔接；每个步骤聚焦一件可执行的事；"
-            "尽量引用工作区里的真实文件或模块；同时生成 3-8 条具体、可验证的验收标准，"
-            "覆盖任务目标、约束和必要验证；全部使用简体中文。"
+            "任务涉及当前项目时，应结合工作区实际内容，并尽量引用真实文件、目录或模块；"
+            "任务与当前项目无关时，应围绕任务本身规划，不要引入无关的文件或代码操作；"
+            "同时生成 3-8 条具体、可验证的验收标准，覆盖任务目标、约束和必要验证；"
+            "全部使用简体中文。"
             "你需要自行判断 revisionMode：用户只是补充、删改、调序或改变局部做法时用 revise；"
             "用户要求完全不同、全新、换一套、从头重做，或新要求与原目标明显不同且旧计划不再适用时用 replace。"
+            "goal 必须表示应用用户修改反馈后的最终任务目标；如果反馈只改变执行方式而不改变目标，"
+            "则原样返回现有任务目标。"
             "revise 时必须返回完整修订计划，并用 sourceStepId 标明保留或修改的是哪个原步骤；"
             "replace 时不要保留旧步骤，所有 sourceStepId 填 null。验收标准必须对应最终完整计划。"
             "每个步骤都必须返回 dependsOnStepIndexes；它使用当前返回列表中的 1-based 序号，"
@@ -2424,7 +2435,9 @@ async def _workbench_generate_plan_steps(
         )
         if requested_operation == "replace":
             prompt += (
-                "\n这是用户主动点击的「重新生成」。必须从任务目标和工作区重新独立拆解，"
+                "\n这是用户主动点击的「重新生成」。必须从最终任务目标重新独立拆解。"
+                "如果新目标仍涉及当前项目，应主动检查必要的工作区内容；"
+                "如果新目标明确与当前项目无关，则不要探索工作区。"
                 "至少一半步骤应采用不同的拆解方式或执行路径，不能只是改写措辞。"
             )
 
@@ -2449,6 +2462,9 @@ async def _workbench_generate_plan_steps(
         else:
             operation = "replace" if _workbench_plan_reset_requested(feedback) else "revise"
         steps = _workbench_reconcile_revised_plan(existing_plan, steps, feedback, operation)
+        revised_goal = str(parsed.get("goal") or "").strip()
+        if revised_goal:
+            session["goal"] = revised_goal
     else:
         steps = _workbench_normalize_plan(steps, task_id=str(session.get("id") or ""))
     valid_plan, _, _ = _workbench_validate_plan_graph(steps)

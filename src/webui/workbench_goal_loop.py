@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import socket
+import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -41,6 +42,7 @@ _PERMISSION_MODES = {"auto", "full_access"}
 # treated as stuck: the loop reflects once, then blocks instead of retrying the
 # same step until the runtime budget is burned.
 _STEP_FAILURE_CAP = 3
+_SQLITE_TIMEOUT_SECONDS = 15
 _MANAGERS: dict[str, "GoalLoopManager"] = {}
 
 
@@ -65,7 +67,8 @@ def _json_loads(value: Any, fallback: Any) -> Any:
 
 
 async def _ensure_schema(db_path: str) -> None:
-    async with aiosqlite.connect(db_path) as db:
+    async with aiosqlite.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS) as db:
+        await db.execute(f"PRAGMA busy_timeout = {_SQLITE_TIMEOUT_SECONDS * 1000}")
         await db.executescript(
             """
             CREATE TABLE IF NOT EXISTS goal_loop_drafts (
@@ -124,7 +127,8 @@ async def _ensure_schema(db_path: str) -> None:
 
 async def _fetch_one(db_path: str, sql: str, args: tuple[Any, ...] = ()) -> dict[str, Any] | None:
     await _ensure_schema(db_path)
-    async with aiosqlite.connect(db_path) as db:
+    async with aiosqlite.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS) as db:
+        await db.execute(f"PRAGMA busy_timeout = {_SQLITE_TIMEOUT_SECONDS * 1000}")
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(sql, args)
         row = await cursor.fetchone()
@@ -133,7 +137,8 @@ async def _fetch_one(db_path: str, sql: str, args: tuple[Any, ...] = ()) -> dict
 
 async def _fetch_all(db_path: str, sql: str, args: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     await _ensure_schema(db_path)
-    async with aiosqlite.connect(db_path) as db:
+    async with aiosqlite.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS) as db:
+        await db.execute(f"PRAGMA busy_timeout = {_SQLITE_TIMEOUT_SECONDS * 1000}")
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(sql, args)
         rows = await cursor.fetchall()
@@ -142,10 +147,28 @@ async def _fetch_all(db_path: str, sql: str, args: tuple[Any, ...] = ()) -> list
 
 async def _execute(db_path: str, sql: str, args: tuple[Any, ...] = ()) -> int:
     await _ensure_schema(db_path)
-    async with aiosqlite.connect(db_path) as db:
+    async with aiosqlite.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS) as db:
+        await db.execute(f"PRAGMA busy_timeout = {_SQLITE_TIMEOUT_SECONDS * 1000}")
         cursor = await db.execute(sql, args)
         await db.commit()
         return int(cursor.rowcount or 0)
+
+
+def _sqlite_storage_busy(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and any(
+        marker in str(exc).lower()
+        for marker in ("database is locked", "database table is locked", "database is busy")
+    )
+
+
+def _storage_busy_response() -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": "任务存储正被其他操作占用，请等待相关测试或任务结束后重试。",
+            "code": "goal_loop_storage_busy",
+        },
+        status_code=503,
+    )
 
 
 def _public_run(run: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1225,7 +1248,20 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
             return JSONResponse({"error": "invalid basePlanDefinitionRevision"}, status_code=400)
         if base_revision != int(session.get("planDefinitionRevision") or 0):
             return JSONResponse({"error": "计划已发生变化，请重新打开配置。", "code": "stale_plan_revision"}, status_code=409)
-        current_run = await _get_run_by_session(db_path, session_id)
+        try:
+            current_run = await _get_run_by_session(db_path, session_id)
+            # Check draft storage before an expensive planning-agent call. This
+            # also clears expired rows while the database is known to be writable.
+            await _execute(
+                db_path,
+                "DELETE FROM goal_loop_drafts WHERE expires_at < ?",
+                (_utc_iso(),),
+            )
+        except Exception as exc:
+            if not _sqlite_storage_busy(exc):
+                raise
+            logger.warning("Goal-loop preview storage is busy for session %s", session_id)
+            return _storage_busy_response()
         if current_run and str(current_run.get("status") or "") not in _TERMINAL_STATUSES | {"cancelled"}:
             return JSONResponse({"error": "该任务已有持续执行实例。", "code": "goal_loop_exists"}, status_code=409)
 
@@ -1254,29 +1290,37 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
         draft_id = f"goal_draft_{uuid.uuid4().hex[:16]}"
         now = _utc_now()
         expires_at = now + timedelta(minutes=30)
-        await _execute(db_path, "DELETE FROM goal_loop_drafts WHERE expires_at < ?", (now.isoformat(),))
-        await _execute(
-            db_path,
-            """
-            INSERT INTO goal_loop_drafts
-            (id, session_id, project_id, base_plan_revision, goal, goal_changed,
-             plan_json, acceptance_json, limits_json, created_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                draft_id,
+        try:
+            await _execute(
+                db_path,
+                """
+                INSERT INTO goal_loop_drafts
+                (id, session_id, project_id, base_plan_revision, goal, goal_changed,
+                 plan_json, acceptance_json, limits_json, created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    draft_id,
+                    session_id,
+                    str(project.get("id") or ""),
+                    base_revision,
+                    goal,
+                    1 if goal_changed else 0,
+                    _json_dumps(plan),
+                    _json_dumps(acceptance),
+                    _json_dumps(limits),
+                    now.isoformat(),
+                    expires_at.isoformat(),
+                ),
+            )
+        except Exception as exc:
+            if not _sqlite_storage_busy(exc):
+                raise
+            logger.warning(
+                "Goal-loop preview could not persist draft for session %s",
                 session_id,
-                str(project.get("id") or ""),
-                base_revision,
-                goal,
-                1 if goal_changed else 0,
-                _json_dumps(plan),
-                _json_dumps(acceptance),
-                _json_dumps(limits),
-                now.isoformat(),
-                expires_at.isoformat(),
-            ),
-        )
+            )
+            return _storage_busy_response()
         return {
             "ok": True,
             "draftId": draft_id,

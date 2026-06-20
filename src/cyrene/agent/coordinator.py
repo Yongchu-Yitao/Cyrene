@@ -337,6 +337,9 @@ async def _run_chat_agent(
     if _mode == "full_access":
         _state._temporary_full_access.set(True)
     behavior_turn_context: dict[str, Any] | None = None
+    dr_token = None
+    dr_first_token = None
+    cmd_token = None
     final_output = ""
     try:
         # 全局 short_term 只属于默认会话（旧 UI 单线程对话的跨重启恢复）。
@@ -769,9 +772,12 @@ async def _run_chat_agent(
                 _behavior_learning.clear_turn_context(behavior_turn_context)
             except Exception:
                 logger.debug("Failed to clear behavior-learning context", exc_info=True)
-        _current_command.reset(cmd_token)
-        _deep_research_mode.reset(dr_token)
-        _deep_research_first_round.reset(dr_first_token)
+        if cmd_token is not None:
+            _current_command.reset(cmd_token)
+        if dr_token is not None:
+            _deep_research_mode.reset(dr_token)
+        if dr_first_token is not None:
+            _deep_research_first_round.reset(dr_first_token)
         _ui_round_assistant_meta.reset(assistant_meta_token)
         _ui_round_hide_initial_detail.reset(hide_initial_detail_token)
         _pending_intermediate_user_replies.reset(intermediate_reply_token)

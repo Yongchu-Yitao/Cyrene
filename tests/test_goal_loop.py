@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sqlite3
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -177,6 +178,49 @@ def test_goal_loop_changed_goal_regenerates_plan_and_requires_full_access_confir
     assert preview.status_code == 200
     assert preview.json()["goalChanged"] is True
     assert preview.json()["plan"][0]["id"] == "new_step"
+
+
+def test_goal_loop_preview_returns_service_unavailable_before_generation_when_storage_is_busy(
+    monkeypatch,
+    tmp_path,
+):
+    from webui import routes
+    from webui import workbench_goal_loop as goal_loop
+
+    generation_called = False
+
+    async def fake_plan(*_args, **_kwargs):
+        nonlocal generation_called
+        generation_called = True
+        raise AssertionError("planning must not run while draft storage is busy")
+
+    original_execute = goal_loop._execute
+
+    async def locked_execute(db_path, sql, args=()):
+        if "DELETE FROM goal_loop_drafts" in sql:
+            raise sqlite3.OperationalError("database is locked")
+        return await original_execute(db_path, sql, args)
+
+    monkeypatch.setattr(routes, "_workbench_generate_plan_steps", fake_plan)
+    monkeypatch.setattr(goal_loop, "_execute", locked_execute)
+    app, _db_path, _store_path = _app(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/task-sessions/session_1/goal-loop/preview",
+        json={
+            "goal": "改为实现短信登录",
+            "maxRuntimeHours": 1,
+            "maxRepairRounds": 2,
+            "permissionMode": "auto",
+            "reflectionMode": "proactive",
+            "basePlanDefinitionRevision": 3,
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "goal_loop_storage_busy"
+    assert generation_called is False
 
 
 async def test_goal_loop_runner_reaches_review_only_after_independent_verification(monkeypatch, tmp_path):
