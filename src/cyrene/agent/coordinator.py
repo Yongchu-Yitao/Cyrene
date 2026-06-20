@@ -352,8 +352,14 @@ async def _run_chat_agent(
             if st:
                 history = [{"role": "system", "content": "[Restored context]\n" + st}]
                 restored_short_term = True
-        if ephemeral_system:
-            history = [*history, {"role": "system", "content": ephemeral_system}]
+        # ``ephemeral_system`` is NOT folded into ``history`` here. Doing so would
+        # park a non-persisted system block between the append-only history and the
+        # current turn; because it is stripped on save, next round the real history
+        # grows into that slot and the block's position shifts — diverging the prefix
+        # right after the static history and forcing the *entire previous round* to be
+        # re-processed as a cache miss. Instead it is pinned at the absolute tail of
+        # every LLM call inside ``_run_main_agent`` (option B), keeping the
+        # system+history prefix byte-stable so the prior round stays cached.
 
         if command != DEEP_REFLECT_COMMAND_ID:
             try:
@@ -711,9 +717,16 @@ async def _run_chat_agent(
         if _state._permission_mode.get() == "plan":
             from cyrene.agent.planning import run_plan_flow
             from cyrene.agent.message import _tool_result_requests_user_input
+            # Plan generation is single-shot (no multi-round tool loop), so prefix
+            # caching across rounds is moot here — fold the ephemeral block into the
+            # history tail so the planner still sees the project memory / task brief.
+            plan_history = (
+                [*history, {"role": "system", "content": ephemeral_system}]
+                if ephemeral_system else history
+            )
             main_text = await run_plan_flow(
                 user_message=user_message,
-                history=history,
+                history=plan_history,
                 round_id=round_id,
                 public_user_message=public_user_message,
                 public_attachments=public_attachments,
@@ -731,7 +744,7 @@ async def _run_chat_agent(
                 user_message, history, bot, chat_id, db_path, main_system,
                 client_request_id=client_request_id, persist_user_message=persist_user_message,
                 public_user_message=public_user_message, public_attachments=public_attachments, lang=lang,
-                system_context=main_system_context,
+                system_context=main_system_context, ephemeral_system=ephemeral_system,
             )
 
         if refresh_labels:

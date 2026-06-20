@@ -210,6 +210,19 @@ def test_workbench_artifact_rows_download_registered_files():
     assert "_workbench_artifact_download_target(project, session, artifact_id)" in routes
 
 
+def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+
+    tabs_rule = styles.split(".workbench-right-tabs {", 1)[1].split("}", 1)[0]
+    body_rule = styles.split(".workbench-right-body {", 1)[1].split("}", 1)[0]
+
+    assert "flex: 0 0 48px;" in tabs_rule
+    assert "flex: 1 1 auto;" in body_rule
+    assert "workbench.css?v=20260620-righttabs1" in index
+
+
 def test_linux_desktop_uses_native_frame_and_directory_picker():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
@@ -227,6 +240,20 @@ def test_linux_desktop_uses_native_frame_and_directory_picker():
     assert "await window.cyrene.pickDirectory()" in create
     assert 'window.cyrene.platform === "linux"' in chat
     assert "await window.cyrene.pickDirectory()" in chat
+
+
+def test_workbench_chat_directory_picker_falls_back_on_macos_and_lists_default_workspace():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    assert 'window.cyrene.platform === "linux"' in chat
+    assert 'fetch("/api/context/pick-directory", { method: "POST" })' in chat
+    assert "defaultWorkspacePath={wsDir}" in chat
+    assert "if (defaultWorkspacePath) workspaceOptions.push" in chat
+    assert 'wbcT("workbenchChat.defaultWorkspace", "Default workspace")' in chat
+    assert '"workbenchChat.defaultWorkspace": "Default workspace"' in i18n
+    assert '"workbenchChat.defaultWorkspace": "默认 workspace"' in i18n
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():

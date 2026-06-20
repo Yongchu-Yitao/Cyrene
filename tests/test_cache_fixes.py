@@ -17,6 +17,38 @@ from cyrene.agent import session as _agent_session
 from cyrene.agent import agent as _agent_core
 
 
+def test_normalized_usage_reads_provider_prompt_cache_fields():
+    from cyrene.call_llm import _normalized_usage
+
+    openai_usage = _normalized_usage(
+        {
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "total_tokens": 110,
+            "prompt_tokens_details": {"cached_tokens": 80},
+        },
+        [],
+        {},
+    )
+    anthropic_usage = _normalized_usage(
+        {
+            "input_tokens": 120,
+            "output_tokens": 12,
+            "cache_read_input_tokens": 90,
+            "cache_creation_input_tokens": 30,
+        },
+        [],
+        {},
+    )
+
+    assert openai_usage["prompt_cache_hit_tokens"] == 80
+    assert openai_usage["prompt_cache_miss_tokens"] == 20
+    assert anthropic_usage["prompt_tokens"] == 120
+    assert anthropic_usage["completion_tokens"] == 12
+    assert anthropic_usage["prompt_cache_hit_tokens"] == 90
+    assert anthropic_usage["prompt_cache_miss_tokens"] == 30
+
+
 def _patch(obj, attr, replacement):
     """Simple patch helper."""
     original = getattr(obj, attr)

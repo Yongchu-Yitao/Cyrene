@@ -229,6 +229,48 @@ function wbcSubagentStatusClass(status) {
   return "done";
 }
 
+// Deterministic per-agent accent colors for the subagent chat room. Defined here
+// (not shared with the legacy Chat UI's AGENT_COLORS in chat.jsx) so the two UIs
+// keep zero front-end coupling.
+var WBC_SUBAGENT_COLORS = [
+  "#3b82f6", "#e8734a", "#1f9d57", "#d94a8c", "#8b6cc4",
+  "#d9a64a", "#0ea5a3", "#c2570f", "#6366f1", "#7cb518",
+];
+
+function wbcAgentColor(agentId) {
+  var id = String(agentId || "");
+  var hash = 0;
+  for (var i = 0; i < id.length; i++) {
+    hash = ((hash << 5) - hash) + id.charCodeAt(i);
+    hash |= 0;
+  }
+  return WBC_SUBAGENT_COLORS[Math.abs(hash) % WBC_SUBAGENT_COLORS.length];
+}
+
+// Two-letter avatar initials from an agent id like "research_a" -> "RA".
+function wbcAgentInitials(name) {
+  var raw = String(name || "").trim();
+  if (!raw) return "?";
+  var parts = raw.split(/[\s_\-.]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return raw.slice(0, 2).toUpperCase();
+}
+
+// Highlight @mentions only when they name a known agent (or everyone), so the
+// pass never corrupts emails / links produced by the markdown renderer.
+function wbcHighlightMentions(html, agentIds) {
+  return String(html == null ? "" : html).replace(
+    /@([\w一-龥][\w.\-一-龥]*)/g,
+    function (full, name) {
+      var known = agentIds && agentIds.indexOf(name) >= 0;
+      if (known || name === "所有人" || name === "all" || name === "everyone") {
+        return '<span class="wbc-subagent-mention">@' + name + "</span>";
+      }
+      return full;
+    }
+  );
+}
+
 function wbcCompactNumber(value) {
   var num = Number(value || 0);
   if (!num) return "0";
@@ -1507,7 +1549,7 @@ function WbcTraceCard({ trace, live, label }) {
               <li key={i} className={isLast ? "active" : "done"}>
                 <span className="wbc-trace-mark">{isLast ? <span className="wb-spinner small" /> : WBC_ICONS.check}</span>
                 <span className="wbc-trace-text">
-                  {entry.tool || entry.text}
+                  {entry.kind === "tool" ? wbcT("toolName." + entry.text, entry.text) : entry.text}
                   {(entry.preview) ? <small>（{entry.preview}）</small> : null}
                 </span>
               </li>
@@ -1696,7 +1738,11 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
 
   function wbcPickWorkspace() {
     setCtxPickerOpen(false);
-    if (window.cyrene && typeof window.cyrene.pickDirectory === "function") {
+    if (
+      window.cyrene &&
+      window.cyrene.platform === "linux" &&
+      typeof window.cyrene.pickDirectory === "function"
+    ) {
       window.cyrene.pickDirectory().then(function (data) {
         if (data && data.path) wbcAddWorkspace(data.path);
       }).catch(function () {});
@@ -1782,6 +1828,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
                 <WbcCtxPicker
                   personaOn={personaOn}
                   workspaceOn={workspaceOn}
+                  defaultWorkspacePath={wsDir}
                   wsHistory={wsHistory}
                   onTogglePersona={wbcTogglePersona}
                   onAddWorkspace={wbcAddWorkspace}
@@ -1863,8 +1910,13 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
 
 // Context picker popup — shown inside the composer when the user clicks "+ Add context".
 // Fully independent from the legacy ModernContextPicker in chat-surface.jsx.
-function WbcCtxPicker({ personaOn, workspaceOn, wsHistory, onTogglePersona, onAddWorkspace, onPickWorkspace }) {
+function WbcCtxPicker({ personaOn, workspaceOn, defaultWorkspacePath, wsHistory, onTogglePersona, onAddWorkspace, onPickWorkspace }) {
   var hasAny = !personaOn || !workspaceOn;
+  var workspaceOptions = [];
+  if (defaultWorkspacePath) workspaceOptions.push({ path: defaultWorkspacePath, isDefault: true });
+  wsHistory.forEach(function (path) {
+    if (path && path !== defaultWorkspacePath) workspaceOptions.push({ path: path, isDefault: false });
+  });
   if (!hasAny) return null;
   return (
     <div className="wbc-popmenu wbc-ctx-picker">
@@ -1878,11 +1930,14 @@ function WbcCtxPicker({ personaOn, workspaceOn, wsHistory, onTogglePersona, onAd
       {!workspaceOn && (
         <React.Fragment>
           <div className="wbc-popmenu-head">{wbcT("workbenchChat.workspaceSection", "Workspace")}</div>
-          {wsHistory.map(function (p) {
+          {workspaceOptions.map(function (option) {
+            var p = option.path;
             var name = p.split("/").filter(Boolean).pop() || p;
             return (
               <button key={p} type="button" onClick={function () { onAddWorkspace(p); }}>
-                <span className="wbc-popmenu-label mono">{name}</span>
+                <span className="wbc-popmenu-label mono">
+                  {option.isDefault ? wbcT("workbenchChat.defaultWorkspace", "Default workspace") : name}
+                </span>
                 <span className="wbc-popmenu-desc">{p}</span>
               </button>
             );
@@ -1966,6 +2021,10 @@ function WbcSide({
   );
 }
 
+// Workbench subagent panel, styled as a read-only group chat room. The main
+// agent's delegated subagents appear as roster members; their inter-agent
+// messages and results stream as chat bubbles. Observational only — the
+// Workbench has no user→subagent send endpoint, so there is no composer.
 function WbcSubagentsTab({ data, loading, onSelectRound }) {
   var rounds = data && Array.isArray(data.rounds) ? data.rounds : [];
   var agents = data && Array.isArray(data.agents) ? data.agents : [];
@@ -1973,16 +2032,19 @@ function WbcSubagentsTab({ data, loading, onSelectRound }) {
   var activeRoundId = String((data && data.activeRoundId) || "");
   var [selectedAgentId, setSelectedAgentId] = useWbcState("");
 
-  useWbcEffect(function () {
-    if (!agents.some(function (agent) { return agent.id === selectedAgentId; })) {
-      setSelectedAgentId(agents[0] ? agents[0].id : "");
-    }
-  }, [activeRoundId, agents.map(function (agent) { return agent.id; }).join("|")]);
+  var roster = agents.map(function (agent) { return agent.id; }).join("|");
+  // Default to no focused agent; reset when the round / roster changes.
+  useWbcEffect(function () { setSelectedAgentId(""); }, [activeRoundId, roster]);
 
-  var selectedAgent = agents.find(function (agent) { return agent.id === selectedAgentId; }) || agents[0] || null;
+  var selectedAgent = agents.find(function (agent) { return agent.id === selectedAgentId; }) || null;
   var activeCount = agents.filter(function (agent) {
     return ["running", "resumed", "waiting"].indexOf(String(agent.status || "")) >= 0;
   }).length;
+  var activeRound = rounds.find(function (round) { return round.id === activeRoundId; }) || rounds[0] || null;
+
+  function focusAgent(id) {
+    setSelectedAgentId(id === selectedAgentId ? "" : id);
+  }
 
   if (loading && !rounds.length && !agents.length) {
     return (
@@ -1995,6 +2057,7 @@ function WbcSubagentsTab({ data, loading, onSelectRound }) {
   if (!rounds.length && !agents.length) {
     return (
       <div className="wbc-subagent-empty">
+        <span className="wbc-subagent-empty-glyph" aria-hidden="true">⠿</span>
         <b>{wbcT("workbenchChat.subagent.emptyTitle", "No subagents in this chat")}</b>
         <p>{wbcT("workbenchChat.subagent.emptyBody", "When the main agent delegates work, subagents and their results will appear here.")}</p>
       </div>
@@ -2003,19 +2066,20 @@ function WbcSubagentsTab({ data, loading, onSelectRound }) {
 
   return (
     <div className="wbc-subagent-page">
-      <section className="wbc-subagent-hero">
-        <div>
-          <span className="wbc-subagent-eyebrow">{wbcT("workbenchChat.subagent.workspace", "Agent workspace")}</span>
-          <b>{wbcT("workbenchChat.subagent.title", "Subagent activity")}</b>
+      <header className="wbc-subagent-bar">
+        <div className="wbc-subagent-bar-main">
+          <span className="wbc-subagent-eyebrow">{wbcT("workbenchChat.subagent.title", "Subagent activity")}</span>
+          <b title={activeRound ? activeRound.title : ""}>
+            {(activeRound && activeRound.title) || wbcT("workbenchChat.subagents", "Subagents")}
+          </b>
         </div>
-        {loading ? <span className="wbc-spinner" aria-hidden="true"></span> : null}
-      </section>
-
-      <div className="wbc-subagent-metrics">
-        <div><b>{agents.length}</b><span>{wbcT("workbenchChat.subagent.total", "Total")}</span></div>
-        <div><b>{activeCount}</b><span>{wbcT("workbenchChat.subagent.active", "Active")}</span></div>
-        <div><b>{messages.length}</b><span>{wbcT("workbenchChat.subagent.updates", "Updates")}</span></div>
-      </div>
+        <span className={"wbc-subagent-livepill " + (activeCount ? "live" : "idle")}>
+          <i aria-hidden="true"></i>
+          {activeCount
+            ? wbcT("workbenchChat.subagent.liveCount", "{n} working", { n: activeCount })
+            : wbcT("workbenchChat.subagent.complete", "Complete")}
+        </span>
+      </header>
 
       {rounds.length > 1 ? (
         <label className="wbc-subagent-round">
@@ -2028,85 +2092,214 @@ function WbcSubagentsTab({ data, loading, onSelectRound }) {
         </label>
       ) : null}
 
-      <section className="workbench-side-section wbc-subagent-section">
-        <div className="wbc-subagent-section-head">
-          <h3>{wbcT("workbenchChat.subagent.agents", "Agents")}</h3>
-          <span>{agents.length}</span>
-        </div>
-        <div className="wbc-subagent-list">
-          {agents.map(function (agent) {
-            var selected = selectedAgent && selectedAgent.id === agent.id;
-            return (
-              <button
-                key={agent.id}
-                type="button"
-                className={"wbc-subagent-card" + (selected ? " active" : "")}
-                onClick={function () { setSelectedAgentId(agent.id); }}
-              >
-                <span className={"wbc-subagent-status-dot " + wbcSubagentStatusClass(agent.status)}></span>
-                <span className="wbc-subagent-card-copy">
-                  <b title={agent.name}>{agent.name}</b>
-                  <small>{agent.task || wbcT("workbenchChat.subagent.noTask", "No task description")}</small>
-                </span>
-                <span className={"wbc-subagent-status " + wbcSubagentStatusClass(agent.status)}>
-                  {wbcSubagentStatusText(agent.status)}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
+      <WbcSubagentRoster agents={agents} selectedId={selectedAgentId} onSelect={focusAgent} />
 
       {selectedAgent ? (
-        <section className="workbench-side-section wbc-subagent-section">
-          <div className="wbc-subagent-section-head">
-            <h3>{wbcT("workbenchChat.subagent.details", "Agent details")}</h3>
-            <span className={"wbc-subagent-status " + wbcSubagentStatusClass(selectedAgent.status)}>
-              {wbcSubagentStatusText(selectedAgent.status)}
-            </span>
-          </div>
-          <div className="wbc-subagent-detail">
-            <label>{wbcT("workbenchChat.subagent.task", "Task")}</label>
-            <p>{selectedAgent.task || "—"}</p>
-            <label>{wbcT("workbenchChat.subagent.result", "Result")}</label>
-            {selectedAgent.result ? (
-              <div className="markdown wbc-subagent-result" dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(selectedAgent.result) }} />
-            ) : (
-              <p className="workbench-muted">{wbcT("workbenchChat.subagent.resultPending", "No result yet.")}</p>
-            )}
-          </div>
-        </section>
+        <WbcSubagentSpotlight agent={selectedAgent} onClose={function () { setSelectedAgentId(""); }} />
       ) : null}
 
-      <section className="workbench-side-section wbc-subagent-section">
-        <div className="wbc-subagent-section-head">
-          <h3>{wbcT("workbenchChat.subagent.timeline", "Activity")}</h3>
-          <span>{messages.length}</span>
-        </div>
-        {messages.length ? (
-          <div className="wbc-subagent-timeline">
-            {messages.map(function (message, index) {
-              var isResult = message.type === "result";
-              return (
-                <article className={"wbc-subagent-event" + (isResult ? " result" : "")} key={message.id || index}>
-                  <span className="wbc-subagent-event-mark"></span>
-                  <div>
-                    <header>
-                      <b>{message.from || wbcT("workbenchChat.subagent.system", "System")}</b>
-                      {message.to ? <span>→ {message.to}</span> : null}
-                      <time>{wbcFormatTime(message.timestamp)}</time>
-                    </header>
-                    <div className="markdown" dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(message.content || "") }} />
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="workbench-muted">{wbcT("workbenchChat.subagent.noActivity", "No messages recorded for this round.")}</p>
-        )}
-      </section>
+      <WbcSubagentStream
+        messages={messages}
+        agents={agents}
+        active={activeCount > 0}
+        selectedId={selectedAgentId}
+        onSelectAgent={focusAgent}
+      />
     </div>
+  );
+}
+
+// Horizontal avatar strip of the round's subagents — the chat room's member list.
+function WbcSubagentRoster({ agents, selectedId, onSelect }) {
+  return (
+    <div className="wbc-subagent-roster">
+      {agents.map(function (agent) {
+        var color = wbcAgentColor(agent.id);
+        var statusCls = wbcSubagentStatusClass(agent.status);
+        var name = agent.name || agent.id;
+        return (
+          <button
+            key={agent.id}
+            type="button"
+            className={"wbc-subagent-chip" + (agent.id === selectedId ? " active" : "")}
+            style={{ "--wb-agent-color": color }}
+            onClick={function () { onSelect(agent.id); }}
+            title={name + " · " + wbcSubagentStatusText(agent.status)}
+          >
+            <span className="wbc-subagent-avatar" style={{ background: color }}>
+              {wbcAgentInitials(name)}
+              <i className={"wbc-subagent-avatar-dot " + statusCls} aria-hidden="true"></i>
+            </span>
+            <span className="wbc-subagent-chip-name">{name}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Focused-agent card: its task brief and (when available) full result.
+function WbcSubagentSpotlight({ agent, onClose }) {
+  var color = wbcAgentColor(agent.id);
+  var name = agent.name || agent.id;
+  return (
+    <section className="wbc-subagent-spotlight" style={{ "--wb-agent-color": color }}>
+      <header>
+        <span className="wbc-subagent-avatar lg" style={{ background: color }}>{wbcAgentInitials(name)}</span>
+        <div className="wbc-subagent-spotlight-id">
+          <b title={name}>{name}</b>
+          <span className={"wbc-subagent-status " + wbcSubagentStatusClass(agent.status)}>
+            {wbcSubagentStatusText(agent.status)}
+          </span>
+        </div>
+        <button type="button" className="wbc-subagent-spotlight-close" onClick={onClose} aria-label={wbcT("workbenchChat.subagent.close", "Close")}>×</button>
+      </header>
+      <div className="wbc-subagent-spotlight-body">
+        <label>{wbcT("workbenchChat.subagent.task", "Task")}</label>
+        <p>{agent.task || "—"}</p>
+        <label>{wbcT("workbenchChat.subagent.result", "Result")}</label>
+        {agent.result ? (
+          <div className="markdown wbc-subagent-result" dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(agent.result) }} />
+        ) : (
+          <p className="workbench-muted">{wbcT("workbenchChat.subagent.resultPending", "No result yet.")}</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// Scrolling chat transcript of inter-agent messages and results.
+function WbcSubagentStream({ messages, agents, active, selectedId, onSelectAgent }) {
+  var scrollRef = useWbcRef(null);
+  var atBottomRef = useWbcRef(true);
+  var initedRef = useWbcRef(false);
+
+  function handleScroll() {
+    var el = scrollRef.current;
+    if (!el) return;
+    atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 48;
+  }
+
+  // First render jumps to the latest message; later updates only follow when the
+  // reader is already near the bottom.
+  useWbcEffect(function () {
+    var el = scrollRef.current;
+    if (!el) return;
+    if (!initedRef.current) {
+      initedRef.current = true;
+      el.scrollTop = el.scrollHeight;
+      atBottomRef.current = true;
+      return;
+    }
+    if (atBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [messages.length]);
+
+  var nameById = {};
+  var agentIds = [];
+  agents.forEach(function (agent) { nameById[agent.id] = agent.name || agent.id; agentIds.push(agent.id); });
+
+  if (!messages.length) {
+    return (
+      <div className="wbc-subagent-stream is-empty">
+        <div className="wbc-subagent-stream-empty">
+          {active ? (
+            <span className="wbc-subagent-typing">
+              <i></i><i></i><i></i>
+              {wbcT("workbenchChat.subagent.working", "Subagents are working…")}
+            </span>
+          ) : (
+            wbcT("workbenchChat.subagent.noActivity", "No messages recorded for this round.")
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  var rows = [];
+  var prevFrom = null;
+  var prevTs = null;
+  for (var i = 0; i < messages.length; i++) {
+    var msg = messages[i];
+    if (prevTs && msg.timestamp) {
+      try {
+        if (new Date(msg.timestamp) - new Date(prevTs) > 300000) {
+          rows.push(<div className="wbc-subagent-timesep" key={"ts_" + i}><span>{wbcFormatTime(msg.timestamp)}</span></div>);
+          prevFrom = null;
+        }
+      } catch (e) { /* unparseable timestamp — skip separator */ }
+    }
+    rows.push(
+      <WbcSubagentBubble
+        key={msg.id || i}
+        msg={msg}
+        name={nameById[msg.from] || msg.from}
+        agentIds={agentIds}
+        grouped={prevFrom === msg.from && msg.from}
+        dimmed={!!selectedId && msg.from !== selectedId}
+        onSelectAgent={onSelectAgent}
+      />
+    );
+    prevFrom = msg.from;
+    prevTs = msg.timestamp;
+  }
+
+  return (
+    <div className="wbc-subagent-stream" ref={scrollRef} onScroll={handleScroll}>
+      {rows}
+    </div>
+  );
+}
+
+// A single transcript entry: agent message, broadcast, result card, or system note.
+function WbcSubagentBubble({ msg, name, agentIds, grouped, dimmed, onSelectAgent }) {
+  var kind = String(msg.type || "message");
+  var from = String(msg.from || "");
+  var color = wbcAgentColor(from);
+  var html = wbcHighlightMentions(wbcRenderMarkdown(msg.content || ""), agentIds);
+
+  if (!from) {
+    return <div className="wbc-subagent-syssep"><span dangerouslySetInnerHTML={{ __html: html }} /></div>;
+  }
+
+  if (kind === "result") {
+    return (
+      <article className={"wbc-subagent-msg result" + (dimmed ? " dimmed" : "")} style={{ "--wb-agent-color": color }}>
+        <div className="wbc-subagent-msg-head">
+          <span className="wbc-subagent-avatar sm" style={{ background: color }}>{wbcAgentInitials(name)}</span>
+          <b>{name}</b>
+          <span className="wbc-subagent-tag result">{wbcT("workbenchChat.subagent.result", "Result")}</span>
+          <time>{wbcFormatTime(msg.timestamp)}</time>
+        </div>
+        <div className="wbc-subagent-bubble result markdown" dangerouslySetInnerHTML={{ __html: html }} />
+      </article>
+    );
+  }
+
+  var isBroadcast = kind === "broadcast" || String(msg.to || "") === "all";
+  var toUser = String(msg.to || "") === "user";
+
+  return (
+    <article className={"wbc-subagent-msg" + (grouped ? " grouped" : "") + (dimmed ? " dimmed" : "")} style={{ "--wb-agent-color": color }}>
+      {grouped ? (
+        <span className="wbc-subagent-avatar-spacer" aria-hidden="true"></span>
+      ) : (
+        <button type="button" className="wbc-subagent-avatar sm" style={{ background: color }}
+          onClick={function () { onSelectAgent && onSelectAgent(from); }} title={name}>
+          {wbcAgentInitials(name)}
+        </button>
+      )}
+      <div className="wbc-subagent-msg-body">
+        {grouped ? null : (
+          <div className="wbc-subagent-msg-head">
+            <b style={{ color: color }}>{name}</b>
+            {isBroadcast ? <span className="wbc-subagent-tag broadcast">{wbcT("workbenchChat.subagent.broadcast", "Broadcast")}</span> : null}
+            {toUser ? <span className="wbc-subagent-tag touser">{wbcT("workbenchChat.subagent.toUser", "To you")}</span> : null}
+            <time>{wbcFormatTime(msg.timestamp)}</time>
+          </div>
+        )}
+        <div className="wbc-subagent-bubble markdown" dangerouslySetInnerHTML={{ __html: html }} />
+      </div>
+    </article>
   );
 }
 

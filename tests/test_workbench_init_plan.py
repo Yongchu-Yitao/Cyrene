@@ -683,6 +683,185 @@ async def test_workbench_explore_agent_repairs_malformed_json_once(monkeypatch):
     assert responses == []
 
 
+async def test_workbench_plan_revision_reuses_thread_without_tools(monkeypatch, tmp_path):
+    from webui import routes
+
+    (tmp_path / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    revision = routes._workbench_workspace_revision(tmp_path)
+    previous_messages = [
+        {"role": "system", "content": routes._WORKBENCH_PLANNER_SYSTEM_PROMPT},
+        {"role": "user", "content": "initial task"},
+        {
+            "role": "assistant",
+            "content": (
+                '{"goal":"完成登录","revisionMode":"revise","steps":'
+                '[{"sourceStepId":null,"title":"实现登录","description":"修改 app.py",'
+                '"dependsOnStepIndexes":[]}],"acceptanceCriteria":["登录可用"]}'
+            ),
+        },
+    ]
+    session = {
+        "id": "task_1",
+        "title": "实现登录",
+        "goal": "完成登录",
+        "constraints": [],
+        "plan": [{"id": "step_1", "title": "实现登录", "description": "修改 app.py", "status": "pending"}],
+        "acceptanceCriteria": [],
+        "planningThread": {
+            "id": "planning_1",
+            "contractVersion": routes._WORKBENCH_PLANNER_CONTRACT_VERSION,
+            "messages": previous_messages,
+            "observationCache": {},
+            "inspectedResources": {},
+            "metrics": [],
+            "workspaceRevision": revision,
+        },
+    }
+    captured = {}
+
+    async def fake_llm(messages, tools=None, **kwargs):
+        captured["messages"] = [dict(message) for message in messages]
+        captured["tools"] = tools
+        return {
+            "content": (
+                '{"goal":"完成登录","revisionMode":"revise","steps":'
+                '[{"sourceStepId":"step_1","title":"实现登录","description":"补充错误处理",'
+                '"dependsOnStepIndexes":[]}],"acceptanceCriteria":["登录可用"]}'
+            ),
+            "tool_calls": [],
+            "usage": {"prompt_tokens": 100, "prompt_cache_hit_tokens": 80},
+        }
+
+    monkeypatch.setattr(routes, "_call_llm", fake_llm)
+
+    _steps, _acceptance, from_llm, operation = await routes._workbench_generate_plan_steps(
+        session,
+        {"workspacePath": str(tmp_path)},
+        feedback="把第一步描述详细一点",
+        requested_operation="revise",
+    )
+
+    assert from_llm is True
+    assert operation == "revise"
+    assert captured["tools"] is None
+    assert captured["messages"][:3] == previous_messages
+    assert captured["messages"][-1]["role"] == "user"
+    assert session["planningThread"]["lastToolBundleVersion"] == routes._WORKBENCH_PLANNER_NO_TOOLS_VERSION
+    assert session["planningThread"]["metrics"][-1]["cachedTokens"] == 80
+
+
+async def test_workbench_plan_revision_explores_after_workspace_change(monkeypatch, tmp_path):
+    from webui import routes
+
+    target = tmp_path / "app.py"
+    target.write_text("print('old')\n", encoding="utf-8")
+    old_revision = routes._workbench_workspace_revision(tmp_path)
+    target.write_text("print('new version')\n", encoding="utf-8")
+    session = {
+        "id": "task_1",
+        "title": "实现登录",
+        "goal": "完成登录",
+        "constraints": [],
+        "plan": [{"id": "step_1", "title": "实现登录", "status": "pending"}],
+        "acceptanceCriteria": [],
+        "planningThread": {
+            "id": "planning_1",
+            "contractVersion": routes._WORKBENCH_PLANNER_CONTRACT_VERSION,
+            "messages": [
+                {"role": "system", "content": routes._WORKBENCH_PLANNER_SYSTEM_PROMPT},
+                {"role": "user", "content": "initial"},
+                {"role": "assistant", "content": "{}"},
+            ],
+            "observationCache": {},
+            "inspectedResources": {},
+            "metrics": [],
+            "workspaceRevision": old_revision,
+        },
+    }
+    captured = {}
+
+    async def fake_llm(messages, tools=None, **kwargs):
+        captured["tools"] = tools
+        return {
+            "content": (
+                '{"goal":"完成登录","revisionMode":"revise","steps":'
+                '[{"sourceStepId":"step_1","title":"实现登录","description":"按新代码调整",'
+                '"dependsOnStepIndexes":[]}],"acceptanceCriteria":["登录可用"]}'
+            ),
+            "tool_calls": [],
+        }
+
+    monkeypatch.setattr(routes, "_call_llm", fake_llm)
+
+    await routes._workbench_generate_plan_steps(
+        session,
+        {"workspacePath": str(tmp_path)},
+        feedback="调整计划",
+        requested_operation="revise",
+    )
+
+    assert captured["tools"] == routes._WORKBENCH_EXPLORE_TOOLS
+
+
+async def test_workbench_read_file_observation_cache_and_runtime_dedup(monkeypatch, tmp_path):
+    from webui import routes
+
+    target = tmp_path / "notes.txt"
+    target.write_text("0123456789", encoding="utf-8")
+    tc = {
+        "id": "call_1",
+        "function": {
+            "name": "read_file",
+            "arguments": '{"path":"notes.txt","offset":2,"limit":4}',
+        },
+    }
+    observation_cache = {}
+    inspected = {}
+    metrics = {}
+    revision = routes._workbench_workspace_revision(tmp_path)
+
+    first_runtime = {}
+    first = await routes._workbench_exec_explore_tool(
+        tc,
+        tmp_path,
+        observation_cache=observation_cache,
+        runtime_cache=first_runtime,
+        metrics=metrics,
+        workspace_revision=revision,
+        inspected_resources=inspected,
+    )
+    duplicate = await routes._workbench_exec_explore_tool(
+        tc,
+        tmp_path,
+        observation_cache=observation_cache,
+        runtime_cache=first_runtime,
+        metrics=metrics,
+        workspace_revision=revision,
+        inspected_resources=inspected,
+    )
+
+    assert first == "2345\n\n...(truncated; next offset=6)"
+    assert duplicate == first
+    assert metrics["duplicateCallsBlocked"] == 1
+
+    def fail_read_text(*args, **kwargs):
+        raise AssertionError("cached file range must not be read again")
+
+    monkeypatch.setattr(Path, "read_text", fail_read_text)
+    second = await routes._workbench_exec_explore_tool(
+        tc,
+        tmp_path,
+        observation_cache=observation_cache,
+        runtime_cache={},
+        metrics=metrics,
+        workspace_revision=revision,
+        inspected_resources=inspected,
+    )
+
+    assert second == first
+    assert metrics["workspaceCacheHits"] == 1
+
+
 async def test_workbench_plan_agent_returns_fresh_acceptance_criteria(monkeypatch, tmp_path):
     from webui import routes
 
@@ -933,18 +1112,27 @@ async def test_workbench_explicit_regeneration_hides_old_plan(monkeypatch):
     assert [item["text"] for item in acceptance] == ["替代方案通过验证"]
     assert len(prompts) == 1
     assert "当前已有执行计划" not in prompts[0]
-    assert "如果新目标仍涉及当前项目，应主动检查必要的工作区内容" in prompts[0]
-    assert "如果新目标明确与当前项目无关，则不要探索工作区" in prompts[0]
+    # Regeneration still re-decomposes from the goal; the exploration policy and
+    # JSON schema now live in the planner system prompt, so the per-call message
+    # only carries the regeneration directive plus the bundle-aware tool directive
+    # (empty workspace here -> no-tools bundle).
+    assert "重新生成" in prompts[0]
+    assert "至少一半步骤" in prompts[0]
+    assert "本次不提供工作区探索工具" in prompts[0]
 
 
 async def test_workbench_plan_prompt_leaves_workspace_exploration_to_agent(monkeypatch, tmp_path):
     from webui import routes
 
+    # Non-empty workspace so the no-tools decision comes from the task being
+    # explicitly project-independent, not merely from an empty workspace.
+    (tmp_path / "app.py").write_text("print('x')\n", encoding="utf-8")
     captured = {}
 
     async def fake_agent(workspace_root, prompt, **kwargs):
         captured["workspace_root"] = workspace_root
         captured["prompt"] = prompt
+        captured["tool_bundle_version"] = kwargs.get("tool_bundle_version")
         return {
             "steps": [
                 {"title": "明确目标", "description": "梳理计划目标"},
@@ -969,12 +1157,13 @@ async def test_workbench_plan_prompt_leaves_workspace_exploration_to_agent(monke
         {"workspacePath": str(tmp_path)},
     )
 
+    # An explicitly project-independent task gets the no-tools bundle, and the
+    # per-call prompt must not advertise exploration tools it cannot use (M1).
+    assert captured["tool_bundle_version"] == routes._WORKBENCH_PLANNER_NO_TOOLS_VERSION
     prompt = captured["prompt"]
-    assert "新项目初始化、项目开发、代码修改、项目分析" in prompt
-    assert "应主动探索工作区" in prompt
-    assert "与当前项目或本地文件无关的计划" in prompt
-    assert "不要读取、列举或搜索工作区" in prompt
-    assert "根据目标、上下文和已有计划自行判断" in prompt
+    assert "本次不提供工作区探索工具" in prompt
+    assert "你可以使用" not in prompt
+    assert "list_directory" not in prompt
 
 
 async def test_workbench_auto_start_acceptance_uses_derived_goal(monkeypatch):

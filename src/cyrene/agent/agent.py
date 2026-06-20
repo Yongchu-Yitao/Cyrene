@@ -157,10 +157,29 @@ async def _run_main_agent(
     public_attachments: list[dict[str, Any]] | None = None,
     lang: str = "",
     system_context: list[dict[str, Any]] | None = None,
+    ephemeral_system: str = "",
 ) -> str:
     _caller_type.set("main_agent")
     suppress_initial_detail = _ui_round_hide_initial_detail.get()
     round_id = _current_round_id.get()
+
+    # Option B prefix-cache discipline: the per-run ephemeral block (Workbench task
+    # brief / project memory / reflection seed) is pinned at the ABSOLUTE tail of
+    # every LLM call rather than parked between history and the current turn. Since
+    # it is re-appended at call time (never stored in ``messages``/history), the
+    # append-only system+history prefix stays byte-identical across rounds, so the
+    # previous round remains a cache hit instead of being re-processed from scratch.
+    def _pin_tail(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if ephemeral_system:
+            return [*msgs, {"role": "system", "content": ephemeral_system}]
+        return msgs
+
+    # Freeze the tool set for this whole run. ``get_active_tool_defs()`` re-reads
+    # enablement flags + lazily-loaded MCP tools on every call; if that list changes
+    # mid-run (an MCP server finishes connecting, a flag is toggled) the tool block
+    # — part of the cached prefix — shifts and invalidates the cache. Snapshot once.
+    active_tool_defs = get_active_tool_defs()
+
     visible_user_message = user_message if public_user_message is None else str(public_user_message)
     user_message_id = f"user_{uuid4().hex}"
     user_entry = {"role": "user", "content": visible_user_message, "message_id": user_message_id}
@@ -306,7 +325,7 @@ async def _run_main_agent(
         return str(routed["final_text"] or "Done.")
 
     # Phase 1: lightweight decision
-    response = await _call_llm(project_history_for_llm(phase1_messages), tools=phase1_tools)
+    response = await _call_llm(_pin_tail(project_history_for_llm(phase1_messages)), tools=phase1_tools)
     tool_calls = response.get("tool_calls") or []
     dr_tools = {"ask_user", "quit"}
     general_tools = {"use_tools", "ask_user", "quit"}
@@ -336,7 +355,7 @@ async def _run_main_agent(
                 ),
             },
         ]
-        response = await _call_llm(project_history_for_llm(retry_messages), tools=phase1_tools)
+        response = await _call_llm(_pin_tail(project_history_for_llm(retry_messages)), tools=phase1_tools)
     tool_calls = response.get("tool_calls") or []
     messages = [system_entry, *history, llm_user_entry]
     assistant_entry = _assistant_entry_from_response(response, round_id)
@@ -389,7 +408,7 @@ async def _run_main_agent(
         messages = [system_entry, *history, dict(llm_user_entry)]
 
         for _ in range(_get_max_tool_rounds()):
-            response = await _call_llm(project_history_for_llm(messages), tools=get_active_tool_defs())
+            response = await _call_llm(_pin_tail(project_history_for_llm(messages)), tools=active_tool_defs)
             entry: dict = {"role": "assistant", "content": response.get("content") or ""}
             if response.get("reasoning_content"):
                 entry["reasoning_content"] = response["reasoning_content"]
@@ -721,7 +740,7 @@ async def _run_main_agent(
                 ),
             },
         ]
-        response = await _call_llm(project_history_for_llm(retry_messages), tools=phase1_tools)
+        response = await _call_llm(_pin_tail(project_history_for_llm(retry_messages)), tools=phase1_tools)
         for tc in (response.get("tool_calls") or []):
             if tc.get("function", {}).get("name") == "ask_user":
                 ask_user_call = tc

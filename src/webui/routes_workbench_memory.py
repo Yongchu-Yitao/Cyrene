@@ -280,9 +280,16 @@ _EXTRACT_PROMPT = """\
 如果没有值得长期记住的内容，就返回空列表。
 
 每条记忆的字段：
-- content: 一句话，用第二人称"你"来描述用户（例如"你偏好简洁、结构化的回答"）。简洁、自包含、不含具体某次任务的临时细节。
-- category: 从这五个里选一个 —— preference（个人偏好）/ project（项目背景）/ habit（工作习惯）/ fact（事实信息）/ conversation（对话记忆）
+- content: %(content_lang_hint)s。简洁、自包含、不含具体某次任务的临时细节。
+- category: 从这五个里选一个——按优先级依次判断：
+  * preference —— 用户的静态口味/长期偏好（例：偏好简洁回答、喜欢深色主题）
+  * project   —— 用户长期正在做/维护的项目或工作主线（例：正在优化 CIFAR-10 分类器 v2）
+  * habit     —— 用户可重复观察到的行为模式（例：习惯让 subagent 执行任务后看汇总）
+  * fact      —— 用户的客观背景信息（例：是数据科学家、使用 Mac M2）
+  * conversation —— 仅当以上四类均不适用时才选，用于一次性情绪/互动状态
 - confidence: high / medium / low（这条信息的可靠程度）
+
+%(output_lang_line)s
 
 只输出 JSON，不要解释，格式如下：
 {"memories": [{"content": "...", "category": "preference", "confidence": "high"}]}
@@ -338,8 +345,19 @@ async def _extract_memories_llm(user_text: str, agent_text: str) -> list[dict]:
     """Ask the LLM to distill durable memories from one exchange."""
     from cyrene.agent.state import _call_llm, _caller_type
     from cyrene.llm import _assistant_text
+    from cyrene.settings_store import get as _get_setting
+
+    lang = str(_get_setting("app_language", "") or "").strip().lower()
+    if lang == "en":
+        content_lang_hint = 'one sentence describing the user in second person "you" (e.g. "You prefer concise answers"). Write in English'
+        output_lang_line = "IMPORTANT: Write every 'content' value in English."
+    else:
+        content_lang_hint = '一句话，用第二人称"你"描述用户（例："你偏好简洁、结构化的回答"），必须用中文书写'
+        output_lang_line = "重要：所有 content 字段必须用中文书写，不得使用英文。"
 
     prompt = _EXTRACT_PROMPT % {
+        "content_lang_hint": content_lang_hint,
+        "output_lang_line": output_lang_line,
         "user": user_text[:1500],
         "agent": agent_text[:1500] or "（无回复）",
     }

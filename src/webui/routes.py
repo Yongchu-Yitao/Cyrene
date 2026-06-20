@@ -4,6 +4,7 @@ import asyncio
 import base64
 import difflib
 import getpass
+import hashlib
 import json
 import logging
 import mimetypes
@@ -124,6 +125,42 @@ _WORKBENCH_STORE = DATA_DIR / "workbench_projects.json"
 _WORKBENCH_STORE_LOCK = threading.RLock()
 _SERVER_STARTED_AT = time.time()
 _WORKBENCH_LEGACY_DATA_KEY = "default"
+
+_WORKBENCH_PLANNER_CONTRACT_VERSION = "planner-contract-v1"
+_WORKBENCH_PLANNER_NO_TOOLS_VERSION = "planner-no-tools-v1"
+_WORKBENCH_PLANNER_EXPLORE_VERSION = "planner-explore-v1"
+_WORKBENCH_PLANNING_THREAD_MAX_CHARS = 120_000
+_WORKBENCH_PLANNER_SYSTEM_PROMPT = """你是任务执行规划 Agent。你的职责是根据任务目标、约束、已有计划、用户反馈和已经确认的工作区事实，生成完整、可执行、可核验的计划。
+
+工作区探索规则：
+- 只有当计划质量依赖尚未确认的项目事实、用户引入新文件/新模块，或工作区自上次规划后发生变化时才探索。
+- 已经观察且指纹未变化的资源不得重复读取。
+- 局部修改步骤、描述、顺序、依赖或验收标准时，优先基于已有上下文直接修订。
+- “重新生成”只表示重新拆解计划，不自动等于重新探索工作区。
+- 与本地项目无关的任务不得探索工作区。
+
+修订规则：
+- revise：保留未被反馈影响的步骤，返回完整修订计划；保留或修改的步骤用 sourceStepId 对应原步骤。
+- replace：从最终目标重新拆解，不保留旧步骤，sourceStepId 使用 null。
+- goal 表示应用本次反馈后的最终目标；反馈未改变目标时原样保留。
+
+只输出一个合法 JSON 对象，不要输出 Markdown 或解释。结构：
+{
+  "goal": "最终任务目标",
+  "title": "仅直接开始任务需要，可省略",
+  "revisionMode": "revise|replace",
+  "steps": [
+    {
+      "sourceStepId": "原步骤 id 或 null",
+      "title": "简洁的动宾短语",
+      "description": "具体工作、涉及的真实文件或模块",
+      "dependsOnStepIndexes": [1]
+    }
+  ],
+  "acceptanceCriteria": ["可独立核验的结果标准"]
+}
+
+生成 3-7 个步骤和 3-8 条验收标准。dependsOnStepIndexes 使用当前返回列表中的 1-based 序号，只能引用前面的步骤；无依赖时返回空数组。全部使用简体中文。"""
 
 
 def _safe_workbench_data_key(value: Any) -> str:
@@ -865,13 +902,26 @@ _WORKBENCH_EXPLORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取工作区中指定文本文件的内容（最多 4000 字符）。二进制文件会提示不可读。",
+            "description": "按字符范围读取工作区中的文本文件。优先读取尚未观察的范围；二进制文件会提示不可读。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
                         "description": "相对于工作区根目录的文件路径，例如 'README.md' 或 'src/main.py'",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0,
+                        "description": "从第几个字符开始读取，默认 0",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 12000,
+                        "default": 4000,
+                        "description": "最多读取多少字符，默认 4000",
                     },
                 },
                 "required": ["path"],
@@ -992,7 +1042,205 @@ async def _workbench_repair_json_response(
     return _workbench_parse_json_object(repaired.get("content") or "")
 
 
-async def _workbench_exec_explore_tool(tc: dict, workspace_root: Path | None) -> str:
+def _workbench_stable_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _workbench_hash_json(value: Any) -> str:
+    return hashlib.sha256(_workbench_stable_json(value).encode("utf-8")).hexdigest()
+
+
+def _workbench_workspace_state(
+    workspace_root: Path | None,
+) -> tuple[str, dict[str, str]]:
+    """Cheap tree revision used to invalidate directory/glob observations.
+
+    File observations still carry a content SHA-256. The tree revision uses
+    names, types, sizes and mtimes so an unchanged workspace can be recognized
+    without rereading every file body before each planning revision.
+    """
+    if not workspace_root or not workspace_root.is_dir():
+        return "missing", {}
+    digest = hashlib.sha256()
+    snapshot: dict[str, str] = {}
+    try:
+        for root, dirs, files in os.walk(workspace_root):
+            dirs[:] = sorted(
+                name for name in dirs
+                if not name.startswith(".") and name not in _WORKBENCH_EMPTY_WORKSPACE_SKIP_DIRS
+            )
+            root_path = Path(root)
+            for name in dirs:
+                path = root_path / name
+                rel = path.relative_to(workspace_root).as_posix()
+                try:
+                    stat = path.stat()
+                    row = ("d", rel, stat.st_mtime_ns)
+                except OSError:
+                    row = ("d", rel, 0)
+                digest.update(_workbench_stable_json(row).encode("utf-8"))
+                if len(snapshot) < 5000:
+                    snapshot[rel + "/"] = f"d:{row[-1]}"
+            for name in sorted(files):
+                if name.startswith("."):
+                    continue
+                path = root_path / name
+                rel = path.relative_to(workspace_root).as_posix()
+                try:
+                    stat = path.stat()
+                    row = ("f", rel, stat.st_size, stat.st_mtime_ns)
+                except OSError:
+                    row = ("f", rel, 0, 0)
+                digest.update(_workbench_stable_json(row).encode("utf-8"))
+                if len(snapshot) < 5000:
+                    snapshot[rel] = f"f:{row[-2]}:{row[-1]}"
+    except OSError:
+        return "unavailable", {}
+    return digest.hexdigest(), snapshot
+
+
+def _workbench_workspace_revision(workspace_root: Path | None) -> str:
+    return _workbench_workspace_state(workspace_root)[0]
+
+
+def _workbench_planning_thread(
+    session: dict[str, Any],
+    workspace_root: Path | None,
+) -> dict[str, Any]:
+    raw = session.get("planningThread")
+    thread = raw if isinstance(raw, dict) else {}
+    current_root = str(workspace_root or "")
+    if thread and str(thread.get("workspaceRoot") or "") not in ("", current_root):
+        thread = {}
+    if str(thread.get("contractVersion") or "") != _WORKBENCH_PLANNER_CONTRACT_VERSION:
+        thread = {}
+    thread.setdefault("id", _short_id("planning"))
+    thread["contractVersion"] = _WORKBENCH_PLANNER_CONTRACT_VERSION
+    thread.setdefault("messages", [])
+    thread.setdefault("observationCache", {})
+    thread.setdefault("inspectedResources", {})
+    thread.setdefault("metrics", [])
+    thread["workspaceRoot"] = current_root
+    session["planningThread"] = thread
+    return thread
+
+
+def _workbench_planning_checkpoint(
+    thread: dict[str, Any],
+    latest_assistant_content: str,
+) -> list[dict[str, Any]]:
+    inspected = thread.get("inspectedResources")
+    checkpoint = {
+        "type": "planning_checkpoint",
+        "goal": thread.get("goal") or "",
+        "constraints": thread.get("constraints") or [],
+        "currentPlan": thread.get("currentPlan") or [],
+        "workspaceRevision": thread.get("workspaceRevision") or "",
+        "inspectedResources": inspected if isinstance(inspected, dict) else {},
+        "confirmedFacts": thread.get("confirmedFacts") or [],
+        "userDecisions": thread.get("userDecisions") or [],
+        "doNotRepeat": sorted((inspected or {}).keys()) if isinstance(inspected, dict) else [],
+    }
+    return [
+        {"role": "system", "content": _WORKBENCH_PLANNER_SYSTEM_PROMPT},
+        {"role": "user", "content": _workbench_stable_json(checkpoint)},
+        {"role": "assistant", "content": latest_assistant_content},
+    ]
+
+
+def _workbench_planning_context_chars(messages: list[dict[str, Any]]) -> int:
+    return sum(len(_workbench_stable_json(message)) for message in messages)
+
+
+def _workbench_maybe_compact_planning_thread(thread: dict[str, Any]) -> None:
+    messages = thread.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return
+    if not thread.pop("compactionPending", False):
+        return
+    latest_content = str(messages[-1].get("content") or "") if isinstance(messages[-1], dict) else ""
+    thread["messages"] = _workbench_planning_checkpoint(thread, latest_content)
+    thread["compactionCount"] = int(thread.get("compactionCount") or 0) + 1
+
+
+def _workbench_feedback_needs_workspace(
+    feedback: str,
+    *,
+    requested_operation: str,
+) -> bool:
+    text = str(feedback or "").strip()
+    if not text:
+        return False
+    resource_signal = re.search(
+        r"([A-Za-z0-9_.-]+[/\\][A-Za-z0-9_./\\-]+|"
+        r"\.(?:py|js|jsx|ts|tsx|java|go|rs|rb|php|swift|kt|md|toml|json|ya?ml)\b|"
+        r"新(?:文件|目录|模块|组件|接口|服务)|新增(?:文件|目录|模块|组件)|"
+        r"代码库|源码|工作区|项目结构|实际文件|先检查|先读取|查看文件|重新扫描)",
+        text,
+        re.IGNORECASE,
+    )
+    if resource_signal:
+        return True
+    local_edit_only = re.search(
+        r"(步骤|顺序|依赖|描述|标题|验收|删除|移除|合并|拆分|调序|提前|延后|"
+        r"第[一二三四五六七八九十\d]+步|保留原计划|改写|精简|详细一点)",
+        text,
+    )
+    if local_edit_only:
+        return False
+    # A replacement changes the decomposition, not necessarily workspace facts.
+    if requested_operation == "replace":
+        return False
+    return False
+
+
+def _workbench_plan_tool_bundle(
+    session: dict[str, Any],
+    workspace_root: Path | None,
+    *,
+    feedback: str,
+    requested_operation: str,
+    auto_start: bool,
+) -> tuple[str, str, dict[str, str]]:
+    current_revision, current_snapshot = _workbench_workspace_state(workspace_root)
+    thread = _workbench_planning_thread(session, workspace_root)
+    previous_revision = str(thread.get("workspaceRevision") or "")
+    has_history = bool(thread.get("messages"))
+    workspace_changed = bool(previous_revision and previous_revision != current_revision)
+    goal_text = str(session.get("goal") or session.get("title") or "")
+    explicitly_independent = bool(re.search(
+        r"(与(?:当前|本地)?项目无关|不涉及(?:当前|本地)?项目|不要(?:读取|查看|检查|关联)(?:工作区|项目|文件)|"
+        r"旅行计划|健身计划|学习计划|活动策划|会议议程|写作提纲)",
+        goal_text,
+    ))
+
+    if _is_workspace_empty(workspace_root):
+        bundle = _WORKBENCH_PLANNER_NO_TOOLS_VERSION
+    elif explicitly_independent:
+        bundle = _WORKBENCH_PLANNER_NO_TOOLS_VERSION
+    elif auto_start:
+        bundle = _WORKBENCH_PLANNER_EXPLORE_VERSION
+    elif not has_history:
+        bundle = _WORKBENCH_PLANNER_EXPLORE_VERSION
+    elif workspace_changed or _workbench_feedback_needs_workspace(
+        feedback, requested_operation=requested_operation
+    ):
+        bundle = _WORKBENCH_PLANNER_EXPLORE_VERSION
+    else:
+        bundle = _WORKBENCH_PLANNER_NO_TOOLS_VERSION
+    return bundle, current_revision, current_snapshot
+
+
+async def _workbench_exec_explore_tool(
+    tc: dict,
+    workspace_root: Path | None,
+    *,
+    observation_cache: dict[str, Any] | None = None,
+    runtime_cache: dict[str, str] | None = None,
+    metrics: dict[str, int] | None = None,
+    workspace_revision: str = "",
+    inspected_resources: dict[str, Any] | None = None,
+) -> str:
     """Execute one workspace-exploration tool call, confined to workspace_root."""
     name = tc["function"]["name"]
     try:
@@ -1005,54 +1253,140 @@ async def _workbench_exec_explore_tool(tc: dict, workspace_root: Path | None) ->
         return "Error: workspace directory does not exist or is inaccessible"
 
     target = (workspace_root / rel_path).resolve()
-    if not str(target).startswith(str(workspace_root)):
+    try:
+        target.relative_to(workspace_root)
+    except ValueError:
         return "Error: path is outside the workspace directory"
+
+    observation_cache = observation_cache if isinstance(observation_cache, dict) else {}
+    runtime_cache = runtime_cache if isinstance(runtime_cache, dict) else {}
+    inspected_resources = inspected_resources if isinstance(inspected_resources, dict) else {}
+    metrics = metrics if isinstance(metrics, dict) else {}
+    metrics.setdefault("workspaceCacheHits", 0)
+    metrics.setdefault("workspaceCacheMisses", 0)
+    metrics.setdefault("duplicateCallsBlocked", 0)
+    normalized_args: dict[str, Any]
+    if name == "read_file":
+        try:
+            offset = max(0, int(args.get("offset") or 0))
+        except (TypeError, ValueError):
+            offset = 0
+        try:
+            limit = min(12000, max(1, int(args.get("limit") or 4000)))
+        except (TypeError, ValueError):
+            limit = 4000
+        normalized_args = {"path": rel_path, "offset": offset, "limit": limit}
+    elif name == "glob":
+        normalized_args = {"pattern": str(args.get("pattern") or "").strip()}
+    else:
+        normalized_args = {"path": rel_path}
+    logical_key = (
+        f"{workspace_root.as_posix()}:{name}:"
+        f"{_workbench_stable_json(normalized_args)}"
+    )
+    if logical_key in runtime_cache:
+        metrics["duplicateCallsBlocked"] += 1
+        return runtime_cache[logical_key]
 
     try:
         if name == "list_directory":
+            stat = target.stat()
+            fingerprint = f"{workspace_revision}:{stat.st_mtime_ns}"
+            cached = observation_cache.get(logical_key)
+            if isinstance(cached, dict) and cached.get("resourceFingerprint") == fingerprint:
+                result = str(cached.get("result") or "")
+                runtime_cache[logical_key] = result
+                metrics["workspaceCacheHits"] += 1
+                return result
             entries: list[str] = []
             for p in sorted(target.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
                 if p.name.startswith("."):
                     continue
                 suffix = "/" if p.is_dir() else ""
                 entries.append(f"{p.name}{suffix}")
-            if not entries:
-                return "(empty directory)"
-            return "\n".join(entries)
+            result = "\n".join(entries) if entries else "(empty directory)"
 
         elif name == "read_file":
             if not target.is_file():
                 return "Error: not a file or does not exist"
             if target.stat().st_size > 256 * 1024:
                 return "Error: file too large (>256KB)"
+            stat = target.stat()
+            stat_fingerprint = f"{stat.st_size}:{stat.st_mtime_ns}"
+            cached = observation_cache.get(logical_key)
+            if isinstance(cached, dict) and cached.get("statFingerprint") == stat_fingerprint:
+                result = str(cached.get("result") or "")
+                runtime_cache[logical_key] = result
+                metrics["workspaceCacheHits"] += 1
+                return result
             try:
                 text = target.read_text(encoding="utf-8", errors="replace")
-                if len(text) > 4000:
-                    text = text[:4000] + "\n\n...(truncated)"
-                return text
+                file_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                result = text[offset:offset + limit]
+                if offset + limit < len(text):
+                    result += f"\n\n...(truncated; next offset={offset + limit})"
+                fingerprint = file_hash
             except (UnicodeDecodeError, LookupError):
                 return "Error: binary file (cannot read as text)"
 
         elif name == "glob":
-            pattern = str(args.get("pattern") or "").strip()
+            pattern = normalized_args["pattern"]
             if not pattern:
                 return "Error: missing glob pattern"
+            fingerprint = workspace_revision
+            cached = observation_cache.get(logical_key)
+            if isinstance(cached, dict) and cached.get("resourceFingerprint") == fingerprint:
+                result = str(cached.get("result") or "")
+                runtime_cache[logical_key] = result
+                metrics["workspaceCacheHits"] += 1
+                return result
             it = workspace_root.rglob(pattern.lstrip("/"))
             matches: list[str] = []
             for p in sorted(it):
+                if any(part.startswith(".") or part in _WORKBENCH_EMPTY_WORKSPACE_SKIP_DIRS for part in p.relative_to(workspace_root).parts):
+                    continue
                 rel = str(p.relative_to(workspace_root))
                 suffix = "/" if p.is_dir() else ""
                 matches.append(f"{rel}{suffix}")
             if len(matches) > 50:
                 matches = matches[:50] + [f"... and {len(matches) - 50} more"]
-            return "\n".join(matches) if matches else "(no matches)"
+            result = "\n".join(matches) if matches else "(no matches)"
+        else:
+            return f"Error: unknown tool '{name}'"
 
     except PermissionError:
         return "Error: permission denied"
     except OSError as e:
         return f"Error: {e}"
 
-    return f"Error: unknown tool '{name}'"
+    metrics["workspaceCacheMisses"] += 1
+    record = {
+        "tool": name,
+        "canonicalArgs": normalized_args,
+        "workspaceRevision": workspace_revision,
+        "resourceFingerprint": fingerprint,
+        "result": result,
+        "facts": [
+            (
+                f"已读取 {rel_path} 的字符范围 "
+                f"{normalized_args.get('offset', 0)}.."
+                f"{normalized_args.get('offset', 0) + normalized_args.get('limit', 0)}"
+                if name == "read_file"
+                else f"已观察 {name} 参数 {_workbench_stable_json(normalized_args)}"
+            )
+        ],
+        "valid": True,
+    }
+    if name == "read_file":
+        record["statFingerprint"] = stat_fingerprint
+    observation_cache[logical_key] = record
+    runtime_cache[logical_key] = result
+    inspected_resources[logical_key] = {
+        "resourceFingerprint": fingerprint,
+        "workspaceRevision": workspace_revision,
+        "facts": record["facts"],
+    }
+    return result
 
 
 async def _workbench_run_explore_agent(
@@ -1066,6 +1400,9 @@ async def _workbench_run_explore_agent(
     session_id: str = "",
     clean_context: bool = False,
     raise_on_failure: bool = False,
+    planning_thread: dict[str, Any] | None = None,
+    tool_bundle_version: str = _WORKBENCH_PLANNER_EXPLORE_VERSION,
+    workspace_revision: str = "",
 ) -> dict[str, Any] | None:
     """Run an LLM that may explore the workspace (list_directory/read_file/glob)
     before answering, and return the JSON object it emits (or None on failure).
@@ -1088,6 +1425,58 @@ async def _workbench_run_explore_agent(
     event_sid = str(session_id or "").strip()
     context_sid = "" if clean_context else event_sid
     token = _current_session_id.set(context_sid) if (event_sid or clean_context) else None
+    thread = planning_thread if isinstance(planning_thread, dict) else None
+    use_explore_tools = tool_bundle_version == _WORKBENCH_PLANNER_EXPLORE_VERSION
+    tools: list[dict[str, Any]] | None = _WORKBENCH_EXPLORE_TOOLS if use_explore_tools else None
+    observation_cache = thread.setdefault("observationCache", {}) if thread is not None else {}
+    inspected_resources = thread.setdefault("inspectedResources", {}) if thread is not None else {}
+    runtime_cache: dict[str, str] = {}
+    call_metrics: dict[str, Any] = {
+        "promptBundleVersion": _WORKBENCH_PLANNER_CONTRACT_VERSION if thread is not None else "",
+        "toolBundleVersion": tool_bundle_version if thread is not None else "",
+        "systemPromptHash": hashlib.sha256(
+            _WORKBENCH_PLANNER_SYSTEM_PROMPT.encode("utf-8")
+        ).hexdigest() if thread is not None else "",
+        "toolsHash": _workbench_hash_json(tools or []),
+        "planningThreadId": str(thread.get("id") or "") if thread is not None else "",
+        "workspaceRevision": workspace_revision,
+        "promptTokens": 0,
+        "cachedTokens": 0,
+        "workspaceCacheHits": 0,
+        "workspaceCacheMisses": 0,
+        "duplicateCallsBlocked": 0,
+    }
+
+    def _record_usage(response: Any) -> None:
+        if not isinstance(response, dict):
+            return
+        usage = response.get("usage")
+        if not isinstance(usage, dict):
+            return
+        call_metrics["promptTokens"] += int(usage.get("prompt_tokens") or 0)
+        call_metrics["cachedTokens"] += int(
+            usage.get("prompt_cache_hit_tokens")
+            or usage.get("cached_tokens")
+            or 0
+        )
+
+    def _commit_thread(messages: list[dict[str, Any]], content: str, parsed: dict[str, Any]) -> None:
+        if thread is None:
+            return
+        final_content = str(content or "").strip() or _workbench_stable_json(parsed)
+        if not messages or messages[-1].get("role") != "assistant":
+            messages.append({"role": "assistant", "content": final_content})
+        thread["messages"] = messages
+        thread["workspaceRevision"] = workspace_revision
+        thread["lastToolBundleVersion"] = tool_bundle_version
+        metrics_history = thread.setdefault("metrics", [])
+        if isinstance(metrics_history, list):
+            metrics_history.append(dict(call_metrics))
+            if len(metrics_history) > 50:
+                del metrics_history[:-50]
+        if _workbench_planning_context_chars(messages) > _WORKBENCH_PLANNING_THREAD_MAX_CHARS:
+            thread["compactionPending"] = True
+        logger.info("Workbench planning metrics: %s", _workbench_stable_json(call_metrics))
 
     async def _emit_tool_event(tc: dict[str, Any]) -> None:
         if not event_sid:
@@ -1113,13 +1502,24 @@ async def _workbench_run_explore_agent(
             pass  # live progress is best-effort; never break the run for it
 
     try:
-        messages = [{"role": "user", "content": prompt}]
+        if thread is not None:
+            prior_messages = thread.get("messages")
+            messages = [
+                dict(message)
+                for message in prior_messages
+                if isinstance(message, dict)
+            ] if isinstance(prior_messages, list) else []
+            if not messages:
+                messages.append({"role": "system", "content": _WORKBENCH_PLANNER_SYSTEM_PROMPT})
+            messages.append({"role": "user", "content": prompt})
+        else:
+            messages = [{"role": "user", "content": prompt}]
         for turn in range(max_turns):
             try:
                 response = await asyncio.wait_for(
                     _call_llm(
                         messages,
-                        tools=_WORKBENCH_EXPLORE_TOOLS,
+                        tools=tools,
                         max_tokens=max_tokens,
                         secondary=secondary,
                         thinking="disabled",
@@ -1139,11 +1539,13 @@ async def _workbench_run_explore_agent(
                 if raise_on_failure:
                     raise error
                 return None
+            _record_usage(response)
             tool_calls = response.get("tool_calls") or []
             if not tool_calls:
                 content = response.get("content") or ""
                 parsed = _workbench_parse_json_object(content)
                 if parsed is not None:
+                    _commit_thread(messages, content, parsed)
                     return parsed
                 try:
                     repaired = await _workbench_repair_json_response(
@@ -1159,6 +1561,7 @@ async def _workbench_run_explore_agent(
                         raise _workbench_generation_error(exc)
                     return None
                 if repaired is not None:
+                    _commit_thread(messages, _workbench_stable_json(repaired), repaired)
                     return repaired
                 if raise_on_failure:
                     preview = re.sub(
@@ -1171,6 +1574,23 @@ async def _workbench_run_explore_agent(
                         detail += f" 响应片段：{preview}"
                     raise _WorkbenchGenerationError("response_format", detail)
                 return None
+            if tools is None:
+                messages.append({
+                    "role": "assistant",
+                    "content": response.get("content") or "",
+                    "tool_calls": tool_calls,
+                })
+                for tc in tool_calls:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id") or _short_id("blocked_tool"),
+                        "content": "Error: workspace tools are not available for this planning revision; use existing observations.",
+                    })
+                messages.append({
+                    "role": "user",
+                    "content": "不要调用工具。请基于已有规划历史和观察结果直接返回最终 JSON。",
+                })
+                continue
             # The assistant tool-call message MUST be appended before the tool
             # results — a 'tool' message has to follow an assistant message carrying
             # its tool_calls, otherwise the next request is malformed and rejected.
@@ -1180,8 +1600,18 @@ async def _workbench_run_explore_agent(
             messages.append(assistant_entry)
             for tc in tool_calls:
                 await _emit_tool_event(tc)
-                result = await _workbench_exec_explore_tool(tc, workspace_root)
+                result = await _workbench_exec_explore_tool(
+                    tc,
+                    workspace_root,
+                    observation_cache=observation_cache,
+                    runtime_cache=runtime_cache,
+                    metrics=call_metrics,
+                    workspace_revision=workspace_revision,
+                    inspected_resources=inspected_resources,
+                )
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+            if call_metrics["duplicateCallsBlocked"] >= 2:
+                tools = None
 
         # Turn budget exhausted while still exploring — force a final answer with no
         # tools available, so the model has to emit the JSON now.
@@ -1199,6 +1629,7 @@ async def _workbench_run_explore_agent(
             if raise_on_failure:
                 raise _workbench_generation_error(exc)
             return None
+        _record_usage(final)
         if not isinstance(final, dict):
             if raise_on_failure:
                 raise _WorkbenchGenerationError(
@@ -1209,6 +1640,7 @@ async def _workbench_run_explore_agent(
         content = final.get("content") or ""
         parsed = _workbench_parse_json_object(content)
         if parsed is not None:
+            _commit_thread(messages, content, parsed)
             return parsed
         try:
             repaired = await _workbench_repair_json_response(
@@ -1224,6 +1656,7 @@ async def _workbench_run_explore_agent(
                 raise _workbench_generation_error(exc)
             return None
         if repaired is not None:
+            _commit_thread(messages, _workbench_stable_json(repaired), repaired)
             return repaired
         if raise_on_failure:
             preview = re.sub(
@@ -2361,9 +2794,40 @@ async def _workbench_generate_plan_steps(
     constraints = [str(c).strip() for c in (session.get("constraints") or []) if str(c).strip()]
     workspace_path = str(project.get("workspacePath") or "").strip()
     workspace_root = Path(workspace_path).expanduser().resolve() if workspace_path else None
+    planning_thread = _workbench_planning_thread(session, workspace_root)
+    previous_workspace_revision = str(planning_thread.get("workspaceRevision") or "")
+    previous_workspace_snapshot = (
+        planning_thread.get("workspaceSnapshot")
+        if isinstance(planning_thread.get("workspaceSnapshot"), dict)
+        else {}
+    )
+    tool_bundle_version, workspace_revision, workspace_snapshot = _workbench_plan_tool_bundle(
+        session,
+        workspace_root,
+        feedback=feedback,
+        requested_operation=requested_operation,
+        auto_start=auto_start,
+    )
 
     constraints_block = ("\n约束：\n" + "\n".join(f"- {c}" for c in constraints)) if constraints else ""
     feedback_block = ("\n用户对计划的修改反馈（请据此调整）：" + feedback) if feedback else ""
+    workspace_delta_block = ""
+    if previous_workspace_revision and previous_workspace_revision != workspace_revision:
+        changed_files = sorted(
+            path
+            for path in set(previous_workspace_snapshot) | set(workspace_snapshot)
+            if previous_workspace_snapshot.get(path) != workspace_snapshot.get(path)
+        )
+        workspace_delta_block = (
+            "\n工作区增量："
+            + _workbench_stable_json({
+                "type": "workspace_delta",
+                "baseRevision": previous_workspace_revision,
+                "revision": workspace_revision,
+                "changedFiles": changed_files[:200],
+                "invalidatedObservations": ["directory/glob observations"],
+            })
+        )
     # A full replacement must be generated independently. Showing the complete
     # old plan strongly anchors the model and often makes it repeat the same
     # steps with fresh IDs.
@@ -2379,73 +2843,62 @@ async def _workbench_generate_plan_steps(
         "优先采用 promising_directions（更有希望的方向），并参考 next_step：\n"
         + reflection_text
     ) if reflection_text else ""
+    # 规划契约、JSON 结构、步骤/验收数量、revise/replace 输出规则、语言要求都由
+    # _WORKBENCH_PLANNER_SYSTEM_PROMPT（线程稳定前缀）承载。这里只追加“增量”：本轮
+    # 任务数据 + 随 Bundle 切换的探索指令 + 系统提示未覆盖的情境化要求，避免与系统
+    # 提示重复，也避免在 no-tools 轮里诱导模型调用并不存在的工具。
+    if tool_bundle_version == _WORKBENCH_PLANNER_EXPLORE_VERSION:
+        explore_directive = (
+            "如确有必要，可用 list_directory、read_file、glob 探索工作区；"
+            "已观察且未变化的内容不要重复读取，够用即止。"
+        )
+    else:
+        explore_directive = (
+            "本次不提供工作区探索工具，请基于规划历史、既往观察结果和下面的信息直接给出计划，不要尝试调用工具。"
+        )
     if auto_start:
+        if tool_bundle_version == _WORKBENCH_PLANNER_EXPLORE_VERSION:
+            lead_in = (
+                "这是「直接开始」的任务——用户没有明确给出目标。"
+                "请先用 list_directory、read_file、glob 通读这个项目（工作区文件 + 项目说明），"
+                "判断当前最应该推进的一件工作，再据此给出 goal、title 和执行步骤；"
+                "已观察且未变化的内容不要重复读取。"
+            )
+        else:
+            lead_in = (
+                "这是「直接开始」的任务——用户没有明确给出目标，且本次没有可用的工作区探索工具。"
+                "请基于规划方向和已有信息，判断当前最应该推进的一件工作，再据此给出 goal、title 和执行步骤。"
+            )
         prompt = (
-            "你是任务执行规划 Agent。这是一个「直接开始」的任务——用户没有明确给出目标，"
-            "请你先用 list_directory、read_file、glob 工具通读这个项目（工作区文件 + 项目说明），"
-            "判断当前最应该推进的一件工作，然后据此给出目标、标题和执行步骤。\n\n"
-            f"规划方向：{goal}{constraints_block}{reflection_block}\n\n"
-            "充分了解后再返回 JSON，只返回一个 JSON 对象，不要 Markdown 代码块标记。结构：\n"
-            "{\n"
-            '  "goal": "一句话、具体、贴合本项目实际的任务目标（中文）",\n'
-            '  "title": "几个字的短标题（中文，<=20字）",\n'
-            '  "steps": [\n'
-            '    {"sourceStepId": null, "title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块", "dependsOnStepIndexes": [1]}\n'
-            "  ],\n"
-            '  "acceptanceCriteria": ["任务完成后可独立核验的结果标准"]\n'
-            "}\n\n"
-            "要求：goal 必须具体到这个项目、不要泛泛而谈；生成 3-7 个步骤、顺序合理、"
-            "尽量引用真实文件/目录/模块；同时生成 3-8 条具体、可验证的验收标准，"
-            "避免“目标清晰”这类过程性描述；全部使用简体中文。"
-            "dependsOnStepIndexes 使用当前返回列表中的 1-based 序号，只能引用排在当前步骤之前的步骤；"
-            "没有前置依赖时必须返回空数组。"
+            f"{lead_in}\n\n"
+            f"规划方向：{goal}{constraints_block}{workspace_delta_block}{reflection_block}\n\n"
+            "goal 要具体、贴合本项目实际、不要泛泛而谈，并尽量引用真实文件/目录/模块；"
+            "验收标准要可独立核验，避免“目标清晰”这类过程性描述。"
+            "按系统提示约定的 JSON 结构，只返回一个 JSON 对象，不要 Markdown 代码块标记。"
         )
     else:
         prompt = (
-            "你是任务执行规划 Agent。请把下面这个任务拆解成清晰、有顺序、可逐步执行的步骤。\n"
-            "你可以使用 list_directory、read_file、glob 工具了解当前工作区，并根据任务与"
-            "当前项目的关系自主决定是否探索：\n"
-            "- 如果这是新项目初始化、项目开发、代码修改、项目分析，或计划质量依赖已有内容，"
-            "应主动探索工作区，了解真实结构和关键文件后再规划；\n"
-            "- 如果用户明确要求制定与当前项目或本地文件无关的计划，应直接围绕该目标规划，"
-            "不要读取、列举或搜索工作区，也不要强行关联当前项目；\n"
-            "- 如果任务与项目的关系不明确，请根据目标、上下文和已有计划自行判断。"
-            "不要仅因为工作区存在就机械探索，也不要仅为了减少工具调用而跳过必要的项目了解。\n\n"
-            f"任务目标：{goal}{constraints_block}{existing_plan_block}{feedback_block}{reflection_block}\n\n"
-            "充分了解后再返回 JSON，只返回一个 JSON 对象，不要 Markdown 代码块标记。结构：\n"
-            "{\n"
-            '  "goal": "应用本次修改后的最终任务目标；未改变目标时原样保留",\n'
-            '  "revisionMode": "revise|replace",\n'
-            '  "steps": [\n'
-            '    {"sourceStepId": "保留/修改的原步骤 id；新增步骤填 null", "title": "动宾短语的步骤标题（中文，简洁）", "description": "这一步具体做什么、涉及哪些文件或模块", "dependsOnStepIndexes": [1]}\n'
-            "  ],\n"
-            '  "acceptanceCriteria": ["任务完成后可独立核验的结果标准"]\n'
-            "}\n\n"
-            "要求：生成 3-7 个步骤；顺序合理、彼此衔接；每个步骤聚焦一件可执行的事；"
-            "任务涉及当前项目时，应结合工作区实际内容，并尽量引用真实文件、目录或模块；"
-            "任务与当前项目无关时，应围绕任务本身规划，不要引入无关的文件或代码操作；"
-            "同时生成 3-8 条具体、可验证的验收标准，覆盖任务目标、约束和必要验证；"
-            "全部使用简体中文。"
-            "你需要自行判断 revisionMode：用户只是补充、删改、调序或改变局部做法时用 revise；"
-            "用户要求完全不同、全新、换一套、从头重做，或新要求与原目标明显不同且旧计划不再适用时用 replace。"
-            "goal 必须表示应用用户修改反馈后的最终任务目标；如果反馈只改变执行方式而不改变目标，"
-            "则原样返回现有任务目标。"
-            "revise 时必须返回完整修订计划，并用 sourceStepId 标明保留或修改的是哪个原步骤；"
-            "replace 时不要保留旧步骤，所有 sourceStepId 填 null。验收标准必须对应最终完整计划。"
-            "每个步骤都必须返回 dependsOnStepIndexes；它使用当前返回列表中的 1-based 序号，"
-            "只能引用排在当前步骤之前的步骤，没有前置依赖时返回空数组。"
+            "请把下面这个任务拆解成清晰、有顺序、可逐步执行的步骤。\n"
+            f"{explore_directive}\n\n"
+            f"任务目标：{goal}{constraints_block}{existing_plan_block}{feedback_block}{workspace_delta_block}{reflection_block}\n\n"
+            "任务涉及当前项目时，尽量引用真实文件、目录或模块；"
+            "与当前项目无关时，围绕任务本身规划，不要引入无关的文件或代码操作。"
+            "revisionMode 自行判断：仅补充、删改、调序或改变局部做法时用 revise；"
+            "要求完全不同、全新、换一套、从头重做，或新目标与原计划明显不符时用 replace。"
+            "按系统提示约定的 JSON 结构，只返回一个 JSON 对象，不要 Markdown 代码块标记。"
         )
         if requested_operation == "replace":
             prompt += (
-                "\n这是用户主动点击的「重新生成」。必须从最终任务目标重新独立拆解。"
-                "如果新目标仍涉及当前项目，应主动检查必要的工作区内容；"
-                "如果新目标明确与当前项目无关，则不要探索工作区。"
+                "\n这是用户主动点击的「重新生成」：必须从最终任务目标重新独立拆解，"
                 "至少一半步骤应采用不同的拆解方式或执行路径，不能只是改写措辞。"
             )
 
     parsed = await _workbench_run_explore_agent(
         workspace_root, prompt, max_tokens=4000, timeout=120,
         session_id=str(session.get("id") or ""),
+        planning_thread=planning_thread,
+        tool_bundle_version=tool_bundle_version,
+        workspace_revision=workspace_revision,
     )
     if not isinstance(parsed, dict):
         fallback_operation = "replace" if requested_operation == "replace" else "revise" if feedback else "create"
@@ -2482,6 +2935,27 @@ async def _workbench_generate_plan_steps(
             session["goal"] = derived_goal
         if _workbench_is_default_title(session.get("title")):
             session["title"] = (derived_title or _workbench_derive_title(session.get("goal") or ""))[:80]
+
+    planning_thread["goal"] = str(session.get("goal") or goal)
+    planning_thread["constraints"] = constraints
+    planning_thread["workspaceSnapshot"] = workspace_snapshot
+    planning_thread["currentPlan"] = [
+        {
+            "id": str(step.get("id") or ""),
+            "title": str(step.get("title") or ""),
+            "description": str(step.get("description") or ""),
+            "dependsOn": _workbench_dependency_ids(step.get("dependsOn")),
+        }
+        for step in steps
+        if isinstance(step, dict)
+    ]
+    if feedback:
+        decisions = planning_thread.setdefault("userDecisions", [])
+        if isinstance(decisions, list):
+            decisions.append(feedback[:2000])
+            if len(decisions) > 30:
+                del decisions[:-30]
+    _workbench_maybe_compact_planning_thread(planning_thread)
 
     acceptance_session = dict(session)
     acceptance_session["plan"] = steps
@@ -7436,7 +7910,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             ) + 1
             latest_session["approvedPlanDefinitionRevision"] = None
             latest_session["acceptanceCriteria"] = acceptance
-        for field in ("goal", "title", "constraints", "reflection"):
+        for field in ("goal", "title", "constraints", "reflection", "planningThread"):
             if field in session:
                 latest_session[field] = session[field]
         latest_session["status"] = "planning"

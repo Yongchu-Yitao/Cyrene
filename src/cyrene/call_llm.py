@@ -230,6 +230,11 @@ _INTERNAL_MSG_KEYS = frozenset({
     "report_ref", "report_archive_session_id", "report_round_id",
     "report_title", "deep_reflection_record", "reflection_id",
     "subagent_flow_snapshot", "proactive",
+    # Past-turn chain-of-thought must never be echoed back upstream: it bloats the
+    # context (accelerating cache-breaking compaction) and DeepSeek's reasoner API
+    # rejects inputs that carry reasoning_content. It stays in the stored history
+    # for the UI; this strip only applies to the payload sent to the model.
+    "reasoning_content",
 })
 
 
@@ -484,9 +489,12 @@ def _normalize_dsml_tool_calls(message: dict[str, Any], tools: list | None) -> d
 
 
 def _normalized_usage(usage: Any, messages: list[dict[str, Any]], response_message: dict[str, Any]) -> dict[str, int]:
-    if isinstance(usage, dict) and any(isinstance(usage.get(key), int) for key in ("prompt_tokens", "completion_tokens", "total_tokens")):
-        prompt = int(usage.get("prompt_tokens") or 0)
-        completion = int(usage.get("completion_tokens") or 0)
+    if isinstance(usage, dict) and any(
+        isinstance(usage.get(key), int)
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "output_tokens")
+    ):
+        prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
         total = int(usage.get("total_tokens") or (prompt + completion))
         normalized: dict[str, int] = {
             "prompt_tokens": prompt,
@@ -496,6 +504,15 @@ def _normalized_usage(usage: Any, messages: list[dict[str, Any]], response_messa
         for key in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
             if isinstance(usage.get(key), int):
                 normalized[key] = int(usage.get(key))
+        prompt_details = usage.get("prompt_tokens_details")
+        if isinstance(prompt_details, dict) and isinstance(prompt_details.get("cached_tokens"), int):
+            cached = int(prompt_details.get("cached_tokens") or 0)
+            normalized["prompt_cache_hit_tokens"] = cached
+            normalized.setdefault("prompt_cache_miss_tokens", max(0, prompt - cached))
+        if isinstance(usage.get("cache_read_input_tokens"), int):
+            normalized["prompt_cache_hit_tokens"] = int(usage.get("cache_read_input_tokens") or 0)
+        if isinstance(usage.get("cache_creation_input_tokens"), int):
+            normalized["prompt_cache_miss_tokens"] = int(usage.get("cache_creation_input_tokens") or 0)
         return normalized
     prompt = sum(_message_token_estimate(message) for message in messages) + 8
     completion = _message_token_estimate(response_message) + 8
