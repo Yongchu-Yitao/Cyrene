@@ -820,6 +820,14 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Hide the scrollbar (still scrollable) to match .workbench-stage — expanding
+     a step adds the step-dependency section and must not flash a scrollbar. */
+  scrollbar-width: none;
+}
+
+.workbench-right-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .workbench-project-list {
@@ -1432,6 +1440,16 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
 .wbc-chat-card.menu-open .wbc-chat-card-actions {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* When a menu is open a full-viewport scrim (.wb-card-menu-scrim, z-index 199)
+   sits above the rail to catch outside clicks. The actions wrapper carries a
+   transform (translateY centering) which creates a stacking context, trapping
+   the menu's own z-index:200 *inside* the wrapper — so the menu can't paint
+   above the scrim and the scrim swallows the click (delete appears dead). Lift
+   the open card's actions above the scrim so the menu stays clickable. */
+.wbc-chat-card.menu-open .wbc-chat-card-actions {
+  z-index: 200;
 }
 
 .wb-card-menu-btn {
@@ -2296,6 +2314,50 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   color: var(--wb-muted);
 }
 
+/* Edit mode reuses the summary layout, with editable controls in the value
+   column. Labels nudge down to line up with the inputs' first text row. */
+.wbp-summary-edit .wbp-summary-k { padding-top: 7px; }
+
+.wbp-edit-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--wb-line-2);
+  border-radius: 7px;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.wbp-edit-input:focus {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--wb-accent) 55%, var(--wb-line-2));
+}
+
+.wbp-edit-cmd {
+  min-height: 84px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.wbp-edit-cmd-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.wbp-summary-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 2px;
+  padding-top: 9px;
+  border-top: 1px solid var(--wb-line);
+}
+
 .wbp-plan-editor {
   margin-bottom: 12px;
   padding: 12px;
@@ -2794,6 +2856,67 @@ html[data-theme="dark"] .wbp-detail-card .wbp-ctx-input {
   background: color-mix(in srgb, #000 22%, var(--wb-card-bg));
 }
 
+/* StepEditor (.wbp-summary-edit) reuses .wbp-tiny-btn / .wbp-ctx-input, which
+   were only styled inside .wbp-detail-card. Without this they fall back to bare
+   button/input defaults — bright and washed out in dark mode. Mirror the
+   control styling, aligned to the panel's other inputs (var(--wb-control-bg)). */
+.wbp-summary-edit .wbp-tiny-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  border: 1px solid var(--wb-line);
+  border-radius: 7px;
+  background: var(--wb-control-bg);
+  color: var(--wb-muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 560;
+  padding: 0 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 110ms, border-color 110ms, color 110ms;
+}
+
+.wbp-summary-edit .wbp-tiny-btn:hover:not(:disabled) {
+  background: var(--wb-control-hover-bg);
+  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line));
+  color: var(--wb-text);
+}
+
+.wbp-summary-edit .wbp-tiny-btn:disabled { opacity: 0.5; cursor: default; }
+.wbp-summary-edit .wbp-tiny-btn svg { opacity: 0.8; }
+
+.wbp-summary-edit .wbp-tiny-btn.danger { color: var(--wb-red); }
+.wbp-summary-edit .wbp-tiny-btn.danger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--wb-red) 38%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-red) 8%, var(--wb-control-bg));
+  color: var(--wb-red);
+}
+
+.wbp-summary-edit .wbp-ctx-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 30px;
+  border: 1px solid var(--wb-line-2);
+  border-radius: 7px;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 0 10px;
+  transition: border-color 110ms, box-shadow 110ms;
+}
+
+.wbp-summary-edit .wbp-ctx-input::placeholder { color: var(--wb-faint); }
+
+.wbp-summary-edit .wbp-ctx-input:focus {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--wb-accent) 55%, var(--wb-line-2));
+}
+
 /* ── Responsive ──────────────────────────────────────────────── */
 
 @media (max-width: 960px) {
@@ -3259,7 +3382,236 @@ html[data-theme="dark"] .wbp-detail-card .wbp-ctx-input {
 }
 .wb-chip:hover { background: var(--wb-control-hover-bg); color: var(--wb-text); }
 .wb-chip:first-child:hover { filter: brightness(1.06); color: var(--wb-accent-text); background: var(--wb-accent); }
+.wb-chip.goal-loop {
+  border: 1px solid color-mix(in srgb, var(--wb-amber) 48%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-amber) 10%, var(--wb-icon-bg));
+  color: color-mix(in srgb, var(--wb-amber) 72%, var(--wb-text));
+}
+.wb-chip.goal-loop:hover {
+  border-color: color-mix(in srgb, var(--wb-amber) 72%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-amber) 17%, var(--wb-icon-bg));
+  color: var(--wb-text);
+}
 .wb-chip:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Goal-loop setup wizard. It deliberately reuses Workbench tokens and modal
+   layering instead of introducing a second visual system. */
+.wb-goal-loop-scrim { z-index: 10110; }
+.wb-goal-loop-modal {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(820px, calc(100vh - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--wb-line);
+  border-radius: 16px;
+  background: var(--wb-card-bg);
+  color: var(--wb-text);
+  box-shadow: 0 28px 90px rgba(15, 23, 42, 0.38);
+}
+.wb-goal-loop-modal.compact { width: min(460px, calc(100vw - 32px)); }
+.wb-goal-loop-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px 12px;
+}
+.wb-goal-loop-head h2 { margin: 3px 0 0; font-size: 19px; line-height: 1.3; }
+.wb-goal-loop-eyebrow {
+  color: var(--wb-amber);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.wb-goal-loop-steps {
+  display: flex;
+  align-items: center;
+  padding: 0 22px 14px;
+}
+.wb-goal-loop-steps span {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--wb-line);
+  border-radius: 50%;
+  color: var(--wb-faint);
+  font-size: 11px;
+  font-weight: 700;
+}
+.wb-goal-loop-steps span.active,
+.wb-goal-loop-steps span.done {
+  border-color: var(--wb-accent);
+  background: var(--wb-accent);
+  color: var(--wb-accent-text);
+}
+.wb-goal-loop-steps i { height: 1px; flex: 1; background: var(--wb-line); }
+.wb-goal-loop-body {
+  overflow: auto;
+  padding: 4px 22px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.wb-goal-loop-field { display: flex; flex-direction: column; gap: 6px; }
+.wb-goal-loop-field > span,
+.wb-goal-loop-options legend { color: var(--wb-text); font-size: 13px; font-weight: 700; }
+.wb-goal-loop-field > small,
+.wb-goal-loop-options small,
+.wb-goal-loop-cost { color: var(--wb-muted); font-size: 11.5px; line-height: 1.45; }
+.wb-goal-loop-field textarea,
+.wb-goal-loop-field input {
+  border: 1px solid var(--wb-line);
+  border-radius: 9px;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  font: inherit;
+  outline: none;
+}
+.wb-goal-loop-field textarea { resize: vertical; min-height: 108px; padding: 11px 12px; line-height: 1.55; }
+.wb-goal-loop-field textarea:focus,
+.wb-goal-loop-field input:focus { border-color: var(--wb-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 13%, transparent); }
+.wb-goal-loop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.wb-goal-loop-number { display: flex; align-items: stretch; }
+.wb-goal-loop-number input { width: 100%; min-width: 0; height: 38px; padding: 0 10px; border-radius: 9px 0 0 9px; }
+html[data-theme="dark"] .wb-goal-loop-number input { color-scheme: dark; }
+.wb-goal-loop-number b {
+  display: grid;
+  place-items: center;
+  min-width: 52px;
+  padding: 0 10px;
+  border: 1px solid var(--wb-line);
+  border-left: 0;
+  border-radius: 0 9px 9px 0;
+  background: var(--wb-icon-bg);
+  color: var(--wb-muted);
+  font-size: 12px;
+}
+.wb-goal-loop-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.wb-goal-loop-options.reflection { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.wb-goal-loop-options legend { grid-column: 1 / -1; margin-bottom: 2px; }
+.wb-goal-loop-options button {
+  min-height: 68px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 10px 11px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+}
+.wb-goal-loop-options button:hover { border-color: var(--wb-line-2); background: var(--wb-control-hover-bg); }
+.wb-goal-loop-options button.selected {
+  border-color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-control-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 35%, transparent);
+}
+.wb-goal-loop-options button.selected.danger {
+  border-color: var(--wb-amber);
+  background: color-mix(in srgb, var(--wb-amber) 9%, var(--wb-control-bg));
+}
+.wb-goal-loop-options button b { font-size: 12.5px; }
+.wb-goal-loop-warning,
+.wb-goal-loop-change {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  border: 1px solid color-mix(in srgb, var(--wb-amber) 45%, var(--wb-line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-amber) 8%, var(--wb-card-bg));
+  padding: 10px 12px;
+  color: var(--wb-text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.wb-goal-loop-warning input { margin-top: 3px; accent-color: var(--wb-amber); }
+.wb-goal-loop-cost { margin: -5px 0 0; }
+.wb-goal-loop-body.preview section {
+  border: 1px solid var(--wb-line);
+  border-radius: 11px;
+  background: var(--wb-control-bg);
+  padding: 13px 14px;
+}
+.wb-goal-loop-body.preview h3 { margin: 0 0 8px; font-size: 13px; }
+.wb-goal-loop-body.preview p { margin: 0; color: var(--wb-text); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; }
+.wb-goal-loop-body.preview ol,
+.wb-goal-loop-body.preview ul { margin: 0; padding-left: 20px; color: var(--wb-text); font-size: 12.5px; }
+.wb-goal-loop-body.preview li { margin: 7px 0; line-height: 1.45; }
+.wb-goal-loop-body.preview li small { display: block; margin-top: 2px; color: var(--wb-muted); }
+.wb-goal-loop-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.wb-goal-loop-summary span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--wb-line);
+  border-radius: 9px;
+  background: var(--wb-icon-bg);
+  padding: 9px 10px;
+}
+.wb-goal-loop-summary small { color: var(--wb-muted); font-size: 10.5px; }
+.wb-goal-loop-summary b { overflow: hidden; color: var(--wb-text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.wb-goal-loop-error {
+  margin: 0 22px 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-red) 45%, var(--wb-line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-red) 8%, var(--wb-card-bg));
+  color: var(--wb-red);
+  padding: 9px 11px;
+  font-size: 12px;
+}
+.wb-goal-loop-live {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin: 10px 0;
+}
+.wb-goal-loop-live span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-icon-bg);
+  padding: 7px 9px;
+}
+.wb-goal-loop-live small { color: var(--wb-muted); font-size: 10px; }
+.wb-goal-loop-live b { overflow: hidden; color: var(--wb-text); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.wb-goal-loop-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 22px 18px;
+  border-top: 1px solid var(--wb-line);
+}
+@media (max-width: 720px) {
+  .wb-goal-loop-modal { max-height: calc(100vh - 16px); }
+  .wb-goal-loop-grid,
+  .wb-goal-loop-options,
+  .wb-goal-loop-options.reflection,
+  .wb-goal-loop-summary,
+  .wb-goal-loop-live { grid-template-columns: 1fr 1fr; }
+  .wb-goal-loop-head,
+  .wb-goal-loop-body,
+  .wb-goal-loop-foot { padding-left: 16px; padding-right: 16px; }
+  .wb-goal-loop-error { margin-left: 16px; margin-right: 16px; }
+  .wb-goal-loop-foot { flex-wrap: wrap; }
+}
 .wb-scope-prompt {
   border: 1px solid color-mix(in srgb, var(--wb-amber) 40%, var(--wb-line));
   background: color-mix(in srgb, var(--wb-amber) 8%, var(--wb-card-bg));
@@ -7975,6 +8327,61 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   background: var(--wb-icon-bg);
   border-radius: 999px;
   padding: 3px 9px;
+}
+
+.wbc-ctx-chip.on {
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-accent) 11%, var(--wb-panel-2));
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 22%, transparent);
+  padding: 2px 4px 2px 9px;
+}
+
+.wbc-ctx-chip.on svg {
+  color: var(--wb-accent);
+}
+
+.wbc-ctx-x {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 999px;
+  margin-left: 1px;
+}
+
+.wbc-ctx-x:hover {
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-text) 12%, transparent);
+}
+
+.wbc-ctx-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px dashed var(--wb-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.wbc-ctx-add-btn:hover,
+.wbc-ctx-add-btn.active {
+  border-color: var(--wb-accent);
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+}
+
+.wbc-ctx-picker {
+  top: auto;
+  bottom: calc(100% + 4px);
+  min-width: 220px;
 }
 
 .wbc-composer-actions {

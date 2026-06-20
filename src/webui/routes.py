@@ -3665,11 +3665,17 @@ async def _workbench_answer_pending(
     question_id: str,
     answer_text: str,
     workspace_dir: str,
+    permission_mode: str = "default",
 ) -> str:
     """Resume a paused Workbench round with the user's answer. Binds the session
     + workspace ContextVars so ``answer_pending_question`` (which calls
     ``_run_chat_agent`` directly, bypassing ``run_agent``'s context setup) grants
     permission / retries the blocked action inside the right project scope.
+
+    ``permission_mode`` carries the run's mode into the resumed slice — a goal
+    loop configured for "auto"/"full_access" must keep that mode when continuing
+    from a clarification, otherwise the continuation silently reverts to
+    "default" and starts asking for permissions the user opted out of.
     """
     from cyrene.agent.state import _current_session_id, _active_workspace_dir
     s_tok = _current_session_id.set(str(session_id or ""))
@@ -3677,6 +3683,7 @@ async def _workbench_answer_pending(
     try:
         return await answer_pending_question(
             question_id, answer_text, _bot, _CHAT_ID, _db_path,
+            permission_mode=permission_mode,
         )
     finally:
         _current_session_id.reset(s_tok)
@@ -7924,6 +7931,31 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             and explicit_denial
         )
 
+        # Goal-loop clarifications (not permission denials) are resumed by the
+        # background runner, so this request returns immediately instead of
+        # blocking for as long as the agent keeps working. The agent-side pending
+        # question stays in place; the runner clears it when it resumes. Denials
+        # fall through to the synchronous path below (they only record the denial
+        # and don't run the agent), as does any case the runner declines to own.
+        if (
+            pending_plan_step
+            and bool(pending_plan_step.get("goalLoop"))
+            and not permission_denied
+        ):
+            from webui.workbench_goal_loop import begin_async_answer
+            if await begin_async_answer(_db_path, session_id, question_id, answer_text):
+                payload = _read_workbench_store()
+                project, session = _workbench_find_session(payload, session_id)
+                return {
+                    "ok": True,
+                    "awaitingUser": False,
+                    "continuePlanExecution": False,
+                    "project": project,
+                    "session": session,
+                    "run": None,
+                    **payload,
+                }
+
         now = _utc_now_iso()
         run_start_ts = now
         workspace_root = _workbench_workspace_root(project)
@@ -7980,6 +8012,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         continue_plan_execution = False
         if pending_plan_step and not awaiting_user:
             pending_step_id = str(pending_plan_step.get("stepId") or "").strip()
+            is_goal_loop_step = bool(pending_plan_step.get("goalLoop"))
             target_step = next(
                 (
                     step for step in (session.get("plan") or [])
@@ -7997,6 +8030,30 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                     target_step["startedAt"] = None
                     target_step["currentAction"] = "权限请求被拒绝，可调整命令后重新执行。"
                     session["status"] = "paused"
+                elif is_goal_loop_step:
+                    # The answered slice already advanced this step: the agent
+                    # resumed from its question and ran to the end of its turn,
+                    # exactly like the normal answer branch below that marks the
+                    # step complete. Marking it complete here — instead of
+                    # resetting it to pending — stops the server-side runner from
+                    # re-executing the SAME step and re-asking the SAME question.
+                    # The independent FINAL acceptance stays the authoritative
+                    # gate: if the step isn't really done it fails there and the
+                    # runner generates repair steps.
+                    target_step["status"] = "completed"
+                    target_step["completedAt"] = now
+                    target_step["currentAction"] = (
+                        f"用户已确认；本步完成，调用工具 {len(tool_call_events)} 次。"
+                        if tool_call_events else "用户已确认，本步骤完成。"
+                    )
+                    target_step["toolCalls"] = [
+                        {"tool": event["tool"], "argsPreview": event["argsPreview"]}
+                        for event in tool_call_events
+                    ]
+                    _workbench_apply_step_file_changes(session, pending_step_id, file_changes)
+                    # Hand progression back to the runner (next step / final
+                    # acceptance); do not settle on review/paused here.
+                    session["status"] = "running"
                 else:
                     target_step["status"] = "completed"
                     target_step["completedAt"] = now
@@ -8044,6 +8101,13 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
+        if pending_plan_step and bool(pending_plan_step.get("goalLoop")) and not awaiting_user:
+            from webui.workbench_goal_loop import resume_after_answer
+            await resume_after_answer(
+                _db_path,
+                session_id,
+                permission_denied=permission_denied,
+            )
         return {
             "ok": True,
             "awaitingUser": awaiting_user,
@@ -8435,6 +8499,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         import os as _os
         _os._exit(42)
 
+    from webui.workbench_goal_loop import register_goal_loop_routes
+
+    register_goal_loop_routes(router, app, db_path)
     app.include_router(router)
 
 

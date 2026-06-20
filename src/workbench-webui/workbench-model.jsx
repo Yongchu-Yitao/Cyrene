@@ -67,6 +67,7 @@ var WorkbenchModel = (function () {
         if (!Array.isArray(session.runs)) session.runs = [];
         if (!Array.isArray(session.artifacts)) session.artifacts = [];
         if (!Array.isArray(session.acceptanceCriteria)) session.acceptanceCriteria = [];
+        if (session.goalLoop && typeof session.goalLoop !== "object") session.goalLoop = null;
       });
     });
     var activeProjectId = store.activeProjectId || (projects[0] && projects[0].id) || "";
@@ -276,6 +277,52 @@ var WorkbenchModel = (function () {
       headers: { "Content-Type": "application/json" },
       body: "{}",
     }).then(normalizeStore);
+  }
+
+  function previewGoalLoop(sessionId, input) {
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input || {}),
+    });
+  }
+
+  function startGoalLoop(sessionId, draftId) {
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ draftId: draftId || "" }),
+    }).then(normalizeStore);
+  }
+
+  function pauseGoalLoop(sessionId) {
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop/pause", {
+      method: "POST",
+    }).then(normalizeStore);
+  }
+
+  function resumeGoalLoop(sessionId) {
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop/resume", {
+      method: "POST",
+    }).then(normalizeStore);
+  }
+
+  function cancelGoalLoop(sessionId) {
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop/cancel", {
+      method: "POST",
+    }).then(normalizeStore);
+  }
+
+  function updateGoalLoopLimits(sessionId, input) {
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop/limits", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input || {}),
+    }).then(normalizeStore);
+  }
+
+  function fetchGoalLoop(sessionId) {
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/goal-loop");
   }
 
   // Intent-aware composer entry: the server classifies the input and routes it
@@ -783,6 +830,13 @@ var WorkbenchModel = (function () {
     dismissHint: dismissHint,
     generatePlan: generatePlan,
     generateAcceptance: generateAcceptance,
+    previewGoalLoop: previewGoalLoop,
+    startGoalLoop: startGoalLoop,
+    pauseGoalLoop: pauseGoalLoop,
+    resumeGoalLoop: resumeGoalLoop,
+    cancelGoalLoop: cancelGoalLoop,
+    updateGoalLoopLimits: updateGoalLoopLimits,
+    fetchGoalLoop: fetchGoalLoop,
     dispatch: dispatch,
     sendChat: sendChat,
     answer: answer,

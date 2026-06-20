@@ -521,8 +521,22 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   }, []);
 
   useWorkbenchEffect(function () {
+    // Goal-loop runs emit a status event on every phase/step change. Reloading
+    // the whole store on each one would pile concurrent fetches onto a server
+    // that is already busy running the agent — exactly when requests start
+    // failing ("Load failed"). Coalesce bursts into a single trailing reload.
+    var goalLoopReloadTimer = null;
     function handleRuntimeEvent(data) {
-      if (!data || ["tool_call", "llm_call", "subagent_update"].indexOf(data.type) < 0) return;
+      if (!data) return;
+      if (data.type === "goal_loop_update") {
+        var activeSessionId = String((activeViewRef.current && activeViewRef.current.sessionId) || "");
+        var eventSessionId = String(data.session_id || "");
+        if (eventSessionId && eventSessionId !== activeSessionId) return;
+        if (goalLoopReloadTimer) clearTimeout(goalLoopReloadTimer);
+        goalLoopReloadTimer = setTimeout(function () { goalLoopReloadTimer = null; reloadWorkbench(); }, 700);
+        return;
+      }
+      if (["tool_call", "llm_call", "subagent_update"].indexOf(data.type) < 0) return;
       setStore(function (prev) {
         var active = prev && prev.activeSession;
         // Merge live activity while a plan step runs, OR while any background
@@ -553,6 +567,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       window.__sseHandlers.add(handleRuntimeEvent);
       return function () {
         window.__sseHandlers.delete(handleRuntimeEvent);
+        if (goalLoopReloadTimer) clearTimeout(goalLoopReloadTimer);
       };
     }
     return undefined;
@@ -2018,6 +2033,24 @@ function useTaskController(session, onRefresh, runtime) {
       });
     },
 
+    configureGoalLoop: function () {
+      return window.confirmModal({
+        title: wbT("goalLoop.risk.title", "持续执行到验收通过"),
+        body: wbT(
+          "goalLoop.risk.body",
+          "Agent 会在后台反复执行计划、独立验收，并在验收失败时自动返工，直到验收通过或达到退出条件。\n\n这个模式通常会产生更多模型调用、工具调用和文件修改，成本明显高于普通执行。关闭页面不会停止任务，你可以随时暂停或取消。"
+        ),
+        confirmLabel: wbT("goalLoop.risk.confirm", "了解并继续"),
+      }).then(function (ok) {
+        if (ok && runtime && runtime.onOpenGoalLoop) runtime.onOpenGoalLoop();
+        return ok;
+      });
+    },
+
+    adjustGoalLoopLimits: function () {
+      if (runtime && runtime.onOpenGoalLoopLimits) runtime.onOpenGoalLoopLimits();
+    },
+
     reject: function () {
       var events = model.withEvent(session, "ActionRejected", "用户拒绝了当前操作。");
       return run(patch({ status: "planning", agentReply: "操作已取消。你可以修改要求，或让我重新规划。", events: events }));
@@ -2120,6 +2153,11 @@ function useTaskController(session, onRefresh, runtime) {
     // keeps the step spinning with a live 停止 button and the click looks dead.
     // Reset startedAt so a later re-run times the step fresh.
     interrupt: function () {
+      if (session.goalLoop && session.goalLoop.status === "running") {
+        interruptedRef.current = true;
+        model.interruptSession(sid);
+        return run(model.pauseGoalLoop(sid));
+      }
       interruptedRef.current = true;
       if (runAbortRef.current) { try { runAbortRef.current.abort(); } catch (e) {} }
       model.interruptSession(sid);
@@ -2186,6 +2224,9 @@ function useTaskController(session, onRefresh, runtime) {
     },
 
     resume: function () {
+      if (session.goalLoop && ["paused", "blocked"].indexOf(session.goalLoop.status) >= 0) {
+        return run(model.resumeGoalLoop(sid));
+      }
       return model.patchSession(sid, { events: model.withEvent(session, "Resumed", "继续执行任务。") })
         .then(apply).then(function () { return ctrl.execute(); });
     },
@@ -2260,6 +2301,9 @@ function useTaskController(session, onRefresh, runtime) {
     cancel: function () {
       return window.confirmModal({ body: "确定取消这个任务吗？当前进度会被保留。", danger: true }).then(function (ok) {
         if (!ok) return undefined;
+        if (session.goalLoop && ["running", "waiting_for_user", "paused", "blocked"].indexOf(session.goalLoop.status) >= 0) {
+          return run(model.cancelGoalLoop(sid));
+        }
         return run(patch({ status: "cancelled", events: model.withEvent(session, "Cancelled", "任务已取消。") }));
       });
     },
@@ -2272,11 +2316,238 @@ function useTaskController(session, onRefresh, runtime) {
   return ctrl;
 }
 
+function GoalLoopWizard({ session, onClose, onStarted }) {
+  var model = window.WorkbenchModel;
+  var [phase, setPhase] = useWorkbenchState("config");
+  var [goal, setGoal] = useWorkbenchState(String(session.goal || ""));
+  var [maxHours, setMaxHours] = useWorkbenchState(2);
+  var [maxRepairs, setMaxRepairs] = useWorkbenchState(3);
+  var [permissionMode, setPermissionMode] = useWorkbenchState("auto");
+  var [reflectionMode, setReflectionMode] = useWorkbenchState("proactive");
+  var [fullAccessConfirmed, setFullAccessConfirmed] = useWorkbenchState(false);
+  var [preview, setPreview] = useWorkbenchState(null);
+  var [busy, setBusy] = useWorkbenchState(false);
+  var [error, setError] = useWorkbenchState("");
+
+  function previewInput() {
+    return {
+      goal: goal.trim(),
+      maxRuntimeHours: Number(maxHours),
+      maxRepairRounds: Number(maxRepairs),
+      permissionMode: permissionMode,
+      reflectionMode: reflectionMode,
+      fullAccessConfirmed: permissionMode !== "full_access" || fullAccessConfirmed,
+      basePlanDefinitionRevision: Number(session.planDefinitionRevision || 0),
+    };
+  }
+
+  function generatePreview() {
+    setError("");
+    if (goal.trim().length < 3) {
+      setError(wbT("goalLoop.validation.goal", "请输入清晰的目标。"));
+      return;
+    }
+    if (permissionMode === "full_access" && !fullAccessConfirmed) {
+      setError(wbT("goalLoop.validation.fullAccess", "请先确认完全访问风险。"));
+      return;
+    }
+    setBusy(true);
+    model.previewGoalLoop(session.id, previewInput())
+      .then(function (result) {
+        setPreview(result);
+        setPhase("preview");
+      })
+      .catch(function (err) { setError(err.message || String(err)); })
+      .finally(function () { setBusy(false); });
+  }
+
+  function start() {
+    if (!preview || !preview.draftId) return;
+    setError("");
+    setBusy(true);
+    model.startGoalLoop(session.id, preview.draftId)
+      .then(function (store) {
+        if (onStarted) onStarted(store);
+        if (onClose) onClose();
+      })
+      .catch(function (err) { setError(err.message || String(err)); })
+      .finally(function () { setBusy(false); });
+  }
+
+  return (
+    <div className="workbench-confirm-scrim wb-goal-loop-scrim" onMouseDown={function (event) { if (!busy && event.target === event.currentTarget) onClose(); }}>
+      <div className="wb-goal-loop-modal" role="dialog" aria-modal="true" aria-labelledby="goal-loop-title">
+        <div className="wb-goal-loop-head">
+          <div>
+            <span className="wb-goal-loop-eyebrow">{wbT("goalLoop.eyebrow", "持续执行模式")}</span>
+            <h2 id="goal-loop-title">{phase === "config" ? wbT("goalLoop.configure.title", "确认目标和退出条件") : wbT("goalLoop.preview.title", "确认持续执行方案")}</h2>
+          </div>
+          <button type="button" className="workbench-toast-close" disabled={busy} onClick={onClose} aria-label={wbT("common.close", "关闭")}>{ICONS.x}</button>
+        </div>
+        <div className="wb-goal-loop-steps" aria-label={wbT("goalLoop.steps", "配置进度")}>
+          <span className="done">1</span><i />
+          <span className={phase === "preview" ? "done" : "active"}>2</span><i />
+          <span className={phase === "preview" ? "active" : ""}>3</span>
+        </div>
+
+        {phase === "config" ? (
+          <div className="wb-goal-loop-body">
+            <label className="wb-goal-loop-field">
+              <span>{wbT("goalLoop.field.goal", "目标")}</span>
+              <small>{wbT("goalLoop.field.goalHint", "描述最终应达到的状态，不要只填写执行步骤。")}</small>
+              <textarea value={goal} rows={5} onChange={function (event) { setGoal(event.target.value); }} />
+            </label>
+            <div className="wb-goal-loop-grid">
+              <label className="wb-goal-loop-field">
+                <span>{wbT("goalLoop.field.runtime", "最大运行时间")}</span>
+                <small>{wbT("goalLoop.field.runtimeHint", "暂停和等待确认期间不计时。")}</small>
+                <div className="wb-goal-loop-number"><input type="number" min="0.5" max="24" step="0.5" value={maxHours} onChange={function (event) { setMaxHours(event.target.value); }} /><b>{wbT("goalLoop.hours", "小时")}</b></div>
+              </label>
+              <label className="wb-goal-loop-field">
+                <span>{wbT("goalLoop.field.repairs", "最大返工轮数")}</span>
+                <small>{wbT("goalLoop.field.repairsHint", "一次验收失败并重新修复计为一轮。")}</small>
+                <div className="wb-goal-loop-number"><input type="number" min="0" max="10" step="1" value={maxRepairs} onChange={function (event) { setMaxRepairs(event.target.value); }} /><b>{wbT("goalLoop.rounds", "轮")}</b></div>
+              </label>
+            </div>
+
+            <fieldset className="wb-goal-loop-options">
+              <legend>{wbT("goalLoop.field.permission", "权限模式")}</legend>
+              <button type="button" className={permissionMode === "auto" ? "selected" : ""} onClick={function () { setPermissionMode("auto"); }}>
+                <b>{wbT("goalLoop.permission.auto", "Auto（推荐）")}</b>
+                <small>{wbT("goalLoop.permission.autoHint", "自动审核权限边界，必要时暂停等待你确认。")}</small>
+              </button>
+              <button type="button" className={permissionMode === "full_access" ? "selected danger" : ""} onClick={function () { setPermissionMode("full_access"); }}>
+                <b>{wbT("goalLoop.permission.full", "完全访问")}</b>
+                <small>{wbT("goalLoop.permission.fullHint", "减少权限中断，但可能修改工作区外的文件。")}</small>
+              </button>
+            </fieldset>
+            {permissionMode === "full_access" && (
+              <label className="wb-goal-loop-warning">
+                <input type="checkbox" checked={fullAccessConfirmed} onChange={function (event) { setFullAccessConfirmed(event.target.checked); }} />
+                <span>{wbT("goalLoop.permission.confirm", "我理解完全访问的风险，并同意在本次持续任务中授予该权限。")}</span>
+              </label>
+            )}
+
+            <fieldset className="wb-goal-loop-options reflection">
+              <legend>{wbT("goalLoop.field.reflection", "深度思考强度")}</legend>
+              {[
+                ["standard", wbT("goalLoop.reflection.standard", "标准"), wbT("goalLoop.reflection.standardHint", "验收失败或明显停滞时调用。")],
+                ["proactive", wbT("goalLoop.reflection.proactive", "主动（推荐）"), wbT("goalLoop.reflection.proactiveHint", "在最终验收前和验收失败后主动检查方向。")],
+                ["frequent", wbT("goalLoop.reflection.frequent", "高频"), wbT("goalLoop.reflection.frequentHint", "每个步骤完成后及返工时调用，成本最高。")],
+              ].map(function (option) {
+                return <button type="button" key={option[0]} className={reflectionMode === option[0] ? "selected" : ""} onClick={function () { setReflectionMode(option[0]); }}><b>{option[1]}</b><small>{option[2]}</small></button>;
+              })}
+            </fieldset>
+            <p className="wb-goal-loop-cost">{wbT("goalLoop.costHint", "较高的深度思考强度会增加模型调用、运行时间和成本。首次启动不会调用深度反思。")}</p>
+          </div>
+        ) : (
+          <div className="wb-goal-loop-body preview">
+            {preview.goalChanged && <div className="wb-goal-loop-change">{wbT("goalLoop.goalChanged", "目标已改变，原计划已失效。下面是基于新目标重新生成的计划和验收条件。")}</div>}
+            <section><h3>{wbT("goalLoop.preview.goal", "目标")}</h3><p>{preview.goal}</p></section>
+            <div className="wb-goal-loop-summary">
+              <span><small>{wbT("goalLoop.field.runtime", "最大运行时间")}</small><b>{preview.limits.maxRuntimeHours} {wbT("goalLoop.hours", "小时")}</b></span>
+              <span><small>{wbT("goalLoop.field.repairs", "最大返工轮数")}</small><b>{preview.limits.maxRepairRounds} {wbT("goalLoop.rounds", "轮")}</b></span>
+              <span><small>{wbT("goalLoop.field.permission", "权限模式")}</small><b>{preview.limits.permissionMode === "full_access" ? wbT("goalLoop.permission.full", "完全访问") : "Auto"}</b></span>
+              <span><small>{wbT("goalLoop.field.reflection", "深度思考强度")}</small><b>{preview.limits.reflectionMode === "frequent" ? wbT("goalLoop.reflection.frequent", "高频") : preview.limits.reflectionMode === "standard" ? wbT("goalLoop.reflection.standard", "标准") : wbT("goalLoop.reflection.proactive", "主动")}</b></span>
+            </div>
+            <section><h3>{wbT("goalLoop.preview.plan", "执行计划")}</h3><ol>{(preview.plan || []).map(function (step) { return <li key={step.id}><b>{step.title}</b>{step.description && <small>{step.description}</small>}</li>; })}</ol></section>
+            <section><h3>{wbT("goalLoop.preview.acceptance", "验收条件")}</h3><ul>{(preview.acceptanceCriteria || []).map(function (item) { return <li key={item.id}>{item.text}</li>; })}</ul></section>
+          </div>
+        )}
+
+        {error && <div className="wb-goal-loop-error">{error}</div>}
+        <div className="wb-goal-loop-foot">
+          <button type="button" className="wb-btn ghost" disabled={busy} onClick={phase === "preview" ? function () { setPhase("config"); setError(""); } : onClose}>{phase === "preview" ? wbT("goalLoop.back", "返回修改") : wbT("common.cancel", "取消")}</button>
+          {phase === "preview" && <button type="button" className="wb-btn ghost" disabled={busy} onClick={generatePreview}>{wbT("goalLoop.regenerate", "重新生成")}</button>}
+          <button type="button" className="wb-btn primary" disabled={busy} onClick={phase === "preview" ? start : generatePreview}>{busy ? wbT("goalLoop.working", "处理中…") : phase === "preview" ? wbT("goalLoop.start", "确认并开始持续执行") : wbT("goalLoop.generate", "生成计划和验收条件")}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Adjust-and-continue dialog for a paused goal loop. The loop pauses when it
+// hits the runtime / repair-round budget; bumping the budget here and resuming
+// is the only way to make progress past those limits (a plain resume would just
+// re-pause). Reuses the wizard's field styling in a compact modal.
+function GoalLoopLimitsDialog({ session, onClose, onSaved }) {
+  var model = window.WorkbenchModel;
+  var loop = (session && session.goalLoop) || {};
+  var [maxHours, setMaxHours] = useWorkbenchState(Math.max(0.5, Math.round((Number(loop.maxActiveSeconds || 7200) / 3600) * 2) / 2));
+  var [maxRepairs, setMaxRepairs] = useWorkbenchState(Number(loop.maxRepairRounds || 3));
+  var [reflectionMode, setReflectionMode] = useWorkbenchState(String(loop.reflectionMode || "proactive"));
+  var [busy, setBusy] = useWorkbenchState(false);
+  var [error, setError] = useWorkbenchState("");
+  var reasonHint = loop.stopReason === "max_runtime"
+    ? wbT("goalLoop.limits.reasonRuntime", "已达到最大运行时间。增加运行时间后即可继续。")
+    : loop.stopReason === "max_repair_rounds"
+    ? wbT("goalLoop.limits.reasonRepairs", "已达到最大返工轮数。增加返工轮数后即可继续。")
+    : wbT("goalLoop.limits.reason", "调整退出条件后继续持续执行。");
+
+  function save() {
+    setError("");
+    setBusy(true);
+    model.updateGoalLoopLimits(session.id, {
+      maxRuntimeHours: Number(maxHours),
+      maxRepairRounds: Number(maxRepairs),
+      reflectionMode: reflectionMode,
+    })
+      .then(function () { return model.resumeGoalLoop(session.id); })
+      .then(function (store) { if (onSaved) onSaved(store); if (onClose) onClose(); })
+      .catch(function (err) { setError((err && err.message) || String(err)); })
+      .finally(function () { setBusy(false); });
+  }
+
+  return (
+    <div className="workbench-confirm-scrim wb-goal-loop-scrim" onMouseDown={function (event) { if (!busy && event.target === event.currentTarget) onClose(); }}>
+      <div className="wb-goal-loop-modal compact" role="dialog" aria-modal="true" aria-labelledby="goal-loop-limits-title">
+        <div className="wb-goal-loop-head">
+          <div>
+            <span className="wb-goal-loop-eyebrow">{wbT("goalLoop.eyebrow", "持续执行模式")}</span>
+            <h2 id="goal-loop-limits-title">{wbT("goalLoop.limits.title", "调整限制并继续")}</h2>
+          </div>
+          <button type="button" className="workbench-toast-close" disabled={busy} onClick={onClose} aria-label={wbT("common.close", "关闭")}>{ICONS.x}</button>
+        </div>
+        <div className="wb-goal-loop-body">
+          <div className="wb-goal-loop-change">{reasonHint}</div>
+          <div className="wb-goal-loop-grid">
+            <label className="wb-goal-loop-field">
+              <span>{wbT("goalLoop.field.runtime", "最大运行时间")}</span>
+              <div className="wb-goal-loop-number"><input type="number" min="0.5" max="24" step="0.5" value={maxHours} onChange={function (event) { setMaxHours(event.target.value); }} /><b>{wbT("goalLoop.hours", "小时")}</b></div>
+            </label>
+            <label className="wb-goal-loop-field">
+              <span>{wbT("goalLoop.field.repairs", "最大返工轮数")}</span>
+              <div className="wb-goal-loop-number"><input type="number" min="0" max="10" step="1" value={maxRepairs} onChange={function (event) { setMaxRepairs(event.target.value); }} /><b>{wbT("goalLoop.rounds", "轮")}</b></div>
+            </label>
+          </div>
+          <fieldset className="wb-goal-loop-options reflection">
+            <legend>{wbT("goalLoop.field.reflection", "深度思考强度")}</legend>
+            {[
+              ["standard", wbT("goalLoop.reflection.standard", "标准")],
+              ["proactive", wbT("goalLoop.reflection.proactive", "主动（推荐）")],
+              ["frequent", wbT("goalLoop.reflection.frequent", "高频")],
+            ].map(function (option) {
+              return <button type="button" key={option[0]} className={reflectionMode === option[0] ? "selected" : ""} onClick={function () { setReflectionMode(option[0]); }}><b>{option[1]}</b></button>;
+            })}
+          </fieldset>
+        </div>
+        {error && <div className="wb-goal-loop-error">{error}</div>}
+        <div className="wb-goal-loop-foot">
+          <button type="button" className="wb-btn ghost" disabled={busy} onClick={onClose}>{wbT("common.cancel", "取消")}</button>
+          <button type="button" className="wb-btn primary" disabled={busy} onClick={save}>{busy ? wbT("goalLoop.working", "处理中…") : wbT("goalLoop.limits.save", "保存并继续")}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TaskWorkArea(props) {
   var project = props.project;
   var session = props.session;
   var [attachments, setAttachments] = useWorkbenchState([]);
   var [mode, setMode] = useWorkbenchState("auto");
+  var [goalLoopOpen, setGoalLoopOpen] = useWorkbenchState(false);
+  var [goalLoopLimitsOpen, setGoalLoopLimitsOpen] = useWorkbenchState(false);
   var sid = session ? session.id : "";
   // Pending attachments belong to the task being composed — reset on switch.
   useWorkbenchEffect(function () { setAttachments([]); }, [sid]);
@@ -2285,6 +2556,8 @@ function TaskWorkArea(props) {
     mode: mode,
     clearAttachments: function () { setAttachments([]); },
     onLocalPatch: props.onLocalPatch,
+    onOpenGoalLoop: function () { setGoalLoopOpen(true); },
+    onOpenGoalLoopLimits: function () { setGoalLoopLimitsOpen(true); },
   });
   if (props.loading) {
     return <main className="workbench-main"><div className="workbench-empty">正在加载工作台...</div></main>;
@@ -2342,6 +2615,8 @@ function TaskWorkArea(props) {
         mode={mode}
         onModeChange={setMode}
       />
+      {goalLoopOpen && <GoalLoopWizard session={session} onClose={function () { setGoalLoopOpen(false); }} onStarted={props.onRefresh} />}
+      {goalLoopLimitsOpen && <GoalLoopLimitsDialog session={session} onClose={function () { setGoalLoopLimitsOpen(false); }} onSaved={props.onRefresh} />}
     </main>
   );
 }
@@ -2483,7 +2758,7 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession 
       });
   }
 
-  var menuActions = headerMenuActions(status, controller, session, project, onSelectSession);
+  var menuActions = headerMenuActions(status, controller, session, project, onSelectSession, onRightTab);
 
   return (
     <div className="workbench-task-header">
@@ -2560,7 +2835,7 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession 
 // Status-dependent secondary actions, folded into the ⋯ menu. The primary action
 // surface is the composer quick-chips below; this is overflow. Returns
 // [{ label, onClick }]; running/idle add nothing (covered by chips + static items).
-function headerMenuActions(status, controller, session, project, onSelectSession) {
+function headerMenuActions(status, controller, session, project, onSelectSession, onRightTab) {
   function openNext() { openNextSession(session, project, onSelectSession); }
   if (status === "answered" || status === "acted") {
     return [
@@ -2581,6 +2856,13 @@ function headerMenuActions(status, controller, session, project, onSelectSession
     ];
   }
   if (status === "blocked") {
+    if (session && session.goalLoop) {
+      return [
+        { label: wbT("task.action.resumeTask", "Resume task"), onClick: function () { controller.resume(); } },
+        { label: wbT("task.action.viewLogs", "View logs"), guard: false, onClick: function () { onRightTab && onRightTab("logs"); } },
+        { label: wbT("task.action.cancelTask", "Cancel task"), onClick: function () { controller.cancel(); } },
+      ];
+    }
     return [
       { label: wbT("task.action.viewDetails", "View details"), guard: false, onClick: function () { onRightTab && onRightTab("context"); } },
       { label: wbT("task.action.viewLogs", "View logs"), guard: false, onClick: function () { onRightTab && onRightTab("logs"); } },
@@ -2846,6 +3128,14 @@ function AgentActivityCard({ session, controller, onRightTab }) {
   var pct = plan.length ? Math.round((done / plan.length) * 100) : 0;
   var lines = wbLiveActivityLines(session, runningStep, busyOp);
   var stage = runningStep ? runningStep.title : ((busyOp && busyOp.label) || wbT("status.running", "Running"));
+  var goalLoop = session.goalLoop && typeof session.goalLoop === "object" ? session.goalLoop : null;
+  var phaseLabels = {
+    executing: wbT("goalLoop.phase.executing", "执行"),
+    reflecting: wbT("goalLoop.phase.reflecting", "深度思考"),
+    verifying: wbT("goalLoop.phase.verifying", "独立验收"),
+    repairing: wbT("goalLoop.phase.repairing", "返工"),
+    recovering: wbT("goalLoop.phase.recovering", "恢复"),
+  };
   var feedRef = useWorkbenchRef(null);
   // Keep the newest activity line in view as it streams in.
   useWorkbenchEffect(function () {
@@ -2858,6 +3148,14 @@ function AgentActivityCard({ session, controller, onRightTab }) {
         ? <span className="wb-progress-badge">{done} / {plan.length}</span>
         : <span className="wb-progress-badge live">{wbT("task.processing", "Processing")}</span>}>
       <p className="wb-running-stage">{wbT("task.currentStage", "Current stage: {stage}", { stage: stage })}</p>
+      {goalLoop && (
+        <div className="wb-goal-loop-live">
+          <span><small>{wbT("goalLoop.live.phase", "阶段")}</small><b>{phaseLabels[goalLoop.phase] || goalLoop.phase}</b></span>
+          <span><small>{wbT("goalLoop.live.runtime", "运行时间")}</small><b>{formatDurationSec(goalLoop.activeSeconds || 0)} / {formatDurationSec(goalLoop.maxActiveSeconds || 0)}</b></span>
+          <span><small>{wbT("goalLoop.live.repairs", "返工")}</small><b>{goalLoop.repairRound || 0} / {goalLoop.maxRepairRounds || 0}</b></span>
+          <span><small>{wbT("goalLoop.live.permission", "权限")}</small><b>{goalLoop.permissionMode === "full_access" ? wbT("goalLoop.permission.full", "完全访问") : "Auto"}</b></span>
+        </div>
+      )}
       {/* A running plan step shows its call details in the expanded subtask below,
           so we omit the inline feed here. Non-step ops (no runningStep) keep it. */}
       {!runningStep && (
@@ -2902,6 +3200,7 @@ function PausedCard({ session, controller }) {
     || null;
   return (
     <WbCard tone="paused" icon={ICONS.pause} title={wbT("task.card.paused", "Task paused")}>
+      {session.goalLoop && <AgentReplyBlock text={session.agentReply || wbT("goalLoop.paused", "持续执行已暂停，当前进度已保留。")} />}
       <p className="wb-card-hint">{wbT("task.pausedAt", "Paused at step {n}{title}.", { n: Math.min(done + 1, plan.length || 1), title: current ? ": " + current.title : "" })}</p>
     </WbCard>
   );
@@ -3529,7 +3828,7 @@ function composerPlaceholder(status) {
 
 // Quick-action chips below the composer; the set changes with status.
 // `guard:false` chips stay enabled while the controller is busy (read-only).
-function composerChips(status, controller, onRightTab) {
+function composerChips(status, controller, onRightTab, session) {
   if (status === "idle" || status === "pending") {
     return [];
   }
@@ -3550,11 +3849,19 @@ function composerChips(status, controller, onRightTab) {
     return [
       { label: wbT("task.action.approveExecution", "Approve execution"), onClick: function () { controller.approvePlan(); } },
       { label: wbT("task.action.approveRunAll", "Approve & run all"), onClick: function () { controller.approveAndRunAll(); } },
+      { label: wbT("goalLoop.action.configure", "持续执行到验收通过"), className: "goal-loop", onClick: function () { controller.configureGoalLoop(); } },
       { label: wbT("task.action.editPlan", "Edit plan"), onClick: focusComposer },
       { label: wbT("task.action.regenerate", "Regenerate"), onClick: function () { controller.regeneratePlan(); } },
     ];
   }
   if (status === "waiting_for_approval" || status === "waiting_for_user" || status === "blocked") {
+    if (session && session.goalLoop && status === "blocked") {
+      return [
+        { label: wbT("task.action.resumeTask", "Resume task"), onClick: function () { controller.resume(); } },
+        { label: wbT("task.action.viewLogs", "View logs"), guard: false, onClick: function () { onRightTab && onRightTab("logs"); } },
+        { label: wbT("task.action.cancelTask", "Cancel task"), onClick: function () { controller.cancel(); } },
+      ];
+    }
     return [
       { label: wbT("task.action.approveExecution", "Approve execution"), onClick: function () { controller.execute(); } },
       { label: wbT("task.action.viewDetails", "View details"), guard: false, onClick: function () { onRightTab && onRightTab("context"); } },
@@ -3569,6 +3876,19 @@ function composerChips(status, controller, onRightTab) {
     ];
   }
   if (status === "paused") {
+    if (session && session.goalLoop) {
+      // Budget-exhausted pauses can't be cleared by a plain resume (it would just
+      // re-pause), so adjusting the limit is the only real "continue" path.
+      var loopStop = session.goalLoop.stopReason || "";
+      var budgetPaused = loopStop === "max_runtime" || loopStop === "max_repair_rounds";
+      var pausedActions = [];
+      if (!budgetPaused) pausedActions.push({ label: wbT("task.action.resumeTask", "Resume task"), onClick: function () { controller.resume(); } });
+      pausedActions.push({ label: wbT("goalLoop.action.adjustLimits", "调整限制并继续"), onClick: function () { controller.adjustGoalLoopLimits(); } });
+      pausedActions.push({ label: wbT("task.action.viewLogs", "View logs"), guard: false, onClick: function () { onRightTab && onRightTab("logs"); } });
+      pausedActions.push({ label: wbT("task.action.viewChanges", "View changes"), guard: false, onClick: function () { onRightTab && onRightTab("files"); } });
+      pausedActions.push({ label: wbT("task.action.cancelTask", "Cancel task"), onClick: function () { controller.cancel(); } });
+      return pausedActions;
+    }
     return [
       { label: wbT("task.action.resumeTask", "Resume task"), onClick: function () { controller.resume(); } },
       { label: wbT("task.action.runAll", "Run all"), onClick: function () { controller.executeAll(); } },
@@ -3691,7 +4011,7 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
   // valid actions are on the question card itself — suppress the composer's
   // status chips so no answer buttons sit above the input box.
   var awaitingAnswer = !!(session.pendingQuestion && session.pendingQuestion.id);
-  var chips = awaitingAnswer ? [] : composerChips(status, controller, onRightTab);
+  var chips = awaitingAnswer ? [] : composerChips(status, controller, onRightTab, session);
   var disabled = controller.busy || running;
   var current = wbModeMeta(mode || "auto");
   var sendDisabled = running ? false : (disabled || (!draft.trim() && attachments.length === 0));
@@ -3716,7 +4036,7 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
       {chips.length > 0 && (
         <div className="wb-composer-chips">
           {chips.map(function (c, i) {
-            return <button key={i} type="button" className="wb-chip" disabled={controller.busy && c.guard !== false} onClick={c.onClick}>{c.label}</button>;
+            return <button key={i} type="button" className={"wb-chip" + (c.className ? " " + c.className : "")} disabled={controller.busy && c.guard !== false} onClick={c.onClick}>{c.label}</button>;
           })}
         </div>
       )}

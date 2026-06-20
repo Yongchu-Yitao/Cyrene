@@ -1868,6 +1868,7 @@ async def test_answer_pending_question_resumes_same_round(monkeypatch, tmp_path)
         assistant_message_meta=None,
         lang="",
         command="",
+        permission_mode="default",
     ):
         seen["user_message"] = user_message
         seen["ephemeral_system"] = ephemeral_system
@@ -1878,6 +1879,7 @@ async def test_answer_pending_question_resumes_same_round(monkeypatch, tmp_path)
         seen["client_request_id"] = client_request_id
         seen["persist_user_message"] = persist_user_message
         seen["command"] = command
+        seen["permission_mode"] = permission_mode
         return "继续完成后的最终答案"
 
     monkeypatch.setattr(_agent_coordinator, "_run_chat_agent", fake_run_chat_agent)

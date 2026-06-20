@@ -842,7 +842,12 @@ async def answer_pending_question(
     chat_id: int,
     db_path: str,
     client_request_id: str = "",
+    permission_mode: str = "default",
 ) -> str:
+    # ``permission_mode`` lets a caller keep a non-default permission mode across
+    # the resume (e.g. a Workbench goal loop running in "auto" / "full_access").
+    # It only applies to the normal clarification-resume path below; the
+    # permission-elevation / plan-confirmation handlers keep their own modes.
     from cyrene.agent.coordinator import _run_chat_agent
 
     context = _pending_question_resume_context(question_id)
@@ -930,6 +935,7 @@ async def answer_pending_question(
             client_request_id=client_request_id,
             persist_user_message=True,
             command=str(context.get("command", "") or "").strip(),
+            permission_mode=permission_mode,
         )
     except Exception:
         await _restore_pending_question(pending)

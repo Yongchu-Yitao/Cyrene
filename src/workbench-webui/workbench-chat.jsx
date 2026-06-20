@@ -1568,6 +1568,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   var [slashOpen, setSlashOpen] = useWbcState(false);
   var [modeOpen, setModeOpen] = useWbcState(false);
   var [contextState, setContextState] = useWbcState(null);
+  var [ctxPickerOpen, setCtxPickerOpen] = useWbcState(false);
   var taRef = useWbcRef(null);
   var fileRef = useWbcRef(null);
   var chatId = chat ? chat.id : "";
@@ -1577,7 +1578,14 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
     setCommand("");
     setSlashOpen(false);
     setModeOpen(false);
-      }, [chatId]);
+    setCtxPickerOpen(false);
+  }, [chatId]);
+
+  function wbcRefreshCtxState() {
+    fetch("/api/context/state").then(function (r) { return r.json(); }).then(function (s) {
+      setContextState(s);
+    }).catch(function () {});
+  }
 
   useWbcEffect(function () {
     var cancelled = false;
@@ -1635,8 +1643,45 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   var showSlash = (slashOpen || (draft.indexOf("/") === 0 && draft.indexOf(" ") === -1)) && slashItems.length > 0 && !running;
   var activeCommand = command ? wbcCommandMeta(command) : null;
   var currentMode = wbcModeMeta(mode);
-  var soulOn = !contextState || contextState.soul_active !== false;
+  var personaOn = !contextState || contextState.soul_active !== false;
+  var workspaceOn = !!(contextState && contextState.workspace_active !== false);
+  var wsDir = (contextState && contextState.workspace_dir) || "";
+  var wsHistory = (contextState && Array.isArray(contextState.workspace_history)) ? contextState.workspace_history : [];
   var modelName = (chat && chat.model) || (project && project.model) || "";
+
+  function wbcTogglePersona() {
+    fetch(personaOn ? "/api/context/remove-soul" : "/api/context/add-soul", { method: "POST" })
+      .then(wbcRefreshCtxState).catch(function () {});
+    setCtxPickerOpen(false);
+  }
+
+  function wbcAddWorkspace(path) {
+    fetch("/api/context/add-workspace", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: path || "" }),
+    }).then(wbcRefreshCtxState).catch(function () {});
+    setCtxPickerOpen(false);
+  }
+
+  function wbcRemoveWorkspace() {
+    fetch("/api/context/remove-workspace", { method: "POST" })
+      .then(wbcRefreshCtxState).catch(function () {});
+  }
+
+  function wbcPickWorkspace() {
+    setCtxPickerOpen(false);
+    if (window.cyrene && typeof window.cyrene.pickDirectory === "function") {
+      window.cyrene.pickDirectory().then(function (data) {
+        if (data && data.path) wbcAddWorkspace(data.path);
+      }).catch(function () {});
+      return;
+    }
+    fetch("/api/context/pick-directory", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (data) { if (data.path) wbcAddWorkspace(data.path); })
+      .catch(function () {});
+  }
   var sendDisabled = running ? false : (!draft.trim() && attachments.length === 0);
   var isLegacy = !!(chat && chat.legacy);
 
@@ -1689,9 +1734,37 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
           placeholder={running ? wbcT("workbenchChat.placeholderRunning", "The agent is replying. Click stop to interrupt...") : wbcT("workbenchChat.placeholder", "Message Cyrene... (Enter to send, Shift+Enter for a new line)")}
         />
         <div className="wbc-context-chips">
-          <span className="wbc-ctx-chip" title={soulOn ? wbcT("workbenchChat.personaOnTitle", "Persona context is on") : wbcT("workbenchChat.personaOffTitle", "Persona context is off")}>
-            {WBC_ICONS.spark}<span>{soulOn ? wbcT("workbenchChat.persona", "Persona") : wbcT("workbenchChat.personaOff", "Persona: off")}</span>
-          </span>
+          {personaOn && (
+            <span className="wbc-ctx-chip on">
+              {WBC_ICONS.spark}
+              <span>{wbcT("workbenchChat.persona", "Persona")}</span>
+              <button type="button" className="wbc-ctx-x" title={wbcT("workbenchChat.removeContext", "Remove")} onClick={wbcTogglePersona}>{WBC_ICONS.x}</button>
+            </span>
+          )}
+          {workspaceOn && (
+            <span className="wbc-ctx-chip on">
+              {WBC_ICONS.folder}
+              <span title={wsDir}>{wbcT("workbenchChat.workspaceChip", "Workspace: {name}", { name: wsDir.split("/").filter(Boolean).pop() || wsDir || "…" })}</span>
+              <button type="button" className="wbc-ctx-x" title={wbcT("workbenchChat.removeContext", "Remove")} onClick={wbcRemoveWorkspace}>{WBC_ICONS.x}</button>
+            </span>
+          )}
+          {(!personaOn || !workspaceOn) && (
+            <span className="wbc-pop-anchor">
+              <button type="button" className={"wbc-ctx-add-btn" + (ctxPickerOpen ? " active" : "")} onClick={function () { setCtxPickerOpen(!ctxPickerOpen); setSlashOpen(false); setModeOpen(false); }}>
+                {WBC_ICONS.plus}<span>{wbcT("workbenchChat.addContext", "Add context")}</span>
+              </button>
+              {ctxPickerOpen && (
+                <WbcCtxPicker
+                  personaOn={personaOn}
+                  workspaceOn={workspaceOn}
+                  wsHistory={wsHistory}
+                  onTogglePersona={wbcTogglePersona}
+                  onAddWorkspace={wbcAddWorkspace}
+                  onPickWorkspace={wbcPickWorkspace}
+                />
+              )}
+            </span>
+          )}
         </div>
         <div className="wbc-composer-actions">
           <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onFilePick} />
@@ -1759,6 +1832,41 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
         </div>
       </div>
       <div className="wb-composer-disclaimer">{wbcT("workbench.composerDisclaimer", "Cyrene is AI and can make mistakes. Please verify responses.")}</div>
+    </div>
+  );
+}
+
+// Context picker popup — shown inside the composer when the user clicks "+ Add context".
+// Fully independent from the legacy ModernContextPicker in chat-surface.jsx.
+function WbcCtxPicker({ personaOn, workspaceOn, wsHistory, onTogglePersona, onAddWorkspace, onPickWorkspace }) {
+  var hasAny = !personaOn || !workspaceOn;
+  if (!hasAny) return null;
+  return (
+    <div className="wbc-popmenu wbc-ctx-picker">
+      <div className="wbc-popmenu-head">{wbcT("workbenchChat.addContext", "Add context")}</div>
+      {!personaOn && (
+        <button type="button" onClick={onTogglePersona}>
+          <span className="wbc-popmenu-label">{WBC_ICONS.spark} {wbcT("workbenchChat.persona", "Persona")}</span>
+          <span className="wbc-popmenu-desc">{wbcT("workbenchChat.addPersonaHint", "Include SOUL.md persona in context")}</span>
+        </button>
+      )}
+      {!workspaceOn && (
+        <React.Fragment>
+          <div className="wbc-popmenu-head">{wbcT("workbenchChat.workspaceSection", "Workspace")}</div>
+          {wsHistory.map(function (p) {
+            var name = p.split("/").filter(Boolean).pop() || p;
+            return (
+              <button key={p} type="button" onClick={function () { onAddWorkspace(p); }}>
+                <span className="wbc-popmenu-label mono">{name}</span>
+                <span className="wbc-popmenu-desc">{p}</span>
+              </button>
+            );
+          })}
+          <button type="button" onClick={onPickWorkspace}>
+            <span className="wbc-popmenu-label">{wbcT("workbenchChat.chooseDirectory", "Choose directory…")}</span>
+          </button>
+        </React.Fragment>
+      )}
     </div>
   );
 }

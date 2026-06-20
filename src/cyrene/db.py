@@ -41,6 +41,59 @@ CREATE TABLE IF NOT EXISTS task_run_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_task_run_logs_task_id ON task_run_logs(task_id);
 
+CREATE TABLE IF NOT EXISTS goal_loop_drafts (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    base_plan_revision INTEGER NOT NULL,
+    goal TEXT NOT NULL,
+    goal_changed INTEGER NOT NULL DEFAULT 0,
+    plan_json TEXT NOT NULL,
+    acceptance_json TEXT NOT NULL,
+    limits_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_goal_loop_drafts_session ON goal_loop_drafts(session_id);
+CREATE INDEX IF NOT EXISTS idx_goal_loop_drafts_expires ON goal_loop_drafts(expires_at);
+
+CREATE TABLE IF NOT EXISTS goal_runs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE,
+    project_id TEXT NOT NULL,
+    objective TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    phase TEXT NOT NULL DEFAULT 'executing',
+    plan_definition_revision INTEGER NOT NULL,
+    current_step_id TEXT,
+    permission_mode TEXT NOT NULL DEFAULT 'auto',
+    reflection_mode TEXT NOT NULL DEFAULT 'proactive',
+    max_active_seconds INTEGER NOT NULL,
+    max_repair_rounds INTEGER NOT NULL,
+    active_seconds REAL NOT NULL DEFAULT 0,
+    active_started_at TEXT,
+    repair_round INTEGER NOT NULL DEFAULT 0,
+    lease_owner TEXT,
+    lease_until TEXT,
+    stop_reason TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_goal_runs_status ON goal_runs(status);
+CREATE INDEX IF NOT EXISTS idx_goal_runs_lease ON goal_runs(lease_until);
+
+CREATE TABLE IF NOT EXISTS goal_run_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    step_id TEXT,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES goal_runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_goal_run_events_run ON goal_run_events(run_id);
+
 CREATE TABLE IF NOT EXISTS daily_stats (
     day TEXT PRIMARY KEY,
     llm_requests INTEGER NOT NULL DEFAULT 0,
