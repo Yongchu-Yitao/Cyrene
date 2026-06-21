@@ -133,6 +133,14 @@ CREATE TABLE IF NOT EXISTS daily_topic_terms (
 );
 CREATE INDEX IF NOT EXISTS idx_daily_topic_terms_day ON daily_topic_terms(day);
 
+CREATE TABLE IF NOT EXISTS daily_tool_stats (
+    day TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, tool)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_tool_stats_day ON daily_tool_stats(day);
+
 CREATE TABLE IF NOT EXISTS analytics_backfills (
     source TEXT PRIMARY KEY,
     completed_at TEXT NOT NULL
@@ -545,15 +553,42 @@ async def get_model_stats_range(db_path: str, day_from: str, day_to: str) -> lis
         return [dict(row) for row in rows]
 
 
-async def record_tool_call(db_path: str, timestamp: str) -> None:
+async def record_tool_call(db_path: str, timestamp: str, tool_name: str = "") -> None:
     day = _normalize_day(timestamp=timestamp)
+    tool = str(tool_name or "").strip()
     async with aiosqlite.connect(db_path) as db:
         await db.execute("INSERT OR IGNORE INTO daily_stats (day) VALUES (?)", (day,))
         await db.execute(
             "UPDATE daily_stats SET tool_calls = tool_calls + 1 WHERE day = ?",
             (day,),
         )
+        if tool:
+            await db.execute(
+                """
+                INSERT INTO daily_tool_stats (day, tool, count) VALUES (?, ?, 1)
+                ON CONFLICT(day, tool) DO UPDATE SET count = count + 1
+                """,
+                (day, tool),
+            )
         await db.commit()
+
+
+async def get_tool_counts_range(db_path: str, day_from: str, day_to: str, limit: int = 5) -> list[dict]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT tool, SUM(count) AS count
+            FROM daily_tool_stats
+            WHERE day >= ? AND day <= ?
+            GROUP BY tool
+            ORDER BY count DESC, tool ASC
+            LIMIT ?
+            """,
+            (day_from, day_to, int(limit)),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
 
 
 async def record_archive_exchange(
@@ -967,3 +1002,27 @@ async def log_task_run(db_path: str, task_id: str, duration_ms: int, status: str
             (task_id, datetime.now(timezone.utc).isoformat(), duration_ms, status, result, error),
         )
         await db.commit()
+
+
+async def get_task_time_totals(db_path: str) -> dict:
+    """Aggregate agent work time across scheduled-task runs and goal-loop runs.
+
+    ``task_run_logs.duration_ms`` is already milliseconds; ``goal_runs.active_seconds``
+    is seconds and gets scaled up. Returns total/longest in ms plus a run count.
+    """
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            "SELECT COALESCE(SUM(duration_ms), 0), COALESCE(MAX(duration_ms), 0), COUNT(*) FROM task_run_logs",
+        )
+        task_total, task_longest, task_runs = await cursor.fetchone()
+        cursor = await db.execute(
+            "SELECT COALESCE(SUM(active_seconds), 0), COALESCE(MAX(active_seconds), 0), COUNT(*) FROM goal_runs",
+        )
+        goal_total_s, goal_longest_s, goal_runs = await cursor.fetchone()
+    goal_total_ms = int(round(float(goal_total_s or 0) * 1000))
+    goal_longest_ms = int(round(float(goal_longest_s or 0) * 1000))
+    return {
+        "total_ms": int(task_total or 0) + goal_total_ms,
+        "longest_ms": max(int(task_longest or 0), goal_longest_ms),
+        "runs": int(task_runs or 0) + int(goal_runs or 0),
+    }

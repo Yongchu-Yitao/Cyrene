@@ -376,6 +376,38 @@ async def test_recall_memory_tool_returns_recent_short_term_entries(tmp_path):
     assert "soul_memory" not in payload
 
 
+async def test_recall_memory_tool_bounds_large_results(tmp_path):
+    from cyrene import short_term
+    from cyrene import tools
+
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([
+        {
+            "content": f"memory-{index}-" + ("x" * 10_000),
+            "type": "fact",
+            "first_seen": "2026-05-18",
+            "last_mentioned": f"2026-05-{20 - index:02d}",
+            "mention_count": 1,
+            "emotional_valence": 0,
+        }
+        for index in range(20)
+    ])
+
+    result = await tools._tool_recall_memory(
+        {"limit": 20},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    payload = json.loads(result)
+
+    assert payload["truncated"] is True
+    assert len(result) < 10_000
+    assert all(len(item["content"]) <= 801 for item in payload["memories"])
+    assert all(item["content_truncated"] is True for item in payload["memories"])
+
+
 async def test_recall_conversation_tool_returns_archived_matches(tmp_path, monkeypatch):
     from cyrene import conversations
     from cyrene import tools

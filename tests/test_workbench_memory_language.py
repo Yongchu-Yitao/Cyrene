@@ -128,6 +128,12 @@ def test_language_neutral_path_does_not_require_translation():
     assert memory._content_matches_language("MAX_RETRIES=3", "zh")
 
 
+def test_english_dominant_mixed_text_requires_chinese_normalization():
+    assert not memory._content_matches_language("User prefers 中文 responses.", "zh")
+    assert not memory._content_matches_language("The user prefers 中文 responses.", "zh")
+    assert memory._content_matches_language("用户使用 React、Next.js 和 TypeScript。", "zh")
+
+
 def test_search_project_memories_filters_and_excludes_stale(monkeypatch, tmp_path):
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     entries = [
@@ -170,6 +176,41 @@ def test_search_project_memories_filters_and_excludes_stale(monkeypatch, tmp_pat
     assert [item["id"] for item in results] == ["mem_new"]
 
 
+def test_search_project_memories_bounds_large_results(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    entries = [
+        {
+            "id": f"mem_{index}",
+            "content": "database " + ("x" * 10_000),
+            "type": "project",
+            "category": "project",
+            "source": "agent",
+            "tags": ["database"],
+            "first_seen": "2026-06-20",
+            "last_mentioned": "2026-06-21",
+            "mention_count": 1,
+            "citations": [{"raw": "y" * 10_000}],
+        }
+        for index in range(20)
+    ]
+    (tmp_path / "wb_memory_project-test.json").write_text(
+        json.dumps(entries),
+        encoding="utf-8",
+    )
+
+    results = memory.search_project_memories(
+        "project-test",
+        query="database",
+        limit=20,
+    )
+    encoded = json.dumps(results, ensure_ascii=False)
+
+    assert len(encoded) < 8_000
+    assert all(len(item["content"]) <= 801 for item in results)
+    assert all(item["content_truncated"] is True for item in results)
+    assert all("citations" not in item for item in results)
+
+
 @pytest.mark.asyncio
 async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_path):
     from cyrene.agent import state
@@ -195,7 +236,7 @@ async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_
     )
     monkeypatch.setattr(
         tool,
-        "resolve_project_data_key_for_session",
+        "resolve_workbench_project_data_key_for_session",
         lambda session_id: "project-test",
     )
     token = state._current_session_id.set("chat-test")
@@ -214,6 +255,76 @@ async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_
     assert payload["status"] == "success"
     assert payload["count"] == 1
     assert payload["memories"][0]["content"] == "用户偏好使用 pytest 编写回归测试。"
+
+
+@pytest.mark.asyncio
+async def test_search_project_memory_allows_default_workbench_project(monkeypatch, tmp_path):
+    from cyrene import short_term
+    from cyrene.agent import state
+    from cyrene.tool_impl import search_project_memory as tool
+
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    monkeypatch.setattr(short_term, "_SHORT_TERM_FILE", tmp_path / "short_term.json")
+    short_term.save_entries([{
+        "content": "默认项目使用 pytest。",
+        "type": "fact",
+        "first_seen": "2026-06-21",
+        "last_mentioned": "2026-06-21",
+        "mention_count": 1,
+    }])
+    monkeypatch.setattr(
+        tool,
+        "resolve_workbench_project_data_key_for_session",
+        lambda session_id: "default",
+    )
+    token = state._current_session_id.set("task-in-default-project")
+    try:
+        result = await tool._tool_search_project_memory(
+            {"query": "pytest"},
+            None,
+            0,
+            "db.sqlite3",
+            None,
+        )
+    finally:
+        state._current_session_id.reset(token)
+
+    payload = json.loads(result)
+    assert payload["status"] == "success"
+    assert payload["count"] == 1
+    assert payload["memories"][0]["content"] == "默认项目使用 pytest。"
+
+
+def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp_path):
+    from cyrene import workbench_context
+
+    projects_path = tmp_path / "workbench_projects.json"
+    chats_path = tmp_path / "workbench_chats.json"
+    projects_path.write_text(
+        json.dumps({
+            "projects": [{
+                "id": "project-default",
+                "dataKey": "default",
+                "sessions": [{"id": "task-default"}],
+            }]
+        }),
+        encoding="utf-8",
+    )
+    chats_path.write_text(
+        json.dumps({
+            "chats": [{
+                "id": "chat-default",
+                "projectId": "project-default",
+            }]
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(workbench_context, "_WORKBENCH_STORE", projects_path)
+    monkeypatch.setattr(workbench_context, "_WORKBENCH_CHATS_STORE", chats_path)
+
+    assert workbench_context.resolve_workbench_project_data_key_for_session("task-default") == "default"
+    assert workbench_context.resolve_workbench_project_data_key_for_session("chat-default") == "default"
+    assert workbench_context.resolve_workbench_project_data_key_for_session("missing") is None
 
 
 def test_memory_tools_are_registered_with_distinct_contracts():

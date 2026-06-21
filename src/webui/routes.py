@@ -7413,6 +7413,37 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             changed.append("beta_updates")
         return {"ok": True, "changed": changed}
 
+    @router.put("/api/profile")
+    async def api_update_profile(request: Request):
+        """Persist the user's custom identity (name / avatar / bio)."""
+        from cyrene.settings_store import set_ as set_setting
+        body = await request.json()
+        changed: list[str] = []
+        if "name" in body:
+            set_setting("profile_name", str(body.get("name") or "").strip()[:60])
+            changed.append("name")
+        if "bio" in body:
+            set_setting("profile_bio", str(body.get("bio") or "").strip()[:120])
+            changed.append("bio")
+        if "avatar" in body:
+            avatar = str(body.get("avatar") or "").strip()
+            if avatar and not avatar.startswith("data:image/"):
+                return JSONResponse({"error": "avatar must be a data:image/ URL"}, status_code=400)
+            if len(avatar) > 700_000:
+                return JSONResponse({"error": "avatar too large (max ~512KB)"}, status_code=400)
+            set_setting("profile_avatar", avatar)
+            changed.append("avatar")
+        if "avatar_emoji" in body:
+            set_setting("profile_avatar_emoji", str(body.get("avatar_emoji") or "").strip()[:8])
+            changed.append("avatar_emoji")
+        if "avatar_color" in body:
+            color = str(body.get("avatar_color") or "").strip()
+            if color and not re.match(r"^#[0-9a-fA-F]{6}$", color):
+                return JSONResponse({"error": "avatar_color must be #rrggbb"}, status_code=400)
+            set_setting("profile_avatar_color", color)
+            changed.append("avatar_color")
+        return {"ok": True, "changed": changed, "user": _build_user()}
+
     @router.post("/api/settings/reset-data")
     async def api_reset_data():
         return await _reset_app_data()
@@ -9518,12 +9549,21 @@ async def _build_entities_summary() -> list:
 
 
 def _build_user() -> dict:
-    """User identity from environment or workspace owner."""
-    name = _resolve_local_username()
+    """User identity from the stored profile, falling back to the local account name."""
+    from cyrene.settings_store import get as get_setting
+    name = str(get_setting("profile_name", "") or "").strip() or _resolve_local_username()
     handle = re.sub(r"[^a-z0-9._-]+", "", name.lower().replace(" ", "")) or "user"
     parts = [part for part in re.split(r"[\s._-]+", name) if part]
     initials = "".join(part[0].upper() for part in parts[:2]) or name[:2].upper() or "U"
-    return {"name": name, "handle": handle, "initials": initials}
+    return {
+        "name": name,
+        "handle": handle,
+        "initials": initials,
+        "avatar": str(get_setting("profile_avatar", "") or ""),
+        "avatar_emoji": str(get_setting("profile_avatar_emoji", "") or ""),
+        "avatar_color": str(get_setting("profile_avatar_color", "") or ""),
+        "bio": str(get_setting("profile_bio", "") or ""),
+    }
 
 
 def _resolve_local_username() -> str:
@@ -11205,6 +11245,8 @@ async def _build_dashboard(ui_tz=None) -> dict:
     }
     model_stats_rows = await cy_db.get_model_stats_range(_db_path, day_from, day_to)
     topic_rows = await cy_db.get_topic_counts_range(_db_path, day_from, day_to, limit=18)
+    tool_rows = await cy_db.get_tool_counts_range(_db_path, day_from, day_to, limit=5)
+    task_time = await cy_db.get_task_time_totals(_db_path)
     archive_day_count = await cy_db.count_stat_days(_db_path)
 
     # 从 daily_stats 汇总全量历史数据（与 timeline 同源）
@@ -11335,6 +11377,8 @@ async def _build_dashboard(ui_tz=None) -> dict:
             "current_streak": _calc_current_streak(stats_by_day, today),
             "longest_streak": _calc_longest_streak(stats_by_day),
             "peak_hour": _calc_peak_hour(stats_by_day),
+            "task_time": task_time,
+            "top_tools": tool_rows,
             "timeline": [
                 {
                     "date": day,

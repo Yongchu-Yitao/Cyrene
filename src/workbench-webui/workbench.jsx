@@ -1001,6 +1001,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             onEditProject={setEditProject}
             onDeleteProject={handleDeleteProject}
             onOpenPage={handleOpenPage}
+            onSettings={function () { setSettingsTab(""); setSettingsOpen(true); }}
           />
           {isChat ? (
             React.createElement(window.WorkbenchChatPage || function () { return <div className="workbench-empty">{t("workbench.chatLoading")}</div>; }, {
@@ -1505,9 +1506,11 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
   );
 }
 
-function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggleCollapse, onSelectProject, onCreateProject, onEditProject, onDeleteProject, onOpenPage }) {
+function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggleCollapse, onSelectProject, onCreateProject, onEditProject, onDeleteProject, onOpenPage, onSettings }) {
   var { t } = window.useWorkbenchI18n();
+  window.useDataVersion();  // re-render chip when DATA.user changes (profile save); data.js loads before this bundle
   var [menuProjectId, setMenuProjectId] = useWorkbenchState("");
+  var [profileOpen, setProfileOpen] = useWorkbenchState(false);
 
   useWorkbenchEffect(function () {
     if (!menuProjectId) return undefined;
@@ -1619,8 +1622,18 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
           );
         })}
       </div>
-      <div className="workbench-account">
-        <div className="workbench-avatar photo">{WorkbenchModel.initials(DATA.user && DATA.user.name)}</div>
+      <div
+        className="workbench-account"
+        role="button"
+        tabIndex={0}
+        title={t("rail.profile")}
+        style={{ cursor: "pointer" }}
+        onClick={function () { setProfileOpen(true); }}
+        onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setProfileOpen(true); } }}
+      >
+        {window.UserAvatar
+          ? React.createElement(window.UserAvatar, { user: DATA.user, size: 34 })
+          : <div className="workbench-avatar photo">{WorkbenchModel.initials(DATA.user && DATA.user.name)}</div>}
         <div className="workbench-account-meta">
           <div className="workbench-account-name">
             <b>{DATA.user && DATA.user.name || "User"}</b>
@@ -1629,6 +1642,12 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
           <small>{(DATA.sessions && DATA.sessions[0] && DATA.sessions[0].model) || DATA.appVersion || "model"}</small>
         </div>
       </div>
+      {profileOpen && window.ProfilePanel
+        ? React.createElement(window.ProfilePanel, {
+            onClose: function () { setProfileOpen(false); },
+            setPage: function () { setProfileOpen(false); if (onSettings) onSettings(); },
+          })
+        : null}
     </aside>
   );
 }

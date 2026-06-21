@@ -5,7 +5,7 @@
 const APP_VERSION = "—";
 
 const DATA = {
-  user: { name: "loading…", handle: "loading", initials: "…" },
+  user: { name: "loading…", handle: "loading", initials: "…", avatar: "", avatar_emoji: "", avatar_color: "", bio: "" },
   assistantName: "Cyrene",
   appVersion: APP_VERSION,
   dashboard: {

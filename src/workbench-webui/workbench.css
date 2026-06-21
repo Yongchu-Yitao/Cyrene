@@ -1465,6 +1465,8 @@ body.wb-col-resizing {
   gap: 10px;
   align-items: center;
 }
+.workbench-account[role="button"] { cursor: pointer; }
+.workbench-account[role="button"]:hover { background: rgba(127, 127, 127, 0.10); }
 
 .workbench-account-meta {
   min-width: 0;

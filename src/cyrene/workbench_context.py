@@ -28,11 +28,16 @@ def _read_projects() -> list[dict[str, Any]]:
     return projects if isinstance(projects, list) else []
 
 
-def resolve_project_data_key_for_session(session_id: str | None) -> str:
-    """Resolve a Workbench chat/task session to the stored schedule project_id."""
+def resolve_workbench_project_data_key_for_session(session_id: str | None) -> str | None:
+    """Resolve a Workbench chat/task session to its project storage key.
+
+    Returns ``None`` when the session is not attached to any Workbench project.
+    A return value of ``"default"`` is valid: the initial Workbench project
+    deliberately uses that legacy storage key.
+    """
     sid = str(session_id or "").strip()
     if not sid:
-        return _LEGACY_DATA_KEY
+        return None
 
     projects = _read_projects()
     project_id = ""
@@ -55,13 +60,18 @@ def resolve_project_data_key_for_session(session_id: str | None) -> str:
                 break
 
     if not project_id:
-        return _LEGACY_DATA_KEY
+        return None
 
     for project in projects:
         if str(project.get("id") or "") == project_id:
             return _safe_workbench_data_key(project.get("dataKey") or project_id)
 
     return _safe_workbench_data_key(project_id)
+
+
+def resolve_project_data_key_for_session(session_id: str | None) -> str:
+    """Compatibility resolver that falls back to the legacy ``default`` key."""
+    return resolve_workbench_project_data_key_for_session(session_id) or _LEGACY_DATA_KEY
 
 
 async def ensure_knowledge_db_for_session(session_id: str | None) -> str:
@@ -76,4 +86,8 @@ async def ensure_knowledge_db_for_session(session_id: str | None) -> str:
     return db_path
 
 
-__all__ = ["ensure_knowledge_db_for_session", "resolve_project_data_key_for_session"]
+__all__ = [
+    "ensure_knowledge_db_for_session",
+    "resolve_project_data_key_for_session",
+    "resolve_workbench_project_data_key_for_session",
+]

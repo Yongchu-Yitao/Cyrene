@@ -284,7 +284,16 @@ def _content_matches_language(content: str, language: str) -> bool:
     if language == "en":
         return not has_han
     if has_han:
-        return True
+        han_count = len(re.findall(r"[\u3400-\u9fff]", text))
+        # Lowercase English words are a useful prose signal while mixed-case
+        # tokens such as PostgreSQL, TypeScript, and Next.js are usually
+        # technical names that should not force translation. Require enough
+        # Chinese text to outweigh multiple English prose words.
+        prose_words = [
+            word for word in re.findall(r"[A-Za-z][A-Za-z'-]*", text)
+            if word.islower() or word.casefold() in {"a", "an", "the", "user"}
+        ]
+        return han_count >= max(2, len(prose_words) * 2)
     if not re.search(r"\s", text):
         return True
     # Do not translate language-neutral values such as ``src/app.py`` or
@@ -597,14 +606,14 @@ def search_project_memories(
     source: str = "",
     limit: int = 10,
     include_stale: bool = False,
+    max_chars: int = 6000,
+    max_content_chars: int = 800,
 ) -> list[dict]:
     """Search one Workbench project's durable memories.
 
     This is the read-side counterpart to ``save_project_memory``. Results are
     bounded, project-scoped, and ranked by direct content match, then recency.
     """
-    if _resolve_workspace_id(workspace_id) == "default":
-        return []
     needle = str(query or "").strip().casefold()
     if not needle:
         return []
@@ -632,10 +641,34 @@ def search_project_memories(
             continue
         score = 2 if needle in content_folded else 1
         updated = str(entry.get("last_mentioned") or entry.get("first_seen") or "")
-        matches.append((score, updated, _serialize(entry)))
+        matches.append((score, updated, entry))
 
     matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return [item[2] for item in matches[:limit]]
+    results: list[dict] = []
+    used_chars = 0
+    for _score, _updated, entry in matches[:limit]:
+        raw_content = str(entry.get("content") or "")
+        content_truncated = len(raw_content) > max_content_chars
+        content = raw_content[:max_content_chars] + ("…" if content_truncated else "")
+        tags = [str(tag)[:80] for tag in (entry.get("tags") or [])[:8]]
+        item = {
+            "id": _entry_id(entry),
+            "content": content,
+            "category": _entry_category(entry),
+            "source": _entry_source(entry),
+            "confidence": _entry_confidence(entry),
+            "tags": tags,
+            "updated_at": str(entry.get("last_mentioned") or entry.get("first_seen") or ""),
+            "stale": bool(entry.get("stale")),
+        }
+        if content_truncated:
+            item["content_truncated"] = True
+        item_chars = len(json.dumps(item, ensure_ascii=False))
+        if results and used_chars + item_chars > max_chars:
+            break
+        results.append(item)
+        used_chars += item_chars
+    return results
 
 
 async def _detect_conflicting_memories(new_content: str, candidates: list[dict]) -> list[str]:

@@ -562,10 +562,307 @@ function readDeveloperMode() {
   try { return localStorage.getItem("cyrene-developer-mode") === "1"; } catch(e) { return false; }
 }
 
+// Renders the user's avatar with priority: uploaded image > emoji > initials+color.
+function UserAvatar({ user, size }) {
+  user = user || {};
+  size = size || 28;
+  const px = size + "px";
+  const base = { width: px, height: px, fontSize: Math.round(size * 0.42) + "px" };
+  if (user.avatar) {
+    return <div className="avatar" aria-label={user.name}
+                style={{ ...base, backgroundImage: "url(" + user.avatar + ")", backgroundSize: "cover", backgroundPosition: "center", borderColor: "transparent" }}></div>;
+  }
+  if (user.avatar_emoji) {
+    return <div className="avatar" aria-label={user.name} style={base}>{user.avatar_emoji}</div>;
+  }
+  const initials = user.initials || (user.name || "U").slice(0, 2).toUpperCase();
+  const style = user.avatar_color
+    ? { ...base, background: user.avatar_color, color: "#fff", borderColor: "transparent" }
+    : base;
+  return <div className="avatar" aria-label={user.name} style={style}>{initials}</div>;
+}
+
+// Milliseconds → compact human-readable duration (e.g. "1h2m", "45m", "12s").
+function formatDuration(ms) {
+  ms = Number(ms) || 0;
+  if (ms < 1000) return "0s";
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return h + "h" + (m > 0 ? m + "m" : "");
+  if (m > 0) return m + "m" + (sec > 0 ? sec + "s" : "");
+  return sec + "s";
+}
+
+// Compact integer (64300000 → "64.3M") for stat cards that would otherwise overflow.
+function compactNumber(n) {
+  n = Number(n) || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
+  return String(n);
+}
+
+// "16:00-20:00" → "16–20点" (zh) / "16–20" (en); leaves "—" untouched.
+function formatPeakHour(label, lang) {
+  label = String(label || "");
+  if (label.indexOf("-") < 0) return label || "—";
+  const ends = label.split("-").map(function (s) { return s.replace(":00", ""); });
+  const span = ends[0] + "–" + ends[1];
+  return lang === "zh" ? span + "点" : span;
+}
+
+// Friendly labels for the "most used" tools; unknown tools fall back to a prettified name.
+const PROFILE_FEATURE_LABELS = {
+  web_search: { en: "Web search", zh: "联网搜索" },
+  fetch_url: { en: "Fetch page", zh: "网页抓取" },
+  run_shell: { en: "Shell", zh: "终端" },
+  bash: { en: "Shell", zh: "终端" },
+  read_file: { en: "Read file", zh: "读文件" },
+  write_file: { en: "Write file", zh: "写文件" },
+  edit_file: { en: "Edit file", zh: "改文件" },
+  save_project_memory: { en: "Memory", zh: "记忆" },
+  recall_memory: { en: "Recall", zh: "回忆" },
+  recall_conversation: { en: "Recall chat", zh: "回忆对话" },
+  search_project_memory: { en: "Search memory", zh: "搜索记忆" },
+  schedule_task: { en: "Schedule", zh: "计划任务" },
+  send_message_to_user: { en: "Message", zh: "发消息" },
+};
+function profileFeatureLabel(tool, lang) {
+  tool = String(tool || "");
+  const hit = PROFILE_FEATURE_LABELS[tool];
+  if (hit) return hit[lang] || hit.en;
+  if (tool.indexOf("browser") === 0) return lang === "zh" ? "浏览器" : "Browser";
+  return tool.replace(/[_-]+/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+}
+
+const PROFILE_AVATAR_COLORS = ["#1D9E75", "#378ADD", "#D4537E", "#BA7517", "#7F77DD", "#D85A30"];
+const PROFILE_EMOJI_PICKS = ["😀", "🐱", "🚀", "🌟", "🦊", "🐼", "🌿", "🔥"];
+
+// Popover anchored above the sidebar footer: identity editing + personal activity stats.
+function ProfilePanel({ onClose, setPage }) {
+  useDataVersion();
+  const { t, lang } = useI18n();
+  const user = DATA.user || {};
+  const usage = (DATA.dashboard && DATA.dashboard.usage) || {};
+  const taskTime = usage.task_time || {};
+  const topTools = usage.top_tools || [];
+
+  const [editing, setEditing] = useStateApp(false);
+  const [name, setName] = useStateApp(user.name || "");
+  const [bio, setBio] = useStateApp(user.bio || "");
+  const [avatarMode, setAvatarMode] = useStateApp(user.avatar ? "image" : (user.avatar_emoji ? "emoji" : "letter"));
+  const [avatarData, setAvatarData] = useStateApp(user.avatar || "");
+  const [emoji, setEmoji] = useStateApp(user.avatar_emoji || "");
+  const [color, setColor] = useStateApp(user.avatar_color || PROFILE_AVATAR_COLORS[0]);
+  const [saving, setSaving] = useStateApp(false);
+  const [err, setErr] = useStateApp("");
+  const fileRef = React.useRef(null);
+
+  useEffectApp(function () {
+    function onKey(e) { if (e.key === "Escape") onClose(); }
+    window.addEventListener("keydown", onKey);
+    return function () { window.removeEventListener("keydown", onKey); };
+  }, []);
+
+  function beginEdit() {
+    setName(user.name || ""); setBio(user.bio || "");
+    setAvatarMode(user.avatar ? "image" : (user.avatar_emoji ? "emoji" : "letter"));
+    setAvatarData(user.avatar || ""); setEmoji(user.avatar_emoji || "");
+    setColor(user.avatar_color || PROFILE_AVATAR_COLORS[0]);
+    setErr(""); setEditing(true);
+  }
+
+  function onPickImage(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function () {
+      const img = new Image();
+      img.onload = function () {
+        const max = 256;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        setAvatarData(canvas.toDataURL("image/jpeg", 0.85));
+        setAvatarMode("image");
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function save() {
+    setSaving(true); setErr("");
+    const payload = { name: name.trim(), bio: bio.trim() };
+    if (avatarMode === "image") { payload.avatar = avatarData || ""; payload.avatar_emoji = ""; }
+    else if (avatarMode === "emoji") { payload.avatar = ""; payload.avatar_emoji = (emoji || "").trim(); }
+    else { payload.avatar = ""; payload.avatar_emoji = ""; payload.avatar_color = color || ""; }
+    fetch("/api/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+      .then(function (r) { return r.ok ? r.json() : r.json().then(function (e) { throw new Error(e.error || "HTTP " + r.status); }); })
+      .then(function (d) {
+        if (d.user) { DATA.user = d.user; window.bumpData && window.bumpData(); }
+        setSaving(false); setEditing(false);
+      })
+      .catch(function (e) { setSaving(false); setErr(String(e.message || e)); });
+  }
+
+  const previewUser = editing
+    ? { name: name, initials: (name || "U").slice(0, 2).toUpperCase(),
+        avatar: avatarMode === "image" ? avatarData : "",
+        avatar_emoji: avatarMode === "emoji" ? emoji : "",
+        avatar_color: avatarMode === "letter" ? color : "" }
+    : user;
+
+  function Cell(opts) {
+    var cls = "profile-cell" + (opts.hero ? " hero" : "") + (opts.accent ? " accent" : "");
+    return (
+      <div className={cls} title={opts.title || undefined}>
+        <div className="profile-cell-value">{opts.value}</div>
+        <div className="profile-cell-label">{opts.label}</div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="profile-backdrop" onClick={onClose}></div>
+      <div className="profile-panel" onClick={function (e) { e.stopPropagation(); }} role="dialog" aria-label={t("profile.open")}>
+        <div className="profile-head">
+          <div className="profile-avatar-wrap">
+            <UserAvatar user={previewUser} size={52} />
+            {editing && (
+              <button type="button" className="profile-avatar-cam" title={t("profile.avatarImage")}
+                      onClick={function () { setAvatarMode("image"); fileRef.current && fileRef.current.click(); }}>
+                <svg width="12" height="12" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M3 6h3l1.2-1.6h3.6L15 6h0v8H3z" /><circle cx="9" cy="10" r="2.4" />
+                </svg>
+              </button>
+            )}
+          </div>
+          {!editing ? (
+            <div className="profile-id">
+              <div className="profile-name">{user.name}</div>
+              <div className="profile-handle">@{user.handle} · {DATA.appVersion || "—"}</div>
+              {user.bio ? <div className="profile-bio">{user.bio}</div> : null}
+            </div>
+          ) : (
+            <div className="profile-id">
+              <input className="profile-input" value={name} maxLength={60}
+                     placeholder={t("profile.namePlaceholder")} onChange={function (e) { setName(e.target.value); }} />
+              <input className="profile-input" value={bio} maxLength={120} style={{ marginTop: 6 }}
+                     placeholder={t("profile.bioPlaceholder")} onChange={function (e) { setBio(e.target.value); }} />
+            </div>
+          )}
+          {!editing && (
+            <button type="button" className="profile-edit-btn" title={t("profile.edit")} onClick={beginEdit}>
+              <svg width="15" height="15" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3l3 3-8 8H4v-3z" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        {editing && (
+          <div className="profile-edit-avatar">
+            <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }}
+                   onChange={function (e) { onPickImage(e.target.files && e.target.files[0]); e.target.value = ""; }} />
+            <div className="profile-seg">
+              <button type="button" className={avatarMode === "image" ? "active" : ""} onClick={function () { setAvatarMode("image"); if (!avatarData) fileRef.current && fileRef.current.click(); }}>{t("profile.avatarImage")}</button>
+              <button type="button" className={avatarMode === "emoji" ? "active" : ""} onClick={function () { setAvatarMode("emoji"); }}>{t("profile.avatarEmoji")}</button>
+              <button type="button" className={avatarMode === "letter" ? "active" : ""} onClick={function () { setAvatarMode("letter"); }}>{t("profile.avatarLetter")}</button>
+            </div>
+            {avatarMode === "image" && (
+              <button type="button" className="profile-upload" onClick={function () { fileRef.current && fileRef.current.click(); }}>{t("profile.upload")}</button>
+            )}
+            {avatarMode === "emoji" && (
+              <div className="profile-picks">
+                {PROFILE_EMOJI_PICKS.map(function (em) {
+                  return <button type="button" key={em} className={"profile-emoji" + (emoji === em ? " active" : "")} onClick={function () { setEmoji(em); }}>{em}</button>;
+                })}
+              </div>
+            )}
+            {avatarMode === "letter" && (
+              <div className="profile-picks">
+                {PROFILE_AVATAR_COLORS.map(function (c) {
+                  return <button type="button" key={c} className={"profile-swatch" + (color === c ? " active" : "")} style={{ background: c }} onClick={function () { setColor(c); }} aria-label={c}></button>;
+                })}
+              </div>
+            )}
+            {err ? <div className="profile-err">{err}</div> : null}
+            <div className="profile-edit-actions">
+              <button type="button" className="profile-btn" onClick={function () { setEditing(false); }}>{t("profile.cancel")}</button>
+              <button type="button" className="profile-btn primary" disabled={saving} onClick={save}>{saving ? "…" : t("profile.save")}</button>
+            </div>
+          </div>
+        )}
+
+        {!editing && (
+          <>
+            <div className="profile-section">
+              <div className="profile-section-title">{t("profile.usage")}</div>
+              <div className="profile-bento">
+                {Cell({ hero: true, value: usage.spend || "—", label: t("profile.spend") })}
+                {Cell({ value: usage.requests != null ? usage.requests : "—", label: t("profile.requests") })}
+                {Cell({ value: usage.total_tokens ? compactNumber(usage.total_tokens) : "—", label: t("profile.tokens"), title: usage.tokens || "" })}
+              </div>
+            </div>
+            <div className="profile-section">
+              <div className="profile-section-title">{t("profile.activity")}</div>
+              <div className="profile-bento cols-3">
+                {Cell({ accent: true, value: (usage.current_streak || 0) + (lang === "zh" ? " 天" : "d"), label: t("profile.streak") })}
+                {Cell({ value: usage.active_days != null ? usage.active_days : "—", label: t("profile.activeDays") })}
+                {Cell({ value: formatPeakHour(usage.peak_hour, lang), label: t("profile.peakHour"), title: usage.peak_hour || "" })}
+              </div>
+            </div>
+            <div className="profile-section">
+              <div className="profile-section-title">{t("profile.tasks")}</div>
+              <div className="profile-bento">
+                {Cell({ value: formatDuration(taskTime.total_ms), label: t("profile.taskTotal") })}
+                {Cell({ value: formatDuration(taskTime.longest_ms), label: t("profile.taskLongest") })}
+              </div>
+              <div className="profile-subnote">{lang === "zh" ? ("共 " + (taskTime.runs || 0) + " 次任务") : ((taskTime.runs || 0) + " runs total")}</div>
+            </div>
+            <div className="profile-section">
+              <div className="profile-section-title">{t("profile.topTools")} <span className="profile-hint">· {t("profile.topToolsHint")}</span></div>
+              {topTools.length ? (
+                <div className="profile-tools">
+                  {topTools.map(function (it) {
+                    var max = (topTools[0] && topTools[0].count) || 1;
+                    var pct = Math.max(8, Math.round((it.count / max) * 100));
+                    return (
+                      <div className="profile-tool" key={it.tool}>
+                        <span className="profile-tool-name">{profileFeatureLabel(it.tool, lang)}</span>
+                        <span className="profile-tool-bar"><span style={{ width: pct + "%" }}></span></span>
+                        <span className="profile-tool-count">{it.count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : <div className="profile-empty">{t("profile.empty")}</div>}
+            </div>
+            <button type="button" className="profile-settings-link" onClick={function () { onClose(); setPage("settings"); }}>
+              {t("nav.settings")}
+            </button>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+// Exposed so the workbench shell (separate bundle, same React + DATA + styles)
+// can open the same profile panel from its own account chip.
+window.ProfilePanel = ProfilePanel;
+window.UserAvatar = UserAvatar;
+
 function Sidebar({ page, setPage, selectedSessionId, onSelectSession, collapsed, onToggleCollapsed, onOpenSearch }) {
   useDataVersion();
   const { t } = useI18n();
   const [devMode, setDevMode] = useStateApp(readDeveloperMode);
+  const [profileOpen, setProfileOpen] = useStateApp(false);
 
   useEffectApp(function () {
     function onDevModeChange() { setDevMode(readDeveloperMode()); }
@@ -665,11 +962,14 @@ function Sidebar({ page, setPage, selectedSessionId, onSelectSession, collapsed,
       )}
 
       <div className="sidebar-footer">
-        <div className="avatar">{DATA.user.initials}</div>
-        <div className="who">
-          {DATA.user.name}
-          <small>@{DATA.user.handle} · {DATA.appVersion || "—"}</small>
-        </div>
+        <button type="button" className="profile-chip" title={t("profile.open")} onClick={() => setProfileOpen(true)}>
+          <UserAvatar user={DATA.user} size={28} />
+          <div className="who">
+            {DATA.user.name}
+            <small>@{DATA.user.handle} · {DATA.appVersion || "—"}</small>
+          </div>
+        </button>
+        {profileOpen && <ProfilePanel onClose={() => setProfileOpen(false)} setPage={setPage} />}
         <button className="windowbar-btn" type="button" title={t("nav.settings")} style={{ marginLeft: "auto" }} onClick={() => setPage("settings")}>
           <svg width="21" height="21" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="9" cy="9" r="4" />

@@ -171,7 +171,7 @@ async def publish_event(event: dict, session_id: str = "") -> None:
             if model:
                 await cy_db.record_model_usage(str(DB_PATH), str(event.get("timestamp") or ""), model, event.get("usage") or {})
         elif event.get("type") == "tool_call":
-            await cy_db.record_tool_call(str(DB_PATH), str(event.get("timestamp") or ""))
+            await cy_db.record_tool_call(str(DB_PATH), str(event.get("timestamp") or ""), str(event.get("tool") or ""))
     except Exception:
         logger.exception("Failed to persist runtime stats")
 
