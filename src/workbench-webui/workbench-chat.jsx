@@ -2015,7 +2015,7 @@ function WbcCtxPicker({ personaOn, workspaceOn, defaultWorkspacePath, wsHistory,
                 <span className="wbc-popmenu-label mono">
                   {option.isDefault ? wbcT("workbenchChat.defaultWorkspace", "Default workspace") : name}
                 </span>
-                <span className="wbc-popmenu-desc">{p}</span>
+                <span className="wbc-popmenu-desc" title={p}>{p}</span>
               </button>
             );
           })}
@@ -2070,6 +2070,7 @@ function WbcSide({
   var flush = activeTab === "viewer" || activeTab === "map";
   return (
     <aside className="wbc-side">
+      {window.WbColResizer ? React.createElement(window.WbColResizer) : null}
       <div className="workbench-right-tabs">
         {tabs.map(function (item) {
           return (

@@ -4154,6 +4154,39 @@ def _workbench_compose_ephemeral_system(
     return "\n\n".join(parts).strip()
 
 
+def _workbench_finalize_directive(session: dict[str, Any]) -> str:
+    """Completion/handoff directive for the finalize dispatch path: the user
+    considers the task done and wants the deliverables surfaced, not more work.
+
+    Instructs the agent to summarize and hand off what already exists — never
+    re-plan or re-run steps — and lists the artifacts already on record so the
+    summary is grounded on real outputs instead of re-derived from scratch."""
+    lines = [
+        "## 收尾交付（用户认为任务已完成）",
+        "用户判断这个任务已经做完，想直接看到并验收成果。请严格按下面来：",
+        "- 不要重新规划、不要新增或重排步骤、也不要重复执行已完成的工作。",
+        "- 核对工作区里已经产出的成果，把这次任务的【最终成果】清晰地汇总在这条回复里交付给用户："
+        "先用一两句话说明任务结论与完成情况，再分点给出关键产出——结论性的内容（数据、要点、说明）"
+        "直接写进回复，交付文件则点出文件名/路径，方便用户查看。",
+        "- 如果某个交付文件是用 Bash/脚本/命令行生成、还没登记为可下载产物，请用 send_file 声明它；"
+        "用 Write 写入工作区的文件已自动登记，无需重复声明。",
+        "- 只在为了汇总成果而确有必要时才读取文件；不要借收尾之机开展新工作。",
+        "- 如果你核对后发现成果其实并不完整、或与目标不符，就如实说明还差什么、建议下一步，"
+        "而不是假装已经完成。",
+    ]
+    artifacts = session.get("artifacts") if isinstance(session.get("artifacts"), list) else []
+    names: list[str] = []
+    for item in artifacts:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("path") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    if names:
+        lines.append("- 已登记的产物（交付汇总里应当体现）：" + "；".join(names[:12]) + "。")
+    return "\n".join(lines)
+
+
 async def _workbench_should_reflect(goal: str, acceptance: list[Any], feedback: str) -> bool:
     """Decide if feedback signals a goal-level miss (→ reflect) vs a minor tweak."""
     fb = str(feedback or "").strip()
@@ -4196,22 +4229,28 @@ async def _workbench_classify_intent(text: str, session: dict[str, Any]) -> str:
     plan_note = (
         "\n注意：本任务已经有一份执行计划。若用户是在增删/调整步骤、改变做法或追加目标 → "
         "task（会按计划修订处理，保留已完成/进行中的步骤，不清空进度）；只是就计划或项目"
-        "提问 → question；一条立刻能做完的小改动 → command。"
+        "提问 → question；一条立刻能做完的小改动 → command；表示整件事已经做完、要收尾/"
+        "交付/验收、或让你把成果汇总出来给他看 → done（不要再据此规划或重排步骤）。"
         if plan else ""
     )
     prompt = (
         "你在判断用户在一个工作台「任务」里输入的一句话应该如何处理。"
-        "只返回 JSON：{\"kind\":\"question\"|\"command\"|\"task\"}。\n\n"
+        "只返回 JSON：{\"kind\":\"question\"|\"command\"|\"task\"|\"done\"}。\n\n"
         "- question：在提问或想了解信息，期待一个直接回答，本身不要求改动文件或执行操作。"
         "例：「这个项目用什么框架？」「登录逻辑在哪个文件？」\n"
         "- command：一条明确、范围清晰、基本一步就能做完的直接指令。"
         "例：「把 README 标题改成 X」「跑一下测试」「格式化这个文件」。\n"
         "- task：较复杂、需要拆成多步、值得先规划再执行的目标。"
-        "例：「实现用户登录系统」「重构整个支付模块」。\n\n"
+        "例：「实现用户登录系统」「重构整个支付模块」。\n"
+        "- done：用户认为整件任务已经做完，要收尾、交付成果或进入验收，或让你把这次任务"
+        "已有的产出汇总给他看，而不是再开展新工作。"
+        "例：「任务完成了」「就到这吧，把成果给我」「可以验收了」「整理一下最终交付物」。\n\n"
         f"当前任务背景：{goal or '（暂无）'}{plan_note}\n用户输入：{src}\n\n"
-        "判定倾向：本工作台鼓励「先规划再执行」。除非是纯提问(question)或一句话立刻能做完的"
-        "小事(command)，凡是要动手推进、涉及多步、或会改动多个文件/模块的工作，一律优先 "
-        "task（制定或修改执行计划）。拿不准 → task。"
+        "判定倾向：本工作台鼓励「先规划再执行」。除非是纯提问(question)、一句话立刻能做完的"
+        "小事(command)、或明确表示任务已完成/要交付验收(done)，凡是要动手推进、涉及多步、"
+        "或会改动多个文件/模块的工作，一律优先 task（制定或修改执行计划）。"
+        "特别注意：用户说「完成了/搞定了/可以了/到这吧/去验收/给我成果」这类收尾话语时优先 "
+        "done，不要再当成新任务去重新规划或重复执行。"
     )
     try:
         resp = await asyncio.wait_for(
@@ -4223,7 +4262,7 @@ async def _workbench_classify_intent(text: str, session: dict[str, Any]) -> str:
         return "plan"
     parsed = _workbench_parse_json_object(resp.get("content") or "")
     kind = str(parsed.get("kind") or "").strip().lower() if isinstance(parsed, dict) else ""
-    return {"question": "answer", "command": "direct", "task": "plan"}.get(kind, "plan")
+    return {"question": "answer", "command": "direct", "task": "plan", "done": "finalize"}.get(kind, "plan")
 
 
 # Session statuses still "open" enough that a sibling's reflection is worth a nudge.
@@ -8570,9 +8609,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
 
         Classifies the input and routes it: a question → a direct answer; a
         one-shot instruction → execute it and report what changed; a complex goal
-        → generate a plan. Only the plan branch enters the planning/approval flow;
-        answer/direct return an agent reply with no plan/steps. ``replyKind`` tells
-        the client which card to render.
+        → generate a plan; a completion/handoff signal ("done", "可以验收了") →
+        summarize the existing deliverables and move to review (no re-planning).
+        Only the plan branch enters the planning/approval flow; answer/direct/
+        finalize return an agent reply with no plan/steps. ``replyKind`` tells the
+        client which card to render.
         """
         body = await request.json()
         user_input = str(body.get("input") or body.get("message") or "").strip()
@@ -8599,10 +8640,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
 
         now = _utc_now_iso()
         # Seed goal/title/constraints from the first ACTIONABLE input so the task
-        # gets a real identity — but not for a pure question (kind=="answer"): a
-        # question is not a task goal. The agent can still set/correct goal+title
-        # at any time via the set_task_goal tool.
-        if kind != "answer" and _workbench_is_blank_goal(session.get("goal")) and user_input:
+        # gets a real identity — but not for a pure question (kind=="answer") or a
+        # completion signal (kind=="finalize"): neither is a task goal. The agent
+        # can still set/correct goal+title at any time via the set_task_goal tool.
+        if kind not in ("answer", "finalize") and _workbench_is_blank_goal(session.get("goal")) and user_input:
             session["goal"] = user_input
             if _workbench_is_default_title(session.get("title")):
                 session["title"] = _workbench_derive_title(user_input)
@@ -8696,14 +8737,18 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 **latest_payload,
             }
 
-        # answer / direct — run a real agent reply (no plan generated), then collect
-        # any tool activity + file changes the run produced so the card can report
-        # what actually happened.
+        # answer / direct / finalize — run a real agent reply (no plan generated),
+        # then collect any tool activity + file changes the run produced so the card
+        # can report what actually happened. finalize additionally instructs the
+        # agent to summarize+hand off the existing deliverables and lands in review.
+        finalizing = kind == "finalize"
         run_start_ts = _utc_now_iso()
         workspace_root = _workbench_workspace_root(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
         ephemeral_system = _workbench_compose_ephemeral_system(project, session)
+        if finalizing:
+            ephemeral_system = (ephemeral_system + "\n\n" + _workbench_finalize_directive(session)).strip()
         agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
@@ -8713,7 +8758,12 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         session["agentReply"] = agent_reply
         if not command and not awaiting_user:
             schedule_capture(_workbench_project_data_key(project), user_input, agent_reply)
-        session["status"] = "waiting_for_user" if awaiting_user else ("acted" if kind == "direct" else "answered")
+        session["status"] = (
+            "waiting_for_user" if awaiting_user
+            else "review" if finalizing
+            else "acted" if kind == "direct"
+            else "answered"
+        )
 
         normalized_attachments = _workbench_normalize_attachments(attachments)
         public_attachments = [build_public_attachment_payload(item) for item in normalized_attachments]
@@ -8765,7 +8815,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         _write_workbench_store(payload)
         append_notification(
             title="Agent 回复完成",
-            body=f"Agent 在「{session.get('title') or '任务'}」中" + ("执行了你的指令。" if kind == "direct" else "回复了你。"),
+            body=f"Agent 在「{session.get('title') or '任务'}」中" + (
+                "整理并交付了任务成果，待你验收。" if finalizing
+                else "执行了你的指令。" if kind == "direct"
+                else "回复了你。"
+            ),
             tab="comment",
             project_ref=project.get("id"),
             source="task_reply",

@@ -361,6 +361,112 @@ function wbSuppressOnScreenNotifications(payload, view, model) {
   });
 }
 
+// Right-panel resize plumbing -------------------------------------------------
+// The rightmost column width is stored in --wb-right-w on .workbench-grid and
+// consumed by both the task grid (column 4) and the chat .wbc-page (column 3).
+// Width lives in the DOM + localStorage rather than React state so a streaming
+// re-render never fights an in-progress drag.
+var WB_RIGHT_MIN = 280;
+// Width the flexible main/thread column must keep — keep this >= the CSS
+// `minmax(320px, …)` floors so the right panel can never squeeze the grid past
+// the viewport (which is what made text overflow when dragging).
+var WB_MAIN_MIN = 340;
+var WB_RIGHT_STORE = "wb-right-w";
+
+// Viewport-based ceiling, used only as a safety clamp when restoring a stored
+// width on load (the precise per-layout ceiling is computed live during drag).
+function wbRightMaxWidth() {
+  var vw = window.innerWidth || document.documentElement.clientWidth || 1280;
+  return Math.max(WB_RIGHT_MIN, Math.min(640, Math.round(vw * 0.45)));
+}
+
+// Largest the right panel may grow without pushing the main column below
+// WB_MAIN_MIN. Measures the actual layout row (task grid OR chat .wbc-page) so
+// it works for both the collapsed and expanded rail.
+function wbRightDynamicMax(panel) {
+  var layout = panel.closest(".wbc-page") || panel.closest(".workbench-grid");
+  if (!layout) return wbRightMaxWidth();
+  var avail = layout.getBoundingClientRect().width;
+  var leftFixed = 0;
+  Array.prototype.forEach.call(layout.children, function (child) {
+    if (child === panel) return;
+    // the flexible main/thread column gets WB_MAIN_MIN reserved, not its current width
+    if (child.classList.contains("workbench-main") || child.classList.contains("wbc-main")) return;
+    leftFixed += child.getBoundingClientRect().width;
+  });
+  return Math.max(WB_RIGHT_MIN, Math.round(avail - leftFixed - WB_MAIN_MIN));
+}
+
+// Stable ref callback (module scope = identity never changes, so React only
+// runs it on mount/unmount of .workbench-grid — not on every re-render).
+function wbApplyStoredRightWidth(node) {
+  if (!node) return;
+  try {
+    var raw = localStorage.getItem(WB_RIGHT_STORE);
+    if (!raw) return;
+    var n = parseInt(raw, 10);
+    if (!isFinite(n)) return;
+    n = Math.max(WB_RIGHT_MIN, Math.min(wbRightMaxWidth(), n));
+    node.style.setProperty("--wb-right-w", n + "px");
+  } catch (e) {}
+}
+
+// Drag handle pinned to the left edge of the rightmost panel. Shared by the
+// task context panel and the chat side panel (exposed on window for the
+// separately-bundled workbench-chat.js).
+function WbColResizer() {
+  function onPointerDown(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    var handle = e.currentTarget;
+    var panel = handle.closest(".workbench-right-panel, .wbc-side");
+    var grid = handle.closest(".workbench-grid");
+    if (!panel || !grid) return;
+    var rightEdge = panel.getBoundingClientRect().right;
+    var maxW = wbRightDynamicMax(panel);
+    try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+    document.body.classList.add("wb-col-resizing");
+    function onMove(ev) {
+      var w = Math.round(rightEdge - ev.clientX);
+      if (w < WB_RIGHT_MIN) w = WB_RIGHT_MIN;
+      if (w > maxW) w = maxW;
+      grid.style.setProperty("--wb-right-w", w + "px");
+    }
+    function onUp() {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      document.body.classList.remove("wb-col-resizing");
+      try {
+        var cur = parseInt(grid.style.getPropertyValue("--wb-right-w"), 10);
+        if (isFinite(cur)) localStorage.setItem(WB_RIGHT_STORE, String(cur));
+      } catch (err) {}
+    }
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  }
+  function onDoubleClick() {
+    var grid = document.querySelector(".workbench-grid");
+    if (grid) grid.style.removeProperty("--wb-right-w");
+    try { localStorage.removeItem(WB_RIGHT_STORE); } catch (err) {}
+  }
+  var title = window.workbenchT
+    ? window.workbenchT("rail.resizeHandle", null, "Drag to resize · double-click to reset")
+    : "Drag to resize";
+  return (
+    <div
+      className="wb-col-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      title={title}
+      onPointerDown={onPointerDown}
+      onDoubleClick={onDoubleClick}
+    />
+  );
+}
+window.WbColResizer = WbColResizer;
+
 function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   useDataVersion();
   var workbenchI18n = window.useWorkbenchI18n();
@@ -387,6 +493,13 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     } catch (e) { return null; }
   });
   var [rightTab, setRightTab] = useWorkbenchState("context");
+  var [railCollapsed, setRailCollapsed] = useWorkbenchState(function () {
+    // Default to collapsed (icon strip); honour the user's stored choice once set.
+    try {
+      var v = localStorage.getItem("wb-rail-collapsed");
+      return v === null ? true : v === "1";
+    } catch (e) { return true; }
+  });
   var [expandedStepId, setExpandedStepId] = useWorkbenchState("");
   var [searchOpen, setSearchOpen] = useWorkbenchState(false);
   var [settingsOpen, setSettingsOpen] = useWorkbenchState(false);
@@ -870,11 +983,19 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       {fullPageConfig ? (
         <WorkbenchFullPage config={fullPageConfig} onClose={function () { setFullPage(null); }} />
       ) : (
-        <div className={"workbench-grid" + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "")}>
+        <div ref={wbApplyStoredRightWidth} className={"workbench-grid" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "")}>
           <ProjectRail
             projects={store.projects}
             activeProjectId={store.activeProjectId}
             activePage={fullPage}
+            collapsed={railCollapsed}
+            onToggleCollapse={function () {
+              setRailCollapsed(function (v) {
+                var next = !v;
+                try { localStorage.setItem("wb-rail-collapsed", next ? "1" : "0"); } catch (e) {}
+                return next;
+              });
+            }}
             onSelectProject={selectProject}
             onCreateProject={createProject}
             onEditProject={setEditProject}
@@ -1384,7 +1505,7 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
   );
 }
 
-function ProjectRail({ projects, activeProjectId, activePage, onSelectProject, onCreateProject, onEditProject, onDeleteProject, onOpenPage }) {
+function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggleCollapse, onSelectProject, onCreateProject, onEditProject, onDeleteProject, onOpenPage }) {
   var { t } = window.useWorkbenchI18n();
   var [menuProjectId, setMenuProjectId] = useWorkbenchState("");
 
@@ -1423,13 +1544,28 @@ function ProjectRail({ projects, activeProjectId, activePage, onSelectProject, o
   return (
     <aside className="workbench-project-rail">
       <div className="workbench-rail-head">
-        <span>{t("rail.projects")}</span>
-        <button type="button" className="workbench-add-btn" onClick={onCreateProject}>
-          <span>
-            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
-          </span>
-          <span>{t("rail.newProject")}</span>
-        </button>
+        <span className="wb-rail-title">{t("rail.projects")}</span>
+        <div className="workbench-rail-head-actions">
+          <button type="button" className="workbench-add-btn" onClick={onCreateProject} title={t("rail.newProject")}>
+            <span>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </span>
+            <span>{t("rail.newProject")}</span>
+          </button>
+          <button
+            type="button"
+            className="workbench-rail-collapse-btn"
+            title={collapsed ? t("rail.expand", null, "Expand sidebar") : t("rail.collapse", null, "Collapse sidebar")}
+            aria-label={collapsed ? t("rail.expand", null, "Expand sidebar") : t("rail.collapse", null, "Collapse sidebar")}
+            onClick={onToggleCollapse}
+          >
+            {collapsed ? (
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m13 7 5 5-5 5M6 7l5 5-5 5"/></svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m11 7-5 5 5 5M18 7l-5 5 5 5"/></svg>
+            )}
+          </button>
+        </div>
       </div>
       <div className={"workbench-project-list" + (menuProjectId ? " has-open-menu" : "")}>
         {projects.map(function (project) {
@@ -1476,7 +1612,7 @@ function ProjectRail({ projects, activeProjectId, activePage, onSelectProject, o
       <div className="workbench-global-nav">
         {navItems.map(function (item) {
           return (
-            <button key={item.id} type="button" className={"workbench-nav-button" + ((activePage === item.id || (item.id === "task" && !activePage)) ? " active" : "")} onClick={item.action}>
+            <button key={item.id} type="button" title={item.label} className={"workbench-nav-button" + ((activePage === item.id || (item.id === "task" && !activePage)) ? " active" : "")} onClick={item.action}>
               <span className="workbench-nav-icon">{item.icon}</span>
               <span>{item.label}</span>
             </button>
@@ -3238,7 +3374,9 @@ function FailedCard({ session, controller }) {
   );
 }
 
-// review (awaiting confirm) / completed (confirmed) — 任务完成.
+// review (awaiting confirm) / completed (confirmed) — 任务完成. The agent's reply
+// carries the textual deliverable; downloadable file deliverables are listed
+// inline below it so the user can review/grab them without leaving the card.
 function CompletionCard({ session, controller, onRightTab, onSelectSession, project, confirmed }) {
   var accept = Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : [];
   var passed = accept.filter(function (a) { return a.status === "passed" || a.status === "done"; }).length;
@@ -3246,6 +3384,37 @@ function CompletionCard({ session, controller, onRightTab, onSelectSession, proj
   return (
     <WbCard tone="done" icon={ICONS.check} title={confirmed ? wbT("task.card.completed", "Task completed") : wbT("task.card.awaitingConfirmation", "Agent finished; awaiting your confirmation")}>
       <AgentReplyBlock text={session.agentReply || wbT("task.completedFallback", "The current task is complete.")} />
+      {artifacts.length > 0 && (
+        <div className="wb-deliverables">
+          <div className="wb-deliverables-label">{wbT("task.deliverables", "Deliverables")}</div>
+          {artifacts.map(function (artifact, i) {
+            var downloadUrl = "/api/task-sessions/" + encodeURIComponent(session.id) + "/artifacts/" + encodeURIComponent(artifact.id) + "/download";
+            var artifactPath = String(artifact.path || "").trim();
+            return (
+              <a className="workbench-artifact-row wb-artifact-download" href={downloadUrl} download={artifact.name || true}
+                title={wbT("task.artifact.download", "Download {name}", { name: artifact.name || "" })} key={artifact.id || i}>
+                <span className="wb-artifact-file-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <path d="M7 3.75h6.4L18 8.35v11.9H7z"></path>
+                    <path d="M13.25 3.9v4.7h4.7"></path>
+                  </svg>
+                </span>
+                <span className="wb-artifact-file-copy">
+                  <b>{artifact.name}</b>
+                  {artifactPath && artifactPath !== artifact.name ? <small>{artifactPath}</small> : null}
+                </span>
+                <span className="wb-artifact-download-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <path d="M12 4v11"></path>
+                    <path d="m8 11 4 4 4-4"></path>
+                    <path d="M5 19h14"></path>
+                  </svg>
+                </span>
+              </a>
+            );
+          })}
+        </div>
+      )}
       <div className="wb-done-grid">
         <button type="button" className="wb-done-stat" onClick={function () { onRightTab && onRightTab("acceptance"); }}>
           <b>{passed} / {accept.length || 0}</b><small>{wbT("task.stat.acceptancePassed", "Acceptance passed")}</small>
@@ -4130,10 +4299,11 @@ function RightContextPanel({ project, session, expandedStepId, tab, onTabChange,
     { id: "artifacts", label: wbT("workbenchChat.artifacts", "Artifacts") },
   ];
   if (!session) {
-    return <aside className="workbench-right-panel"><div className="workbench-right-body"><p className="workbench-muted">{wbT("task.noTaskSelected", "Select a task.")}</p></div></aside>;
+    return <aside className="workbench-right-panel"><WbColResizer /><div className="workbench-right-body"><p className="workbench-muted">{wbT("task.noTaskSelected", "Select a task.")}</p></div></aside>;
   }
   return (
     <aside className="workbench-right-panel">
+      <WbColResizer />
       <div className="workbench-right-tabs">
         {tabs.map(function (item) {
           return <button key={item.id} type="button" className={tab === item.id ? "active" : ""} onClick={function () { onTabChange(item.id); }}>{item.label}</button>;

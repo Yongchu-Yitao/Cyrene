@@ -116,8 +116,6 @@ function SettingsOverlay({
   // ── Channels state ──
   var [telegramToken, setTelegramToken] = useStateSt("");
   var [telegramSaved, setTelegramSaved] = useStateSt("");
-  var [wechatToken, setWechatToken] = useStateSt("");
-  var [wechatSaved, setWechatSaved] = useStateSt("");
   var [notifyTelegram, setNotifyTelegram] = useStateSt(true);
   var [notifyWechat, setNotifyWechat] = useStateSt(true);
 
@@ -228,8 +226,6 @@ function SettingsOverlay({
     fetch("/api/settings/keys").then(function (r) { return r.json(); }).then(function (p) {
       var tk = (p.keys || []).find(function (item) { return item.key === "TELEGRAM_BOT_TOKEN"; });
       if (tk) setTelegramToken(tk.value || "");
-      var wk = (p.keys || []).find(function (item) { return item.key === "WECHAT_BOT_TOKEN"; });
-      if (wk) setWechatToken(wk.value || "");
       var ak = (p.keys || []).find(function (item) { return item.key === "AMAP_API_KEY"; });
       if (ak) setAmapKey(ak.value || "");
     }).catch(function () {});
@@ -381,7 +377,7 @@ function SettingsOverlay({
         React.createElement("div", { className: "settings-overlay-content" },
           tab === "general" && GeneralPanel({ t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved }),
           tab === "models" && ModelsPanel({ t, models, setModels, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, saveModels, config }),
-          tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, wechatToken, setWechatToken, wechatSaved, setWechatSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
+          tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
           tab === "appearance" && AppearancePanel({ t, tweaks, setTweak, actualTheme, theme: initialTheme }),
           tab === "capabilities" && CapabilitiesPanel({ t, browserTools, saveBrowserTools, mcpConfigs, setMcpConfigs, mcpServers, toolList, toolsExpanded, setToolsExpanded, toolsSaved, saveTools, newMcpServer, setNewMcpServer, mcpSaved, saveMcp, config }),
@@ -589,7 +585,7 @@ function modelDraftField(draft, setDraft, onAdd, t) {
 
 // ── Channels Panel ──
 function ChannelsPanel(p) {
-  var { t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, wechatToken, setWechatToken, wechatSaved, setWechatSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat } = p;
+  var { t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat } = p;
 
   function saveTelegram() {
     if (!telegramToken || telegramToken.startsWith("••")) { setTelegramSaved(t("settings.noChanges")); setTimeout(function () { setTelegramSaved(""); }, 1500); return; }
@@ -597,14 +593,6 @@ function ChannelsPanel(p) {
     fetch("/api/settings/keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ TELEGRAM_BOT_TOKEN: telegramToken }) })
       .then(function () { setTelegramSaved(t("settings.saved")); setTimeout(function () { setTelegramSaved(""); }, 1500); })
       .catch(function () { setTelegramSaved(t("settings.error")); });
-  }
-
-  function saveWechat() {
-    if (!wechatToken || wechatToken.startsWith("••")) { setWechatSaved(t("settings.noChanges")); setTimeout(function () { setWechatSaved(""); }, 1500); return; }
-    setWechatSaved(t("settings.saving"));
-    fetch("/api/settings/keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ WECHAT_BOT_TOKEN: wechatToken }) })
-      .then(function () { setWechatSaved(t("settings.saved")); setTimeout(function () { setWechatSaved(""); }, 1500); })
-      .catch(function () { setWechatSaved(t("settings.error")); });
   }
 
   return React.createElement("div", { className: "settings-panel" },
@@ -632,25 +620,204 @@ function ChannelsPanel(p) {
       ),
     ),
 
-    // WeChat
-    React.createElement("div", { className: "wb-channel-card" },
-      React.createElement("div", { className: "wb-channel-head" },
+    React.createElement(WeChatConnectionPanel, { t, notifyWechat, setNotifyWechat }),
+  );
+}
+
+function WeChatConnectionPanel(p) {
+  var { t, notifyWechat, setNotifyWechat } = p;
+  var [connected, setConnected] = useStateSt(false);
+  var [running, setRunning] = useStateSt(false);
+  var [ownerWxid, setOwnerWxid] = useStateSt("");
+  var [qrCode, setQrCode] = useStateSt("");
+  var [qrStatus, setQrStatus] = useStateSt("");
+  var [busy, setBusy] = useStateSt(false);
+  var cancelledRef = useRefSt(false);
+  var pollAbortRef = useRefSt(null);
+
+  function refreshStatus() {
+    return fetch("/api/wechat/status")
+      .then(readSettingsResponse)
+      .then(function (status) {
+        setConnected(!!status.connected);
+        setRunning(!!status.running);
+        setOwnerWxid(status.owner_wxid || "");
+        return status;
+      });
+  }
+
+  useEffectSt(function () {
+    cancelledRef.current = false;
+    refreshStatus().catch(function () {
+      if (!cancelledRef.current) setQrStatus(t("settings.wechatStatusFailed"));
+    });
+    return function () {
+      cancelledRef.current = true;
+      if (pollAbortRef.current) pollAbortRef.current.abort();
+    };
+  }, []);
+
+  function closeQrModal() {
+    cancelledRef.current = true;
+    if (pollAbortRef.current) pollAbortRef.current.abort();
+    pollAbortRef.current = null;
+    setQrCode("");
+    setQrStatus("");
+    setBusy(false);
+  }
+
+  function qrImageUrl(content) {
+    if (String(content || "").startsWith("data:image/")) return content;
+    return "https://api.qrserver.com/v1/create-qr-code/?size=280x280&margin=8&data=" + encodeURIComponent(content);
+  }
+
+  function pollLogin(qrcodeId) {
+    var controller = new AbortController();
+    pollAbortRef.current = controller;
+    setQrStatus(t("settings.wechatWaitingConfirm"));
+    fetch("/api/wechat/poll-login", {
+      method: "POST",
+      body: JSON.stringify({ qrcode_id: qrcodeId }),
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+    }).then(readSettingsResponse).then(function (result) {
+      if (cancelledRef.current) return;
+      if (!result.ok) {
+        setBusy(false);
+        setQrStatus(t("settings.wechatQrExpired"));
+        return;
+      }
+      setQrStatus(t("settings.wechatLoginSuccess"));
+      return fetch("/api/wechat/start", { method: "POST" })
+        .then(readSettingsResponse)
+        .then(refreshStatus)
+        .then(function () {
+          if (cancelledRef.current) return;
+          setBusy(false);
+          setQrCode("");
+          setQrStatus("");
+        });
+    }).catch(function (error) {
+      if (cancelledRef.current || error.name === "AbortError") return;
+      setBusy(false);
+      setQrStatus(t("settings.wechatConnectionFailed") + ": " + error.message);
+    }).finally(function () {
+      if (pollAbortRef.current === controller) pollAbortRef.current = null;
+    });
+  }
+
+  function startLogin() {
+    cancelledRef.current = false;
+    if (pollAbortRef.current) pollAbortRef.current.abort();
+    setBusy(true);
+    setQrCode("");
+    setQrStatus(t("settings.wechatFetchingQr"));
+    fetch("/api/wechat/qr-login", { method: "POST" })
+      .then(readSettingsResponse)
+      .then(function (result) {
+        if (!result.qrcode_id || (!result.qrcode_image && !result.qrcode_img)) {
+          throw new Error(t("settings.wechatInvalidQr"));
+        }
+        if (cancelledRef.current) return;
+        setQrCode(qrImageUrl(result.qrcode_image || result.qrcode_img));
+        setQrStatus(t("settings.wechatScanPrompt"));
+        pollLogin(result.qrcode_id);
+      })
+      .catch(function (error) {
+        if (cancelledRef.current || error.name === "AbortError") return;
+        setBusy(false);
+        setQrStatus(t("settings.wechatConnectionFailed") + ": " + error.message);
+      });
+  }
+
+  function startWechat() {
+    setBusy(true);
+    setQrStatus("");
+    fetch("/api/wechat/start", { method: "POST" })
+      .then(readSettingsResponse)
+      .then(refreshStatus)
+      .catch(function (error) {
+        setQrStatus(t("settings.wechatStartFailed") + ": " + error.message);
+      })
+      .finally(function () { setBusy(false); });
+  }
+
+  function stopWechat() {
+    setBusy(true);
+    setQrStatus("");
+    fetch("/api/wechat/stop", { method: "POST" })
+      .then(readSettingsResponse)
+      .then(refreshStatus)
+      .catch(function (error) {
+        setQrStatus(t("settings.wechatStopFailed") + ": " + error.message);
+      })
+      .finally(function () { setBusy(false); });
+  }
+
+  var statusText = connected
+    ? (running ? t("settings.wechatConnectedRunning") : t("settings.wechatConnectedStopped"))
+    : t("settings.wechatNotConnected");
+
+  return React.createElement("div", { className: "wb-channel-card wb-wechat-card" },
+    React.createElement("div", { className: "wb-channel-head wb-channel-head-spread" },
+      React.createElement("div", { className: "wb-channel-title" },
         React.createElement("span", { className: "wb-channel-icon" }, "⌖"),
         React.createElement("b", null, t("settings.wechat")),
       ),
-      React.createElement("p", { className: "wb-channel-desc" }, t("settings.wechatTokenHint")),
-      FieldRow(t("settings.wechatToken"), null,
-        React.createElement("div", { className: "wb-inline-row" },
-          React.createElement("input", { className: "wb-input mono", type: "password", value: wechatToken, onChange: function (e) { setWechatToken(e.target.value); }, placeholder: "WECHAT_BOT_TOKEN" }),
-          React.createElement("button", { className: "wb-btn primary", onClick: saveWechat }, t("settings.save")),
+      connected && React.createElement("span", {
+        className: "wb-channel-state " + (running ? "running" : "stopped"),
+      }, running ? t("settings.wechatRunning") : t("settings.wechatStopped")),
+    ),
+    React.createElement("p", { className: "wb-channel-desc" }, t("settings.wechatDescription")),
+    React.createElement("div", { className: "wb-wechat-status-row" },
+      React.createElement("div", { className: "wb-wechat-status-copy" },
+        React.createElement("small", null, t("settings.wechatCurrentStatus")),
+        React.createElement("span", null,
+          React.createElement("i", { className: "wb-channel-dot " + (running ? "running" : (connected ? "stopped" : "off")) }),
+          React.createElement("strong", null, statusText),
         ),
-        wechatSaved && React.createElement("span", { className: "wb-hint saved" }, wechatSaved),
+        ownerWxid && React.createElement("code", null, ownerWxid),
       ),
-      FieldRow(t("settings.notifyWechat"), t("settings.notifyWechatHint"), Toggle(notifyWechat, function () {
-        var next = !notifyWechat;
-        setNotifyWechat(next);
-        fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notify_wechat: next }) }).catch(function () {});
-      })),
+      React.createElement("div", { className: "wb-wechat-actions" },
+        connected && running && React.createElement("button", {
+          className: "wb-btn danger", onClick: stopWechat, disabled: busy,
+        }, t("settings.wechatStop")),
+        connected && !running && React.createElement("button", {
+          className: "wb-btn primary", onClick: startWechat, disabled: busy,
+        }, t("settings.wechatStart")),
+        !connected && React.createElement("button", {
+          className: "wb-btn primary", onClick: startLogin, disabled: busy,
+        }, busy ? t("settings.wechatFetchingQr") : t("settings.wechatScanConnect")),
+      ),
+    ),
+    qrStatus && !qrCode && React.createElement("div", { className: "wb-wechat-message", role: "status" }, qrStatus),
+    FieldRow(t("settings.notifyWechat"), t("settings.notifyWechatHint"), Toggle(notifyWechat, function () {
+      var next = !notifyWechat;
+      setNotifyWechat(next);
+      fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notify_wechat: next }) }).catch(function () {});
+    })),
+    qrCode && React.createElement("div", {
+      className: "wb-wechat-qr-overlay",
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": t("settings.wechatScanningTitle"),
+      onClick: closeQrModal,
+    },
+      React.createElement("div", { className: "wb-wechat-qr-dialog", onClick: function (event) { event.stopPropagation(); } },
+        React.createElement("button", {
+          className: "wb-wechat-qr-close",
+          onClick: closeQrModal,
+          title: t("common.close"),
+          "aria-label": t("common.close"),
+        }, "×"),
+        React.createElement("h3", null, t("settings.wechatScanningTitle")),
+        React.createElement("img", { src: qrCode, alt: t("settings.wechatQrAlt") }),
+        React.createElement("p", { role: "status" }, qrStatus),
+        qrStatus === t("settings.wechatQrExpired") && React.createElement("button", {
+          className: "wb-btn primary",
+          onClick: startLogin,
+        }, t("settings.wechatQrRetry")),
+      ),
     ),
   );
 }

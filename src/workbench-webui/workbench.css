@@ -738,9 +738,15 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   /* Single source of truth for the project-rail width so every view
      (main, knowledge, …) stays in lock-step across breakpoints. */
   --wb-rail-w: 290px;
+  /* Width the rail expands back to while collapsed + hovered (tracks the
+     responsive open width below). */
+  --wb-rail-w-open: 290px;
   height: calc(100vh - 58px);
   display: grid;
-  grid-template-columns: var(--wb-rail-w) 270px minmax(460px, 1fr) 350px;
+  /* The right panel width is user-resizable: --wb-right-w is set inline (from
+     localStorage / drag) on this element and inherited by .wbc-page. Until the
+     user drags it, the per-breakpoint fallback keeps the original layout. */
+  grid-template-columns: var(--wb-rail-w) 270px minmax(320px, 1fr) var(--wb-right-w, 350px);
   min-width: 0;
 }
 
@@ -759,6 +765,178 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
 .workbench-right-panel {
   display: flex;
   flex-direction: column;
+}
+
+/* ── Collapsible project rail ──────────────────────────────────────────────
+   Collapsed = a 64px icon strip. The grid track shrinks to 64px while the rail
+   element keeps `position: relative` so, on hover, it can widen back to the
+   open width and spill over the next column as a floating overlay WITHOUT
+   reflowing the rest of the grid (fixed tracks don't grow to fit overflow). */
+.workbench-grid.rail-collapsed {
+  --wb-rail-w: 64px;
+}
+
+.workbench-grid.rail-collapsed .workbench-project-rail {
+  position: relative;
+  z-index: 60;
+  width: var(--wb-rail-w);
+  overflow: hidden;
+  transition: width 170ms ease, box-shadow 170ms ease;
+  will-change: width;
+}
+
+.workbench-grid.rail-collapsed .workbench-project-rail:hover,
+.workbench-grid.rail-collapsed .workbench-project-rail:focus-within {
+  width: var(--wb-rail-w-open);
+  /* stays overflow:hidden so the labels reveal left-to-right as the rail
+     widens, instead of flashing over the neighbouring column. box-shadow is
+     painted outside the box, so hidden overflow does not clip it. */
+  box-shadow: 18px 0 50px rgba(20, 28, 45, 0.16);
+}
+
+/* Icon-only layout while collapsed and neither hovered nor keyboard-focused.
+   Labels return to their default display the moment the rail expands. */
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .wb-rail-title,
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-rail-collapse-btn,
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-add-btn > span:last-child,
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-project-meta,
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-project-menu-btn,
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-nav-button > span:last-child,
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-account-meta {
+  display: none;
+}
+
+/* Every row becomes a flex box that centers its single visible child (the
+   icon / avatar). Flex centering is reliable here — unlike `justify-content`
+   on a 1fr grid, which would leave the fixed-width icon pinned to the left. */
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-rail-head {
+  justify-content: center;
+  padding: 0;
+}
+
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-add-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 9px;
+}
+
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-project-list {
+  padding-inline: 0;
+  align-items: center;
+}
+
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-project-card {
+  width: 44px;
+  min-height: 44px;
+}
+
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-project-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 5px 0;
+}
+
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-global-nav {
+  margin-inline: 0;
+  padding-inline: 0;
+  justify-items: center;
+}
+
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-nav-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  margin: 0 auto;
+  padding: 0;
+  gap: 0;
+}
+
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-account {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 13px 0;
+}
+
+.workbench-rail-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* Collapse / expand toggle button in the rail head. */
+.workbench-rail-collapse-btn {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.workbench-rail-collapse-btn:hover {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.workbench-rail-collapse-btn svg {
+  display: block;
+}
+
+/* ── Resizable right panel ─────────────────────────────────────────────────
+   A thin grab handle pinned to the LEFT edge of the rightmost panel (task
+   context panel + chat viewer/map side). Dragging writes --wb-right-w onto
+   .workbench-grid, which both grids consume. Handle lives inside the panel so
+   .wbc-side's overflow:hidden never clips it. */
+.workbench-right-panel,
+.wbc-side {
+  position: relative;
+}
+
+.wb-col-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 8px;
+  z-index: 40;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+
+.wb-col-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.wb-col-resizer:hover::after,
+body.wb-col-resizing .wb-col-resizer::after {
+  background: var(--wb-accent);
+}
+
+body.wb-col-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .workbench-rail-head {
@@ -795,6 +973,12 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   font-weight: 650;
 }
 
+.wb-rail-title,
+.workbench-add-btn > span:last-child {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .workbench-add-btn span:first-child {
   width: 16px;
   height: 16px;
@@ -818,9 +1002,11 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
 
 .workbench-right-body {
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  overflow-wrap: anywhere;
   /* Hide the scrollbar (still scrollable) to match .workbench-stage — expanding
      a step adds the step-dependency section and must not flash a scrollbar. */
   scrollbar-width: none;
@@ -1211,11 +1397,13 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   padding: 16px 0 14px;
   border-top: 1px solid var(--wb-line);
   display: grid;
+  grid-auto-rows: 39px;
   gap: 5px;
 }
 
 .workbench-nav-button {
   width: 100%;
+  height: 39px;
   min-height: 39px;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -1230,7 +1418,15 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   cursor: pointer;
   font-size: 14px;
   font-weight: 620;
+  overflow: hidden;
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.workbench-nav-button > span:last-child {
+  min-width: max-content;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workbench-nav-button:hover {
@@ -1258,16 +1454,25 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
 }
 
 .workbench-account {
+  height: 63px;
+  min-height: 63px;
+  box-sizing: border-box;
   border-top: 1px solid var(--wb-line);
   padding: 13px 14px;
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-rows: 36px;
   gap: 10px;
   align-items: center;
 }
 
 .workbench-account-meta {
   min-width: 0;
+  height: 36px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .workbench-account-name {
@@ -1275,6 +1480,7 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   align-items: center;
   gap: 7px;
   min-width: 0;
+  line-height: 18px;
 }
 
 .workbench-account b {
@@ -1283,6 +1489,10 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workbench-account small {
+  line-height: 16px;
 }
 
 .workbench-pro-badge {
@@ -2829,6 +3039,7 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
 .workbench-right-panel {
   border-right: 0;
   background: var(--wb-right-bg);
+  container-type: inline-size;
 }
 
 .workbench-right-tabs {
@@ -2868,6 +3079,20 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
 .workbench-right-tabs button:hover {
   color: var(--wb-text);
   border-bottom-color: var(--wb-accent);
+}
+
+/* Keep all five Chinese task tabs visible at the 280px resize floor. The
+   regular spacing remains unchanged once the panel has enough room. */
+@container (max-width: 320px) {
+  .workbench-right-tabs {
+    gap: 2px;
+    padding-inline: 8px;
+  }
+
+  .workbench-right-tabs button {
+    padding-inline: 2px;
+    font-size: 12px;
+  }
 }
 
 .workbench-right-body {
@@ -3176,6 +3401,23 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
 }
 
 /* Completion stat tiles */
+.wb-deliverables {
+  margin: 12px 0 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--wb-line);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wb-deliverables-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--wb-muted);
+  margin-bottom: 4px;
+}
+
 .wb-done-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .wb-done-stat {
   border: 1px solid var(--wb-line);
@@ -4064,7 +4306,8 @@ html[data-theme="dark"] .wb-composer-disclaimer {
 @media (max-width: 1320px) {
   .workbench-grid {
     --wb-rail-w: 250px;
-    grid-template-columns: var(--wb-rail-w) 270px minmax(390px, 1fr) 280px;
+    --wb-rail-w-open: 250px;
+    grid-template-columns: var(--wb-rail-w) 270px minmax(300px, 1fr) var(--wb-right-w, 280px);
   }
 
   .workbench-topbar {
@@ -5245,6 +5488,16 @@ html[data-theme="light"] .wb-tool-list .mono {
   margin-bottom: 6px;
 }
 
+.wb-channel-head-spread {
+  justify-content: space-between;
+}
+
+.wb-channel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .wb-channel-icon {
   font-size: 16px;
   opacity: 0.5;
@@ -5255,6 +5508,184 @@ html[data-theme="light"] .wb-tool-list .mono {
   font-size: 12px;
   margin: 0 0 10px;
   line-height: 1.5;
+}
+
+.wb-channel-state {
+  padding: 3px 8px;
+  border: 1px solid var(--wb-line);
+  border-radius: 999px;
+  color: var(--wb-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.wb-channel-state.running {
+  border-color: color-mix(in srgb, var(--wb-green) 38%, transparent);
+  background: color-mix(in srgb, var(--wb-green) 9%, transparent);
+  color: var(--wb-green);
+}
+
+.wb-wechat-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-control-bg);
+  margin-bottom: 8px;
+}
+
+.wb-wechat-status-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.wb-wechat-status-copy small {
+  color: var(--wb-muted);
+  font-size: 11px;
+}
+
+.wb-wechat-status-copy > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--wb-text);
+  font-size: 13px;
+}
+
+.wb-wechat-status-copy code {
+  color: var(--wb-green);
+  font-size: 11px;
+}
+
+.wb-channel-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--wb-faint);
+}
+
+.wb-channel-dot.running {
+  background: var(--wb-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-green) 13%, transparent);
+}
+
+.wb-channel-dot.stopped {
+  background: var(--wb-amber);
+}
+
+.wb-wechat-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wb-btn.danger {
+  border-color: color-mix(in srgb, var(--wb-red) 38%, var(--wb-line));
+  color: var(--wb-red);
+}
+
+.wb-btn.danger:hover {
+  background: color-mix(in srgb, var(--wb-red) 10%, var(--wb-control-bg));
+}
+
+.wb-wechat-message {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 7px;
+  background: var(--wb-control-bg);
+  color: var(--wb-muted);
+  font-size: 12px;
+}
+
+.wb-wechat-qr-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10020;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.wb-wechat-qr-dialog {
+  position: relative;
+  width: min(360px, calc(100vw - 40px));
+  padding: 26px;
+  border: 1px solid var(--wb-line-2);
+  border-radius: 12px;
+  background: var(--wb-panel);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+  text-align: center;
+}
+
+.wb-wechat-qr-dialog h3 {
+  margin: 0 0 16px;
+  color: var(--wb-text);
+  font-size: 16px;
+}
+
+.wb-wechat-qr-dialog img {
+  display: block;
+  width: 280px;
+  max-width: 100%;
+  aspect-ratio: 1;
+  margin: 0 auto;
+  border: 8px solid #fff;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.wb-wechat-qr-dialog p {
+  min-height: 20px;
+  margin: 14px 0 0;
+  color: var(--wb-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.wb-wechat-qr-dialog .wb-btn {
+  margin-top: 12px;
+}
+
+.wb-wechat-qr-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.wb-wechat-qr-close:hover {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+@media (max-width: 680px) {
+  .wb-wechat-status-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .wb-wechat-actions .wb-btn {
+    width: 100%;
+  }
 }
 
 /* MCP rows */
@@ -7492,7 +7923,9 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 .wbc-page {
   display: grid;
-  grid-template-columns: 270px minmax(420px, 1fr) 350px;
+  /* Right column shares --wb-right-w (inherited from .workbench-grid) so the
+     conversation viewer/map panel resizes with the same drag handle. */
+  grid-template-columns: 270px minmax(320px, 1fr) var(--wb-right-w, 350px);
   min-width: 0;
   height: 100%;
   overflow: hidden;
@@ -8497,6 +8930,26 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   display: inline-flex;
 }
 
+.wbc-ctx-picker {
+  width: min(360px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+.wbc-ctx-picker > button,
+.wbc-ctx-picker .wbc-popmenu-label,
+.wbc-ctx-picker .wbc-popmenu-desc {
+  min-width: 0;
+}
+
+.wbc-ctx-picker .wbc-popmenu-label,
+.wbc-ctx-picker .wbc-popmenu-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---- right panel ---- */
 
 .wbc-side {
@@ -8509,8 +8962,13 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 .wbc-side-body {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  /* long unbreakable strings (paths, ids) wrap instead of spilling out when
+     the panel is dragged narrow */
+  overflow-wrap: anywhere;
   padding: 14px;
 }
 
@@ -9303,7 +9761,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 @media (max-width: 1320px) {
   .wbc-page {
-    grid-template-columns: 230px minmax(360px, 1fr) 310px;
+    grid-template-columns: 230px minmax(300px, 1fr) var(--wb-right-w, 310px);
   }
 }
 

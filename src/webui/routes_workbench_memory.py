@@ -262,6 +262,86 @@ def _normalize_tags(value: Any) -> list[str]:
     return out[:12]
 
 
+def _preferred_memory_language() -> str:
+    """Return the configured language used for user-visible memory content."""
+    try:
+        from cyrene.settings_store import get as _get_setting
+
+        return "en" if str(_get_setting("app_language", "") or "").strip().lower() == "en" else "zh"
+    except Exception:
+        return "zh"
+
+
+def _content_matches_language(content: str, language: str) -> bool:
+    """Whether natural-language text already matches the requested language.
+
+    Pure identifiers, paths, commands, and similarly language-neutral fragments
+    are accepted unchanged. Chinese content needs at least one Han character;
+    English content must not contain Han characters.
+    """
+    text = str(content or "").strip()
+    has_han = bool(re.search(r"[\u3400-\u9fff]", text))
+    if language == "en":
+        return not has_han
+    if has_han:
+        return True
+    if not re.search(r"\s", text):
+        return True
+    # Do not translate language-neutral values such as ``src/app.py`` or
+    # ``MAX_RETRIES=3``. Two or more words indicate English prose.
+    words = re.findall(r"[A-Za-z][A-Za-z'-]*", text)
+    return len(words) < 2
+
+
+async def _normalize_agent_memory_language(content: str) -> str:
+    """Translate an agent-authored memory into the configured UI language.
+
+    Returns an empty string when translation fails or still produces the wrong
+    language. Callers must treat that as a rejected write so wrong-language
+    content never reaches the Workbench memory store.
+    """
+    text = str(content or "").strip()
+    language = _preferred_memory_language()
+    if not text or _content_matches_language(text, language):
+        return text
+
+    from cyrene.agent.state import _call_llm, _caller_type
+    from cyrene.llm import _assistant_text
+
+    target = "English" if language == "en" else "Simplified Chinese"
+    prompt = (
+        f"Translate the following project-memory sentence into {target}. "
+        "Keep the meaning precise and concise. Preserve code, file paths, shell commands, "
+        "identifiers, numbers, model names, and proper nouns exactly. "
+        'Return JSON only in this form: {"content":"translated sentence"}.\n\n'
+        f"Memory:\n{text}"
+    )
+    token = _caller_type.set("workbench_memory")
+    try:
+        response = await asyncio.wait_for(
+            _call_llm(
+                [{"role": "user", "content": prompt}],
+                tools=None,
+                max_tokens=300,
+                secondary=True,
+                thinking="disabled",
+            ),
+            timeout=30,
+        )
+        parsed = _parse_json_object(_assistant_text(response))
+        translated = str(parsed.get("content") or "").strip() if isinstance(parsed, dict) else ""
+    except Exception:  # noqa: BLE001
+        logger.debug("Workbench agent-memory translation failed", exc_info=True)
+        return ""
+    finally:
+        _caller_type.reset(token)
+
+    if len(translated) < 4 or not _content_matches_language(translated, language):
+        logger.warning("Rejected wrong-language Workbench agent memory after translation")
+        return ""
+    return translated
+
+
 # ── conversation capture (agent memory → per-workspace store) ────────────
 # When the workbench agent finishes a turn, an LLM pass distills durable,
 # user-specific memories from the exchange and sinks them into THIS workspace's
@@ -566,13 +646,17 @@ async def add_agent_memory_checked(
     and retires (marks stale) those — so the agent's latest understanding wins,
     while the superseded record is kept (reversible) and no longer injected.
 
-    Returns ``(new_or_reinforced_entry, [retired_entries])``. At most one LLM
-    call, only on this deliberate tool path; never raises (degrades to a plain
-    add). The cheap conversation-capture / reflection-sink paths are unaffected."""
+    Returns ``(new_or_reinforced_entry, [retired_entries])``. It may make one
+    language-normalization call when the agent supplied content in the wrong
+    language, plus one semantic-conflict call for a genuinely new fact. The
+    cheap conversation-capture / reflection-sink paths are unaffected."""
     content = str(content or "").strip()
     if len(content) < 4:
         return None, []
     if _resolve_workspace_id(workspace_id) == "default":
+        return None, []
+    content = await _normalize_agent_memory_language(content)
+    if len(content) < 4:
         return None, []
     category = str(category or "").strip().lower()
     if category not in _CATEGORY_LABELS:

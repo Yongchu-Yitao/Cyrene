@@ -234,10 +234,58 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
 
     tabs_rule = styles.split(".workbench-right-tabs {", 1)[1].split("}", 1)[0]
     body_rule = styles.split(".workbench-right-body {", 1)[1].split("}", 1)[0]
+    compact_tabs = styles.split("@container (max-width: 320px) {", 1)[1].split("}", 2)
 
     assert "flex: 0 0 48px;" in tabs_rule
     assert "flex: 1 1 auto;" in body_rule
-    assert "workbench.css?v=20260620-righttabs1" in index
+    assert "container-type: inline-size;" in styles
+    assert "gap: 2px;" in compact_tabs[0]
+    assert "padding-inline: 8px;" in compact_tabs[0]
+    assert "padding-inline: 2px;" in compact_tabs[1]
+    assert "font-size: 12px;" in compact_tabs[1]
+    assert "workbench.css?v=20260621-railcollapse4-rightresize3-wechatqr1-ctxpicker1" in index
+
+
+def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+
+    nav_rule = styles.rsplit(".workbench-nav-button {", 1)[1].split("}", 1)[0]
+    nav_label_rule = styles.split(".workbench-nav-button > span:last-child {", 1)[1].split("}", 1)[0]
+    global_nav_rule = styles.rsplit(".workbench-global-nav {", 1)[1].split("}", 1)[0]
+    account_rule = styles.rsplit(".workbench-account {", 1)[1].split("}", 1)[0]
+    account_meta_rule = styles.rsplit(".workbench-account-meta {", 1)[1].split("}", 1)[0]
+
+    assert ".workbench-project-rail:focus-within" in styles
+    assert ":not(:hover):not(:focus-within)" in styles
+    assert "height: 39px;" in nav_rule
+    assert "grid-auto-rows: 39px;" in global_nav_rule
+    assert "white-space: nowrap;" in nav_label_rule
+    assert "height: 63px;" in account_rule
+    assert "grid-template-rows: 36px;" in account_rule
+    assert "height: 36px;" in account_meta_rule
+    assert "workbench.css?v=20260621-railcollapse4-rightresize3-wechatqr1-ctxpicker1" in index
+
+
+def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
+    root = Path(__file__).resolve().parent.parent
+    settings = (root / "src" / "workbench-webui" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    translations = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+
+    assert "function WeChatConnectionPanel" in settings
+    assert 'fetch("/api/wechat/status")' in settings
+    assert 'fetch("/api/wechat/qr-login"' in settings
+    assert 'fetch("/api/wechat/poll-login"' in settings
+    assert 'fetch("/api/wechat/start"' in settings
+    assert 'fetch("/api/wechat/stop"' in settings
+    assert "result.qrcode_image || result.qrcode_img" in settings
+    assert "WECHAT_BOT_TOKEN" not in settings
+    assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
+    assert ".wb-wechat-qr-overlay" in styles
+    assert "settings-overlay.js?v=20260621-wechatqr1" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -273,6 +321,27 @@ def test_workbench_chat_directory_picker_falls_back_on_macos_and_lists_default_w
     assert '"workbenchChat.defaultWorkspace": "默认 workspace"' in i18n
 
 
+def test_workbench_context_picker_contains_long_workspace_paths():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+
+    picker_rule = styles.rsplit(".wbc-ctx-picker {", 1)[1].split("}", 1)[0]
+    text_rule = styles.rsplit(
+        ".wbc-ctx-picker .wbc-popmenu-label,\n.wbc-ctx-picker .wbc-popmenu-desc {",
+        1,
+    )[1].split("}", 1)[0]
+
+    assert "max-width: calc(100vw - 24px);" in picker_rule
+    assert "overflow-x: hidden;" in picker_rule
+    assert "min-width: 0;" in styles
+    assert "text-overflow: ellipsis;" in text_rule
+    assert "white-space: nowrap;" in text_rule
+    assert 'className="wbc-popmenu-desc" title={p}' in chat
+    assert "workbench-chat.js?v=20260621-railcollapse1-rightresize1-ctxpicker1" in index
+
+
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
@@ -287,7 +356,7 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
     assert "workbench-model.js?v=20260620-goalloop1" in index
-    assert "workbench.js?v=20260620-goalloop2" in index
+    assert "workbench.js?v=20260621-railcollapse2-rightresize2" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -349,7 +418,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.models || p.primary_candidates || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=20260619-toast1" in index
+    assert "settings-overlay.js?v=20260621-wechatqr1" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():

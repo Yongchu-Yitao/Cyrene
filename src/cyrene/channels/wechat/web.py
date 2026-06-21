@@ -2,11 +2,40 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 
 from fastapi import FastAPI, HTTPException
 
 logger = logging.getLogger(__name__)
+
+
+def _qr_image_data_uri(content: str, size: int = 280) -> str:
+    """Render QR content locally so login does not depend on a third-party image service."""
+    from reportlab.graphics import renderSVG
+    from reportlab.graphics.barcode.qr import QrCodeWidget
+    from reportlab.graphics.shapes import Drawing
+
+    qr = QrCodeWidget(content)
+    x1, y1, x2, y2 = qr.getBounds()
+    quiet_zone = 16
+    scale = (size - quiet_zone * 2) / max(x2 - x1, y2 - y1)
+    drawing = Drawing(
+        size,
+        size,
+        transform=[
+            scale,
+            0,
+            0,
+            scale,
+            quiet_zone - x1 * scale,
+            quiet_zone - y1 * scale,
+        ],
+    )
+    drawing.add(qr)
+    svg = renderSVG.drawToString(drawing)
+    encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return f"data:image/svg+xml;base64,{encoded}"
 
 
 def register_wechat_routes(app: FastAPI) -> None:
@@ -37,7 +66,11 @@ def register_wechat_routes(app: FastAPI) -> None:
 
         auth = WeChatAuth()
         qrcode_id, qrcode_img = await auth.get_qr_code()
-        return {"qrcode_id": qrcode_id, "qrcode_img": qrcode_img}
+        return {
+            "qrcode_id": qrcode_id,
+            "qrcode_img": qrcode_img,
+            "qrcode_image": _qr_image_data_uri(qrcode_img),
+        }
 
     @app.post("/api/wechat/poll-login")
     async def wechat_poll_login(data: dict):
