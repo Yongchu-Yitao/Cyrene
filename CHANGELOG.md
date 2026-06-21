@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.6.0b6] - 2026-06-22
+
+### Added
+
+- **RecallConversation 工具** — Agent 现在可以通过 `RecallConversation` 工具按关键词、session ID 或日期检索历史对话轮次，返回匹配的用户消息与助手回复摘要，支持数量限制（最多 10 条）。
+- **search_project_memory 工具** — Workbench 任务内新增 `search_project_memory` 工具，Agent 可按分类、来源、关键词搜索当前项目的持久化记忆条目；仅在 Workbench 项目 context 内可用，其他场景返回结构化错误。
+- **右侧面板调整大小 & 导航栏折叠** — Workbench 右侧面板（查看器/地图/等）现在支持拖拽调整宽度；左侧导航 rail 支持折叠/展开，收起后只显示图标，节省水平空间。
+
+### Changed
+
+- **提示词缓存优化（`static_system_extra`）** — `run_agent` / `_run_chat_agent` 新增 `static_system_extra` 参数，将 Workbench 任务执行模式和产物交付规则从每轮重新注入的 `ephemeral_system` 尾部提升到字节稳定的 SYSTEM 前缀，减少重复 token 处理；Goal Loop 同步接入。
+- **`temporal_context` 移到 ephemeral 尾部** — 日期/时区上下文从 SYSTEM 前缀移至每轮 ephemeral 块，防止日期翻转导致整个 system+history 前缀缓存失效。
+- **对话中间消息处理** — Workbench Chat 现在正确处理工具调用过程中的中间文本块（partial assistant turns），流式展示更流畅；`workbench-model.jsx` runtime 快照新增 `watchRequestId` 字段供滚动锚定使用。
+- **RecallMemory 增强** — `RecallMemory` 工具调用路径重构，统一使用 `recall_conversations` 后端；Workbench Chat 侧边栏展示记忆检索结果时支持折叠/展开查看。
+- **SimpleXNG 子进程守护** — 新增 `simplexng_child.py` 模块，SimpleXNG 搜索子进程通过父进程 PID 存活检测（含 PID 复用防护）在主进程退出时自动退出，避免僵尸进程。
+- **用户资料页增强** — 资料统计数据（对话轮数、活跃天数等）接入 DB 层；新增 i18n 翻译覆盖中英文；data 层新增对应查询接口。
+- **WeChat 频道 Web 接口健壮性** — `wechat/web.py` 补充异常处理，防止网络抖动导致未捕获异常。
+
+### Tests
+
+- 新增 `tests/test_wechat_web.py` — 覆盖 WeChat web 接口异常路径。
+- 新增 `tests/test_workbench_dispatch_finalize.py` — 覆盖意图分流与任务收尾（finalize）流程。
+- 新增 `tests/test_workbench_memory_language.py` — 覆盖 Workbench 记忆写入的语言偏好透传。
+- 新增 `tests/test_searxng_manager.py` — 覆盖 SearXNG/SimpleXNG 管理器启动与候选端点逻辑。
+- 新增 `tests/test_profile_stats.py` — 覆盖用户资料统计数据查询。
+
 ## [0.6.0b5] - 2026-06-20
 
 ### Security

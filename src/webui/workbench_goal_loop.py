@@ -724,6 +724,8 @@ class GoalLoopManager:
                 workspace_files_before = R._workbench_workspace_file_snapshot(workspace_root)
                 started_at = _utc_iso()
                 ephemeral = R._workbench_compose_ephemeral_system(current_project, current_session)
+                # Run-invariant — rides in the cache-stable system prefix (static
+                # extra), not the per-run ephemeral tail.
                 loop_instruction = (
                     "\n\n## 持续执行模式\n"
                     "本次只是目标循环中的一个有界工作片段。完成当前步骤后可以调用 quit，"
@@ -749,7 +751,8 @@ class GoalLoopManager:
                             [],
                             permission_mode=str(run.get("permission_mode") or "auto"),
                             project_workspace=str(current_project.get("workspacePath") or ""),
-                            ephemeral_system=ephemeral + loop_instruction,
+                            ephemeral_system=ephemeral,
+                            static_system_extra=R._workbench_compose_static_system() + loop_instruction,
                         )
                 except asyncio.CancelledError:
                     raise

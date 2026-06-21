@@ -202,6 +202,7 @@ async def run_agent(
     session_id: str = "",
     workspace_dir: str = "",
     ephemeral_system: str = "",
+    static_system_extra: str = "",
 ) -> str:
     """Main entry point. Runs the main agent loop with full tools.
 
@@ -212,6 +213,12 @@ async def run_agent(
     (e.g. a Workbench project's memory / reflection seed). It is appended at the
     prompt tail and never persisted, so it leaves the cached system+history
     prefix intact — keep it out of the base system prompt for cache hit rate.
+
+    ``static_system_extra`` is a run-invariant block (e.g. Workbench task-mode
+    framing) concatenated into the SYSTEM prefix right after the base prompt,
+    ahead of every volatile block. Use it for instructions that never change
+    between runs so they stay in the cache-stable prefix; use ``ephemeral_system``
+    for anything that varies per run.
     """
     session_token = _current_session_id.set(session_id)
     workspace_token = _active_workspace_dir.set(workspace_dir or "")
@@ -226,6 +233,7 @@ async def run_agent(
                 client_request_id=client_request_id, lang=lang, command=command,
                 public_user_message=public_user_message, public_attachments=public_attachments,
                 permission_mode=permission_mode, ephemeral_system=ephemeral_system,
+                static_system_extra=static_system_extra,
             )
     finally:
         _current_session_id.reset(session_token)
@@ -268,6 +276,7 @@ async def _run_chat_agent(
     chat_id: int,
     db_path: str,
     ephemeral_system: str = "",
+    static_system_extra: str = "",
     forced_round_id: str = "",
     history_override: list[dict[str, Any]] | None = None,
     persist_base_messages: list[dict[str, Any]] | None = None,
@@ -400,6 +409,20 @@ async def _run_chat_agent(
                 content=_MAIN_AGENT_PROMPT,
             ),
         ]
+        # Caller-provided static system extension (e.g. Workbench task-mode framing).
+        # Concatenated right after the base prompt — ahead of every volatile block
+        # (memory, temporal, workspace) — so it stays inside the byte-stable cached
+        # prefix instead of being re-processed each tool round at the prompt tail.
+        if static_system_extra:
+            main_system = main_system + "\n\n" + static_system_extra
+            main_system_context.append(context_block(
+                "main.system.static_extra",
+                "system",
+                source="run_agent(static_system_extra)",
+                reason="caller-provided static system extension; cache-stable prefix",
+                transforms=["concat_into_system"],
+                content=static_system_extra,
+            ))
         if lang and lang != "en":
             lang_prompt = f"The user has set their preferred language to {lang}. Reply in this language."
             main_system += "\n\n" + lang_prompt
@@ -432,16 +455,11 @@ async def _run_chat_agent(
                 transforms=["preview", "concat_into_system"],
                 content=skill_prompt_block,
             ))
-        main_system += "\n\n" + temporal_context
-        main_system_context.append(context_block(
-            "runtime.temporal_context",
-            "system",
-            source="datetime.now().astimezone()",
-            reason="anchor relative dates and current/recent searches",
-            content=temporal_context,
-            metadata={"date": f"{now:%Y-%m-%d}", "timezone": now.tzname()},
-            transforms=["concat_into_system"],
-        ))
+        # ``temporal_context`` is deliberately NOT concatenated into the system
+        # prefix: the date rolls over daily, which would invalidate the entire
+        # system+history prefix every midnight. It is pinned to the prompt tail via
+        # ``effective_ephemeral`` (below) instead, riding along with the per-run
+        # ephemeral block that is re-sent each round anyway — at no extra cache cost.
         try:
             from cyrene.shell_runtime import resolve_shell
             _shell_kind = resolve_shell()[0]
@@ -713,6 +731,12 @@ async def _run_chat_agent(
                 metadata={"policy": spawn_policy},
             ))
 
+        # Pin the per-day temporal anchor to the prompt tail next to the per-run
+        # ephemeral block, so neither rides in the cached system+history prefix.
+        effective_ephemeral = "\n\n".join(
+            part for part in (ephemeral_system, temporal_context) if part
+        )
+
         # 计划模式：先拆解成步骤/任务，展示并请用户确认，不直接执行。
         if _state._permission_mode.get() == "plan":
             from cyrene.agent.planning import run_plan_flow
@@ -721,8 +745,8 @@ async def _run_chat_agent(
             # caching across rounds is moot here — fold the ephemeral block into the
             # history tail so the planner still sees the project memory / task brief.
             plan_history = (
-                [*history, {"role": "system", "content": ephemeral_system}]
-                if ephemeral_system else history
+                [*history, {"role": "system", "content": effective_ephemeral}]
+                if effective_ephemeral else history
             )
             main_text = await run_plan_flow(
                 user_message=user_message,
@@ -744,7 +768,7 @@ async def _run_chat_agent(
                 user_message, history, bot, chat_id, db_path, main_system,
                 client_request_id=client_request_id, persist_user_message=persist_user_message,
                 public_user_message=public_user_message, public_attachments=public_attachments, lang=lang,
-                system_context=main_system_context, ephemeral_system=ephemeral_system,
+                system_context=main_system_context, ephemeral_system=effective_ephemeral,
             )
 
         if refresh_labels:

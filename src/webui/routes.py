@@ -4096,6 +4096,38 @@ def _workbench_render_reflection_block(session: dict[str, Any]) -> str:
         return ""
 
 
+# Run-invariant task-mode framing for Workbench task runs. These instructions
+# never change between runs, so they belong in the cache-stable SYSTEM prefix
+# (injected via ``run_agent(static_system_extra=...)``) rather than the per-run
+# ``ephemeral_system`` tail, which is re-processed on every tool round.
+_WORKBENCH_TASK_MODE_SYSTEM = (
+    "## 任务执行模式\n"
+    "你正在一个带有可编辑「执行计划」的任务里工作，本工作台鼓励先规划再执行。\n"
+    "- 需要动手完成多步工作时，优先制定或更新执行计划，再按计划逐步推进，不要脱离计划临时发挥。\n"
+    "- 已有计划时以它为准，按步骤推进；发现计划需要调整就更新对应步骤，而不是另起一套做法。\n"
+    "- 仅当用户只是提问、或一句话就能完成的小事时，才直接回答或执行、无需计划。\n"
+    "- 如果这个任务还没有明确目标，或现有目标/标题与你实际要做的事不符（例如用户开场只是提了个"
+    "问题），就调用 set_task_goal 设定一个简洁的目标和短标题。"
+    "\n\n"
+    "## 把产物交付给用户\n"
+    "任务的交付物（报告、数据、导出文件、生成的代码包等）要让用户能在「产物」面板下载：\n"
+    "- 用 Write 写入工作区的文件会自动登记为产物；用 Bash/脚本/命令行生成的文件不会——"
+    "必须在生成后调用 send_file 声明它，否则只算普通文件改动，用户无法下载。\n"
+    "- 只声明真正的交付物；不要声明依赖、缓存或构建中间产物（如 node_modules、dist、__pycache__）。\n"
+    "- 不要只在回复里写出文件路径就当作已经交付。"
+)
+
+
+def _workbench_compose_static_system() -> str:
+    """Run-invariant task-mode system block for a Workbench task run.
+
+    Injected via ``run_agent(static_system_extra=...)`` so it lands in the
+    byte-stable system prefix (ahead of memory/temporal/workspace), instead of
+    the per-run ``ephemeral_system`` tail that is re-processed every tool round.
+    """
+    return _WORKBENCH_TASK_MODE_SYSTEM
+
+
 def _workbench_compose_ephemeral_system(
     project: dict[str, Any] | None,
     session: dict[str, Any],
@@ -4106,32 +4138,10 @@ def _workbench_compose_ephemeral_system(
     Injected via ``ephemeral_system`` (prompt tail, never persisted), so it never
     invalidates the cached system+history prefix and preserves prompt-cache hits.
     """
+    # Static task-mode framing (执行模式 + 产物交付) now lives in the cache-stable
+    # SYSTEM prefix via ``_workbench_compose_static_system`` — this tail block keeps
+    # only per-run volatile context: task brief, project memory, reflection seed.
     parts: list[str] = []
-    # Task-mode framing: this run belongs to a task that owns an editable
-    # execution plan, so bias the agent toward planning/updating it rather than
-    # ad-hoc one-off actions (mirrors the intent classifier's plan-leaning).
-    parts.append(
-        "## 任务执行模式\n"
-        "你正在一个带有可编辑「执行计划」的任务里工作，本工作台鼓励先规划再执行。\n"
-        "- 需要动手完成多步工作时，优先制定或更新执行计划，再按计划逐步推进，不要脱离计划临时发挥。\n"
-        "- 已有计划时以它为准，按步骤推进；发现计划需要调整就更新对应步骤，而不是另起一套做法。\n"
-        "- 仅当用户只是提问、或一句话就能完成的小事时，才直接回答或执行、无需计划。\n"
-        "- 如果这个任务还没有明确目标，或现有目标/标题与你实际要做的事不符（例如用户开场只是提了个"
-        "问题），就调用 set_task_goal 设定一个简洁的目标和短标题。"
-    )
-    # Artifact delivery: only files written via Write (auto-promoted) or declared
-    # via send_file surface in the downloadable 「产物」 panel. A deliverable
-    # produced only through Bash/shell is caught as a weak git diff and stays
-    # invisible there, so spell out that the agent must declare it — otherwise it
-    # assumes a shell-produced file already reached the user.
-    parts.append(
-        "## 把产物交付给用户\n"
-        "任务的交付物（报告、数据、导出文件、生成的代码包等）要让用户能在「产物」面板下载：\n"
-        "- 用 Write 写入工作区的文件会自动登记为产物；用 Bash/脚本/命令行生成的文件不会——"
-        "必须在生成后调用 send_file 声明它，否则只算普通文件改动，用户无法下载。\n"
-        "- 只声明真正的交付物；不要声明依赖、缓存或构建中间产物（如 node_modules、dist、__pycache__）。\n"
-        "- 不要只在回复里写出文件路径就当作已经交付。"
-    )
     # The task's goal/title/summary/plan live only in the Workbench store, never in
     # the agent's conversation history — inject them so the agent actually sees the
     # plan + context the UI shows (otherwise it asks "我没看到执行计划").
@@ -4622,6 +4632,7 @@ async def _workbench_agent_reply(
     command: str = "",
     project_workspace: str = "",
     ephemeral_system: str = "",
+    static_system_extra: str = "",
 ) -> str:
     """Execute a real agent run for a workbench session.
 
@@ -4679,6 +4690,7 @@ async def _workbench_agent_reply(
             public_attachments=public_attachments,
             workspace_dir=workspace_dir,
             ephemeral_system=str(ephemeral_system or ""),
+            static_system_extra=str(static_system_extra or ""),
         )
     except Exception:
         logger.exception("Workbench agent run failed for session %s", session_id)
@@ -8486,7 +8498,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
         ephemeral_system = _workbench_compose_ephemeral_system(project, session)
-        agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
+        agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system())
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         # A run that hit a permission / clarification boundary pauses awaiting the
@@ -8591,7 +8603,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
         ephemeral_system = _workbench_compose_ephemeral_system(project, session)
-        agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
+        agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system())
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
@@ -8780,7 +8792,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         ephemeral_system = _workbench_compose_ephemeral_system(project, session)
         if finalizing:
             ephemeral_system = (ephemeral_system + "\n\n" + _workbench_finalize_directive(session)).strip()
-        agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
+        agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system())
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
