@@ -1366,6 +1366,32 @@ def test_workbench_git_status_delta_and_step_related_files():
     assert [item["path"] for item in session["plan"][0]["relatedFiles"]] == ["old.py", "new.py", "app.py"]
 
 
+def test_workbench_workspace_snapshot_detects_named_shell_output(tmp_path):
+    from webui.routes import (
+        _workbench_workspace_file_snapshot,
+        _workbench_workspace_snapshot_delta,
+    )
+
+    before = _workbench_workspace_file_snapshot(tmp_path)
+    output = tmp_path / "exports" / "report.pdf"
+    output.parent.mkdir()
+    output.write_bytes(b"%PDF-1.7\n")
+    scratch = tmp_path / "scratch.tmp"
+    scratch.write_text("temporary", encoding="utf-8")
+    after = _workbench_workspace_file_snapshot(tmp_path)
+
+    changes = _workbench_workspace_snapshot_delta(
+        before,
+        after,
+        "已生成 exports/report.pdf，可直接交付。",
+    )
+    by_path = {item["path"]: item for item in changes}
+    assert by_path["exports/report.pdf"]["status"] == "produced"
+    assert by_path["exports/report.pdf"]["source"] == "workspace_output"
+    assert by_path["scratch.tmp"]["status"] == "created"
+    assert by_path["scratch.tmp"]["source"] == "workspace"
+
+
 import pytest
 
 
@@ -1493,24 +1519,29 @@ def test_workbench_generation_error_redacts_credentials():
 def test_workbench_promote_file_artifacts_promotes_and_dedups():
     from webui.routes import _workbench_promote_file_artifacts
 
-    session = {"artifacts": [{"id": "a1", "type": "task_brief", "name": "task-brief.md", "status": "draft"}]}
+    session = {"artifacts": [
+        {"id": "a1", "type": "task_brief", "name": "task-brief.md", "status": "draft"},
+        {"id": "a2", "type": "knowledge_document", "name": "archived.md", "status": "indexed"},
+    ]}
     changes = [
-        {"path": "report.md", "status": "created/updated", "source": "Write"},
+        {"path": "report.md", "status": "produced", "source": "workspace_output"},
         {"path": "existing.py", "status": "modified", "source": "Edit"},
         {"path": "inferred.txt", "status": "created", "source": "git"},
         {"path": "export.pdf", "status": "produced", "source": "send_file"},
+        {"path": "shell.pdf", "status": "produced", "source": "workspace_output"},
         {"path": "report.md", "status": "created/updated", "source": "Write"},
     ]
     added = _workbench_promote_file_artifacts(session, changes, "2026-06-14T00:00:00Z")
 
-    assert added == 2
+    assert added == 3
     file_arts = [a for a in session["artifacts"] if a["type"] == "file_change"]
     by_name = {a["name"]: a for a in file_arts}
-    assert set(by_name) == {"report.md", "export.pdf"}
-    assert by_name["report.md"]["status"] == "created"
+    assert set(by_name) == {"report.md", "export.pdf", "shell.pdf"}
+    assert by_name["report.md"]["status"] == "ready"
     assert by_name["export.pdf"]["status"] == "ready"
-    assert by_name["report.md"]["source"] == "Write"
-    assert any(a["type"] == "task_brief" for a in session["artifacts"])
+    assert by_name["shell.pdf"]["status"] == "ready"
+    assert by_name["report.md"]["source"] == "workspace_output"
+    assert all(a["type"] == "file_change" for a in session["artifacts"])
 
     # idempotent: re-running adds nothing
     assert _workbench_promote_file_artifacts(session, changes, "2026-06-14T01:00:00Z") == 0
@@ -1532,11 +1563,56 @@ def test_workbench_backfill_file_artifacts_from_runs_and_steps():
     }
     added = _workbench_backfill_file_artifacts(session, "2026-06-14T00:00:00Z")
 
-    assert added == 1
+    assert added == 0
     names = {a["name"] for a in session["artifacts"] if a["type"] == "file_change"}
-    assert names == {"report.md"}
+    assert names == set()
     # idempotent
     assert _workbench_backfill_file_artifacts(session, "2026-06-14T00:00:00Z") == 0
+
+
+def test_workbench_prunes_non_file_and_duplicate_artifacts():
+    from webui.routes import _workbench_prune_non_file_artifacts
+
+    session = {"artifacts": [
+        {"id": "brief", "type": "task_brief", "name": "task-brief.md"},
+        {"id": "file-1", "type": "file_change", "name": "report.md", "path": "out/report.md"},
+        {"id": "file-2", "type": "file_change", "name": "report.md", "path": "out/report.md"},
+        {"id": "test", "type": "file_change", "name": "test_render.md", "path": "test_render.md"},
+        {"id": "knowledge", "type": "knowledge_document", "name": "archived.md"},
+    ]}
+
+    assert _workbench_prune_non_file_artifacts(session) is True
+    assert session["artifacts"] == [
+        {"id": "file-1", "type": "file_change", "name": "report.md", "path": "out/report.md"},
+    ]
+
+
+def test_workbench_backfills_reported_historical_output(tmp_path):
+    from webui.routes import _workbench_backfill_referenced_file_artifacts
+
+    output = tmp_path / "exports" / "final.pdf"
+    output.parent.mkdir()
+    output.write_bytes(b"%PDF-1.7\n")
+    source = tmp_path / "source.md"
+    source.write_text("# source", encoding="utf-8")
+    session = {
+        "artifacts": [],
+        "runs": [{
+            "agentResponse": (
+                "PDF 已成功生成，可直接交付。"
+                f"文件路径：`{output}`。输入源文件为 `{source}`。"
+            ),
+        }],
+    }
+
+    added = _workbench_backfill_referenced_file_artifacts(
+        {"workspacePath": str(tmp_path)},
+        session,
+        "2026-06-21T00:00:00Z",
+    )
+
+    assert added == 1
+    assert session["artifacts"][0]["path"] == "exports/final.pdf"
 
 
 def test_workbench_prunes_parent_repo_git_files_and_artifacts(tmp_path):
@@ -1567,4 +1643,4 @@ def test_workbench_prunes_parent_repo_git_files_and_artifacts(tmp_path):
     assert [item["path"] for item in session["runs"][0]["fileChanges"]] == ["report.md"]
     assert session["runs"][0]["events"][0]["fileChanges"] == []
     assert session["events"][0]["fileChanges"] == []
-    assert [item["path"] for item in session["artifacts"]] == ["report.md"]
+    assert session["artifacts"] == []

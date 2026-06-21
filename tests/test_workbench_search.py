@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -387,6 +388,107 @@ def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypat
     assert response.json()["assistantMessage"]["content"] == "done"
     assert captured["workspace_dir"] == str(
         (search_env["data_dir"].parent / "workspace").resolve()
+    )
+
+
+def test_workbench_chat_persists_intermediate_messages_between_tool_cards(
+    client, search_env, monkeypatch,
+):
+    from cyrene import agent
+    from webui import routes_workbench_chat as chat_mod
+
+    state_messages = [{"role": "user", "content": "old"}]
+
+    async def fake_run_agent(**_kwargs):
+        state_messages.extend([
+            {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "search_1",
+                    "function": {
+                        "name": "WebSearch",
+                        "arguments": json.dumps({"query": "first"}),
+                    },
+                }],
+            },
+            {"role": "tool", "tool_call_id": "search_1", "content": "found"},
+            {
+                "role": "assistant",
+                "content": "先汇报阶段结果，我继续处理。",
+                "message_id": "mid_1",
+                "created_at": "2026-06-21T01:00:00+00:00",
+                "intermediate_reply": True,
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "message_1",
+                        "function": {
+                            "name": "send_message",
+                            "arguments": json.dumps({"text": "先汇报阶段结果，我继续处理。"}),
+                        },
+                    },
+                    {
+                        "id": "bash_1",
+                        "function": {
+                            "name": "Bash",
+                            "arguments": json.dumps({"command": "echo done"}),
+                        },
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "message_1", "content": "sent"},
+            {"role": "tool", "tool_call_id": "bash_1", "content": "done"},
+            {"role": "assistant", "content": "最终完成。"},
+        ])
+        return "最终完成。"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    monkeypatch.setattr(chat_mod, "_session_state_messages", lambda _chat_id: list(state_messages))
+
+    response = client.post(
+        "/api/workbench/chats/chat_1/messages",
+        json={"message": "do it"},
+    )
+
+    assert response.status_code == 200
+    saved = response.json()["assistantMessages"]
+    assert [message["content"] for message in saved] == [
+        "先汇报阶段结果，我继续处理。",
+        "最终完成。",
+    ]
+    assert [entry["tool"] for entry in saved[0]["trace"]] == ["WebSearch"]
+    assert [entry["tool"] for entry in saved[1]["trace"]] == ["Bash"]
+
+    chats = json.loads((search_env["data_dir"] / "workbench_chats.json").read_text(encoding="utf-8"))
+    transcript = chats["chats"][0]["messages"]
+    assert [message["content"] for message in transcript[-2:]] == [
+        "先汇报阶段结果，我继续处理。",
+        "最终完成。",
+    ]
+
+
+def test_workbench_chat_network_failure_requests_resend(client, search_env, monkeypatch):
+    from cyrene import agent
+    from cyrene.call_llm import NETWORK_RETRY_LIMIT
+
+    async def fake_run_agent(**_kwargs):
+        raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+
+    response = client.post(
+        "/api/workbench/chats/chat_1/messages",
+        json={"message": "inspect the project", "stream": True, "lang": "zh"},
+    )
+
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+    error = next(event for event in events if event.get("type") == "error")
+    assert error["error"] == "model_call_failed"
+    assert error["message"] == (
+        f"网络连接异常，已自动重试 {NETWORK_RETRY_LIMIT} 次仍未成功。请重新发送这条消息。"
     )
 
 

@@ -54,6 +54,12 @@ _candidate_cooldowns: dict[tuple[str, str], float] = {}
 # httpx 连接超时与读超时分开：对不可达主机快速失败，而不是吃满整个调用超时。
 _CONNECT_TIMEOUT_SECONDS = 5.0
 
+# A model request may be dropped before the provider sends response headers.
+# Retry transport failures locally before surfacing them to the user. HTTP
+# responses (including 4xx/5xx) are deliberately excluded from this budget.
+NETWORK_RETRY_LIMIT = 3
+_NETWORK_RETRY_BASE_DELAY_SECONDS = 0.5
+
 
 def _candidate_key(candidate: dict[str, Any]) -> tuple[str, str]:
     return (str(candidate.get("model") or ""), str(candidate.get("base_url") or ""))
@@ -737,7 +743,9 @@ async def call_llm(
     def _candidate_label(c: dict[str, Any]) -> str:
         return f"{c.get('id')}({c.get('model')}@{c.get('base_url')})"
 
-    transport = httpx.AsyncHTTPTransport(retries=1)
+    # Keep the transport's connect-only retry disabled so the explicit policy
+    # below is the single bounded retry budget for all transport failures.
+    transport = httpx.AsyncHTTPTransport(retries=0)
     client_timeout = httpx.Timeout(timeout, connect=min(_CONNECT_TIMEOUT_SECONDS, timeout))
     async with httpx.AsyncClient(transport=transport, timeout=client_timeout) as client:
         last_error: Exception | None = None
@@ -766,15 +774,54 @@ async def call_llm(
 
                 for endpoint in endpoints:
                     try:
-                        if stream:
-                            msg = await _handle_stream(client, endpoint, payload, headers, stream_callback)
-                        else:
-                            resp = await client.post(endpoint, json=payload, headers=headers)
-                            if resp.status_code != 200:
-                                resp.raise_for_status()
-                            data = resp.json()
-                            msg = _message_from_upstream_payload(data)
-                            msg["usage"] = _normalized_usage(data.get("usage"), messages, msg)
+                        network_retries = 0
+                        while True:
+                            stream_event_emitted = False
+
+                            async def _tracked_stream_callback(event: dict[str, Any]) -> None:
+                                nonlocal stream_event_emitted
+                                stream_event_emitted = True
+                                if stream_callback:
+                                    await stream_callback(event)
+
+                            try:
+                                if stream:
+                                    msg = await _handle_stream(
+                                        client,
+                                        endpoint,
+                                        payload,
+                                        headers,
+                                        _tracked_stream_callback,
+                                    )
+                                else:
+                                    resp = await client.post(endpoint, json=payload, headers=headers)
+                                    if resp.status_code != 200:
+                                        resp.raise_for_status()
+                                    data = resp.json()
+                                    msg = _message_from_upstream_payload(data)
+                                    msg["usage"] = _normalized_usage(data.get("usage"), messages, msg)
+                                break
+                            except httpx.TransportError as exc:
+                                # Restarting a stream after visible deltas would
+                                # duplicate text in the UI. Only retry before the
+                                # first stream event reaches the caller.
+                                if stream_event_emitted or network_retries >= NETWORK_RETRY_LIMIT:
+                                    raise
+                                network_retries += 1
+                                delay = _NETWORK_RETRY_BASE_DELAY_SECONDS * (2 ** (network_retries - 1))
+                                logger.warning(
+                                    "call_llm transient network failure; retrying "
+                                    "[caller=%s phase=%s model=%s endpoint=%s retry=%d/%d delay=%.1fs]: %s",
+                                    caller,
+                                    phase,
+                                    model,
+                                    endpoint,
+                                    network_retries,
+                                    NETWORK_RETRY_LIMIT,
+                                    delay,
+                                    _format_httpx_error(exc),
+                                )
+                                await asyncio.sleep(delay)
 
                         msg = _normalize_dsml_tool_calls(msg, tools)
                         msg.setdefault("role", "assistant")

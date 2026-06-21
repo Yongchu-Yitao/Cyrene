@@ -4445,21 +4445,14 @@ function AcceptanceTab({ session, onRefresh }) {
   );
 }
 
-var ARTIFACT_TYPE_LABELS = { task_brief: "task.artifact.taskBrief", file_change: "task.artifact.file" };
-
 function ArtifactsTab({ session }) {
-  var artifacts = session && Array.isArray(session.artifacts) ? session.artifacts : [];
+  var artifacts = WorkbenchModel.ensureArtifacts(session);
   return (
     <div className="workbench-side-stack">
       <SideSection title={wbT("task.side.artifactsCount", "Artifacts ({count})", { count: artifacts.length })}>
         {artifacts.length ? artifacts.map(function (artifact, i) {
-          var typeLabel = ARTIFACT_TYPE_LABELS[artifact.type] ? wbT(ARTIFACT_TYPE_LABELS[artifact.type], artifact.type) : artifact.type;
-          var canDownload = artifact.type === "file_change" && artifact.id && session && session.id;
-          var content = <React.Fragment><b>{artifact.name}</b><small>{typeLabel} · {WorkbenchModel.statusText(artifact.status)}</small><p>{artifact.summary || ""}</p></React.Fragment>;
-          if (!canDownload) {
-            return <div className="workbench-artifact-row" key={artifact.id || i}>{content}</div>;
-          }
           var downloadUrl = "/api/task-sessions/" + encodeURIComponent(session.id) + "/artifacts/" + encodeURIComponent(artifact.id) + "/download";
+          var artifactPath = String(artifact.path || "").trim();
           return (
             <a
               className="workbench-artifact-row wb-artifact-download"
@@ -4468,7 +4461,23 @@ function ArtifactsTab({ session }) {
               title={wbT("task.artifact.download", "Download {name}", { name: artifact.name || "" })}
               key={artifact.id || i}
             >
-              {content}
+              <span className="wb-artifact-file-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M7 3.75h6.4L18 8.35v11.9H7z"></path>
+                  <path d="M13.25 3.9v4.7h4.7"></path>
+                </svg>
+              </span>
+              <span className="wb-artifact-file-copy">
+                <b>{artifact.name}</b>
+                {artifactPath && artifactPath !== artifact.name ? <small>{artifactPath}</small> : null}
+              </span>
+              <span className="wb-artifact-download-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M12 4v11"></path>
+                  <path d="m8 11 4 4 4-4"></path>
+                  <path d="M5 19h14"></path>
+                </svg>
+              </span>
             </a>
           );
         }) : <p className="workbench-muted">{wbT("task.artifacts.empty", "No artifacts generated for this task yet.")}</p>}

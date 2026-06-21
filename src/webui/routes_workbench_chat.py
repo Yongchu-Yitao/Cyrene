@@ -24,9 +24,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from cyrene.call_llm import NETWORK_RETRY_LIMIT
 from cyrene.config import DATA_DIR
 from cyrene.io_utils import atomic_write_json, read_json_safe
 from webui.workbench_notifications import append_notification
@@ -36,7 +38,7 @@ logger = logging.getLogger(__name__)
 _CHATS_STORE = DATA_DIR / "workbench_chats.json"
 
 # Internal control tools that say nothing useful in a progress trace.
-_TRACE_SKIP_TOOLS = {"use_tools", "quit"}
+_TRACE_SKIP_TOOLS = {"use_tools", "quit", "send_message"}
 _USAGE_KEYS = (
     "prompt_tokens",
     "completion_tokens",
@@ -56,6 +58,18 @@ def _short_id(prefix: str) -> str:
 
 def _ndjson_line(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False) + "\n"
+
+
+def _workbench_chat_run_error_message(exc: Exception, lang: str = "") -> str:
+    """Return a user-facing message after bounded model-network retries."""
+    if isinstance(exc, httpx.TransportError):
+        if str(lang or "").lower() == "en":
+            return (
+                f"The network connection still failed after {NETWORK_RETRY_LIMIT} automatic retries. "
+                "Please send this message again."
+            )
+        return f"网络连接异常，已自动重试 {NETWORK_RETRY_LIMIT} 次仍未成功。请重新发送这条消息。"
+    return str(exc).strip() or exc.__class__.__name__
 
 
 # ---------------------------------------------------------------------------
@@ -516,53 +530,111 @@ def _tool_args_preview(raw_arguments: str) -> str:
     return preview[:80]
 
 
-def _extract_exchange_meta(
+def _exchange_usage() -> dict[str, int]:
+    return {key: 0 for key in _USAGE_KEYS}
+
+
+def _append_exchange_meta(
+    message: dict[str, Any],
+    trace: list[dict[str, Any]],
+    usage: dict[str, int],
+    files: list[dict[str, Any]],
+    seen_file_urls: set[str],
+) -> None:
+    raw_usage = message.get("usage")
+    if isinstance(raw_usage, dict):
+        for key in _USAGE_KEYS:
+            try:
+                usage[key] += int(raw_usage.get(key) or 0)
+            except (TypeError, ValueError):
+                continue
+    for tool_call in message.get("tool_calls") or []:
+        fn = tool_call.get("function") if isinstance(tool_call, dict) else None
+        name = str((fn or {}).get("name") or "").strip()
+        if not name or name in _TRACE_SKIP_TOOLS:
+            continue
+        trace.append({
+            "tool": name,
+            "preview": _tool_args_preview(str((fn or {}).get("arguments") or "")),
+        })
+    for item in message.get("attachments") or []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        key = url or str(item.get("name") or "")
+        if not key or key in seen_file_urls:
+            continue
+        seen_file_urls.add(key)
+        files.append({
+            "id": str(item.get("id") or "").strip(),
+            "name": str(item.get("name") or "file"),
+            "content_type": str(item.get("content_type") or "application/octet-stream"),
+            "size": int(item.get("size") or 0),
+            "kind": str(item.get("kind") or "file"),
+            "url": url,
+        })
+
+
+def _extract_exchange_segments(
     state_messages: list[dict[str, Any]], start_index: int
-) -> tuple[list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
-    """Collect tool trace + token usage + agent-produced files from this exchange."""
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
+    """Split one agent exchange at persisted mid-run assistant messages."""
+    segments: list[dict[str, Any]] = []
     trace: list[dict[str, Any]] = []
-    usage = {key: 0 for key in _USAGE_KEYS}
+    usage = _exchange_usage()
     files: list[dict[str, Any]] = []
     seen_file_urls: set[str] = set()
+
     for message in state_messages[start_index:]:
         if str(message.get("role") or "") != "assistant":
             continue
-        raw_usage = message.get("usage")
-        if isinstance(raw_usage, dict):
-            for key in _USAGE_KEYS:
-                try:
-                    usage[key] += int(raw_usage.get(key) or 0)
-                except (TypeError, ValueError):
+        if bool(message.get("intermediate_reply")):
+            entry: dict[str, Any] = {
+                "id": str(message.get("message_id") or _short_id("msg")),
+                "role": "assistant",
+                "content": str(message.get("content") or ""),
+                "createdAt": str(message.get("created_at") or _utc_now_iso()),
+                "intermediate": True,
+            }
+            if trace:
+                entry["trace"] = trace[:40]
+            if any(usage.values()):
+                if not usage["total_tokens"]:
+                    usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+                entry["usage"] = dict(usage)
+            attachments = list(files)
+            attachment_keys = {
+                str(item.get("url") or item.get("name") or "")
+                for item in attachments
+            }
+            for item in message.get("attachments") or []:
+                if not isinstance(item, dict):
                     continue
-        for tool_call in message.get("tool_calls") or []:
-            fn = tool_call.get("function") if isinstance(tool_call, dict) else None
-            name = str((fn or {}).get("name") or "").strip()
-            if not name or name in _TRACE_SKIP_TOOLS:
-                continue
-            trace.append({
-                "tool": name,
-                "preview": _tool_args_preview(str((fn or {}).get("arguments") or "")),
-            })
-        # Files the agent attached to its replies (report exports, send_file…)
-        for item in message.get("attachments") or []:
-            if not isinstance(item, dict):
-                continue
-            url = str(item.get("url") or "").strip()
-            key = url or str(item.get("name") or "")
-            if not key or key in seen_file_urls:
-                continue
-            seen_file_urls.add(key)
-            files.append({
-                "id": str(item.get("id") or "").strip(),
-                "name": str(item.get("name") or "file"),
-                "content_type": str(item.get("content_type") or "application/octet-stream"),
-                "size": int(item.get("size") or 0),
-                "kind": str(item.get("kind") or "file"),
-                "url": url,
-            })
+                attachment = {
+                    "id": str(item.get("id") or "").strip(),
+                    "name": str(item.get("name") or "file"),
+                    "content_type": str(item.get("content_type") or "application/octet-stream"),
+                    "size": int(item.get("size") or 0),
+                    "kind": str(item.get("kind") or "file"),
+                    "url": str(item.get("url") or "").strip(),
+                }
+                key = str(attachment.get("url") or attachment.get("name") or "")
+                if key and key not in attachment_keys:
+                    attachment_keys.add(key)
+                    attachments.append(attachment)
+            if attachments:
+                entry["attachments"] = attachments
+            segments.append(entry)
+            trace = []
+            usage = _exchange_usage()
+            files = []
+            seen_file_urls = set()
+            continue
+        _append_exchange_meta(message, trace, usage, files, seen_file_urls)
+
     if not usage["total_tokens"]:
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
-    return trace[:40], usage, files[:20]
+    return segments, trace[:40], usage, files[:20]
 
 
 def _truncate_state_for_retry(session_id: str) -> bool:
@@ -955,18 +1027,23 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             )
 
         def _finalize(reply_text: str) -> dict[str, Any]:
-            """Persist the assistant message (trace + usage + files) and settle status."""
-            trace, usage, files = _extract_exchange_meta(_session_state_messages(chat_id), state_len_before)
+            """Persist mid-run messages plus the final assistant reply in order."""
+            intermediate_entries, trace, usage, files = _extract_exchange_segments(
+                _session_state_messages(chat_id), state_len_before
+            )
             fresh = _read_chats_store()
             fresh_chat = _find_chat(fresh, chat_id)
             if not fresh_chat:
                 return {}
+            model_name = fresh_chat.get("model") or ""
+            for entry in intermediate_entries:
+                entry["model"] = model_name
             assistant_entry: dict[str, Any] = {
                 "id": _short_id("msg"),
                 "role": "assistant",
                 "content": str(reply_text or ""),
                 "createdAt": _utc_now_iso(),
-                "model": fresh_chat.get("model") or "",
+                "model": model_name,
             }
             if trace:
                 assistant_entry["trace"] = trace
@@ -974,7 +1051,16 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 assistant_entry["usage"] = usage
             if files:
                 assistant_entry["attachments"] = files
-            fresh_chat.setdefault("messages", []).append(assistant_entry)
+            saved_messages = [*intermediate_entries, assistant_entry]
+            existing_ids = {
+                str(item.get("id") or "")
+                for item in fresh_chat.setdefault("messages", [])
+                if isinstance(item, dict)
+            }
+            fresh_chat["messages"].extend([
+                item for item in saved_messages
+                if str(item.get("id") or "") not in existing_ids
+            ])
             fresh_chat["status"] = "idle"
             fresh_chat.pop("pendingQuestion", None)
             fresh_chat["updatedAt"] = assistant_entry["createdAt"]
@@ -991,7 +1077,10 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                     link_label=str(fresh_chat.get("title") or ""),
                     meta={"chatId": chat_id},
                 )
-            return assistant_entry
+            return {
+                "assistantMessage": assistant_entry,
+                "assistantMessages": saved_messages,
+            }
 
         def _settle_status() -> None:
             fresh = _read_chats_store()
@@ -1021,13 +1110,21 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             except Exception as exc:
                 logger.exception("Workbench chat run failed for %s", chat_id)
                 _settle_status()
-                return JSONResponse({"error": "agent run failed", "detail": str(exc)}, status_code=502)
+                message = _workbench_chat_run_error_message(exc, lang)
+                error = message if isinstance(exc, httpx.TransportError) else "agent run failed"
+                return JSONResponse({"error": error, "detail": str(exc)}, status_code=502)
             if reply == R._AWAITING_USER_SENTINEL:
                 pending = R._workbench_pending_question_for(chat_id)
                 _stash_chat_pending(pending)
                 return {"ok": True, "awaitingUser": True, "pendingQuestion": pending, "userMessage": _public_message(user_entry), "retry": retry}
-            assistant_entry = _finalize(reply)
-            return {"ok": True, "userMessage": _public_message(user_entry), "assistantMessage": assistant_entry, "retry": retry}
+            finalized = _finalize(reply)
+            return {
+                "ok": True,
+                "userMessage": _public_message(user_entry),
+                "assistantMessage": finalized.get("assistantMessage") or {},
+                "assistantMessages": finalized.get("assistantMessages") or [],
+                "retry": retry,
+            }
 
         async def event_stream():
             queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -1068,7 +1165,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                     yield _ndjson_line({
                         "type": "error",
                         "error": "model_call_failed",
-                        "message": str(exc).strip() or exc.__class__.__name__,
+                        "message": _workbench_chat_run_error_message(exc, lang),
                     })
                     return
                 if reply == R._AWAITING_USER_SENTINEL:
@@ -1083,8 +1180,8 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                     for chunk in R._reply_stream_chunks(reply):
                         yield _ndjson_line({"type": "reply_delta", "delta": chunk})
                     yield _ndjson_line({"type": "reply_done", "response": reply})
-                assistant_entry = _finalize(reply)
-                yield _ndjson_line({"type": "saved", "assistantMessage": assistant_entry})
+                finalized = _finalize(reply)
+                yield _ndjson_line({"type": "saved", **finalized})
             finally:
                 if not task.done():
                     task.cancel()
@@ -1216,17 +1313,22 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             _stash_chat_pending_for(chat_id, new_pending)
             return {"ok": True, "awaitingUser": True, "pendingQuestion": new_pending}
 
-        trace, usage, files = _extract_exchange_meta(_session_state_messages(chat_id), state_len_before)
+        intermediate_entries, trace, usage, files = _extract_exchange_segments(
+            _session_state_messages(chat_id), state_len_before
+        )
         fresh = _read_chats_store()
         fresh_chat = _find_chat(fresh, chat_id)
         if not fresh_chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        model_name = fresh_chat.get("model") or ""
+        for entry in intermediate_entries:
+            entry["model"] = model_name
         assistant_entry: dict[str, Any] = {
             "id": _short_id("msg"),
             "role": "assistant",
             "content": str(reply or ""),
             "createdAt": _utc_now_iso(),
-            "model": fresh_chat.get("model") or "",
+            "model": model_name,
         }
         if trace:
             assistant_entry["trace"] = trace
@@ -1234,14 +1336,20 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             assistant_entry["usage"] = usage
         if files:
             assistant_entry["attachments"] = files
-        fresh_chat.setdefault("messages", []).append(assistant_entry)
+        saved_messages = [*intermediate_entries, assistant_entry]
+        fresh_chat.setdefault("messages", []).extend(saved_messages)
         fresh_chat["status"] = "idle"
         fresh_chat.pop("pendingQuestion", None)
         fresh_chat["updatedAt"] = assistant_entry["createdAt"]
         _write_chats_store(fresh)
         if project_id:
             R.schedule_capture(_project_data_key(project_id), answer_text, str(reply or ""))
-        return {"ok": True, "awaitingUser": False, "assistantMessage": _public_message(assistant_entry)}
+        return {
+            "ok": True,
+            "awaitingUser": False,
+            "assistantMessage": _public_message(assistant_entry),
+            "assistantMessages": [_public_message(item) for item in saved_messages],
+        }
 
 
 def _stash_chat_pending_for(chat_id: str, pending: dict[str, Any] | None) -> None:

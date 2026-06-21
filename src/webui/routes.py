@@ -2162,9 +2162,13 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> None:
                 if step.get("order") != index + 1:
                     step["order"] = index + 1
                     changed = True
+            if _workbench_prune_non_file_artifacts(session):
+                changed = True
             if _workbench_prune_invalid_file_records(project, session):
                 changed = True
             if _workbench_backfill_file_artifacts(session, now):
+                changed = True
+            if _workbench_backfill_referenced_file_artifacts(project, session, now):
                 changed = True
     if projects and not payload.get("activeProjectId"):
         payload["activeProjectId"] = projects[0].get("id")
@@ -3217,7 +3221,7 @@ def _workbench_file_changes_from_tool_event(event: dict[str, Any], workspace_roo
 def _workbench_merge_file_changes(changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     order: list[str] = []
-    rank = {"created": 4, "modified": 3, "deleted": 3, "renamed": 3, "created/updated": 2}
+    rank = {"produced": 5, "created": 4, "modified": 3, "deleted": 3, "renamed": 3, "created/updated": 2}
     for item in changes:
         if not isinstance(item, dict):
             continue
@@ -3241,9 +3245,94 @@ def _workbench_merge_file_changes(changes: list[dict[str, Any]]) -> list[dict[st
         if not inferred_cannot_override_explicit and rank.get(new_status, 0) > rank.get(old_status, 0):
             old["status"] = new_status
             old["changeType"] = new_status
+            if new_status == "produced" and item.get("source"):
+                old["source"] = item.get("source")
         if item.get("source") and not old.get("source"):
             old["source"] = item.get("source")
     return [merged[key] for key in order]
+
+
+_WORKBENCH_SNAPSHOT_IGNORED_DIRS = {
+    ".git", ".hg", ".svn", ".idea", ".vscode", ".pytest_cache", ".mypy_cache",
+    ".ruff_cache", ".tox", ".venv", "__pycache__", "node_modules",
+}
+
+
+def _workbench_workspace_file_snapshot(workspace_root: Path | None) -> dict[str, tuple[int, int]]:
+    """Capture cheap file identity for shell/subagent output detection."""
+    if not workspace_root:
+        return {}
+    try:
+        root = workspace_root.resolve()
+    except OSError:
+        return {}
+    if not root.exists() or not root.is_dir():
+        return {}
+
+    snapshot: dict[str, tuple[int, int]] = {}
+    try:
+        for current, dirnames, filenames in os.walk(root):
+            dirnames[:] = [
+                name for name in dirnames
+                if name not in _WORKBENCH_SNAPSHOT_IGNORED_DIRS and not name.startswith(".")
+            ]
+            current_path = Path(current)
+            for filename in filenames:
+                if filename.startswith("."):
+                    continue
+                target = current_path / filename
+                try:
+                    if not target.is_file() or target.is_symlink():
+                        continue
+                    stat = target.stat()
+                    rel = target.relative_to(root).as_posix()
+                except (OSError, ValueError):
+                    continue
+                snapshot[rel] = (int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        return snapshot
+    return snapshot
+
+
+def _workbench_workspace_snapshot_delta(
+    before: dict[str, tuple[int, int]],
+    after: dict[str, tuple[int, int]],
+    evidence: str = "",
+) -> list[dict[str, Any]]:
+    """Return workspace changes and mark files explicitly named as outputs."""
+    evidence_text = str(evidence or "")
+    changes: list[dict[str, Any]] = []
+    for path, signature in after.items():
+        previous = before.get(path)
+        if previous == signature:
+            continue
+        status = "created" if previous is None else "modified"
+        name = path.rsplit("/", 1)[-1]
+        explicitly_named = path in evidence_text or name in evidence_text
+        change = _workbench_file_change(
+            path,
+            "produced" if explicitly_named else status,
+            source="workspace_output" if explicitly_named else "workspace",
+        )
+        if change:
+            changes.append(change)
+    return changes
+
+
+def _workbench_collect_run_file_changes(
+    tool_events: list[dict[str, Any]],
+    git_before: dict[str, str],
+    git_after: dict[str, str],
+    workspace_before: dict[str, tuple[int, int]],
+    workspace_after: dict[str, tuple[int, int]],
+    workspace_root: Path | None,
+    evidence: str = "",
+) -> list[dict[str, Any]]:
+    return _workbench_merge_file_changes([
+        *[change for event in tool_events for change in (event.get("fileChanges") or [])],
+        *_workbench_git_status_delta(git_before, git_after, workspace_root),
+        *_workbench_workspace_snapshot_delta(workspace_before, workspace_after, evidence),
+    ])
 
 
 def _workbench_git_context(workspace_root: Path | None) -> tuple[Path, str] | None:
@@ -3459,13 +3548,57 @@ def _workbench_is_artifact_change(change: dict[str, Any]) -> bool:
     """
     source = str(change.get("source") or "").strip().lower()
     change_type = str(change.get("status") or change.get("changeType") or "").strip().lower()
-    if source == "send_file":
+    if source in {"send_file", "workspace_output"}:
         return change_type == "produced"
-    return source == "write" and change_type in {"created", "created/updated"}
+    return False
+
+
+def _workbench_prune_non_file_artifacts(session: dict[str, Any]) -> bool:
+    """Keep the artifact collection limited to unique downloadable files."""
+    artifacts = session.get("artifacts")
+    if not isinstance(artifacts, list):
+        session["artifacts"] = []
+        return artifacts is not None
+
+    kept: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("type") != "file_change":
+            continue
+        path = str(artifact.get("path") or artifact.get("name") or "").strip()
+        if not path or path in seen_paths:
+            continue
+        name = path.rsplit("/", 1)[-1].lower()
+        looks_temporary = name.startswith(("test_", "temp_", "tmp_", "scratch_"))
+        if looks_temporary:
+            reported = False
+            for run in session.get("runs") or []:
+                if not isinstance(run, dict):
+                    continue
+                response = str(run.get("agentResponse") or "")
+                index = response.find(path)
+                if index < 0:
+                    index = response.find(path.rsplit("/", 1)[-1])
+                if index < 0:
+                    continue
+                context = response[max(0, index - 180):index + len(path) + 180]
+                if _WORKBENCH_OUTPUT_EVIDENCE.search(context):
+                    reported = True
+                    break
+            if not reported:
+                continue
+        seen_paths.add(path)
+        kept.append(artifact)
+
+    if kept == artifacts:
+        return False
+    session["artifacts"] = kept
+    return True
 
 
 def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: list[dict[str, Any]], now: str) -> int:
     """Surface explicitly produced files as task artifacts (dedup by path)."""
+    _workbench_prune_non_file_artifacts(session)
     if not file_changes:
         return 0
     artifacts = session.get("artifacts") if isinstance(session.get("artifacts"), list) else []
@@ -3522,6 +3655,59 @@ def _workbench_backfill_file_artifacts(session: dict[str, Any], now: str) -> int
         if isinstance(step, dict):
             changes.extend(c for c in (step.get("relatedFiles") or []) if isinstance(c, dict))
     return _workbench_promote_file_artifacts(session, _workbench_merge_file_changes(changes), now)
+
+
+_WORKBENCH_OUTPUT_EVIDENCE = re.compile(
+    r"(已生成|成功生成|生成完成|已导出|成功导出|已保存|文件路径|可直接交付|"
+    r"generated|created|exported|saved|produced|deliverable)",
+    flags=re.IGNORECASE,
+)
+_WORKBENCH_INPUT_EVIDENCE = re.compile(
+    r"(输入|源文件|读取|基于|转换自|input|source|read from|converted from)",
+    flags=re.IGNORECASE,
+)
+
+
+def _workbench_backfill_referenced_file_artifacts(
+    project: dict[str, Any],
+    session: dict[str, Any],
+    now: str,
+) -> int:
+    """Recover real files explicitly reported as outputs by historical runs."""
+    root = _workbench_workspace_root(project)
+    snapshot = _workbench_workspace_file_snapshot(root)
+    if not snapshot:
+        return 0
+    changes: list[dict[str, Any]] = []
+    for run in session.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        response = str(run.get("agentResponse") or "")
+        if not response or not _WORKBENCH_OUTPUT_EVIDENCE.search(response):
+            continue
+        for path in snapshot:
+            name = path.rsplit("/", 1)[-1]
+            positions = [
+                index for token in (path, name)
+                if token and (index := response.find(token)) >= 0
+            ]
+            if not positions:
+                continue
+            index = min(positions)
+            prefix = response[max(0, index - 80):index]
+            if _WORKBENCH_INPUT_EVIDENCE.search(prefix):
+                continue
+            context = response[max(0, index - 180):index + len(name) + 180]
+            if not _WORKBENCH_OUTPUT_EVIDENCE.search(context):
+                continue
+            change = _workbench_file_change(path, "produced", root, "workspace_output")
+            if change:
+                changes.append(change)
+    return _workbench_promote_file_artifacts(
+        session,
+        _workbench_merge_file_changes(changes),
+        now,
+    )
 
 
 def _workbench_prune_invalid_file_records(
@@ -3675,25 +3861,6 @@ async def _workbench_archive_run_knowledge(
     context["knowledgeDocumentIds"] = known_ids
     project["context"] = context
 
-    artifacts = session.get("artifacts") if isinstance(session.get("artifacts"), list) else []
-    known_doc_ids = {
-        str(artifact.get("documentId") or "")
-        for artifact in artifacts
-        if isinstance(artifact, dict)
-    }
-    summary_doc = documents[0] if documents else {}
-    summary_id = str(summary_doc.get("id") or "")
-    if summary_id and summary_id not in known_doc_ids:
-        artifacts.append({
-            "id": _short_id("artifact"),
-            "type": "knowledge_document",
-            "name": str(summary_doc.get("name") or "Task result"),
-            "documentId": summary_id,
-            "status": str(summary_doc.get("status") or "indexed"),
-            "createdAt": now,
-            "summary": "任务结果已归档到当前项目知识库。",
-        })
-    session["artifacts"] = artifacts
     return documents
 
 
@@ -7762,6 +7929,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         for field in ("constraints", "events", "runs", "artifacts", "acceptanceCriteria"):
             if isinstance(body.get(field), list):
                 session[field] = body[field]
+        _workbench_prune_non_file_artifacts(session)
         if isinstance(body.get("plan"), list):
             previous_definition = _workbench_plan_definition_signature(session.get("plan"))
             next_plan = _workbench_normalize_plan(body["plan"], task_id=session_id)
@@ -8246,9 +8414,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         run_start_ts = _utc_now_iso()
         workspace_root = _workbench_workspace_root(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
+        workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
         ephemeral_system = _workbench_compose_ephemeral_system(project, session)
         agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
+        workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         # A run that hit a permission / clarification boundary pauses awaiting the
         # user's answer — surface the question on the card instead of the sentinel.
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
@@ -8275,10 +8445,15 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         run_id = _short_id("run")
         activity_events = _collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
         tool_call_events = [event for event in activity_events if event.get("type") == "ToolCallEvent"]
-        file_changes = _workbench_merge_file_changes([
-            *[change for event in tool_call_events for change in (event.get("fileChanges") or [])],
-            *_workbench_git_status_delta(git_status_before, git_status_after, workspace_root),
-        ])
+        file_changes = _workbench_collect_run_file_changes(
+            tool_call_events,
+            git_status_before,
+            git_status_after,
+            workspace_files_before,
+            workspace_files_after,
+            workspace_root,
+            f"{user_input}\n{agent_reply}",
+        )
         if is_step_run and step_id:
             _workbench_apply_step_file_changes(session, step_id, file_changes)
         events = [
@@ -8306,17 +8481,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         }
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
-        if not session.get("artifacts"):
-            session["artifacts"] = [
-                {
-                    "id": _short_id("artifact"),
-                    "type": "task_brief",
-                    "name": "task-brief.md",
-                    "status": "draft",
-                    "createdAt": now,
-                    "summary": "任务目标、约束、计划和验收标准的结构化记录。",
-                }
-            ]
         _workbench_promote_file_artifacts(session, file_changes, now)
         if not awaiting_user:
             await _workbench_archive_run_knowledge(
@@ -8353,8 +8517,13 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             return JSONResponse({"error": "session not found"}, status_code=404)
         task_meta_before = _workbench_capture_task_meta(session)
         chat_run_start_ts = _utc_now_iso()
+        workspace_root = _workbench_workspace_root(project)
+        git_status_before = _workbench_git_status_snapshot(workspace_root)
+        workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
         ephemeral_system = _workbench_compose_ephemeral_system(project, session)
         agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
+        git_status_after = _workbench_git_status_snapshot(workspace_root)
+        workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
         # Preserve any title/goal/summary the agent changed mid-run via set_task_goal.
         _workbench_sync_agent_task_meta(session, session_id, task_meta_before)
@@ -8367,9 +8536,19 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         session["updatedAt"] = now
         project["updatedAt"] = now
         chat_run_id = _short_id("run")
-        chat_tool_events = _collect_run_tool_events(session_id, chat_run_start_ts, chat_run_id)
+        chat_tool_events = _collect_run_tool_events(session_id, chat_run_start_ts, chat_run_id, workspace_root)
+        file_changes = _workbench_collect_run_file_changes(
+            chat_tool_events,
+            git_status_before,
+            git_status_after,
+            workspace_files_before,
+            workspace_files_after,
+            workspace_root,
+            f"{message}\n{agent_reply}",
+        )
         if chat_tool_events:
             session.setdefault("events", []).extend(chat_tool_events)
+        _workbench_promote_file_artifacts(session, file_changes, now)
         payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
@@ -8523,9 +8702,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         run_start_ts = _utc_now_iso()
         workspace_root = _workbench_workspace_root(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
+        workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
         ephemeral_system = _workbench_compose_ephemeral_system(project, session)
         agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
+        workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
         # Preserve any title/goal/summary the agent changed mid-run via set_task_goal.
         _workbench_sync_agent_task_meta(session, session_id, task_meta_before)
@@ -8539,10 +8720,15 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         run_id = _short_id("run")
         activity_events = _collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
         tool_call_events = [event for event in activity_events if event.get("type") == "ToolCallEvent"]
-        file_changes = _workbench_merge_file_changes([
-            *[change for event in tool_call_events for change in (event.get("fileChanges") or [])],
-            *_workbench_git_status_delta(git_status_before, git_status_after, workspace_root),
-        ])
+        file_changes = _workbench_collect_run_file_changes(
+            tool_call_events,
+            git_status_before,
+            git_status_after,
+            workspace_files_before,
+            workspace_files_after,
+            workspace_root,
+            f"{user_input}\n{agent_reply}",
+        )
         events = [
             {"id": _short_id("event"), "type": "UserMessageEvent", "runId": run_id, "createdAt": now, "body": user_input or "[附件]", "attachments": public_attachments},
             *activity_events,
@@ -8663,12 +8849,14 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         workspace_root = _workbench_workspace_root(project)
         workspace_dir = _workbench_resolve_workspace_dir(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
+        workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
         try:
             agent_reply = await _workbench_answer_pending(session_id, question_id, answer_text, workspace_dir)
         except Exception:
             logger.exception("Workbench answer-resume failed for session %s", session_id)
             return JSONResponse({"error": "answer resume failed"}, status_code=502)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
+        workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
 
         # Another boundary may have been hit while resuming → re-surface the new
         # question; otherwise clear the card and settle on the continued reply.
@@ -8682,10 +8870,15 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         run_id = _short_id("run")
         activity_events = _collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
         tool_call_events = [e for e in activity_events if e.get("type") == "ToolCallEvent"]
-        file_changes = _workbench_merge_file_changes([
-            *[change for event in tool_call_events for change in (event.get("fileChanges") or [])],
-            *_workbench_git_status_delta(git_status_before, git_status_after, workspace_root),
-        ])
+        file_changes = _workbench_collect_run_file_changes(
+            tool_call_events,
+            git_status_before,
+            git_status_after,
+            workspace_files_before,
+            workspace_files_after,
+            workspace_root,
+            f"{answer_text}\n{agent_reply}",
+        )
         events = [
             {"id": _short_id("event"), "type": "UserMessageEvent", "runId": run_id, "createdAt": now, "body": f"[确认] {answer_text}"},
             *activity_events,

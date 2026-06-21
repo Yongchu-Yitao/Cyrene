@@ -151,6 +151,20 @@ def test_workbench_chat_supports_parallel_conversation_runtimes():
     assert "workbenchChat.lockedByOther" not in i18n
 
 
+def test_workbench_chat_splits_live_tools_around_intermediate_messages():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+
+    assert 'type === "intermediate_message"' in source
+    assert "function appendIntermediate(chatId, message)" in source
+    assert "segments: segments.concat" in source
+    assert "progress: []" in source
+    assert "completedSegments.map" in source
+    assert "<WbcAssistantMessage" in source
+    assert "event.assistantMessages" in source
+    assert 'event.type === "assistant_message" && event.intermediate && event.message' in source
+
+
 def test_workbench_copy_uses_electron_clipboard_bridge():
     root = Path(__file__).resolve().parent.parent
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
@@ -198,13 +212,16 @@ def test_workbench_acceptance_button_calls_agent_endpoint():
 def test_workbench_artifact_rows_download_registered_files():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
     routes = (root / "src" / "webui" / "routes.py").read_text(encoding="utf-8")
 
-    assert 'artifact.type === "file_change"' in source
+    assert "WorkbenchModel.ensureArtifacts(session)" in source
     assert 'className="workbench-artifact-row wb-artifact-download"' in source
     assert 'download={artifact.name || true}' in source
     assert '"/artifacts/" + encodeURIComponent(artifact.id) + "/download"' in source
+    assert "artifact.type !== \"file_change\"" in model
+    assert 'name: "task-summary.md"' not in model
     assert ".wb-artifact-download:hover" in styles
     assert '@router.get("/api/task-sessions/{session_id}/artifacts/{artifact_id}/download")' in routes
     assert "_workbench_artifact_download_target(project, session, artifact_id)" in routes

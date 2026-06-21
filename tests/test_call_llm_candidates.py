@@ -6,11 +6,13 @@ model list is the sole ordered source of truth, with no phantom env candidate
 prepended (that duplicate 401'd on every call when its key was empty).
 """
 import json
+import socket
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+import httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -31,6 +33,14 @@ class _CountingHandler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         self.server.hits += 1
         self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.server.disconnects_remaining > 0:
+            self.server.disconnects_remaining -= 1
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            self.connection.close()
+            return
         if self.server.status != 200:
             self.send_response(self.server.status)
             self.end_headers()
@@ -54,10 +64,11 @@ class _CountingHandler(BaseHTTPRequestHandler):
 def stub_server_factory():
     servers = []
 
-    def make(status: int):
+    def make(status: int, *, disconnects: int = 0):
         server = HTTPServer(("127.0.0.1", 0), _CountingHandler)
         server.status = status
         server.hits = 0
+        server.disconnects_remaining = disconnects
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         servers.append(server)
@@ -133,6 +144,49 @@ async def test_connection_refused_fails_fast_and_cools_down(stub_server_factory)
     )
     assert msg.get("content") == "pong"
     assert cl._candidate_cooling(cl._candidate_key(refused))
+
+
+async def test_transient_network_disconnect_retries_then_succeeds(stub_server_factory, monkeypatch):
+    server, candidate = stub_server_factory(200, disconnects=cl.NETWORK_RETRY_LIMIT)
+    monkeypatch.setattr(cl, "_NETWORK_RETRY_BASE_DELAY_SECONDS", 0)
+
+    msg = await cl.call_llm(
+        [{"role": "user", "content": "hi"}],
+        candidates=[candidate],
+        publish_events=False,
+        record_usage=False,
+    )
+
+    assert msg.get("content") == "pong"
+    assert server.hits == cl.NETWORK_RETRY_LIMIT + 1
+    assert not cl._candidate_cooling(cl._candidate_key(candidate))
+
+
+async def test_transient_network_disconnect_stops_after_retry_limit(stub_server_factory, monkeypatch):
+    server, candidate = stub_server_factory(200, disconnects=cl.NETWORK_RETRY_LIMIT + 1)
+    monkeypatch.setattr(cl, "_NETWORK_RETRY_BASE_DELAY_SECONDS", 0)
+
+    with pytest.raises(httpx.RemoteProtocolError):
+        await cl.call_llm(
+            [{"role": "user", "content": "hi"}],
+            candidates=[candidate],
+            publish_events=False,
+            record_usage=False,
+        )
+
+    assert server.hits == cl.NETWORK_RETRY_LIMIT + 1
+    assert cl._candidate_cooling(cl._candidate_key(candidate))
+
+
+def test_workbench_network_error_message_requests_resend():
+    from webui.routes_workbench_chat import _workbench_chat_run_error_message
+
+    exc = httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+    assert _workbench_chat_run_error_message(exc, "zh") == (
+        f"网络连接异常，已自动重试 {cl.NETWORK_RETRY_LIMIT} 次仍未成功。请重新发送这条消息。"
+    )
+    assert "Please send this message again." in _workbench_chat_run_error_message(exc, "en")
 
 
 def test_resolve_llm_candidates_is_the_model_list_in_order(monkeypatch):

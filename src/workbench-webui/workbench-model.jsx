@@ -786,18 +786,18 @@ var WorkbenchModel = (function () {
     });
   }
 
-  // Ensure the session has at least one artifact once it has executed.
+  // Artifacts are real, downloadable files only. Never manufacture summaries
+  // or task briefs just to make this collection non-empty.
   function ensureArtifacts(session) {
     var arr = session && Array.isArray(session.artifacts) ? session.artifacts.slice() : [];
-    if (arr.length) return arr;
-    return [{
-      id: shortId("artifact"),
-      type: "summary",
-      name: "task-summary.md",
-      status: "ready",
-      createdAt: new Date().toISOString(),
-      summary: "任务执行过程与结果的结构化总结。",
-    }];
+    var seen = Object.create(null);
+    return arr.filter(function (artifact) {
+      if (!artifact || artifact.type !== "file_change" || !artifact.id) return false;
+      var key = String(artifact.path || artifact.name || "").trim();
+      if (!key || seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
   }
 
   // Heuristic: does this composer message ask for something beyond the current

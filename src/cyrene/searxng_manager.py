@@ -21,7 +21,7 @@ from urllib.request import getproxies
 import httpx
 import yaml
 
-from cyrene.config import DATA_DIR, SEARCH_PROXY
+from cyrene.config import DATA_DIR, SEARCH_PROXY, SEARXNG_URL
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ class SearXNGManager:
     def __init__(self) -> None:
         self._process: subprocess.Popen | None = None
         self._url: str = ""
+        self._external = False
 
     @property
     def url(self) -> str:
@@ -44,6 +45,8 @@ class SearXNGManager:
 
     @property
     def is_running(self) -> bool:
+        if self._external:
+            return bool(self._url)
         return self._process is not None and self._process.poll() is None
 
     def start(self, port: int = 8888, host: str = "127.0.0.1") -> str:
@@ -52,11 +55,27 @@ class SearXNGManager:
         Returns the base URL on success.  Raises RuntimeError if the process
         fails to start or doesn't become healthy within the timeout.
         """
-        self._url = f"http://{host}:{port}"
-
         if self.is_running:
             logger.info("SimpleXNG already running at %s", self._url)
             return self._url
+
+        external_url = str(SEARXNG_URL or "").strip().rstrip("/")
+        if external_url:
+            self._external = True
+            self._url = external_url
+            logger.info("Using external SearXNG at %s", self._url)
+            return self._url
+
+        self._external = False
+        requested_port = port
+        if not _is_port_available(host, port):
+            port = _find_available_port(host)
+            logger.warning(
+                "SimpleXNG port %d is already occupied; using fallback port %d",
+                requested_port,
+                port,
+            )
+        self._url = f"http://{host}:{port}"
 
         fd, log_path = tempfile.mkstemp(prefix="simplexng_", suffix=".log")
         os.close(fd)
@@ -66,13 +85,14 @@ class SearXNGManager:
             settings_path = _write_simplexng_settings(port, host)
             launch_cmd = _build_simplexng_launch_cmd(port, host, settings_path=settings_path)
             env = _build_simplexng_env(settings_path)
-            self._process = subprocess.Popen(
-                launch_cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=open(log_path, "w"),
-                env=env,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-            )
+            with open(log_path, "w") as stderr_file:
+                self._process = subprocess.Popen(
+                    launch_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=stderr_file,
+                    env=env,
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                )
         except FileNotFoundError:
             raise RuntimeError(
                 "SimpleXNG is not installed. Run: pip install simplexng"
@@ -96,6 +116,10 @@ class SearXNGManager:
 
     def stop(self) -> None:
         """Terminate the SimpleXNG subprocess gracefully, then force-kill."""
+        if self._external:
+            self._external = False
+            self._url = ""
+            return
         if self._process is None:
             return
         proc, self._process = self._process, None
@@ -141,7 +165,10 @@ class SearXNGManager:
             try:
                 r = httpx.get(url, timeout=3.0, trust_env=False)
                 if r.status_code == 200:
-                    return True
+                    # A different process may have answered on the target port.
+                    # Confirm our child is still alive before accepting readiness.
+                    time.sleep(0.1)
+                    return self._process is not None and self._process.poll() is None
             except Exception:
                 pass
             time.sleep(_HEALTH_CHECK_INTERVAL)
@@ -203,6 +230,7 @@ def _build_simplexng_env(settings_path: Path) -> dict[str, str]:
     """Build environment for the SimpleXNG child process."""
     env = os.environ.copy()
     env["SEARXNG_SETTINGS_PATH"] = str(settings_path)
+    env["CYRENE_SIMPLEXNG_PARENT_PID"] = str(os.getpid())
     proxy_url = _get_effective_search_proxy()
     if proxy_url:
         env["HTTP_PROXY"] = proxy_url
@@ -260,6 +288,25 @@ def _merge_no_proxy(existing: str) -> str:
     return ",".join(entries)
 
 
+def _is_port_available(host: str, port: int) -> bool:
+    """Return whether a TCP listener can bind to ``host:port``."""
+    try:
+        with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, port))
+        return True
+    except OSError:
+        return False
+
+
+def _find_available_port(host: str) -> int:
+    """Ask the OS for an unused TCP port on the requested interface."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
+
+
 def _build_simplexng_launch_cmd(port: int, host: str, *, settings_path: Path | None = None) -> list[str]:
     """Build a launch command compatible with different SimpleXNG package layouts."""
     args = ["-p", str(port), "-H", host]
@@ -272,11 +319,8 @@ def _build_simplexng_launch_cmd(port: int, host: str, *, settings_path: Path | N
     if getattr(sys, "frozen", False):
         return [sys.executable, "--launch-simplexng", *args]
 
-    if importlib.util.find_spec("simplexng.__main__") is not None:
-        return [sys.executable, "-m", "simplexng", *args]
-
     if importlib.util.find_spec("simplexng.simplexng") is not None:
-        return [sys.executable, "-m", "simplexng.simplexng", *args]
+        return [sys.executable, "-m", "cyrene.simplexng_child", *args]
 
     script_path = Path(sys.executable).resolve().parent / "simplexng"
     if script_path.exists():

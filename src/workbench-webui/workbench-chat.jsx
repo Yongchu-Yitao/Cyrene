@@ -121,6 +121,7 @@ var WorkbenchChatModel = (function () {
         try { event = JSON.parse(line); } catch (e) { return; }
         var type = String(event.type || "");
         if (type === "ack" && handlers.onAck) handlers.onAck(event);
+        else if (type === "intermediate_message" && handlers.onIntermediateMessage) handlers.onIntermediateMessage(event);
         else if (type === "reply_start" && handlers.onReplyStart) handlers.onReplyStart(event);
         else if (type === "reply_delta" && handlers.onReplyDelta) handlers.onReplyDelta(event.delta || "");
         else if (type === "reply_done" && handlers.onReplyDone) handlers.onReplyDone(event.response || "");
@@ -411,6 +412,15 @@ function wbcChatUsedMap(chat, runtime) {
       if (wbcIsMapTool(runtime.progress[i].text)) return true;
     }
   }
+  if (runtime && Array.isArray(runtime.segments)) {
+    for (var s = 0; s < runtime.segments.length; s++) {
+      var segmentProgress = runtime.segments[s] && runtime.segments[s].progress;
+      if (!Array.isArray(segmentProgress)) continue;
+      for (var p = 0; p < segmentProgress.length; p++) {
+        if (wbcIsMapTool(segmentProgress[p].text)) return true;
+      }
+    }
+  }
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   for (var m = 0; m < messages.length; m++) {
     var trace = messages[m].trace;
@@ -503,6 +513,28 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     }
   }
 
+  function appendIntermediate(chatId, message) {
+    if (!chatId || !message || !message.id) return;
+    update(chatId, function (cur) {
+      if (!cur) return null;
+      var segments = Array.isArray(cur.segments) ? cur.segments : [];
+      if (segments.some(function (segment) {
+        return segment && segment.message && String(segment.message.id || "") === String(message.id || "");
+      })) return cur;
+      return {
+        ...cur,
+        text: "",
+        progress: [],
+        replying: false,
+        segments: segments.concat([{
+          id: String(message.id),
+          message: message,
+          progress: Array.isArray(cur.progress) ? cur.progress : [],
+        }]),
+      };
+    });
+  }
+
   // Begin a streamed send for `chatId`. No-op (returns null) when a run is
   // already in flight for that conversation, keeping message ordering
   // deterministic; returns the send promise otherwise.
@@ -510,7 +542,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     if (!chatId || runtimes[chatId]) return null;
     var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
     if (ac) aborts[chatId] = ac;
-    update(chatId, { chatId: chatId, text: "", progress: [], startedAt: Date.now(), replying: false });
+    update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), replying: false });
     return model.sendMessage(chatId, input, {
       onAck: function (event) {
         if (event.retry) {
@@ -529,8 +561,14 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
       onReplyDone: function (text) {
         update(chatId, function (cur) { return cur ? { ...cur, text: text || cur.text } : null; });
       },
+      onIntermediateMessage: function (event) {
+        appendIntermediate(chatId, event && event.message);
+      },
       onSaved: function (event) {
-        if (event.assistantMessage) fire("onAssistantSaved", chatId, event.assistantMessage);
+        var savedMessages = Array.isArray(event.assistantMessages) && event.assistantMessages.length
+          ? event.assistantMessages
+          : (event.assistantMessage ? [event.assistantMessage] : []);
+        if (savedMessages.length) fire("onAssistantSaved", chatId, savedMessages);
         update(chatId, null);
         fire("onSettled", chatId);
       },
@@ -568,9 +606,11 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     if (!chatId || !runtimes[chatId]) return;
     var entry = null;
     if (event.type === "tool_call") {
+      var toolName = String(event.tool || "");
+      if (["use_tools", "quit", "send_message"].indexOf(toolName) >= 0) return;
       var args = event.args || {};
       var preview = Object.values(args).filter(Boolean).map(String).join(", ").slice(0, 60);
-      entry = { kind: "tool", text: String(event.tool || wbcT("settings.tools", "Tools")), preview: preview };
+      entry = { kind: "tool", text: toolName || wbcT("settings.tools", "Tools"), preview: preview };
     } else if (event.type === "phase_transition" && event.detail) {
       entry = { kind: "phase", text: String(event.detail).slice(0, 80), preview: "" };
     } else if (event.type === "subagent_update") {
@@ -579,6 +619,9 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
         text: String(event.agent_id || wbcT("workbenchChat.subagents", "Subagents")),
         preview: wbcSubagentStatusText(event.status),
       };
+    } else if (event.type === "assistant_message" && event.intermediate && event.message) {
+      appendIntermediate(chatId, event.message);
+      return;
     }
     if (!entry) return;
     update(chatId, function (latest) {
@@ -941,10 +984,18 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
           return { ...prev, messages: list.slice(0, cut + 1) };
         });
       },
-      onAssistantSaved: function (chatId, assistantMessage) {
+      onAssistantSaved: function (chatId, assistantMessages) {
         setActiveChat(function (prev) {
           if (!prev || prev.id !== chatId) return prev;
-          return { ...prev, status: "idle", messages: (prev.messages || []).concat([assistantMessage]) };
+          var current = prev.messages || [];
+          var knownIds = new Set(current.map(function (message) { return String(message.id || ""); }));
+          var additions = (assistantMessages || []).filter(function (message) {
+            var id = String((message && message.id) || "");
+            if (!id || knownIds.has(id)) return false;
+            knownIds.add(id);
+            return true;
+          });
+          return { ...prev, status: "idle", messages: current.concat(additions) };
         });
       },
       onAwaitingUser: function (chatId, pendingQuestion) {
@@ -999,7 +1050,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     // progress folds into it (onSseEvent only fills a runtime that already exists).
     // Without it the resume ran invisibly — an empty thread while the side panel
     // showed a frozen "Replying" — and the composer offered no way to stop it.
-    runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], startedAt: Date.now(), replying: true });
+    runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), replying: true });
     model.answerChat(chatId, questionId, optionText).then(function (res) {
       runtimeEngine.update(chatId, null);
       setActiveChat(function (prev) {
@@ -1008,7 +1059,18 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
           return { ...prev, status: "idle", pendingQuestion: res.pendingQuestion || null };
         }
         var msgs = prev.messages || [];
-        if (res && res.assistantMessage) msgs = msgs.concat([res.assistantMessage]);
+        var savedMessages = res && Array.isArray(res.assistantMessages) && res.assistantMessages.length
+          ? res.assistantMessages
+          : (res && res.assistantMessage ? [res.assistantMessage] : []);
+        if (savedMessages.length) {
+          var knownIds = new Set(msgs.map(function (message) { return String(message.id || ""); }));
+          msgs = msgs.concat(savedMessages.filter(function (message) {
+            var id = String((message && message.id) || "");
+            if (!id || knownIds.has(id)) return false;
+            knownIds.add(id);
+            return true;
+          }));
+        }
         return { ...prev, status: "idle", pendingQuestion: null, messages: msgs };
       });
       refreshChats();
@@ -1250,7 +1312,7 @@ function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onIn
   useWbcEffect(function () {
     var el = scrollRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [messages.length, runtime && runtime.text, runtime && runtime.progress.length]);
+  }, [messages.length, runtime && runtime.text, runtime && runtime.progress.length, runtime && runtime.segments && runtime.segments.length]);
 
   useWbcEffect(function () {
     stickRef.current = true;
@@ -1297,7 +1359,7 @@ function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onIn
             ? <WbcUserMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} />
             : <WbcAssistantMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onRetryMessage={canRetry ? onRetryMessage : null} />;
         })}
-        {runtime && <WbcLiveMessage runtime={runtime} />}
+        {runtime && <WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} />}
         {chat && chat.pendingQuestion && chat.pendingQuestion.id && !runtime && (
           <WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} />
         )}
@@ -1598,26 +1660,41 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
   );
 }
 
-function WbcLiveMessage({ runtime }) {
+function WbcLiveMessage({ runtime, onOpenFile }) {
+  var completedSegments = Array.isArray(runtime.segments) ? runtime.segments : [];
   var progressEntries = runtime.progress.map(function (entry) {
     return { tool: entry.text, preview: entry.preview };
   });
   return (
-    <div className="wbc-msg assistant">
-      {(progressEntries.length > 0 || !runtime.text) && (
-        <WbcTraceCard
-          trace={progressEntries}
-          live={true}
-          label={runtime.text ? wbcT("workbenchChat.traceLabel", "Execution") : (progressEntries.length ? wbcT("workbenchChat.toolRunning", "Calling tools...") : wbcT("workbenchChat.traceIdle", "Thinking..."))}
-        />
-      )}
-      {runtime.text && (
-        <div className="wbc-msg-body markdown">
-          <div dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(runtime.text) }} />
-          <span className="wbc-caret" />
-        </div>
-      )}
-    </div>
+    <React.Fragment>
+      {completedSegments.map(function (segment) {
+        var segmentTrace = (segment.progress || []).map(function (entry) {
+          return { tool: entry.text, preview: entry.preview };
+        });
+        return (
+          <WbcAssistantMessage
+            key={segment.id}
+            msg={{ ...segment.message, trace: segmentTrace }}
+            onOpenFile={onOpenFile}
+          />
+        );
+      })}
+      <div className="wbc-msg assistant">
+        {(progressEntries.length > 0 || !runtime.text) && (
+          <WbcTraceCard
+            trace={progressEntries}
+            live={true}
+            label={runtime.text ? wbcT("workbenchChat.traceLabel", "Execution") : (progressEntries.length ? wbcT("workbenchChat.toolRunning", "Calling tools...") : wbcT("workbenchChat.traceIdle", "Thinking..."))}
+          />
+        )}
+        {runtime.text && (
+          <div className="wbc-msg-body markdown">
+            <div dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(runtime.text) }} />
+            <span className="wbc-caret" />
+          </div>
+        )}
+      </div>
+    </React.Fragment>
   );
 }
 

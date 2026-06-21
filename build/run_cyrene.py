@@ -89,8 +89,8 @@ if __name__ == "__main__":
     # These flags let the frozen binary act as a trampoline for bundled modules.
     if "--launch-simplexng" in sys.argv:
         sys.argv.remove("--launch-simplexng")
-        import runpy
-        runpy.run_module("simplexng.simplexng", run_name="__main__")
+        from cyrene.simplexng_child import main as _run_simplexng_child
+        _run_simplexng_child()
         raise SystemExit(0)
 
     if "--launch-web" in sys.argv:

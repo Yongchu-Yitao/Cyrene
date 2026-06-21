@@ -3737,11 +3737,13 @@ html[data-theme="dark"] .wb-composer-disclaimer {
 }
 
 .wb-artifact-download {
+  align-items: center;
+  flex-direction: row;
+  gap: 10px;
   text-decoration: none;
   cursor: pointer;
   border-radius: 8px;
-  padding-left: 6px;
-  padding-right: 6px;
+  padding: 10px 8px;
   margin-left: -6px;
   margin-right: -6px;
 }
@@ -3754,6 +3756,59 @@ html[data-theme="dark"] .wb-composer-disclaimer {
 .wb-artifact-download:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--wb-accent) 55%, transparent);
   outline-offset: 1px;
+}
+
+.wb-artifact-file-icon,
+.wb-artifact-download-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.wb-artifact-file-icon {
+  width: 30px;
+  height: 30px;
+  color: var(--wb-accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-accent) 10%, transparent);
+}
+
+.wb-artifact-file-icon svg,
+.wb-artifact-download-icon svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.wb-artifact-file-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wb-artifact-file-copy b,
+.wb-artifact-file-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-artifact-download-icon {
+  width: 26px;
+  height: 26px;
+  color: var(--wb-faint);
+}
+
+.wb-artifact-download:hover .wb-artifact-download-icon,
+.wb-artifact-download:focus-visible .wb-artifact-download-icon {
+  color: var(--wb-accent);
 }
 
 .wb-file-diff-trigger {

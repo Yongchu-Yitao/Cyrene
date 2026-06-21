@@ -1485,6 +1485,12 @@ async def test_send_message_tool_persists_intermediate_reply(monkeypatch, tmp_pa
     request_token = agent._current_client_request_id.set("req_1")
     pending_token = agent._pending_intermediate_user_replies.set([])
     sender_token = agent._current_agent_id.set("main")
+    streamed = []
+
+    async def collect_stream_event(event):
+        streamed.append(event)
+
+    stream_token = agent._reply_stream_writer.set(collect_stream_event)
     try:
         result = await tools._tool_send_user_message(
             {"text": "先给你一个中途结论：方向是对的，我继续细化。"},
@@ -1494,6 +1500,7 @@ async def test_send_message_tool_persists_intermediate_reply(monkeypatch, tmp_pa
             None,
         )
     finally:
+        agent._reply_stream_writer.reset(stream_token)
         agent._current_agent_id.reset(sender_token)
         agent._pending_intermediate_user_replies.reset(pending_token)
         agent._current_client_request_id.reset(request_token)
@@ -1508,6 +1515,16 @@ async def test_send_message_tool_persists_intermediate_reply(monkeypatch, tmp_pa
     assert saved[-1]["client_request_id"] == "req_1"
     assert saved[-1]["intermediate_reply"] is True
     assert any(event.get("type") == "assistant_message" and event.get("intermediate") is True for event in seen)
+    assert streamed == [{
+        "type": "intermediate_message",
+        "message": {
+            "id": saved[-1]["message_id"],
+            "role": "assistant",
+            "content": "先给你一个中途结论：方向是对的，我继续细化。",
+            "createdAt": saved[-1]["created_at"],
+            "intermediate": True,
+        },
+    }]
 
 
 async def test_send_message_tool_from_scheduler_persists_system_message(monkeypatch, tmp_path):

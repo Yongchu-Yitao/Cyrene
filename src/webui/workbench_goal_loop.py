@@ -721,6 +721,7 @@ class GoalLoopManager:
                 _, current_project, current_session = _read_session(str(run["session_id"]))
                 workspace_root = R._workbench_workspace_root(current_project)
                 git_before = R._workbench_git_status_snapshot(workspace_root)
+                workspace_files_before = R._workbench_workspace_file_snapshot(workspace_root)
                 started_at = _utc_iso()
                 ephemeral = R._workbench_compose_ephemeral_system(current_project, current_session)
                 loop_instruction = (
@@ -760,6 +761,7 @@ class GoalLoopManager:
                 if not latest_run or str(latest_run.get("status") or "") != "running":
                     return
                 git_after = R._workbench_git_status_snapshot(workspace_root)
+                workspace_files_after = R._workbench_workspace_file_snapshot(workspace_root)
                 _, latest_project, latest_session = _read_session(str(run["session_id"]))
                 display_reply, awaiting = R._workbench_apply_pending(latest_session, str(run["session_id"]), reply)
                 if awaiting or reply == _AWAITING_USER_SENTINEL:
@@ -793,16 +795,20 @@ class GoalLoopManager:
                     str(run["session_id"]), started_at, R._short_id("run"), workspace_root
                 )
                 tool_events = [item for item in activity_events if item.get("type") == "ToolCallEvent"]
-                file_changes = R._workbench_merge_file_changes(
-                    [
-                        *[change for event in tool_events for change in (event.get("fileChanges") or [])],
-                        *R._workbench_git_status_delta(git_before, git_after, workspace_root),
-                    ]
+                step_prompt = _step_prompt(latest_session, step)
+                file_changes = R._workbench_collect_run_file_changes(
+                    tool_events,
+                    git_before,
+                    git_after,
+                    workspace_files_before,
+                    workspace_files_after,
+                    workspace_root,
+                    f"{step_prompt}\n{display_reply}",
                 )
                 run_record = {
                     "id": R._short_id("run"),
                     "taskId": str(run["session_id"]),
-                    "userInput": _step_prompt(latest_session, step),
+                    "userInput": step_prompt,
                     "agentResponse": display_reply,
                     "status": "completed",
                     "startedAt": started_at,
