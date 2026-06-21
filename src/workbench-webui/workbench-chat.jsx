@@ -1611,7 +1611,11 @@ function WbcTraceCard({ trace, live, label }) {
               <li key={i} className={isLast ? "active" : "done"}>
                 <span className="wbc-trace-mark">{isLast ? <span className="wb-spinner small" /> : WBC_ICONS.check}</span>
                 <span className="wbc-trace-text">
-                  {entry.kind === "tool" ? wbcT("toolName." + entry.text, entry.text) : entry.text}
+                  {(function () {
+                    var toolKey = entry.text || entry.tool || "";
+                    var isToolEntry = entry.kind === "tool" || !!entry.tool;
+                    return isToolEntry ? wbcT("toolName." + toolKey, toolKey) : toolKey;
+                  })()}
                   {(entry.preview) ? <small>（{entry.preview}）</small> : null}
                 </span>
               </li>

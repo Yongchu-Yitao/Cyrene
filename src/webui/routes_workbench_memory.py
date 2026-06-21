@@ -589,6 +589,55 @@ def add_agent_memory(
     return _serialize(entry)
 
 
+def search_project_memories(
+    workspace_id: str | None,
+    *,
+    query: str,
+    category: str = "",
+    source: str = "",
+    limit: int = 10,
+    include_stale: bool = False,
+) -> list[dict]:
+    """Search one Workbench project's durable memories.
+
+    This is the read-side counterpart to ``save_project_memory``. Results are
+    bounded, project-scoped, and ranked by direct content match, then recency.
+    """
+    if _resolve_workspace_id(workspace_id) == "default":
+        return []
+    needle = str(query or "").strip().casefold()
+    if not needle:
+        return []
+    category = str(category or "").strip().lower()
+    source = str(source or "").strip().lower()
+    limit = max(1, min(int(limit or 10), 20))
+
+    matches: list[tuple[int, str, dict]] = []
+    for entry in _load(workspace_id):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("stale") and not include_stale:
+            continue
+        entry_category = _entry_category(entry)
+        entry_source = _entry_source(entry)
+        if category and entry_category != category:
+            continue
+        if source and entry_source != source:
+            continue
+        content = str(entry.get("content") or "")
+        tags = [str(tag) for tag in entry.get("tags") or []]
+        content_folded = content.casefold()
+        tags_folded = " ".join(tags).casefold()
+        if needle not in content_folded and needle not in tags_folded:
+            continue
+        score = 2 if needle in content_folded else 1
+        updated = str(entry.get("last_mentioned") or entry.get("first_seen") or "")
+        matches.append((score, updated, _serialize(entry)))
+
+    matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [item[2] for item in matches[:limit]]
+
+
 async def _detect_conflicting_memories(new_content: str, candidates: list[dict]) -> list[str]:
     """LLM judge: which existing memories does the new fact contradict/supersede?
 

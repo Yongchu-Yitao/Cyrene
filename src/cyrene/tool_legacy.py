@@ -35,7 +35,6 @@ from cyrene.config import (
     STATE_FILE,
     WORKSPACE_DIR,
 )
-from cyrene.conversations import recall_conversations
 from cyrene.llm import _truncate
 from cyrene.schedule_spec import compute_next_run
 from cyrene.search import deep_search
@@ -43,7 +42,6 @@ from cyrene.shells import close_shell as _close_shell_session
 from cyrene.shells import list_shells as _list_shell_sessions
 from cyrene.shells import send_shell as _send_shell_session
 from cyrene.shells import start_shell as _start_shell_session
-from cyrene.short_term import get_context as _get_short_term_context
 from cyrene.skills_registry import (
     build_skills as _build_skills,
     install_skill_from_path as _install_skill,
@@ -51,7 +49,6 @@ from cyrene.skills_registry import (
 )
 from cyrene.subagent import register as _reg_subagent, can_receive, _run_subagent, _spawn_subagent_task
 from cyrene.inbox import send_message as _send_inbox
-from cyrene.soul import read_shallow_memory
 from cyrene.workbench_context import resolve_project_data_key_for_session
 
 logger = logging.getLogger(__name__)
@@ -1344,48 +1341,10 @@ async def _tool_query_round(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
 
 
 async def _tool_recall_memory(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    """Recall archived session history plus persisted memory."""
-    query = str(args.get("query", "") or "").strip()
-    session_id = str(args.get("session_id", "") or "").strip()
-    date = str(args.get("date", "") or "").strip()
-    limit = max(1, min(int(args.get("limit", 5) or 5), 10))
-    include_soul = bool(args.get("include_soul", True))
-    include_short_term = bool(args.get("include_short_term", True))
+    """Compatibility entry point for the recent-memory tool."""
+    from cyrene.tool_impl.recall_memory import _tool_recall_memory as _impl
 
-    matches = recall_conversations(
-        query=query,
-        session_id=session_id,
-        date=date,
-        limit=limit,
-    )
-    payload: dict[str, Any] = {
-        "query": query,
-        "session_id": session_id,
-        "date": date,
-        "matches": [
-            {
-                "date": item.get("date", ""),
-                "timestamp": item.get("timestamp", ""),
-                "archive_session_id": item.get("archive_session_id", ""),
-                "session_title": item.get("session_title", ""),
-                "round_id": item.get("round_id", ""),
-                "round_title": item.get("round_title", ""),
-                "user": item.get("user_body", ""),
-                "assistant": item.get("assistant_body", ""),
-            }
-            for item in matches
-        ],
-    }
-    if include_short_term:
-        payload["short_term_memory"] = _get_short_term_context(
-            max_chars=1800,
-            header="[Short-term cross-session memory:]",
-        )
-    if include_soul:
-        payload["soul_memory"] = _truncate(read_shallow_memory(), 3000)
-    if not payload["matches"]:
-        payload["note"] = "No archived session matches found for the given filters."
-    return _json_result(payload)
+    return await _impl(args, _bot, _chat_id, _db_path, _notify_state)
 
 
 async def _tool_search_knowledge(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
@@ -2139,7 +2098,31 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "RecallMemory",
-            "description": "Recall relevant memory from other archived sessions. Searches conversation archives by keyword, session ID, or date, and can include short-term memory plus SOUL.md memory in the result.",
+            "description": (
+                "Read the most recently mentioned short-term memories across sessions. "
+                "Use this for recent preferences, facts, events, or context remembered about the user. "
+                "Use RecallConversation instead when you need the actual text of an older conversation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Optional keyword or phrase to filter recent memory content."},
+                    "type": {"type": "string", "description": "Optional memory type filter, such as fact, preference, event, or emotion."},
+                    "limit": {"type": "integer", "description": "Maximum number of recent memories to return (1-20, default 10)."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "RecallConversation",
+            "description": (
+                "Search historical conversation archives and return matching user/assistant exchanges. "
+                "Use this when the user refers to a previous discussion, decision, promise, or exact wording. "
+                "Use RecallMemory instead for recent distilled memory rather than conversation text."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2147,10 +2130,39 @@ TOOL_DEFS = [
                     "session_id": {"type": "string", "description": "Optional archive session id, such as session_abcd1234 or archive_2026-05-19_session_abcd1234."},
                     "date": {"type": "string", "description": "Optional date filter in YYYY-MM-DD format."},
                     "limit": {"type": "integer", "description": "Maximum number of archived conversation matches to return (1-10)."},
-                    "include_soul": {"type": "boolean", "description": "Whether to include SOUL.md shallow memory in the result."},
-                    "include_short_term": {"type": "boolean", "description": "Whether to include short-term cross-session memory in the result."},
                 },
                 "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_project_memory",
+            "description": (
+                "Search durable memory belonging to the current Workbench project. "
+                "Use this for prior project decisions, constraints, working approaches, user preferences, "
+                "or environment facts that may not be present in the automatically injected memory subset. "
+                "Read-only; only works inside a Workbench project task or chat."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Keyword or phrase to search for in project memory."},
+                    "category": {
+                        "type": "string",
+                        "enum": ["preference", "project", "habit", "fact", "conversation"],
+                        "description": "Optional memory category filter.",
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["conversation", "knowledge", "manual", "agent", "other"],
+                        "description": "Optional memory source filter.",
+                    },
+                    "limit": {"type": "integer", "description": "Maximum number of matches to return (1-20, default 10)."},
+                    "include_stale": {"type": "boolean", "description": "Include retired/superseded memories (default false)."},
+                },
+                "required": ["query"],
             },
         },
     },

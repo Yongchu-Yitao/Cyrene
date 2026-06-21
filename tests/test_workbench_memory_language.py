@@ -126,3 +126,107 @@ def test_save_project_memory_tool_requires_user_language():
 def test_language_neutral_path_does_not_require_translation():
     assert memory._content_matches_language("src/app.py", "zh")
     assert memory._content_matches_language("MAX_RETRIES=3", "zh")
+
+
+def test_search_project_memories_filters_and_excludes_stale(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    entries = [
+        {
+            "id": "mem_new",
+            "content": "项目使用 PostgreSQL 作为主数据库。",
+            "type": "project",
+            "category": "project",
+            "source": "agent",
+            "tags": ["database", "PostgreSQL"],
+            "first_seen": "2026-06-20",
+            "last_mentioned": "2026-06-21",
+            "mention_count": 2,
+        },
+        {
+            "id": "mem_old",
+            "content": "项目曾经使用 SQLite。",
+            "type": "project",
+            "category": "project",
+            "source": "agent",
+            "tags": ["database"],
+            "first_seen": "2026-06-10",
+            "last_mentioned": "2026-06-10",
+            "mention_count": 1,
+            "stale": True,
+        },
+    ]
+    (tmp_path / "wb_memory_project-test.json").write_text(
+        json.dumps(entries, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    results = memory.search_project_memories(
+        "project-test",
+        query="database",
+        category="project",
+        source="agent",
+    )
+
+    assert [item["id"] for item in results] == ["mem_new"]
+
+
+@pytest.mark.asyncio
+async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_path):
+    from cyrene.agent import state
+    from cyrene.tool_impl import search_project_memory as tool
+
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    (tmp_path / "wb_memory_project-test.json").write_text(
+        json.dumps(
+            [{
+                "id": "mem_1",
+                "content": "用户偏好使用 pytest 编写回归测试。",
+                "type": "preference",
+                "category": "preference",
+                "source": "agent",
+                "tags": ["pytest"],
+                "first_seen": "2026-06-21",
+                "last_mentioned": "2026-06-21",
+                "mention_count": 1,
+            }],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        tool,
+        "resolve_project_data_key_for_session",
+        lambda session_id: "project-test",
+    )
+    token = state._current_session_id.set("chat-test")
+    try:
+        result = await tool._tool_search_project_memory(
+            {"query": "pytest", "limit": 5},
+            None,
+            0,
+            "db.sqlite3",
+            None,
+        )
+    finally:
+        state._current_session_id.reset(token)
+
+    payload = json.loads(result)
+    assert payload["status"] == "success"
+    assert payload["count"] == 1
+    assert payload["memories"][0]["content"] == "用户偏好使用 pytest 编写回归测试。"
+
+
+def test_memory_tools_are_registered_with_distinct_contracts():
+    from cyrene import tools
+
+    defs = {
+        item["function"]["name"]: item["function"]
+        for item in tools.TOOL_DEFS
+    }
+
+    assert "RecallMemory" in defs
+    assert "RecallConversation" in defs
+    assert "search_project_memory" in defs
+    assert "session_id" not in defs["RecallMemory"]["parameters"]["properties"]
+    assert "session_id" in defs["RecallConversation"]["parameters"]["properties"]
+    assert defs["search_project_memory"]["parameters"]["required"] == ["query"]

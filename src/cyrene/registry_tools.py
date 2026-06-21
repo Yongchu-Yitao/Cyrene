@@ -30,6 +30,8 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.grep",  # Grep
     "cyrene.tool_impl.bash",  # Bash
     "cyrene.tool_impl.recall_memory",  # RecallMemory
+    "cyrene.tool_impl.recall_conversation",  # RecallConversation
+    "cyrene.tool_impl.search_project_memory",  # search_project_memory
     "cyrene.tool_impl.save_project_memory",  # save_project_memory
     "cyrene.tool_impl.set_task_goal",  # set_task_goal
     "cyrene.tool_impl.list_knowledge_documents",  # ListKnowledgeDocuments

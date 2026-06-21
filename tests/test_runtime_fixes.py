@@ -327,9 +327,57 @@ def test_subagent_tool_defs_hide_main_only_tools():
     assert "send_agent_message" in sub_defs
 
 
-async def test_recall_memory_tool_returns_archived_matches_and_persisted_memory(tmp_path, monkeypatch):
-    from cyrene import conversations
+async def test_recall_memory_tool_returns_recent_short_term_entries(tmp_path):
     from cyrene import short_term
+    from cyrene import tools
+
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([
+        {
+            "content": "user prefers concise replies",
+            "type": "preference",
+            "first_seen": "2026-05-18",
+            "last_mentioned": "2026-05-20",
+            "mention_count": 1,
+            "emotional_valence": 0,
+        },
+        {
+            "content": "user prefers detailed reports",
+            "type": "preference",
+            "first_seen": "2026-05-17",
+            "last_mentioned": "2026-05-19",
+            "mention_count": 2,
+            "emotional_valence": 0,
+        },
+        {
+            "content": "user uses macOS",
+            "type": "fact",
+            "first_seen": "2026-05-16",
+            "last_mentioned": "2026-05-21",
+            "mention_count": 1,
+            "emotional_valence": 0,
+        },
+    ])
+
+    result = await tools._tool_recall_memory(
+        {"query": "prefers", "type": "preference", "limit": 2},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    payload = json.loads(result)
+
+    assert [item["content"] for item in payload["memories"]] == [
+        "user prefers concise replies",
+        "user prefers detailed reports",
+    ]
+    assert "matches" not in payload
+    assert "soul_memory" not in payload
+
+
+async def test_recall_conversation_tool_returns_archived_matches(tmp_path, monkeypatch):
+    from cyrene import conversations
     from cyrene import tools
 
     conversations_dir = tmp_path / "conversations"
@@ -358,20 +406,7 @@ async def test_recall_memory_tool_returns_archived_matches_and_persisted_memory(
         encoding="utf-8",
     )
 
-    short_term.init_short_term(tmp_path)
-    short_term.save_entries([
-        {
-            "content": "user prefers concise replies",
-            "type": "preference",
-            "first_seen": "2026-05-19",
-            "last_mentioned": "2026-05-19",
-            "mention_count": 1,
-            "emotional_valence": 0,
-        }
-    ])
-    monkeypatch.setattr(tools, "read_shallow_memory", lambda: "## RELATIONSHIP:USER\n- Trust level: warm")
-
-    result = await tools._tool_recall_memory(
+    result = await tools._tool_recall_conversation(
         {"session_id": "archive_2026-05-19_session_beta", "limit": 2},
         None,
         0,
@@ -383,8 +418,7 @@ async def test_recall_memory_tool_returns_archived_matches_and_persisted_memory(
     assert payload["matches"][0]["archive_session_id"] == "session_beta"
     assert payload["matches"][0]["session_title"] == "第二场"
     assert payload["matches"][0]["assistant"] == "已记录你偏好简洁回答。"
-    assert "user prefers concise replies" in payload["short_term_memory"]
-    assert "Trust level: warm" in payload["soul_memory"]
+    assert "memories" not in payload
 
 
 async def test_run_chat_agent_avoids_duplicate_short_term_memory_in_system_prompt(monkeypatch, tmp_path):
