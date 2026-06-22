@@ -5500,6 +5500,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     async def api_ui_data(tz: str = ""):
         return await _build_ui_data(tz)
 
+    @router.get("/api/dashboard")
+    async def api_dashboard(tz: str = ""):
+        return await _build_dashboard(_resolve_ui_tz(tz))
+
     # ---- Chat API ----
 
     @router.post("/api/chat/upload")

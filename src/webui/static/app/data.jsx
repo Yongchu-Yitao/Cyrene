@@ -232,6 +232,31 @@ async function refreshStatus() {
   } catch (e) { /* swallow */ }
 }
 
+let __dashboardRequestSeq = 0;
+let __dashboardRefreshTimer = null;
+async function refreshDashboard() {
+  const seq = ++__dashboardRequestSeq;
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    const r = await fetch("/api/dashboard?tz=" + encodeURIComponent(tz));
+    if (!r.ok) return;
+    const dashboard = await r.json();
+    if (seq !== __dashboardRequestSeq) return;
+    if (dashboard) {
+      const prev = JSON.stringify(DATA.dashboard);
+      DATA.dashboard = dashboard;
+      if (prev !== JSON.stringify(dashboard)) bumpData();
+    }
+  } catch (e) { /* swallow */ }
+}
+function scheduleDashboardRefresh() {
+  if (__dashboardRefreshTimer) return;
+  __dashboardRefreshTimer = window.setTimeout(() => {
+    __dashboardRefreshTimer = null;
+    void refreshDashboard();
+  }, 3000);
+}
+
 function scheduleRealtimeRefresh() {
   if (__refreshTimer) return;
   __refreshTimer = window.setTimeout(() => {
@@ -248,6 +273,7 @@ function scheduleRealtimeRefresh() {
 
 window.refreshSessions = refreshSessions;
 window.refreshStatus = refreshStatus;
+window.refreshDashboard = refreshDashboard;
 window.reloadUiData = bootstrapData;
 
 // ── Global SSE event bus for real-time chat progress ──
@@ -312,6 +338,7 @@ function connectEvents() {
           "entity_deleted",
         ].includes(data.type)) {
           scheduleRealtimeRefresh();
+          scheduleDashboardRefresh();
         }
 
         // Map pin events — update global state for the MapView component.
@@ -366,4 +393,4 @@ function connectEvents() {
 }
 
 bootstrapData().then(() => connectEvents());
-setInterval(() => { refreshSessions(); refreshStatus(); }, 15000);
+setInterval(() => { refreshSessions(); refreshStatus(); refreshDashboard(); }, 15000);
