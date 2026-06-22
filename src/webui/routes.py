@@ -7693,6 +7693,12 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         projects = payload.get("projects", [])
         # Collect session IDs before filtering so we can clean up agent state
         doomed_project = next((p for p in projects if str(p.get("id") or "") == project_id), None)
+        if doomed_project and _workbench_project_data_key(doomed_project) == _WORKBENCH_LEGACY_DATA_KEY:
+            return error_response(
+                "The default project cannot be deleted",
+                400,
+                "default_project_protected",
+            )
         if doomed_project:
             doomed_data_key = _workbench_project_data_key(doomed_project)
             for s in (doomed_project.get("sessions") or []):

@@ -958,6 +958,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
 
   function handleDeleteProject(project) {
     if (!project) return Promise.resolve();
+    if (project.dataKey === "default") {
+      setError(wbT("project.cannotDeleteDefault", "The default project cannot be deleted."));
+      return Promise.resolve();
+    }
     return window.confirmModal({
       body: wbT("project.confirmDelete", "Delete project \"{name}\"? Data inside the project will also be deleted.", { name: project.name }),
       confirmLabel: wbT("common.delete", "Delete"),
@@ -1703,7 +1707,9 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
               {menuOpen && (
                 <div className="workbench-project-menu">
                   <button type="button" onClick={function () { setMenuProjectId(""); onEditProject(project); }}>{t("rail.editProject")}</button>
-                  <button type="button" className="danger" onClick={function () { setMenuProjectId(""); onDeleteProject(project); }}>{t("rail.deleteProject")}</button>
+                  {project.dataKey !== "default" && (
+                    <button type="button" className="danger" onClick={function () { setMenuProjectId(""); onDeleteProject(project); }}>{t("rail.deleteProject")}</button>
+                  )}
                 </div>
               )}
             </div>

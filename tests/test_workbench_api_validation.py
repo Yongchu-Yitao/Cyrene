@@ -162,6 +162,80 @@ def test_project_update_cannot_bypass_workspace_root_validation(
     assert current.json()["project"]["workspacePath"] != str(outside)
 
 
+def test_default_project_cannot_be_deleted(monkeypatch, tmp_path):
+    from webui import routes
+
+    client = _client(monkeypatch, tmp_path)
+    store_path = routes._WORKBENCH_STORE
+    store_path.write_text(
+        json.dumps(
+            {
+                "projects": [
+                    {
+                        "id": "project_default",
+                        "name": "Cyrene",
+                        "dataKey": "default",
+                        "workspacePath": str(tmp_path / "workspace"),
+                        "sessions": [],
+                    }
+                ],
+                "activeProjectId": "project_default",
+                "activeSessionId": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.delete("/api/projects/project_default")
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "default_project_protected"
+    remaining = client.get("/api/projects")
+    assert remaining.status_code == 200
+    assert any(p["id"] == "project_default" for p in remaining.json()["projects"])
+
+
+def test_non_default_project_can_be_deleted(monkeypatch, tmp_path):
+    from webui import routes
+
+    client = _client(monkeypatch, tmp_path)
+    store_path = routes._WORKBENCH_STORE
+    store_path.write_text(
+        json.dumps(
+            {
+                "projects": [
+                    {
+                        "id": "project_default",
+                        "name": "Cyrene",
+                        "dataKey": "default",
+                        "workspacePath": str(tmp_path / "workspace"),
+                        "sessions": [],
+                    },
+                    {
+                        "id": "project_extra",
+                        "name": "Extra",
+                        "dataKey": "extra",
+                        "workspacePath": str(tmp_path / "workspace"),
+                        "sessions": [],
+                    },
+                ],
+                "activeProjectId": "project_extra",
+                "activeSessionId": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.delete("/api/projects/project_extra")
+
+    assert response.status_code == 200
+    remaining = client.get("/api/projects")
+    ids = [p["id"] for p in remaining.json()["projects"]]
+    assert "project_extra" not in ids
+    assert "project_default" in ids
+
+
+
 def test_workspace_validation_rejects_unwritable_directory(monkeypatch, tmp_path):
     from webui import workspace_validation
 
