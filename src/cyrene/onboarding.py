@@ -123,10 +123,21 @@ def _has_existing_data() -> bool:
     if _has_runtime_activity():
         return True
 
-    # Workbench chat threads (data/workbench_chats.json holds a non-empty map
-    # once any conversation exists). Note: workbench_projects.json is excluded
-    # on purpose — it is auto-recreated with an empty default project on first
-    # read, so its mere presence is not evidence of use.
+    # Workbench chat threads. SQLite is authoritative; legacy JSON remains an
+    # import fallback for installations that have not started the new version.
+    try:
+        from cyrene.workbench_store import has_document_data, list_document_keys
+
+        workbench_db = STORE_DIR / "cyrene.db"
+        if workbench_db.exists() and has_document_data(workbench_db, "chats"):
+            return True
+        if workbench_db.exists() and list_document_keys(workbench_db, prefix="memory:"):
+            return True
+    except Exception:
+        pass
+
+    # Note: projects are excluded on purpose — an empty default project is
+    # auto-created and is not evidence of prior use.
     chats_path = DATA_DIR / "workbench_chats.json"
     if chats_path.exists():
         try:

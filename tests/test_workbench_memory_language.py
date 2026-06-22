@@ -341,3 +341,181 @@ def test_memory_tools_are_registered_with_distinct_contracts():
     assert "session_id" not in defs["RecallMemory"]["parameters"]["properties"]
     assert "session_id" in defs["RecallConversation"]["parameters"]["properties"]
     assert defs["search_project_memory"]["parameters"]["required"] == ["query"]
+
+
+@pytest.mark.asyncio
+async def test_agent_memory_records_citation_and_history_on_create(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+
+    async def fake_call_llm(messages, **kwargs):
+        return {"content": '{"content": "用户使用 pytest 编写测试。"}'}
+
+    monkeypatch.setattr(agent_state, "_call_llm", fake_call_llm)
+
+    saved, retired = await memory.add_agent_memory_checked(
+        "project-test",
+        "用户使用 pytest 编写测试。",
+        category="habit",
+    )
+
+    assert retired == []
+    assert saved is not None
+    assert saved["source"] == "agent"
+    assert len(saved["citations"]) == 1
+    assert saved["citations"][0]["source"] == "agent"
+    assert saved["citations"][0]["snippet"]
+    assert len(saved["history"]) == 1
+    assert saved["history"][0]["action"] == "created"
+
+
+@pytest.mark.asyncio
+async def test_agent_memory_records_citation_and_history_on_reinforce(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    (tmp_path / "wb_memory_project-test.json").write_text(
+        json.dumps([{
+            "id": "mem_existing",
+            "content": "用户使用 pytest 编写测试。",
+            "type": "habit",
+            "category": "habit",
+            "source": "agent",
+            "tags": [],
+            "first_seen": "2026-06-10",
+            "last_mentioned": "2026-06-10",
+            "mention_count": 1,
+        }], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    async def unexpected_call(*args, **kwargs):
+        raise AssertionError("reinforcement should not call the LLM")
+
+    monkeypatch.setattr(agent_state, "_call_llm", unexpected_call)
+
+    saved, retired = await memory.add_agent_memory_checked(
+        "project-test",
+        "用户使用 pytest 编写测试。",
+        category="habit",
+    )
+
+    assert retired == []
+    assert saved is not None
+    assert saved["id"] == "mem_existing"
+    assert saved["citation_count"] == 2
+    assert len(saved["citations"]) == 1  # one new citation from this reinforcement
+    assert saved["citations"][0]["source"] == "agent"
+    history_actions = [h["action"] for h in saved["history"]]
+    assert "reinforced" in history_actions
+
+
+@pytest.mark.asyncio
+async def test_agent_memory_revives_stale_and_records_history(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    (tmp_path / "wb_memory_project-test.json").write_text(
+        json.dumps([{
+            "id": "mem_old",
+            "content": "用户使用 SQLite 作为数据库。",
+            "type": "fact",
+            "category": "fact",
+            "source": "agent",
+            "tags": [],
+            "first_seen": "2026-06-01",
+            "last_mentioned": "2026-06-01",
+            "mention_count": 1,
+            "stale": True,
+        }], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    async def unexpected_call(*args, **kwargs):
+        raise AssertionError("reinforcement of existing text should not call the LLM")
+
+    monkeypatch.setattr(agent_state, "_call_llm", unexpected_call)
+
+    saved, retired = await memory.add_agent_memory_checked(
+        "project-test",
+        "用户使用 SQLite 作为数据库。",
+        category="fact",
+    )
+
+    assert retired == []
+    assert saved is not None
+    assert saved["stale"] is False
+    history_actions = [h["action"] for h in saved["history"]]
+    assert "reinforced" in history_actions
+    assert "revived" in history_actions
+
+
+def test_serialize_backfills_history_from_timestamps_for_legacy_entries(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    entry = {
+        "id": "mem_legacy",
+        "content": "Legacy memory without history.",
+        "type": "fact",
+        "category": "fact",
+        "source": "manual",
+        "tags": [],
+        "first_seen": "2026-06-01",
+        "last_mentioned": "2026-06-15",
+        "mention_count": 2,
+    }
+    serialized = memory._serialize(entry)
+    actions = [h["action"] for h in serialized["history"]]
+    assert "created" in actions
+    assert "reinforced" in actions
+
+
+def test_serialize_populates_citation_and_history_fields(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    entry = {
+        "id": "mem_full",
+        "content": "Full memory with events.",
+        "type": "fact",
+        "category": "fact",
+        "source": "agent",
+        "tags": ["test"],
+        "first_seen": "2026-06-01",
+        "last_mentioned": "2026-06-20",
+        "mention_count": 3,
+        "citations": [
+            {"at": "2026-06-15", "source": "agent", "snippet": "first cite"},
+            {"at": "2026-06-20", "source": "conversation", "snippet": "second cite"},
+        ],
+        "history": [
+            {"at": "2026-06-01", "action": "created"},
+            {"at": "2026-06-15", "action": "reinforced"},
+            {"at": "2026-06-20", "action": "edited", "detail": "updated content"},
+        ],
+    }
+    serialized = memory._serialize(entry)
+    assert len(serialized["citations"]) == 2
+    assert serialized["citations"][0]["source_label"]
+    assert serialized["citations"][0]["snippet"] == "first cite"
+    assert len(serialized["history"]) == 3
+    assert serialized["history"][0]["action"] == "created"
+    assert serialized["history"][0]["action_label"]
+    assert serialized["history"][2]["detail"] == "updated content"
+
+
+def test_search_project_memories_excludes_history_field(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    (tmp_path / "wb_memory_project-test.json").write_text(
+        json.dumps([{
+            "id": "mem_1",
+            "content": "database config",
+            "type": "fact",
+            "category": "fact",
+            "source": "agent",
+            "tags": ["database"],
+            "first_seen": "2026-06-20",
+            "last_mentioned": "2026-06-21",
+            "mention_count": 1,
+            "history": [{"at": "2026-06-20", "action": "created"}],
+        }]),
+        encoding="utf-8",
+    )
+
+    results = memory.search_project_memories("project-test", query="database", limit=5)
+
+    assert len(results) == 1
+    assert "history" not in results[0]
+    assert "citations" not in results[0]

@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from cyrene.config import DB_PATH, WORKSPACE_DIR
+from cyrene.config import ASSISTANT_NAME, DB_PATH, WORKSPACE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,94 @@ CONVERSATIONS_DIR = WORKSPACE_DIR / "conversations"
 def ensure_conversations_dir() -> None:
     """Create conversations directory if it doesn't exist."""
     CONVERSATIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Per-session conversation files (Workbench)
+#
+# The legacy agent funnels every exchange into one shared daily file
+# (``archive_exchange`` above). Workbench conversations instead get ONE Markdown
+# file per conversation id, written under the project's own workspace, so each
+# conversation is independently readable by id and the agent can ``Read``/``Grep``
+# its own history straight from its workspace: ``conversations/<session_id>.md``.
+# ---------------------------------------------------------------------------
+
+def _safe_session_filename(session_id: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(session_id or "").strip()).strip("._")
+    return cleaned or "session"
+
+
+def session_conversations_dir(workspace_dir: str | Path | None = None) -> Path:
+    """Return the ``conversations/`` dir for a workspace.
+
+    A non-empty ``workspace_dir`` (a Workbench project's workspacePath) scopes
+    archives to that project; empty/None falls back to the global
+    ``WORKSPACE_DIR/conversations`` so non-project runs keep their location.
+    """
+    base = Path(workspace_dir).expanduser() if workspace_dir else WORKSPACE_DIR
+    return base / "conversations"
+
+
+def session_conversation_file(
+    session_id: str, workspace_dir: str | Path | None = None
+) -> Path:
+    """Path to a single conversation's archive file (may not exist yet)."""
+    return session_conversations_dir(workspace_dir) / f"{_safe_session_filename(session_id)}.md"
+
+
+def _upsert_session_file_header(content: str, session_id: str, session_title: str) -> str:
+    """Build/refresh the per-session file header, preserving existing entries."""
+    title_line = f"<!-- session_title: {session_title} -->\n" if session_title else ""
+    header = (
+        f"# Conversation {session_id}\n\n"
+        f"<!-- session_id: {session_id} -->\n"
+        f"{title_line}\n"
+    )
+    if content.startswith("# Conversation "):
+        match = re.search(r"(?m)^##\s", content)
+        body = content[match.start():] if match else ""
+        return header + body
+    return header + content
+
+
+def archive_session_exchange(
+    session_id: str,
+    user_message: str,
+    assistant_response: str,
+    *,
+    workspace_dir: str | Path | None = None,
+    session_title: str = "",
+) -> Path | None:
+    """Append one user/assistant exchange to ``conversations/<session_id>.md``.
+
+    Best-effort: returns the file path on success, ``None`` on any failure
+    (callers must never let archiving break the live reply).
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    directory = session_conversations_dir(workspace_dir)
+    filepath = directory / f"{_safe_session_filename(sid)}.md"
+    now = datetime.now().astimezone()
+    timestamp = now.strftime("%Y-%m-%d %H:%M:%S %Z").strip() or now.strftime("%Y-%m-%d %H:%M:%S")
+    user_text = str(user_message or "").strip() or "（无文本）"
+    assistant_text = str(assistant_response or "").strip()
+    entry = (
+        f"## {timestamp}\n\n"
+        f"**User**: {user_text}\n\n"
+        f"**{ASSISTANT_NAME}**: {assistant_text}\n\n"
+        f"---\n\n"
+    )
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        content = filepath.read_text(encoding="utf-8") if filepath.exists() else ""
+        content = _upsert_session_file_header(content, sid, session_title)
+        filepath.write_text(content + entry, encoding="utf-8")
+        logger.debug("Archived conversation exchange to %s", filepath)
+        return filepath
+    except Exception:
+        logger.exception("Failed to archive session exchange to %s", filepath)
+        return None
 
 
 def _get_today_file() -> Path:

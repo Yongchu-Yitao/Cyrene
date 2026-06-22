@@ -8,8 +8,11 @@ from typing import Any
 
 from cyrene.config import DATA_DIR
 from cyrene.io_utils import atomic_write_json, read_json_safe
+from cyrene.workbench_store import read_document, write_document
 
 _NOTIFICATIONS_STORE = DATA_DIR / "workbench_notifications.json"
+_STORE_DB_PATH = ""
+_CONFIGURED_NOTIFICATIONS_STORE = None
 _MAX_ITEMS = 400
 _VALID_TABS = {"all", "mention", "comment", "system"}
 
@@ -48,15 +51,44 @@ def _resolve_project_ref(project_ref: str | None) -> dict[str, str]:
 
 
 def _read_store() -> dict[str, Any]:
-    data = read_json_safe(_NOTIFICATIONS_STORE)
+    if not _STORE_DB_PATH or _CONFIGURED_NOTIFICATIONS_STORE != _NOTIFICATIONS_STORE:
+        data = read_json_safe(_NOTIFICATIONS_STORE)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            return data
+        return {"items": []}
+    data = read_document(
+        _STORE_DB_PATH,
+        "notifications",
+        lambda: {"items": []},
+        legacy_path=_NOTIFICATIONS_STORE,
+    )
     if isinstance(data, dict) and isinstance(data.get("items"), list):
         return data
     return {"items": []}
 
 
 def _write_store(payload: dict[str, Any]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(_NOTIFICATIONS_STORE, payload)
+    if not _STORE_DB_PATH or _CONFIGURED_NOTIFICATIONS_STORE != _NOTIFICATIONS_STORE:
+        atomic_write_json(_NOTIFICATIONS_STORE, payload)
+        return
+    merged = write_document(
+        _STORE_DB_PATH,
+        "notifications",
+        payload,
+        lambda: {"items": []},
+        legacy_path=_NOTIFICATIONS_STORE,
+        export_path=_NOTIFICATIONS_STORE,
+    )
+    payload.clear()
+    payload.update(merged)
+    if hasattr(payload, "_workbench_base"):
+        payload._workbench_base = getattr(merged, "_workbench_base", dict(merged))
+
+
+def configure_store(db_path: str) -> None:
+    global _STORE_DB_PATH, _CONFIGURED_NOTIFICATIONS_STORE
+    _STORE_DB_PATH = str(db_path or "")
+    _CONFIGURED_NOTIFICATIONS_STORE = _NOTIFICATIONS_STORE
 
 
 def append_notification(

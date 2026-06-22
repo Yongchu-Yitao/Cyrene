@@ -333,9 +333,9 @@ def test_workbench_plan_mutation_endpoint_validates_revision_dependencies_and_st
     assert session["planDefinitionRevision"] == 4
     assert session["approvedPlanDefinitionRevision"] is None
 
-    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    stored = routes._read_workbench_store()
     stored["projects"][0]["sessions"][0]["plan"][0]["status"] = "completed"
-    store_path.write_text(json.dumps(stored), encoding="utf-8")
+    routes._write_workbench_store(stored)
     locked = client.patch("/api/task-sessions/session_1/plan", json={
         "operation": "delete",
         "basePlanRevision": 4,
@@ -411,9 +411,9 @@ def test_workbench_step_run_rejects_unmet_dependencies_before_agent_call(monkeyp
     assert stale.status_code == 409
     assert stale.json()["code"] == "stale_plan_revision"
 
-    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    stored = routes._read_workbench_store()
     stored["projects"][0]["sessions"][0]["approvedPlanDefinitionRevision"] = None
-    store_path.write_text(json.dumps(stored), encoding="utf-8")
+    routes._write_workbench_store(stored)
     unapproved = client.post("/api/task-sessions/session_1/runs", json={
         "input": "run A",
         "stepId": "step_a",
@@ -425,7 +425,7 @@ def test_workbench_step_run_rejects_unmet_dependencies_before_agent_call(monkeyp
     assert unapproved.json()["code"] == "plan_not_approved"
 
     stored["projects"][0]["sessions"][0]["approvedPlanDefinitionRevision"] = 1
-    store_path.write_text(json.dumps(stored), encoding="utf-8")
+    routes._write_workbench_store(stored)
     response = client.post("/api/task-sessions/session_1/runs", json={
         "input": "run B",
         "stepId": "step_b",

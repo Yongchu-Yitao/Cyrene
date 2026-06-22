@@ -6,9 +6,9 @@ This module is intentionally INDEPENDENT from the legacy memory page
 ``/api/workbench/memory/*`` so the two UIs never share request code.
 
 Per-workspace isolation: every request carries a ``workspace`` query param
-(the Workbench project id). It resolves to its own
-``store/wb_memory_<workspace>.json`` file, so each workspace/project owns a
-separate memory store. A missing/blank workspace falls back to ``default``.
+(the Workbench project id). It resolves to its own SQLite document, so each
+workspace/project owns a separate memory store. A missing/blank workspace
+falls back to ``default``.
 Cross-workspace memory is intentionally NOT implemented yet.
 
 Each memory item is a structured entry adapted into the rich model the
@@ -27,13 +27,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from cyrene.config import STORE_DIR
 from cyrene.io_utils import atomic_write_json, read_json_safe
+from cyrene.workbench_store import delete_document, read_document, write_document
+from webui import api_models
+from webui.api_errors import error_response
 
 logger = logging.getLogger(__name__)
+_STORE_DB_PATH = ""
+_CONFIGURED_STORE_DIR: Path | None = None
 
 # ── classification vocab ─────────────────────────────────────────────────
 # The five memory categories surfaced in the sidebar, in display order.
@@ -109,21 +114,68 @@ def _memory_path(workspace_id: str | None) -> Path:
 
 
 def _load(workspace_id: str | None) -> list[dict]:
-    if _resolve_workspace_id(workspace_id) == "default":
+    resolved = _resolve_workspace_id(workspace_id)
+    if resolved == "default":
         from cyrene.short_term import load_entries
 
         return load_entries()
-    data = read_json_safe(_memory_path(workspace_id))
+    if not _STORE_DB_PATH or _CONFIGURED_STORE_DIR != Path(STORE_DIR):
+        data = read_json_safe(_memory_path(workspace_id))
+        return data if isinstance(data, list) else []
+    data = read_document(
+        _STORE_DB_PATH,
+        f"memory:{resolved}",
+        list,
+        legacy_path=_memory_path(workspace_id),
+    )
     return data if isinstance(data, list) else []
 
 
-def _save(workspace_id: str | None, entries: list[dict]) -> None:
-    if _resolve_workspace_id(workspace_id) == "default":
+def _save(
+    workspace_id: str | None,
+    entries: list[dict],
+    *,
+    base_value: list[dict] | None = None,
+) -> None:
+    resolved = _resolve_workspace_id(workspace_id)
+    if resolved == "default":
         from cyrene.short_term import save_entries
 
         save_entries(entries)
         return
-    atomic_write_json(_memory_path(workspace_id), entries)
+    if not _STORE_DB_PATH or _CONFIGURED_STORE_DIR != Path(STORE_DIR):
+        atomic_write_json(_memory_path(workspace_id), entries)
+        return
+    merged = write_document(
+        _STORE_DB_PATH,
+        f"memory:{resolved}",
+        entries,
+        list,
+        legacy_path=_memory_path(workspace_id),
+        export_path=_memory_path(workspace_id),
+        base_value=base_value,
+    )
+    entries.clear()
+    entries.extend(merged)
+    if hasattr(entries, "_workbench_base"):
+        entries._workbench_base = getattr(merged, "_workbench_base", list(merged))
+
+
+def configure_store(db_path: str) -> None:
+    global _STORE_DB_PATH, _CONFIGURED_STORE_DIR
+    _STORE_DB_PATH = str(db_path or "")
+    _CONFIGURED_STORE_DIR = Path(STORE_DIR)
+
+
+def delete_workspace_memory(workspace_id: str | None) -> None:
+    resolved = _resolve_workspace_id(workspace_id)
+    if resolved == "default":
+        return
+    path = _memory_path(workspace_id)
+    if _STORE_DB_PATH and _CONFIGURED_STORE_DIR == Path(STORE_DIR):
+        delete_document(_STORE_DB_PATH, f"memory:{resolved}", export_path=path)
+    else:
+        path.unlink(missing_ok=True)
 
 
 def _today() -> str:
@@ -165,6 +217,92 @@ def _entry_id(entry: dict) -> str:
     return "mem_" + hashlib.sha1(content.encode("utf-8")).hexdigest()[:12]
 
 
+_MAX_CITATIONS = 50
+_MAX_HISTORY = 50
+
+_CITATION_SOURCE_LABELS = {
+    "conversation": "对话引用",
+    "agent": "Agent 引用",
+    "knowledge": "知识库引用",
+    "manual": "手动添加",
+    "other": "其他",
+}
+
+_HISTORY_ACTION_LABELS = {
+    "created": "创建记忆",
+    "edited": "编辑内容",
+    "reinforced": "再次引用",
+    "stale": "标记过时",
+    "revived": "恢复使用",
+}
+
+
+def _append_citation(entry: dict, source: str, snippet: str = "") -> None:
+    """Record one citation event on the entry (capped to _MAX_CITATIONS)."""
+    cits = entry.get("citations")
+    if not isinstance(cits, list):
+        cits = []
+        entry["citations"] = cits
+    cits.append({
+        "at": _today(),
+        "source": source if source in _CITATION_SOURCE_LABELS else "other",
+        "snippet": str(snippet or "").strip()[:200],
+    })
+    if len(cits) > _MAX_CITATIONS:
+        del cits[: len(cits) - _MAX_CITATIONS]
+
+
+def _append_history(entry: dict, action: str, detail: str = "") -> None:
+    """Record one history event on the entry (capped to _MAX_HISTORY)."""
+    hist = entry.get("history")
+    if not isinstance(hist, list):
+        hist = []
+        entry["history"] = hist
+    hist.append({
+        "at": _today(),
+        "action": action if action in _HISTORY_ACTION_LABELS else "edited",
+        "detail": str(detail or "").strip()[:200],
+    })
+    if len(hist) > _MAX_HISTORY:
+        del hist[: len(hist) - _MAX_HISTORY]
+
+
+def _entry_citations(entry: dict) -> list:
+    cits = entry.get("citations")
+    if not isinstance(cits, list):
+        return []
+    return [
+        {
+            "at": str(c.get("at") or ""),
+            "source": str(c.get("source") or "other"),
+            "source_label": _CITATION_SOURCE_LABELS.get(
+                str(c.get("source") or "other"), "其他"
+            ),
+            "snippet": str(c.get("snippet") or ""),
+        }
+        for c in cits
+        if isinstance(c, dict)
+    ]
+
+
+def _entry_history(entry: dict) -> list:
+    hist = entry.get("history")
+    if not isinstance(hist, list):
+        return []
+    return [
+        {
+            "at": str(h.get("at") or ""),
+            "action": str(h.get("action") or "edited"),
+            "action_label": _HISTORY_ACTION_LABELS.get(
+                str(h.get("action") or "edited"), "编辑"
+            ),
+            "detail": str(h.get("detail") or ""),
+        }
+        for h in hist
+        if isinstance(h, dict)
+    ]
+
+
 def _serialize(entry: dict) -> dict:
     cat = _entry_category(entry)
     src = _entry_source(entry)
@@ -172,6 +310,16 @@ def _serialize(entry: dict) -> dict:
     tags = entry.get("tags")
     if not isinstance(tags, list):
         tags = []
+    history = _entry_history(entry)
+    # Backfill a minimal history from timestamps for legacy entries that
+    # predate explicit event tracking so the History tab is never empty.
+    if not history:
+        created = str(entry.get("first_seen") or "")
+        updated = str(entry.get("last_mentioned") or entry.get("first_seen") or "")
+        if created:
+            history.append({"at": created, "action": "created", "action_label": "创建记忆", "detail": ""})
+        if updated and updated != created:
+            history.append({"at": updated, "action": "reinforced", "action_label": "再次引用", "detail": ""})
     return {
         "id": _entry_id(entry),
         "content": str(entry.get("content") or ""),
@@ -185,7 +333,8 @@ def _serialize(entry: dict) -> dict:
         "citation_count": int(entry.get("mention_count") or 1),
         "created_at": str(entry.get("first_seen") or ""),
         "updated_at": str(entry.get("last_mentioned") or entry.get("first_seen") or ""),
-        "citations": entry.get("citations") if isinstance(entry.get("citations"), list) else [],
+        "citations": _entry_citations(entry),
+        "history": history,
         "emotional_valence": entry.get("emotional_valence", 0),
         "stale": bool(entry.get("stale")),
     }
@@ -495,6 +644,8 @@ async def capture_from_exchange(workspace_id: str, user_text: str, agent_text: s
         if dup is not None:
             dup["last_mentioned"] = today
             dup["mention_count"] = int(dup.get("mention_count") or 1) + 1
+            _append_citation(dup, "conversation", user_text[:200])
+            _append_history(dup, "reinforced")
             changed = True
             continue
 
@@ -512,6 +663,8 @@ async def capture_from_exchange(workspace_id: str, user_text: str, agent_text: s
         }
         if confidence in _CONFIDENCE_LABELS:
             entry["confidence"] = confidence
+        _append_citation(entry, "conversation", user_text[:200])
+        _append_history(entry, "created")
         entries.append(entry)
         added += 1
         changed = True
@@ -573,9 +726,14 @@ def add_agent_memory(
     if dup is not None:
         # Reinforce an existing memory rather than duplicating it. Re-recording a
         # fact also revives it if it had been retired (stale).
+        was_stale = bool(dup.get("stale"))
         dup["last_mentioned"] = today
         dup["mention_count"] = int(dup.get("mention_count") or 1) + 1
         dup["stale"] = False
+        _append_citation(dup, source if source in _CITATION_SOURCE_LABELS else "agent", content[:200])
+        _append_history(dup, "reinforced")
+        if was_stale:
+            _append_history(dup, "revived")
         _save(workspace_id, entries)
         return _serialize(dup)
     entry: dict[str, Any] = {
@@ -593,6 +751,8 @@ def add_agent_memory(
     conf = str(confidence or "").strip().lower()
     if conf in _CONFIDENCE_LABELS:
         entry["confidence"] = conf
+    _append_citation(entry, source if source in _CITATION_SOURCE_LABELS else "agent", content[:200])
+    _append_history(entry, "created")
     entries.append(entry)
     _save(workspace_id, entries)
     return _serialize(entry)
@@ -749,9 +909,14 @@ async def add_agent_memory_checked(
     # Textually (near-)identical → reinforce; a fact never conflicts with itself.
     dup = _similar_entry(entries, content)
     if dup is not None:
+        was_stale = bool(dup.get("stale"))
         dup["last_mentioned"] = today
         dup["mention_count"] = int(dup.get("mention_count") or 1) + 1
         dup["stale"] = False
+        _append_citation(dup, "agent", content[:200])
+        _append_history(dup, "reinforced")
+        if was_stale:
+            _append_history(dup, "revived")
         _save(workspace_id, entries)
         return _serialize(dup), []
 
@@ -776,6 +941,7 @@ async def add_agent_memory_checked(
                 e["stale"] = True
                 e["supersededAt"] = today
                 e["supersededBy"] = new_id
+                _append_history(e, "stale", "被新记忆取代")
                 retired.append(_serialize(e))
 
     entry: dict[str, Any] = {
@@ -793,6 +959,8 @@ async def add_agent_memory_checked(
     conf = str(confidence or "").strip().lower()
     if conf in _CONFIDENCE_LABELS:
         entry["confidence"] = conf
+    _append_citation(entry, "agent", content[:200])
+    _append_history(entry, "created")
     entries.append(entry)
     _save(workspace_id, entries)
     return _serialize(entry), retired
@@ -848,22 +1016,24 @@ def render_memory_for_injection(
     return header + "\n" + "\n".join(lines)
 
 
-def register_workbench_memory_routes(router: APIRouter) -> None:
+def register_workbench_memory_routes(router: APIRouter, db_path: str = "") -> None:
     """Register workspace-scoped memory routes for the Workbench UI."""
+    if db_path:
+        configure_store(db_path)
 
     @router.get("/api/workbench/memory")
     async def wb_list_memory(workspace: str = "default"):
         try:
             return _build_payload(workspace)
-        except Exception as e:  # noqa: BLE001
-            return JSONResponse({"error": f"List failed: {e}"}, status_code=400)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to list Workbench memory for %s", workspace)
+            return error_response("List failed", 500, "memory_list_failed")
 
     @router.post("/api/workbench/memory")
-    async def wb_create_memory(request: Request, workspace: str = "default"):
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    async def wb_create_memory(
+        body_model: api_models.MemoryCreateBody, workspace: str = "default"
+    ):
+        body = api_models.body_dict(body_model)
 
         content = str(body.get("content") or "").strip()
         if not content:
@@ -896,20 +1066,23 @@ def register_workbench_memory_routes(router: APIRouter) -> None:
 
         try:
             entries = _load(workspace)
+            _append_history(entry, "created")
             entries.append(entry)
             _save(workspace, entries)
             payload = _build_payload(workspace)
             payload["id"] = entry["id"]
             return payload
-        except Exception as e:  # noqa: BLE001
-            return JSONResponse({"error": f"Create failed: {e}"}, status_code=400)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to create Workbench memory for %s", workspace)
+            return error_response("Create failed", 500, "memory_create_failed")
 
     @router.patch("/api/workbench/memory/{mem_id}")
-    async def wb_update_memory(mem_id: str, request: Request, workspace: str = "default"):
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    async def wb_update_memory(
+        mem_id: str,
+        body_model: api_models.MemoryUpdateBody,
+        workspace: str = "default",
+    ):
+        body = api_models.body_dict(body_model)
 
         try:
             entries = _load(workspace)
@@ -950,14 +1123,25 @@ def register_workbench_memory_routes(router: APIRouter) -> None:
             if "stale" in body:
                 # Retire (or revive) a memory: stale entries stay on the page but
                 # are no longer injected into agent runs.
-                target["stale"] = bool(body.get("stale"))
+                new_stale = bool(body.get("stale"))
+                old_stale = bool(target.get("stale"))
+                target["stale"] = new_stale
+                if new_stale and not old_stale:
+                    _append_history(target, "stale")
+                elif not new_stale and old_stale:
+                    _append_history(target, "revived")
             # An edit counts as a fresh touch — drives the "更新时间".
             target["last_mentioned"] = _today()
+            if any(k in body for k in ("content", "category", "source", "confidence", "tags")):
+                _append_history(target, "edited")
 
             _save(workspace, entries)
             return _build_payload(workspace)
-        except Exception as e:  # noqa: BLE001
-            return JSONResponse({"error": f"Update failed: {e}"}, status_code=400)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to update Workbench memory %s for %s", mem_id, workspace
+            )
+            return error_response("Update failed", 500, "memory_update_failed")
 
     @router.delete("/api/workbench/memory/{mem_id}")
     async def wb_delete_memory(mem_id: str, workspace: str = "default"):
@@ -966,7 +1150,14 @@ def register_workbench_memory_routes(router: APIRouter) -> None:
             kept = [e for e in entries if _entry_id(e) != mem_id]
             if len(kept) == len(entries):
                 return JSONResponse({"error": "memory not found"}, status_code=404)
-            _save(workspace, kept)
+            _save(
+                workspace,
+                kept,
+                base_value=getattr(entries, "_workbench_base", entries),
+            )
             return _build_payload(workspace)
-        except Exception as e:  # noqa: BLE001
-            return JSONResponse({"error": f"Delete failed: {e}"}, status_code=400)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to delete Workbench memory %s for %s", mem_id, workspace
+            )
+            return error_response("Delete failed", 500, "memory_delete_failed")

@@ -54,6 +54,30 @@ def workspace_scope_block(workspace_dir: Any = WORKSPACE_DIR, shell_kind: str = 
 
 _WORKSPACE_SCOPE_BLOCK = workspace_scope_block()
 
+
+def conversation_identity_block(session_id: Any = "") -> str:
+    """Tell the agent its own conversation id and where conversation history lives.
+
+    Returned only for session-scoped runs (Workbench conversations carry a
+    ``session_id``; the legacy single-session agent uses an empty id and gets no
+    block). Each conversation is archived after every exchange to
+    ``conversations/<session_id>.md`` inside the workspace, so the agent can read
+    its own earlier turns — or any sibling conversation — straight from disk.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return ""
+    return (
+        f"## Conversation Identity\n\n"
+        f"Your current conversation id is `{sid}`.\n\n"
+        f"- This conversation is archived to `conversations/{sid}.md` in your workspace, "
+        f"appended after each exchange. Earlier turns of THIS conversation are recorded there.\n"
+        f"- Every conversation in this workspace is saved as `conversations/<conversation-id>.md` "
+        f"(one Markdown file per id). To revisit past discussion — this conversation or another — "
+        f"`Read` that file, or `Glob`/`Grep` across the `conversations/` folder.\n"
+        f"- Treat these files as read-only history; do not edit or delete them."
+    )
+
 # ---------------------------------------------------------------------------
 # Agent mode prompts
 # ---------------------------------------------------------------------------

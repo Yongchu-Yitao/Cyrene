@@ -268,6 +268,12 @@ CREATE TABLE IF NOT EXISTS kb_relations (
 );
 CREATE INDEX IF NOT EXISTS idx_kb_relations_src ON kb_relations(src_id);
 CREATE INDEX IF NOT EXISTS idx_kb_relations_dst ON kb_relations(dst_id);
+
+CREATE TABLE IF NOT EXISTS workbench_state (
+    key TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 _TOPIC_RE = re.compile(r"[\u4e00-\u9fff]{2,}|[a-z][a-z0-9_-]{2,}")

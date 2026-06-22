@@ -43,7 +43,9 @@ async def _tool_save_project_memory(
 
     # Lazy import: the store lives in the webui layer (loaded in the server
     # process); importing it here at module load would invert package layering.
-    from webui.routes_workbench_memory import add_agent_memory_checked
+    from webui.routes_workbench_memory import add_agent_memory_checked, configure_store
+
+    configure_store(_db_path)
 
     # Resolves textual duplicates (reinforce) and asks an LLM whether this fact
     # contradicts/supersedes existing memories — retiring the outdated ones.

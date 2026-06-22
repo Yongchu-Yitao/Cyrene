@@ -204,7 +204,9 @@
         var qs = new URLSearchParams(params || {}).toString();
         var r = await fetch("/api/workbench/knowledge/documents?" + withWs(qs));
         var payload = await jsonOrThrow(r);
-        return (payload && payload.documents) || [];
+        var docs = (payload && payload.documents) || [];
+        docs._total = (payload && payload.total != null) ? payload.total : docs.length;
+        return docs;
       },
       detail: async function (id) {
         var r = await fetch("/api/workbench/knowledge/documents/" + encodeURIComponent(id) + "?" + withWs());
@@ -338,6 +340,7 @@
         tab === "detail" && React.createElement(KbDetailInfo, {
           doc: doc, detail: detail, tags: tags, sm: sm, userName: userName,
           chunks: chunks, relations: relations, rawUrl: props.rawUrl,
+          onSaveTags: props.onSaveTags,
         }),
         tab === "content" && React.createElement(KbContentTab, { detail: detail, doc: doc, loading: props.detailLoading }),
         tab === "related" && React.createElement(KbRelatedTab, { relations: relations, docsById: props.docsById, onSelect: props.onSelect })
@@ -353,18 +356,78 @@
     );
   }
 
+  function KbTagEditor(props) {
+    var tags = props.tags || [];
+    var tagInputState = useState(""); var tagInput = tagInputState[0]; var setTagInput = tagInputState[1];
+    var editState = useState(false); var editing = editState[0]; var setEditing = editState[1];
+    var busyState = useState(false); var tagBusy = busyState[0]; var setTagBusy = busyState[1];
+    var inputRef = useRef(null);
+
+    function commit(newTags) {
+      setTagBusy(true);
+      props.onSave(newTags).then(function () { setTagBusy(false); }).catch(function () { setTagBusy(false); });
+    }
+    function addTag() {
+      var raw = tagInput.trim();
+      if (!raw) return;
+      var parts = raw.split(/[,，;；\s]+/).map(function (t) { return t.trim(); }).filter(Boolean);
+      var current = tags.slice();
+      var changed = false;
+      for (var i = 0; i < parts.length; i++) {
+        if (current.indexOf(parts[i]) < 0) { current.push(parts[i]); changed = true; }
+      }
+      setTagInput("");
+      if (changed) commit(current);
+    }
+    function removeTag(tag) {
+      commit(tags.filter(function (t) { return t !== tag; }));
+    }
+    function onKey(e) {
+      if (e.key === "Enter") { e.preventDefault(); addTag(); }
+      else if (e.key === "Backspace" && !tagInput && tags.length) { removeTag(tags[tags.length - 1]); }
+    }
+
+    if (!editing) {
+      return React.createElement(
+        "div", { className: "wb-kb-tags" },
+        tags.map(function (tag) {
+          return React.createElement("span", { className: "wb-kb-tag", key: tag }, "# " + tag);
+        }),
+        tags.length === 0 && React.createElement("span", { className: "wb-kb-muted" }, "暂无标签"),
+        React.createElement("button", {
+          type: "button", className: "wb-kb-tag-edit-btn", title: "编辑标签",
+          onClick: function () { setEditing(true); setTimeout(function () { if (inputRef.current) inputRef.current.focus(); }, 0); },
+        }, React.createElement("svg", { width: 13, height: 13, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
+          React.createElement("path", { d: "M12 20h9" }), React.createElement("path", { d: "M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" })))
+      );
+    }
+    return React.createElement(
+      "div", { className: "wb-kb-tags editing" },
+      tags.map(function (tag) {
+        return React.createElement("span", { className: "wb-kb-tag removable", key: tag },
+          "# " + tag,
+          React.createElement("button", { type: "button", className: "wb-kb-tag-x", onClick: function () { removeTag(tag); }, title: "移除" },
+            React.createElement("svg", { width: 10, height: 10, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.5, strokeLinecap: "round" },
+              React.createElement("path", { d: "m6 6 12 12M18 6 6 18" })))
+        );
+      }),
+      React.createElement("input", {
+        ref: inputRef, type: "text", className: "wb-kb-tag-input", value: tagInput,
+        placeholder: "添加标签，回车确认…",
+        onChange: function (e) { setTagInput(e.target.value); },
+        onKeyDown: onKey,
+        disabled: tagBusy,
+      }),
+      React.createElement("button", { type: "button", className: "wb-kb-tag-done", onClick: function () { setEditing(false); }, disabled: tagBusy }, "完成")
+    );
+  }
+
   function KbDetailInfo(props) {
     var doc = props.doc;
     return React.createElement(
       "div", { className: "wb-kb-detail-stack" },
       React.createElement("p", { className: "wb-kb-detail-desc" }, docDescription(doc)),
-      React.createElement(
-        "div", { className: "wb-kb-tags" },
-        (props.tags.length ? props.tags : []).map(function (tag) {
-          return React.createElement("span", { className: "wb-kb-tag", key: tag }, "# " + tag);
-        }),
-        props.tags.length === 0 && React.createElement("span", { className: "wb-kb-muted" }, "暂无标签")
-      ),
+      React.createElement(KbTagEditor, { tags: props.tags, onSave: props.onSaveTags }),
       React.createElement(
         "div", { className: "wb-kb-meta-card" },
         React.createElement(MetaRow, { label: "创建时间", value: formatDate(doc.created_at) }),
@@ -389,22 +452,43 @@
     );
   }
 
+  function renderChunkHtml(content, doc) {
+    var text = String(content || "").trim();
+    if (!text) return null;
+    var vk = visualKind(doc);
+    if (vk === "markdown" || vk === "note") {
+      try {
+        var raw = window.marked ? window.marked.parse(text) : text;
+        return window.DOMPurify ? window.DOMPurify.sanitize(raw) : raw;
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
+  }
+
   function KbContentTab(props) {
     var detail = props.detail;
+    var doc = props.doc;
     var chunks = (detail && Array.isArray(detail.chunks)) ? detail.chunks : [];
     if (props.loading) return React.createElement("div", { className: "wb-kb-muted pad" }, "加载内容中…");
     if (!chunks.length) {
-      var st = statusMeta(props.doc.status);
+      var st = statusMeta(doc.status);
       return React.createElement("div", { className: "wb-kb-muted pad" },
         st.tone === "amber" ? "正在索引，稍后即可查看提取内容。" : "暂无已提取的文本内容。");
     }
+    var vk = visualKind(doc);
+    var renderAsMarkdown = vk === "markdown" || vk === "note";
     return React.createElement(
-      "div", { className: "wb-kb-chunks" },
+      "div", { className: "wb-kb-chunks" + (renderAsMarkdown ? " markdown-body" : "") },
       chunks.map(function (c, i) {
+        var html = renderAsMarkdown ? renderChunkHtml(c.content, doc) : null;
         return React.createElement(
           "div", { className: "wb-kb-chunk", key: c.id || i },
           React.createElement("div", { className: "wb-kb-chunk-ord" }, "#" + ((c.ordinal != null ? c.ordinal : i) + 1)),
-          React.createElement("p", null, String(c.content || "").trim())
+          html != null
+            ? React.createElement("div", { className: "wb-kb-chunk-md", dangerouslySetInnerHTML: { __html: html } })
+            : React.createElement("p", { className: "wb-kb-chunk-text" }, String(c.content || "").trim())
         );
       })
     );
@@ -453,6 +537,7 @@
     var detailLoadState = useState(false); var detailLoading = detailLoadState[0]; var setDetailLoading = detailLoadState[1];
     var detailTabState = useState("detail"); var detailTab = detailTabState[0]; var setDetailTab = detailTabState[1];
     var busyState = useState(false); var busy = busyState[0]; var setBusy = busyState[1];
+    var totalDocsState = useState(0); var totalDocs = totalDocsState[0]; var setTotalDocs = totalDocsState[1];
     var fileRef = useRef(null);
 
     var client = useMemo(function () { return api(workspace); }, [workspace]);
@@ -460,9 +545,9 @@
     function loadDocuments() {
       setLoading(true);
       setError("");
-      return client.list({ limit: 500 })
-        .then(function (docs) { setDocuments(Array.isArray(docs) ? docs : []); })
-        .catch(function (err) { setError(err.message || String(err)); setDocuments([]); })
+      return client.list({})
+        .then(function (docs) { setDocuments(Array.isArray(docs) ? docs : []); setTotalDocs(docs._total || 0); })
+        .catch(function (err) { setError(err.message || String(err)); setDocuments([]); setTotalDocs(0); })
         .finally(function () { setLoading(false); });
     }
 
@@ -507,6 +592,22 @@
         .then(function (full) { setDetail(full); })
         .catch(function () { setDetail(null); })
         .finally(function () { setDetailLoading(false); });
+    }
+
+    function handleSaveTags(id, newTags) {
+      return client.update(id, { tags: newTags })
+        .then(function (updated) {
+          // Patch the list-level doc so the card / group views reflect the
+          // change immediately without a full reload.
+          setDocuments(function (prev) {
+            return prev.map(function (d) { return d.id === id ? Object.assign({}, d, { tags: newTags }) : d; });
+          });
+          if (detail && detail.id === id) {
+            setDetail(Object.assign({}, detail, { tags: newTags }));
+          }
+          return updated;
+        })
+        .catch(function (err) { setError(err.message || String(err)); throw err; });
     }
 
     function triggerUpload() { if (fileRef.current) fileRef.current.click(); }
@@ -586,14 +687,22 @@
     ];
 
     // group docs for folders / tags tabs
+    var FOLDER_LABELS = {
+      pdf: "PDF 文档", doc: "Word 文档", sheet: "电子表格", slide: "演示文稿",
+      markdown: "Markdown", link: "链接", image: "图片", code: "代码文件",
+      map: "地图数据", note: "文本", file: "其他",
+    };
+    var FOLDER_ORDER = ["pdf", "doc", "sheet", "slide", "markdown", "link", "image", "code", "map", "note", "file"];
     var groups = useMemo(function () {
       if (activeTab === "folders") {
-        var bySource = {};
+        var byKind = {};
         visibleDocs.forEach(function (d) {
-          var key = String(d.source || "other");
-          (bySource[key] = bySource[key] || []).push(d);
+          var key = visualKind(d);
+          (byKind[key] = byKind[key] || []).push(d);
         });
-        return Object.keys(bySource).map(function (k) { return { key: k, label: sourceLabel(k), docs: bySource[k] }; });
+        return FOLDER_ORDER
+          .filter(function (k) { return byKind[k] && byKind[k].length; })
+          .map(function (k) { return { key: k, label: FOLDER_LABELS[k] || "其他", docs: byKind[k] }; });
       }
       if (activeTab === "tags") {
         var byTag = {};
@@ -786,7 +895,12 @@
                 : renderCards(visibleDocs))
             )
         ),
-        React.createElement("div", { className: "wb-kb-count" }, "共 " + visibleDocs.length + " 个知识")
+        React.createElement(
+          "div", { className: "wb-kb-count" },
+          totalDocs > visibleDocs.length
+            ? "显示前 " + visibleDocs.length + " 个，共 " + totalDocs + " 个知识"
+            : "共 " + visibleDocs.length + " 个知识"
+        )
       )
       ),
 
@@ -797,6 +911,7 @@
           tab: detailTab, setTab: setDetailTab,
           rawUrl: client.rawUrl(selectedDoc.id),
           docsById: docsById, onSelect: selectDoc,
+          onSaveTags: function (newTags) { return handleSaveTags(selectedDoc.id, newTags); },
         })
         : React.createElement(
           "aside", { className: "wb-kb-detail empty" },

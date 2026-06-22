@@ -641,7 +641,7 @@ const PROFILE_AVATAR_COLORS = ["#1D9E75", "#378ADD", "#D4537E", "#BA7517", "#7F7
 const PROFILE_EMOJI_PICKS = ["😀", "🐱", "🚀", "🌟", "🦊", "🐼", "🌿", "🔥"];
 
 // Popover anchored above the sidebar footer: identity editing + personal activity stats.
-function ProfilePanel({ onClose, setPage }) {
+function ProfileContent({ onClose, onOpenSettings }) {
   useDataVersion();
   const { t, lang } = useI18n();
   const user = DATA.user || {};
@@ -661,7 +661,7 @@ function ProfilePanel({ onClose, setPage }) {
   const fileRef = React.useRef(null);
 
   useEffectApp(function () {
-    function onKey(e) { if (e.key === "Escape") onClose(); }
+    function onKey(e) { if (e.key === "Escape" && onClose) onClose(); }
     window.addEventListener("keydown", onKey);
     return function () { window.removeEventListener("keydown", onKey); };
   }, []);
@@ -716,6 +716,8 @@ function ProfilePanel({ onClose, setPage }) {
         avatar_color: avatarMode === "letter" ? color : "" }
     : user;
 
+  const toolsMax = (topTools[0] && topTools[0].count) || 1;
+
   function Cell(opts) {
     var cls = "profile-cell" + (opts.hero ? " hero" : "") + (opts.accent ? " accent" : "");
     return (
@@ -727,8 +729,6 @@ function ProfilePanel({ onClose, setPage }) {
   }
 
   return (
-    <>
-      <div className="profile-backdrop" onClick={onClose}></div>
       <div className="profile-panel" onClick={function (e) { e.stopPropagation(); }} role="dialog" aria-label={t("profile.open")}>
         <div className="profile-head">
           <div className="profile-avatar-wrap">
@@ -830,8 +830,7 @@ function ProfilePanel({ onClose, setPage }) {
               {topTools.length ? (
                 <div className="profile-tools">
                   {topTools.map(function (it) {
-                    var max = (topTools[0] && topTools[0].count) || 1;
-                    var pct = Math.max(8, Math.round((it.count / max) * 100));
+                    var pct = Math.max(8, Math.round((it.count / toolsMax) * 100));
                     return (
                       <div className="profile-tool" key={it.tool}>
                         <span className="profile-tool-name">{profileFeatureLabel(it.tool, lang)}</span>
@@ -843,20 +842,24 @@ function ProfilePanel({ onClose, setPage }) {
                 </div>
               ) : <div className="profile-empty">{t("profile.empty")}</div>}
             </div>
-            <button type="button" className="profile-settings-link" onClick={function () { onClose(); setPage("settings"); }}>
+            <button type="button" className="profile-settings-link" onClick={function () { if (onOpenSettings) onOpenSettings(); if (onClose) onClose(); }}>
               {t("nav.settings")}
             </button>
           </>
         )}
       </div>
-    </>
   );
 }
 
-// Exposed so the workbench shell (separate bundle, same React + DATA + styles)
-// can open the same profile panel from its own account chip.
-window.ProfilePanel = ProfilePanel;
-window.UserAvatar = UserAvatar;
+// Popover wrapper (agent UI sidebar): backdrop + fixed card around the shared content.
+function ProfilePanel({ onClose, setPage }) {
+  return (
+    <>
+      <div className="profile-backdrop" onClick={onClose}></div>
+      <ProfileContent onClose={onClose} onOpenSettings={function () { if (setPage) setPage("settings"); }} />
+    </>
+  );
+}
 
 function Sidebar({ page, setPage, selectedSessionId, onSelectSession, collapsed, onToggleCollapsed, onOpenSearch }) {
   useDataVersion();

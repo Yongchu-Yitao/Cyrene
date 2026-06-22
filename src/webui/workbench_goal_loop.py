@@ -6,8 +6,8 @@ adds a harness-owned loop around those bounded slices:
     execute one plan step -> verify it -> continue -> verify the whole goal
     -> reflect/repair on failure -> repeat within user-configured limits.
 
-SQLite is the execution source of truth. ``workbench_projects.json`` remains the
-UI projection so existing Workbench rendering and task history keep working.
+SQLite is the source of truth for both loop execution and the Workbench UI
+projection. Legacy JSON files are migration/export artifacts only.
 """
 
 from __future__ import annotations
@@ -24,11 +24,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 import aiosqlite
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from cyrene import debug
 from cyrene.agent import _AWAITING_USER_SENTINEL, interrupt_active_run
+from webui import api_models
 from webui.workbench_notifications import append_notification
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,11 @@ def _json_loads(value: Any, fallback: Any) -> Any:
 
 
 async def _ensure_schema(db_path: str) -> None:
+    # Goal-loop workers can be exercised without registering the FastAPI app.
+    # Bind their projection reads/writes to the same SQLite database explicitly.
+    from webui import routes as R
+
+    R._configure_workbench_store(str(db_path))
     if db_path in _SCHEMA_READY:
         return
     async with aiosqlite.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS) as db:
@@ -1245,10 +1251,12 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
         await manager.shutdown()
 
     @router.post("/api/task-sessions/{session_id}/goal-loop/preview")
-    async def preview_goal_loop(session_id: str, request: Request):
+    async def preview_goal_loop(
+        session_id: str, body_model: api_models.GoalLoopPreviewBody
+    ):
         from webui import routes as R
 
-        body = await request.json()
+        body = api_models.body_dict(body_model)
         limits, error = _validate_limits(body)
         if not limits:
             return JSONResponse({"error": error}, status_code=400)
@@ -1350,8 +1358,10 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
         }
 
     @router.post("/api/task-sessions/{session_id}/goal-loop/start")
-    async def start_goal_loop(session_id: str, request: Request):
-        body = await request.json()
+    async def start_goal_loop(
+        session_id: str, body_model: api_models.GoalLoopStartBody
+    ):
+        body = api_models.body_dict(body_model)
         draft_id = str(body.get("draftId") or "").strip()
         draft = await _fetch_one(
             db_path,
@@ -1533,8 +1543,10 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
         return {"ok": True, "project": project, "session": session, "goalLoop": _public_run(cancelled), **payload}
 
     @router.patch("/api/task-sessions/{session_id}/goal-loop/limits")
-    async def update_goal_loop_limits(session_id: str, request: Request):
-        body = await request.json()
+    async def update_goal_loop_limits(
+        session_id: str, body_model: api_models.GoalLoopLimitsBody
+    ):
+        body = api_models.body_dict(body_model)
         run = await _get_run_by_session(db_path, session_id)
         if not run:
             return JSONResponse({"error": "持续任务不存在。"}, status_code=404)

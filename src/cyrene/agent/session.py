@@ -250,6 +250,11 @@ def _strip_tool_episode_text(messages: list[dict[str, Any]]) -> list[str]:
 
     Tool calls are reduced to ``[tool] name(args)``; tool *results* (role=="tool")
     are dropped entirely — we keep what was attempted, not the bulky output.
+
+    User/assistant prose is kept verbatim: it is a small slice of the token
+    budget (the bulk is tool results, already dropped) and truncating it would
+    cost conversational context for negligible savings. The background LLM
+    distillation pass bounds the final block size, so fidelity here is free.
     """
     lines: list[str] = []
     for m in messages:
@@ -259,10 +264,10 @@ def _strip_tool_episode_text(messages: list[dict[str, Any]]) -> list[str]:
         content = str(m.get("content") or "").strip()
         if role == "user":
             if content:
-                lines.append(f"User: {content[:500]}")
+                lines.append(f"User: {content}")
         elif role == "assistant":
             if content:
-                lines.append(f"{ASSISTANT_NAME}: {content[:500]}")
+                lines.append(f"{ASSISTANT_NAME}: {content}")
             for tc in (m.get("tool_calls") or []):
                 fn = tc.get("function", {}) if isinstance(tc, dict) else {}
                 name = str(fn.get("name") or "").strip()

@@ -8,10 +8,21 @@ from typing import Any
 
 from cyrene.config import DATA_DIR
 from cyrene.io_utils import read_json_safe
+from cyrene.workbench_store import read_document
 
 _WORKBENCH_STORE = DATA_DIR / "workbench_projects.json"
 _WORKBENCH_CHATS_STORE = DATA_DIR / "workbench_chats.json"
 _LEGACY_DATA_KEY = "default"
+_WORKBENCH_DB_PATH = ""
+_CONFIGURED_PROJECTS_STORE: Path | None = None
+_CONFIGURED_CHATS_STORE: Path | None = None
+
+
+def configure_store(db_path: str) -> None:
+    global _WORKBENCH_DB_PATH, _CONFIGURED_PROJECTS_STORE, _CONFIGURED_CHATS_STORE
+    _WORKBENCH_DB_PATH = str(db_path or "")
+    _CONFIGURED_PROJECTS_STORE = Path(_WORKBENCH_STORE)
+    _CONFIGURED_CHATS_STORE = Path(_WORKBENCH_CHATS_STORE)
 
 
 def _safe_workbench_data_key(raw: str | None) -> str:
@@ -23,7 +34,18 @@ def _safe_workbench_data_key(raw: str | None) -> str:
 
 
 def _read_projects() -> list[dict[str, Any]]:
-    payload = read_json_safe(_WORKBENCH_STORE)
+    if (
+        _WORKBENCH_DB_PATH
+        and _CONFIGURED_PROJECTS_STORE == Path(_WORKBENCH_STORE)
+    ):
+        payload = read_document(
+            _WORKBENCH_DB_PATH,
+            "projects",
+            lambda: {"projects": []},
+            legacy_path=_WORKBENCH_STORE,
+        )
+    else:
+        payload = read_json_safe(_WORKBENCH_STORE)
     projects = payload.get("projects") if isinstance(payload, dict) else None
     return projects if isinstance(projects, list) else []
 
@@ -42,7 +64,18 @@ def resolve_workbench_project_data_key_for_session(session_id: str | None) -> st
     projects = _read_projects()
     project_id = ""
 
-    chats_payload = read_json_safe(_WORKBENCH_CHATS_STORE)
+    if (
+        _WORKBENCH_DB_PATH
+        and _CONFIGURED_CHATS_STORE == Path(_WORKBENCH_CHATS_STORE)
+    ):
+        chats_payload = read_document(
+            _WORKBENCH_DB_PATH,
+            "chats",
+            lambda: {"chats": []},
+            legacy_path=_WORKBENCH_CHATS_STORE,
+        )
+    else:
+        chats_payload = read_json_safe(_WORKBENCH_CHATS_STORE)
     chats = chats_payload.get("chats") if isinstance(chats_payload, dict) else None
     if isinstance(chats, list):
         for chat in chats:
@@ -87,6 +120,7 @@ async def ensure_knowledge_db_for_session(session_id: str | None) -> str:
 
 
 __all__ = [
+    "configure_store",
     "ensure_knowledge_db_for_session",
     "resolve_project_data_key_for_session",
     "resolve_workbench_project_data_key_for_session",

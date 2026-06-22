@@ -234,9 +234,17 @@
 
     var citeBody = h("div", { className: "wb-mem-detail-scroll" },
       h("div", { className: "wb-mem-cite-summary" }, h("b", null, m.citation_count), h("span", null, "次被引用")),
-      h("div", { className: "wb-mem-empty-soft" },
-        svg({ width: 26, height: 26, strokeWidth: 1.5 }, h("path", { d: "M8 10h8M8 14h5" }), h("path", { d: "M21 11.4a6.9 6.9 0 0 1-9.6 6.4L6 19l1.1-4.1A6.9 6.9 0 1 1 21 11.4Z" })),
-        h("p", null, "引用记录会在 Agent 引用此记忆时自动记录")));
+      (m.citations || []).length > 0
+        ? h("div", { className: "wb-mem-cite-list" }, m.citations.map(function (c, i) {
+            return h("div", { className: "wb-mem-cite-row", key: i },
+              h("div", { className: "wb-mem-cite-row-head" },
+                h("span", { className: "wb-mem-chip " + (SOURCE_TONE[c.source] || "slate") }, c.source_label || c.source),
+                h("time", null, formatFull(c.at))),
+              c.snippet && h("p", { className: "wb-mem-cite-snippet" }, c.snippet));
+          }))
+        : h("div", { className: "wb-mem-empty-soft" },
+            svg({ width: 26, height: 26, strokeWidth: 1.5 }, h("path", { d: "M8 10h8M8 14h5" }), h("path", { d: "M21 11.4a6.9 6.9 0 0 1-9.6 6.4L6 19l1.1-4.1A6.9 6.9 0 1 1 21 11.4Z" })),
+            h("p", null, "这条记忆还没有被引用过。Agent 在对话中引用此记忆时会自动记录。")));
 
     var relatedBody = h("div", { className: "wb-mem-detail-scroll" },
       related.length === 0
@@ -248,10 +256,18 @@
             h("time", null, formatRel(r.updated_at)));
         }));
 
+    var historyEvents = (m.history || []).slice().reverse();
     var historyBody = h("div", { className: "wb-mem-detail-scroll" },
-      h("div", { className: "wb-mem-history" },
-        h("div", { className: "wb-mem-history-row" }, h("span", { className: "wb-mem-dot" }), h("div", null, h("b", null, "最后更新"), h("small", null, formatFull(m.updated_at)))),
-        h("div", { className: "wb-mem-history-row" }, h("span", { className: "wb-mem-dot muted" }), h("div", null, h("b", null, "创建记忆"), h("small", null, formatFull(m.created_at))))));
+      historyEvents.length > 0
+        ? h("div", { className: "wb-mem-history" }, historyEvents.map(function (ev, i) {
+            return h("div", { className: "wb-mem-history-row", key: i },
+              h("span", { className: "wb-mem-dot" + (i === 0 ? "" : " muted") }),
+              h("div", null,
+                h("b", null, ev.action_label || ev.action),
+                ev.detail && h("p", { className: "wb-mem-history-detail" }, ev.detail),
+                h("small", null, formatFull(ev.at))));
+          }))
+        : h("div", { className: "wb-mem-empty-soft" }, h("p", null, "暂无编辑历史")));
 
     return h("aside", { className: "wb-mem-detail" },
       h("div", { className: "wb-mem-detail-tabs" }, tabs.map(function (t) {
@@ -340,7 +356,35 @@
     var selected = selectedId ? memories.find(function (m) { return m.id === selectedId; }) || null : null;
     var related = useMemo(function () {
       if (!selected) return [];
-      return memories.filter(function (m) { return m.id !== selected.id && m.category === selected.category; }).slice(0, 8);
+      var selTags = (selected.tags || []).map(function (t) { return String(t).toLowerCase(); });
+      var stopRe = /[\s,，。.;；、！？!?()\[\]{}「」""'']+/;
+      var selWords = (selected.content || "").toLowerCase().split(stopRe).filter(function (w) { return w.length >= 2; });
+      return memories
+        .filter(function (m) { return m.id !== selected.id; })
+        .map(function (m) {
+          var score = 0;
+          // Same category is a mild signal.
+          if (m.category === selected.category) score += 1;
+          // Shared tags are the strongest signal.
+          var mTags = (m.tags || []).map(function (t) { return String(t).toLowerCase(); });
+          for (var i = 0; i < mTags.length; i++) {
+            if (selTags.indexOf(mTags[i]) >= 0) score += 3;
+          }
+          // Same source is a weak tiebreaker.
+          if (m.source === selected.source) score += 0.5;
+          // Content word overlap (capped so a long doc doesn't dominate).
+          var mWords = (m.content || "").toLowerCase().split(stopRe).filter(function (w) { return w.length >= 2; });
+          var shared = 0;
+          for (var j = 0; j < mWords.length && shared < 5; j++) {
+            if (selWords.indexOf(mWords[j]) >= 0) shared++;
+          }
+          score += shared;
+          return { m: m, score: score };
+        })
+        .filter(function (r) { return r.score > 0; })
+        .sort(function (a, b) { return b.score - a.score; })
+        .slice(0, 8)
+        .map(function (r) { return r.m; });
     }, [selected, memories]);
 
     function applyPayload(p) {

@@ -43,6 +43,7 @@ from cyrene.agent.prompts import (
     _QUICK_ANSWER_PROMPT,
     _WORKSPACE_SCOPE_BLOCK,
     _spawn_policy_prompt_block,
+    conversation_identity_block,
     workspace_scope_block,
 )
 from cyrene.agent.session import (
@@ -475,6 +476,21 @@ async def _run_chat_agent(
             transforms=["concat_into_system"],
             content=current_workspace_scope,
         ))
+
+        # Session-scoped runs (Workbench conversations) get their conversation id
+        # plus where their archived history lives. Constant within a session, so it
+        # stays in the cache-stable system prefix; empty for the legacy agent.
+        conversation_identity = conversation_identity_block(_current_session_id.get())
+        if conversation_identity:
+            main_system += "\n\n" + conversation_identity
+            main_system_context.append(context_block(
+                "runtime.conversation_identity",
+                "system",
+                source="cyrene.agent.prompts.conversation_identity_block",
+                reason="agent knows its conversation id and can read its own archived history",
+                transforms=["concat_into_system"],
+                content=conversation_identity,
+            ))
 
         is_deep_research = command == "deep-research"
         dr_token = _deep_research_mode.set(is_deep_research)

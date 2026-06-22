@@ -611,8 +611,8 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
       var args = event.args || {};
       var preview = Object.values(args).filter(Boolean).map(String).join(", ").slice(0, 60);
       entry = { kind: "tool", text: toolName || wbcT("settings.tools", "Tools"), preview: preview };
-    } else if (event.type === "phase_transition" && event.detail) {
-      entry = { kind: "phase", text: String(event.detail).slice(0, 80), preview: "" };
+    } else if (event.type === "phase_transition" && (event.detail || event.detail_key)) {
+      entry = { kind: "phase", text: event.detail ? String(event.detail).slice(0, 80) : "", detailKey: event.detail_key || "", detailParams: event.detail_params || {}, preview: "" };
     } else if (event.type === "subagent_update") {
       entry = {
         kind: "subagent",
@@ -1614,7 +1614,9 @@ function WbcTraceCard({ trace, live, label }) {
                   {(function () {
                     var toolKey = entry.text || entry.tool || "";
                     var isToolEntry = entry.kind === "tool" || !!entry.tool;
-                    return isToolEntry ? wbcT("toolName." + toolKey, toolKey) : toolKey;
+                    if (isToolEntry) return wbcT("toolName." + toolKey, toolKey);
+                    if (entry.detailKey) return wbcT(entry.detailKey, toolKey, entry.detailParams);
+                    return toolKey;
                   })()}
                   {(entry.preview) ? <small>（{entry.preview}）</small> : null}
                 </span>
@@ -1706,10 +1708,48 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
 // Composer
 // ---------------------------------------------------------------------------
 
+var WBC_DRAFT_PREFIX = "cyrene-wbc-draft-";
+var WBC_ATTACH_PREFIX = "cyrene-wbc-attach-";
+
+function wbcIsPersistableChatId(id) {
+  return !!(id && String(id).indexOf("legacy:") !== 0);
+}
+
+function wbcLoadDraft(id) {
+  if (!wbcIsPersistableChatId(id)) return "";
+  try { return localStorage.getItem(WBC_DRAFT_PREFIX + id) || ""; } catch (e) { return ""; }
+}
+
+function wbcSaveDraft(id, text) {
+  if (!wbcIsPersistableChatId(id)) return;
+  try {
+    if (text) localStorage.setItem(WBC_DRAFT_PREFIX + id, text);
+    else localStorage.removeItem(WBC_DRAFT_PREFIX + id);
+  } catch (e) {}
+}
+
+function wbcLoadAttachments(id) {
+  if (!wbcIsPersistableChatId(id)) return [];
+  try {
+    var raw = localStorage.getItem(WBC_ATTACH_PREFIX + id);
+    var parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) { return []; }
+}
+
+function wbcSaveAttachments(id, list) {
+  if (!wbcIsPersistableChatId(id)) return;
+  try {
+    if (list && list.length) localStorage.setItem(WBC_ATTACH_PREFIX + id, JSON.stringify(list));
+    else localStorage.removeItem(WBC_ATTACH_PREFIX + id);
+  } catch (e) {}
+}
+
 function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   var model = window.WorkbenchChatModel;
-  var [draft, setDraft] = useWbcState("");
-  var [attachments, setAttachments] = useWbcState([]);
+  var chatId = chat ? chat.id : "";
+  var [draft, setDraft] = useWbcState(function () { return wbcLoadDraft(chatId); });
+  var [attachments, setAttachments] = useWbcState(function () { return wbcLoadAttachments(chatId); });
   var [mode, setMode] = useWbcState("auto");
   var [command, setCommand] = useWbcState("");
   var [uploading, setUploading] = useWbcState(false);
@@ -1719,10 +1759,32 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   var [ctxPickerOpen, setCtxPickerOpen] = useWbcState(false);
   var taRef = useWbcRef(null);
   var fileRef = useWbcRef(null);
-  var chatId = chat ? chat.id : "";
+  var draftRef = useWbcRef(draft);
+  var attachRef = useWbcRef(attachments);
+  var prevChatIdRef = useWbcRef(chatId);
+
+  useWbcEffect(function () { draftRef.current = draft; });
+  useWbcEffect(function () { attachRef.current = attachments; });
 
   useWbcEffect(function () {
-    setAttachments([]);
+    if (prevChatIdRef.current === chatId) wbcSaveDraft(chatId, draft);
+  }, [draft]);
+
+  useWbcEffect(function () {
+    if (prevChatIdRef.current === chatId) wbcSaveAttachments(chatId, attachments);
+  }, [attachments]);
+
+  useWbcEffect(function () { syncHeight(); }, [draft]);
+
+  useWbcEffect(function () {
+    var prev = prevChatIdRef.current;
+    if (prev !== chatId) {
+      wbcSaveDraft(prev, draftRef.current);
+      wbcSaveAttachments(prev, attachRef.current);
+      setDraft(wbcLoadDraft(chatId));
+      setAttachments(wbcLoadAttachments(chatId));
+      prevChatIdRef.current = chatId;
+    }
     setCommand("");
     setSlashOpen(false);
     setModeOpen(false);
@@ -1761,11 +1823,26 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   }
 
   function onKeyDown(event) {
-    if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+    var sc = window.WorkbenchShortcuts;
+    if (sc && sc.matches(event, "composer-send")) {
       if (event.nativeEvent && event.nativeEvent.isComposing) return; // IME guard
       event.preventDefault();
       submit();
-    } else if (event.key === "Escape") {
+      return;
+    }
+    if (sc && sc.matches(event, "composer-newline")) {
+      // Allow the textarea's default Shift+Enter behavior (insert newline).
+      return;
+    }
+    // Fallback when the shortcut module is unavailable: plain Enter sends,
+    // Shift/Cmd/Ctrl+Enter inserts a newline.
+    if (!sc && event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+      if (event.nativeEvent && event.nativeEvent.isComposing) return; // IME guard
+      event.preventDefault();
+      submit();
+      return;
+    }
+    if (event.key === "Escape") {
       setSlashOpen(false);
       setModeOpen(false);
     }
@@ -2085,7 +2162,7 @@ function WbcSide({
         })}
       </div>
       <div className={"wbc-side-body" + (flush ? " flush" : "")}>
-        {activeTab === "overview" && <WbcOverviewTab chat={chat} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} />}
+        {activeTab === "overview" && <WbcOverviewTab chat={chat} runtime={runtime} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} />}
         {activeTab === "plan" && <WbcPlanTab plan={pendingPlan} />}
         {activeTab === "subagents" && (
           <WbcSubagentsTab
@@ -2731,38 +2808,122 @@ function WbcUsageRing({ usage }) {
   );
 }
 
-function WbcModelUsage() {
-  var dash = (typeof DATA !== "undefined" && DATA.dashboard) || {};
-  var rawStats = Array.isArray(dash.model_stats) ? dash.model_stats : [];
-  var modelMap = {};
-  rawStats.forEach(function (row) {
-    if (!modelMap[row.model]) modelMap[row.model] = 0;
-    modelMap[row.model] += row.requests || 0;
-  });
-  var entries = Object.keys(modelMap)
-    .map(function (m) { return { model: m, requests: modelMap[m] }; })
-    .sort(function (a, b) { return b.requests - a.requests; })
-    .slice(0, 5);
-  var totalRequests = entries.reduce(function (sum, m) { return sum + m.requests; }, 0);
-  if (!entries.length) return null;
+// Context-window gauge + composition for ONE conversation. Reads the agent's
+// raw per-session state (sessions/<id>/state.json) so the numbers are scoped to
+// this chat and reflect what the compactor actually measures; polls while a run
+// streams so the panel updates in real time as turns are appended.
+var WBC_CTX_SEG_ORDER = ["compacted", "system", "user", "assistant", "tool"];
+var WBC_CTX_SEG_LABEL = {
+  compacted: ["workbenchChat.ctx.seg.compacted", "Compressed"],
+  system: ["workbenchChat.ctx.seg.system", "System"],
+  user: ["workbenchChat.ctx.seg.user", "User"],
+  assistant: ["workbenchChat.ctx.seg.assistant", "Assistant"],
+  tool: ["workbenchChat.ctx.seg.tool", "Tools"],
+};
+
+function wbcCtxPct(ratio) {
+  var p = (Number(ratio) || 0) * 100;
+  if (p > 0 && p < 1) return "<1%";
+  return Math.round(p) + "%";
+}
+
+function WbcContextUsage({ chat, running }) {
+  var [data, setData] = useWbcState(null);
+  var chatId = chat ? chat.id : "";
+  var updatedAt = chat ? chat.updatedAt : "";
+
+  useWbcEffect(function () {
+    if (!chatId) { setData(null); return undefined; }
+    var cancelled = false;
+    function load() {
+      fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/context")
+        .then(function (r) { return r.json(); })
+        .then(function (payload) { if (!cancelled && payload && !payload.error) setData(payload); })
+        .catch(function () {});
+    }
+    load();
+    var timer = running ? setInterval(load, 3500) : null;
+    return function () { cancelled = true; if (timer) clearInterval(timer); };
+  }, [chatId, updatedAt, running]);
+
+  if (!data) return null;
+
+  var segments = Array.isArray(data.segments) ? data.segments : [];
+  var segTotal = segments.reduce(function (sum, seg) { return sum + Number(seg.tokens || 0); }, 0);
+  var used = Number(data.ctxUsed || 0);
+  var limit = Number(data.ctxLimit || 0);
+  var ratio = (typeof data.ratio === "number") ? data.ratio : (limit > 0 ? used / limit : 0);
+  var triggerRatio = Number(data.compactTriggerRatio) || 0.6;
+  var triggerPct = Math.round(triggerRatio * 100);
+  var fillLevel = ratio >= triggerRatio ? "high" : (ratio >= triggerRatio * 0.66 ? "mid" : "low");
+  var compaction = data.compaction || {};
+
+  if (segTotal <= 0 && used <= 0) {
+    return (
+      <section className="workbench-side-section">
+        <h3>{wbcT("workbenchChat.ctx.title", "Context window")}</h3>
+        <p className="workbench-muted">{wbcT("workbenchChat.ctx.empty", "No agent context yet.")}</p>
+      </section>
+    );
+  }
+
+  var legend = WBC_CTX_SEG_ORDER.map(function (key) {
+    var entry = segments.find(function (seg) { return seg.key === key; });
+    var tokens = entry ? Number(entry.tokens || 0) : 0;
+    if (tokens <= 0) return null;
+    var label = wbcT(WBC_CTX_SEG_LABEL[key][0], WBC_CTX_SEG_LABEL[key][1]);
+    return { key: key, tokens: tokens, label: label, pct: (tokens / segTotal) * 100 };
+  }).filter(Boolean);
+
   return (
     <section className="workbench-side-section">
-      <h3>{wbcT("workbenchChat.modelShare", "Model share")}</h3>
-      {entries.map(function (m) {
-        var pct = totalRequests ? Math.round(m.requests / totalRequests * 100) : 0;
-        return (
-          <div key={m.model} className="wbc-model-row">
-            <span className="wbc-model-name" title={m.model}>{m.model}</span>
-            <span className="wbc-model-track"><span style={{ width: pct + "%" }} /></span>
-            <span className="wbc-model-pct">{pct}%</span>
+      <h3>{wbcT("workbenchChat.ctx.title", "Context window")}</h3>
+      <div className="wbc-ctx-gauge">
+        <div className="wbc-ctx-gauge-head">
+          <b>{limit > 0 ? wbcCtxPct(ratio) : wbcCompactNumber(used)}</b>
+          <span>{limit > 0
+            ? (wbcCompactNumber(used) + " / " + wbcCompactNumber(limit))
+            : wbcT("workbenchChat.ctx.unknownLimit", "Window size unknown")}</span>
+        </div>
+        <div className={"wbc-ctx-bar level-" + fillLevel}>
+          <span className="wbc-ctx-bar-fill" style={{ width: Math.max(1.5, Math.min(100, ratio * 100)) + "%" }} />
+          {limit > 0 && (
+            <span className="wbc-ctx-bar-tick" style={{ left: triggerPct + "%" }}
+              title={wbcT("workbenchChat.ctx.compactAt", "Compaction triggers at {pct}%", { pct: triggerPct })} />
+          )}
+        </div>
+        {compaction.active
+          ? <p className="wbc-ctx-note hot">{wbcT("workbenchChat.ctx.compacted", "Compressed {n} earlier block(s) · {tokens} tok", { n: compaction.blocks, tokens: wbcCompactNumber(compaction.tokens) })}</p>
+          : (limit > 0 ? <p className="wbc-ctx-note">{wbcT("workbenchChat.ctx.compactAt", "Compaction triggers at {pct}%", { pct: triggerPct })}</p> : null)}
+      </div>
+      {legend.length > 0 && (
+        <div className="wbc-ctx-split">
+          <div className="wbc-ctx-split-label">{wbcT("workbenchChat.ctx.breakdown", "Context breakdown")}</div>
+          <div className="wbc-ctx-splitbar">
+            {legend.map(function (item) {
+              return <span key={item.key} className={"wbc-ctx-seg seg-" + item.key}
+                style={{ width: item.pct + "%" }}
+                title={item.label + " · " + wbcCompactNumber(item.tokens) + " (" + item.pct.toFixed(1) + "%)"} />;
+            })}
           </div>
-        );
-      })}
+          <div className="wbc-ctx-legend">
+            {legend.map(function (item) {
+              return (
+                <span key={item.key} className="wbc-ctx-legend-item">
+                  <i className={"wbc-ctx-dot seg-" + item.key} />
+                  {item.label}
+                  <em>{item.pct.toFixed(1)}%</em>
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
 
-function WbcOverviewTab({ chat, onRename, onDelete, onToTask, toTaskBusy }) {
+function WbcOverviewTab({ chat, runtime, onRename, onDelete, onToTask, toTaskBusy }) {
   if (!chat) {
     return <p className="workbench-muted">{wbcT("workbenchChat.noMessages", "Select or create a chat.")}</p>;
   }
@@ -2782,7 +2943,7 @@ function WbcOverviewTab({ chat, onRename, onDelete, onToTask, toTaskBusy }) {
         <div className="wb-kv"><span>{wbcT("chat.runId", "Session ID")}</span><b className="wbc-kv-mono">{chat.id}</b></div>
         <div className="wb-kv"><span>{wbcT("workbenchChat.createdAt", "Created")}</span><b>{wbcFormatTime(chat.createdAt) || "—"}</b></div>
       </section>
-      <WbcModelUsage />
+      <WbcContextUsage chat={chat} running={!!runtime} />
       <section className="workbench-side-section">
         <h3>{wbcT("workbenchChat.quickActions", "Quick actions")}</h3>
         <div className="wbc-quick-actions">

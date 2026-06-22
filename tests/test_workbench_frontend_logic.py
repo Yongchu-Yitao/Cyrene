@@ -243,7 +243,7 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
     assert "padding-inline: 8px;" in compact_tabs[0]
     assert "padding-inline: 2px;" in compact_tabs[1]
     assert "font-size: 12px;" in compact_tabs[1]
-    assert "workbench.css?v=20260621-railcollapse4-rightresize3-wechatqr1-ctxpicker1" in index
+    assert "workbench.css?v=20260622-shortcuts1" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -265,7 +265,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=20260621-railcollapse4-rightresize3-wechatqr1-ctxpicker1" in index
+    assert "workbench.css?v=20260622-shortcuts1" in index
 
 
 def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
@@ -285,7 +285,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=20260621-wechatqr1" in index
+    assert "settings-overlay.js?v=20260622-shortcuts1" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -339,7 +339,7 @@ def test_workbench_context_picker_contains_long_workspace_paths():
     assert "text-overflow: ellipsis;" in text_rule
     assert "white-space: nowrap;" in text_rule
     assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=20260621-railcollapse1-rightresize1-ctxpicker1" in index
+    assert "workbench-chat.js?v=20260622-shortcuts1" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -356,7 +356,7 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
     assert "workbench-model.js?v=20260620-goalloop1" in index
-    assert "workbench.js?v=20260621-railcollapse2-rightresize2" in index
+    assert "workbench.js?v=20260622-shortcuts1" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -418,7 +418,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.models || p.primary_candidates || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=20260621-wechatqr1" in index
+    assert "settings-overlay.js?v=20260622-shortcuts1" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -493,3 +493,275 @@ def test_workbench_subagent_payload_recovers_chat_scoped_snapshot(monkeypatch):
     assert payload["agents"][0]["id"] == "alpha"
     assert payload["agents"][0]["result"] == "Approach A is simpler."
     assert payload["messages"][0]["type"] == "result"
+
+
+def _run_workbench_shortcuts_js(expression: str):
+    root = Path(__file__).resolve().parent.parent
+    shortcuts_path = root / "src" / "workbench-webui" / "workbench-shortcuts.jsx"
+    script = f"""
+    const fs = require("fs");
+    const store = {{}};
+    global.window = {{
+        navigator: {{ userAgent: "Mozilla/5.0 (Windows NT 10.0)" }},
+        dispatchEvent: () => {{}},
+        Event: function (n) {{ this.type = n; }},
+    }};
+    global.localStorage = {{
+        getItem: (k) => (k in store ? store[k] : null),
+        setItem: (k, v) => {{ store[k] = String(v); }},
+        removeItem: (k) => {{ delete store[k]; }},
+    }};
+    eval(fs.readFileSync({json.dumps(str(shortcuts_path))}, "utf8"));
+    const result = ({expression});
+    process.stdout.write(JSON.stringify(result));
+    """
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
+def test_workbench_shortcuts_module_exposes_actions_and_platform_aware_mod():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-shortcuts.jsx").read_text(encoding="utf-8")
+
+    assert "window.WorkbenchShortcuts" in source
+    assert "isMacPlatform" in source
+    assert '"mod"' in source
+    # Composer Enter-to-send is one of the default bindings so the setting panel
+    # can show and rebind it.
+    assert '"composer-send"' in source
+    assert '"Enter"' in source
+
+    ids = _run_workbench_shortcuts_js(
+        "window.WorkbenchShortcuts.list().map(function (i) { return i.id; })"
+    )
+    assert "search" in ids
+    assert "new-chat" in ids
+    assert "new-task" in ids
+    assert "composer-send" in ids
+    assert "composer-newline" in ids
+
+
+def test_workbench_shortcuts_matches_mod_k_on_windows_user_agent():
+    # The "mod" token resolves to Ctrl on Windows/Linux user agents. A Cmd+K
+    # event (metaKey) on a Windows UA should also match search, because "mod"
+    # matches meta OR ctrl so Mac keyboards work everywhere; a plain "k"
+    # should not match.
+    result = _run_workbench_shortcuts_js(
+        "{"
+        ' ctrlK: window.WorkbenchShortcuts.matches({ key: "k", metaKey: false, ctrlKey: true, shiftKey: false, altKey: false }, "search"),'
+        ' cmdK: window.WorkbenchShortcuts.matches({ key: "k", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false }, "search"),'
+        ' plainK: window.WorkbenchShortcuts.matches({ key: "k", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }, "search"),'
+        ' enter: window.WorkbenchShortcuts.matches({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }, "composer-send"),'
+        ' shiftEnter: window.WorkbenchShortcuts.matches({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: true, altKey: false }, "composer-send"),'
+        ' shiftEnterNewline: window.WorkbenchShortcuts.matches({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: true, altKey: false }, "composer-newline")'
+        "}"
+    )
+    assert result == {
+        "ctrlK": True,
+        "cmdK": True,  # mod matches meta OR ctrl so Mac keyboards work everywhere
+        "plainK": False,
+        "enter": True,
+        "shiftEnter": False,
+        "shiftEnterNewline": True,
+    }
+
+
+def test_workbench_shortcuts_persist_and_reset_custom_binding():
+    result = _run_workbench_shortcuts_js(
+        "(function () {"
+        " var sc = window.WorkbenchShortcuts;"
+        " var before = sc.describe('search').join('+');"
+        " sc.set('search', ['mod', 'P']);"
+        " var after = sc.describe('search').join('+');"
+        " sc.reset('search');"
+        " var reset = sc.describe('search').join('+');"
+        " var isCustom = sc.isCustom('search');"
+        " return { before: before, after: after, reset: reset, isCustom: isCustom };"
+        "})()"
+    )
+    assert result == {
+        "before": "mod+K",
+        "after": "mod+P",
+        "reset": "mod+K",
+        "isCustom": False,
+    }
+
+
+def test_workbench_shortcuts_capture_event_converts_ctrl_to_mod_on_windows():
+    # On Windows/Linux, pressing Ctrl+K should capture as ["mod", "K"] so the
+    # binding stays portable when the user later opens the app on a Mac.
+    result = _run_workbench_shortcuts_js(
+        "{"
+        ' ctrlK: window.WorkbenchShortcuts.captureEvent({ key: "k", metaKey: false, ctrlKey: true, shiftKey: false, altKey: false }),'
+        ' shiftEnter: window.WorkbenchShortcuts.captureEvent({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: true, altKey: false }),'
+        ' escape: window.WorkbenchShortcuts.captureEvent({ key: "Escape", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }),'
+        ' pureMod: window.WorkbenchShortcuts.captureEvent({ key: "Control", metaKey: false, ctrlKey: true, shiftKey: false, altKey: false })'
+        "}"
+    )
+    assert result["ctrlK"] == {"cancelled": False, "keys": ["mod", "K"]}
+    assert result["shiftEnter"] == {"cancelled": False, "keys": ["shift", "Enter"]}
+    assert result["escape"] == {"cancelled": True, "keys": []}
+    assert result["pureMod"] == {"cancelled": False, "keys": []}
+
+
+def test_workbench_task_composer_uses_enter_to_send_via_shortcut_module():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+
+    # The old Cmd/Ctrl+Enter to send behavior is replaced by the shortcut module
+    # so Enter sends directly (matching the chat composer).
+    composer_block = source.split("function TaskComposer(", 1)[1].split("function composerPlaceholder", 1)[0]
+    assert 'sc.matches(event, "composer-send")' in composer_block
+    assert "event.metaKey || event.ctrlKey" not in composer_block.split("function onKeyDown")[1].split("}")[0]
+
+
+def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    translations = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+
+    assert '{ id: "shortcuts", labelKey: "settings.shortcuts" }' in source
+    assert "function ShortcutsPanel" in source
+    assert "React.createElement(ShortcutsPanel" in source
+    assert "window.WorkbenchShortcuts" in source
+    assert "captureEvent" in source
+    # The panel groups bindings and offers a reset-all action.
+    assert "settings.shortcutGroupGlobal" in source
+    assert "settings.resetShortcuts" in source
+    # i18n keys for both languages
+    assert '"settings.shortcuts": "Shortcuts"' in translations
+    assert '"settings.shortcuts": "快捷键"' in translations
+    assert '"shortcut.action.search"' in translations
+    assert '"shortcut.action.composerSend"' in translations
+    # Styles for the panel
+    assert ".wb-shortcuts-panel" in styles
+    assert ".wb-shortcut-row" in styles
+    assert ".wb-shortcut-capture" in styles
+    # The new module is loaded before the panels that consume it
+    assert "compiled/workbench-shortcuts.js?v=20260622-shortcuts1" in index
+
+
+def test_workbench_help_center_lists_shortcuts_from_module_with_customize_link():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+
+    # Help center reads the binding list from WorkbenchShortcuts instead of
+    # hardcoding the keys array, so customizations surface there too.
+    help_block = source.split("function WorkbenchHelpCenter", 1)[1].split("function WorkbenchEditProjectModal", 1)[0]
+    assert "WorkbenchShortcuts" in help_block
+    assert "shortcutList" in help_block
+    assert "help.customizeShortcuts" in help_block
+    # The old hardcoded list is gone.
+    assert '{ id: "search", label: t("help.shortcut.search"), keys: ["mod", "K"] }' not in help_block
+
+
+def test_workbench_global_shortcut_handler_wired_in_workbench_app():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+
+    app_block = source.split("function WorkbenchApp", 1)[1].split("function WorkbenchTopbar", 1)[0]
+    # A keydown listener dispatches the global shortcuts.
+    assert 'addEventListener("keydown"' in app_block
+    assert 'sc.matches(event, "search")' in app_block
+    assert 'sc.matches(event, "new-chat")' in app_block
+    assert 'sc.matches(event, "new-task")' in app_block
+    assert 'sc.matches(event, "settings")' in app_block
+    assert 'sc.matches(event, "toggle-sidebar")' in app_block
+    assert 'sc.matches(event, "switch-project")' in app_block
+
+
+def test_workbench_memory_cite_tab_renders_actual_citations_not_placeholder():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
+
+    # The old placeholder text is gone.
+    assert "引用记录会在 Agent 引用此记忆时自动记录" not in source
+    # The Cite tab now renders citations from the memory's citations list.
+    assert "m.citations" in source
+    assert "wb-mem-cite-list" in source
+    assert "wb-mem-cite-row" in source
+
+
+def test_workbench_memory_history_tab_renders_events_not_hardcoded():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
+
+    # The old hardcoded two-row history is gone — isolate the historyBody block.
+    history_block = source.split("var historyBody", 1)[1].split("return h(\"aside\"", 1)[0]
+    assert '"最后更新"' not in history_block
+    assert '"创建记忆"' not in history_block
+    # The History tab now renders from m.history.
+    assert "m.history" in source
+    assert "historyEvents" in source
+    assert "action_label" in source
+
+
+def test_workbench_memory_related_uses_tag_and_content_matching_not_category_only():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
+
+    # The old simple category-only filter is gone — the filter line that used
+    # category as the sole match criterion no longer exists.
+    assert "m.id !== selected.id && m.category === selected.category" not in source
+    # The new scoring uses shared tags and content word overlap.
+    assert "selTags" in source
+    assert "selWords" in source
+    assert "score" in source
+    # Category is now just one mild scoring signal, not a hard filter.
+    related_block = source.split("var related = useMemo", 1)[1].split("var related", 1)[0].split("function applyPayload", 1)[0]
+    assert "score += 1" in related_block  # category match adds 1
+    assert "score += 3" in related_block  # shared tag adds 3
+
+
+def test_workbench_knowledge_folders_group_by_kind_not_source():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+
+    # The old source-based grouping is gone from the folders tab.
+    folders_block = source.split('if (activeTab === "folders")', 1)[1].split('if (activeTab === "tags")', 1)[0]
+    assert "bySource" not in folders_block
+    assert "d.source" not in folders_block
+    # The new grouping uses visualKind.
+    assert "visualKind" in folders_block
+    assert "byKind" in folders_block
+    assert "FOLDER_LABELS" in source
+
+
+def test_workbench_knowledge_tags_are_editable_inline():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+
+    assert "function KbTagEditor" in source
+    assert "wb-kb-tag-input" in source
+    assert "wb-kb-tag-edit-btn" in source
+    assert "onSaveTags" in source
+    assert "handleSaveTags" in source
+    # The PATCH API is used for saving tags.
+    assert "client.update" in source
+
+
+def test_workbench_knowledge_content_tab_renders_markdown_chunks():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+
+    assert "renderChunkHtml" in source
+    assert "window.marked" in source
+    assert "DOMPurify" in source
+    assert "dangerouslySetInnerHTML" in source
+    assert "wb-kb-chunk-md" in source
+    assert "wb-kb-chunk-text" in source
+
+
+def test_workbench_knowledge_list_does_not_silently_truncate():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+
+    # The old silent limit:500 is gone.
+    assert "limit: 500" not in source
+    # The total count from the backend is used to show truncation awareness.
+    assert "_total" in source
+    assert "totalDocs" in source
+    assert "显示前" in source
+

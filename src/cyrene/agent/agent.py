@@ -320,6 +320,8 @@ async def _run_main_agent(
         await _publish_runtime_event({
             "type": "phase_transition", "from": "skill_router", "to": "learned_skill",
             "detail": f"Matched learned skill {routed['skill']['name']} ({routed['skill']['skill_type']})",
+            "detail_key": "phase.learnedSkill",
+            "detail_params": {"name": routed['skill']['name'], "type": routed['skill']['skill_type']},
         })
         await _save_session_messages(_session_messages_to_save(routed["messages"]))
         return str(routed["final_text"] or "Done.")
@@ -404,6 +406,8 @@ async def _run_main_agent(
         event = {"type": "phase_transition", "from": "phase1_decision", "to": "phase2_execution"}
         if not suppress_initial_detail:
             event["detail"] = f"Phase 1 decided to use tools. Task: {user_message[:120]}"
+            event["detail_key"] = "phase.useTools"
+            event["detail_params"] = {"task": user_message[:120]}
         await _publish_runtime_event(event)
         messages = [system_entry, *history, dict(llm_user_entry)]
 
@@ -423,7 +427,7 @@ async def _run_main_agent(
             tcs = response.get("tool_calls") or []
             tool_names = [str(t.get("function", {}).get("name") or "") for t in tcs]
             if tcs and all(name == "quit" for name in tool_names):
-                await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit"})
+                await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
                 if _streaming_reply_requested():
                     messages.pop()
                     final_text = await _final_reply_from_history(project_history_for_llm(messages), max_tokens=None)
@@ -552,7 +556,7 @@ async def _run_main_agent(
                 return _AWAITING_USER_SENTINEL
             await _save_session_messages(_session_messages_to_save(messages))
             if quit_requested and not pending_reflection_tool_calls:
-                await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit"})
+                await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
                 return await _ensure_text_reply(response, messages)
 
             # Subagent monitoring loop
@@ -560,6 +564,7 @@ async def _run_main_agent(
                 await _publish_runtime_event({
                     "type": "phase_transition", "from": "phase2_execution", "to": "subagent_monitoring",
                     "detail": "Subagents spawned, entering monitoring loop",
+                    "detail_key": "phase.subagentMonitoring",
                 })
                 from cyrene.subagent import (
                     _run_subagent, _spawn_subagent_task,
@@ -631,6 +636,7 @@ async def _run_main_agent(
                 await _publish_runtime_event({
                     "type": "phase_transition", "from": "subagent_monitoring", "to": "synthesis",
                     "detail": "All subagents done, starting summary subagent",
+                    "detail_key": "phase.synthesis",
                 })
                 summary_result = await _run_summary_subagent(
                     round_id=round_id, parent_task=user_message, round_history=messages,
@@ -774,6 +780,7 @@ async def _run_main_agent(
     event = {"type": "phase_transition", "from": "phase1_decision", "to": "chat_only"}
     if not suppress_initial_detail:
         event["detail"] = "Phase 1 decided chat-only, no tools needed"
+        event["detail_key"] = "phase.chatOnly"
     await _publish_runtime_event(event)
     if _streaming_reply_requested():
         messages = [system_entry, *history, attach_context(user_entry, context_block(

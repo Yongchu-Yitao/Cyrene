@@ -45,6 +45,9 @@ from webui.routes_workbench_schedule import register_workbench_schedule_routes
 from webui.routes_workbench_chat import register_workbench_chat_routes
 from webui.workbench_notifications import append_notification, list_notifications, mark_notifications_read
 from webui.routes_code import router as code_router
+from webui import api_models
+from webui.api_errors import error_response, install_api_exception_handlers
+from webui.workspace_validation import WorkspacePathError, validate_workspace_path
 from cyrene.call_llm import _format_httpx_error as format_httpx_error
 from cyrene.attachments import (
     EXPORTS_DIR as _EXPORTS_DIR,
@@ -110,6 +113,8 @@ from cyrene.shells import set_cc_since
 from cyrene.short_term import load_entries
 from cyrene.soul import get_default_soul_content, read_soul, get_soul_path
 from cyrene.version import get_version_label
+from cyrene.workbench_store import read_document, write_document
+from cyrene.io_utils import atomic_write_json, read_json_safe
 
 logger = logging.getLogger(__name__)
 _CC_PROJECT_DIR = WORKSPACE_DIR.parent
@@ -123,6 +128,7 @@ _APP_DIR = _STATIC_DIR / "app"
 _UPLOADS_DIR = DATA_DIR / "webui_uploads"
 _WORKBENCH_STORE = DATA_DIR / "workbench_projects.json"
 _WORKBENCH_STORE_LOCK = threading.RLock()
+_CONFIGURED_WORKBENCH_STORE: Path | None = None
 _SERVER_STARTED_AT = time.time()
 _WORKBENCH_LEGACY_DATA_KEY = "default"
 
@@ -2054,49 +2060,88 @@ def _workbench_create_sessions_from_init_plan(
     return created
 
 
+def _configure_workbench_store(db_path: str) -> None:
+    global _db_path, _CONFIGURED_WORKBENCH_STORE
+    _db_path = str(db_path)
+    _CONFIGURED_WORKBENCH_STORE = Path(_WORKBENCH_STORE)
+
+
+def _workbench_store_uses_sqlite() -> bool:
+    return bool(
+        _db_path
+        and _CONFIGURED_WORKBENCH_STORE is not None
+        and Path(_WORKBENCH_STORE) == _CONFIGURED_WORKBENCH_STORE
+    )
+
+
 def _read_workbench_store() -> dict[str, Any]:
     with _WORKBENCH_STORE_LOCK:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        if not _WORKBENCH_STORE.exists():
-            payload = _workbench_default_project()
-            _write_workbench_store(payload)
-            return payload
-        try:
-            raw = json.loads(_WORKBENCH_STORE.read_text(encoding="utf-8"))
+        if not _workbench_store_uses_sqlite():
+            raw = read_json_safe(_WORKBENCH_STORE)
             if isinstance(raw, dict) and isinstance(raw.get("projects"), list):
                 if not raw["projects"]:
-                    payload = _workbench_default_project()
-                    _write_workbench_store(payload)
-                    return payload
+                    raw = _workbench_default_project()
                 _workbench_ensure_invariants(raw)
                 return raw
-        except Exception:
-            logger.exception("Failed to read workbench store")
-        payload = _workbench_default_project()
-        _write_workbench_store(payload)
-        return payload
-
-
-def _write_workbench_store(payload: dict[str, Any]) -> None:
-    with _WORKBENCH_STORE_LOCK:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        tmp_path = _WORKBENCH_STORE.with_name(
-            f"{_WORKBENCH_STORE.name}.{uuid.uuid4().hex}.tmp"
-        )
+            return _workbench_default_project()
         try:
-            tmp_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            raw = read_document(
+                _db_path or str(DB_PATH),
+                "projects",
+                _workbench_default_project,
+                legacy_path=_WORKBENCH_STORE,
             )
-            tmp_path.replace(_WORKBENCH_STORE)
-        finally:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            if not isinstance(raw, dict) or not isinstance(raw.get("projects"), list):
+                raw = write_document(
+                    _db_path or str(DB_PATH),
+                    "projects",
+                    _workbench_default_project(),
+                    _workbench_default_project,
+                    legacy_path=_WORKBENCH_STORE,
+                    export_path=_WORKBENCH_STORE,
+                )
+            if not raw["projects"]:
+                raw = write_document(
+                    _db_path or str(DB_PATH),
+                    "projects",
+                    _workbench_default_project(),
+                    _workbench_default_project,
+                    legacy_path=_WORKBENCH_STORE,
+                    export_path=_WORKBENCH_STORE,
+                    base_value=getattr(raw, "_workbench_base", None),
+                )
+            _workbench_ensure_invariants(raw)
+            return raw
+        except Exception:
+            logger.exception("Failed to read Workbench state from SQLite")
+            raise
 
 
-def _workbench_ensure_invariants(payload: dict[str, Any]) -> None:
+def _write_workbench_store(
+    payload: dict[str, Any],
+    *,
+    base_value: dict[str, Any] | None = None,
+) -> None:
+    with _WORKBENCH_STORE_LOCK:
+        if not _workbench_store_uses_sqlite():
+            atomic_write_json(_WORKBENCH_STORE, payload)
+            return
+        merged = write_document(
+            _db_path or str(DB_PATH),
+            "projects",
+            payload,
+            _workbench_default_project,
+            legacy_path=_WORKBENCH_STORE,
+            export_path=_WORKBENCH_STORE,
+            base_value=base_value,
+        )
+        payload.clear()
+        payload.update(merged)
+        if hasattr(payload, "_workbench_base"):
+            payload._workbench_base = getattr(merged, "_workbench_base", dict(merged))
+
+
+def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
     changed = False
     projects = payload.setdefault("projects", [])
     now = _utc_now_iso()
@@ -2177,8 +2222,7 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> None:
         first_sessions = projects[0].get("sessions") or []
         payload["activeSessionId"] = first_sessions[0].get("id") if first_sessions else ""
         changed = True
-    if changed:
-        _write_workbench_store(payload)
+    return changed
 
 
 def _workbench_find_project(payload: dict[str, Any], project_id: str) -> dict[str, Any] | None:
@@ -4754,16 +4798,15 @@ async def _reset_app_data() -> dict[str, Any]:
         DATA_DIR / "web_settings.json",
         DATA_DIR / "onboarding_state.json",
         DATA_DIR / ".setup_done",
-        # Workbench store: projects/tasks, chat threads, notifications. Without
-        # these, "reset" would leave the app showing old projects and skip the
-        # first-run onboarding on restart.
+        # Legacy Workbench JSON exports. The authoritative rows are removed
+        # below when the SQLite database itself is reset.
         _WORKBENCH_STORE,
         DATA_DIR / "workbench_chats.json",
         DATA_DIR / "workbench_notifications.json",
     ):
         _remove_path(path)
 
-    # Per-workspace agent memory (store/wb_memory_<ws>.json).
+    # Legacy per-workspace memory exports.
     for mem_path in STORE_DIR.glob("wb_memory_*.json"):
         _remove_path(mem_path)
 
@@ -5304,15 +5347,27 @@ async def _search_workbench_items(query: str, types: set[str], per_type_limit: i
     if "memory" in types:
         try:
             from cyrene.config import STORE_DIR
-            from cyrene.io_utils import read_json_safe
+            from cyrene.workbench_store import list_document_keys, read_document
             from webui.routes_workbench_memory import _entry_id
 
-            for mem_path in STORE_DIR.glob("wb_memory_*.json"):
+            memory_keys = {
+                key[len("memory:"):]
+                for key in list_document_keys(_db_path or str(DB_PATH), prefix="memory:")
+            }
+            memory_keys.update(
+                path.stem[len("wb_memory_"):]
+                for path in STORE_DIR.glob("wb_memory_*.json")
+            )
+            for dk in sorted(memory_keys):
                 if len(groups["memory"]) >= per_type_limit:
                     break
-                dk = mem_path.stem[len("wb_memory_"):]
                 pid = data_key_to_project.get(dk, "")
-                data = read_json_safe(mem_path)
+                data = read_document(
+                    _db_path or str(DB_PATH),
+                    f"memory:{dk}",
+                    list,
+                    legacy_path=STORE_DIR / f"wb_memory_{dk}.json",
+                )
                 entries = data if isinstance(data, list) else []
                 for entry in entries:
                     content = str(entry.get("content") or "")
@@ -5403,7 +5458,13 @@ async def _search_workbench_items(query: str, types: set[str], per_type_limit: i
 def register_routes(app, bot: Any, db_path: str) -> None:
     global _bot, _db_path
     _bot = bot
-    _db_path = db_path
+    _configure_workbench_store(db_path)
+    from webui.workbench_notifications import configure_store as configure_notifications_store
+    from cyrene.workbench_context import configure_store as configure_workbench_context
+
+    configure_notifications_store(db_path)
+    configure_workbench_context(db_path)
+    install_api_exception_handlers(app)
 
     router = APIRouter()
     register_map_routes(router)
@@ -5411,7 +5472,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     register_entity_routes(router, db_path)
     register_knowledge_routes(router)
     register_workbench_knowledge_routes(router)
-    register_workbench_memory_routes(router)
+    register_workbench_memory_routes(router, db_path)
     register_workbench_schedule_routes(router, db_path)
     register_workbench_chat_routes(router, bot, db_path)
     router.include_router(code_router)
@@ -7513,32 +7574,38 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         )
 
     @router.post("/api/workbench/notifications/read")
-    async def api_workbench_notifications_read(request: Request):
-        body = await request.json()
-        ids = body.get("ids") if isinstance(body.get("ids"), list) else []
-        mark_all = bool(body.get("markAll"))
+    async def api_workbench_notifications_read(body: api_models.NotificationsReadBody):
+        ids = body.ids
+        mark_all = body.markAll
         result = mark_notifications_read(ids, mark_all=mark_all)
         return {**result, **list_notifications(limit=80)}
 
     @router.patch("/api/workbench/activate")
-    async def api_workbench_activate(request: Request):
-        body = await request.json()
+    async def api_workbench_activate(body: api_models.WorkbenchActivateBody):
         payload = _read_workbench_store()
-        pid = str(body.get("projectId") or "").strip()
+        pid = str(body.projectId or "").strip()
         if pid:
             payload["activeProjectId"] = pid
-        sid = str(body.get("sessionId") or "").strip()
+        sid = str(body.sessionId or "").strip()
         if sid:
             payload["activeSessionId"] = sid
         _write_workbench_store(payload)
         return {"ok": True, **payload}
 
     @router.post("/api/projects")
-    async def api_workbench_create_project(request: Request):
-        body = await request.json()
+    async def api_workbench_create_project(body_model: api_models.ProjectCreateBody):
+        body = api_models.body_dict(body_model)
         payload = _read_workbench_store()
         now = _utc_now_iso()
-        workspace_path = str(body.get("workspacePath") or body.get("workspace_path") or WORKSPACE_DIR)
+        try:
+            workspace_path = str(
+                validate_workspace_path(
+                    str(body.get("workspacePath") or WORKSPACE_DIR),
+                    create=True,
+                )
+            )
+        except WorkspacePathError as exc:
+            return error_response(str(exc), 400, exc.code)
         name = str(body.get("name") or Path(workspace_path).name or "New Project").strip()
         description = str(body.get("description") or "").strip()
         project_id = _short_id("project")
@@ -7584,12 +7651,24 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"ok": True, "project": project, "session": initial_session, **payload}
 
     @router.patch("/api/projects/{project_id}")
-    async def api_workbench_update_project(project_id: str, request: Request):
-        body = await request.json()
+    async def api_workbench_update_project(
+        project_id: str, body_model: api_models.ProjectUpdateBody
+    ):
+        body = api_models.body_dict(body_model)
         payload = _read_workbench_store()
         project = _workbench_find_project(payload, project_id)
         if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
+        if "workspacePath" in body:
+            try:
+                body["workspacePath"] = str(
+                    validate_workspace_path(
+                        str(body.get("workspacePath") or ""),
+                        create=True,
+                    )
+                )
+            except WorkspacePathError as exc:
+                return error_response(str(exc), 400, exc.code)
         for field in ("name", "description", "icon", "color", "template", "workspacePath", "status", "model", "accountTier"):
             if field in body:
                 project[field] = body[field]
@@ -7623,8 +7702,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             if doomed_data_key != _WORKBENCH_LEGACY_DATA_KEY:
                 try:
                     from cyrene.config import get_knowledge_db_path, STORE_DIR
+                    from webui.routes_workbench_memory import delete_workspace_memory
+
                     _remove_path(get_knowledge_db_path(doomed_data_key))
-                    _remove_path(STORE_DIR / f"wb_memory_{doomed_data_key}.json")
+                    delete_workspace_memory(doomed_data_key)
                     import aiosqlite
                     async with aiosqlite.connect(_db_path) as db:
                         await db.execute(
@@ -7634,6 +7715,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                         await db.commit()
                 except Exception:
                     logger.exception("Failed to remove project-scoped data for %s", project_id)
+        base_payload = getattr(payload, "_workbench_base", None)
         next_projects = [project for project in projects if str(project.get("id") or "") != project_id]
         if len(next_projects) == len(projects):
             return JSONResponse({"error": "project not found"}, status_code=404)
@@ -7644,7 +7726,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             payload["activeProjectId"] = next_projects[0].get("id")
             sessions = next_projects[0].get("sessions") or []
             payload["activeSessionId"] = sessions[0].get("id") if sessions else ""
-        _write_workbench_store(payload)
+        _write_workbench_store(payload, base_value=base_payload)
         return {"ok": True, **payload}
 
     @router.get("/api/projects/{project_id}/sessions")
@@ -7656,8 +7738,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"sessions": project.get("sessions", [])}
 
     @router.post("/api/projects/{project_id}/sessions")
-    async def api_workbench_create_session(project_id: str, request: Request):
-        body = await request.json()
+    async def api_workbench_create_session(
+        project_id: str, body_model: api_models.SessionCreateBody
+    ):
+        body = api_models.body_dict(body_model)
         payload = _read_workbench_store()
         project = _workbench_find_project(payload, project_id)
         if not project:
@@ -7684,8 +7768,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"ok": True, "session": session, **payload}
 
     @router.post("/api/task-sessions/{session_id}/follow-up")
-    async def api_workbench_create_follow_up(session_id: str, request: Request):
-        body = await request.json()
+    async def api_workbench_create_follow_up(
+        session_id: str, body_model: api_models.FollowUpBody
+    ):
+        body = api_models.body_dict(body_model)
         payload = _read_workbench_store()
         project, source_session = _workbench_find_session(payload, session_id)
         if not source_session or not project:
@@ -7740,15 +7826,16 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         }
 
     @router.post("/api/projects/{project_id}/init/generate")
-    async def api_workbench_generate_init(project_id: str, request: Request):
+    async def api_workbench_generate_init(
+        project_id: str, body_model: api_models.InitGenerateBody
+    ):
         """(Re)generate the onboarding questions for a project's init session.
 
         Runs the agent against the project's metadata and workspace files; on
         any failure it keeps the deterministic fallback form. Either way the
         form is marked as ``generated`` so the client only requests this once.
         """
-        body = await request.json()
-        lang = str(body.get("lang") or "").strip()
+        lang = str(body_model.lang or "").strip()
         payload = _read_workbench_store()
         project = _workbench_find_project(payload, project_id)
         if not project:
@@ -7803,8 +7890,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except TimeoutError as exc:
             return JSONResponse({"error": str(exc)}, status_code=504)
-        except RuntimeError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=500)
+        except RuntimeError:
+            logger.exception(
+                "Failed to compute Workbench diff for session %s", session_id
+            )
+            return error_response("Diff failed", 500, "workbench_diff_failed")
         return result
 
     @router.get("/api/task-sessions/{session_id}/workspace/exists")
@@ -7834,13 +7924,12 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"exists": exists, "path": rel, "isDir": resolved.is_dir() if exists else False}
 
     @router.patch("/api/task-sessions/{session_id}/plan")
-    async def api_workbench_mutate_plan(session_id: str, request: Request):
-        body = await request.json()
+    async def api_workbench_mutate_plan(
+        session_id: str, body_model: api_models.PlanMutationBody
+    ):
+        body = api_models.body_dict(body_model)
         operation = str(body.get("operation") or "").strip().lower()
-        try:
-            requested_revision = int(body.get("basePlanRevision"))
-        except (TypeError, ValueError):
-            return JSONResponse({"error": "invalid basePlanRevision"}, status_code=400)
+        requested_revision = body_model.basePlanRevision
 
         with _WORKBENCH_STORE_LOCK:
             payload = _read_workbench_store()
@@ -7990,8 +8079,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             return {"ok": True, "project": project, "session": session, **payload}
 
     @router.patch("/api/task-sessions/{session_id}")
-    async def api_workbench_update_session(session_id: str, request: Request):
-        body = await request.json()
+    async def api_workbench_update_session(
+        session_id: str, body_model: api_models.SessionUpdateBody
+    ):
+        body = api_models.body_dict(body_model)
         payload = _read_workbench_store()
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
@@ -8082,14 +8173,16 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"ok": True, **payload}
 
     @router.post("/api/task-sessions/{session_id}/plan/generate")
-    async def api_workbench_generate_plan(session_id: str, request: Request):
+    async def api_workbench_generate_plan(
+        session_id: str, body_model: api_models.PlanGenerateBody
+    ):
         """Generate a REAL execution plan for a task session.
 
         The agent reads the session goal + constraints and explores the project
         workspace, then returns ordered steps (all ``pending`` — nothing is run
         or pre-completed here). Drives the idle → planning transition.
         """
-        body = await request.json()
+        body = api_models.body_dict(body_model)
         goal = str(body.get("goal") or "").strip()
         feedback = str(body.get("feedback") or "").strip()
         auto_start = bool(body.get("autoStart"))
@@ -8232,9 +8325,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         }
 
     @router.post("/api/task-sessions/{session_id}/reflect")
-    async def api_workbench_reflect(session_id: str, request: Request):
+    async def api_workbench_reflect(
+        session_id: str, body_model: api_models.ReflectionBody
+    ):
         """Run deep reflection over this task's history and attach the packet."""
-        body = await request.json()
+        body = api_models.body_dict(body_model)
         focus = str(body.get("focus") or "").strip()
         payload = _read_workbench_store()
         project, session = _workbench_find_session(payload, session_id)
@@ -8256,7 +8351,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"ok": True, "project": project, "session": session, **payload}
 
     @router.post("/api/task-sessions/{session_id}/verify")
-    async def api_workbench_verify(session_id: str, request: Request):
+    async def api_workbench_verify(
+        session_id: str, _body: api_models.EmptyBody | None = None
+    ):
         """Independent acceptance agent verifies the criteria against results."""
         payload = _read_workbench_store()
         project, session = _workbench_find_session(payload, session_id)
@@ -8327,7 +8424,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"ok": True, "verdict": verdict, "project": project, "session": session, **payload}
 
     @router.post("/api/task-sessions/{session_id}/reflect-and-fork")
-    async def api_workbench_reflect_and_fork(session_id: str, request: Request):
+    async def api_workbench_reflect_and_fork(
+        session_id: str, _body: api_models.EmptyBody | None = None
+    ):
         """Reflect on a (failed) task, then create a fresh sibling session that
         inherits the goal/constraints and carries the reflection packet so its
         plan avoids the dead-ends. Returns the new session (made active)."""
@@ -8405,8 +8504,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"ok": True, "project": project, "session": session, **payload}
 
     @router.post("/api/task-sessions/{session_id}/runs")
-    async def api_workbench_create_run(session_id: str, request: Request):
-        body = await request.json()
+    async def api_workbench_create_run(
+        session_id: str, body_model: api_models.AgentInputBody
+    ):
+        body = api_models.body_dict(body_model)
         user_input = str(body.get("input") or body.get("message") or "").strip()
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         mode = str(body.get("mode") or "auto")
@@ -8584,9 +8685,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"ok": True, "project": project, "session": session, "run": run, **payload}
 
     @router.post("/api/task-sessions/{session_id}/chat")
-    async def api_workbench_session_chat(session_id: str, request: Request):
+    async def api_workbench_session_chat(
+        session_id: str, body_model: api_models.AgentInputBody
+    ):
         """Simple chat mode — returns agent reply without generating plans/steps."""
-        body = await request.json()
+        body = api_models.body_dict(body_model)
         message = str(body.get("message") or "").strip()
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         mode = str(body.get("mode") or "auto")
@@ -8647,7 +8750,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"ok": True, "project": project, "session": session, **payload}
 
     @router.post("/api/task-sessions/{session_id}/dispatch")
-    async def api_workbench_dispatch(session_id: str, request: Request):
+    async def api_workbench_dispatch(
+        session_id: str, body_model: api_models.AgentInputBody
+    ):
         """Intent-aware entry for the task composer.
 
         Classifies the input and routes it: a question → a direct answer; a
@@ -8658,7 +8763,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         finalize return an agent reply with no plan/steps. ``replyKind`` tells the
         client which card to render.
         """
-        body = await request.json()
+        body = api_models.body_dict(body_model)
         user_input = str(body.get("input") or body.get("message") or "").strip()
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         mode = str(body.get("mode") or "auto")
@@ -8873,12 +8978,14 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"ok": True, "replyKind": kind, "project": project, "session": session, "run": run, **payload}
 
     @router.post("/api/task-sessions/{session_id}/answer")
-    async def api_workbench_answer(session_id: str, request: Request):
+    async def api_workbench_answer(
+        session_id: str, body_model: api_models.AnswerBody
+    ):
         """Answer a paused run's permission / clarification question and resume
         the SAME round inside the project scope. The continued reply (or a follow-up
         question) replaces the question card. Mirrors the legacy chat answer flow,
         but session-scoped to this Workbench task."""
-        body = await request.json()
+        body = api_models.body_dict(body_model)
         question_id = str(body.get("question_id") or "").strip()
         answer_text = str(body.get("answer") or body.get("selected_option") or "").strip()
         if not question_id or not answer_text:
@@ -9111,14 +9218,16 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         }
 
     @router.post("/api/task-sessions/{session_id}/init/submit")
-    async def api_workbench_submit_init(session_id: str, request: Request):
+    async def api_workbench_submit_init(
+        session_id: str, body_model: api_models.InitSubmitBody
+    ):
         """Finalize project initialization.
 
         Persists the onboarding answers, writes a project brief into the project
         context, and asks the initialization agent to draft the major task plan.
         Confirming that plan is a separate step that creates task sessions.
         """
-        body = await request.json()
+        body = api_models.body_dict(body_model)
         payload = _read_workbench_store()
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
@@ -9177,9 +9286,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"ok": True, "project": project, "session": session, **payload}
 
     @router.post("/api/task-sessions/{session_id}/init/plan")
-    async def api_workbench_revise_init_plan(session_id: str, request: Request):
+    async def api_workbench_revise_init_plan(
+        session_id: str, body_model: api_models.InitPlanBody
+    ):
         """Revise the initialization task plan from user feedback."""
-        body = await request.json()
+        body = api_models.body_dict(body_model)
         feedback = str(body.get("feedback") or body.get("message") or "").strip()
         payload = _read_workbench_store()
         project, session = _workbench_find_session(payload, session_id)
@@ -9228,9 +9339,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"ok": True, "project": project, "session": session, **payload}
 
     @router.post("/api/task-sessions/{session_id}/init/confirm")
-    async def api_workbench_confirm_init_plan(session_id: str, request: Request):
+    async def api_workbench_confirm_init_plan(
+        session_id: str, body_model: api_models.InitConfirmBody
+    ):
         """Create task sessions from the confirmed initialization plan."""
-        body = await request.json()
+        body = api_models.body_dict(body_model)
         payload = _read_workbench_store()
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:

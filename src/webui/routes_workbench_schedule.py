@@ -28,13 +28,18 @@ local time's UTC components, so "what you see is when it fires".
 from __future__ import annotations
 
 import math
+import logging
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 from croniter import croniter
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+from webui import api_models
+from webui.api_errors import error_response
 from webui.workbench_notifications import append_notification
+
+logger = logging.getLogger(__name__)
 
 # Max concrete occurrences expanded per recurring task per window. A calendar is
 # not meant to render a sub-minute cron across a month; we cap and move on.
@@ -260,8 +265,9 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
         """Raw scheduled tasks (agent 定时任务) for the management/list view."""
         try:
             return {"tasks": await _all_tasks(workspace), "workspace": _resolve_workspace_id(workspace)}
-        except Exception as e:  # noqa: BLE001
-            return JSONResponse({"error": f"List failed: {e}"}, status_code=400)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to list scheduled tasks for %s", workspace)
+            return error_response("List failed", 500, "schedule_list_failed")
 
     @router.get("/api/workbench/schedule/occurrences")
     async def wb_list_occurrences(start: str = "", end: str = "", workspace: str = "default"):
@@ -304,18 +310,18 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
                 "end": end_dt.isoformat(),
                 "workspace": resolved_workspace,
             }
-        except Exception as e:  # noqa: BLE001
-            return JSONResponse({"error": f"Occurrences failed: {e}"}, status_code=400)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to list schedule occurrences for %s", workspace)
+            return error_response("Occurrences failed", 500, "schedule_occurrences_failed")
 
     @router.post("/api/workbench/schedule/tasks")
-    async def wb_create_task(request: Request, workspace: str = "default"):
+    async def wb_create_task(
+        body_model: api_models.ScheduleCreateBody, workspace: str = "default"
+    ):
         """Create a scheduled task. Mirrors the REST policy: workspace_only only
         (full-access scheduled tasks must be created via the chat agent's
         ``schedule_task`` tool, which shows a confirmation dialog)."""
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        body = api_models.body_dict(body_model)
 
         prompt = str(body.get("prompt") or "").strip()
         stype = str(body.get("schedule_type") or "").strip()
@@ -355,17 +361,19 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
                 meta={"taskId": task_id},
             )
             return {"ok": True, "id": task_id, "tasks": await _all_tasks(resolved_workspace), "workspace": resolved_workspace}
-        except Exception as e:  # noqa: BLE001
-            return JSONResponse({"error": f"Create failed: {e}"}, status_code=400)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to create scheduled task for %s", workspace)
+            return error_response("Create failed", 500, "schedule_create_failed")
 
     @router.put("/api/workbench/schedule/tasks/{task_id}")
-    async def wb_update_task(task_id: str, request: Request, workspace: str = "default"):
+    async def wb_update_task(
+        task_id: str,
+        body_model: api_models.ScheduleUpdateBody,
+        workspace: str = "default",
+    ):
         """Update a task's prompt / schedule / status. Recomputes ``next_run``
         when the schedule changes (an invalid schedule is a 400)."""
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        body = api_models.body_dict(body_model)
 
         stype = body.get("schedule_type")
         svalue = body.get("schedule_value")
@@ -404,8 +412,11 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
                 meta={"taskId": task_id},
             )
             return {"ok": True, "tasks": await _all_tasks(resolved_workspace), "workspace": resolved_workspace}
-        except Exception as e:  # noqa: BLE001
-            return JSONResponse({"error": f"Update failed: {e}"}, status_code=400)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to update scheduled task %s for %s", task_id, workspace
+            )
+            return error_response("Update failed", 500, "schedule_update_failed")
 
     @router.delete("/api/workbench/schedule/tasks/{task_id}")
     async def wb_delete_task(task_id: str, workspace: str = "default"):
@@ -420,8 +431,11 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
             if cursor.rowcount <= 0:
                 return JSONResponse({"error": "task not found"}, status_code=404)
             return {"ok": True, "tasks": await _all_tasks(resolved_workspace), "workspace": resolved_workspace}
-        except Exception as e:  # noqa: BLE001
-            return JSONResponse({"error": f"Delete failed: {e}"}, status_code=400)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to delete scheduled task %s for %s", task_id, workspace
+            )
+            return error_response("Delete failed", 500, "schedule_delete_failed")
 
     @router.get("/api/workbench/schedule/tasks/{task_id}/runs")
     async def wb_task_runs(task_id: str, limit: int = 20, workspace: str = "default"):
@@ -440,5 +454,8 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
                 )
                 rows = await cursor.fetchall()
             return {"runs": [dict(r) for r in rows]}
-        except Exception as e:  # noqa: BLE001
-            return JSONResponse({"error": f"Runs failed: {e}"}, status_code=400)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to list runs for scheduled task %s in %s", task_id, workspace
+            )
+            return error_response("Runs failed", 500, "schedule_runs_failed")

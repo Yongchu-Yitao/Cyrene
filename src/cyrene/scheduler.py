@@ -49,6 +49,7 @@ from webui.workbench_notifications import append_notification
 logger = logging.getLogger(__name__)
 
 _scheduler: AsyncIOScheduler | None = None
+_workbench_db_path: str = ""
 
 # ---------------------------------------------------------------------------
 # Lottery state  (persisted to disk)
@@ -274,7 +275,17 @@ def _parse_activity_timestamp(value: object) -> datetime | None:
 
 def _latest_workbench_user_activity() -> dict[str, object] | None:
     """Return the Workbench chat most recently touched by the user."""
-    data = read_json_safe(DATA_DIR / "workbench_chats.json")
+    if _workbench_db_path:
+        from cyrene.workbench_store import read_document
+
+        data = read_document(
+            _workbench_db_path,
+            "chats",
+            lambda: {"chats": []},
+            legacy_path=DATA_DIR / "workbench_chats.json",
+        )
+    else:
+        data = read_json_safe(DATA_DIR / "workbench_chats.json")
     if not isinstance(data, dict) or not isinstance(data.get("chats"), list):
         return None
 
@@ -1077,6 +1088,16 @@ def setup_scheduler(bot, db_path: str) -> AsyncIOScheduler:
     """
     global _scheduler
     global _BIG_HEARTBEAT_INTERVAL
+    global _workbench_db_path
+    _workbench_db_path = str(db_path)
+    try:
+        from webui import routes_workbench_chat as _chat_store
+        from webui.workbench_notifications import configure_store as _configure_notifications
+
+        _chat_store.configure_store(str(db_path))
+        _configure_notifications(str(db_path))
+    except Exception:
+        logger.debug("Could not configure Workbench SQLite stores for scheduler", exc_info=True)
     _load_lottery_state()
     hb_seconds = _get_heartbeat_interval()
     _BIG_HEARTBEAT_INTERVAL = max(1, hb_seconds // SCHEDULER_INTERVAL)

@@ -7,8 +7,7 @@ never share request code, while reusing the same per-session agent runtime
 (``run_agent(session_id=...)``).
 
 Data model: every Workbench project (workspace) owns two kinds of sessions —
-task sessions (stored in ``workbench_projects.json``) and chat sessions
-(stored here, in ``data/workbench_chats.json``, bound via ``projectId``).
+task sessions and chat sessions persisted transactionally in SQLite.
 Each chat keeps a public transcript (user / assistant messages with
 attachments, tool trace and token usage) that survives agent-side context
 compaction; the agent's own raw context lives in
@@ -25,17 +24,22 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from cyrene.call_llm import NETWORK_RETRY_LIMIT
 from cyrene.config import DATA_DIR
+from cyrene.conversations import archive_session_exchange
 from cyrene.io_utils import atomic_write_json, read_json_safe
+from cyrene.workbench_store import read_document, write_document
+from webui import api_models
 from webui.workbench_notifications import append_notification
 
 logger = logging.getLogger(__name__)
 
 _CHATS_STORE = DATA_DIR / "workbench_chats.json"
+_STORE_DB_PATH = ""
+_CONFIGURED_CHATS_STORE = None
 
 # Internal control tools that say nothing useful in a progress trace.
 _TRACE_SKIP_TOOLS = {"use_tools", "quit", "send_message"}
@@ -77,15 +81,44 @@ def _workbench_chat_run_error_message(exc: Exception, lang: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 def _read_chats_store() -> dict[str, Any]:
-    data = read_json_safe(_CHATS_STORE)
+    if not _STORE_DB_PATH or _CONFIGURED_CHATS_STORE != _CHATS_STORE:
+        data = read_json_safe(_CHATS_STORE)
+        if isinstance(data, dict) and isinstance(data.get("chats"), list):
+            return data
+        return {"chats": []}
+    data = read_document(
+        _STORE_DB_PATH,
+        "chats",
+        lambda: {"chats": []},
+        legacy_path=_CHATS_STORE,
+    )
     if isinstance(data, dict) and isinstance(data.get("chats"), list):
         return data
     return {"chats": []}
 
 
 def _write_chats_store(payload: dict[str, Any]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(_CHATS_STORE, payload)
+    if not _STORE_DB_PATH or _CONFIGURED_CHATS_STORE != _CHATS_STORE:
+        atomic_write_json(_CHATS_STORE, payload)
+        return
+    merged = write_document(
+        _STORE_DB_PATH,
+        "chats",
+        payload,
+        lambda: {"chats": []},
+        legacy_path=_CHATS_STORE,
+        export_path=_CHATS_STORE,
+    )
+    payload.clear()
+    payload.update(merged)
+    if hasattr(payload, "_workbench_base"):
+        payload._workbench_base = getattr(merged, "_workbench_base", dict(merged))
+
+
+def configure_store(db_path: str) -> None:
+    global _STORE_DB_PATH, _CONFIGURED_CHATS_STORE
+    _STORE_DB_PATH = str(db_path or "")
+    _CONFIGURED_CHATS_STORE = _CHATS_STORE
 
 
 def _mark_user_activity(chat: dict[str, Any], timestamp: str) -> None:
@@ -518,6 +551,100 @@ def _session_state_messages(session_id: str) -> list[dict[str, Any]]:
     return []
 
 
+# Categories surfaced in the Workbench overview's "context breakdown" bar. The
+# order is the visual stacking order (oldest/system first, live turns last).
+_CONTEXT_SEGMENT_KEYS = ("compacted", "system", "user", "assistant", "tool")
+
+
+def _context_segment_tokens(messages: list[dict[str, Any]]) -> dict[str, int]:
+    """Split the agent's RAW context into per-category token estimates.
+
+    This mirrors ``call_llm._message_token_estimate`` field-by-field so the sum
+    equals what the compactor measures against the context window — the gauge and
+    the 60% compaction trigger therefore share one honest denominator. Each
+    message's tokens are attributed to a UI bucket:
+
+    - ``compacted`` — append-only summary blocks of older history
+    - ``system``    — live system messages (non-compacted)
+    - ``user`` / ``assistant`` — prose by author (assistant prose only)
+    - ``tool``      — assistant tool-call args + tool-result bodies (the bulk)
+    """
+    from cyrene.call_llm import _approx_token_count
+
+    seg = {key: 0 for key in _CONTEXT_SEGMENT_KEYS}
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")
+        base = 4 + _approx_token_count(role)
+        if message.get("compacted_block"):
+            seg["compacted"] += base + _approx_token_count(message.get("content") or "")
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            content_tokens = _approx_token_count(content)
+        elif isinstance(content, list):
+            content_tokens = sum(
+                _approx_token_count(block.get("text") or "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+        else:
+            content_tokens = _approx_token_count(content or "")
+        tool_tokens = 0
+        for tool_call in message.get("tool_calls") or []:
+            fn = tool_call.get("function", {}) if isinstance(tool_call, dict) else {}
+            tool_tokens += _approx_token_count(fn.get("name") or "")
+            tool_tokens += _approx_token_count(fn.get("arguments") or "")
+        if role == "user":
+            seg["user"] += base + content_tokens
+        elif role == "assistant":
+            seg["assistant"] += base + content_tokens + _approx_token_count(message.get("reasoning_content") or "")
+            seg["tool"] += tool_tokens
+        elif role == "tool":
+            seg["tool"] += base + content_tokens + _approx_token_count(message.get("tool_call_id") or "")
+        else:
+            seg["system"] += base + content_tokens
+    return seg
+
+
+def _chat_context_payload(state_id: str, model_name: str) -> dict[str, Any]:
+    """Live context-window composition for one chat, computed from raw state.
+
+    Per-conversation by construction (state lives at ``sessions/<id>/state.json``)
+    and cheap enough to poll while a run streams, so the overview updates in
+    real time as the agent appends turns.
+    """
+    from cyrene.agent.session import _COMPACT_TRIGGER_RATIO
+    from cyrene.config_store import ctx_limit_for_model
+
+    messages = _session_state_messages(state_id)
+    seg = _context_segment_tokens(messages)
+    used = sum(seg.values())
+    limit = ctx_limit_for_model(model_name)
+    compacted_blocks = sum(
+        1 for m in messages if isinstance(m, dict) and m.get("compacted_block")
+    )
+    distilled = any(
+        isinstance(m, dict) and m.get("compacted_block") and m.get("llm_compacted")
+        for m in messages
+    )
+    return {
+        "ctxLimit": limit,
+        "ctxUsed": used,
+        "ratio": (used / limit) if limit > 0 else None,
+        "compactTriggerRatio": _COMPACT_TRIGGER_RATIO,
+        "messageCount": len(messages),
+        "segments": [{"key": key, "tokens": seg[key]} for key in _CONTEXT_SEGMENT_KEYS],
+        "compaction": {
+            "active": compacted_blocks > 0,
+            "blocks": compacted_blocks,
+            "tokens": seg["compacted"],
+            "distilled": distilled,
+        },
+    }
+
+
 def _tool_args_preview(raw_arguments: str) -> str:
     try:
         args = json.loads(raw_arguments or "{}")
@@ -796,6 +923,7 @@ async def _summarize_chat_to_brief(chat: dict[str, Any], project: dict[str, Any]
 # ---------------------------------------------------------------------------
 
 def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
+    configure_store(db_path)
     # Heavyweight helpers (store access, attachments, agent entrypoints) live in
     # webui.routes; import lazily at call time to avoid a circular import.
 
@@ -828,8 +956,8 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         return {"chats": chats}
 
     @router.post("/api/workbench/chats")
-    async def api_workbench_create_chat(request: Request):
-        body = await request.json()
+    async def api_workbench_create_chat(body_model: api_models.ChatCreateBody):
+        body = api_models.body_dict(body_model)
         project_id = str(body.get("project") or body.get("projectId") or "").strip()
         if not project_id:
             return JSONResponse({"error": "project is required"}, status_code=400)
@@ -868,9 +996,29 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             return JSONResponse({"error": "chat not found"}, status_code=404)
         return _workbench_subagent_payload(chat_id, round_id)
 
+    @router.get("/api/workbench/chats/{chat_id}/context")
+    async def api_workbench_chat_context(chat_id: str):
+        """Live context-window gauge + composition for the overview panel."""
+        from cyrene import config
+
+        if chat_id.startswith("legacy:"):
+            _prefix, _project_id, session_id = (chat_id.split(":", 2) + ["", ""])[:3]
+            if not session_id:
+                return JSONResponse({"error": "chat not found"}, status_code=404)
+            model_name = str(getattr(config, "OPENAI_MODEL", "") or "")
+            return _chat_context_payload(session_id, model_name)
+        payload = _read_chats_store()
+        chat = _find_chat(payload, chat_id)
+        if not chat:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        model_name = str(chat.get("model") or getattr(config, "OPENAI_MODEL", "") or "")
+        return _chat_context_payload(chat_id, model_name)
+
     @router.patch("/api/workbench/chats/{chat_id}")
-    async def api_workbench_update_chat(chat_id: str, request: Request):
-        body = await request.json()
+    async def api_workbench_update_chat(
+        chat_id: str, body_model: api_models.ChatUpdateBody
+    ):
+        body = api_models.body_dict(body_model)
         if chat_id.startswith("legacy:"):
             return JSONResponse({"error": "legacy chat metadata is read-only"}, status_code=403)
         payload = _read_chats_store()
@@ -909,11 +1057,13 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         return {"ok": True}
 
     @router.post("/api/workbench/chats/{chat_id}/messages")
-    async def api_workbench_chat_send(chat_id: str, request: Request):
+    async def api_workbench_chat_send(
+        chat_id: str, body_model: api_models.ChatMessageBody
+    ):
         from cyrene.agent import run_agent
         from cyrene.agent.state import PERMISSION_MODES, _attachment_paths_by_name, _reply_stream_writer
 
-        body = await request.json()
+        body = api_models.body_dict(body_model)
         message = str(body.get("message") or "").strip()
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         command = str(body.get("command") or "").strip()
@@ -1065,6 +1215,19 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             fresh_chat.pop("pendingQuestion", None)
             fresh_chat["updatedAt"] = assistant_entry["createdAt"]
             _write_chats_store(fresh)
+            # Persist this exchange to the workspace's per-session conversation
+            # file so the conversation survives outside the JSON store and the
+            # agent can read its own history by id. Best-effort; never block reply.
+            try:
+                archive_session_exchange(
+                    chat_id,
+                    message,
+                    str(reply_text or ""),
+                    workspace_dir=workspace_dir,
+                    session_title=str(fresh_chat.get("title") or ""),
+                )
+            except Exception:
+                logger.exception("Failed to archive workbench conversation %s", chat_id)
             if not command and not retry:
                 R.schedule_capture(_project_data_key(project_id), message, str(reply_text or ""))
                 append_notification(
@@ -1194,9 +1357,11 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         )
 
     @router.post("/api/workbench/chats/{chat_id}/to-task")
-    async def api_workbench_chat_to_task(chat_id: str, request: Request):
+    async def api_workbench_chat_to_task(
+        chat_id: str, body_model: api_models.ChatToTaskBody
+    ):
         """Promote a conversation into a task session of its project (开始执行)."""
-        body = await request.json()
+        body = api_models.body_dict(body_model)
         payload = _read_chats_store()
         chat = _find_chat(payload, chat_id)
         if not chat:
@@ -1272,11 +1437,13 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         return {"ok": True, "session": session, **store}
 
     @router.post("/api/workbench/chats/{chat_id}/answer")
-    async def api_workbench_chat_answer(chat_id: str, request: Request):
+    async def api_workbench_chat_answer(
+        chat_id: str, body_model: api_models.AnswerBody
+    ):
         """Answer a paused chat run's permission / clarification question and
         resume the SAME round. Returns the continued reply (appended as an
         assistant message) or a follow-up question. Session-scoped to this chat."""
-        body = await request.json()
+        body = api_models.body_dict(body_model)
         question_id = str(body.get("question_id") or "").strip()
         answer_text = str(body.get("answer") or body.get("selected_option") or "").strip()
         if not question_id or not answer_text:
@@ -1342,6 +1509,16 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         fresh_chat.pop("pendingQuestion", None)
         fresh_chat["updatedAt"] = assistant_entry["createdAt"]
         _write_chats_store(fresh)
+        try:
+            archive_session_exchange(
+                chat_id,
+                answer_text,
+                str(reply or ""),
+                workspace_dir=workspace_dir,
+                session_title=str(fresh_chat.get("title") or ""),
+            )
+        except Exception:
+            logger.exception("Failed to archive workbench conversation %s", chat_id)
         if project_id:
             R.schedule_capture(_project_data_key(project_id), answer_text, str(reply or ""))
         return {

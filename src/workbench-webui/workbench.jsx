@@ -608,6 +608,83 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     };
   }, [fullPage, activeChatId, store && store.activeSessionId]);
 
+  // Global keyboard shortcuts (search, new chat/task, command palette,
+  // switch project, toggle sidebar, settings). Bindings come from the
+  // platform-aware WorkbenchShortcuts module so ⌘ on mac / Ctrl elsewhere is
+  // handled automatically and user customizations in Settings → Shortcuts are
+  // honoured. Composer Enter-to-send is handled locally in each composer's
+  // onKeyDown; these are the shell-level ones.
+  useWorkbenchEffect(function () {
+    function onKey(event) {
+      var sc = window.WorkbenchShortcuts;
+      if (!sc) return;
+      // Don't intercept while a modal/overlay that owns its own keys is open.
+      if (searchOpen || settingsOpen || newProjectOpen || newTaskOpen) return;
+      // Ignore typing inside inputs / textareas / contenteditable so a Cmd+K
+      // still fires search but a plain "k" doesn't trigger anything.
+      var target = event.target;
+      var tag = target && target.tagName ? target.tagName.toLowerCase() : "";
+      var isEditable = tag === "input" || tag === "textarea" || tag === "select" || !!(target && target.isContentEditable);
+      // All current global shortcuts require a modifier (mod/shift/ctrl) so
+      // they won't fire from plain typing — but still bail on plain keys when
+      // the user is editing to avoid swallowing character entry.
+      if (isEditable && !(event.metaKey || event.ctrlKey || event.altKey)) return;
+
+      if (sc.matches(event, "search")) {
+        event.preventDefault();
+        setSearchOpen(true);
+        return;
+      }
+      if (sc.matches(event, "new-chat")) {
+        event.preventDefault();
+        setFullPage("chat");
+        return;
+      }
+      if (sc.matches(event, "new-task")) {
+        event.preventDefault();
+        if (store && store.activeProject) setNewTaskOpen(true);
+        return;
+      }
+      if (sc.matches(event, "command-palette")) {
+        // No dedicated palette yet — reuse search as the entry point so the
+        // shortcut still does something useful.
+        event.preventDefault();
+        setSearchOpen(true);
+        return;
+      }
+      if (sc.matches(event, "settings")) {
+        event.preventDefault();
+        setSettingsTab("shortcuts");
+        setSettingsOpen(true);
+        return;
+      }
+      if (sc.matches(event, "toggle-sidebar")) {
+        event.preventDefault();
+        setRailCollapsed(function (v) {
+          var next = !v;
+          try { localStorage.setItem("wb-rail-collapsed", next ? "1" : "0"); } catch (e) {}
+          return next;
+        });
+        return;
+      }
+      if (sc.matches(event, "switch-project")) {
+        // Mod+1..9 selects the nth project. The terminal key is the digit.
+        var digit = String(event.key || "");
+        if (/^[1-9]$/.test(digit)) {
+          var projects = (store && store.projects) || [];
+          var idx = parseInt(digit, 10) - 1;
+          if (projects[idx]) {
+            event.preventDefault();
+            selectProject(projects[idx].id);
+          }
+        }
+        return;
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return function () { window.removeEventListener("keydown", onKey); };
+  }, [searchOpen, settingsOpen, newProjectOpen, newTaskOpen, store && store.activeProject, store && store.projects]);
+
   // Auto-refresh the notification center on a timer so new items (agent replies,
   // scheduled-task results, knowledge ingestion…) appear without a page reload —
   // workbench notifications are persisted server-side but never pushed over SSE.
@@ -926,7 +1003,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var isMemory = fullPage === "memory";
   var isChat = fullPage === "chat";
   var isWelcome = fullPage === "welcome";
-  var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isWelcome;
+  var isProfile = fullPage === "profile";
+  var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isWelcome || isProfile;
   var fullPageConfig = fullPage && !isModulePage ? workbenchFullPageConfig(fullPage, setFullPage, store) : null;
 
   // First-run onboarding (LLM + personality). Driven by the backend onboarding
@@ -983,7 +1061,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       {fullPageConfig ? (
         <WorkbenchFullPage config={fullPageConfig} onClose={function () { setFullPage(null); }} />
       ) : (
-        <div ref={wbApplyStoredRightWidth} className={"workbench-grid" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "")}>
+        <div ref={wbApplyStoredRightWidth} className={"workbench-grid" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "") + (isProfile ? " is-profile" : "")}>
           <ProjectRail
             projects={store.projects}
             activeProjectId={store.activeProjectId}
@@ -1027,6 +1105,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
               actualTheme: actualTheme,
               onToggleTheme: onToggleTheme,
             })
+          ) : isProfile ? (
+            window.WorkbenchProfilePage
+              ? React.createElement(window.WorkbenchProfilePage, {})
+              : <div className="workbench-empty">…</div>
           ) : (
           <>
           <TaskRail
@@ -1147,7 +1229,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
 function WorkbenchTopbar({ project, session, activePage, chatCrumb, notifications, onReloadNotifications, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = window.useWorkbenchI18n();
   var title = project ? project.name : "Project";
-  var pageLabels = { chat: t("workbench.page.chat"), knowledge: t("workbench.page.knowledge"), schedule: t("workbench.page.schedule"), memory: t("workbench.page.memory"), welcome: t("workbench.page.welcome") };
+  var pageLabels = { chat: t("workbench.page.chat"), knowledge: t("workbench.page.knowledge"), schedule: t("workbench.page.schedule"), memory: t("workbench.page.memory"), welcome: t("workbench.page.welcome"), profile: t("rail.profile") };
   var sessionTitle = activePage && pageLabels[activePage] ? pageLabels[activePage] : (session ? session.title : t("workbench.page.task"));
   var chatTail = activePage === "chat" ? String(chatCrumb || "").trim() : "";
   var themeTitle = theme === "system" ? t("workbench.theme.system") : actualTheme === "dark" ? t("workbench.theme.dark") : t("workbench.theme.light");
@@ -1189,7 +1271,11 @@ function WorkbenchTopbar({ project, session, activePage, chatCrumb, notification
         <button type="button" className="workbench-icon-btn" onClick={function () { onSettings(); }} title={t("nav.settings")}>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
-        <div className="workbench-avatar">{WorkbenchModel.initials(DATA.user && DATA.user.name)}</div>
+        <button type="button" className={"workbench-avatar-btn" + (activePage === "profile" ? " active" : "")} title={t("rail.profile")} onClick={function () { onOpenPage && onOpenPage("profile"); }}>
+          {window.WorkbenchAvatar
+            ? React.createElement(window.WorkbenchAvatar, { user: DATA.user, size: 30 })
+            : <span className="workbench-avatar">{WorkbenchModel.initials(DATA.user && DATA.user.name)}</span>}
+        </button>
       </div>
     </div>
   );
@@ -1325,6 +1411,16 @@ function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }
   var [open, setOpen] = useWorkbenchState(false);
   var rootRef = useWorkbenchRef(null);
   var isMac = useWorkbenchMemo(wbIsMacPlatform, []);
+  // Refresh the shortcut list every time the popover opens so it reflects any
+  // rebinding done in Settings → Shortcuts. Mirror the module's glyph renderer
+  // so the help center and the settings panel stay visually consistent.
+  var shortcutList = useWorkbenchMemo(function () {
+    if (!window.WorkbenchShortcuts) return [];
+    var list = window.WorkbenchShortcuts.list();
+    // Show the same set the help center always showed (global actions only);
+    // composer bindings live in the settings panel where they can be rebound.
+    return list.filter(function (item) { return item.group === "global"; });
+  }, [open]);
 
   useWorkbenchEffect(function () {
     if (!open) return undefined;
@@ -1375,13 +1471,13 @@ function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }
     },
   ];
 
-  var shortcuts = [
-    { id: "search", label: t("help.shortcut.search"), keys: ["mod", "K"] },
-    { id: "new-chat", label: t("help.shortcut.newChat"), keys: ["mod", "N"] },
-    { id: "new-task", label: t("help.shortcut.newTask"), keys: ["mod", "T"] },
-    { id: "command-palette", label: t("help.shortcut.commandPalette"), keys: ["mod", "shift", "P"] },
-    { id: "switch-project", label: t("help.shortcut.switchProject"), keys: ["mod", "1–9"] },
-  ];
+  var shortcuts = shortcutList.map(function (item) {
+    return {
+      id: item.id,
+      label: t(item.labelKey),
+      keys: item.keys,
+    };
+  });
 
   var version = (window.DATA && window.DATA.appVersion) || "1.0.0";
 
@@ -1434,6 +1530,9 @@ function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }
                   );
                 })}
               </div>
+              <button type="button" className="workbench-help-customize" onClick={function () { run(function () { onSettings && onSettings("shortcuts"); }); }}>
+                {t("help.customizeShortcuts", "Customize shortcuts")}
+              </button>
             </div>
             <div className="workbench-help-divider"></div>
             <div className="workbench-help-links">
@@ -1510,7 +1609,6 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
   var { t } = window.useWorkbenchI18n();
   window.useDataVersion();  // re-render chip when DATA.user changes (profile save); data.js loads before this bundle
   var [menuProjectId, setMenuProjectId] = useWorkbenchState("");
-  var [profileOpen, setProfileOpen] = useWorkbenchState(false);
 
   useWorkbenchEffect(function () {
     if (!menuProjectId) return undefined;
@@ -1623,16 +1721,16 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
         })}
       </div>
       <div
-        className="workbench-account"
+        className={"workbench-account" + (activePage === "profile" ? " active" : "")}
         role="button"
         tabIndex={0}
         title={t("rail.profile")}
         style={{ cursor: "pointer" }}
-        onClick={function () { setProfileOpen(true); }}
-        onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setProfileOpen(true); } }}
+        onClick={function () { onOpenPage && onOpenPage("profile"); }}
+        onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenPage && onOpenPage("profile"); } }}
       >
-        {window.UserAvatar
-          ? React.createElement(window.UserAvatar, { user: DATA.user, size: 34 })
+        {window.WorkbenchAvatar
+          ? React.createElement(window.WorkbenchAvatar, { user: DATA.user, size: 34 })
           : <div className="workbench-avatar photo">{WorkbenchModel.initials(DATA.user && DATA.user.name)}</div>}
         <div className="workbench-account-meta">
           <div className="workbench-account-name">
@@ -1642,12 +1740,6 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
           <small>{(DATA.sessions && DATA.sessions[0] && DATA.sessions[0].model) || DATA.appVersion || "model"}</small>
         </div>
       </div>
-      {profileOpen && window.ProfilePanel
-        ? React.createElement(window.ProfilePanel, {
-            onClose: function () { setProfileOpen(false); },
-            setPage: function () { setProfileOpen(false); if (onSettings) onSettings(); },
-          })
-        : null}
     </aside>
   );
 }
@@ -4173,8 +4265,28 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
   }
 
   function onKeyDown(event) {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit(); }
-    else if (event.key === "Escape") { setModeOpen(false); }
+    var sc = window.WorkbenchShortcuts;
+    // Enter sends; Shift+Enter (or the user's customized newline binding)
+    // inserts a newline. IME composition is guarded so multi-keystroke input
+    // (zh/ja/ko) does not submit mid-composition. Falls back to the default
+    // Enter-to-send behavior if the shortcut module is unavailable.
+    if (sc && sc.matches(event, "composer-send")) {
+      if (event.nativeEvent && event.nativeEvent.isComposing) return;
+      event.preventDefault();
+      submit();
+      return;
+    }
+    if (sc && sc.matches(event, "composer-newline")) {
+      // Allow the textarea's default Shift+Enter behavior (insert newline).
+      return;
+    }
+    if (!sc && event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+      if (event.nativeEvent && event.nativeEvent.isComposing) return;
+      event.preventDefault();
+      submit();
+      return;
+    }
+    if (event.key === "Escape") { setModeOpen(false); }
   }
 
   function pickFiles() { if (fileRef.current) fileRef.current.click(); }

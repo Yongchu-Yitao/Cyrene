@@ -14,6 +14,7 @@ a separate knowledge base. A missing/blank workspace falls back to ``default``.
 """
 
 import asyncio
+import logging
 import mimetypes
 import re
 from datetime import datetime
@@ -30,7 +31,11 @@ from cyrene.attachments import (
     is_exported_attachment_path,
     safe_attachment_filename,
 )
+from webui import api_models
+from webui.api_errors import error_response
 from webui.workbench_notifications import append_notification
+
+logger = logging.getLogger(__name__)
 
 # Cache of knowledge-db paths whose tables have already been created, so we
 # init each workspace db lazily (on first touch) exactly once per process.
@@ -94,17 +99,29 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
         status: str = None,
         tag: str = None,
         source: str = None,
-        limit: int = 200,
+        limit: int = 0,
     ):
-        """List documents in a workspace's knowledge base."""
+        """List documents in a workspace's knowledge base.
+
+        ``limit <= 0`` (the default) returns all documents so the Workbench UI
+        never silently truncates. A ``total`` count is always included.
+        """
         try:
             db_path = await _ensure_kb_db(workspace)
             documents = await store.list_documents(
                 db_path, q=q, kind=kind, status=status, tag=tag, source=source, limit=limit
             )
-            return {"documents": documents, "workspace": _resolve_workspace_id(workspace)}
-        except Exception as e:
-            return JSONResponse({"error": f"List failed: {str(e)}"}, status_code=400)
+            total = await store.count_documents(
+                db_path, q=q, kind=kind, status=status, tag=tag, source=source
+            )
+            return {
+                "documents": documents,
+                "total": total,
+                "workspace": _resolve_workspace_id(workspace),
+            }
+        except Exception:
+            logger.exception("Failed to list knowledge documents for %s", workspace)
+            return error_response("List failed", 500, "knowledge_list_failed")
 
     @router.get("/api/workbench/knowledge/stats")
     async def wb_get_stats(workspace: str = ""):
@@ -112,8 +129,9 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
         try:
             db_path = await _ensure_kb_db(workspace)
             return await store.get_stats(db_path)
-        except Exception as e:
-            return JSONResponse({"error": f"Stats failed: {str(e)}"}, status_code=400)
+        except Exception:
+            logger.exception("Failed to load knowledge stats for %s", workspace)
+            return error_response("Stats failed", 500, "knowledge_stats_failed")
 
     @router.get("/api/workbench/knowledge/documents/{doc_id}")
     async def wb_get_document(doc_id: str, workspace: str = ""):
@@ -126,8 +144,9 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
             chunks = await store.get_chunks(db_path, doc_id, with_embedding=False, limit=200)
             relations = await store.list_relations(db_path, src_id=doc_id)
             return {**doc, "chunks": chunks, "relations": relations}
-        except Exception as e:
-            return JSONResponse({"error": f"Get failed: {str(e)}"}, status_code=400)
+        except Exception:
+            logger.exception("Failed to load knowledge document %s", doc_id)
+            return error_response("Get failed", 500, "knowledge_get_failed")
 
     @router.post("/api/workbench/knowledge/documents")
     async def wb_upload_documents(files: list[UploadFile], workspace: str = ""):
@@ -137,8 +156,11 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
 
         try:
             db_path = await _ensure_kb_db(workspace)
-        except Exception as e:
-            return JSONResponse({"error": f"Workspace init failed: {str(e)}"}, status_code=400)
+        except Exception:
+            logger.exception("Failed to initialize knowledge workspace %s", workspace)
+            return error_response(
+                "Workspace init failed", 500, "knowledge_workspace_init_failed"
+            )
 
         _UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
         documents: list[dict[str, Any]] = []
@@ -176,9 +198,16 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
 
                 if doc.get("status") in {"pending", "error"}:
                     asyncio.create_task(ingest.index_document(db_path, doc["id"]))
-            except Exception as e:
-                return JSONResponse(
-                    {"error": f"Failed to upload {file.filename}: {str(e)}"}, status_code=400
+            except Exception:
+                logger.exception(
+                    "Failed to upload knowledge document %s for %s",
+                    file.filename,
+                    workspace,
+                )
+                return error_response(
+                    f"Failed to upload {file.filename}",
+                    500,
+                    "knowledge_upload_failed",
                 )
         for doc in documents:
             append_notification(
@@ -194,8 +223,13 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
         return {"documents": documents}
 
     @router.patch("/api/workbench/knowledge/documents/{doc_id}")
-    async def wb_update_document(doc_id: str, body: dict, workspace: str = ""):
+    async def wb_update_document(
+        doc_id: str,
+        body_model: api_models.KnowledgeUpdateBody,
+        workspace: str = "",
+    ):
         """Update document metadata (title / tags / summary)."""
+        body = api_models.body_dict(body_model)
         try:
             db_path = await _ensure_kb_db(workspace)
             allowed_fields = {"title", "tags", "summary", "entity_id"}
@@ -205,8 +239,9 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
                 return doc or JSONResponse({"error": "not found"}, status_code=404)
             updated = await store.update_document(db_path, doc_id, **filtered)
             return updated or JSONResponse({"error": "not found"}, status_code=404)
-        except Exception as e:
-            return JSONResponse({"error": f"Update failed: {str(e)}"}, status_code=400)
+        except Exception:
+            logger.exception("Failed to update knowledge document %s", doc_id)
+            return error_response("Update failed", 500, "knowledge_update_failed")
 
     @router.post("/api/workbench/knowledge/documents/{doc_id}/reindex")
     async def wb_reindex_document(doc_id: str, workspace: str = ""):
@@ -228,8 +263,9 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
                 meta={"documentId": doc_id},
             )
             return {"ok": True}
-        except Exception as e:
-            return JSONResponse({"error": f"Reindex failed: {str(e)}"}, status_code=400)
+        except Exception:
+            logger.exception("Failed to reindex knowledge document %s", doc_id)
+            return error_response("Reindex failed", 500, "knowledge_reindex_failed")
 
     @router.delete("/api/workbench/knowledge/documents/{doc_id}")
     async def wb_delete_document(doc_id: str, workspace: str = ""):
@@ -238,8 +274,9 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
             db_path = await _ensure_kb_db(workspace)
             success = await store.delete_document(db_path, doc_id, remove_file=True)
             return {"ok": success}
-        except Exception as e:
-            return JSONResponse({"error": f"Delete failed: {str(e)}"}, status_code=400)
+        except Exception:
+            logger.exception("Failed to delete knowledge document %s", doc_id)
+            return error_response("Delete failed", 500, "knowledge_delete_failed")
 
     @router.get("/api/workbench/knowledge/documents/{doc_id}/raw")
     async def wb_get_document_raw(doc_id: str, workspace: str = ""):
@@ -260,8 +297,9 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
             return FileResponse(
                 str(file_path), media_type=doc.get("content_type", "application/octet-stream")
             )
-        except Exception as e:
-            return JSONResponse({"error": f"Raw access failed: {str(e)}"}, status_code=400)
+        except Exception:
+            logger.exception("Failed raw access for knowledge document %s", doc_id)
+            return error_response("Raw access failed", 500, "knowledge_raw_failed")
 
     @router.get("/api/workbench/knowledge/search")
     async def wb_search_knowledge(workspace: str = "", q: str = "", k: int = 8):
@@ -272,5 +310,6 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
             db_path = await _ensure_kb_db(workspace)
             results = await retrieve.search_knowledge(db_path, q, k=k)
             return {"results": results}
-        except Exception as e:
-            return JSONResponse({"error": f"Search failed: {str(e)}"}, status_code=400)
+        except Exception:
+            logger.exception("Failed knowledge search for %s", workspace)
+            return error_response("Search failed", 500, "knowledge_search_failed")

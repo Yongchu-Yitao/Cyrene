@@ -222,7 +222,10 @@ async def list_documents(
     source: str | None = None,
     limit: int = 200,
 ) -> list[dict]:
-    """List documents with optional filtering."""
+    """List documents with optional filtering.
+
+    ``limit <= 0`` means no limit (return all matches).
+    """
     query = "SELECT * FROM kb_documents WHERE 1=1"
     params: list[Any] = []
 
@@ -249,8 +252,10 @@ async def list_documents(
         tag_pattern = f'%"{tag}"%'
         params.append(tag_pattern)
 
-    query += " ORDER BY updated_at DESC LIMIT ?"
-    params.append(limit)
+    query += " ORDER BY updated_at DESC"
+    if limit and limit > 0:
+        query += " LIMIT ?"
+        params.append(limit)
 
     async with aiosqlite.connect(db_path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
@@ -259,6 +264,47 @@ async def list_documents(
         results = [_row_to_document(row) for row in rows]
 
     return results
+
+
+async def count_documents(
+    db_path: str,
+    *,
+    q: str | None = None,
+    kind: str | None = None,
+    status: str | None = None,
+    tag: str | None = None,
+    source: str | None = None,
+) -> int:
+    """Count documents matching the given filters (ignores limit)."""
+    query = "SELECT COUNT(*) as cnt FROM kb_documents WHERE 1=1"
+    params: list[Any] = []
+
+    if q:
+        query += " AND (name LIKE ? OR title LIKE ? OR summary LIKE ?)"
+        search_pattern = f"%{q}%"
+        params.extend([search_pattern, search_pattern, search_pattern])
+
+    if kind:
+        query += " AND kind = ?"
+        params.append(kind)
+
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+
+    if source:
+        query += " AND source = ?"
+        params.append(source)
+
+    if tag:
+        query += " AND tags LIKE ?"
+        tag_pattern = f'%"{tag}"%'
+        params.append(tag_pattern)
+
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        cursor = await db.execute(query, params)
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
 
 
 async def update_document(db_path: str, doc_id: str, **fields) -> dict | None:

@@ -593,10 +593,16 @@ def _parse_ctx_str(ctx_str: str) -> int:
         return 0
 
 
-def get_current_ctx_limit() -> int:
-    """Context-window size (in tokens) of the active primary model. 0 if unknown."""
-    from cyrene import config
-    model_name = str(getattr(config, "OPENAI_MODEL", "") or "").strip()
+def ctx_limit_for_model(model_name: str) -> int:
+    """Context-window size (in tokens) for a specific model name. 0 if unknown.
+
+    Resolves a configured ``ctx`` first, then falls back to a family heuristic.
+    Used per-conversation so each chat's context gauge reflects its OWN model,
+    not just the globally-active one.
+    """
+    model_name = str(model_name or "").strip()
+    if not model_name:
+        return 0
     for model in (get_models() or []):
         if model.get("model") == model_name or model.get("name") == model_name:
             limit = _parse_ctx_str(model.get("ctx", ""))
@@ -614,11 +620,23 @@ def get_current_ctx_limit() -> int:
         return 128_000
     if "gpt-3.5" in ml:
         return 16_000
-    if any(x in ml for x in ("deepseek", "qwen")):
+    if "deepseek" in ml:
+        # V4 family (deepseek-v4-flash / deepseek-v4-pro) ships a 1M-token
+        # window; older deepseek-chat (V3) / deepseek-reasoner (R1) cap at 128K.
+        # Over-reporting would push compaction past the model's real limit and
+        # the API would hard-reject oversized requests, so only widen for V4.
+        return 1_000_000 if "v4" in ml else 128_000
+    if "qwen" in ml:
         return 128_000
     if "gemini" in ml:
         return 1_000_000
     return 0
+
+
+def get_current_ctx_limit() -> int:
+    """Context-window size (in tokens) of the active primary model. 0 if unknown."""
+    from cyrene import config
+    return ctx_limit_for_model(str(getattr(config, "OPENAI_MODEL", "") or ""))
 
 
 def save_vision_models(models: list[dict]) -> None:

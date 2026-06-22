@@ -67,6 +67,7 @@ var TABS = [
   { id: "appearance", labelKey: "settings.appearance" },
   { id: "capabilities", labelKey: "settings.capabilities" },
   { id: "skills", labelKey: "settings.skills" },
+  { id: "shortcuts", labelKey: "settings.shortcuts" },
   { id: "data", labelKey: "settings.data" },
   { id: "about", labelKey: "settings.about" },
 ];
@@ -382,6 +383,7 @@ function SettingsOverlay({
           tab === "appearance" && AppearancePanel({ t, tweaks, setTweak, actualTheme, theme: initialTheme }),
           tab === "capabilities" && CapabilitiesPanel({ t, browserTools, saveBrowserTools, mcpConfigs, setMcpConfigs, mcpServers, toolList, toolsExpanded, setToolsExpanded, toolsSaved, saveTools, newMcpServer, setNewMcpServer, mcpSaved, saveMcp, config }),
           tab === "skills" && React.createElement(SkillsPanel, { t }),
+          tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
           tab === "data" && DataPanel({ t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSid, setExportSid, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
           tab === "about" && AboutPanel({ t, config }),
         ),
@@ -1491,6 +1493,179 @@ function SkillsPanel(p) {
         );
       })
     )
+  );
+}
+
+// ── Shortcuts Panel ──
+function ShortcutsPanel(p) {
+  var t = p.t;
+  var sc = window.WorkbenchShortcuts;
+  var isMac = sc ? sc.isMacPlatform() : false;
+  var [items, setItems] = useStateSt(function () { return sc ? sc.list() : []; });
+  var [capturingId, setCapturingId] = useStateSt("");
+  // conflict: { reboundId, withId } — the rebound action now clashes with
+  // `withId`. The warning is shown on the rebound row so the user knows which
+  // binding they need to clear.
+  var [conflict, setConflict] = useStateSt(null);
+  var [notice, setNotice] = useStateSt("");
+
+  function conflictLabel(id, list, tt) {
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id === id) return tt(list[i].labelKey);
+    }
+    return id;
+  }
+
+  // Re-read the binding list whenever the underlying store changes (a rebind
+  // in this panel, a reset, or another tab editing localStorage).
+  useEffectSt(function () {
+    function refresh() { if (sc) setItems(sc.list()); }
+    refresh();
+    window.addEventListener("cyrene-shortcuts-change", refresh);
+    return function () { window.removeEventListener("cyrene-shortcuts-change", refresh); };
+  }, []);
+
+  function startCapture(id) {
+    setCapturingId(id);
+    setConflict(null);
+    setNotice("");
+  }
+  function cancelCapture() {
+    setCapturingId("");
+    setConflict(null);
+  }
+
+  function onCaptureKeydown(event) {
+    if (!capturingId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    var result = sc.captureEvent(event);
+    if (result.cancelled) { cancelCapture(); return; }
+    if (!result.keys.length) return; // wait for a terminal key
+    // Reject empty / modifier-only bindings.
+    var hasTerminal = result.keys.some(function (tok) {
+      return tok !== "mod" && tok !== "ctrl" && tok !== "shift" && tok !== "alt";
+    });
+    if (!hasTerminal) { cancelCapture(); return; }
+    // Detect conflicts with other actions.
+    var conflictId = "";
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].id === capturingId) continue;
+      if (sameBinding(items[i].keys, result.keys)) { conflictId = items[i].id; break; }
+    }
+    sc.set(capturingId, result.keys);
+    if (conflictId) {
+      // Show the warning on the row that was just rebound so the user knows
+      // which other action they need to rebind to clear the clash.
+      setConflict({ reboundId: capturingId, withId: conflictId });
+    } else {
+      setConflict(null);
+    }
+    setCapturingId("");
+    setNotice(t("settings.shortcutSaved"));
+    setTimeout(function () { setNotice(""); }, 1500);
+  }
+
+  // Listen for keydown while capturing. Attached at the panel root so it
+  // captures before the textarea / input handlers can swallow the event.
+  // We use capture phase to grab the key early.
+  useEffectSt(function () {
+    if (!capturingId) return undefined;
+    function handler(e) { onCaptureKeydown(e); }
+    window.addEventListener("keydown", handler, true);
+    return function () { window.removeEventListener("keydown", handler, true); };
+  }, [capturingId, items]);
+
+  function resetOne(id) {
+    if (!sc) return;
+    sc.reset(id);
+    setConflict(null);
+    setNotice(t("settings.shortcutReset"));
+    setTimeout(function () { setNotice(""); }, 1500);
+  }
+  function resetAll() {
+    if (!sc) return;
+    sc.resetAll();
+    setConflict(null);
+    setNotice(t("settings.shortcutResetAll"));
+    setTimeout(function () { setNotice(""); }, 1500);
+  }
+
+  function sameBinding(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    var norm = function (arr) { return arr.slice().sort().join("|"); };
+    return norm(a) === norm(b);
+  }
+
+  function renderKeys(keys) {
+    return keys.map(function (token, idx) {
+      return React.createElement("kbd", { key: idx }, sc ? sc.shortcutGlyph(token, isMac) : token);
+    });
+  }
+
+  var groups = {};
+  items.forEach(function (item) {
+    if (!groups[item.group]) groups[item.group] = [];
+    groups[item.group].push(item);
+  });
+  var groupOrder = ["global", "composer"];
+  var groupLabelKey = {
+    global: "settings.shortcutGroupGlobal",
+    composer: "settings.shortcutGroupComposer",
+  };
+
+  return React.createElement("div", { className: "settings-panel wb-shortcuts-panel" },
+    SectionTitle(t("settings.shortcuts"), t("settings.shortcutsSubtitle")),
+    React.createElement("p", { className: "wb-shortcuts-platform" },
+      t("settings.shortcutPlatformHint", { os: isMac ? "macOS" : "Windows / Linux" })
+    ),
+    groupOrder.map(function (groupKey) {
+      var groupItems = groups[groupKey] || [];
+      if (!groupItems.length) return null;
+      return SectionBlock(t(groupLabelKey[groupKey] || groupKey), null,
+        groupItems.map(function (item) {
+          var isCapturing = capturingId === item.id;
+          var isConflict = conflict && conflict.reboundId === item.id;
+          var canRebind = item.allowRebind !== false;
+          return React.createElement("div", { className: "wb-shortcut-row", key: item.id },
+            React.createElement("div", { className: "wb-shortcut-info" },
+              React.createElement("b", null, t(item.labelKey)),
+              React.createElement("small", null, t(item.descKey)),
+            ),
+            React.createElement("div", { className: "wb-shortcut-controls" },
+              isCapturing
+                ? React.createElement("span", { className: "wb-shortcut-capture" }, t("settings.shortcutCapture"))
+                : React.createElement("span", { className: "wb-shortcut-keys" + (item.isCustom ? " custom" : "") },
+                    renderKeys(item.keys)
+                  ),
+              canRebind && !isCapturing && React.createElement("button", {
+                type: "button",
+                className: "wb-btn",
+                onClick: function () { startCapture(item.id); },
+              }, t("settings.shortcutRebind")),
+              isCapturing && React.createElement("button", {
+                type: "button",
+                className: "wb-btn ghost",
+                onClick: cancelCapture,
+              }, t("common.cancel")),
+              !isCapturing && item.isCustom && React.createElement("button", {
+                type: "button",
+                className: "wb-icon-btn-small",
+                title: t("settings.shortcutReset"),
+                onClick: function () { resetOne(item.id); },
+              }, "↺"),
+            ),
+            isConflict && React.createElement("div", { className: "wb-shortcut-conflict" },
+              t("settings.shortcutConflict", { name: conflictLabel(conflict.withId, items, t) })
+            ),
+          );
+        })
+      );
+    }),
+    React.createElement("div", { className: "wb-save-actions" },
+      React.createElement("button", { type: "button", className: "wb-btn", onClick: resetAll }, t("settings.resetShortcuts")),
+      notice && React.createElement("span", { className: "wb-hint saved" }, notice),
+    ),
   );
 }
 

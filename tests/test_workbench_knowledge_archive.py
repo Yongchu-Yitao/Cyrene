@@ -146,3 +146,94 @@ async def test_changed_document_is_marked_pending_for_reindex(tmp_path):
     assert updated["id"] == first["id"]
     assert updated["status"] == "pending"
     assert updated["indexed_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_documents_with_limit_zero_returns_all(tmp_path):
+    from cyrene import db
+    from cyrene.knowledge import store
+
+    db_path = str(tmp_path / "knowledge.db")
+    await db.init_knowledge_db(db_path)
+    for i in range(5):
+        f = tmp_path / f"doc_{i}.md"
+        f.write_text(f"content {i}", encoding="utf-8")
+        await store.upsert_document_by_path(
+            db_path,
+            path=str(f),
+            source="generated",
+            content_hash=store.content_hash_file(f),
+        )
+
+    all_docs = await store.list_documents(db_path, limit=0)
+    limited = await store.list_documents(db_path, limit=2)
+
+    assert len(all_docs) == 5
+    assert len(limited) == 2
+
+
+@pytest.mark.asyncio
+async def test_count_documents_matches_list_without_limit(tmp_path):
+    from cyrene import db
+    from cyrene.knowledge import store
+
+    db_path = str(tmp_path / "knowledge.db")
+    await db.init_knowledge_db(db_path)
+    for i in range(3):
+        f = tmp_path / f"file_{i}.md"
+        f.write_text(f"body {i}", encoding="utf-8")
+        await store.upsert_document_by_path(
+            db_path,
+            path=str(f),
+            source="generated",
+            kind="markdown",
+            content_hash=store.content_hash_file(f),
+        )
+
+    total = await store.count_documents(db_path)
+    by_kind = await store.count_documents(db_path, kind="markdown")
+    all_docs = await store.list_documents(db_path, limit=0)
+
+    assert total == 3
+    assert by_kind == 3
+    assert len(all_docs) == total
+
+
+@pytest.mark.asyncio
+async def test_workbench_knowledge_list_returns_total(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from cyrene import config, db
+    from cyrene.knowledge import store
+    from webui import routes_workbench_knowledge
+
+    monkeypatch.setattr(config, "STORE_DIR", tmp_path / "store")
+    monkeypatch.setattr(routes_workbench_knowledge, "_resolve_workspace_id", lambda ws: str(ws))
+
+    db_path = str(tmp_path / "knowledge.db")
+    await db.init_knowledge_db(db_path)
+    for i in range(3):
+        f = tmp_path / f"file_{i}.md"
+        f.write_text(f"body {i}", encoding="utf-8")
+        await store.upsert_document_by_path(
+            db_path,
+            path=str(f),
+            source="generated",
+            content_hash=store.content_hash_file(f),
+        )
+
+    async def _ensure_kb(workspace):
+        return db_path
+
+    monkeypatch.setattr(routes_workbench_knowledge, "_ensure_kb_db", _ensure_kb)
+
+    app = FastAPI()
+    routes_workbench_knowledge.register_workbench_knowledge_routes(app.router)
+    client = TestClient(app)
+
+    response = client.get("/api/workbench/knowledge/documents?workspace=test")
+    payload = response.json()
+
+    assert payload["total"] == 3
+    assert len(payload["documents"]) == 3
