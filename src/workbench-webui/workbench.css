@@ -8316,9 +8316,17 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 .wbc-chat-card-top {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.wbc-chat-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .wbc-chat-card-top b {
@@ -8735,68 +8743,78 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 /* ---- user message edit (fork) ---- */
 
-.wbc-edit-btn {
-  opacity: 0;
-  transition: opacity 0.12s;
-}
-
-.wbc-msg.user:hover .wbc-edit-btn,
-.wbc-msg.user .wbc-edit-btn:focus {
-  opacity: 1;
-}
-
-/* On touch devices (no hover), make the edit button always visible. */
-@media (hover: none) {
-  .wbc-edit-btn { opacity: 1; }
+/* Edit action sits in a footer below the bubble, right-aligned — mirrors the
+   assistant copy/regenerate footer but anchored to the right. It stays faint
+   and brightens on hover, like the other message actions. */
+.wbc-user-foot {
+  justify-content: flex-end;
 }
 
 .wbc-msg.user.editing {
   max-width: none;
+  align-items: flex-end;
 }
 
 .wbc-edit-bubble {
-  border-radius: 13px;
-  border-color: color-mix(in srgb, var(--wb-accent) 38%, transparent);
+  width: 520px;
+  max-width: 100%;
+  box-sizing: border-box;
+  border-radius: 14px;
+  border-color: color-mix(in srgb, var(--wb-accent) 32%, transparent);
   background: var(--wb-card-bg);
-  padding: 10px;
-  min-width: 260px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 12px;
 }
 
 .wbc-edit-textarea {
   width: 100%;
-  min-height: 60px;
-  max-height: 240px;
+  box-sizing: border-box;
+  min-height: 72px;
+  max-height: 260px;
   resize: none;
   border: 1px solid var(--wb-line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--wb-bg);
   color: var(--wb-text);
-  padding: 8px 10px;
+  padding: 10px 12px;
   font-size: 13.5px;
   line-height: 1.6;
   font-family: inherit;
+  outline: 0;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.wbc-edit-textarea::placeholder {
+  color: var(--wb-faint);
+}
+
+.wbc-edit-textarea:focus {
+  border-color: var(--wb-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 16%, transparent);
 }
 
 .wbc-edit-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
-  margin-top: 8px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
 }
 
-/* ---- rail fork marker ---- */
+/* ---- rail fork marker (inline, right of the chat title) ---- */
 
 .wbc-fork-marker {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 5px;
-  font-size: 11px;
-  color: var(--wb-faint);
-  background: color-mix(in srgb, var(--wb-accent) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--wb-accent) 22%, transparent);
-  border-radius: 6px;
-  padding: 1px 7px;
+  gap: 3px;
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 26%, transparent);
+  border-radius: 5px;
+  padding: 0 5px;
   cursor: pointer;
   transition: color 0.12s, background 0.12s;
 }
@@ -10284,6 +10302,12 @@ html[data-theme="dark"] .wbc-quick-actions button {
 html[data-theme="dark"] .wbc-bubble {
   background: color-mix(in srgb, var(--wb-accent) 20%, var(--wb-panel));
   border-color: color-mix(in srgb, var(--wb-accent) 30%, transparent);
+}
+/* Edit bubble reads as a neutral editor panel even in dark mode (not accent-tinted
+   like a normal user bubble), so it wins over the generic dark bubble rule above. */
+html[data-theme="dark"] .wbc-edit-bubble {
+  background: var(--wb-card-bg);
+  border-color: color-mix(in srgb, var(--wb-accent) 34%, transparent);
 }
 html[data-theme="dark"] .wbc-trace {
   background: color-mix(in srgb, var(--wb-green) 10%, var(--wb-panel));

@@ -1285,7 +1285,19 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
               onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(chat.id); } }}
             >
               <span className="wbc-chat-card-top">
-                <b>{chat.title || wbcT("workbenchChat.newChat", "New chat")}</b>
+                <span className="wbc-chat-card-title">
+                  <b>{chat.title || wbcT("workbenchChat.newChat", "New chat")}</b>
+                  {chat.forkedFromChatId && (
+                    <span
+                      className="wbc-fork-marker"
+                      title={wbcT("workbenchChat.forkSource", "Forked from another chat — click to open the original")}
+                      onClick={function (e) { e.stopPropagation(); onSelect(chat.forkedFromChatId); }}
+                    >
+                      {WBC_ICONS.fork}
+                      {wbcT("workbenchChat.forked", "Forked")}
+                    </span>
+                  )}
+                </span>
                 <span className="wbc-chat-card-right">
                   <time className="wbc-chat-card-time">{wbcFormatTime(chat.updatedAt || chat.createdAt)}</time>
                   <span className="wbc-chat-card-actions">
@@ -1313,16 +1325,6 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
                 {chatRunning ? <i className="wbc-running-dot" /> : null}
                 {chat.preview || wbcT("workbenchChat.noMessages", "No messages yet")}
               </span>
-              {chat.forkedFromChatId && (
-                <span
-                  className="wbc-fork-marker"
-                  title={wbcT("workbenchChat.forkSource", "Forked from another chat — click to open the original")}
-                  onClick={function (e) { e.stopPropagation(); onSelect(chat.forkedFromChatId); }}
-                >
-                  {WBC_ICONS.fork}
-                  {wbcT("workbenchChat.forked", "Forked")}
-                </span>
-              )}
             </div>
           );
         })}
@@ -1636,31 +1638,29 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit }) {
   if (editing) {
     return (
       <div className="wbc-msg user editing">
-        <div className="wbc-msg-row">
-          <time>{wbcFormatTime(msg.createdAt)}</time>
-          <div className="wbc-bubble wbc-edit-bubble">
-            {attachments.length > 0 && (
-              <div className="wbc-msg-attachments">
-                {attachments.map(function (file, i) {
-                  var isImg = file.kind === "image" || String(file.content_type || "").indexOf("image") === 0;
-                  var open = function () { if (onOpenFile && file.url) onOpenFile(file); };
-                  return isImg && file.url
-                    ? <img key={file.id || i} src={file.url} alt={file.name || "image"} onClick={open} style={{ cursor: "zoom-in" }} />
-                    : <button type="button" key={file.id || i} className="wbc-attach-chip" onClick={open} title={wbcT("workbenchChat.viewInSide", "View on the right")}>{WBC_ICONS.file}{file.name || "file"}</button>;
-                })}
-              </div>
-            )}
-            <textarea
-              ref={taRef}
-              className="wbc-edit-textarea"
-              value={draft}
-              onChange={function (e) { setDraft(e.target.value); }}
-              onKeyDown={onEditKeyDown}
-            />
-            <div className="wbc-edit-actions">
-              <button type="button" className="wb-btn ghost" onClick={cancelEdit}>{wbcT("common.cancel", "Cancel")}</button>
-              <button type="button" className="wb-btn primary" onClick={saveEdit} disabled={!draft.trim()}>{wbcT("workbenchChat.editSave", "Save & send")}</button>
+        <div className="wbc-bubble wbc-edit-bubble">
+          {attachments.length > 0 && (
+            <div className="wbc-msg-attachments">
+              {attachments.map(function (file, i) {
+                var isImg = file.kind === "image" || String(file.content_type || "").indexOf("image") === 0;
+                var open = function () { if (onOpenFile && file.url) onOpenFile(file); };
+                return isImg && file.url
+                  ? <img key={file.id || i} src={file.url} alt={file.name || "image"} onClick={open} style={{ cursor: "zoom-in" }} />
+                  : <button type="button" key={file.id || i} className="wbc-attach-chip" onClick={open} title={wbcT("workbenchChat.viewInSide", "View on the right")}>{WBC_ICONS.file}{file.name || "file"}</button>;
+              })}
             </div>
+          )}
+          <textarea
+            ref={taRef}
+            className="wbc-edit-textarea"
+            value={draft}
+            onChange={function (e) { setDraft(e.target.value); }}
+            onKeyDown={onEditKeyDown}
+            placeholder={wbcT("workbenchChat.editPlaceholder", "Edit your message...")}
+          />
+          <div className="wbc-edit-actions">
+            <button type="button" className="wb-btn ghost" onClick={cancelEdit}>{wbcT("common.cancel", "Cancel")}</button>
+            <button type="button" className="wb-btn primary" onClick={saveEdit} disabled={!draft.trim()}>{wbcT("workbenchChat.editSave", "Save & send")}</button>
           </div>
         </div>
       </div>
@@ -1685,12 +1685,14 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit }) {
           )}
           {msg.content ? <p>{msg.content}</p> : null}
         </div>
-        {canEdit && onEditMessage && (
+      </div>
+      {canEdit && onEditMessage && (
+        <div className="wbc-msg-foot wbc-user-foot">
           <button type="button" className="wbc-msg-action wbc-edit-btn" onClick={startEdit} title={wbcT("workbenchChat.editMessage", "Edit & branch")}>
             {WBC_ICONS.edit}
           </button>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
