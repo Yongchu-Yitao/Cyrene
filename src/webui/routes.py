@@ -7597,10 +7597,20 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         body = api_models.body_dict(body_model)
         payload = _read_workbench_store()
         now = _utc_now_iso()
+        project_id = _short_id("project")
+        raw_workspace = str(body.get("workspacePath") or "").strip()
+        if not raw_workspace:
+            # No explicit workspace folder picked — create a fresh per-project
+            # subdirectory under the global WORKSPACE_DIR so the new project
+            # starts empty instead of inheriting the (non-empty) default
+            # workspace. This ensures _is_workspace_empty() returns True and
+            # the init flow takes the "brand-new project" branch rather than
+            # exploring the default workspace's contents.
+            raw_workspace = str(Path(WORKSPACE_DIR) / "projects" / project_id)
         try:
             workspace_path = str(
                 validate_workspace_path(
-                    str(body.get("workspacePath") or WORKSPACE_DIR),
+                    raw_workspace,
                     create=True,
                 )
             )
@@ -7608,7 +7618,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             return error_response(str(exc), 400, exc.code)
         name = str(body.get("name") or Path(workspace_path).name or "New Project").strip()
         description = str(body.get("description") or "").strip()
-        project_id = _short_id("project")
         project = {
             "id": project_id,
             "name": name,

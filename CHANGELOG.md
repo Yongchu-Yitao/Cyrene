@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0b8] - 2026-06-23
+
+### Fixed
+
+- **新建空项目错误地读取默认 workspace 内容** — 在 Workbench 新建项目时若未显式选择 workspace 路径，后端会静默回退到全局默认 `WORKSPACE_DIR`（`<repo>/workspace/`，非空），导致 `_is_workspace_empty()` 返回 `False`，init 流程跳过"全新项目"引导分支，改为启动 explore-agent 去列默认 workspace 里的 `SOUL.md`、`conversations/` 等已有文件。现改为：缺失 `workspacePath` 时自动在 `WORKSPACE_DIR/projects/<project_id>` 下创建一个空的逐项目子目录，确保新项目走"全新项目，工作区还没有代码"的引导路径。
+- **前端预填当前项目 workspace 路径** — "新建项目"弹窗原先用当前活动项目的 `workspacePath`（通常是非空的全局 `WORKSPACE_DIR`）预填路径输入框，用户若不修改就会误传默认 workspace。改为默认留空，强制用户选择或走自动创建路径。
+- **Glob/Grep 工具硬编码全局 workspace** — `tool_impl/glob.py`、`tool_impl/grep.py`（及 `tool_legacy.py` 中的 legacy 副本）的 `Glob` 和 `Grep` 工具原先硬编码 `WORKSPACE_DIR.glob(...)` / `path.relative_to(WORKSPACE_DIR)`，忽略了 `active_workspace_dir()` ContextVar，导致即使项目正确设置了 `workspacePath`，主 agent 的文件搜索仍然读取全局默认 workspace。改为使用 `active_workspace_dir()`，与 `Read`、`Bash`、`git_tools` 等工具对齐。这也修复了 Grep 在非默认 workspace 下 `relative_to(WORKSPACE_DIR)` 抛 `ValueError` 的潜在崩溃。
+
 ## [0.6.0b7] - 2026-06-23
 
 ### Added

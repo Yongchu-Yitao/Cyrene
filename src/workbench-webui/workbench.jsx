@@ -1196,7 +1196,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       {newProjectOpen && window.WorkbenchNewProjectModal && React.createElement(
         window.WorkbenchNewProjectModal,
         {
-          defaultWorkspacePath: store.activeProject && store.activeProject.workspacePath,
+          defaultWorkspacePath: "",
           onClose: function () { setNewProjectOpen(false); },
           onCreate: function (input) {
             return handleCreateProject(input).then(function () { setNewProjectOpen(false); });

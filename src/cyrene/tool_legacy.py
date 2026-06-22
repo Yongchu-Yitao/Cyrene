@@ -1072,8 +1072,10 @@ async def _tool_glob(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
     from cyrene.settings_store import is_workspace_active
     if not is_workspace_active():
         return "Workspace access is disabled. Ask the user to add workspace via '+ add context' in the chat input, or set a workspace directory in Settings."
+    from cyrene.agent.state import active_workspace_dir
     pattern = str(args["pattern"])
-    matches = sorted(str(path.relative_to(WORKSPACE_DIR)) for path in WORKSPACE_DIR.glob(pattern))
+    workspace = active_workspace_dir()
+    matches = sorted(str(path.relative_to(workspace)) for path in workspace.glob(pattern))
     return "\n".join(matches[:200]) if matches else "No matches."
 
 
@@ -1081,9 +1083,11 @@ async def _tool_grep(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
     from cyrene.settings_store import is_workspace_active
     if not is_workspace_active():
         return "Workspace access is disabled. Ask the user to add workspace via '+ add context' in the chat input, or set a workspace directory in Settings."
+    from cyrene.agent.state import active_workspace_dir
     pattern = re.compile(str(args["pattern"]))
     search_root = _resolve_workspace_path(str(args.get("path", ".")))
     glob_pattern = str(args.get("glob", "**/*"))
+    workspace = active_workspace_dir()
     lines: list[str] = []
 
     for path in search_root.glob(glob_pattern):
@@ -1095,7 +1099,7 @@ async def _tool_grep(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
             continue
         for index, line in enumerate(content.splitlines(), start=1):
             if pattern.search(line):
-                rel = path.relative_to(WORKSPACE_DIR)
+                rel = path.relative_to(workspace)
                 lines.append(f"{rel}:{index}:{line}")
                 if len(lines) >= 200:
                     return "\n".join(lines)
