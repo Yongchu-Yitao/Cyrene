@@ -439,10 +439,20 @@ jobs:
             echo "is_pre=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Extract changelog section
+        id: notes
+        run: |
+          # Extract the first "## [...]" section from CHANGELOG.md
+          {
+            echo "body<<CHANGELOG_EOF"
+            awk '/^## \[/{n++} n==1{print} n>=2{exit}' CHANGELOG.md
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
-          generate_release_notes: true
+          body: ${{ steps.notes.outputs.body }}
           fail_on_unmatched_files: true
           prerelease: ${{ steps.pre.outputs.is_pre == 'true' }}

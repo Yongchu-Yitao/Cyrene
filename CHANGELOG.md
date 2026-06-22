@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.6.0b7] - 2026-06-23
+
+### Added
+
+- **Chat 编辑与分叉（Edit & Branch）** — Workbench Chat 支持编辑已发送的用户消息并从该点分叉出新对话；原对话保持不变，分叉对话标注"Forked"标记并可点击回溯源对话。同时支持从任意位置重新生成回复。
+- **Workbench 个人资料页** — 导航栏新增独立的 Profile 页面，展示对话轮数、活跃天数等统计数据，支持头像/emoji 自定义与功能开关。
+- **键盘快捷键管理器** — 新增平台感知的全局快捷键模块（搜索、新对话、新任务、命令面板、切换项目、折叠侧栏、设置）。⌘ 在 macOS / Ctrl 在其他平台自动适配；用户可在 Settings → Shortcuts 中自定义绑定并持久化到 localStorage。
+- **Settings 浮层面板** — 新增浮动式设置面板，含 Shortcuts 等多个标签页。
+- **Workbench SQLite 事务存储** — 新增 `workbench_store.py` 模块，以 SQLite 为单一真相源，通过 `BEGIN IMMEDIATE` + 三方合并实现并发写入安全；实体列表按稳定 `id` 合并，并发消息、会话、通知与记忆互不覆盖，替代旧的整文件 JSON 读-改-写循环。
+- **Workspace 路径安全校验** — 新增 `workspace_validation.py` 安全边界模块，限制用户选择的 workspace 目录必须在允许的根路径下（home、workspace dir、temp、挂载点等），防止路径穿越。
+- **API 请求校验** — 新增 `api_models.py`（pydantic 校验请求体）与 `api_errors.py`（统一 HTTP 错误处理）覆盖 Workbench API 路由。
+- **DSML 流式过滤** — `call_llm.py` 新增 `_DsmlStreamFilter`，在流式输出中增量剥离 DeepSeek 文本 DSML 工具调用标记，防止标记泄露到 UI；原始文本保留供流结束后恢复为真实工具调用。
+- **Context window 仪表** — Workbench 新增上下文分段 token 追踪与 chat context payload 展示。
+
+### Changed
+
+- **Chat 房间样式重构** — 头像列表与 subagent chip 布局重构，视觉更紧凑；用户消息编辑态与 fork 标记样式完善；触屏设备下编辑按钮可见性改善。
+- **Chat 状态管理增强** — 编辑流程中对话状态处理更稳健；流式中间消息（工具调用过程中的 partial assistant turns）处理改进。
+
+### Tests
+
+- 新增 `tests/test_workbench_chat_fork.py` — 覆盖对话分叉功能与状态管理，确保原对话不受影响。
+- 新增 `tests/test_dsml_stream_filter.py` — 覆盖流式 DSML 标记抑制，防止工具调用标记泄露到 UI。
+- 新增 `tests/test_workbench_context_gauge.py` — 覆盖上下文分段 token 与 chat context payload。
+- 新增 `tests/test_workbench_sqlite_store.py` — 覆盖 SQLite 存储并发操作与三方合并。
+- 新增 `tests/test_workbench_api_validation.py` — 覆盖 API 请求校验与错误处理。
+- 新增 `tests/test_conversation_archive.py` — 覆盖对话归档。
+- 更新 `test_profile_stats.py`、`test_runtime_fixes.py`、`test_workbench_frontend_logic.py`、`test_workbench_init_plan.py`、`test_workbench_knowledge_archive.py`、`test_workbench_memory_language.py` — 补充 profile 统计、运行时修复、前端逻辑、初始化计划、知识归档与记忆语言偏好场景。
+
 ## [0.6.0b6] - 2026-06-22
 
 ### Added
