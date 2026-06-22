@@ -94,17 +94,19 @@
     if (root.tagName === "PRE") addActions(root);
   }
 
-  var _retryCount = 0;
-  var _maxRetries = 100;
+  // Legacy chat uses .msg-list; Workbench chat uses .wbc-thread; the
+  // Workbench side panel (viewer, context, artifacts) uses .wbc-side-body.
+  // These are stable containers that survive tab/session switches within a
+  // page. A light 2s poll re-attaches observers after full page navigations
+  // (the app is an SPA — pages unmount/remount on navigation).
+  var _selectors = [".msg-list", ".wbc-thread", ".wbc-side-body"];
+  var _watched = {};
 
-  function start() {
-    var container = document.querySelector(".msg-list");
-    if (!container) {
-      _retryCount++;
-      if (_retryCount <= _maxRetries) {
-        setTimeout(start, 300);
-      }
-      return;
+  function watchContainer(selector, container) {
+    var prev = _watched[selector];
+    if (prev) {
+      if (prev.node === container) return;
+      prev.observer.disconnect();
     }
     scanMessages(container);
     var observer = new MutationObserver(function (mutations) {
@@ -116,11 +118,30 @@
       }
     });
     observer.observe(container, { childList: true, subtree: true });
+    _watched[selector] = { node: container, observer: observer };
+  }
+
+  function start() {
+    for (var i = 0; i < _selectors.length; i++) {
+      var selector = _selectors[i];
+      var container = document.querySelector(selector);
+      if (container) {
+        watchContainer(selector, container);
+      } else if (_watched[selector]) {
+        _watched[selector].observer.disconnect();
+        delete _watched[selector];
+      }
+    }
+  }
+
+  function init() {
+    start();
+    setInterval(start, 2000);
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", start);
+    document.addEventListener("DOMContentLoaded", init);
   } else {
-    start();
+    init();
   }
 })();

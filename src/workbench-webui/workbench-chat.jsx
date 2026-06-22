@@ -197,7 +197,9 @@ function wbcRenderMarkdown(text) {
   var source = String(text == null ? "" : text);
   try {
     var raw = window.marked ? window.marked.parse(source) : source;
-    return window.DOMPurify ? window.DOMPurify.sanitize(raw) : raw;
+    return window.DOMPurify
+      ? window.DOMPurify.sanitize(raw, { ADD_ATTR: ["data-line", "data-language"] })
+      : raw;
   } catch (e) {
     return source;
   }

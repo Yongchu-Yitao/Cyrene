@@ -1,7 +1,8 @@
 /* ── Code block syntax highlighting ── */
 
 /* Line numbers */
-.msg-body.markdown pre code .hljs-ln-n {
+.msg-body.markdown pre code .hljs-ln-n,
+.wbc-msg-body.markdown pre code .hljs-ln-n {
   user-select: none;
   -webkit-user-select: none;
   text-align: right;
@@ -14,7 +15,8 @@
 }
 
 /* Language tag on code blocks */
-.msg-body.markdown pre[data-language]::before {
+.msg-body.markdown pre[data-language]::before,
+.wbc-msg-body.markdown pre[data-language]::before {
   content: attr(data-language);
   position: absolute;
   top: 0;
@@ -51,6 +53,7 @@
 }
 
 .msg-body.markdown pre:hover .code-block-actions,
+.wbc-msg-body.markdown pre:hover .code-block-actions,
 .code-block-actions:hover {
   opacity: 1;
 }
@@ -83,13 +86,15 @@
 /* ── Highlight.js theme overrides for Cyrene ── */
 
 /* Light theme */
-[data-theme="light"] .msg-body.markdown pre code.hljs {
+[data-theme="light"] .msg-body.markdown pre code.hljs,
+[data-theme="light"] .wbc-msg-body.markdown pre code.hljs {
   color: var(--text-2);
   background: transparent;
 }
 
 /* Dark theme — use a soft dark background matching the shell bg */
-[data-theme="dark"] .msg-body.markdown pre code.hljs {
+[data-theme="dark"] .msg-body.markdown pre code.hljs,
+[data-theme="dark"] .wbc-msg-body.markdown pre code.hljs {
   color: var(--text-2);
   background: transparent;
 }
