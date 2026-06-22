@@ -9394,24 +9394,20 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* Roster — the chat room's avatar member strip. */
 .wbc-subagent-roster {
   flex: 0 0 auto;
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 2px;
-  scrollbar-width: thin;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 5px;
 }
 
 .wbc-subagent-chip {
-  flex: 0 0 auto;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  max-width: 158px;
+  gap: 7px;
   border: 1px solid var(--wb-line);
-  border-radius: 999px;
+  border-radius: 8px;
   background: var(--wb-control-bg);
   color: var(--wb-text);
-  padding: 3px 11px 3px 3px;
+  padding: 5px 10px 5px 5px;
   cursor: pointer;
   transition: border-color .12s ease, background .12s ease;
 }
@@ -9754,8 +9750,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* Bubble. */
 .wbc-subagent-bubble {
   border: 1px solid var(--wb-line);
-  border-left: 2px solid var(--wb-agent-color, var(--wb-accent));
-  border-radius: 4px 10px 10px 10px;
+  border-radius: 10px;
   background: var(--wb-card-bg);
   padding: 7px 10px;
   color: var(--wb-text);
