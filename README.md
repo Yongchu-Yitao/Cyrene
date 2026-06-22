@@ -65,7 +65,7 @@ It runs as a local daemon with two web front-ends (and optional Telegram/WeChat 
 - **No API versioning** — all endpoints under bare `/api/`
 - **No rate/cost limiting** — no LLM call quota protection
 - **Windows from source** — requires manual patching of vendored dependencies; pre-built installer recommended
-- **Testing** — unit tests exist but no CI test run, no integration/E2E tests
+- **Testing** — unit tests exist (`uv run pytest -q`) but the pytest suite is not run in CI (CI only smoke-tests the packaged app), and there are no integration/E2E tests
 
 ---
 
@@ -79,23 +79,30 @@ Download the latest release for your platform from the [Releases page](https://g
 
 ### Option B: From source
 
+Requires Python 3.12+ and [Node.js 20+](https://nodejs.org/) (for the WebUI JSX precompilation step).
+
 ```bash
-conda create -n cyrene python=3.12 -y
-conda activate cyrene
-pip install -e .
+# 1. Install dependencies (uv recommended — uv.lock is committed for reproducible builds)
+uv sync           # or: pip install -e .
 
-# Workbench UI (default)
-python -m cyrene --workbench
+# 2. Precompile the WebUI JSX → JS (required from source; releases bundle this already)
+cd src/webui && npm install && node build-jsx.mjs && cd ../..
 
-# Classic agent UI (legacy)
-python -m cyrene --agent
+# 3. Run
+python -m cyrene --workbench     # Workbench UI (default)
+python -m cyrene --agent         # Classic agent UI (legacy)
 ```
 
 Open `http://localhost:4242`. First launch runs an onboarding wizard that guides you through API key configuration and personality setup.
 
-> No `.env` file is required. All configuration is stored in an encrypted store (`data/config.enc` by default) and managed through the Web UI settings or onboarding wizard.
+> No `.env` file is required. All configuration is stored in an encrypted store (`data/config.enc` by default) and managed through the Web UI settings or onboarding wizard. A legacy `.env.example` is kept for backward compatibility.
 
-> **Windows?** Pre-built binary recommended. For source, see [docs/installation.md](docs/installation.md#windows).
+Optional extras:
+
+- **Browser live view & login takeover** — `uv pip install -e ".[browser]"` then `playwright install chromium`
+- **Development & tests** — `uv pip install -e ".[dev]"` then `uv run pytest -q`
+
+> **Windows?** Pre-built binary recommended. For source (requires patching vendored SimpleXNG deps), see [docs/installation.md](docs/installation.md#windows).
 
 ---
 
@@ -113,6 +120,8 @@ Open `http://localhost:4242`. First launch runs an onboarding wizard that guides
 ## Tech Stack
 
 - **Runtime** — Python 3.12+, FastAPI, Uvicorn, SQLite
+- **Package manager** — uv (lock file committed); pip also supported
+- **Linting** — Ruff (line length 180)
 - **LLM** — OpenAI-compatible API (default: DeepSeek, works with Claude/GPT/Qwen)
 - **Search** — SimpleXNG (bundled, no Docker)
 - **Browser** — Playwright (headless/headed), WebSocket screencasting

@@ -6,6 +6,7 @@ build/cyrene_window
 dist/
 wheels/
 *.egg-info
+.ruff_cache/
 
 # Virtual environments
 .venv
@@ -14,6 +15,11 @@ wheels/
 workspace/
 store/
 data/
+backups/
+
+# Stray root-level SQLite (runtime DBs live in store/ and data/)
+/db.sqlite3
+/db.sqlite3-*
 
 # Environment
 .env
@@ -37,7 +43,6 @@ dist-electron/
 CLAUDE.md
 CLAUDE.local.md
 AGENTS.md
-uv.lock
 .codex
 .codex.lock
 .codex-run
