@@ -1496,7 +1496,13 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         try:
             if src_state.exists():
                 shutil.copyfile(src_state, new_state)
-                _truncate_state_file_at_user_ordinal(new_state, user_ordinal)
+                truncated = _truncate_state_file_at_user_ordinal(new_state, user_ordinal)
+                if not truncated:
+                    logger.warning(
+                        "Fork state truncation missed user ordinal %d for %s (source %s) — "
+                        "state may have been compacted; replay will use the existing prefix.",
+                        user_ordinal, new_chat_id, chat_id,
+                    )
             else:
                 atomic_write_json(new_state, {"messages": []})
         except Exception:

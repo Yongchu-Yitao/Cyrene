@@ -8740,8 +8740,18 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   transition: opacity 0.12s;
 }
 
-.wbc-msg.user:hover .wbc-edit-btn {
+.wbc-msg.user:hover .wbc-edit-btn,
+.wbc-msg.user .wbc-edit-btn:focus {
   opacity: 1;
+}
+
+/* On touch devices (no hover), make the edit button always visible. */
+@media (hover: none) {
+  .wbc-edit-btn { opacity: 1; }
+}
+
+.wbc-msg.user.editing {
+  max-width: none;
 }
 
 .wbc-edit-bubble {
