@@ -8733,6 +8733,69 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   color: var(--wb-text);
 }
 
+/* ---- user message edit (fork) ---- */
+
+.wbc-edit-btn {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.wbc-msg.user:hover .wbc-edit-btn {
+  opacity: 1;
+}
+
+.wbc-edit-bubble {
+  border-radius: 13px;
+  border-color: color-mix(in srgb, var(--wb-accent) 38%, transparent);
+  background: var(--wb-card-bg);
+  padding: 10px;
+  min-width: 260px;
+}
+
+.wbc-edit-textarea {
+  width: 100%;
+  min-height: 60px;
+  max-height: 240px;
+  resize: none;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-bg);
+  color: var(--wb-text);
+  padding: 8px 10px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  font-family: inherit;
+}
+
+.wbc-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* ---- rail fork marker ---- */
+
+.wbc-fork-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--wb-faint);
+  background: color-mix(in srgb, var(--wb-accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 22%, transparent);
+  border-radius: 6px;
+  padding: 1px 7px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+
+.wbc-fork-marker:hover {
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-accent) 18%, transparent);
+}
+
 /* ---- tool trace card ---- */
 
 .wbc-trace {

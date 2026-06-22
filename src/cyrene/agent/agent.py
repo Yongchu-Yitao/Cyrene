@@ -13,9 +13,11 @@ from uuid import uuid4
 
 from cyrene.agent.guidance import (
     _final_reply_from_history,
+    _final_reply_with_tools,
     _final_plain_reply_from_history,
     _final_user_reply_from_history,
     _is_placeholder_reply,
+    _strip_visible_dsml_tool_blocks,
     _tool_result_fallback_text,
 )
 from cyrene.agent.deep_reflection import create_deep_reflection_record, has_deep_reflection_record, project_history_for_llm
@@ -426,39 +428,52 @@ async def _run_main_agent(
 
             tcs = response.get("tool_calls") or []
             tool_names = [str(t.get("function", {}).get("name") or "") for t in tcs]
-            if tcs and all(name == "quit" for name in tool_names):
-                await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
+            done_via_quit = bool(tcs) and all(name == "quit" for name in tool_names)
+            if done_via_quit or not tcs:
+                if done_via_quit:
+                    await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
                 if _streaming_reply_requested():
-                    messages.pop()
-                    final_text = await _final_reply_from_history(project_history_for_llm(messages), max_tokens=None)
-                    final_entry: dict[str, Any] = _attach_final_usage({"role": "assistant", "content": final_text})
+                    # The model signalled done. Regenerate the user-facing reply
+                    # with the tool channel still open: writing the answer often
+                    # surfaces a gap (a source never consulted, a check never run)
+                    # that the quit-time self-check missed. Honoring a late tool
+                    # call beats leaking it as textual markup or answering blind.
+                    messages.pop()  # drop the bare quit/empty turn
+                    wrap = await _final_reply_with_tools(project_history_for_llm(messages), active_tool_defs, max_tokens=None)
+                    wrap_real = [t for t in (wrap.get("tool_calls") or []) if str(t.get("function", {}).get("name") or "") != "quit"]
+                    if wrap_real:
+                        await _publish_runtime_event({"type": "phase_transition", "from": "done", "to": "execution", "detail": "Wrap-up reopened tools", "detail_key": "phase.wrapUpReopen"})
+                        wrap_entry: dict[str, Any] = {"role": "assistant", "content": wrap.get("content") or ""}
+                        if wrap.get("reasoning_content"):
+                            wrap_entry["reasoning_content"] = wrap["reasoning_content"]
+                        wrap_entry["tool_calls"] = wrap_real
+                        if wrap.get("usage"):
+                            wrap_entry["usage"] = wrap["usage"]
+                        if round_id:
+                            wrap_entry["round_id"] = round_id
+                        messages.append(_apply_assistant_meta(wrap_entry))
+                        response = wrap
+                        tcs = wrap_real
+                        # fall through to the shared tool-execution block below
+                    else:
+                        # No real tool call. The stream handler already filtered
+                        # DSML from the live deltas; strip any residue (markup for
+                        # an unknown tool that normalization left in place) so the
+                        # persisted reply matches what the user saw.
+                        final_text = _strip_visible_dsml_tool_blocks(wrap.get("content") or "") or "Done."
+                        final_entry: dict[str, Any] = _attach_final_usage({"role": "assistant", "content": final_text})
+                        if client_request_id:
+                            final_entry["client_request_id"] = client_request_id
+                        if round_id:
+                            final_entry["round_id"] = round_id
+                        messages.append(_apply_assistant_meta(final_entry))
+                        await _save_session_messages(_session_messages_to_save(messages))
+                        return final_text
+                else:
                     if client_request_id:
-                        final_entry["client_request_id"] = client_request_id
-                    if round_id:
-                        final_entry["round_id"] = round_id
-                    messages.append(_apply_assistant_meta(final_entry))
+                        messages[-1]["client_request_id"] = client_request_id
                     await _save_session_messages(_session_messages_to_save(messages))
-                    return final_text
-                if client_request_id:
-                    messages[-1]["client_request_id"] = client_request_id
-                await _save_session_messages(_session_messages_to_save(messages))
-                return await _ensure_text_reply(response, messages)
-            if not tcs:
-                if _streaming_reply_requested():
-                    messages.pop()
-                    final_text = await _final_reply_from_history(project_history_for_llm(messages), max_tokens=None)
-                    final_entry = _attach_final_usage({"role": "assistant", "content": final_text})
-                    if client_request_id:
-                        final_entry["client_request_id"] = client_request_id
-                    if round_id:
-                        final_entry["round_id"] = round_id
-                    messages.append(_apply_assistant_meta(final_entry))
-                    await _save_session_messages(_session_messages_to_save(messages))
-                    return final_text
-                if client_request_id:
-                    messages[-1]["client_request_id"] = client_request_id
-                await _save_session_messages(_session_messages_to_save(messages))
-                return await _ensure_text_reply(response, messages)
+                    return await _ensure_text_reply(response, messages)
 
             awaiting_user = False
             spawned = False

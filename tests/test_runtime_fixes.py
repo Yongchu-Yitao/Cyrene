@@ -2208,6 +2208,88 @@ async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
     assert saved["messages"][-1]["client_request_id"] == "req_stream"
 
 
+async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeypatch):
+    """A tool intent the model only surfaces while writing the final answer is
+    executed (re-entering the tool loop) instead of being leaked or discarded."""
+    from cyrene.agent import agent as _agent_core
+    from cyrene.agent import state as _agent_state
+    from cyrene import behavior_learning
+
+    state_file = tmp_path / "state.json"
+    state_file.write_text(json.dumps({"_session_epoch": _agent_state._session_epoch, "messages": []}), encoding="utf-8")
+    _patch_state_file(monkeypatch, state_file)
+    _patch_data_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(_agent_core, "_get_max_tool_rounds", lambda: 5)
+    monkeypatch.setattr(_agent_core, "_publish_runtime_event", AsyncMock())
+    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
+
+    saved = {}
+    executed = []
+    streamed = []
+    stream_calls = {"n": 0}
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        names = {item.get("function", {}).get("name") for item in (tools or [])}
+        if "use_tools" in names:  # dispatch routes into the execution phase
+            return {"content": "", "tool_calls": [{"id": "d1", "function": {"name": "use_tools", "arguments": "{\"task\":\"看 github 实现\"}"}}]}
+        # execution phase: the model believes it is done and quits early
+        return {"content": "", "tool_calls": [{"id": "q1", "function": {"name": "quit", "arguments": "{}"}}]}
+
+    async def fake_call_llm_stream(messages, max_tokens=32000, tools=None):
+        stream_calls["n"] += 1
+        if stream_calls["n"] == 1:
+            # while composing the answer the model realizes it must fetch the source
+            await _agent_core._emit_reply_stream_event({"type": "reply_start"})
+            await _agent_core._emit_reply_stream_event({"type": "reply_delta", "delta": "让我核对 GitHub 源。"})
+            return {
+                "role": "assistant", "content": "让我核对 GitHub 源。",
+                "tool_calls": [{"id": "wf1", "type": "function", "function": {"name": "WebFetch", "arguments": "{\"url\":\"https://example.com/x\"}"}}],
+            }
+        await _agent_core._emit_reply_stream_event({"type": "reply_delta", "delta": "已对比完成"})
+        await _agent_core._emit_reply_stream_event({"type": "reply_done", "response": "让我核对 GitHub 源。已对比完成"})
+        return {"role": "assistant", "content": "已对比完成"}
+
+    async def fake_execute_tool(name, args, *rest, **kw):
+        executed.append(name)
+        return f"result of {name}"
+
+    async def fake_save(messages):
+        saved["messages"] = list(messages)
+
+    _patch_call_llm(monkeypatch, fake_call_llm)
+    _patch_call_llm_stream(monkeypatch, fake_call_llm_stream)
+    _patch_save_session(monkeypatch, fake_save)
+    _patch_append_session(monkeypatch, AsyncMock())
+    monkeypatch.setattr(_agent_core, "_execute_tool", fake_execute_tool)
+    monkeypatch.setattr(_agent_core, "get_active_tool_defs", lambda: [
+        {"type": "function", "function": {"name": "WebFetch", "parameters": {}}},
+        {"type": "function", "function": {"name": "quit", "parameters": {}}},
+    ])
+
+    async def collect(event):
+        streamed.append(event)
+
+    writer_token = _agent_state._reply_stream_writer.set(collect)
+    round_token = _agent_core._current_round_id.set("round_reenter")
+    try:
+        result = await _agent_core._run_main_agent(
+            "你确定吗，看 github 链接",
+            [], None, 0, "db.sqlite3",
+            system_prompt="system", client_request_id="req_reenter",
+        )
+    finally:
+        _agent_core._current_round_id.reset(round_token)
+        _agent_state._reply_stream_writer.reset(writer_token)
+
+    assert result == "已对比完成"
+    assert "WebFetch" in executed              # the late tool intent was honored
+    assert stream_calls["n"] == 2              # wrap-up: reopen tools, then finalize
+    deltas = "".join(e.get("delta", "") for e in streamed if e["type"] == "reply_delta")
+    assert "DSML" not in deltas
+    assert "已对比完成" in deltas
+    assert saved["messages"][-1]["content"] == "已对比完成"
+
+
 async def test_stream_agent_reply_forwards_live_events_before_completion(monkeypatch):
     from cyrene import agent
     from cyrene.agent import state as _agent_state

@@ -547,6 +547,20 @@ async def _final_reply_from_history(messages: list[dict], max_tokens: int | None
     return (await _validated_final_no_tool_reply(messages, max_tokens=max_tokens)) or "Done."
 
 
+async def _final_reply_with_tools(messages: list[dict], tools: list, max_tokens: int | None = None) -> dict[str, Any]:
+    """Stream the wrap-up reply while keeping the tool channel open.
+
+    The synthesis step normally forbids tools, but the model sometimes only
+    realizes mid-answer that it still needs one (e.g. a source it never fetched).
+    Keeping tools available lets the caller honor that intent and re-enter the
+    tool loop instead of leaking it as textual markup. Returns the full assistant
+    message (content + any tool calls); the streamed text is already filtered of
+    DSML markup by the stream handler."""
+    response = await _call_llm_stream(messages, max_tokens=max_tokens, tools=tools)
+    _record_final_reply_usage(response)
+    return response
+
+
 def _strip_visible_dsml_tool_blocks(text: str) -> str:
     return _VISIBLE_DSML_TOOL_BLOCK_RE.sub("", str(text or "")).strip()
 

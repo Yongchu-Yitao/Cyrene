@@ -290,7 +290,13 @@ async def _call_llm(
     )
 
 
-async def _call_llm_stream(messages: list[dict], max_tokens: int | None = 32000, *, secondary: bool = False) -> dict[str, Any]:
+async def _call_llm_stream(
+    messages: list[dict],
+    max_tokens: int | None = 32000,
+    *,
+    secondary: bool = False,
+    tools: list | None = None,
+) -> dict[str, Any]:
     from cyrene.call_llm import call_llm as _unified_call_llm
 
     return await _unified_call_llm(
@@ -299,6 +305,7 @@ async def _call_llm_stream(messages: list[dict], max_tokens: int | None = 32000,
         model_type="secondary" if secondary else "primary",
         stream=True,
         stream_callback=_reply_stream_writer.get(),
+        tools=tools,
         caller=_caller_type.get(),
         phase=_llm_phase_name(None),
         round_id=_current_round_id.get(),

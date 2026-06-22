@@ -194,6 +194,7 @@ class ChatMessageBody(APIBody):
     command: str | None = Field(default=None, max_length=20_000)
     stream: bool = False
     retry: bool = False
+    forkReplay: bool = False
     mode: str | None = Field(default=None, max_length=80)
     lang: Literal["", "en", "zh"] = ""
 
@@ -201,6 +202,11 @@ class ChatMessageBody(APIBody):
 class ChatToTaskBody(APIBody):
     title: str | None = Field(default=None, max_length=160)
     goal: str | None = Field(default=None, max_length=50_000)
+
+
+class ChatForkBody(APIBody):
+    messageId: str | None = Field(default=None, max_length=200)
+    content: str | None = Field(default=None, max_length=200_000)
 
 
 class MemoryCreateBody(APIBody):

@@ -1,6 +1,7 @@
 """Tests for the profile panel's backend stats: per-tool counts, task-time
 aggregation, and the persisted user identity in _build_user()."""
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -92,3 +93,45 @@ def test_build_user_falls_back_to_local_name(monkeypatch):
     assert user["initials"] == "S"
     assert user["avatar"] == ""
     assert user["avatar_emoji"] == ""
+
+
+def test_bump_activity_sync_increments_correct_bucket(tmp_path):
+    db_path = str(tmp_path / "activity.db")
+    asyncio.run(cy_db.init_db(db_path))
+
+    # Compute expected day/bucket in local time so the test is tz-agnostic.
+    ts = "2026-06-22T16:30:00+00:00"
+    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local_dt = dt.astimezone()
+    expected_day = local_dt.strftime("%Y-%m-%d")
+    expected_col = cy_db._activity_column(int(local_dt.strftime("%H")))
+
+    cy_db.bump_activity_sync(db_path, timestamp=ts)
+
+    async def _query():
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            return await (
+                await db.execute(
+                    "SELECT day, activity_00_04, activity_04_08, activity_08_12, "
+                    "activity_12_16, activity_16_20, activity_20_24 FROM daily_stats WHERE day = ?",
+                    (expected_day,),
+                )
+            ).fetchone()
+
+    row = asyncio.run(_query())
+
+    assert row is not None
+    assert row[expected_col] == 1
+    for col in (
+        "activity_00_04",
+        "activity_04_08",
+        "activity_08_12",
+        "activity_12_16",
+        "activity_16_20",
+        "activity_20_24",
+    ):
+        if col != expected_col:
+            assert row[col] == 0

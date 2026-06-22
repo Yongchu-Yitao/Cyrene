@@ -2694,7 +2694,7 @@ function GoalLoopWizard({ session, onClose, onStarted }) {
             <div className="wb-goal-loop-summary">
               <span><small>{wbT("goalLoop.field.runtime", "最大运行时间")}</small><b>{preview.limits.maxRuntimeHours} {wbT("goalLoop.hours", "小时")}</b></span>
               <span><small>{wbT("goalLoop.field.repairs", "最大返工轮数")}</small><b>{preview.limits.maxRepairRounds} {wbT("goalLoop.rounds", "轮")}</b></span>
-              <span><small>{wbT("goalLoop.field.permission", "权限模式")}</small><b>{preview.limits.permissionMode === "full_access" ? wbT("goalLoop.permission.full", "完全访问") : "Auto"}</b></span>
+              <span><small>{wbT("goalLoop.field.permission", "权限模式")}</small><b>{preview.limits.permissionMode === "full_access" ? wbT("goalLoop.permission.full", "完全访问") : wbT("goalLoop.permission.autoShort", "自动")}</b></span>
               <span><small>{wbT("goalLoop.field.reflection", "深度思考强度")}</small><b>{preview.limits.reflectionMode === "frequent" ? wbT("goalLoop.reflection.frequent", "高频") : preview.limits.reflectionMode === "standard" ? wbT("goalLoop.reflection.standard", "标准") : wbT("goalLoop.reflection.proactive", "主动")}</b></span>
             </div>
             <section><h3>{wbT("goalLoop.preview.plan", "执行计划")}</h3><ol>{(preview.plan || []).map(function (step) { return <li key={step.id}><b>{step.title}</b>{step.description && <small>{step.description}</small>}</li>; })}</ol></section>
@@ -3400,7 +3400,7 @@ function AgentActivityCard({ session, controller, onRightTab }) {
           <span><small>{wbT("goalLoop.live.phase", "阶段")}</small><b>{phaseLabels[goalLoop.phase] || goalLoop.phase}</b></span>
           <span><small>{wbT("goalLoop.live.runtime", "运行时间")}</small><b>{formatDurationSec(goalLoop.activeSeconds || 0)} / {formatDurationSec(goalLoop.maxActiveSeconds || 0)}</b></span>
           <span><small>{wbT("goalLoop.live.repairs", "返工")}</small><b>{goalLoop.repairRound || 0} / {goalLoop.maxRepairRounds || 0}</b></span>
-          <span><small>{wbT("goalLoop.live.permission", "权限")}</small><b>{goalLoop.permissionMode === "full_access" ? wbT("goalLoop.permission.full", "完全访问") : "Auto"}</b></span>
+          <span><small>{wbT("goalLoop.live.permission", "权限")}</small><b>{goalLoop.permissionMode === "full_access" ? wbT("goalLoop.permission.full", "完全访问") : wbT("goalLoop.permission.autoShort", "自动")}</b></span>
         </div>
       )}
       {/* A running plan step shows its call details in the expanded subtask below,

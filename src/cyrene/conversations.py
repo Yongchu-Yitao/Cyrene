@@ -98,6 +98,15 @@ def archive_session_exchange(
         content = filepath.read_text(encoding="utf-8") if filepath.exists() else ""
         content = _upsert_session_file_header(content, sid, session_title)
         filepath.write_text(content + entry, encoding="utf-8")
+
+        # Keep the profile activity heatmap in sync with Workbench conversations.
+        try:
+            from cyrene import db as cy_db
+
+            cy_db.bump_activity_sync(str(DB_PATH), timestamp=now.isoformat())
+        except Exception:
+            logger.exception("Failed to bump activity for session archive")
+
         logger.debug("Archived conversation exchange to %s", filepath)
         return filepath
     except Exception:

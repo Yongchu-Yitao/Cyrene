@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -203,7 +204,7 @@ def _chat_preview(chat: dict[str, Any]) -> str:
 def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
     """Listing payload — transcript omitted to keep the rail cheap."""
     usage = _aggregate_usage(chat.get("messages") or [])
-    return {
+    payload = {
         "id": chat.get("id"),
         "projectId": chat.get("projectId"),
         "kind": "chat",
@@ -216,6 +217,11 @@ def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
         "messageCount": len(chat.get("messages") or []),
         "usage": usage,
     }
+    if chat.get("forkedFromChatId"):
+        payload["forkedFromChatId"] = chat.get("forkedFromChatId")
+    if chat.get("forkedAtMessageId"):
+        payload["forkedAtMessageId"] = chat.get("forkedAtMessageId")
+    return payload
 
 
 def _public_message(message: dict[str, Any]) -> dict[str, Any]:
@@ -764,17 +770,14 @@ def _extract_exchange_segments(
     return segments, trace[:40], usage, files[:20]
 
 
-def _truncate_state_for_retry(session_id: str) -> bool:
-    """Drop the last exchange from the agent's raw state so a retry regenerates
-    the reply without seeing the previous answer.
+def _truncate_state_file_at_last_user(path) -> bool:
+    """Cut the message list in *path* right BEFORE the last visible user entry.
 
-    Cuts the message list right BEFORE the last visible user entry — a user
-    message is always a valid history boundary, so the remaining prefix stays
-    structurally sound (no orphan tool results). ``run_agent`` re-appends the
-    user message itself.
+    A user message is always a valid history boundary, so the remaining prefix
+    stays structurally sound (no orphan tool results). ``run_agent`` re-appends
+    the user message itself. Operates directly on a state-file path so the fork
+    flow can reuse it on a copy without a live session.
     """
-    from cyrene.agent.state import _session_state_file
-    path = _session_state_file(session_id)
     data = read_json_safe(path)
     if not isinstance(data, dict):
         return False
@@ -794,6 +797,50 @@ def _truncate_state_for_retry(session_id: str) -> bool:
     data["messages"] = messages[:cut_at]
     atomic_write_json(path, data)
     return True
+
+
+def _truncate_state_file_at_user_ordinal(path, target_ordinal: int) -> bool:
+    """Cut the message list in *path* right BEFORE the Nth visible user message.
+
+    ``target_ordinal`` is 1-indexed among visible (non-compacted, non-hidden)
+    user entries — matching the public transcript's user-message count so a fork
+    that edits the 2nd user turn truncates the raw state at the same boundary.
+    """
+    if not isinstance(target_ordinal, int) or target_ordinal < 1:
+        return False
+    data = read_json_safe(path)
+    if not isinstance(data, dict):
+        return False
+    messages = data.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return False
+    seen = 0
+    cut_at = None
+    for index in range(len(messages)):
+        entry = messages[index]
+        if not isinstance(entry, dict) or entry.get("compacted_block"):
+            continue
+        if str(entry.get("role") or "") == "user" and not entry.get("hidden_from_ui"):
+            seen += 1
+            if seen == target_ordinal:
+                cut_at = index
+                break
+    if cut_at is None:
+        return False
+    data["messages"] = messages[:cut_at]
+    atomic_write_json(path, data)
+    return True
+
+
+def _truncate_state_for_retry(session_id: str) -> bool:
+    """Drop the last exchange from the agent's raw state so a retry regenerates
+    the reply without seeing the previous answer.
+
+    Thin wrapper around ``_truncate_state_file_at_last_user`` resolved via the
+    session's state-file path.
+    """
+    from cyrene.agent.state import _session_state_file
+    return _truncate_state_file_at_last_user(_session_state_file(session_id))
 
 
 # ---------------------------------------------------------------------------
@@ -1069,6 +1116,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         command = str(body.get("command") or "").strip()
         wants_stream = bool(body.get("stream"))
         retry = bool(body.get("retry"))
+        fork_replay = bool(body.get("forkReplay"))
         mode = str(body.get("mode") or "auto").strip().lower()
         if mode not in PERMISSION_MODES:
             mode = "auto"
@@ -1121,7 +1169,10 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             command = ""
             normalized = R._workbench_normalize_attachments(user_entry.get("agentAttachments") or [])
             public_attachments = user_entry.get("attachments") if isinstance(user_entry.get("attachments"), list) else []
-            _truncate_state_for_retry(chat_id)
+            # A fork already truncated the raw state at the edit boundary; only
+            # a plain retry needs to drop the last exchange from the state here.
+            if not fork_replay:
+                _truncate_state_for_retry(chat_id)
         else:
             user_entry = {
                 "id": _short_id("msg"),
@@ -1355,6 +1406,103 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             media_type="application/x-ndjson",
             headers={"Cache-Control": "no-cache"},
         )
+
+    @router.post("/api/workbench/chats/{chat_id}/fork")
+    async def api_workbench_chat_fork(
+        chat_id: str, body_model: api_models.ChatForkBody
+    ):
+        """Fork a conversation at an edited user message.
+
+        Creates a new chat with the prefix transcript (everything before the
+        edited user message) plus a NEW user entry bearing the edited content
+        and the original attachments. The source chat is preserved untouched.
+        The agent's raw state is copied from the source session and truncated at
+        the same user-message boundary so the forked chat can replay the edit
+        through a normal send (``{ retry: true, forkReplay: true }``) without
+        re-truncating. The agent is NOT run here.
+        """
+        from cyrene.agent.state import _session_state_file
+
+        body = api_models.body_dict(body_model)
+        message_id = str(body.get("messageId") or "").strip()
+        new_content = str(body.get("content") or "").strip()
+        if not message_id:
+            return JSONResponse({"error": "messageId is required"}, status_code=400)
+        if not new_content:
+            return JSONResponse({"error": "content is required"}, status_code=400)
+        if chat_id.startswith("legacy:"):
+            return JSONResponse({"error": "legacy chats cannot be forked"}, status_code=403)
+
+        payload = _read_chats_store()
+        chat = _find_chat(payload, chat_id)
+        if not chat:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        messages = chat.get("messages") if isinstance(chat.get("messages"), list) else []
+        if not messages:
+            return JSONResponse({"error": "chat has no messages"}, status_code=400)
+
+        edit_index = -1
+        for index, entry in enumerate(messages):
+            if str(entry.get("id") or "") == message_id:
+                edit_index = index
+                break
+        if edit_index < 0:
+            return JSONResponse({"error": "message not found"}, status_code=404)
+        if str(messages[edit_index].get("role") or "") != "user":
+            return JSONResponse({"error": "can only edit user messages"}, status_code=400)
+
+        # User-message ordinal (1-indexed) of the edited turn — this is the
+        # boundary at which the raw state will be truncated.
+        user_ordinal = sum(
+            1 for entry in messages[:edit_index + 1]
+            if str(entry.get("role") or "") == "user"
+        )
+
+        R = _routes()
+        project_id = str(chat.get("projectId") or "")
+        now = _utc_now_iso()
+        new_chat = _new_chat(project_id, str(chat.get("title") or ""), str(chat.get("model") or R._get_model()))
+        new_chat["forkedFromChatId"] = chat_id
+        new_chat["forkedAtMessageId"] = message_id
+
+        # Prefix transcript: everything before the edited user message.
+        prefix = [dict(entry) for entry in messages[:edit_index]]
+        # New user entry bearing the edited text + original attachments.
+        orig = messages[edit_index]
+        edited_entry: dict[str, Any] = {
+            "id": _short_id("msg"),
+            "role": "user",
+            "content": new_content,
+            "createdAt": now,
+        }
+        if isinstance(orig.get("attachments"), list) and orig["attachments"]:
+            edited_entry["attachments"] = orig["attachments"]
+            # Preserve the private path-bearing attachments so the replay send
+            # can rebuild the agent prompt + read-guard map (same as :1132-1136).
+            if orig.get("agentAttachments"):
+                edited_entry["agentAttachments"] = orig["agentAttachments"]
+        new_chat["messages"] = prefix + [edited_entry]
+        new_chat["updatedAt"] = now
+
+        payload.setdefault("chats", []).insert(0, new_chat)
+        _write_chats_store(payload)
+
+        # Seed the forked session's raw state from the source, truncated at the
+        # same user-message boundary so the replay send appends the edited turn.
+        new_chat_id = str(new_chat.get("id") or "")
+        src_state = _session_state_file(chat_id)
+        new_state = _session_state_file(new_chat_id)
+        new_state.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if src_state.exists():
+                shutil.copyfile(src_state, new_state)
+                _truncate_state_file_at_user_ordinal(new_state, user_ordinal)
+            else:
+                atomic_write_json(new_state, {"messages": []})
+        except Exception:
+            logger.exception("Failed to seed fork state for %s", new_chat_id)
+
+        return {"ok": True, "chat": _public_chat_full(new_chat)}
 
     @router.post("/api/workbench/chats/{chat_id}/to-task")
     async def api_workbench_chat_to_task(

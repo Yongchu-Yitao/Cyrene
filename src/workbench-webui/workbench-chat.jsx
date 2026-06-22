@@ -101,6 +101,7 @@ var WorkbenchChatModel = (function () {
         mode: input.mode || "auto",
         command: input.command || "",
         retry: !!input.retry,
+        forkReplay: !!input.forkReplay,
         stream: true,
         lang: (window.WorkbenchI18n && window.WorkbenchI18n.getLang ? window.WorkbenchI18n.getLang() : ""),
       }),
@@ -160,6 +161,17 @@ var WorkbenchChatModel = (function () {
     });
   }
 
+  // Fork a conversation at an edited user message. Creates a new chat with the
+  // prefix transcript + the edited user entry, and seeds the agent state. The
+  // caller then replays the edit via sendMessage({ retry: true, forkReplay: true }).
+  function forkChat(chatId, messageId, content) {
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/fork", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messageId: messageId || "", content: content || "" }),
+    }).then(function (payload) { return payload.chat; });
+  }
+
   window.WorkbenchChatModel = {
     listChats: listChats,
     createChat: createChat,
@@ -172,6 +184,7 @@ var WorkbenchChatModel = (function () {
     uploadFiles: uploadFiles,
     sendMessage: sendMessage,
     answerChat: answerChat,
+    forkChat: forkChat,
   };
   return window.WorkbenchChatModel;
 })();
@@ -324,6 +337,7 @@ var WBC_ICONS = {
   task: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1.5"/><path d="M9 14 10.5 15.5 15 11"/></svg>,
   spark: <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M12 2.5 13.7 9 20 10.7 13.7 12.4 12 19l-1.7-6.6L4 10.7 10.3 9Z"/></svg>,
   folder: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>,
+  fork: <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M6 8.2v7.6M8.2 6h7.6M8.2 18H15a3 3 0 0 0 3-3V8.2"/></svg>,
 };
 
 // Slash commands + permission modes (mirrors the legacy agent capabilities;
@@ -1088,6 +1102,24 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     handleSend({ retry: true });
   }
 
+  // Edit a user message → fork the conversation at that point, switch to the
+  // forked chat, and replay the edited turn through the streaming engine. The
+  // original conversation is preserved untouched.
+  function handleEditMessage(messageId, newContent) {
+    if (!activeChat || activeChat.legacy || runtimeEngine.isRunning(activeChat.id)) return;
+    if (!messageId || !newContent) return;
+    setError("");
+    model.forkChat(activeChat.id, messageId, newContent).then(function (newChat) {
+      setChats(function (prev) { return [newChat].concat(prev); });
+      setActiveChatId(newChat.id);
+      setActiveChat(newChat);
+      // Replay the edited user message (already the last entry in the forked
+      // transcript) through the agent. forkReplay tells the server the state
+      // was already truncated by the fork — no re-truncation needed.
+      return runtimeEngine.start(newChat.id, { retry: true, forkReplay: true }, model);
+    }).catch(function (err) { setError(wbcErrorText(err)); });
+  }
+
   function handleCreateChat() {
     model.createChat(projectId).then(function (chat) {
       setChats(function (prev) { return [chat].concat(prev); });
@@ -1173,6 +1205,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         onInterrupt={handleInterrupt}
         onAnswer={handleAnswer}
         onRetryMessage={handleRetryMessage}
+        onEditMessage={handleEditMessage}
         onRename={handleRename}
         onDelete={handleDelete}
         onToTask={handleToTask}
@@ -1280,6 +1313,16 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
                 {chatRunning ? <i className="wbc-running-dot" /> : null}
                 {chat.preview || wbcT("workbenchChat.noMessages", "No messages yet")}
               </span>
+              {chat.forkedFromChatId && (
+                <span
+                  className="wbc-fork-marker"
+                  title={wbcT("workbenchChat.forkSource", "Forked from another chat — click to open the original")}
+                  onClick={function (e) { e.stopPropagation(); onSelect(chat.forkedFromChatId); }}
+                >
+                  {WBC_ICONS.fork}
+                  {wbcT("workbenchChat.forked", "Forked")}
+                </span>
+              )}
             </div>
           );
         })}
@@ -1292,7 +1335,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onInterrupt, onAnswer, onRetryMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile }) {
+function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile }) {
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
@@ -1355,8 +1398,9 @@ function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onIn
         )}
         {messages.map(function (msg) {
           var canRetry = !isLegacy && !running && String(msg.id || "") === lastAssistantId;
+          var canEdit = !isLegacy && !running && msg.role === "user" && !!onEditMessage;
           return msg.role === "user"
-            ? <WbcUserMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} />
+            ? <WbcUserMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onEditMessage={onEditMessage} canEdit={canEdit} />
             : <WbcAssistantMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onRetryMessage={canRetry ? onRetryMessage : null} />;
         })}
         {runtime && <WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} />}
@@ -1544,8 +1588,85 @@ function WbcHeader({ project, chat, running, onRename, onDelete, onToTask, toTas
   );
 }
 
-function WbcUserMessage({ msg, onOpenFile }) {
+function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit }) {
   var attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+  var [editing, setEditing] = useWbcState(false);
+  var [draft, setDraft] = useWbcState(String(msg.content || ""));
+  var taRef = useWbcRef(null);
+
+  useWbcEffect(function () {
+    if (editing && taRef.current) {
+      taRef.current.style.height = "auto";
+      taRef.current.style.height = Math.min(taRef.current.scrollHeight, 240) + "px";
+      taRef.current.focus();
+      taRef.current.setSelectionRange(taRef.current.value.length, taRef.current.value.length);
+    }
+  }, [editing]);
+
+  function startEdit(e) {
+    e.stopPropagation();
+    setDraft(String(msg.content || ""));
+    setEditing(true);
+  }
+  function cancelEdit() {
+    setEditing(false);
+    setDraft(String(msg.content || ""));
+  }
+  function saveEdit() {
+    var text = String(draft || "").trim();
+    if (!text || !onEditMessage) { setEditing(false); return; }
+    if (text === String(msg.content || "").trim()) { setEditing(false); return; }
+    setEditing(false);
+    onEditMessage(msg.id, text);
+  }
+  function onEditKeyDown(event) {
+    var sc = window.WorkbenchShortcuts;
+    if (sc && sc.matches(event, "composer-send")) {
+      if (event.nativeEvent && event.nativeEvent.isComposing) return;
+      event.preventDefault();
+      saveEdit();
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEdit();
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="wbc-msg user editing">
+        <div className="wbc-msg-row">
+          <time>{wbcFormatTime(msg.createdAt)}</time>
+          <div className="wbc-bubble wbc-edit-bubble">
+            {attachments.length > 0 && (
+              <div className="wbc-msg-attachments">
+                {attachments.map(function (file, i) {
+                  var isImg = file.kind === "image" || String(file.content_type || "").indexOf("image") === 0;
+                  var open = function () { if (onOpenFile && file.url) onOpenFile(file); };
+                  return isImg && file.url
+                    ? <img key={file.id || i} src={file.url} alt={file.name || "image"} onClick={open} style={{ cursor: "zoom-in" }} />
+                    : <button type="button" key={file.id || i} className="wbc-attach-chip" onClick={open} title={wbcT("workbenchChat.viewInSide", "View on the right")}>{WBC_ICONS.file}{file.name || "file"}</button>;
+                })}
+              </div>
+            )}
+            <textarea
+              ref={taRef}
+              className="wbc-edit-textarea"
+              value={draft}
+              onChange={function (e) { setDraft(e.target.value); }}
+              onKeyDown={onEditKeyDown}
+            />
+            <div className="wbc-edit-actions">
+              <button type="button" className="wb-btn ghost" onClick={cancelEdit}>{wbcT("common.cancel", "Cancel")}</button>
+              <button type="button" className="wb-btn primary" onClick={saveEdit} disabled={!draft.trim()}>{wbcT("workbenchChat.editSave", "Save & send")}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="wbc-msg user">
       <div className="wbc-msg-row">
@@ -1564,6 +1685,11 @@ function WbcUserMessage({ msg, onOpenFile }) {
           )}
           {msg.content ? <p>{msg.content}</p> : null}
         </div>
+        {canEdit && onEditMessage && (
+          <button type="button" className="wbc-msg-action wbc-edit-btn" onClick={startEdit} title={wbcT("workbenchChat.editMessage", "Edit & branch")}>
+            {WBC_ICONS.edit}
+          </button>
+        )}
       </div>
     </div>
   );

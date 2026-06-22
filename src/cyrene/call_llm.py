@@ -907,6 +907,144 @@ async def call_llm(
 # Streaming handler
 # ---------------------------------------------------------------------------
 
+# Textual DSML tool-call markers can be streamed as ordinary content deltas
+# (DeepSeek's fallback when it cannot use the structured tool-call channel).
+# The block is parsed back into real tool calls *after* the stream completes
+# (`_normalize_dsml_tool_calls`), but the raw deltas would otherwise reach the
+# UI verbatim mid-stream. `_DsmlStreamFilter` withholds the markup from the
+# forwarded stream while the caller keeps the raw text for normalization.
+_DSML_STREAM_OPENERS = ("<｜｜DSML｜｜tool_calls>", "<||DSML||tool_calls>")
+_DSML_STREAM_CLOSERS = ("</｜｜DSML｜｜tool_calls>", "</||DSML||tool_calls>")
+_DSML_STREAM_MAX_OPENER = max(len(opener) for opener in _DSML_STREAM_OPENERS)
+
+
+def _first_marker(text: str, markers: tuple[str, ...]) -> tuple[int, int]:
+    """Earliest (index, length) of any marker in ``text``; (-1, 0) if none."""
+    best_index = -1
+    best_len = 0
+    for marker in markers:
+        index = text.find(marker)
+        if index >= 0 and (best_index < 0 or index < best_index):
+            best_index, best_len = index, len(marker)
+    return best_index, best_len
+
+
+def _trailing_marker_prefix(text: str, markers: tuple[str, ...]) -> int:
+    """Length of the longest suffix of ``text`` that is a prefix of any marker."""
+    limit = min(len(text), _DSML_STREAM_MAX_OPENER)
+    for k in range(limit, 0, -1):
+        suffix = text[-k:]
+        if any(marker.startswith(suffix) for marker in markers):
+            return k
+    return 0
+
+
+class _DsmlStreamFilter:
+    """Strip DSML tool-call blocks from a forwarded delta stream incrementally."""
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._suppressing = False
+        self._emitted: list[str] = []
+
+    def feed(self, text: str) -> str:
+        if not text:
+            return ""
+        self._buf += text
+        out: list[str] = []
+        while self._buf:
+            if self._suppressing:
+                close_index, close_len = _first_marker(self._buf, _DSML_STREAM_CLOSERS)
+                if close_index < 0:
+                    # Still inside the block — drop everything but retain a
+                    # possible partial closer at the tail for the next chunk.
+                    keep = _trailing_marker_prefix(self._buf, _DSML_STREAM_CLOSERS)
+                    self._buf = self._buf[len(self._buf) - keep:] if keep else ""
+                    break
+                self._buf = self._buf[close_index + close_len:]
+                self._suppressing = False
+                continue
+            open_index, open_len = _first_marker(self._buf, _DSML_STREAM_OPENERS)
+            if open_index < 0:
+                keep = _trailing_marker_prefix(self._buf, _DSML_STREAM_OPENERS)
+                emit_upto = len(self._buf) - keep
+                if emit_upto > 0:
+                    out.append(self._buf[:emit_upto])
+                self._buf = self._buf[emit_upto:]
+                break
+            if open_index > 0:
+                out.append(self._buf[:open_index])
+            self._buf = self._buf[open_index + open_len:]
+            self._suppressing = True
+        result = "".join(out)
+        if result:
+            self._emitted.append(result)
+        return result
+
+    def flush(self) -> str:
+        # A held buffer is, by construction, only ever a partial opener prefix
+        # (ambiguous tail). If the stream ended there it was an incomplete DSML
+        # opener, so dropping it is correct; emit only genuine leftover text.
+        out = ""
+        if not self._suppressing and self._buf:
+            if _trailing_marker_prefix(self._buf, _DSML_STREAM_OPENERS) != len(self._buf):
+                out = self._buf
+        self._buf = ""
+        if out:
+            self._emitted.append(out)
+        return out
+
+    def emitted(self) -> str:
+        return "".join(self._emitted)
+
+
+def _accumulate_tool_call_deltas(
+    deltas: Any, fragments: dict[int, dict[str, Any]]
+) -> None:
+    """Merge OpenAI streamed ``delta.tool_calls`` fragments by index."""
+    if not isinstance(deltas, list):
+        return
+    for delta in deltas:
+        if not isinstance(delta, dict):
+            continue
+        index = delta.get("index")
+        if not isinstance(index, int):
+            index = len(fragments)
+        fragment = fragments.setdefault(
+            index, {"id": None, "type": "function", "name": "", "arguments": ""}
+        )
+        if delta.get("id"):
+            fragment["id"] = delta["id"]
+        if delta.get("type"):
+            fragment["type"] = delta["type"]
+        function = delta.get("function")
+        if isinstance(function, dict):
+            if function.get("name"):
+                fragment["name"] = function["name"]
+            if isinstance(function.get("arguments"), str):
+                fragment["arguments"] += function["arguments"]
+
+
+def _finalize_tool_call_fragments(
+    fragments: dict[int, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    for index in sorted(fragments):
+        fragment = fragments[index]
+        name = str(fragment.get("name") or "").strip()
+        if not name:
+            continue
+        calls.append({
+            "index": len(calls),
+            "id": fragment.get("id") or f"call_stream_{uuid.uuid4().hex[:16]}",
+            "type": fragment.get("type") or "function",
+            "function": {
+                "name": name,
+                "arguments": fragment.get("arguments") or "{}",
+            },
+        })
+    return calls
+
 
 async def _handle_stream(
     client: httpx.AsyncClient,
@@ -915,10 +1053,22 @@ async def _handle_stream(
     headers: dict[str, str],
     stream_callback: Callable[[dict[str, Any]], Awaitable[None]] | None,
 ) -> dict[str, Any]:
-    accumulated: list[str] = []
+    accumulated: list[str] = []  # raw content — kept for tool-call normalization
     reasoning_parts: list[str] = []
+    tool_call_fragments: dict[int, dict[str, Any]] = {}
     usage: dict[str, Any] = {}
     started = False
+    dsml_filter = _DsmlStreamFilter()
+
+    async def _forward(text: str) -> None:
+        nonlocal started
+        if not text:
+            return
+        if not started and stream_callback:
+            await stream_callback({"type": "reply_start"})
+            started = True
+        if stream_callback:
+            await stream_callback({"type": "reply_delta", "delta": text})
 
     async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
         if resp.status_code != 200:
@@ -941,27 +1091,30 @@ async def _handle_stream(
                 usage = data["usage"]
             for choice in data.get("choices") or []:
                 delta = choice.get("delta") or {}
-                text = _extract_stream_delta_text(delta)
                 rc = delta.get("reasoning_content")
                 if isinstance(rc, str) and rc.strip():
                     reasoning_parts.append(rc)
+                _accumulate_tool_call_deltas(delta.get("tool_calls"), tool_call_fragments)
+                text = _extract_stream_delta_text(delta)
                 if not text:
                     continue
-                if not started and stream_callback:
-                    await stream_callback({"type": "reply_start"})
-                    started = True
                 accumulated.append(text)
-                if stream_callback:
-                    await stream_callback({"type": "reply_delta", "delta": text})
+                await _forward(dsml_filter.feed(text))
+    await _forward(dsml_filter.flush())
 
     full_text = "".join(accumulated)
     if not started and stream_callback:
         await stream_callback({"type": "reply_start"})
     if stream_callback:
-        await stream_callback({"type": "reply_done", "response": full_text})
+        # The UI accumulates filtered deltas, so the final payload must match
+        # what was forwarded — never the raw text (which may carry DSML markup).
+        await stream_callback({"type": "reply_done", "response": dsml_filter.emitted()})
 
     msg: dict[str, Any] = {"role": "assistant", "content": full_text}
     if reasoning_parts:
         msg["reasoning_content"] = "".join(reasoning_parts)
+    tool_calls = _finalize_tool_call_fragments(tool_call_fragments)
+    if tool_calls:
+        msg["tool_calls"] = tool_calls
     msg["usage"] = _normalized_usage(usage, payload.get("messages", []), msg)
     return msg

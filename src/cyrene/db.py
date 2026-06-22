@@ -449,6 +449,32 @@ def _activity_column(hour: int) -> str:
     return "activity_20_24"
 
 
+def bump_activity_sync(db_path: str, timestamp: str | None = None) -> None:
+    """Increment the correct daily activity bucket for the given timestamp.
+
+    Synchronous counterpart used by Workbench's per-session archiving, which
+    runs synchronously so callers are not forced to be async.
+    """
+    ts = str(timestamp or datetime.now(_local_tzinfo()).isoformat())
+    day = _normalize_day(timestamp=ts)
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        hour = int(dt.astimezone(_local_tzinfo()).strftime("%H"))
+    except Exception:
+        hour = 0
+    activity_col = _activity_column(hour)
+    with sqlite3.connect(db_path, timeout=30) as db:
+        db.execute("PRAGMA busy_timeout = 30000")
+        db.execute("INSERT OR IGNORE INTO daily_stats (day) VALUES (?)", (day,))
+        db.execute(
+            f"UPDATE daily_stats SET {activity_col} = {activity_col} + 1 WHERE day = ?",
+            (day,),
+        )
+        db.commit()
+
+
 def _extract_topic_terms(text: str, limit: int = 12) -> list[str]:
     source = str(text or "").lower()
     if not source:
