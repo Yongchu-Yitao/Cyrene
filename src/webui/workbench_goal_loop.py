@@ -842,6 +842,18 @@ class GoalLoopManager:
                 passed = verification is None or bool(verification.get("passed"))
                 step_attempts = 0
 
+                # Generate step outcome before finish_step so it rides inside the
+                # same _write_session instead of requiring a second write.
+                outcome = None
+                if passed and display_reply:
+                    try:
+                        outcome = await asyncio.wait_for(
+                            R._workbench_generate_step_outcome(step, display_reply, step_prompt),
+                            timeout=10,
+                        )
+                    except (asyncio.TimeoutError, Exception):
+                        pass
+
                 def finish_step(_p: dict[str, Any], project_obj: dict[str, Any], fresh: dict[str, Any]) -> None:
                     nonlocal step_attempts
                     fresh.setdefault("runs", []).append(run_record)
@@ -860,6 +872,8 @@ class GoalLoopManager:
                                 str((verification or {}).get("evidence") or "").strip()
                                 or "步骤执行完成；最终目标将在全部步骤后独立验收。"
                             )
+                            if outcome:
+                                candidate["outcome"] = outcome
                         else:
                             candidate["status"] = "pending"
                             candidate["startedAt"] = None
@@ -883,21 +897,6 @@ class GoalLoopManager:
                     step_id=step_id,
                     payload=verification or {"passed": True, "evidence": "final verification deferred"},
                 )
-                # Generate step outcome for context cascade across future steps.
-                if passed and display_reply:
-                    try:
-                        outcome = await asyncio.wait_for(
-                            R._workbench_generate_step_outcome(step, display_reply, step_prompt),
-                            timeout=10,
-                        )
-                        if outcome:
-                            def _store_step_outcome(_p: dict[str, Any], _proj: dict[str, Any], fresh: dict[str, Any]) -> None:
-                                for c in fresh.get("plan") or []:
-                                    if isinstance(c, dict) and str(c.get("id") or "") == step_id:
-                                        c["outcome"] = outcome
-                            _write_session(str(run["session_id"]), _store_step_outcome)
-                    except (asyncio.TimeoutError, Exception):
-                        pass
                 if not passed and step_attempts >= _STEP_FAILURE_CAP:
                     # The same step keeps failing independent verification. Reflect
                     # once for a root cause, then block rather than retry until the
