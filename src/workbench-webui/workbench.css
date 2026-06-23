@@ -8966,11 +8966,11 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-heartbeat-still.wbc-still-leave {
-  animation: wbc-still-leave 0.6s ease-in forwards;
+  animation: wbc-still-leave 0.6s ease-in both;
 }
 
 .wbc-heartbeat-still.wbc-still-enter {
-  animation: wbc-still-enter 0.6s ease-out forwards;
+  animation: wbc-still-enter 0.6s ease-out both;
 }
 
 .wbc-heartbeat-still::before {

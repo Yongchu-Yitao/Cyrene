@@ -1861,23 +1861,22 @@ var WBC_HEARTBEAT_STALL_MS = 10000;
 // Mounts/unmounts with the runtime, so the timer is torn down the moment the run settles.
 function WbcHeartbeat({ startedAt, lastEventAt }) {
   var [now, setNow] = useWbcState(function () { return Date.now(); });
-  var [phraseIdx, setPhraseIdx] = useWbcState(function () { return Math.floor(Math.random() * WBC_THINKING_PHRASES.length); });
-  var [displayText, setDisplayText] = useWbcState(WBC_THINKING_PHRASES[0]);
+  var [displayText, setDisplayText] = useWbcState(function () { return WBC_THINKING_PHRASES[Math.floor(Math.random() * WBC_THINKING_PHRASES.length)]; });
   var [animClass, setAnimClass] = useWbcState("");
+
+  function handleAnimEnd() {
+    if (animClass === "wbc-still-leave") {
+      setDisplayText(WBC_THINKING_PHRASES[Math.floor(Math.random() * WBC_THINKING_PHRASES.length)]);
+      setAnimClass("wbc-still-enter");
+    } else if (animClass === "wbc-still-enter") {
+      setAnimClass("");
+    }
+  }
+
   useWbcEffect(function () {
     var timer = setInterval(function () {
       setNow(Date.now());
-      var nextIdx = Math.floor(Math.random() * WBC_THINKING_PHRASES.length);
-      setPhraseIdx(nextIdx);
-      // 淡出 → 换文字 → 淡入
       setAnimClass("wbc-still-leave");
-      setTimeout(function () {
-        setDisplayText(WBC_THINKING_PHRASES[nextIdx]);
-        setAnimClass("wbc-still-enter");
-        setTimeout(function () {
-          setAnimClass("");
-        }, 600);
-      }, 600);
     }, 4000);
     return function () { clearInterval(timer); };
   }, []);
@@ -1888,7 +1887,7 @@ function WbcHeartbeat({ startedAt, lastEventAt }) {
     <div className={"wbc-heartbeat" + (stalled ? " stalled" : "")} aria-live="polite">
       <span className="wbc-heartbeat-pulse" />
       <span className="wbc-heartbeat-elapsed">{wbcT("workbenchChat.elapsed", "Running {s}s", { s: elapsed })}</span>
-      <span className={"wbc-heartbeat-still" + (animClass ? " " + animClass : "")}>{displayText}</span>
+      <span className={"wbc-heartbeat-still" + (animClass ? " " + animClass : "")} onAnimationEnd={handleAnimEnd}>{displayText}</span>
     </div>
   );
 }
