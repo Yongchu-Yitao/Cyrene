@@ -10267,6 +10267,87 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 .wbc-ctx-seg.seg-tool,
 .wbc-ctx-dot.seg-tool { background: var(--wb-green); }
 
+/* Context block layer segment colors */
+.wbc-ctx-seg.seg-system_prefix,
+.wbc-ctx-dot.seg-system_prefix { background: var(--wb-faint); }
+.wbc-ctx-seg.seg-ephemeral,
+.wbc-ctx-dot.seg-ephemeral { background: var(--wb-red); }
+.wbc-ctx-seg.seg-messages,
+.wbc-ctx-dot.seg-messages { background: var(--wb-green); }
+
+/* Block list below the legend */
+.wbc-ctx-dot.sub { opacity: 1; }
+
+/* Grouped legend below the bar */
+.wbc-ctx-legend-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.wbc-ctx-legend-layer-head {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--wb-text);
+  margin-bottom: 2px;
+}
+.wbc-ctx-legend-layer-body {
+  padding-left: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.wbc-ctx-legend-layer-body .wbc-ctx-legend-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11.5px;
+  padding: 1px 0;
+  gap: 8px;
+}
+.wbc-ctx-legend-layer-body .wbc-ctx-legend-item em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+  text-align: right;
+}
+.wbc-ctx-legend-layer-body .wbc-ctx-legend-item span {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Sub-item colors — Messages: exact match with Overview segments */
+.wbc-ctx-dot.sub.msg-sub.seg-compacted,
+.wbc-ctx-seg.sub.msg-sub.seg-compacted { background: var(--wb-amber); }
+.wbc-ctx-dot.sub.msg-sub.seg-tool,
+.wbc-ctx-seg.sub.msg-sub.seg-tool      { background: var(--wb-green); }
+.wbc-ctx-dot.sub.msg-sub.seg-assistant,
+.wbc-ctx-seg.sub.msg-sub.seg-assistant { background: var(--wb-purple); }
+.wbc-ctx-dot.sub.msg-sub.seg-user,
+.wbc-ctx-seg.sub.msg-sub.seg-user      { background: var(--wb-blue); }
+.wbc-ctx-dot.sub.msg-sub.seg-system,
+.wbc-ctx-seg.sub.msg-sub.seg-system    { background: var(--wb-faint); }
+
+/* Sub-item colors — System Prefix: lighter shades of Overview palette */
+.wbc-ctx-dot.sub.sys-sub-0,
+.wbc-ctx-seg.sub.sys-sub-0  { background: color-mix(in srgb, var(--wb-faint) 40%, white 60%); }
+.wbc-ctx-dot.sub.sys-sub-1,
+.wbc-ctx-seg.sub.sys-sub-1  { background: color-mix(in srgb, var(--wb-blue) 45%, white 55%); }
+.wbc-ctx-dot.sub.sys-sub-2,
+.wbc-ctx-seg.sub.sys-sub-2  { background: color-mix(in srgb, var(--wb-purple) 45%, white 55%); }
+.wbc-ctx-dot.sub.sys-sub-3,
+.wbc-ctx-seg.sub.sys-sub-3  { background: color-mix(in srgb, var(--wb-green) 45%, white 55%); }
+.wbc-ctx-dot.sub.sys-sub-4,
+.wbc-ctx-seg.sub.sys-sub-4  { background: color-mix(in srgb, var(--wb-amber) 50%, white 50%); }
+.wbc-ctx-dot.sub.sys-sub-5,
+.wbc-ctx-seg.sub.sys-sub-5  { background: color-mix(in srgb, var(--wb-amber) 60%, black 40%); }
+.wbc-ctx-dot.sub.sys-sub-6,
+.wbc-ctx-seg.sub.sys-sub-6  { background: color-mix(in srgb, var(--wb-faint) 55%, white 45%); }
+.wbc-ctx-dot.sub.sys-sub-7,
+.wbc-ctx-seg.sub.sys-sub-7  { background: color-mix(in srgb, var(--wb-faint) 65%, white 35%); }
+
 .wbc-quick-actions {
   display: flex;
   flex-direction: column;

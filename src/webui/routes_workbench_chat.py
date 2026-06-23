@@ -1062,6 +1062,81 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         model_name = str(chat.get("model") or getattr(config, "OPENAI_MODEL", "") or "")
         return _chat_context_payload(chat_id, model_name)
 
+    @router.get("/api/workbench/chats/{chat_id}/context-blocks")
+    async def api_workbench_chat_context_blocks(chat_id: str):
+        """Context block composition using the same token math as the Overview gauge."""
+        from cyrene.agent.state import _session_state_file
+        from cyrene.call_llm import _approx_token_count
+
+        if chat_id.startswith("legacy:"):
+            _, _project_id, session_id = (chat_id.split(":", 2) + ["", ""])[:3]
+            if not session_id:
+                return JSONResponse({"error": "chat not found"}, status_code=404)
+            state_id = session_id
+        else:
+            state_id = chat_id
+
+        data = read_json_safe(_session_state_file(state_id))
+        if not isinstance(data, dict):
+            return {"layers": [], "totalTokensEst": 0}
+
+        messages = data.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        seg = _context_segment_tokens(messages)
+        msg_total = sum(seg.values())
+
+        layers: list[dict[str, Any]] = []
+
+        # Layer 1: System Prefix — from separately-saved blocks (not in state.json)
+        sys_blocks = data.get("system_context_blocks")
+        if isinstance(sys_blocks, list) and sys_blocks:
+            sys_tokens = sum(int(b.get("tokens_est", 0) or 0) for b in sys_blocks if isinstance(b, dict))
+            layers.append({
+                "id": "system_prefix",
+                "label": "System Prefix",
+                "sublabel": None,
+                "blocks": [dict(b) for b in sys_blocks if isinstance(b, dict)],
+                "totalTokens": sys_tokens,
+            })
+
+        # Layer 2: Ephemeral — from saved text (not in state.json)
+        ephemeral = data.get("ephemeral_context")
+        if isinstance(ephemeral, str) and ephemeral.strip():
+            tokens = _approx_token_count(ephemeral)
+            layers.append({
+                "id": "ephemeral",
+                "label": "Ephemeral Tail",
+                "sublabel": None,
+                "blocks": [{"id": "ephemeral.run", "type": "ephemeral", "tokens_est": tokens, "chars": len(ephemeral)}],
+                "totalTokens": tokens,
+            })
+
+        # Layer 3: Messages — same segments as the Overview gauge
+        msg_seg_order = [
+            ("compacted", "Compacted"),
+            ("system", "System"),
+            ("user", "User"),
+            ("assistant", "Assistant"),
+            ("tool", "Tool"),
+        ]
+        msg_blocks = []
+        for key, label in msg_seg_order:
+            t = int(seg.get(key, 0) or 0)
+            if t > 0:
+                msg_blocks.append({"id": "segment." + key, "type": key, "tokens_est": t, "source": "", "reason": ""})
+        if msg_blocks:
+            layers.append({
+                "id": "messages",
+                "label": "Conversation Messages",
+                "sublabel": None,
+                "blocks": msg_blocks,
+                "totalTokens": msg_total,
+            })
+
+        total = sum(layer["totalTokens"] for layer in layers)
+        return {"layers": layers, "totalTokensEst": total, "messageTokens": msg_total}
+
     @router.patch("/api/workbench/chats/{chat_id}")
     async def api_workbench_update_chat(
         chat_id: str, body_model: api_models.ChatUpdateBody

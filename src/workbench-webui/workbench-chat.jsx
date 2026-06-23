@@ -2348,7 +2348,7 @@ function WbcSide({
             onSelectRound={onSelectSubagentRound}
           />
         )}
-        {activeTab === "context" && <WbcContextTab project={project} chat={chat} />}
+        {activeTab === "context" && <WbcContextTab project={project} chat={chat} runtime={runtime} />}
         {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} onOpenFile={onOpenFile} />}
         {activeTab === "viewer" && <WbcViewerTab file={viewerFile} />}
         {activeTab === "map" && <WbcMapTab chatId={chat ? chat.id : ""} active={true} />}
@@ -3139,7 +3139,178 @@ function WbcOverviewTab({ chat, runtime, onRename, onDelete, onToTask, toTaskBus
   );
 }
 
-function WbcContextTab({ project, chat }) {
+function wbcBlockLabel(block) {
+  var id = block.id || "";
+  var key = "workbenchChat.ctxBlock." + id;
+  var label = wbcT(key, "");
+  if (label) return label;
+  // Match known prefixes for a generic label
+  if (id.startsWith("history.compacted.")) return wbcT("workbenchChat.ctxBlock.history.compacted", "Compacted history");
+  if (id.startsWith("history.deep_reflection.")) return wbcT("workbenchChat.ctxBlock.history.deep_reflection", "Deep reflection");
+  if (id.startsWith("history.tool_result.")) return wbcT("workbenchChat.ctxBlock.history.tool_result", "Tool result");
+  if (id.startsWith("session.history.")) return wbcT("workbenchChat.ctxBlock.session.history", "History message");
+  if (id.startsWith("user.current.")) return wbcT("workbenchChat.ctxBlock.user.current", "User message");
+  return id.replace(/^(main\.|runtime\.|command\.|spawn_policy\.|history\.|session\.)/, "");
+}
+
+function WbcContextBlockList({ chat, running }) {
+  var [data, setData] = useWbcState(null);
+  var chatId = chat ? chat.id : "";
+  var updatedAt = chat ? chat.updatedAt : "";
+
+  useWbcEffect(function () {
+    if (!chatId) { setData(null); return undefined; }
+    var cancelled = false;
+    function load() {
+      fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/context-blocks")
+        .then(function (r) { return r.json(); })
+        .then(function (payload) { if (!cancelled && payload && !payload.error) setData(payload); })
+        .catch(function () {});
+    }
+    load();
+    var timer = running ? setInterval(load, 3500) : null;
+    return function () { cancelled = true; if (timer) clearInterval(timer); };
+  }, [chatId, updatedAt, running]);
+
+  if (!data || !Array.isArray(data.layers) || data.layers.length === 0) {
+    return React.createElement("p", { className: "workbench-muted" },
+      wbcT("workbenchChat.ctxBlocks.empty", "Send a message and the context composition will appear here."));
+  }
+
+  var layers = data.layers;
+  var msgTokens = data.messageTokens || 0;
+  // Total for the bar: include all layers (system + ephemeral + messages)
+  var barTotal = layers.reduce(function (sum, l) { return sum + (Number(l.totalTokens) || 0); }, 0);
+  // Gauge head shows message tokens only (matches Overview ctxUsed)
+  var total = msgTokens || barTotal;
+
+  // Build legend: explode system_prefix and messages sub-blocks for the bar
+  var SYS_SHADE_MAP = { system: 0, memory: 1, skills: 2, runtime: 3, command_prompt: 4, spawn_policy: 5, short_term: 6 };
+  function sysShadeForBlock(b) {
+    // Use block type first, fall back to id prefix matching for "system"-typed blocks
+    var t = b.type || "";
+    if (SYS_SHADE_MAP[t] != null && t !== "system") return SYS_SHADE_MAP[t];
+    // "system" type covers many blocks — differentiate by id prefix
+    var id = b.id || "";
+    if (id.startsWith("main.system.static_extra")) return 4;
+    if (id.startsWith("main.system.language")) return 1;
+    if (id.startsWith("memory.")) return 1;
+    if (id.startsWith("skills.")) return 2;
+    if (id.startsWith("runtime.workspace")) return 3;
+    if (id.startsWith("runtime.permission")) return 6;
+    if (id.startsWith("runtime.project")) return 1;
+    if (id.startsWith("runtime.session")) return 2;
+    if (id.startsWith("runtime.spawn")) return 5;
+    if (id.startsWith("runtime.goal")) return 4;
+    if (id.startsWith("command.")) return 5;
+    if (id.startsWith("spawn_policy.")) return 7;
+    if (id.startsWith("short_term.")) return 7;
+    return SYS_SHADE_MAP[t] != null ? SYS_SHADE_MAP[t] : 7;
+  }
+  function msgSubClass(b) {
+    var key = b.type || "";
+    return "sub msg-sub seg-" + key;
+  }
+  function sysSubClass(b) {
+    var shade = sysShadeForBlock(b);
+    return "sub sys-sub sys-sub-" + shade;
+  }
+  // Enforce consistent order: system_prefix → ephemeral → messages
+  var LAYER_ORDER = ["system_prefix", "ephemeral", "messages"];
+  var orderedLayers = LAYER_ORDER.map(function (id) {
+    return layers.find(function (l) { return l.id === id; });
+  }).filter(Boolean);
+  // Append any unknown layers at the end
+  layers.forEach(function (l) { if (LAYER_ORDER.indexOf(l.id) === -1) orderedLayers.push(l); });
+
+  function _ctxSegFromBlock(b, isMsg) {
+    var t = Number(b.tokens_est) || 0;
+    if (t <= 0) return null;
+    var key = isMsg ? (b.type || "") : (b.id || "");
+    var label = isMsg
+      ? wbcT("workbenchChat.ctx.seg." + key, WBC_CTX_SEG_LABEL[key] && WBC_CTX_SEG_LABEL[key][1] || key)
+      : wbcBlockLabel(b);
+    var dotClass = isMsg ? msgSubClass(b) : sysSubClass(b);
+    return { key: key, tokens: t, label: label, dotClass: dotClass };
+  }
+
+  var segItems = [];
+  orderedLayers.forEach(function (layer) {
+    var tokens = Number(layer.totalTokens) || 0;
+    if (tokens <= 0) return;
+    var blocks = Array.isArray(layer.blocks) ? layer.blocks : [];
+    var isMsg = layer.id === "messages";
+    var isSys = layer.id === "system_prefix";
+    var explode = (isMsg || isSys) && blocks.length > 0;
+    if (explode) {
+      blocks.forEach(function (b) {
+        var seg = _ctxSegFromBlock(b, isMsg);
+        if (!seg) return;
+        var pct = barTotal > 0 ? (seg.tokens / barTotal) * 100 : 0;
+        segItems.push({ id: layer.id + "-" + seg.key, tokens: seg.tokens, label: seg.label, pct: pct, dotClass: seg.dotClass });
+      });
+    } else {
+      var label = wbcT("workbenchChat.ctxBlocks.layer." + layer.id, layer.label);
+      var pct = barTotal > 0 ? (tokens / barTotal) * 100 : 0;
+      segItems.push({ id: layer.id, tokens: tokens, label: label, pct: pct, dotClass: "seg-" + layer.id });
+    }
+  });
+
+  return React.createElement("div", null,
+    // Gauge head
+    React.createElement("div", { className: "wbc-ctx-gauge-head" },
+      React.createElement("b", null, wbcCompactNumber(total)),
+      React.createElement("span", null, wbcT("workbenchChat.ctxBlocks.totalTokens", "tokens"))
+    ),
+    // Split bar
+    segItems.length > 0 && React.createElement("div", { className: "wbc-ctx-split" },
+      React.createElement("div", { className: "wbc-ctx-splitbar" },
+        segItems.map(function (item) {
+          return React.createElement("span", {
+            key: item.id,
+            className: "wbc-ctx-seg " + (item.dotClass || ""),
+            style: { width: Math.max(1.5, item.pct) + "%" },
+            title: item.label + " · " + wbcCompactNumber(item.tokens),
+          });
+        })
+      ),
+      // Grouped legend: layer headers with sub-item color→name→tokens
+      React.createElement("div", { className: "wbc-ctx-legend-group" },
+        orderedLayers.map(function (layer) {
+          var tokens = Number(layer.totalTokens) || 0;
+          if (tokens <= 0) return null;
+          var blocks = Array.isArray(layer.blocks) ? layer.blocks : [];
+          var isMsg = layer.id === "messages";
+          var isSys = layer.id === "system_prefix";
+          var layerLabel = wbcT("workbenchChat.ctxBlocks.layer." + layer.id, layer.label);
+          return React.createElement("div", { key: layer.id, className: "wbc-ctx-legend-layer" },
+            React.createElement("div", { className: "wbc-ctx-legend-layer-head" },
+              React.createElement("span", null, layerLabel)
+            ),
+            React.createElement("div", { className: "wbc-ctx-legend-layer-body" },
+              (isMsg || isSys) && blocks.length > 0
+                ? blocks.map(function (b) {
+                    var seg = _ctxSegFromBlock(b, isMsg);
+                    if (!seg) return null;
+                    return React.createElement("div", { key: seg.key, className: "wbc-ctx-legend-item" },
+                      React.createElement("i", { className: "wbc-ctx-dot " + seg.dotClass }),
+                      React.createElement("span", null, seg.label),
+                      React.createElement("em", null, wbcCompactNumber(seg.tokens))
+                    );
+                  }).filter(Boolean)
+                : React.createElement("div", { className: "wbc-ctx-legend-item" },
+                    React.createElement("span", null, layerLabel),
+                    React.createElement("em", null, wbcCompactNumber(tokens))
+                  )
+            )
+          );
+        })
+      )
+    )
+  );
+}
+
+function WbcContextTab({ project, chat, runtime }) {
   var [state, setState] = useWbcState(null);
   useWbcEffect(function () {
     var cancelled = false;
@@ -3151,10 +3322,8 @@ function WbcContextTab({ project, chat }) {
   return (
     <div className="workbench-side-stack">
       <section className="workbench-side-section">
-        <h3>{wbcT("workbenchChat.projectContext", "Project context")}</h3>
-        <div className="wb-kv"><span>{wbcT("settings.projectName", "Project")}</span><b>{project ? project.name : "—"}</b></div>
-        <p className="workbench-muted">{(project && project.workspacePath) || "—"}</p>
-        {project && project.context && project.context.summary ? <p>{project.context.summary}</p> : null}
+        <h3>{wbcT("workbenchChat.conversationContext", "Conversation context")}</h3>
+        <WbcContextBlockList chat={chat} running={!!runtime} />
       </section>
       <section className="workbench-side-section">
         <h3>{wbcT("workbenchChat.injectedContext", "Injected context")}</h3>

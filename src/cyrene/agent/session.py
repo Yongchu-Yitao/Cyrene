@@ -13,7 +13,7 @@ from uuid import uuid4
 
 import cyrene.agent.state as _state
 from cyrene import debug
-from cyrene.context_trace import strip_context_metadata
+from cyrene.context_trace import strip_context_metadata, summarize_context_trace
 from cyrene.io_utils import atomic_write_json, read_json_safe
 from cyrene.agent.message import (
     _dedupe_messages_by_id,
@@ -708,7 +708,12 @@ async def _write_session_messages_locked(state: dict[str, Any], messages: list[d
         _schedule_compaction_distill()
 
 
-async def _save_session_messages(messages: list[dict[str, Any]]) -> None:
+async def _save_session_messages(
+    messages: list[dict[str, Any]],
+    system_context_blocks: list[dict[str, Any]] | None = None,
+    ephemeral_context: str | None = None,
+) -> None:
+    message_trace = summarize_context_trace(messages)
     messages = strip_context_metadata(messages)
     messages = _compress_report_messages_for_storage(messages)
     messages = _ensure_message_identity(list(messages))
@@ -761,6 +766,11 @@ async def _save_session_messages(messages: list[dict[str, Any]]) -> None:
                 *_merge_live_block(live_block, suffix),
                 *base_tail,
             ])
+        if system_context_blocks is not None:
+            state["system_context_blocks"] = list(system_context_blocks)
+        if ephemeral_context is not None:
+            state["ephemeral_context"] = str(ephemeral_context)
+        state["message_context_trace"] = message_trace
         await _write_session_messages_locked(state, effective_messages)
 
 

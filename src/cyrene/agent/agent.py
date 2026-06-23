@@ -165,6 +165,13 @@ async def _run_main_agent(
     suppress_initial_detail = _ui_round_hide_initial_detail.get()
     round_id = _current_round_id.get()
 
+    async def _save(msgs):
+        await _save_session_messages(
+            msgs,
+            system_context_blocks=system_context,
+            ephemeral_context=ephemeral_system,
+        )
+
     # Option B prefix-cache discipline: the per-run ephemeral block (Workbench task
     # brief / project memory / reflection seed) is pinned at the ABSOLUTE tail of
     # every LLM call rather than parked between history and the current turn. Since
@@ -325,7 +332,7 @@ async def _run_main_agent(
             "detail_key": "phase.learnedSkill",
             "detail_params": {"name": routed['skill']['name'], "type": routed['skill']['skill_type']},
         })
-        await _save_session_messages(_session_messages_to_save(routed["messages"]))
+        await _save(_session_messages_to_save(routed["messages"]))
         return str(routed["final_text"] or "Done.")
 
     # Phase 1: lightweight decision
@@ -376,7 +383,7 @@ async def _run_main_agent(
         elif name == "quit":
             if client_request_id:
                 messages[-1]["client_request_id"] = client_request_id
-            await _save_session_messages(_session_messages_to_save(messages))
+            await _save(_session_messages_to_save(messages))
             return await _ensure_text_reply(response, messages)
 
     if ask_user_call:
@@ -401,7 +408,7 @@ async def _run_main_agent(
         messages.append(tool_entry)
         if _tool_result_requests_user_input(result):
             return _AWAITING_USER_SENTINEL
-        await _save_session_messages(_session_messages_to_save(messages))
+        await _save(_session_messages_to_save(messages))
         return (await _ensure_text_reply(response, messages, fallback=str(result)))
 
     if use_tools_call:
@@ -467,12 +474,12 @@ async def _run_main_agent(
                         if round_id:
                             final_entry["round_id"] = round_id
                         messages.append(_apply_assistant_meta(final_entry))
-                        await _save_session_messages(_session_messages_to_save(messages))
+                        await _save(_session_messages_to_save(messages))
                         return final_text
                 else:
                     if client_request_id:
                         messages[-1]["client_request_id"] = client_request_id
-                    await _save_session_messages(_session_messages_to_save(messages))
+                    await _save(_session_messages_to_save(messages))
                     return await _ensure_text_reply(response, messages)
 
             awaiting_user = False
@@ -569,7 +576,7 @@ async def _run_main_agent(
                 messages.extend(pending_reflection_records)
             if awaiting_user:
                 return _AWAITING_USER_SENTINEL
-            await _save_session_messages(_session_messages_to_save(messages))
+            await _save(_session_messages_to_save(messages))
             if quit_requested and not pending_reflection_tool_calls:
                 await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
                 return await _ensure_text_reply(response, messages)
@@ -642,7 +649,7 @@ async def _run_main_agent(
                     else:
                         quiet_ticks = 0
                 if interrupted:
-                    await _save_session_messages(_session_messages_to_save(messages))
+                    await _save(_session_messages_to_save(messages))
                     # Cancel running subagents immediately and mark them done so
                     # the summary phase can start right away.
                     await _cancel_subagent_tasks(round_id=round_id)
@@ -724,7 +731,7 @@ async def _run_main_agent(
                     messages.pop()
                 messages.append(_apply_assistant_meta(synthesis_entry))
                 await _sub_clear(round_id=round_id)
-                await _save_session_messages(_session_messages_to_save(messages))
+                await _save(_session_messages_to_save(messages))
                 return final_text
 
         final_text = await _ensure_text_reply(
@@ -741,7 +748,7 @@ async def _run_main_agent(
         if round_id:
             final_entry["round_id"] = round_id
         messages.append(_apply_assistant_meta(final_entry))
-        await _save_session_messages(_session_messages_to_save(messages))
+        await _save(_session_messages_to_save(messages))
         return final_text
 
     # Deep research first round: if LLM output text instead of calling ask_user, retry
@@ -788,7 +795,7 @@ async def _run_main_agent(
             messages.append(tool_entry)
             if _tool_result_requests_user_input(result):
                 return _AWAITING_USER_SENTINEL
-            await _save_session_messages(_session_messages_to_save(messages))
+            await _save(_session_messages_to_save(messages))
             return (await _ensure_text_reply(response, messages, fallback=str(result)))
 
     # Chat-only path (no tools)
@@ -812,9 +819,9 @@ async def _run_main_agent(
         if round_id:
             final_entry["round_id"] = round_id
         messages.append(_apply_assistant_meta(final_entry))
-        await _save_session_messages(_session_messages_to_save(messages))
+        await _save(_session_messages_to_save(messages))
         return final_text
     if client_request_id:
         messages[-1]["client_request_id"] = client_request_id
-    await _save_session_messages(_session_messages_to_save(messages))
+    await _save(_session_messages_to_save(messages))
     return await _ensure_text_reply(response, messages)
