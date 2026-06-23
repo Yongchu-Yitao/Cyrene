@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.6.0b9] - 2026-06-23
+
+### Added
+
+- **Workbench API 封装层（`workbench_chat_runs.py`）** — 新增独立模块封装 chat run 生命周期：创建/恢复 run、sse 心跳、中止、轮次历史与 run 元数据路由。前端通过 `workbench-api.jsx` 统一客户端调用，替换原先散落在 `workbench-chat.jsx` 里的 `fetch` 调用，降低耦合。
+- **Chat 心跳（Heartbeat）** — Workbench Chat 流式响应新增 SSE 心跳帧，保持长连接活跃、防止中间代理/网关因空闲超时断流；前端在心跳到达时更新「正在思考」指示而不写入消息。
+- **LLM 蒸馏上限与阈值预检** — `call_llm.py` 引入压缩块蒸馏最大尝试次数，防止增量压缩无限重试；新增 `exceeds_compaction_threshold` 预检，仅在消息上下文真正超过压缩阈值时才触发蒸馏。
+- **LLM 瞬时错误重试** — 对 LLM 调用中的瞬时服务器错误加入有限次数自动重试，超限后才失败；新增针对瞬时错误与重试行为的测试。
+- **Workbench 初始化任务优先级指示** — 初始化 UI 增加任务管理与优先级视觉指示，更清晰展示 init 阶段任务队列。
+
+### Fixed
+
+- **Workbench Chat 代码块语法高亮与复制按钮丢失** — marked v5+ 移除 `highlight` 选项后 `highlight.jsx` 沦为死代码，代码块不再带 hljs span。改用 marked v13 正确的渲染器经 `marked.use` 输出完整 `<pre><code>` 块（含行号与语言标签）。`actions.jsx` 原先只扫描 `.msg-list`（legacy chat），复制/编辑按钮无法触达 workbench 的 `.wbc-thread`；现同时监听 `.msg-list`、`.wbc-thread`、`.wbc-side-body`，并在 SPA 导航后以 2s 轮询重新挂载观察器。`highlight.css` 选择器由 `.msg-body-only` 扩展到 `.wbc-msg-body.markdown`，行号、语言标签、操作栏与 hljs 主题在 workbench 全部生效。渲染器顶层 try/catch 在 hljs 失败时回退为纯转义文本，避免 `marked.parse` 崩溃。
+- **Workbench Profile 仪表盘统计数据不实时刷新** — Profile 页消费 `DATA.dashboard`（KPI、活跃度热图、insights、top tools），但该数据仅在 bootstrap 时获取一次，SSE 事件总线与 15s 轮询均未触及。新增轻量 `GET /api/dashboard?tz=` 路由只返回 `_build_dashboard`，避免重建完整 `ui-data`；`refreshDashboard()` 带请求序列守卫与 JSON 指纹跳过无变化重渲，经 3s 防抖订阅 SSE 事件并纳入 15s 全局轮询。
+- **默认 Workbench 项目可被删除** — `DELETE /api/projects/{id}` 端点对默认项目（`dataKey === "default"`）缺少守卫，会清空其 sessions、chats、memory。现对默认项目返回 `400 default_project_protected`，前端隐藏默认项目的删除按钮并在调用失败时给出友好提示。
+
+### Changed
+
+- **Workbench 路由 JSON 响应与错误分类** — `routes.py` 统一处理 JSON 响应格式，并对解析失败加入错误分类，便于前端区分瞬时错误与永久错误。
+
+### Tests
+
+- 新增 `tests/test_call_llm_candidates.py` 瞬时服务器错误用例 — 覆盖重试行为与失败处理。
+- 更新 `tests/test_workbench_api_validation.py` — 覆盖默认项目删除保护（`default_project_protected`）。
+- 更新 `tests/test_workbench_init_plan.py` — 覆盖 init 任务管理与优先级指示。
+
+### Docs
+
+- **README / .gitignore 与项目状态同步** — Quick Start 切换到 uv（lock file 已提交）并附 pip 回退；补充 WebUI JSX 预编译步骤（`compiled/` 被 gitignore、由 `index.html` 加载）与 Node.js 20+ 前置；列出 `browser`/`dev` 可选 extras、细化 Testing 限制说明，tech stack 加入 uv + Ruff。`.gitignore` 不再忽略 `uv.lock`，新增 `.ruff_cache/`、`backups/` 与根锚定 `/db.sqlite3[-*]`；移除误提交的根 `db.sqlite3`（真正运行时 DB 在 `store/cyrene.db`）。
+
 ## [0.6.0b8] - 2026-06-23
 
 ### Fixed
