@@ -8928,6 +8928,43 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   font-family: inherit;
 }
 
+/* ---- live heartbeat (elapsed + stall hint) ---- */
+.wbc-heartbeat {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 7px;
+  font-size: 11.5px;
+  color: var(--wb-muted);
+}
+
+.wbc-heartbeat-pulse {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--wb-green);
+  animation: wbc-pulse 1.1s ease-in-out infinite;
+}
+
+.wbc-heartbeat-elapsed {
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-heartbeat-still {
+  color: var(--wb-amber);
+}
+
+.wbc-heartbeat-still::before {
+  content: "·";
+  margin-right: 7px;
+  color: var(--wb-faint);
+}
+
+.wbc-heartbeat.stalled .wbc-heartbeat-pulse {
+  background: var(--wb-amber);
+}
+
 /* ---- composer ---- */
 
 /* Inline permission / clarification prompt at the bottom of the chat thread. */

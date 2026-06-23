@@ -34,18 +34,13 @@ var WorkbenchModel = (function () {
     return fallback || key;
   }
 
+  // Route through the shared wrapper (workbench-api.jsx) for one normalized fetch
+  // path across the workbench. Default timeout:0 (no death timeout) because most
+  // task-session endpoints below drive open-ended agent/LLM work that legitimately
+  // runs for minutes; toast:false keeps each caller's existing error handling as
+  // the single feedback channel. Quick CRUD callers may pass a `timeout` per call.
   function apiJson(url, options) {
-    return fetch(url, options || {}).then(function (response) {
-      return response.json().catch(function () { return {}; }).then(function (payload) {
-        if (!response.ok) {
-          var error = new Error(payload.error || payload.detail || ("HTTP " + response.status));
-          error.code = payload.code || "";
-          error.status = response.status;
-          throw error;
-        }
-        return payload;
-      });
-    });
+    return window.WorkbenchAPI.json(url, { toast: false, timeout: 0, ...(options || {}) });
   }
 
   function normalizeStore(payload) {

@@ -16,13 +16,13 @@ var {
 // ---------------------------------------------------------------------------
 
 var WorkbenchChatModel = (function () {
+  // Route ordinary JSON calls through the shared wrapper (workbench-api.jsx):
+  // a 30s AbortController timeout so a stalled backend no longer spins forever,
+  // plus normalized errors. toast:false keeps this conversation's own inline
+  // error banner (setError → wbcErrorText) as the single feedback channel;
+  // callers can pass a longer/disabled `timeout` per call.
   function apiJson(url, options) {
-    return fetch(url, options || {}).then(function (response) {
-      return response.json().catch(function () { return {}; }).then(function (payload) {
-        if (!response.ok) throw new Error(payload.error || payload.detail || ("HTTP " + response.status));
-        return payload;
-      });
-    });
+    return window.WorkbenchAPI.json(url, { toast: false, ...(options || {}) });
   }
 
   function listChats(projectId) {
@@ -68,6 +68,7 @@ var WorkbenchChatModel = (function () {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input || {}),
+      timeout: 180000, // LLM reads & distills the whole conversation — long budget
     });
   }
 
@@ -81,7 +82,9 @@ var WorkbenchChatModel = (function () {
     if (!list.length) return Promise.resolve([]);
     var form = new FormData();
     list.forEach(function (f) { form.append("files", f); });
-    return fetch("/api/chat/upload", { method: "POST", body: form }).then(function (r) {
+    // Uploads can be large — give a generous budget rather than the 30s default,
+    // and let the caller surface failures (the composer toasts on upload error).
+    return window.WorkbenchAPI.fetch("/api/chat/upload", { method: "POST", body: form, timeout: 120000 }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (payload) {
         if (!r.ok) throw new Error(payload.error || ("HTTP " + r.status));
         return Array.isArray(payload.files) ? payload.files : [];
@@ -151,13 +154,14 @@ var WorkbenchChatModel = (function () {
   // Answer a paused chat run's permission / clarification question → resume.
   // Resolves to { awaitingUser, assistantMessage?, pendingQuestion? }.
   function answerChat(chatId, questionId, answerText) {
-    return fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/answer", {
+    // Resumes an agent round (open-ended LLM work) — no death timeout. toast:false
+    // because handleAnswer restores the prompt and surfaces the error itself.
+    return window.WorkbenchAPI.json("/api/workbench/chats/" + encodeURIComponent(chatId) + "/answer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question_id: questionId || "", answer: answerText || "" }),
-    }).then(function (r) {
-      if (!r.ok) return r.json().then(function (b) { throw new Error((b && b.error) || ("HTTP " + r.status)); });
-      return r.json();
+      timeout: 0,
+      toast: false,
     });
   }
 
@@ -475,7 +479,7 @@ function wbcCommandMeta(id) {
 // transcript hooks; when it unmounts the hooks fall away and the run streams on,
 // with the transcript re-pulled from the server on remount.
 var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
-  var runtimes = {};            // chatId -> { chatId, text, progress, startedAt, replying }
+  var runtimes = {};            // chatId -> { chatId, text, progress, startedAt, lastEventAt, replying }
   var aborts = {};              // chatId -> AbortController
   var subscribers = new Set();
   var hooks = null;             // live transcript hooks from the mounted page
@@ -542,6 +546,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
         text: "",
         progress: [],
         replying: false,
+        lastEventAt: Date.now(),
         segments: segments.concat([{
           id: String(message.id),
           message: message,
@@ -558,7 +563,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     if (!chatId || runtimes[chatId]) return null;
     var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
     if (ac) aborts[chatId] = ac;
-    update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), replying: false });
+    update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false });
     return model.sendMessage(chatId, input, {
       onAck: function (event) {
         if (event.retry) {
@@ -569,13 +574,13 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
         if (event.userMessage) fire("onUserMessage", chatId, event.userMessage);
       },
       onReplyStart: function () {
-        update(chatId, function (cur) { return cur ? { ...cur, replying: true } : null; });
+        update(chatId, function (cur) { return cur ? { ...cur, replying: true, lastEventAt: Date.now() } : null; });
       },
       onReplyDelta: function (delta) {
-        update(chatId, function (cur) { return cur ? { ...cur, replying: true, text: cur.text + delta } : null; });
+        update(chatId, function (cur) { return cur ? { ...cur, replying: true, text: cur.text + delta, lastEventAt: Date.now() } : null; });
       },
       onReplyDone: function (text) {
-        update(chatId, function (cur) { return cur ? { ...cur, text: text || cur.text } : null; });
+        update(chatId, function (cur) { return cur ? { ...cur, text: text || cur.text, lastEventAt: Date.now() } : null; });
       },
       onIntermediateMessage: function (event) {
         appendIntermediate(chatId, event && event.message);
@@ -642,7 +647,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     if (!entry) return;
     update(chatId, function (latest) {
       if (!latest) return null;
-      return { ...latest, progress: latest.progress.concat([entry]).slice(-30) };
+      return { ...latest, lastEventAt: Date.now(), progress: latest.progress.concat([entry]).slice(-30) };
     });
   }
   if (window.__sseHandlers && window.__sseHandlers.add) window.__sseHandlers.add(onSseEvent);
@@ -1066,7 +1071,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     // progress folds into it (onSseEvent only fills a runtime that already exists).
     // Without it the resume ran invisibly — an empty thread while the side panel
     // showed a frozen "Replying" — and the composer offered no way to stop it.
-    runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), replying: true });
+    runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: true });
     model.answerChat(chatId, questionId, optionText).then(function (res) {
       runtimeEngine.update(chatId, null);
       setActiveChat(function (prev) {
@@ -1796,6 +1801,34 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
   );
 }
 
+// After this many ms with no new sign of life (reply delta, tool call, phase,
+// subagent or intermediate message) the live card switches from a plain elapsed
+// counter to an explicit "still working…" reassurance, so a quiet stretch reads
+// as "alive but busy" rather than "frozen".
+var WBC_HEARTBEAT_STALL_MS = 10000;
+
+// Live "heartbeat" for a running reply: a self-ticking elapsed counter plus a
+// stall hint. Self-contained 1s interval so it re-renders only itself (a leaf),
+// never the whole conversation. Mounts/unmounts with the runtime, so the timer
+// is torn down the moment the run settles.
+function WbcHeartbeat({ startedAt, lastEventAt }) {
+  var [now, setNow] = useWbcState(function () { return Date.now(); });
+  useWbcEffect(function () {
+    var timer = setInterval(function () { setNow(Date.now()); }, 1000);
+    return function () { clearInterval(timer); };
+  }, []);
+  if (!startedAt) return null;
+  var elapsed = Math.max(0, Math.round((now - startedAt) / 1000));
+  var stalled = !!lastEventAt && (now - lastEventAt) > WBC_HEARTBEAT_STALL_MS;
+  return (
+    <div className={"wbc-heartbeat" + (stalled ? " stalled" : "")} aria-live="polite">
+      <span className="wbc-heartbeat-pulse" />
+      <span className="wbc-heartbeat-elapsed">{wbcT("workbenchChat.elapsed", "Running {s}s", { s: elapsed })}</span>
+      {stalled && <span className="wbc-heartbeat-still">{wbcT("workbenchChat.stillWorking", "Still working…")}</span>}
+    </div>
+  );
+}
+
 function WbcLiveMessage({ runtime, onOpenFile }) {
   var completedSegments = Array.isArray(runtime.segments) ? runtime.segments : [];
   var progressEntries = runtime.progress.map(function (entry) {
@@ -1816,6 +1849,7 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
         );
       })}
       <div className="wbc-msg assistant">
+        <WbcHeartbeat startedAt={runtime.startedAt} lastEventAt={runtime.lastEventAt} />
         {(progressEntries.length > 0 || !runtime.text) && (
           <WbcTraceCard
             trace={progressEntries}
@@ -2005,23 +2039,29 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   var modelName = (chat && chat.model) || (project && project.model) || "";
 
   function wbcTogglePersona() {
-    fetch(personaOn ? "/api/context/remove-soul" : "/api/context/add-soul", { method: "POST" })
-      .then(wbcRefreshCtxState).catch(function () {});
+    window.WorkbenchAPI.fetch(personaOn ? "/api/context/remove-soul" : "/api/context/add-soul", { method: "POST" })
+      .then(wbcRefreshCtxState, function (err) {
+        window.WorkbenchAPI.toastError(err, wbcT("workbenchChat.personaFailed", "Failed to toggle persona: "));
+      }).catch(function () {});
     setCtxPickerOpen(false);
   }
 
   function wbcAddWorkspace(path) {
-    fetch("/api/context/add-workspace", {
+    window.WorkbenchAPI.fetch("/api/context/add-workspace", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: path || "" }),
-    }).then(wbcRefreshCtxState).catch(function () {});
+    }).then(wbcRefreshCtxState, function (err) {
+      window.WorkbenchAPI.toastError(err, wbcT("workbenchChat.workspaceAddFailed", "Failed to add workspace: "));
+    }).catch(function () {});
     setCtxPickerOpen(false);
   }
 
   function wbcRemoveWorkspace() {
-    fetch("/api/context/remove-workspace", { method: "POST" })
-      .then(wbcRefreshCtxState).catch(function () {});
+    window.WorkbenchAPI.fetch("/api/context/remove-workspace", { method: "POST" })
+      .then(wbcRefreshCtxState, function (err) {
+        window.WorkbenchAPI.toastError(err, wbcT("workbenchChat.workspaceRemoveFailed", "Failed to remove workspace: "));
+      }).catch(function () {});
   }
 
   function wbcPickWorkspace() {
@@ -2036,10 +2076,12 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
       }).catch(function () {});
       return;
     }
-    fetch("/api/context/pick-directory", { method: "POST" })
-      .then(function (r) { return r.json(); })
-      .then(function (data) { if (data.path) wbcAddWorkspace(data.path); })
-      .catch(function () {});
+    window.WorkbenchAPI.fetch("/api/context/pick-directory", { method: "POST" })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (data) { if (data && data.path) wbcAddWorkspace(data.path); })
+      .catch(function (err) {
+        window.WorkbenchAPI.toastError(err, wbcT("workbenchChat.pickDirFailed", "Failed to open directory picker: "));
+      });
   }
   var sendDisabled = running ? false : (!draft.trim() && attachments.length === 0);
   var isLegacy = !!(chat && chat.legacy);
