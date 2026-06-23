@@ -1856,16 +1856,28 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
 var WBC_HEARTBEAT_STALL_MS = 10000;
 
 // Live "heartbeat" for a running reply: a self-ticking elapsed counter plus a
-// random thinking phrase that cycles every ~4 s when stalled. Self-contained
+// random thinking phrase that fades out/in when cycling every ~4 s. Self-contained
 // interval so it re-renders only itself (a leaf), never the whole conversation.
 // Mounts/unmounts with the runtime, so the timer is torn down the moment the run settles.
 function WbcHeartbeat({ startedAt, lastEventAt }) {
   var [now, setNow] = useWbcState(function () { return Date.now(); });
   var [phraseIdx, setPhraseIdx] = useWbcState(function () { return Math.floor(Math.random() * WBC_THINKING_PHRASES.length); });
+  var [displayText, setDisplayText] = useWbcState(WBC_THINKING_PHRASES[0]);
+  var [animClass, setAnimClass] = useWbcState("");
   useWbcEffect(function () {
     var timer = setInterval(function () {
       setNow(Date.now());
-      setPhraseIdx(Math.floor(Math.random() * WBC_THINKING_PHRASES.length));
+      var nextIdx = Math.floor(Math.random() * WBC_THINKING_PHRASES.length);
+      setPhraseIdx(nextIdx);
+      // 淡出 → 换文字 → 淡入
+      setAnimClass("wbc-still-leave");
+      setTimeout(function () {
+        setDisplayText(WBC_THINKING_PHRASES[nextIdx]);
+        setAnimClass("wbc-still-enter");
+        setTimeout(function () {
+          setAnimClass("");
+        }, 600);
+      }, 600);
     }, 4000);
     return function () { clearInterval(timer); };
   }, []);
@@ -1876,7 +1888,7 @@ function WbcHeartbeat({ startedAt, lastEventAt }) {
     <div className={"wbc-heartbeat" + (stalled ? " stalled" : "")} aria-live="polite">
       <span className="wbc-heartbeat-pulse" />
       <span className="wbc-heartbeat-elapsed">{wbcT("workbenchChat.elapsed", "Running {s}s", { s: elapsed })}</span>
-      <span className="wbc-heartbeat-still">{WBC_THINKING_PHRASES[phraseIdx]}</span>
+      <span className={"wbc-heartbeat-still" + (animClass ? " " + animClass : "")}>{displayText}</span>
     </div>
   );
 }
