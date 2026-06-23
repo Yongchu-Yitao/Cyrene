@@ -1035,7 +1035,7 @@ def render_task_reports_for_planning(
     entries = _load(workspace_id)
     if not entries:
         return ""
-    reports: list[tuple[int, str]] = []
+    reports: list[tuple[str, str]] = []
     for e in entries:
         if not isinstance(e, dict):
             continue
@@ -1046,14 +1046,14 @@ def render_task_reports_for_planning(
         content = str(e.get("content") or "").strip()
         if not content:
             continue
-        mc = int(e.get("mention_count") or 1)
-        reports.append((mc, content))
+        ts = str(e.get("first_seen") or "")
+        reports.append((ts, content))
     if not reports:
         return ""
     reports.sort(key=lambda x: x[0], reverse=True)
     blocks: list[str] = []
     used = 0
-    for _mc, content in reports[:limit]:
+    for _ts, content in reports[:limit]:
         if used + len(content) > max_chars:
             break
         blocks.append(content)

@@ -2935,7 +2935,7 @@ async def _workbench_generate_plan_steps(
         explore_directive = (
             "本次不提供工作区探索工具，请基于规划历史、既往观察结果和下面的信息直接给出计划，不要尝试调用工具。"
         )
-    past_reports_block = _workbench_render_past_task_reports(project) if not feedback else ""
+    past_reports_block = _workbench_render_past_task_reports(project)
     reports_section = f"\n\n{past_reports_block}" if past_reports_block else ""
     if auto_start:
         if tool_bundle_version == _WORKBENCH_PLANNER_EXPLORE_VERSION:
@@ -4220,7 +4220,6 @@ _WORKBENCH_TASK_MODE_SYSTEM = (
     "- 不要只在回复里写出文件路径就当作已经交付。"
 )
 
-
 def _workbench_compose_static_system(
     project: dict[str, Any] | None = None,
     session: dict[str, Any] | None = None,
@@ -4414,56 +4413,75 @@ def _workbench_render_past_task_reports(project: dict[str, Any] | None) -> str:
         return ""
 
 
+def _workbench_compose_task_report_text(session: dict[str, Any]) -> str:
+    """Compose a compact task report directly from session structured data.
+    No LLM call — goal, step outcomes, issues, files, verification results are
+    already on the session. Returns "" when there is nothing worth reporting."""
+    goal = str(session.get("goal") or session.get("title") or "").strip()
+    if not goal:
+        return ""
+    lines: list[str] = [f"任务：{goal}"]
+    plan = session.get("plan") if isinstance(session.get("plan"), list) else []
+    completed = [
+        s for s in plan
+        if isinstance(s, dict)
+        and str(s.get("status") or "") in ("completed", "done")
+        and isinstance(s.get("outcome"), dict)
+    ]
+    if completed:
+        for s in completed[:6]:
+            summary = str(s["outcome"].get("summary") or "").strip()
+            if summary:
+                lines.append(f"  - {summary}")
+    # Issues across completed steps
+    issues: list[str] = []
+    for s in completed:
+        raw = s["outcome"].get("issues")
+        if not isinstance(raw, (list, tuple)):
+            continue
+        for issue in raw[:2]:
+            text = str(issue).strip()
+            if text and text not in issues:
+                issues.append(text)
+    if issues:
+        lines.append(f"踩坑：{'；'.join(issues[:5])}")
+    # Verification
+    verify = str(session.get("verifyReason") or "").strip()
+    criteria = session.get("acceptanceCriteria") if isinstance(session.get("acceptanceCriteria"), list) else []
+    if criteria:
+        passed = sum(1 for c in criteria if isinstance(c, dict) and c.get("status") == "passed")
+        lines.append(f"验收：{passed}/{len(criteria)} 通过" + (f"——{verify}" if verify else ""))
+    elif verify:
+        lines.append(f"验收：{verify}")
+    # Key files (deduplicated, from step outcomes)
+    files: list[str] = []
+    for s in completed:
+        raw = s["outcome"].get("filesChanged")
+        if not isinstance(raw, (list, tuple)):
+            continue
+        for f in raw[:3]:
+            text = str(f).strip()
+            if text and text not in files:
+                files.append(text)
+    if files:
+        lines.append(f"关键文件：{'、'.join(files[:8])}")
+    return "\n".join(lines)
+
+
 async def _workbench_generate_task_report(
     project: dict[str, Any],
     session: dict[str, Any],
 ) -> str | None:
-    """Generate a structured task completion report and store it as a project
+    """Compose a task completion report from session data and store as project
     memory (category=task_report). Best-effort; failures are silent."""
-    goal = str(session.get("goal") or session.get("title") or "").strip()
-    agent_reply = str(session.get("agentReply") or "").strip()
-    plan = session.get("plan") if isinstance(session.get("plan"), list) else []
-    # Collect step outcomes for richer context
-    outcome_lines: list[str] = []
-    for step in plan:
-        if not isinstance(step, dict):
-            continue
-        st = str(step.get("title") or "").strip()
-        if not st:
-            continue
-        status = str(step.get("status") or "pending")
-        outcome = step.get("outcome") if isinstance(step.get("outcome"), dict) else None
-        summary = str(outcome.get("summary") or "") if outcome else ""
-        outcome_lines.append(f"- [{status}] {st}" + (f"：{summary}" if summary else ""))
-    outcomes_text = "\n".join(outcome_lines[:12]) if outcome_lines else "（无步骤记录）"
-    prompt = (
-        "你是任务复盘 Agent。请根据下面任务的目标、执行过程和最终结果，生成一份简短的任务完成报告"
-        "（中文，300-800字），结构如下：\n\n"
-        "1. 任务目标与达成情况（一句话）\n"
-        "2. 采用的方法/路径（2-4点，具体、可操作）\n"
-        "3. 踩过的坑及避免方式（如有）\n"
-        "4. 关键产出文件清单（如有）\n\n"
-        "报告将被注入到本项目将来新任务的规划提示中，帮助后续 agent 借鉴经验。"
-        "因此要具体、有可操作性，避免泛泛而谈。\n\n"
-        f"任务目标：{goal}\n"
-        f"步骤执行记录：\n{outcomes_text}\n"
-        f"最终交付/回复：{agent_reply[:2000]}"
-    )
-    try:
-        resp = await asyncio.wait_for(
-            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=1000, secondary=True, thinking="disabled"),
-            timeout=40,
-        )
-    except Exception:
-        return None
-    report = str(resp.get("content") or "").strip()
-    if len(report) < 40:
+    report = _workbench_compose_task_report_text(session)
+    if len(report) < 20:
         return None
     data_key = _workbench_project_data_key(project)
     try:
         add_agent_memory(
             data_key,
-            f"[任务报告] {goal[:80]}\n{report}",
+            report,
             category="task_report",
             tags=["任务报告", "自动生成"],
             source="agent",
@@ -4758,6 +4776,56 @@ async def _workbench_dispatch_reflection_hints(
             sess["updatedAt"] = now
     except Exception:
         logger.exception("Failed to dispatch reflection hints")
+
+
+def _workbench_merge_hint_mutations(
+    orig_project: dict[str, Any],
+    latest_project: dict[str, Any],
+) -> None:
+    """Merge ``pendingHints`` / ``events`` added by
+    ``_workbench_dispatch_reflection_hints`` on *original* project sessions into
+    the *latest* project sessions.  Only appends — never overwrites existing
+    data.  Best-effort."""
+    orig_sessions = orig_project.get("sessions") if isinstance(orig_project.get("sessions"), list) else []
+    latest_sessions = latest_project.get("sessions") if isinstance(latest_project.get("sessions"), list) else []
+    if not orig_sessions or not latest_sessions:
+        return
+    latest_by_id: dict[str, dict[str, Any]] = {}
+    for s in latest_sessions:
+        if isinstance(s, dict):
+            sid = str(s.get("id") or "")
+            if sid:
+                latest_by_id[sid] = s
+    for orig_sess in orig_sessions:
+        if not isinstance(orig_sess, dict):
+            continue
+        orig_id = str(orig_sess.get("id") or "")
+        if not orig_id:
+            continue
+        latest_sess = latest_by_id.get(orig_id)
+        if latest_sess is None:
+            continue
+        orig_hints = orig_sess.get("pendingHints")
+        if isinstance(orig_hints, list) and orig_hints:
+            latest_hints = latest_sess.get("pendingHints")
+            if not isinstance(latest_hints, list):
+                latest_hints = []
+                latest_sess["pendingHints"] = latest_hints
+            existing_ids = {str(h.get("id") or "") for h in latest_hints if isinstance(h, dict)}
+            for h in orig_hints:
+                if isinstance(h, dict) and str(h.get("id") or "") not in existing_ids:
+                    latest_hints.append(h)
+        orig_events = orig_sess.get("events")
+        if isinstance(orig_events, list) and orig_events:
+            latest_events = latest_sess.get("events")
+            if not isinstance(latest_events, list):
+                latest_events = []
+                latest_sess["events"] = latest_events
+            existing_event_ids = {str(e.get("id") or "") for e in latest_events if isinstance(e, dict)}
+            for e in orig_events:
+                if isinstance(e, dict) and str(e.get("id") or "") not in existing_event_ids:
+                    latest_events.append(e)
+        latest_sess["updatedAt"] = orig_sess.get("updatedAt") or latest_sess.get("updatedAt")
 
 
 async def _workbench_verify_acceptance(
@@ -8626,6 +8694,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         for field in ("goal", "title", "constraints", "reflection", "planningThread"):
             if field in session:
                 latest_session[field] = session[field]
+        # Merge hint mutations from original project sessions into the fresh
+        # payload.  _workbench_dispatch_reflection_hints mutated sessions
+        # in-place on the original ``project``; copy those pendingHints /
+        # events to ``latest_project`` so the final write persists them.
+        _workbench_merge_hint_mutations(project, latest_project)
         latest_session["status"] = "planning"
         if from_llm:
             latest_session["agentReply"] = (
