@@ -868,7 +868,7 @@ class GoalLoopManager:
                                 or "步骤验收未通过，请继续修复。"
                             )
                     R._workbench_apply_step_file_changes(fresh, step_id, file_changes)
-                    R._workbench_promote_file_artifacts(fresh, file_changes, _utc_iso())
+                    R._workbench_promote_file_artifacts(fresh, file_changes, _utc_iso(), workspace_root)
                     fresh["status"] = "running"
                     fresh["goalLoop"] = _public_run(latest_run)
 

@@ -38,7 +38,11 @@ def workspace_scope_block(workspace_dir: Any = WORKSPACE_DIR, shell_kind: str = 
         f"or they trigger a permission request.\n"
         f"- **Avoid `$(...)` and backticks** in shell commands — they trigger a security review prompt.\n"
         f"- **Avoid `rm` unless deletion is part of the task** — even workspace deletions prompt for user confirmation.\n"
-        f"- **Write output files into the workspace** (reports, exports, downloads), not `/tmp` or `~`."
+        f"- **Write output files into organized workspace subdirectories:**\n"
+        f"  - `deliverables/` — reports, exports, data files, downloads that the user should receive\n"
+        f"  - `scratch/` — temporary scripts, intermediate files, working files (not final deliverables)\n"
+        f"  - Do NOT dump deliverable files directly into the workspace root.\n"
+        f"- Files declared via `send_file` are automatically moved to `deliverables/`."
     )
     if shell_kind and shell_kind != "bash":
         block += (

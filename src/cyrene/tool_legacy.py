@@ -1142,9 +1142,10 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
             return refusal
     timeout_ms = int(args.get("timeout_ms", 120000))
     timeout_sec = timeout_ms / 1000
+    from cyrene.agent.state import active_workspace_dir
     proc = await asyncio.create_subprocess_exec(
         *command_argv(command),
-        cwd=str(WORKSPACE_DIR),
+        cwd=str(active_workspace_dir()),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

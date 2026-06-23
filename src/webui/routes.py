@@ -3670,8 +3670,13 @@ def _workbench_prune_non_file_artifacts(session: dict[str, Any]) -> bool:
     return True
 
 
-def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: list[dict[str, Any]], now: str) -> int:
-    """Surface explicitly produced files as task artifacts (dedup by path)."""
+def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: list[dict[str, Any]], now: str, workspace_root: Path | None = None) -> int:
+    """Surface explicitly produced files as task artifacts (dedup by path).
+
+    When ``workspace_root`` is provided, files declared via ``send_file``
+    (changeType ``produced``) are physically moved into ``deliverables/``
+    under the workspace root so the root stays clean.
+    """
     _workbench_prune_non_file_artifacts(session)
     if not file_changes:
         return 0
@@ -3687,6 +3692,7 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
         "modified": "modified",
         "renamed": "modified",
     }
+    deliverables_dir = (workspace_root / "deliverables").resolve() if workspace_root else None
     added = 0
     for change in file_changes:
         if not isinstance(change, dict):
@@ -3702,6 +3708,24 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
             status = "ready"
         if not status:
             continue
+        # Move send_file deliverables into deliverables/ so the workspace root
+        # doesn't accumulate flat files. Skip files already under deliverables/.
+        if change_type == "produced" and deliverables_dir:
+            src_path = (workspace_root / path).resolve()  # type: ignore[union-attr]
+            try:
+                src_path.relative_to(deliverables_dir)
+            except ValueError:
+                if src_path.exists():
+                    deliverables_dir.mkdir(parents=True, exist_ok=True)
+                    dest_name = path.rsplit("/", 1)[-1] or path
+                    dest_path = deliverables_dir / dest_name
+                    if dest_path.exists():
+                        stem = Path(dest_name).stem
+                        suffix = Path(dest_name).suffix or ".bin"
+                        dest_path = deliverables_dir / f"{stem}_{_short_id('f')}{suffix}"
+                    if src_path != dest_path:
+                        shutil.move(str(src_path), str(dest_path))
+                        path = str(dest_path.relative_to(workspace_root))  # type: ignore[union-attr]
         known_paths.add(path)
         artifacts.append({
             "id": _short_id("artifact"),
@@ -3781,6 +3805,7 @@ def _workbench_backfill_referenced_file_artifacts(
         session,
         _workbench_merge_file_changes(changes),
         now,
+        root,
     )
 
 
@@ -4188,6 +4213,7 @@ _WORKBENCH_TASK_MODE_SYSTEM = (
     "- 用 Write 写入工作区的文件会自动登记为产物；用 Bash/脚本/命令行生成的文件不会——"
     "必须在生成后调用 send_file 声明它，否则只算普通文件改动，用户无法下载。\n"
     "- 只声明真正的交付物；不要声明依赖、缓存或构建中间产物（如 node_modules、dist、__pycache__）。\n"
+    "- 交付物请写到 deliverables/ 子目录下；用 send_file 声明的文件会被自动归档到 deliverables/。\n"
     "- 不要只在回复里写出文件路径就当作已经交付。"
 )
 
@@ -7112,10 +7138,25 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     @router.get("/api/context/state")
     async def api_context_state():
         from cyrene.settings_store import is_workspace_active, is_soul_active, get_workspace_history
+        # When inside a Workbench project, reflect the project's actual workspace
+        # path instead of the global fallback so the UI chip and context-picker
+        # defaults match the project the user is working in.
+        workspace_dir = str(WORKSPACE_DIR)
+        try:
+            store = _read_workbench_store()
+            active_id = str(store.get("activeProjectId") or "").strip()
+            if active_id:
+                project = _workbench_find_project(store, active_id)
+                if project:
+                    project_ws = str(project.get("workspacePath") or "").strip()
+                    if project_ws:
+                        workspace_dir = project_ws
+        except Exception:
+            pass
         return {
             "soul_active": is_soul_active(),
             "workspace_active": is_workspace_active(),
-            "workspace_dir": str(WORKSPACE_DIR),
+            "workspace_dir": workspace_dir,
             "workspace_history": get_workspace_history(),
         }
 
@@ -8733,7 +8774,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         }
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
-        _workbench_promote_file_artifacts(session, file_changes, now)
+        _workbench_promote_file_artifacts(session, file_changes, now, workspace_root)
         if not awaiting_user:
             await _workbench_archive_run_knowledge(
                 project, session, run, workspace_root, now,
@@ -8802,7 +8843,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         )
         if chat_tool_events:
             session.setdefault("events", []).extend(chat_tool_events)
-        _workbench_promote_file_artifacts(session, file_changes, now)
+        _workbench_promote_file_artifacts(session, file_changes, now, workspace_root)
         payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
@@ -9020,7 +9061,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         }
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
-        _workbench_promote_file_artifacts(session, file_changes, now)
+        _workbench_promote_file_artifacts(session, file_changes, now, workspace_root)
         if not awaiting_user:
             await _workbench_archive_run_knowledge(
                 project, session, run, workspace_root, now,
@@ -9176,7 +9217,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         }
         session.setdefault("runs", []).append(run)
         session.setdefault("events", []).extend(events)
-        _workbench_promote_file_artifacts(session, file_changes, now)
+        _workbench_promote_file_artifacts(session, file_changes, now, workspace_root)
         continue_plan_execution = False
         if pending_plan_step and not awaiting_user:
             pending_step_id = str(pending_plan_step.get("stepId") or "").strip()
