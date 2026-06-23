@@ -3,6 +3,49 @@
 // backend endpoints (/api/workbench/chats*, /api/chat/upload, /api/events SSE)
 // are shared. Layout: chat rail | conversation | right context panel.
 
+// 正在工作中的随机提示语
+var WBC_THINKING_PHRASES = [
+  "还得想一下",
+  "让我想想",
+  "先别急",
+  "在做了",
+  "差不多了",
+  "要仔细想想",
+  "我瞧瞧什么个事",
+  "让我捋一捋",
+  "这事得盘一下",
+  "先过一遍细节",
+  "我再确认下",
+  "我的脑子在转",
+  "马上给你整明白",
+  "得把边界看清楚",
+  "我查一下细节",
+  "先对齐一下信息",
+  "再核一遍",
+  "我把线索串一下",
+  "稍微推一下",
+  "看下哪里最稳",
+  "我确认下结果",
+  "先把上下文过一遍",
+  "这块要算清楚",
+  "我再想深一点",
+  "别急，快好了",
+  "正在盘逻辑",
+  "再跑一轮看看",
+  "快了快了",
+  "别催，在干活了",
+  "我努力一把",
+  "你先喝口水",
+  "快好了再等一下",
+  "让我过一遍",
+  "快了，再等等",
+  "我再想想还有没有更好的办法",
+  "这事有点意思，让我研究研究",
+  "再查一下相关资料",
+  "拼起来看看",
+  "再验证一下结果",
+];
+
 var {
   useState: useWbcState,
   useEffect: useWbcEffect,
@@ -1813,13 +1856,17 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
 var WBC_HEARTBEAT_STALL_MS = 10000;
 
 // Live "heartbeat" for a running reply: a self-ticking elapsed counter plus a
-// stall hint. Self-contained 1s interval so it re-renders only itself (a leaf),
-// never the whole conversation. Mounts/unmounts with the runtime, so the timer
-// is torn down the moment the run settles.
+// random thinking phrase that cycles every ~4 s when stalled. Self-contained
+// interval so it re-renders only itself (a leaf), never the whole conversation.
+// Mounts/unmounts with the runtime, so the timer is torn down the moment the run settles.
 function WbcHeartbeat({ startedAt, lastEventAt }) {
   var [now, setNow] = useWbcState(function () { return Date.now(); });
+  var [phraseIdx, setPhraseIdx] = useWbcState(function () { return Math.floor(Math.random() * WBC_THINKING_PHRASES.length); });
   useWbcEffect(function () {
-    var timer = setInterval(function () { setNow(Date.now()); }, 1000);
+    var timer = setInterval(function () {
+      setNow(Date.now());
+      setPhraseIdx(Math.floor(Math.random() * WBC_THINKING_PHRASES.length));
+    }, 4000);
     return function () { clearInterval(timer); };
   }, []);
   if (!startedAt) return null;
@@ -1829,7 +1876,7 @@ function WbcHeartbeat({ startedAt, lastEventAt }) {
     <div className={"wbc-heartbeat" + (stalled ? " stalled" : "")} aria-live="polite">
       <span className="wbc-heartbeat-pulse" />
       <span className="wbc-heartbeat-elapsed">{wbcT("workbenchChat.elapsed", "Running {s}s", { s: elapsed })}</span>
-      {stalled && <span className="wbc-heartbeat-still">{wbcT("workbenchChat.stillWorking", "Still working…")}</span>}
+      <span className="wbc-heartbeat-still">{WBC_THINKING_PHRASES[phraseIdx]}</span>
     </div>
   );
 }
