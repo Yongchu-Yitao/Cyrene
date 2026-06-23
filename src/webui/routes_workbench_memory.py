@@ -48,8 +48,9 @@ _CATEGORY_LABELS: dict[str, str] = {
     "habit": "工作习惯",
     "fact": "事实信息",
     "conversation": "对话记忆",
+    "task_report": "任务报告",
 }
-_CATEGORY_ORDER = ["preference", "project", "habit", "fact", "conversation"]
+_CATEGORY_ORDER = ["preference", "project", "habit", "fact", "conversation", "task_report"]
 
 # Map a legacy/free-form entry ``type`` onto a Workbench category so memories
 # captured by the agent (which only tags ``fact`` / ``preference`` / …) still
@@ -66,6 +67,7 @@ _TYPE_TO_CATEGORY: dict[str, str] = {
     "chat": "conversation",
     "event": "conversation",
     "emotion": "conversation",
+    "task_report": "task_report",
 }
 
 _SOURCE_LABELS: dict[str, str] = {
@@ -1014,6 +1016,52 @@ def render_memory_for_injection(
         return ""
     header = "## 项目记忆（本项目此前沉淀/记录的长期信息，执行时请参考复用、避免重复摸索；与当前任务无关则忽略）"
     return header + "\n" + "\n".join(lines)
+
+
+def render_task_reports_for_planning(
+    workspace_id: str | None,
+    *,
+    limit: int = 3,
+    max_chars: int = 2500,
+) -> str:
+    """Render past task completion reports for injection into the plan-generation
+    prompt. Only ``task_report``-category entries are included; stale entries are
+    skipped. Returns "" when no reports exist.
+
+    NOT used in general agent runs — task reports are too verbose for every step.
+    """
+    if _resolve_workspace_id(workspace_id) == "default":
+        return ""
+    entries = _load(workspace_id)
+    if not entries:
+        return ""
+    reports: list[tuple[int, str]] = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        if e.get("stale"):
+            continue
+        if _entry_category(e) != "task_report":
+            continue
+        content = str(e.get("content") or "").strip()
+        if not content:
+            continue
+        mc = int(e.get("mention_count") or 1)
+        reports.append((mc, content))
+    if not reports:
+        return ""
+    reports.sort(key=lambda x: x[0], reverse=True)
+    blocks: list[str] = []
+    used = 0
+    for _mc, content in reports[:limit]:
+        if used + len(content) > max_chars:
+            break
+        blocks.append(content)
+        used += len(content)
+    if not blocks:
+        return ""
+    header = "## 本项目历史任务报告（请参考成功经验，避免重复踩坑；与当前任务无关则忽略）"
+    return header + "\n\n" + "\n---\n".join(blocks)
 
 
 def register_workbench_memory_routes(router: APIRouter, db_path: str = "") -> None:

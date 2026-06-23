@@ -39,6 +39,7 @@ from webui.routes_workbench_memory import (
     add_agent_memory,
     register_workbench_memory_routes,
     render_memory_for_injection,
+    render_task_reports_for_planning,
     schedule_capture,
 )
 from webui.routes_workbench_schedule import register_workbench_schedule_routes
@@ -2934,6 +2935,8 @@ async def _workbench_generate_plan_steps(
         explore_directive = (
             "本次不提供工作区探索工具，请基于规划历史、既往观察结果和下面的信息直接给出计划，不要尝试调用工具。"
         )
+    past_reports_block = _workbench_render_past_task_reports(project) if not feedback else ""
+    reports_section = f"\n\n{past_reports_block}" if past_reports_block else ""
     if auto_start:
         if tool_bundle_version == _WORKBENCH_PLANNER_EXPLORE_VERSION:
             lead_in = (
@@ -2949,7 +2952,7 @@ async def _workbench_generate_plan_steps(
             )
         prompt = (
             f"{lead_in}\n\n"
-            f"规划方向：{goal}{constraints_block}{workspace_delta_block}{reflection_block}\n\n"
+            f"规划方向：{goal}{constraints_block}{workspace_delta_block}{reflection_block}{reports_section}\n\n"
             "goal 要具体、贴合本项目实际、不要泛泛而谈，并尽量引用真实文件/目录/模块；"
             "验收标准要可独立核验，避免“目标清晰”这类过程性描述。"
             "按系统提示约定的 JSON 结构，只返回一个 JSON 对象，不要 Markdown 代码块标记。"
@@ -2958,7 +2961,7 @@ async def _workbench_generate_plan_steps(
         prompt = (
             "请把下面这个任务拆解成清晰、有顺序、可逐步执行的步骤。\n"
             f"{explore_directive}\n\n"
-            f"任务目标：{goal}{constraints_block}{existing_plan_block}{feedback_block}{workspace_delta_block}{reflection_block}\n\n"
+            f"任务目标：{goal}{constraints_block}{existing_plan_block}{feedback_block}{workspace_delta_block}{reflection_block}{reports_section}\n\n"
             "任务涉及当前项目时，尽量引用真实文件、目录或模块；"
             "与当前项目无关时，围绕任务本身规划，不要引入无关的文件或代码操作。"
             "revisionMode 自行判断：仅补充、删改、调序或改变局部做法时用 revise；"
@@ -4228,26 +4231,272 @@ def _workbench_compose_static_system() -> str:
     return _WORKBENCH_TASK_MODE_SYSTEM
 
 
+# ── Per-run context enrichment (ephemeral_system tail, cache-safe) ──────
+
+def _workbench_render_workspace_state_block(
+    session: dict[str, Any],
+    workspace_root: Path | None,
+    *,
+    recent_run_count: int = 2,
+) -> str:
+    """Progressive context enrichment: recent file changes + git status + last N
+    run summaries. Deterministic (no LLM), cheap to compute, cache-safe in tail."""
+    lines: list[str] = []
+    # ── Recently changed files (from session run records, zero I/O) ─────
+    runs = session.get("runs") if isinstance(session.get("runs"), list) else []
+    if runs:
+        recent_paths: list[str] = []
+        seen: set[str] = set()
+        for run in runs[-recent_run_count:]:
+            if not isinstance(run, dict):
+                continue
+            for fc in (run.get("fileChanges") or []):
+                if not isinstance(fc, dict):
+                    continue
+                path = str(fc.get("path") or fc.get("newPath") or "").strip()
+                if path and path not in seen:
+                    seen.add(path)
+                    recent_paths.append(path)
+        if recent_paths:
+            lines.append("- 近期变更文件：" + "、".join(recent_paths[:12]))
+    # ── Git status summary ──────────────────────────────────────────────
+    git_snap = _workbench_git_status_snapshot(workspace_root)
+    if git_snap:
+        total = len(git_snap)
+        # porcelain=v1 2-char code: index 0 = staging status, index 1 = worktree status.
+        # Staged: index 0 is NOT space (modified in index) AND not '?' (untracked).
+        staged = sum(1 for v in git_snap.values() if v[0] not in (' ', '?'))
+        lines.append(f"- Git 状态：{total} files changed ({staged} staged)")
+    # ── Recent run summaries (same session) ─────────────────────────────
+    if runs and recent_run_count > 0:
+        for run in runs[-recent_run_count:]:
+            if not isinstance(run, dict):
+                continue
+            ui = str(run.get("userInput") or "")[:80]
+            ar = str(run.get("agentResponse") or "")[:80]
+            if ui or ar:
+                lines.append(f"- 上次执行: 「{ui}」→「{ar}」")
+    if not lines:
+        return ""
+    return "## 当前工作区状态\n" + "\n".join(lines)
+
+
+def _workbench_render_step_context_block(
+    session: dict[str, Any],
+    current_step_id: str = "",
+) -> str:
+    """Step context cascade: inject completed-steps outcomes so the agent
+    knows what preceding steps produced without re-exploring the workspace."""
+    plan = session.get("plan") if isinstance(session.get("plan"), list) else []
+    if not plan:
+        return ""
+    ordered = sorted(
+        (s for s in plan if isinstance(s, dict)),
+        key=lambda s: int(s.get("order") or 0),
+    )
+    blocks: list[str] = []
+    for step in ordered:
+        sid = str(step.get("id") or "")
+        if sid == current_step_id:
+            break  # don't include current step or steps after it
+        outcome = step.get("outcome") if isinstance(step.get("outcome"), dict) else None
+        status = str(step.get("status") or "pending")
+        if outcome and status in ("completed", "done"):
+            title = str(step.get("title") or sid)[:60]
+            summary = str(outcome.get("summary") or "")[:120]
+            files_changed = outcome.get("filesChanged") if isinstance(outcome.get("filesChanged"), list) else []
+            issues = outcome.get("issues") if isinstance(outcome.get("issues"), list) else []
+            block = f"Step [{status}] {title}\n  摘要：{summary}"
+            if files_changed:
+                block += f"\n  产出文件：{'、'.join(str(f) for f in files_changed[:8])}"
+            if issues:
+                block += f"\n  注意事项：{'；'.join(str(i) for i in issues[:3])}"
+            blocks.append(block)
+        elif status in ("completed", "done"):
+            title = str(step.get("title") or sid)[:60]
+            blocks.append(f"Step [{status}] {title}（无详细摘要）")
+    if not blocks:
+        return ""
+    return "## 已完成步骤摘要\n" + "\n".join(blocks)
+
+
+async def _workbench_generate_step_outcome(
+    step: dict[str, Any],
+    agent_reply: str,
+    user_input: str = "",
+) -> dict[str, Any] | None:
+    """Generate a structured step-outcome summary from the agent reply + step
+    definition. One lightweight secondary LLM call; failures are silent (best-effort).
+
+    The outcome is stored on the step dict in-place and also returned.
+    """
+    title = str(step.get("title") or "").strip()
+    description = str(step.get("description") or "").strip()
+    reply_snippet = str(agent_reply or "")[:2000]
+    user_snippet = str(user_input or "")[:500]
+    prompt = (
+        "用一句话（中文，<=60字）概括 agent 在这个步骤中做了什么，并列出关键信息。"
+        "只返回 JSON：{\"summary\":\"一句话概括\",\"filesChanged\":[\"文件路径\"],"
+        "\"keyDecisions\":[\"关键决策（<=30字）\"],\"issues\":[\"遇到的问题（<=30字）\"]}。\n\n"
+        f"步骤标题：{title}\n步骤说明：{description}\n用户输入：{user_snippet}\n"
+        f"Agent 回复/执行结果：{reply_snippet}"
+    )
+    try:
+        resp = await asyncio.wait_for(
+            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=300, secondary=True, thinking="disabled"),
+            timeout=20,
+        )
+    except Exception:
+        return None
+    parsed = _workbench_parse_json_object(resp.get("content") or "")
+    if not isinstance(parsed, dict):
+        return None
+    outcome: dict[str, Any] = {
+        "summary": str(parsed.get("summary") or "").strip()[:120],
+        "filesChanged": [
+            str(f).strip()[:200]
+            for f in (parsed.get("filesChanged") or [])
+            if isinstance(f, str) and str(f).strip()
+        ][:10],
+        "keyDecisions": [
+            str(d).strip()[:60]
+            for d in (parsed.get("keyDecisions") or [])
+            if isinstance(d, str) and str(d).strip()
+        ][:5],
+        "issues": [
+            str(i).strip()[:60]
+            for i in (parsed.get("issues") or [])
+            if isinstance(i, str) and str(i).strip()
+        ][:3],
+        "generatedAt": _utc_now_iso(),
+    }
+    step["outcome"] = outcome
+    return outcome
+
+
+# ── Task completion report (cross-session linkage) ──────────────────────
+
+def _workbench_render_past_task_reports(project: dict[str, Any] | None) -> str:
+    """Render past task completion reports for injection into the plan-generation
+    prompt. Separate from regular memory injection — these are only useful at
+    planning time, not during every agent run."""
+    if not project:
+        return ""
+    data_key = _workbench_project_data_key(project)
+    try:
+        return render_task_reports_for_planning(data_key, limit=3, max_chars=2500)
+    except Exception:
+        logger.exception("Failed to render past task reports for planning")
+        return ""
+
+
+async def _workbench_generate_task_report(
+    project: dict[str, Any],
+    session: dict[str, Any],
+) -> str | None:
+    """Generate a structured task completion report and store it as a project
+    memory (category=task_report). Best-effort; failures are silent."""
+    goal = str(session.get("goal") or session.get("title") or "").strip()
+    agent_reply = str(session.get("agentReply") or "").strip()
+    plan = session.get("plan") if isinstance(session.get("plan"), list) else []
+    # Collect step outcomes for richer context
+    outcome_lines: list[str] = []
+    for step in plan:
+        if not isinstance(step, dict):
+            continue
+        st = str(step.get("title") or "").strip()
+        if not st:
+            continue
+        status = str(step.get("status") or "pending")
+        outcome = step.get("outcome") if isinstance(step.get("outcome"), dict) else None
+        summary = str(outcome.get("summary") or "") if outcome else ""
+        outcome_lines.append(f"- [{status}] {st}" + (f"：{summary}" if summary else ""))
+    outcomes_text = "\n".join(outcome_lines[:12]) if outcome_lines else "（无步骤记录）"
+    prompt = (
+        "你是任务复盘 Agent。请根据下面任务的目标、执行过程和最终结果，生成一份简短的任务完成报告"
+        "（中文，300-800字），结构如下：\n\n"
+        "1. 任务目标与达成情况（一句话）\n"
+        "2. 采用的方法/路径（2-4点，具体、可操作）\n"
+        "3. 踩过的坑及避免方式（如有）\n"
+        "4. 关键产出文件清单（如有）\n\n"
+        "报告将被注入到本项目将来新任务的规划提示中，帮助后续 agent 借鉴经验。"
+        "因此要具体、有可操作性，避免泛泛而谈。\n\n"
+        f"任务目标：{goal}\n"
+        f"步骤执行记录：\n{outcomes_text}\n"
+        f"最终交付/回复：{agent_reply[:2000]}"
+    )
+    try:
+        resp = await asyncio.wait_for(
+            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=1000, secondary=True, thinking="disabled"),
+            timeout=40,
+        )
+    except Exception:
+        return None
+    report = str(resp.get("content") or "").strip()
+    if len(report) < 40:
+        return None
+    data_key = _workbench_project_data_key(project)
+    try:
+        add_agent_memory(
+            data_key,
+            f"[任务报告] {goal[:80]}\n{report}",
+            category="task_report",
+            tags=["任务报告", "自动生成"],
+            source="agent",
+        )
+    except Exception:
+        logger.exception("Failed to store task report for %s", data_key)
+        return None
+    return report
+
+
+def _schedule_task_report(
+    project: dict[str, Any],
+    session: dict[str, Any],
+) -> None:
+    """Fire-and-forget task completion report generation."""
+    async def _runner() -> None:
+        try:
+            report = await _workbench_generate_task_report(project, session)
+            if report:
+                logger.info("Task report generated for session %s", session.get("id"))
+        except Exception:
+            logger.debug("Task report generation failed", exc_info=True)
+    try:
+        asyncio.create_task(_runner())
+    except RuntimeError:
+        pass
+
+
 def _workbench_compose_ephemeral_system(
     project: dict[str, Any] | None,
     session: dict[str, Any],
+    *,
+    step_id: str = "",
+    workspace_root: Path | None = None,
 ) -> str:
-    """Assemble the per-run system block for a Workbench agent run: the project's
-    durable memory + the session's deep-reflection seed.
+    """Assemble the per-run system block for a Workbench agent run.
 
     Injected via ``ephemeral_system`` (prompt tail, never persisted), so it never
     invalidates the cached system+history prefix and preserves prompt-cache hits.
+
+    Blocks (in order): task brief → step context cascade → workspace state →
+    project memory → reflection seed.
     """
-    # Static task-mode framing (执行模式 + 产物交付) now lives in the cache-stable
-    # SYSTEM prefix via ``_workbench_compose_static_system`` — this tail block keeps
-    # only per-run volatile context: task brief, project memory, reflection seed.
     parts: list[str] = []
-    # The task's goal/title/summary/plan live only in the Workbench store, never in
-    # the agent's conversation history — inject them so the agent actually sees the
-    # plan + context the UI shows (otherwise it asks "我没看到执行计划").
+    # 1. Task brief: goal / title / plan — lives only in the Workbench store.
     brief_block = _workbench_render_task_brief_block(session)
     if brief_block:
         parts.append(brief_block)
+    # 2. Step context cascade: what preceding steps produced (same session).
+    step_block = _workbench_render_step_context_block(session, current_step_id=step_id)
+    if step_block:
+        parts.append(step_block)
+    # 3. Progressive enrichment: recent file changes, git status, recent runs.
+    state_block = _workbench_render_workspace_state_block(session, workspace_root)
+    if state_block:
+        parts.append(state_block)
+    # 4. Project durable memories (facts, preferences, habits).
     try:
         mem_block = render_memory_for_injection(_workbench_project_data_key(project))
     except Exception:
@@ -4255,6 +4504,7 @@ def _workbench_compose_ephemeral_system(
         mem_block = ""
     if mem_block:
         parts.append(mem_block)
+    # 5. Deep reflection seed (dead ends to avoid, promising directions).
     reflection_seed = _workbench_render_reflection_block(session)
     if reflection_seed:
         parts.append(
@@ -8708,7 +8958,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         workspace_root = _workbench_workspace_root(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
-        ephemeral_system = _workbench_compose_ephemeral_system(project, session)
+        ephemeral_system = _workbench_compose_ephemeral_system(
+            project, session, step_id=step_id if is_step_run else "", workspace_root=workspace_root
+        )
         agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system())
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
@@ -8725,6 +8977,15 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         # Preserve any title/goal/summary the agent changed mid-run via set_task_goal.
         _workbench_sync_agent_task_meta(session, session_id, task_meta_before)
         session["agentReply"] = agent_reply
+        # Generate step outcome for context cascade (best-effort, short timeout).
+        if is_step_run and not awaiting_user and step:
+            try:
+                await asyncio.wait_for(
+                    _workbench_generate_step_outcome(step, agent_reply, user_input),
+                    timeout=10,
+                )
+            except (asyncio.TimeoutError, Exception):
+                pass
         # Sink durable memories from this exchange into the project's workspace store.
         if not command and not awaiting_user:
             schedule_capture(_workbench_project_data_key(project), user_input, agent_reply)
@@ -8815,7 +9076,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         workspace_root = _workbench_workspace_root(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
-        ephemeral_system = _workbench_compose_ephemeral_system(project, session)
+        ephemeral_system = _workbench_compose_ephemeral_system(
+            project, session, workspace_root=workspace_root
+        )
         agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system())
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
@@ -9004,7 +9267,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         workspace_root = _workbench_workspace_root(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
-        ephemeral_system = _workbench_compose_ephemeral_system(project, session)
+        ephemeral_system = _workbench_compose_ephemeral_system(
+            project, session, workspace_root=workspace_root
+        )
         if finalizing:
             ephemeral_system = (ephemeral_system + "\n\n" + _workbench_finalize_directive(session)).strip()
         agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system())
@@ -9016,6 +9281,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         session["agentReply"] = agent_reply
         if not command and not awaiting_user:
             schedule_capture(_workbench_project_data_key(project), user_input, agent_reply)
+        # On finalize: generate a task completion report for cross-session learning.
+        if finalizing and not awaiting_user:
+            _schedule_task_report(project, session)
         session["status"] = (
             "waiting_for_user" if awaiting_user
             else "review" if finalizing

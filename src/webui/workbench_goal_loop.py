@@ -729,7 +729,10 @@ class GoalLoopManager:
                 git_before = R._workbench_git_status_snapshot(workspace_root)
                 workspace_files_before = R._workbench_workspace_file_snapshot(workspace_root)
                 started_at = _utc_iso()
-                ephemeral = R._workbench_compose_ephemeral_system(current_project, current_session)
+                ephemeral = R._workbench_compose_ephemeral_system(
+                    current_project, current_session,
+                    step_id=step_id, workspace_root=workspace_root,
+                )
                 # Run-invariant — rides in the cache-stable system prefix (static
                 # extra), not the per-run ephemeral tail.
                 loop_instruction = (
@@ -880,6 +883,21 @@ class GoalLoopManager:
                     step_id=step_id,
                     payload=verification or {"passed": True, "evidence": "final verification deferred"},
                 )
+                # Generate step outcome for context cascade across future steps.
+                if passed and display_reply:
+                    try:
+                        outcome = await asyncio.wait_for(
+                            R._workbench_generate_step_outcome(step, display_reply, step_prompt),
+                            timeout=10,
+                        )
+                        if outcome:
+                            def _store_step_outcome(_p: dict[str, Any], _proj: dict[str, Any], fresh: dict[str, Any]) -> None:
+                                for c in fresh.get("plan") or []:
+                                    if isinstance(c, dict) and str(c.get("id") or "") == step_id:
+                                        c["outcome"] = outcome
+                            _write_session(str(run["session_id"]), _store_step_outcome)
+                    except (asyncio.TimeoutError, Exception):
+                        pass
                 if not passed and step_attempts >= _STEP_FAILURE_CAP:
                     # The same step keeps failing independent verification. Reflect
                     # once for a root cause, then block rather than retry until the
