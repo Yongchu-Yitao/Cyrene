@@ -1028,7 +1028,12 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         });
       },
       onError: function (chatId, err) { setError(wbcErrorText(err)); },
-      onSettled: function () { refreshChats(); },
+      onSettled: function (chatId) {
+        model.getChat(chatId).then(function (chat) {
+          if (activeChatIdRef.current === chatId) setActiveChat(chat);
+        }).catch(function () {});
+        refreshChats();
+      },
       onResync: function (chatId) {
         // Stream ended without a `saved` event (e.g. interrupted) — re-pull.
         model.getChat(chatId).then(function (chat) {

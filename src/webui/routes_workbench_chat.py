@@ -216,6 +216,7 @@ def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
         "preview": _chat_preview(chat),
         "messageCount": len(chat.get("messages") or []),
         "usage": usage,
+        "pendingQuestion": chat.get("pendingQuestion") or None,
     }
     if chat.get("forkedFromChatId"):
         payload["forkedFromChatId"] = chat.get("forkedFromChatId")
