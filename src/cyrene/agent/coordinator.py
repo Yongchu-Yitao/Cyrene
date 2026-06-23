@@ -477,21 +477,6 @@ async def _run_chat_agent(
             content=current_workspace_scope,
         ))
 
-        # Session-scoped runs (Workbench conversations) get their conversation id
-        # plus where their archived history lives. Constant within a session, so it
-        # stays in the cache-stable system prefix; empty for the legacy agent.
-        conversation_identity = conversation_identity_block(_current_session_id.get())
-        if conversation_identity:
-            main_system += "\n\n" + conversation_identity
-            main_system_context.append(context_block(
-                "runtime.conversation_identity",
-                "system",
-                source="cyrene.agent.prompts.conversation_identity_block",
-                reason="agent knows its conversation id and can read its own archived history",
-                transforms=["concat_into_system"],
-                content=conversation_identity,
-            ))
-
         is_deep_research = command == "deep-research"
         dr_token = _deep_research_mode.set(is_deep_research)
         dr_first_token = _deep_research_first_round.set(is_deep_research and not bool(forced_round_id))
@@ -747,10 +732,14 @@ async def _run_chat_agent(
                 metadata={"policy": spawn_policy},
             ))
 
-        # Pin the per-day temporal anchor to the prompt tail next to the per-run
-        # ephemeral block, so neither rides in the cached system+history prefix.
+        # Pin per-run / per-session dynamic blocks to the prompt tail so none of
+        # them ride in the cached system+history prefix.  The conversation identity
+        # (session-specific chat id) lives here too — putting it in the system prefix
+        # would make every conversation's prefix unique and prevent cache sharing
+        # across fork / chat boundaries.
+        conversation_identity = conversation_identity_block(_current_session_id.get())
         effective_ephemeral = "\n\n".join(
-            part for part in (ephemeral_system, temporal_context) if part
+            part for part in (ephemeral_system, temporal_context, conversation_identity) if part
         )
 
         # 计划模式：先拆解成步骤/任务，展示并请用户确认，不直接执行。
