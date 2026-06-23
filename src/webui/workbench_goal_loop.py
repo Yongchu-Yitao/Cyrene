@@ -761,7 +761,7 @@ class GoalLoopManager:
                             permission_mode=str(run.get("permission_mode") or "auto"),
                             project_workspace=str(current_project.get("workspacePath") or ""),
                             ephemeral_system=ephemeral,
-                            static_system_extra=R._workbench_compose_static_system() + loop_instruction,
+                            static_system_extra=R._workbench_compose_static_system(current_project, current_session) + loop_instruction,
                         )
                 except asyncio.CancelledError:
                     raise

@@ -4221,14 +4221,38 @@ _WORKBENCH_TASK_MODE_SYSTEM = (
 )
 
 
-def _workbench_compose_static_system() -> str:
-    """Run-invariant task-mode system block for a Workbench task run.
+def _workbench_compose_static_system(
+    project: dict[str, Any] | None = None,
+    session: dict[str, Any] | None = None,
+) -> str:
+    """Cache-stable system block for Workbench (system prefix).
 
-    Injected via ``run_agent(static_system_extra=...)`` so it lands in the
-    byte-stable system prefix (ahead of memory/temporal/workspace), instead of
-    the per-run ``ephemeral_system`` tail that is re-processed every tool round.
+    Includes the constant task-mode framing plus session-stable context that
+    changes rarely enough to belong in the byte-stable system prefix rather
+    than the per-run ``ephemeral_system`` tail.
+
+    Injected via ``run_agent(static_system_extra=...)`` so it lands ahead of
+    memory/temporal/workspace blocks.
     """
-    return _WORKBENCH_TASK_MODE_SYSTEM
+    parts: list[str] = [_WORKBENCH_TASK_MODE_SYSTEM]
+    # Project durable memories — change only when the user explicitly saves.
+    if project:
+        try:
+            mem_block = render_memory_for_injection(_workbench_project_data_key(project))
+        except Exception:
+            logger.exception("Failed to render project memory for static system")
+            mem_block = ""
+        if mem_block:
+            parts.append(mem_block)
+    # Reflection seed — changes only on reflection cycles (infrequent).
+    if session:
+        reflection_seed = _workbench_render_reflection_block(session)
+        if reflection_seed:
+            parts.append(
+                "## 深度反思结论（执行时请避开 excluded_paths，优先 promising_directions）\n"
+                + reflection_seed
+            )
+    return "\n\n".join(parts).strip()
 
 
 # ── Per-run context enrichment (ephemeral_system tail, cache-safe) ──────
@@ -4475,13 +4499,14 @@ def _workbench_compose_ephemeral_system(
     step_id: str = "",
     workspace_root: Path | None = None,
 ) -> str:
-    """Assemble the per-run system block for a Workbench agent run.
+    """Assemble the per-run ephemeral block for a Workbench agent run.
 
     Injected via ``ephemeral_system`` (prompt tail, never persisted), so it never
-    invalidates the cached system+history prefix and preserves prompt-cache hits.
+    invalidates the cached system+history prefix. Only carry truly per-run content;
+    stable blocks (project memory, reflection seed) ride in the system prefix via
+    ``_workbench_compose_static_system``.
 
-    Blocks (in order): task brief → step context cascade → workspace state →
-    project memory → reflection seed.
+    Blocks (in order): task brief → step context cascade → workspace state.
     """
     parts: list[str] = []
     # 1. Task brief: goal / title / plan — lives only in the Workbench store.
@@ -4492,25 +4517,10 @@ def _workbench_compose_ephemeral_system(
     step_block = _workbench_render_step_context_block(session, current_step_id=step_id)
     if step_block:
         parts.append(step_block)
-    # 3. Progressive enrichment: recent file changes, git status, recent runs.
+    # 3. Workspace state: recent file changes, git status, recent run summaries.
     state_block = _workbench_render_workspace_state_block(session, workspace_root)
     if state_block:
         parts.append(state_block)
-    # 4. Project durable memories (facts, preferences, habits).
-    try:
-        mem_block = render_memory_for_injection(_workbench_project_data_key(project))
-    except Exception:
-        logger.exception("Failed to render project memory for injection")
-        mem_block = ""
-    if mem_block:
-        parts.append(mem_block)
-    # 5. Deep reflection seed (dead ends to avoid, promising directions).
-    reflection_seed = _workbench_render_reflection_block(session)
-    if reflection_seed:
-        parts.append(
-            "## 深度反思结论（执行时请避开 excluded_paths，优先 promising_directions）\n"
-            + reflection_seed
-        )
     return "\n\n".join(parts).strip()
 
 
@@ -8961,7 +8971,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         ephemeral_system = _workbench_compose_ephemeral_system(
             project, session, step_id=step_id if is_step_run else "", workspace_root=workspace_root
         )
-        agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system())
+        agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         # A run that hit a permission / clarification boundary pauses awaiting the
@@ -9079,7 +9089,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         ephemeral_system = _workbench_compose_ephemeral_system(
             project, session, workspace_root=workspace_root
         )
-        agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system())
+        agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
@@ -9272,7 +9282,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         )
         if finalizing:
             ephemeral_system = (ephemeral_system + "\n\n" + _workbench_finalize_directive(session)).strip()
-        agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system())
+        agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
