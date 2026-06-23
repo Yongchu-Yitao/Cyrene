@@ -1243,7 +1243,10 @@ async def test_workbench_verifier_rejects_missing_criteria_results(monkeypatch, 
     import pytest
     from webui import routes
 
+    calls = {"n": 0}
+
     async def fake_agent(*args, **kwargs):
+        calls["n"] += 1
         return {
             "results": [{"id": "accept_1", "passed": True, "evidence": "ok"}],
             "recommend_reflection": False,
@@ -1251,6 +1254,8 @@ async def test_workbench_verifier_rejects_missing_criteria_results(monkeypatch, 
         }
 
     monkeypatch.setattr(routes, "_workbench_run_explore_agent", fake_agent)
+    # Keep the retry backoff instant so the test does not actually sleep.
+    monkeypatch.setattr(routes, "_WORKBENCH_VERIFY_RETRY_BASE_DELAY", 0.0)
     session = {
         "id": "task_session_1",
         "title": "实现登录",
@@ -1260,10 +1265,75 @@ async def test_workbench_verifier_rejects_missing_criteria_results(monkeypatch, 
         ],
     }
 
+    # A schema-shaped failure (missing criterion) is retryable, so it exhausts
+    # the attempt budget before finally surfacing the error.
     with pytest.raises(routes._WorkbenchGenerationError, match="遗漏了 1 条"):
         await routes._workbench_verify_acceptance(
             session, {"workspacePath": str(tmp_path)}
         )
+    assert calls["n"] == routes._WORKBENCH_VERIFY_MAX_ATTEMPTS
+
+
+async def test_workbench_verifier_retries_transient_then_succeeds(monkeypatch, tmp_path):
+    from webui import routes
+
+    calls = {"n": 0}
+
+    async def flaky_agent(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # First reply comes back empty — a transient glitch the loop retries.
+            raise routes._WorkbenchGenerationError("empty_response", "模型返回了空响应。")
+        return {
+            "results": [{"id": "accept_1", "passed": True, "evidence": "测试通过"}],
+            "recommend_reflection": False,
+            "reason": "全部通过",
+        }
+
+    monkeypatch.setattr(routes, "_workbench_run_explore_agent", flaky_agent)
+    monkeypatch.setattr(routes, "_WORKBENCH_VERIFY_RETRY_BASE_DELAY", 0.0)
+    session = {
+        "id": "task_session_1",
+        "title": "实现登录",
+        "acceptanceCriteria": [
+            {"id": "accept_1", "text": "登录测试通过", "status": "pending"}
+        ],
+    }
+
+    verdict = await routes._workbench_verify_acceptance(
+        session, {"workspacePath": str(tmp_path)}
+    )
+
+    assert calls["n"] == 2
+    assert verdict["results"][0]["passed"] is True
+
+
+async def test_workbench_verifier_does_not_retry_auth_failure(monkeypatch, tmp_path):
+    import pytest
+    from webui import routes
+
+    calls = {"n": 0}
+
+    async def auth_failing_agent(*args, **kwargs):
+        calls["n"] += 1
+        raise routes._WorkbenchGenerationError("authentication", "模型服务鉴权失败（HTTP 401）。")
+
+    monkeypatch.setattr(routes, "_workbench_run_explore_agent", auth_failing_agent)
+    monkeypatch.setattr(routes, "_WORKBENCH_VERIFY_RETRY_BASE_DELAY", 0.0)
+    session = {
+        "id": "task_session_1",
+        "title": "实现登录",
+        "acceptanceCriteria": [
+            {"id": "accept_1", "text": "登录测试通过", "status": "pending"}
+        ],
+    }
+
+    # Auth/config errors won't fix themselves on retry, so they bail immediately.
+    with pytest.raises(routes._WorkbenchGenerationError, match="鉴权失败"):
+        await routes._workbench_verify_acceptance(
+            session, {"workspacePath": str(tmp_path)}
+        )
+    assert calls["n"] == 1
 
 
 async def test_workbench_clean_explore_agent_clears_inherited_session(monkeypatch):

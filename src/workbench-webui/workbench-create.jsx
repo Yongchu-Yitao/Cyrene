@@ -430,26 +430,38 @@
     return Array.isArray(value) ? value.join("\n") : "";
   }
 
+  var InitChevronIcon = <Svg size={13} sw={1.9}><path d="M5 7l3 3 3-3" /></Svg>;
+  var INIT_PRIORITY_COLOR = { high: "red", medium: "amber", low: "blue" };
+  var INIT_PRIORITY_KEYS  = { high: "priority.high", medium: "priority.medium", low: "priority.low" };
+  var INIT_PRIORITY_LIST  = [{ id: "high", key: "priority.high" }, { id: "medium", key: "priority.medium" }, { id: "low", key: "priority.low" }];
+
   function InitTaskPlan(props) {
     var tasks = Array.isArray(props.tasks) ? props.tasks : [];
+    var [expandedId, setExpandedId] = useState(null);
+
     function updateTask(index, patch) {
       props.onChange(tasks.map(function (task, i) {
         return i === index ? Object.assign({}, task, patch) : task;
       }));
     }
     function removeTask(index) {
+      var removed = tasks[index];
+      if (removed && expandedId === removed.id) setExpandedId(null);
       props.onChange(tasks.filter(function (_, i) { return i !== index; }));
     }
     function addTask() {
+      var newId = "draft_" + Date.now();
       props.onChange(tasks.concat([{
-        id: "draft_" + Date.now(),
+        id: newId,
         title: T("init.plan.newStep"),
         goal: "",
         priority: "medium",
         constraints: [],
         acceptanceCriteria: [],
       }]));
+      setExpandedId(newId);
     }
+
     if (!tasks.length) {
       return (
         <div className="wb-init-plan">
@@ -465,59 +477,95 @@
             <b>{T("init.plan.title")}</b>
             <p>{T("init.plan.desc")}</p>
           </div>
-          <button type="button" className="wb-btn ghost" onClick={addTask}>{T("init.plan.addTask")}</button>
+          <button type="button" className="wb-btn ghost compact" onClick={addTask}>{T("init.plan.addTask")}</button>
         </div>
         <div className="wb-init-plan-list">
           {tasks.map(function (task, index) {
+            var taskKey = task.id || String(index);
+            var expanded = expandedId === taskKey;
+            var isLast = index === tasks.length - 1;
+            var priorityColor = INIT_PRIORITY_COLOR[task.priority] || "amber";
             return (
-              <div className="wb-init-plan-card" key={task.id || index}>
-                <div className="wb-init-plan-card-head">
-                  <span>{index + 1}</span>
-                  <input
-                    className="wb-init-input"
-                    value={task.title || ""}
-                    placeholder={T("init.plan.taskTitle")}
-                    onChange={function (e) { updateTask(index, { title: e.target.value }); }}
-                  />
-                  <select
-                    className="wb-init-select"
-                    value={task.priority || "medium"}
-                    onChange={function (e) { updateTask(index, { priority: e.target.value }); }}
-                  >
-                    <option value="high">{T("priority.high")}</option>
-                    <option value="medium">{T("priority.medium")}</option>
-                    <option value="low">{T("priority.low")}</option>
-                  </select>
-                  <button type="button" className="wb-btn ghost" onClick={function () { removeTask(index); }}>{T("schedule.delete")}</button>
+              <div className={"wb-init-plan-step" + (expanded ? " expanded" : "")} key={taskKey}>
+                <div className="wb-init-plan-rail">
+                  <div className="wb-init-plan-node">{index + 1}</div>
+                  {!isLast && <span className="wb-init-plan-vline" />}
                 </div>
-                <textarea
-                  className="wb-init-textarea"
-                  rows={3}
-                  value={task.goal || ""}
-                  placeholder={T("init.plan.goalPlaceholder")}
-                  onChange={function (e) { updateTask(index, { goal: e.target.value }); }}
-                />
-                <div className="wb-init-plan-cols">
-                  <label>
-                    <span>{T("init.plan.constraints")}</span>
-                    <textarea
-                      className="wb-init-textarea"
-                      rows={2}
-                      value={listToLines(task.constraints)}
-                      placeholder={T("init.plan.onePerLine")}
-                      onChange={function (e) { updateTask(index, { constraints: linesToList(e.target.value) }); }}
-                    />
-                  </label>
-                  <label>
-                    <span>{T("init.plan.acceptanceCriteria")}</span>
-                    <textarea
-                      className="wb-init-textarea"
-                      rows={2}
-                      value={listToLines(task.acceptanceCriteria)}
-                      placeholder={T("init.plan.onePerLine")}
-                      onChange={function (e) { updateTask(index, { acceptanceCriteria: linesToList(e.target.value) }); }}
-                    />
-                  </label>
+                <div className="wb-init-plan-body">
+                  <div
+                    className="wb-init-plan-row-head"
+                    role="button"
+                    tabIndex={0}
+                    onClick={function () { setExpandedId(expanded ? null : taskKey); }}
+                    onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedId(expanded ? null : taskKey); } }}
+                  >
+                    <span className="wb-init-plan-title-text">{task.title || T("init.plan.taskTitle")}</span>
+                    <span className={"wb-init-plan-badge " + priorityColor}>{T(INIT_PRIORITY_KEYS[task.priority] || "priority.medium")}</span>
+                    <span className={"wb-init-plan-caret" + (expanded ? " open" : "")}>{InitChevronIcon}</span>
+                  </div>
+                  {expanded && (
+                    <div className="wb-init-plan-detail" onClick={function (e) { e.stopPropagation(); }}>
+                      <div className="wb-init-plan-field">
+                        <label>{T("init.plan.taskTitle")}</label>
+                        <input
+                          className="wb-init-input"
+                          value={task.title || ""}
+                          autoFocus
+                          placeholder={T("init.plan.taskTitle")}
+                          onChange={function (e) { updateTask(index, { title: e.target.value }); }}
+                        />
+                      </div>
+                      <div className="wb-init-plan-field">
+                        <label>{T("create.task.priority")}</label>
+                        <div className="wb-cp-seg">
+                          {INIT_PRIORITY_LIST.map(function (p) {
+                            return (
+                              <button type="button" key={p.id} className={"wb-cp-seg-btn" + ((task.priority || "medium") === p.id ? " on" : "")} onClick={function () { updateTask(index, { priority: p.id }); }}>
+                                {T(p.key)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="wb-init-plan-field">
+                        <label>{T("create.task.goal")}</label>
+                        <textarea
+                          className="wb-init-textarea"
+                          rows={3}
+                          value={task.goal || ""}
+                          placeholder={T("init.plan.goalPlaceholder")}
+                          onChange={function (e) { updateTask(index, { goal: e.target.value }); }}
+                        />
+                      </div>
+                      <div className="wb-init-plan-cols">
+                        <label>
+                          <span>{T("init.plan.constraints")}</span>
+                          <textarea
+                            className="wb-init-textarea"
+                            rows={2}
+                            value={listToLines(task.constraints)}
+                            placeholder={T("init.plan.onePerLine")}
+                            onChange={function (e) { updateTask(index, { constraints: linesToList(e.target.value) }); }}
+                          />
+                        </label>
+                        <label>
+                          <span>{T("init.plan.acceptanceCriteria")}</span>
+                          <textarea
+                            className="wb-init-textarea"
+                            rows={2}
+                            value={listToLines(task.acceptanceCriteria)}
+                            placeholder={T("init.plan.onePerLine")}
+                            onChange={function (e) { updateTask(index, { acceptanceCriteria: linesToList(e.target.value) }); }}
+                          />
+                        </label>
+                      </div>
+                      <div className="wb-init-plan-detail-foot">
+                        <button type="button" className="wb-btn ghost compact" onClick={function () { removeTask(index); }}>
+                          {T("schedule.delete")}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             );

@@ -8117,20 +8117,56 @@ html[data-theme="light"] .wb-tool-list .mono {
 }
 .wb-init-plan-head b { display: block; font-size: 15px; color: var(--wb-text); margin-bottom: 3px; }
 .wb-init-plan-head p { margin: 0; font-size: 12.5px; color: var(--wb-muted); }
-.wb-init-plan-list { display: flex; flex-direction: column; gap: 12px; }
-.wb-init-plan-card {
-  display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--wb-line);
-  border-radius: 14px; padding: 14px; background: var(--wb-card-bg);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+.wb-init-plan-list { display: flex; flex-direction: column; }
+.wb-init-plan-step { display: flex; align-items: stretch; }
+.wb-init-plan-rail {
+  display: flex; flex-direction: column; align-items: center;
+  flex: 0 0 36px; padding-top: 10px;
 }
-.wb-init-plan-card-head {
-  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto auto; gap: 10px; align-items: center;
-}
-.wb-init-plan-card-head > span {
-  display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px;
-  font-size: 12px; font-weight: 720; color: var(--wb-accent);
+.wb-init-plan-node {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 12px; font-weight: 700; color: var(--wb-accent);
   background: color-mix(in srgb, var(--wb-accent) 13%, transparent);
+  border: 1.5px solid color-mix(in srgb, var(--wb-accent) 30%, transparent);
+  flex: 0 0 auto;
 }
+.wb-init-plan-vline {
+  flex: 1; width: 2px; min-height: 16px;
+  background: var(--wb-line); margin: 5px 0;
+}
+.wb-init-plan-body {
+  flex: 1; min-width: 0; padding-left: 4px; padding-bottom: 10px;
+}
+.wb-init-plan-step:last-child .wb-init-plan-body { padding-bottom: 0; }
+.wb-init-plan-row-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: 10px; cursor: pointer;
+  -webkit-user-select: none; user-select: none;
+}
+.wb-init-plan-row-head:hover { background: var(--wb-row-hover-bg, var(--wb-active-bg)); }
+.wb-init-plan-title-text {
+  flex: 1; font-size: 14px; font-weight: 580; color: var(--wb-text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wb-init-plan-badge {
+  flex: 0 0 auto; font-size: 11.5px; font-weight: 650;
+  padding: 2px 8px; border-radius: 999px;
+}
+.wb-init-plan-badge.red   { color: var(--wb-red);    background: color-mix(in srgb, var(--wb-red)   12%, transparent); }
+.wb-init-plan-badge.amber { color: var(--wb-amber);  background: color-mix(in srgb, var(--wb-amber) 12%, transparent); }
+.wb-init-plan-badge.blue  { color: var(--wb-accent); background: color-mix(in srgb, var(--wb-accent) 12%, transparent); }
+.wb-init-plan-caret {
+  flex: 0 0 auto; display: grid; place-items: center;
+  width: 18px; height: 18px; opacity: 0.35;
+  transition: transform 0.15s ease, opacity 0.1s ease;
+}
+.wb-init-plan-row-head:hover .wb-init-plan-caret { opacity: 0.55; }
+.wb-init-plan-caret.open { transform: rotate(180deg); opacity: 0.65; }
+.wb-init-plan-detail { padding: 4px 10px 10px; display: flex; flex-direction: column; gap: 11px; }
+.wb-init-plan-field { display: flex; flex-direction: column; gap: 5px; }
+.wb-init-plan-field > label { font-size: 12px; font-weight: 650; color: var(--wb-muted); }
+.wb-init-plan-detail-foot { display: flex; justify-content: flex-end; padding-top: 2px; }
 .wb-init-plan-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .wb-init-plan-cols label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .wb-init-plan-cols span { font-size: 12px; font-weight: 650; color: var(--wb-muted); }
@@ -8174,9 +8210,6 @@ html[data-theme="light"] .wb-tool-list .mono {
   .wb-create-project { width: 600px; }
   .wb-cp-cols { grid-template-columns: 1fr; gap: 6px; }
   .wb-cp-right { border-left: none; padding-left: 0; border-top: 1px solid var(--wb-line); padding-top: 16px; margin-top: 16px; }
-  .wb-init-plan-card-head { grid-template-columns: 28px minmax(0, 1fr); }
-  .wb-init-plan-card-head .wb-init-select,
-  .wb-init-plan-card-head .wb-btn { grid-column: 2; width: fit-content; }
   .wb-init-plan-cols, .wb-init-feedback { grid-template-columns: 1fr; }
   .wb-init-plan-error-head { flex-direction: column; }
   .wb-init-plan-error-reason { grid-template-columns: 1fr; gap: 3px; }

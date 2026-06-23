@@ -274,6 +274,7 @@ async def _call_llm(
     *,
     secondary: bool = False,
     thinking: str = "auto",
+    response_format: dict | None = None,
 ) -> dict:
     from cyrene.call_llm import call_llm as _unified_call_llm
 
@@ -283,6 +284,7 @@ async def _call_llm(
         max_tokens=max_tokens,
         model_type="secondary" if secondary else "primary",
         thinking=thinking,
+        response_format=response_format,
         caller=_caller_type.get(),
         phase=_llm_phase_name(tools),
         round_id=_current_round_id.get(),

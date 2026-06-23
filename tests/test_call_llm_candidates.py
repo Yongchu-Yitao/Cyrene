@@ -41,6 +41,12 @@ class _CountingHandler(BaseHTTPRequestHandler):
                 pass
             self.connection.close()
             return
+        if self.server.transient_failures_remaining > 0:
+            self.server.transient_failures_remaining -= 1
+            self.send_response(self.server.transient_status)
+            self.end_headers()
+            self.wfile.write(b"{}")
+            return
         if self.server.status != 200:
             self.send_response(self.server.status)
             self.end_headers()
@@ -64,11 +70,13 @@ class _CountingHandler(BaseHTTPRequestHandler):
 def stub_server_factory():
     servers = []
 
-    def make(status: int, *, disconnects: int = 0):
+    def make(status: int, *, disconnects: int = 0, transient_failures: int = 0, transient_status: int = 503):
         server = HTTPServer(("127.0.0.1", 0), _CountingHandler)
         server.status = status
         server.hits = 0
         server.disconnects_remaining = disconnects
+        server.transient_failures_remaining = transient_failures
+        server.transient_status = transient_status
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         servers.append(server)
@@ -87,7 +95,8 @@ def stub_server_factory():
         server.server_close()
 
 
-async def test_failed_candidate_gets_cooldown_and_is_skipped(stub_server_factory):
+async def test_failed_candidate_gets_cooldown_and_is_skipped(stub_server_factory, monkeypatch):
+    monkeypatch.setattr(cl, "_SERVER_ERROR_RETRY_BASE_DELAY_SECONDS", 0)
     bad_server, bad = stub_server_factory(500)
     good_server, good = stub_server_factory(200)
 
@@ -97,7 +106,9 @@ async def test_failed_candidate_gets_cooldown_and_is_skipped(stub_server_factory
         publish_events=False, record_usage=False,
     )
     assert msg.get("content") == "pong"
-    assert bad_server.hits == 1
+    # A persistent 5xx exhausts the same-endpoint retry budget before rotating.
+    expected_bad_hits = 1 + cl.SERVER_ERROR_RETRY_LIMIT
+    assert bad_server.hits == expected_bad_hits
     assert cl._candidate_cooling(cl._candidate_key(bad))
     assert not cl._candidate_cooling(cl._candidate_key(good))
 
@@ -108,8 +119,42 @@ async def test_failed_candidate_gets_cooldown_and_is_skipped(stub_server_factory
         publish_events=False, record_usage=False,
     )
     assert msg.get("content") == "pong"
-    assert bad_server.hits == 1  # unchanged — skipped
+    assert bad_server.hits == expected_bad_hits  # unchanged — skipped
     assert good_server.hits == 2
+
+
+async def test_transient_server_error_retries_then_succeeds(stub_server_factory, monkeypatch):
+    # 5xx on the first attempts (within the retry budget), then a clean 200.
+    server, candidate = stub_server_factory(
+        200, transient_failures=cl.SERVER_ERROR_RETRY_LIMIT, transient_status=503
+    )
+    monkeypatch.setattr(cl, "_SERVER_ERROR_RETRY_BASE_DELAY_SECONDS", 0)
+
+    msg = await cl.call_llm(
+        [{"role": "user", "content": "hi"}],
+        candidates=[candidate],
+        publish_events=False, record_usage=False,
+    )
+
+    assert msg.get("content") == "pong"
+    assert server.hits == cl.SERVER_ERROR_RETRY_LIMIT + 1
+    # A run that ultimately succeeded must not leave the candidate cooling.
+    assert not cl._candidate_cooling(cl._candidate_key(candidate))
+
+
+async def test_client_error_is_not_retried(stub_server_factory, monkeypatch):
+    monkeypatch.setattr(cl, "_SERVER_ERROR_RETRY_BASE_DELAY_SECONDS", 0)
+    bad_server, bad = stub_server_factory(400)
+    good_server, good = stub_server_factory(200)
+
+    msg = await cl.call_llm(
+        [{"role": "user", "content": "hi"}],
+        candidates=[bad, good],
+        publish_events=False, record_usage=False,
+    )
+    assert msg.get("content") == "pong"
+    # 4xx is a real client error: hit once, then rotate — never retried.
+    assert bad_server.hits == 1
 
 
 async def test_all_candidates_cooling_still_tries(stub_server_factory):

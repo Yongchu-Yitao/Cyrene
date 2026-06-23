@@ -348,7 +348,8 @@ def _compact_messages_for_storage(messages: list[dict[str, Any]]) -> list[dict[s
 
 
 # ---------------------------------------------------------------------------
-# Pass 2 — background LLM distillation of mechanical compacted blocks
+# Pass 2 — background LLM distillation of mechanical compacted blocks,
+# triggered only when the Pass 1 fold left the context above the threshold
 # ---------------------------------------------------------------------------
 
 _COMPACT_DISTILL_PROMPT = (
@@ -361,12 +362,35 @@ _COMPACT_DISTILL_PROMPT = (
     "Archived context to compress:\n"
 )
 
+# Max LLM distillation attempts per compacted block before giving up and keeping
+# the mechanical block (prevents endless retries when the secondary model is down).
+_COMPACT_DISTILL_MAX_ATTEMPTS = 3
+
 
 def _has_pending_compacted_block(messages: list[dict[str, Any]]) -> bool:
     return any(
         isinstance(m, dict) and m.get("compacted_block") and not m.get("llm_compacted")
         for m in messages
     )
+
+
+def _exceeds_compact_threshold(messages: list[dict[str, Any]]) -> bool:
+    """True if estimated tokens still exceed the compaction trigger ratio.
+
+    Evaluated on the post-fold message list: LLM distillation only runs when the
+    cheap mechanical fold left the context above the threshold, so a fold that
+    already fit within budget never pays for a distillation call. Mirrors the
+    ctx-limit handling in ``_compact_messages_for_storage`` (unknown window → no
+    distillation, since the mechanical pass already fell back to count trimming).
+    """
+    from cyrene.config_store import get_current_ctx_limit
+    from cyrene.call_llm import _message_token_estimate
+
+    ctx_limit = get_current_ctx_limit()
+    if ctx_limit <= 0:
+        return False
+    total = sum(_message_token_estimate(m) for m in messages)
+    return total > int(ctx_limit * _COMPACT_TRIGGER_RATIO)
 
 
 def _schedule_compaction_distill() -> None:
@@ -388,10 +412,17 @@ async def _distill_pending_compacted_blocks(session_id: str = "") -> None:
     by message_id (compacted blocks are immutable, so the id is a stable anchor
     even if new messages were appended meanwhile). A session-epoch guard prevents
     writing stale content into a session that was reset mid-distillation.
+
+    Each block is attempted at most once per task run (``attempted_ids``) to avoid
+    a same-task retry storm. On LLM failure the block keeps a ``distill_attempts``
+    counter and stays pending, so a later compaction cycle retries it — until
+    ``_COMPACT_DISTILL_MAX_ATTEMPTS`` is reached, after which it is marked done
+    (the mechanical block is kept) to stop retrying for good.
     """
     ctx = _ensure_session(session_id)
     # Set ContextVar so downstream _load_session_state() reads the right state file
     _session_token = _state._current_session_id.set(session_id)
+    attempted_ids: set[str] = set()
     try:
         while True:
             async with ctx.session_state_lock:
@@ -405,12 +436,14 @@ async def _distill_pending_compacted_blocks(session_id: str = "") -> None:
                         m for m in messages
                         if isinstance(m, dict) and m.get("compacted_block")
                         and not m.get("llm_compacted") and str(m.get("message_id", "")).strip()
+                        and str(m.get("message_id", "")).strip() not in attempted_ids
                     ),
                     None,
                 )
                 if target is None:
                     return
                 target_id = str(target["message_id"]).strip()
+                attempted_ids.add(target_id)  # one attempt per block per run → no retry storm
                 raw_content = str(target.get("content") or "")
 
             body = raw_content
@@ -451,7 +484,15 @@ async def _distill_pending_compacted_blocks(session_id: str = "") -> None:
                     ):
                         if distilled:
                             m["content"] = _COMPACT_BLOCK_PREFIX + "\n" + distilled
-                        m["llm_compacted"] = True  # mark done even on failure → no retry storm
+                            m["llm_compacted"] = True
+                            m.pop("distill_attempts", None)
+                        else:
+                            attempts = int(m.get("distill_attempts") or 0) + 1
+                            m["distill_attempts"] = attempts
+                            if attempts >= _COMPACT_DISTILL_MAX_ATTEMPTS:
+                                # Give up after repeated failures: keep the mechanical
+                                # block and stop retrying (no infinite retry).
+                                m["llm_compacted"] = True
                         updated = True
                         break
                 if not updated:
@@ -660,7 +701,10 @@ async def _write_session_messages_locked(state: dict[str, Any], messages: list[d
     if len(messages) >= _MAX_HISTORY_MESSAGES + 5:
         _schedule_memory_compression(messages)
 
-    if _has_pending_compacted_block(trimmed):
+    # Distill only when the cheap mechanical fold was not enough on its own:
+    # the post-fold context still exceeds the compaction threshold. A fold that
+    # already fit within budget keeps its mechanical block and skips the LLM.
+    if _has_pending_compacted_block(trimmed) and _exceeds_compact_threshold(trimmed):
         _schedule_compaction_distill()
 
 

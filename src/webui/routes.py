@@ -136,6 +136,16 @@ _WORKBENCH_PLANNER_CONTRACT_VERSION = "planner-contract-v1"
 _WORKBENCH_PLANNER_NO_TOOLS_VERSION = "planner-no-tools-v1"
 _WORKBENCH_PLANNER_EXPLORE_VERSION = "planner-explore-v1"
 _WORKBENCH_PLANNING_THREAD_MAX_CHARS = 120_000
+# Constrained JSON mode for the tool-less "just emit JSON" rounds (final answer
+# + repair) of the explore agent. Providers require the word "json" to appear in
+# the messages, which those rounds' instructions guarantee.
+_WORKBENCH_JSON_RESPONSE_FORMAT = {"type": "json_object"}
+# Independent acceptance is autonomous: a single flaky model reply must not pause
+# the whole goal loop, so retry transient failures a few times with backoff.
+# Auth/config failures won't fix themselves on retry, so they bail immediately.
+_WORKBENCH_VERIFY_MAX_ATTEMPTS = 3
+_WORKBENCH_VERIFY_RETRY_BASE_DELAY = 2.0
+_WORKBENCH_VERIFY_NON_RETRYABLE = frozenset({"authentication", "configuration"})
 _WORKBENCH_PLANNER_SYSTEM_PROMPT = """你是任务执行规划 Agent。你的职责是根据任务目标、约束、已有计划、用户反馈和已经确认的工作区事实，生成完整、可执行、可核验的计划。
 
 工作区探索规则：
@@ -1031,6 +1041,7 @@ async def _workbench_repair_json_response(
             "你刚才的最终回答无法解析为 JSON。不要继续探索，也不要解释。"
             "请保留原回答的结论和字段，只修正格式，并且只输出一个合法 JSON 对象。"
             "不要使用 Markdown 代码块，不要输出 JSON 之外的任何文字。"
+            "（输出必须是单个合法的 json 对象。）"
         ),
     })
     repaired = await asyncio.wait_for(
@@ -1040,12 +1051,40 @@ async def _workbench_repair_json_response(
             max_tokens=max_tokens,
             secondary=secondary,
             thinking="disabled",
+            response_format=_WORKBENCH_JSON_RESPONSE_FORMAT,
         ),
         timeout=timeout,
     )
     if not isinstance(repaired, dict):
         return None
     return _workbench_parse_json_object(repaired.get("content") or "")
+
+
+def _workbench_explore_parse_failure(
+    response: Any,
+    content: Any,
+) -> _WorkbenchGenerationError:
+    """Classify a final reply that survived parse + repair but is still not a
+    JSON object.
+
+    An empty body or a ``finish_reason == "length"`` truncation is a transient
+    glitch worth retrying, so it gets its own category rather than the generic
+    ``response_format`` verdict (which callers may treat as a hard failure).
+    """
+    finish_reason = str(response.get("finish_reason") or "") if isinstance(response, dict) else ""
+    stripped = _workbench_redact_error_text(str(content or "")).strip()
+    preview = re.sub(r"\s+", " ", stripped)[:500]
+    if finish_reason == "length":
+        detail = "模型在产出 JSON 前被 max_tokens 截断（finish_reason=length）。"
+        if preview:
+            detail += f" 已生成片段：{preview[:300]}"
+        return _WorkbenchGenerationError("truncated", detail)
+    if not stripped:
+        return _WorkbenchGenerationError("empty_response", "模型返回了空响应。")
+    detail = "模型响应不是有效的 JSON 对象。"
+    if preview:
+        detail += f" 响应片段：{preview}"
+    return _WorkbenchGenerationError("response_format", detail)
 
 
 def _workbench_stable_json(value: Any) -> str:
@@ -1400,7 +1439,7 @@ async def _workbench_run_explore_agent(
     prompt: str,
     *,
     max_turns: int = 8,
-    max_tokens: int = 3000,
+    max_tokens: int | None = 3000,
     timeout: float = 90,
     secondary: bool = False,
     session_id: str = "",
@@ -1570,15 +1609,7 @@ async def _workbench_run_explore_agent(
                     _commit_thread(messages, _workbench_stable_json(repaired), repaired)
                     return repaired
                 if raise_on_failure:
-                    preview = re.sub(
-                        r"\s+",
-                        " ",
-                        _workbench_redact_error_text(content).strip(),
-                    )[:500]
-                    detail = "模型响应不是有效的 JSON 对象。"
-                    if preview:
-                        detail += f" 响应片段：{preview}"
-                    raise _WorkbenchGenerationError("response_format", detail)
+                    raise _workbench_explore_parse_failure(response, content)
                 return None
             if tools is None:
                 messages.append({
@@ -1623,11 +1654,18 @@ async def _workbench_run_explore_agent(
         # tools available, so the model has to emit the JSON now.
         messages.append({
             "role": "user",
-            "content": "请停止探索。基于你已经了解到的信息，现在只返回最终的 JSON 对象本身，不要再调用任何工具，也不要任何额外说明或 Markdown 代码块标记。",
+            "content": "请停止探索。基于你已经了解到的信息，现在只返回最终的 JSON 对象本身，不要再调用任何工具，也不要任何额外说明或 Markdown 代码块标记。（输出必须是单个合法的 json 对象。）",
         })
         try:
             final = await asyncio.wait_for(
-                _call_llm(messages, tools=None, max_tokens=max_tokens, secondary=secondary, thinking="disabled"),
+                _call_llm(
+                    messages,
+                    tools=None,
+                    max_tokens=max_tokens,
+                    secondary=secondary,
+                    thinking="disabled",
+                    response_format=_WORKBENCH_JSON_RESPONSE_FORMAT,
+                ),
                 timeout=timeout,
             )
         except Exception as exc:
@@ -1665,15 +1703,7 @@ async def _workbench_run_explore_agent(
             _commit_thread(messages, _workbench_stable_json(repaired), repaired)
             return repaired
         if raise_on_failure:
-            preview = re.sub(
-                r"\s+",
-                " ",
-                _workbench_redact_error_text(content).strip(),
-            )[:500]
-            detail = "模型在停止探索后仍未返回有效的 JSON 对象。"
-            if preview:
-                detail += f" 响应片段：{preview}"
-            raise _WorkbenchGenerationError("response_format", detail)
+            raise _workbench_explore_parse_failure(final, content)
         return None
     finally:
         if token is not None:
@@ -4471,48 +4501,68 @@ async def _workbench_verify_acceptance(
         "}\n"
         "只要有任一标准未达成，通常 recommend_reflection 应为 true。"
     )
-    parsed = await _workbench_run_explore_agent(
-        workspace_root, prompt, max_tokens=3000, timeout=120,
-        session_id=str(session.get("id") or ""),
-        clean_context=True,
-        raise_on_failure=True,
-    )
-    if not isinstance(parsed, dict):
-        raise _WorkbenchGenerationError("response_format", "验收模型没有返回 JSON 对象。")
-
-    raw_results = parsed.get("results")
-    if not isinstance(raw_results, list):
-        raise _WorkbenchGenerationError("response_format", "验收结果缺少 results 数组。")
     expected_ids = {str(item.get("id") or "") for item in criteria}
-    normalized_results: list[dict[str, Any]] = []
-    seen_ids: set[str] = set()
-    for result in raw_results:
-        if not isinstance(result, dict):
-            continue
-        result_id = str(result.get("id") or "").strip()
-        if result_id not in expected_ids or result_id in seen_ids:
-            continue
-        passed = result.get("passed")
-        if not isinstance(passed, bool):
-            continue
-        seen_ids.add(result_id)
-        normalized_results.append({
-            "id": result_id,
-            "passed": passed,
-            "evidence": str(result.get("evidence") or "").strip(),
-        })
-    missing_ids = expected_ids - seen_ids
-    if missing_ids:
-        raise _WorkbenchGenerationError(
-            "response_format",
-            f"验收模型遗漏了 {len(missing_ids)} 条验收标准。",
-        )
-    return {
-        **parsed,
-        "results": normalized_results,
-        "recommend_reflection": bool(parsed.get("recommend_reflection")),
-        "reason": str(parsed.get("reason") or "").strip(),
-    }
+    # No max_tokens cap: a reasoning-heavy or verbose verdict must never be
+    # truncated before it emits the JSON. Retry transient failures with backoff
+    # so a single flaky reply does not pause the whole goal loop.
+    last_error: _WorkbenchGenerationError | None = None
+    for attempt in range(_WORKBENCH_VERIFY_MAX_ATTEMPTS):
+        try:
+            parsed = await _workbench_run_explore_agent(
+                workspace_root, prompt, max_tokens=None, timeout=120,
+                session_id=str(session.get("id") or ""),
+                clean_context=True,
+                raise_on_failure=True,
+            )
+            if not isinstance(parsed, dict):
+                raise _WorkbenchGenerationError("response_format", "验收模型没有返回 JSON 对象。")
+
+            raw_results = parsed.get("results")
+            if not isinstance(raw_results, list):
+                raise _WorkbenchGenerationError("response_format", "验收结果缺少 results 数组。")
+            normalized_results: list[dict[str, Any]] = []
+            seen_ids: set[str] = set()
+            for result in raw_results:
+                if not isinstance(result, dict):
+                    continue
+                result_id = str(result.get("id") or "").strip()
+                if result_id not in expected_ids or result_id in seen_ids:
+                    continue
+                passed = result.get("passed")
+                if not isinstance(passed, bool):
+                    continue
+                seen_ids.add(result_id)
+                normalized_results.append({
+                    "id": result_id,
+                    "passed": passed,
+                    "evidence": str(result.get("evidence") or "").strip(),
+                })
+            missing_ids = expected_ids - seen_ids
+            if missing_ids:
+                raise _WorkbenchGenerationError(
+                    "response_format",
+                    f"验收模型遗漏了 {len(missing_ids)} 条验收标准。",
+                )
+            return {
+                **parsed,
+                "results": normalized_results,
+                "recommend_reflection": bool(parsed.get("recommend_reflection")),
+                "reason": str(parsed.get("reason") or "").strip(),
+            }
+        except _WorkbenchGenerationError as exc:
+            last_error = exc
+            if exc.category in _WORKBENCH_VERIFY_NON_RETRYABLE or attempt >= _WORKBENCH_VERIFY_MAX_ATTEMPTS - 1:
+                raise
+            delay = _WORKBENCH_VERIFY_RETRY_BASE_DELAY * (2 ** attempt)
+            logger.warning(
+                "Workbench acceptance verify failed (attempt %d/%d, category=%s); retrying in %.1fs: %s",
+                attempt + 1, _WORKBENCH_VERIFY_MAX_ATTEMPTS, exc.category, delay, exc.message,
+            )
+            await asyncio.sleep(delay)
+    # The loop body always returns or raises; this is only for type-checkers.
+    if last_error is not None:
+        raise last_error
+    return None
 
 
 def _option_label(option: Any) -> str:

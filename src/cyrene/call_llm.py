@@ -59,6 +59,11 @@ _CONNECT_TIMEOUT_SECONDS = 5.0
 # responses (including 4xx/5xx) are deliberately excluded from this budget.
 NETWORK_RETRY_LIMIT = 3
 _NETWORK_RETRY_BASE_DELAY_SECONDS = 0.5
+# Bounded same-endpoint retry for transient upstream 5xx (incl. non-standard
+# overload codes like 550 / 529) before rotating to the next endpoint/candidate.
+# 4xx is a real client error and is never retried here.
+SERVER_ERROR_RETRY_LIMIT = 2
+_SERVER_ERROR_RETRY_BASE_DELAY_SECONDS = 1.0
 
 
 def _candidate_key(candidate: dict[str, Any]) -> tuple[str, str]:
@@ -232,10 +237,14 @@ def _resolve_candidates(model_type: str) -> list[dict[str, Any]]:
 _INTERNAL_MSG_KEYS = frozenset({
     "message_id", "round_id", "round_title", "client_request_id",
     "hidden_from_ui", "system_initiated", "usage", "attachments",
-    "compacted_block", "llm_compacted", "report_expanded_for_turn",
+    "compacted_block", "llm_compacted", "distill_attempts", "report_expanded_for_turn",
     "report_ref", "report_archive_session_id", "report_round_id",
     "report_title", "deep_reflection_record", "reflection_id",
     "subagent_flow_snapshot", "proactive",
+    # Per-response metadata we attach to the returned message for callers to
+    # inspect (e.g. detecting a max_tokens truncation), but which must not be
+    # echoed back upstream when the message is replayed in history.
+    "finish_reason",
     # Past-turn chain-of-thought must never be echoed back upstream: it bloats the
     # context (accelerating cache-breaking compaction) and DeepSeek's reasoner API
     # rejects inputs that carry reasoning_content. It stays in the stored history
@@ -365,6 +374,7 @@ def _build_payload(
     stream: bool,
     model: str,
     thinking: str,
+    response_format: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -375,6 +385,11 @@ def _build_payload(
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
+    # Constrained JSON mode (OpenAI/DeepSeek `response_format`). Only meaningful
+    # without tools — providers reject/ignore it alongside function calling — so
+    # callers pass it on tool-less "just emit JSON" rounds.
+    if response_format is not None and not tools:
+        payload["response_format"] = response_format
     if stream:
         payload["stream"] = True
         payload["stream_options"] = {"include_usage": True}
@@ -669,6 +684,7 @@ async def call_llm(
     stream: bool = False,
     stream_callback: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     thinking: str = "auto",
+    response_format: dict[str, Any] | None = None,
     caller: str = "unknown",
     phase: str = "unknown",
     return_text: bool = False,
@@ -762,7 +778,7 @@ async def call_llm(
                 if is_secondary and max_conc > 0:
                     _secondary_in_flight += 1
                 model = str(candidate.get("model") or "").strip()
-                payload = _build_payload(messages, tools, max_tokens, stream, model, thinking)
+                payload = _build_payload(messages, tools, max_tokens, stream, model, thinking, response_format)
 
                 headers = {"Content-Type": "application/json"}
                 api_key = str(candidate.get("api_key") or "").strip()
@@ -775,6 +791,7 @@ async def call_llm(
                 for endpoint in endpoints:
                     try:
                         network_retries = 0
+                        server_error_retries = 0
                         while True:
                             stream_event_emitted = False
 
@@ -800,6 +817,11 @@ async def call_llm(
                                     data = resp.json()
                                     msg = _message_from_upstream_payload(data)
                                     msg["usage"] = _normalized_usage(data.get("usage"), messages, msg)
+                                    _choices = data.get("choices")
+                                    if isinstance(_choices, list) and _choices and isinstance(_choices[0], dict):
+                                        _finish = _choices[0].get("finish_reason")
+                                        if _finish:
+                                            msg["finish_reason"] = str(_finish)
                                 break
                             except httpx.TransportError as exc:
                                 # Restarting a stream after visible deltas would
@@ -820,6 +842,34 @@ async def call_llm(
                                     NETWORK_RETRY_LIMIT,
                                     delay,
                                     _format_httpx_error(exc),
+                                )
+                                await asyncio.sleep(delay)
+                            except httpx.HTTPStatusError as exc:
+                                # Transient upstream 5xx (incl. non-standard overload
+                                # codes like 550 / 529): back off and retry the same
+                                # endpoint before rotating. A 4xx is a real client
+                                # error, so let it propagate. Never retry once stream
+                                # deltas have already reached the caller.
+                                status = exc.response.status_code
+                                if (
+                                    status < 500
+                                    or stream_event_emitted
+                                    or server_error_retries >= SERVER_ERROR_RETRY_LIMIT
+                                ):
+                                    raise
+                                server_error_retries += 1
+                                delay = _SERVER_ERROR_RETRY_BASE_DELAY_SECONDS * (2 ** (server_error_retries - 1))
+                                logger.warning(
+                                    "call_llm transient upstream error; retrying "
+                                    "[caller=%s phase=%s model=%s endpoint=%s status=%d retry=%d/%d delay=%.1fs]",
+                                    caller,
+                                    phase,
+                                    model,
+                                    endpoint,
+                                    status,
+                                    server_error_retries,
+                                    SERVER_ERROR_RETRY_LIMIT,
+                                    delay,
                                 )
                                 await asyncio.sleep(delay)
 
