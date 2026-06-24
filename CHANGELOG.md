@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.6.0b10] - 2026-06-24
+
+### Added
+
+- **可恢复的 Workbench Chat 运行** — Chat Agent 运行由进程级 `ChatRunManager` 持有，不再依赖单个 HTTP 流的生命周期。浏览器断线、切换页面或短暂网络中断后，Agent 仍会继续执行并持久化结果；前端通过独立只读重连接口恢复事件流。
+- **手动压缩对话上下文** — Workbench Chat 概览新增“压缩对话”操作，可在自动阈值前显式执行现有上下文折叠流程，并显示压缩前后的 context 占用比例。
+- **项目记忆退役工具** — 新增 `retire_project_memory`，Agent 可按精确 memory ID 将错误、过时或已被取代的项目记忆标记为 retired。记录仍可在 Memory 页面恢复，但不会继续注入 Agent 上下文或出现在普通搜索结果中。
+- **回复期间继续编辑草稿** — Agent 回复期间输入框保持可编辑，用户可提前准备下一条消息；发送仍被锁定，停止当前运行后才可提交。
+
+### Fixed
+
+- **新消息被错误当作运行重连而静默丢弃** — `POST /messages` 现在只负责创建新运行；已有运行时统一返回 `409 chat_run_in_progress`。重连改走独立 `GET /run-stream`，从协议层区分“发送新消息”和“恢复旧事件流”。
+- **非流式请求可绕过单聊天运行锁** — 流式与非流式 Chat 请求现在都先在同一个运行注册表中原子占位，防止同一聊天并发启动多个 Agent、覆盖状态或打乱 transcript 顺序。
+- **重试失败会删除旧回复** — 重新生成改为事务式替换：旧回复在新回复持久化前保持不动；模型调用失败时恢复原 Agent state，只有成功或进入 awaiting-user 状态后才提交截断。
+- **重复附件上传导致当前会话文件失效** — Knowledge Base 内容去重不再删除 Chat transcript 正在引用的上传路径；缺失的 canonical KB 路径可由新的同内容文件恢复并重新索引。
+- **附件缺失后误扫本机文件系统** — `AnalyzeAttachment` 对文件缺失返回终止型结构化错误，提示重新上传，并明确禁止使用 Glob/Grep/Bash/find 扫描设备寻找替代文件。
+- **图片附件预览破图与溢出** — Composer 和历史消息中的图片加载失败时自动降级为文件 chip，预览容器限制溢出。
+- **系统主动轮次可能调用 `ask_user`** — proactive/system-initiated 轮次不再暴露或执行 `ask_user`，必须自主完成检查或静默结束。
+- **未知 context window 时按消息数丢历史** — 无法确定模型上下文窗口时不再执行有损的固定条数裁剪；仅在 token budget 可确定时压缩。
+- **短期记忆提取长期停留在最早消息** — 记忆压缩窗口改为最近 20 条用户/助手消息，并过滤 retired 条目。
+- **内部 task report 污染 Memory 页面和全局搜索** — `task_report` 继续作为内部规划上下文保存，但不再计入用户可见记忆列表、统计、来源图和 Workbench 搜索。
+
+### Changed
+
+- **静态资源缓存版本统一** — WebUI 所有 JS/CSS cache-busting 参数统一为 `beta10`，确保升级后加载同一版本的完整前端资源。
+- **版本元数据统一** — Python 包、Electron 应用、Electron lockfile、README badge、WeChat client 标识统一到 beta 10。
+
+### Tests
+
+- 新增 Chat 运行断线继续执行、显式重连、非流式运行注册、重试回滚、重复附件保留、缺失附件终止、手动上下文压缩、记忆退役、内部记忆隐藏和 proactive 工具限制等回归测试。
+- WebUI JSX 全量编译通过；相关 Python 测试覆盖 session persistence、runtime、knowledge、Workbench chat/memory/search 和前端逻辑。
+
 ## [0.6.0b9] - 2026-06-23
 
 ### Added

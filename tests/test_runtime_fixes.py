@@ -620,6 +620,8 @@ async def test_call_llm_falls_back_to_next_model_candidate(monkeypatch):
     assert message["content"] == "fallback ok"
     assert attempts == [
         ("primary-model", "https://primary.example/v1/chat/completions"),
+        ("primary-model", "https://primary.example/v1/chat/completions"),
+        ("primary-model", "https://primary.example/v1/chat/completions"),
         ("fallback-model", "https://fallback.example/v1/chat/completions"),
     ]
 
@@ -697,6 +699,8 @@ async def test_call_llm_stream_falls_back_to_next_model_candidate(monkeypatch):
     assert message["content"] == "hello world"
     assert message["usage"]["total_tokens"] == 3
     assert attempts == [
+        ("primary-model", "https://primary.example/v1/chat/completions"),
+        ("primary-model", "https://primary.example/v1/chat/completions"),
         ("primary-model", "https://primary.example/v1/chat/completions"),
         ("fallback-model", "https://fallback.example/v1/chat/completions"),
     ]
@@ -1243,6 +1247,109 @@ async def test_system_initiated_silent_quit_yields_no_message(tmp_path, monkeypa
     assert result == ""
 
 
+async def test_system_initiated_round_cannot_use_ask_user(tmp_path, monkeypatch):
+    """Proactive rounds must neither expose nor execute ask_user."""
+    from cyrene import agent
+    from cyrene.agent import agent as _agent_core
+    from cyrene.agent import session as _agent_session
+    from cyrene import debug
+
+    calls = []
+    executed = []
+
+    async def fake_publish_event(event):
+        return None
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+        tool_names = {
+            str(tool.get("function", {}).get("name") or "")
+            for tool in (tools or [])
+        }
+        calls.append(tool_names)
+        assert "ask_user" not in tool_names
+        if len(calls) == 1:
+            return {
+                "content": "",
+                "tool_calls": [{
+                    "id": "use_1",
+                    "function": {
+                        "name": "use_tools",
+                        "arguments": json.dumps({"task": "hidden proactive instruction"}),
+                    },
+                }],
+            }
+        if len(calls) == 2:
+            # Simulate a provider/model emitting a tool that was not advertised.
+            return {
+                "content": "",
+                "tool_calls": [{
+                    "id": "ask_1",
+                    "function": {
+                        "name": "ask_user",
+                        "arguments": json.dumps({"text": "How are you?"}),
+                    },
+                }],
+            }
+        return {
+            "content": "Just checking in.",
+            "tool_calls": [],
+        }
+
+    async def fake_execute_tool(name, arguments, bot, chat_id, db_path, notify_state):
+        executed.append(name)
+        return "ok"
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(_agent_session, "_refresh_session_labels", AsyncMock())
+    monkeypatch.setattr(agent, "get_memory_context", lambda include_short_term=True: "")
+    monkeypatch.setattr(_agent_core, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(_agent_core, "_execute_tool", fake_execute_tool)
+    monkeypatch.setattr(debug, "publish_event", fake_publish_event)
+
+    result = await agent._run_chat_agent(
+        "hidden proactive instruction",
+        None,
+        0,
+        "db.sqlite3",
+        persist_user_message=False,
+        public_prompt="",
+        refresh_labels=False,
+        hide_initial_detail=True,
+        assistant_message_meta={"proactive": True, "system_initiated": True},
+    )
+
+    assert result == "Just checking in."
+    assert "ask_user" not in executed
+    assert len(calls) == 3
+
+
+async def test_tool_executor_rejects_ask_user_for_system_initiated_round(monkeypatch):
+    from cyrene import tool_executor
+    from cyrene.agent import state as _agent_state
+
+    handler = AsyncMock(return_value="should not run")
+    monkeypatch.setitem(tool_executor.TOOL_HANDLERS, "ask_user", handler)
+    token = _agent_state._ui_round_assistant_meta.set({
+        "proactive": True,
+        "system_initiated": True,
+    })
+    try:
+        result = await tool_executor._execute_tool(
+            "ask_user",
+            {"text": "How are you?"},
+            None,
+            0,
+            "db.sqlite3",
+            None,
+        )
+    finally:
+        _agent_state._ui_round_assistant_meta.reset(token)
+
+    assert result.startswith("Tool unavailable:")
+    handler.assert_not_awaited()
+
+
 def test_assistant_text_ignores_reasoning_when_tool_calls_present():
     """Regression: a turn that emits tool_calls (e.g. ``quit``) with empty
     content must NOT surface ``reasoning_content`` as user-facing text — that
@@ -1446,7 +1553,7 @@ async def test_execute_task_fallback_persists_webui_reminder(monkeypatch, tmp_pa
 
     saved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))["messages"]
 
-    assert saved[-1]["content"] == "Reminder: 提醒我喝水"
+    assert saved[-1]["content"] == "Result: task finished without explicit message"
     assert saved[-1]["system_initiated"] is True
     assert saved[-1]["scheduled"] is True
     assert any(event.get("type") == "assistant_message" and event.get("scheduled") is True for event in seen)
@@ -2173,7 +2280,7 @@ async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
         await agent._emit_reply_stream_event({"type": "reply_done", "response": "真实流式"})
         return {"content": "真实流式"}
 
-    async def fake_save_session_messages(messages):
+    async def fake_save_session_messages(messages, **_kwargs):
         saved["messages"] = list(messages)
 
     _patch_call_llm(monkeypatch, fake_call_llm)
@@ -2253,7 +2360,7 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
         executed.append(name)
         return f"result of {name}"
 
-    async def fake_save(messages):
+    async def fake_save(messages, **_kwargs):
         saved["messages"] = list(messages)
 
     _patch_call_llm(monkeypatch, fake_call_llm)
@@ -4371,7 +4478,7 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
     async def fake_execute_tool(name, args, bot, chat_id, db_path, notify_state):
         return "spawned"
 
-    async def fake_save(messages):
+    async def fake_save(messages, **_kwargs):
         saved.append(messages)
 
     async def fake_snapshot(round_id=None):
@@ -4412,6 +4519,7 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
 
 async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_explanation(monkeypatch):
     from cyrene import agent
+    from cyrene import behavior_learning
     from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
@@ -4438,11 +4546,12 @@ async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_expl
         calls.append(tools)
         return next(responses)
 
-    async def fake_save(messages):
+    async def fake_save(messages, **_kwargs):
         saved.append(messages)
 
     _patch_call_llm(monkeypatch, fake_call_llm)
     _patch_save_session(monkeypatch, fake_save)
+    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
 
     result = await agent._run_main_agent("现在先看看多伦多的天气", [], None, 0, "db.sqlite3")
 
@@ -4811,7 +4920,7 @@ async def test_streamed_chat_only_final_reply_persists_usage(monkeypatch, tmp_pa
 
     saved: dict[str, Any] = {}
 
-    async def fake_save(messages):
+    async def fake_save(messages, **_kwargs):
         saved["messages"] = messages
 
     _patch_call_llm(monkeypatch, fake_phase1)

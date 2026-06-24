@@ -108,7 +108,14 @@ def get_context(max_chars: int = 5000, header: str = "[Previous context:]") -> s
         return ""
 
     # 按 last_mentioned 倒序
-    sorted_entries = sorted(entries, key=lambda e: e.get("last_mentioned", ""), reverse=True)
+    active_entries = [entry for entry in entries if not entry.get("stale")]
+    if not active_entries:
+        return ""
+    sorted_entries = sorted(
+        active_entries,
+        key=lambda e: e.get("last_mentioned", ""),
+        reverse=True,
+    )
 
     parts: list[str] = [header]
     chars_used = len(parts[0])

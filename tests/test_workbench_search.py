@@ -214,6 +214,40 @@ def test_delete_regular_workbench_chat_still_removes_store(
     assert payload["chats"] == []
 
 
+def test_compact_workbench_chat_is_an_explicit_forced_action(
+    client, search_env, monkeypatch,
+):
+    import cyrene.agent as agent
+
+    calls = []
+
+    async def fake_compact(session_id="", *, ctx_limit=None, force=False):
+        calls.append({
+            "session_id": session_id,
+            "ctx_limit": ctx_limit,
+            "force": force,
+        })
+        return {
+            "compacted": True,
+            "reason": "compacted",
+            "beforeTokens": 50,
+            "afterTokens": 25,
+            "ctxLimit": ctx_limit,
+            "triggerRatio": 0.6,
+        }
+
+    monkeypatch.setattr(agent, "compact_session_if_needed", fake_compact)
+
+    response = client.post("/api/workbench/chats/chat_1/compact")
+
+    assert response.status_code == 200
+    assert response.json()["compacted"] is True
+    assert len(calls) == 1
+    assert calls[0]["session_id"] == "chat_1"
+    assert calls[0]["force"] is True
+    assert calls[0]["ctx_limit"] > 0
+
+
 def test_empty_legacy_live_session_is_not_listed(search_env, monkeypatch):
     from webui import routes_workbench_chat as chat_mod
 
@@ -313,6 +347,41 @@ async def test_search_workbench_items_memory(search_env):
     assert len(groups["memory"]) == 1
     assert groups["memory"][0]["type"] == "memory"
     assert groups["memory"][0]["memId"] == "mem_1"
+
+
+@pytest.mark.asyncio
+async def test_search_workbench_items_hides_internal_task_reports(search_env):
+    from cyrene import io_utils
+
+    io_utils.atomic_write_json(
+        search_env["store_dir"] / "wb_memory_project_1.json",
+        [
+            {
+                "id": "mem_1",
+                "content": "User prefers dark mode",
+                "category": "preference",
+                "type": "preference",
+                "source": "manual",
+                "tags": ["ui", "theme"],
+                "first_seen": "2026-01-01",
+                "last_mentioned": "2026-01-02",
+            },
+            {
+                "id": "mem_report",
+                "content": "Task report: dark mode migration completed",
+                "category": "task_report",
+                "type": "task_report",
+                "source": "agent",
+                "tags": ["task report"],
+                "first_seen": "2026-01-02",
+                "last_mentioned": "2026-01-02",
+            },
+        ],
+    )
+
+    groups = await _search_workbench_items("dark mode", {"memory"}, 10)
+
+    assert [item["memId"] for item in groups["memory"]] == ["mem_1"]
 
 
 @pytest.mark.asyncio

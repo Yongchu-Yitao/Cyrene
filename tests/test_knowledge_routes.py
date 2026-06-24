@@ -239,6 +239,41 @@ class TestKnowledgeRoutes:
         assert len(list(tmp_path.iterdir())) == 1
 
     @pytest.mark.asyncio
+    async def test_chat_upload_duplicate_keeps_each_session_attachment(
+        self, client, temp_db, tmp_path, monkeypatch
+    ):
+        """KB deduplication must not delete paths returned to chat sessions."""
+        import webui.routes as routes
+
+        monkeypatch.setattr(routes, "_UPLOADS_DIR", tmp_path)
+        payload = b"same chat attachment bytes"
+
+        first = client.post(
+            "/api/chat/upload",
+            files={"files": ("first.txt", payload, "text/plain")},
+        )
+        second = client.post(
+            "/api/chat/upload",
+            files={"files": ("second.txt", payload, "text/plain")},
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        first_file = first.json()["files"][0]
+        second_file = second.json()["files"][0]
+        assert first_file["id"] != second_file["id"]
+        assert Path(first_file["path"]).read_bytes() == payload
+        assert Path(second_file["path"]).read_bytes() == payload
+        assert client.get(first_file["url"]).content == payload
+        assert client.get(second_file["url"]).content == payload
+
+        from cyrene.knowledge import store
+
+        all_docs = await store.list_documents(temp_db)
+        assert len(all_docs) == 1
+        assert len(list(tmp_path.iterdir())) == 2
+
+    @pytest.mark.asyncio
     async def test_import_missing_path(self, client):
         """Test importing with missing path."""
         response = client.post("/api/knowledge/import", json={})

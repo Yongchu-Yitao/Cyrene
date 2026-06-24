@@ -211,6 +211,46 @@ def test_search_project_memories_bounds_large_results(monkeypatch, tmp_path):
     assert all("citations" not in item for item in results)
 
 
+def test_workbench_memory_payload_hides_internal_task_reports(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    entries = [
+        {
+            "id": "mem_visible",
+            "content": "用户偏好简洁回答。",
+            "type": "preference",
+            "category": "preference",
+            "source": "conversation",
+            "first_seen": "2026-06-23",
+            "last_mentioned": "2026-06-24",
+            "mention_count": 2,
+        },
+        {
+            "id": "mem_report",
+            "content": "任务：修复记忆页面\n验收：全部通过",
+            "type": "task_report",
+            "category": "task_report",
+            "source": "agent",
+            "tags": ["任务报告", "自动生成"],
+            "first_seen": "2026-06-24",
+            "last_mentioned": "2026-06-24",
+            "mention_count": 1,
+        },
+    ]
+    (tmp_path / "wb_memory_project-test.json").write_text(
+        json.dumps(entries, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    payload = memory._build_payload("project-test")
+
+    assert [item["id"] for item in payload["memories"]] == ["mem_visible"]
+    assert payload["overview"]["total"] == 1
+    assert payload["overview"]["total_citations"] == 2
+    assert sum(source["count"] for source in payload["sources"]) == 1
+    assert all(category["id"] != "task_report" for category in payload["categories"])
+    assert "修复记忆页面" in memory.render_task_reports_for_planning("project-test")
+
+
 @pytest.mark.asyncio
 async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_path):
     from cyrene.agent import state
@@ -338,9 +378,165 @@ def test_memory_tools_are_registered_with_distinct_contracts():
     assert "RecallMemory" in defs
     assert "RecallConversation" in defs
     assert "search_project_memory" in defs
+    assert "retire_project_memory" in defs
     assert "session_id" not in defs["RecallMemory"]["parameters"]["properties"]
     assert "session_id" in defs["RecallConversation"]["parameters"]["properties"]
     assert defs["search_project_memory"]["parameters"]["required"] == ["query"]
+    assert defs["retire_project_memory"]["parameters"]["required"] == ["memory_id"]
+    assert tools.is_tool_allowed_for_actor("retire_project_memory", "main")
+    assert not tools.is_tool_allowed_for_actor("retire_project_memory", "subagent")
+
+
+@pytest.mark.asyncio
+async def test_retire_project_memory_tool_marks_exact_memory_stale(
+    monkeypatch, tmp_path
+):
+    from cyrene.agent import state
+    from cyrene.tool_impl import retire_project_memory as tool
+
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    (tmp_path / "wb_memory_project-test.json").write_text(
+        json.dumps([{
+            "id": "mem_old",
+            "content": "方案文档是 13 页。",
+            "type": "fact",
+            "category": "fact",
+            "source": "agent",
+            "tags": ["方案文档"],
+            "first_seen": "2026-06-10",
+            "last_mentioned": "2026-06-10",
+            "mention_count": 1,
+        }], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        tool,
+        "resolve_workbench_project_data_key_for_session",
+        lambda session_id: "project-test",
+    )
+
+    token = state._current_session_id.set("chat-test")
+    try:
+        result = await tool._tool_retire_project_memory(
+            {"memory_id": "mem_old", "reason": "最新版文档为 10 页 v3"},
+            None,
+            0,
+            "",
+            None,
+        )
+    finally:
+        state._current_session_id.reset(token)
+
+    payload = json.loads(result)
+    assert payload["status"] == "success"
+    assert payload["changed"] is True
+    assert payload["stale"] is True
+
+    stored = json.loads(
+        (tmp_path / "wb_memory_project-test.json").read_text(encoding="utf-8")
+    )
+    assert stored[0]["stale"] is True
+    assert stored[0]["retiredAt"]
+    assert stored[0]["history"][-1]["action"] == "stale"
+    assert stored[0]["history"][-1]["detail"] == "最新版文档为 10 页 v3"
+    assert memory.search_project_memories(
+        "project-test", query="方案文档"
+    ) == []
+    assert "方案文档是 13 页" not in memory.render_memory_for_injection(
+        "project-test"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retire_project_memory_tool_is_idempotent(monkeypatch, tmp_path):
+    from cyrene.agent import state
+    from cyrene.tool_impl import retire_project_memory as tool
+
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    (tmp_path / "wb_memory_project-test.json").write_text(
+        json.dumps([{
+            "id": "mem_old",
+            "content": "旧结论。",
+            "type": "fact",
+            "category": "fact",
+            "source": "agent",
+            "first_seen": "2026-06-10",
+            "last_mentioned": "2026-06-20",
+            "mention_count": 1,
+            "stale": True,
+        }], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        tool,
+        "resolve_workbench_project_data_key_for_session",
+        lambda session_id: "project-test",
+    )
+
+    token = state._current_session_id.set("chat-test")
+    try:
+        result = await tool._tool_retire_project_memory(
+            {"memory_id": "mem_old"},
+            None,
+            0,
+            "",
+            None,
+        )
+    finally:
+        state._current_session_id.reset(token)
+
+    payload = json.loads(result)
+    assert payload["status"] == "success"
+    assert payload["changed"] is False
+    assert payload["message"] == "Project memory was already retired."
+
+
+@pytest.mark.asyncio
+async def test_retire_project_memory_tool_supports_default_workbench_project(
+    monkeypatch, tmp_path
+):
+    from cyrene import short_term
+    from cyrene.agent import state
+    from cyrene.tool_impl import recall_memory
+    from cyrene.tool_impl import retire_project_memory as tool
+
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    monkeypatch.setattr(short_term, "_SHORT_TERM_FILE", tmp_path / "short_term.json")
+    short_term.save_entries([{
+        "id": "mem_default_old",
+        "content": "默认项目的旧配置。",
+        "type": "fact",
+        "first_seen": "2026-06-10",
+        "last_mentioned": "2026-06-20",
+        "mention_count": 1,
+    }])
+    monkeypatch.setattr(
+        tool,
+        "resolve_workbench_project_data_key_for_session",
+        lambda session_id: "default",
+    )
+
+    token = state._current_session_id.set("task-default")
+    try:
+        result = await tool._tool_retire_project_memory(
+            {"memory_id": "mem_default_old"},
+            None,
+            0,
+            "",
+            None,
+        )
+    finally:
+        state._current_session_id.reset(token)
+
+    payload = json.loads(result)
+    assert payload["status"] == "success"
+    assert payload["changed"] is True
+    assert short_term.get_context() == ""
+
+    recalled = json.loads(
+        await recall_memory._tool_recall_memory({}, None, 0, "", None)
+    )
+    assert recalled["memories"] == []
 
 
 @pytest.mark.asyncio

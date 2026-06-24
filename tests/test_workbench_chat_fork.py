@@ -28,6 +28,7 @@ def fork_env(monkeypatch, tmp_path):
     from cyrene import io_utils
     from webui import routes as routes_mod
     from webui import routes_workbench_chat as chat_mod
+    from webui.workbench_chat_runs import ChatRunManager
 
     data_dir = tmp_path / "data"
     store_dir = tmp_path / "store"
@@ -51,6 +52,11 @@ def fork_env(monkeypatch, tmp_path):
     # DATA_DIR (otherwise stale paths from prior tests leak in).
     agent_state._sessions.clear()
     chat_mod._CHATS_STORE = data_dir / "workbench_chats.json"
+    monkeypatch.setattr(
+        chat_mod,
+        "_CHAT_RUN_MANAGER",
+        ChatRunManager(retention_seconds=0),
+    )
     routes_mod._WORKBENCH_STORE = data_dir / "workbench_projects.json"
 
     with TemporaryDirectory() as db_tmp:
@@ -314,6 +320,183 @@ def test_fork_replay_send_does_not_retruncate_state(client, fork_env, monkeypatc
     roles = [m["role"] for m in state_after["messages"]]
     assert roles == ["system", "user", "assistant", "user", "assistant"]
     assert state_after["messages"][3]["content"] == "edited second"
+
+
+def test_failed_retry_preserves_public_reply_and_restores_agent_state(
+    client, fork_env, monkeypatch
+):
+    """A failed regeneration must not destroy the answer it was replacing."""
+    from cyrene import agent
+
+    original_messages = [
+        {"id": "u1", "role": "user", "content": "question"},
+        {"id": "a1", "role": "assistant", "content": "valuable old answer"},
+    ]
+    original_state = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "valuable old answer"},
+    ]
+    _write_chat(fork_env, "chat_retry", original_messages)
+    state_path = _write_state(fork_env, "chat_retry", original_state)
+
+    async def fail_run_agent(**_kwargs):
+        raise RuntimeError("provider failed")
+
+    monkeypatch.setattr(agent, "run_agent", fail_run_agent)
+
+    response = client.post(
+        "/api/workbench/chats/chat_retry/messages",
+        json={"retry": True},
+    )
+
+    assert response.status_code == 502
+    stored = client.get("/api/workbench/chats/chat_retry").json()["chat"]
+    assert [(m["id"], m["content"]) for m in stored["messages"]] == [
+        ("u1", "question"),
+        ("a1", "valuable old answer"),
+    ]
+    assert json.loads(state_path.read_text(encoding="utf-8"))["messages"] == original_state
+
+
+def test_successful_retry_replaces_old_reply_only_after_new_reply_is_ready(
+    client, fork_env, monkeypatch
+):
+    from cyrene import agent
+
+    _write_chat(fork_env, "chat_retry", [
+        {"id": "u1", "role": "user", "content": "question"},
+        {"id": "a1", "role": "assistant", "content": "old answer"},
+    ])
+    state_path = _write_state(fork_env, "chat_retry", [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "old answer"},
+    ])
+
+    async def successful_run_agent(**kwargs):
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["messages"].extend([
+            {"role": "user", "content": kwargs["user_message"]},
+            {"role": "assistant", "content": "new answer"},
+        ])
+        from cyrene import io_utils
+        io_utils.atomic_write_json(state_path, state)
+        return "new answer"
+
+    monkeypatch.setattr(agent, "run_agent", successful_run_agent)
+
+    response = client.post(
+        "/api/workbench/chats/chat_retry/messages",
+        json={"retry": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["assistantMessage"]["content"] == "new answer"
+    stored = client.get("/api/workbench/chats/chat_retry").json()["chat"]
+    assert [(m["role"], m["content"]) for m in stored["messages"]] == [
+        ("user", "question"),
+        ("assistant", "new answer"),
+    ]
+
+
+def test_non_streaming_send_is_owned_by_chat_run_manager(
+    client, fork_env, monkeypatch
+):
+    from cyrene import agent
+    from webui import routes_workbench_chat as chat_mod
+
+    _write_chat(fork_env, "chat_owned", [])
+    calls = []
+    real_start_or_get = chat_mod._CHAT_RUN_MANAGER.start_or_get
+
+    def tracked_start_or_get(chat_id, ack_event, runner, *, stream=True):
+        calls.append({"chat_id": chat_id, "stream": stream})
+        return real_start_or_get(
+            chat_id,
+            ack_event,
+            runner,
+            stream=stream,
+        )
+
+    async def successful_run_agent(**_kwargs):
+        return "owned reply"
+
+    monkeypatch.setattr(chat_mod._CHAT_RUN_MANAGER, "start_or_get", tracked_start_or_get)
+    monkeypatch.setattr(agent, "run_agent", successful_run_agent)
+
+    response = client.post(
+        "/api/workbench/chats/chat_owned/messages",
+        json={"message": "hello"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["assistantMessage"]["content"] == "owned reply"
+    assert calls == [{"chat_id": "chat_owned", "stream": False}]
+
+
+def test_existing_run_rejects_new_send_and_has_explicit_reconnect_endpoint(
+    client, fork_env, monkeypatch
+):
+    from webui import routes_workbench_chat as chat_mod
+
+    _write_chat(fork_env, "chat_running", [])
+
+    class FakeManager:
+        def get(self, chat_id):
+            return object() if chat_id == "chat_running" else None
+
+        async def stream(self, _run):
+            yield json.dumps({"type": "ack", "chatId": "chat_running"}) + "\n"
+
+    monkeypatch.setattr(chat_mod, "_CHAT_RUN_MANAGER", FakeManager())
+
+    send = client.post(
+        "/api/workbench/chats/chat_running/messages",
+        json={"message": "must not be dropped", "stream": True},
+    )
+    reconnect = client.get(
+        "/api/workbench/chats/chat_running/run-stream",
+    )
+
+    assert send.status_code == 409
+    assert send.json()["code"] == "chat_run_in_progress"
+    assert reconnect.status_code == 200
+    assert json.loads(reconnect.text.strip())["type"] == "ack"
+
+
+@pytest.mark.asyncio
+async def test_chat_run_continues_after_stream_subscriber_disconnects():
+    """Dropping the HTTP subscriber must not cancel the owned agent task."""
+    import asyncio
+    from webui.workbench_chat_runs import ChatRunManager
+
+    release = asyncio.Event()
+    manager = ChatRunManager(retention_seconds=0)
+
+    async def runner(run):
+        await release.wait()
+        run.outcome = {"kind": "reply", "payload": {"content": "durable"}}
+        await run.publish({"type": "saved", "assistantMessage": {"content": "durable"}})
+
+    run, is_new = manager.start_or_get(
+        "chat_owned",
+        {"type": "ack", "chatId": "chat_owned"},
+        runner,
+        stream=True,
+    )
+    assert is_new is True
+
+    stream = manager.stream(run)
+    first = await anext(stream)
+    assert json.loads(first)["type"] == "ack"
+    await stream.aclose()
+
+    release.set()
+    await asyncio.wait_for(run.done.wait(), timeout=1)
+
+    assert run.status == "done"
+    assert run.outcome == {"kind": "reply", "payload": {"content": "durable"}}
 
 
 def test_fork_rejects_legacy_chat(client, fork_env):

@@ -1682,7 +1682,8 @@ def test_workbench_backfills_reported_historical_output(tmp_path):
     )
 
     assert added == 1
-    assert session["artifacts"][0]["path"] == "exports/final.pdf"
+    assert session["artifacts"][0]["path"] == "deliverables/final.pdf"
+    assert (tmp_path / "deliverables" / "final.pdf").read_bytes() == b"%PDF-1.7\n"
 
 
 def test_workbench_prunes_parent_repo_git_files_and_artifacts(tmp_path):

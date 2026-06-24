@@ -151,6 +151,56 @@ def test_workbench_chat_supports_parallel_conversation_runtimes():
     assert "workbenchChat.lockedByOther" not in i18n
 
 
+def test_workbench_chat_allows_drafting_but_not_sending_while_running():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    composer = source.split("function WbcComposer(", 1)[1].split(
+        "// Context picker popup", 1
+    )[0]
+
+    textarea = composer.split("<textarea", 1)[1].split("/>", 1)[0]
+    keydown = composer.split("function onKeyDown(event) {", 1)[1].split(
+        "function pickFiles()", 1
+    )[0]
+
+    assert "disabled={running}" not in textarea
+    assert "if (running) return;" in keydown
+    assert "onClick={running ? onInterrupt : submit}" in composer
+    assert "if (running) { onInterrupt(); return; }" not in composer
+    assert "Agent 正在回复，可先输入；停止后才能发送。" in (
+        root / "src" / "workbench-webui" / "workbench-i18n.jsx"
+    ).read_text(encoding="utf-8")
+    assert "workbench-chat.js?v=beta10" in index
+    assert "workbench-i18n.js?v=beta10" in index
+
+
+def test_workbench_attachment_preview_falls_back_without_overflowing():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "failedImagePreviews" in source
+    assert "onError={function () {" in source
+    assert "showImagePreview" in source
+    assert "function WbcMessageAttachment({ file, onOpenFile })" in source
+    message_attachment = source.split(
+        "function WbcMessageAttachment({ file, onOpenFile })", 1
+    )[1].split("function WbcUserMessage(", 1)[0]
+    assert "onError={function () { setImageFailed(true); }}" in message_attachment
+    assert source.count("<WbcMessageAttachment key=") == 2
+    image_rule = styles.split(".wbc-attach-card.image {", 1)[1].split("}", 1)[0]
+    assert "overflow: hidden;" in image_rule
+
+
 def test_workbench_chat_splits_live_tools_around_intermediate_messages():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
@@ -163,6 +213,41 @@ def test_workbench_chat_splits_live_tools_around_intermediate_messages():
     assert "<WbcAssistantMessage" in source
     assert "event.assistantMessages" in source
     assert 'event.type === "assistant_message" && event.intermediate && event.message' in source
+
+
+def test_workbench_chat_retry_truncates_only_after_durable_terminal_event():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    ack_block = source.split("onAck: function (event) {", 1)[1].split(
+        "onReplyStart:", 1
+    )[0]
+    saved_block = source.split("onSaved: function (event) {", 1)[1].split(
+        "onAwaitingUser:", 1
+    )[0]
+    awaiting_block = source.split("onAwaitingUser: function (event) {", 1)[1].split(
+        "onError:", 1
+    )[0]
+
+    assert "if (event.retry) return;" in ack_block
+    assert 'fire("onRetryTruncate"' not in ack_block
+    assert 'fire("onRetryTruncate"' in saved_block
+    assert 'fire("onRetryTruncate"' in awaiting_block
+
+
+def test_workbench_chat_uses_explicit_run_reconnect_without_resubmitting_message():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'function reconnectRun(chatId, handlers, signal)' in source
+    assert '"/run-stream"' in source
+    assert 'function reconnect(chatId, model)' in source
+    assert 'runtimeEngine.reconnect(activeChat.id, model)' in source
+    assert 'activeChat.status === "running"' in source
 
 
 def test_workbench_copy_uses_electron_clipboard_bridge():
@@ -243,7 +328,7 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
     assert "padding-inline: 8px;" in compact_tabs[0]
     assert "padding-inline: 2px;" in compact_tabs[1]
     assert "font-size: 12px;" in compact_tabs[1]
-    assert "workbench.css?v=20260622-shortcuts1" in index
+    assert "workbench.css?v=beta10" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -265,7 +350,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=20260622-shortcuts1" in index
+    assert "workbench.css?v=beta10" in index
 
 
 def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
@@ -285,7 +370,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=20260622-shortcuts1" in index
+    assert "settings-overlay.js?v=beta10" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -339,7 +424,7 @@ def test_workbench_context_picker_contains_long_workspace_paths():
     assert "text-overflow: ellipsis;" in text_rule
     assert "white-space: nowrap;" in text_rule
     assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=20260622-shortcuts1" in index
+    assert "workbench-chat.js?v=beta10" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -355,8 +440,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=20260620-goalloop1" in index
-    assert "workbench.js?v=20260622-shortcuts1" in index
+    assert "workbench-model.js?v=beta10" in index
+    assert "workbench.js?v=beta10" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -372,11 +457,11 @@ def test_workbench_regenerate_plan_failure_preserves_current_plan():
 def test_workbench_plan_conflict_does_not_apply_client_fallback():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
-    model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
+    api = (root / "src" / "workbench-webui" / "workbench-api.jsx").read_text(encoding="utf-8")
 
     assert 'err.code === "stale_plan_revision"' in source
     assert "rethrowPlanConflict(err);" in source
-    assert "error.code = payload.code" in model
+    assert "error.code = (payload && payload.code)" in api
 
 
 def test_workbench_init_plan_failure_shows_details_and_restart():
@@ -418,7 +503,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.models || p.primary_candidates || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=20260622-shortcuts1" in index
+    assert "settings-overlay.js?v=beta10" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -446,6 +531,25 @@ def test_workbench_chat_subagent_page_is_independent_and_localized():
 """
     )
     assert result == ["子代理", "子代理执行", "执行中", "执行结果"]
+
+
+def test_workbench_chat_quick_actions_include_manual_context_compaction():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+
+    assert 'function compactChat(chatId)' in source
+    assert '"/compact"' in source
+    assert 'wbcT(compactBusy ? "workbenchChat.compactBusy" : "workbenchChat.compact"' in source
+
+    result = _run_workbench_i18n_js(
+        """
+[
+  window.WorkbenchI18n.t("workbenchChat.compact"),
+  window.WorkbenchI18n.t("workbenchChat.compactBusy")
+]
+"""
+    )
+    assert result == ["压缩对话", "正在压缩…"]
 
 
 def test_workbench_subagent_payload_recovers_chat_scoped_snapshot(monkeypatch):
@@ -640,7 +744,7 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=20260622-shortcuts1" in index
+    assert "compiled/workbench-shortcuts.js?v=beta10" in index
 
 
 def test_workbench_help_center_lists_shortcuts_from_module_with_customize_link():
@@ -764,4 +868,3 @@ def test_workbench_knowledge_list_does_not_silently_truncate():
     assert "_total" in source
     assert "totalDocs" in source
     assert "显示前" in source
-

@@ -266,6 +266,7 @@ class ChatRunManager:
         """Recover from a hard crash: a chat left ``status="running"`` in the
         store has no live task in this fresh process, so reset it to ``idle`` and
         clear any stale pending question that can no longer be resumed."""
+        self.closed = False
         from webui import routes_workbench_chat as chat_mod
 
         try:

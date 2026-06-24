@@ -10,6 +10,8 @@ sys.modules.setdefault("pypdf", MagicMock())
 
 from cyrene import agent
 import cyrene.agent.state as agent_state
+from cyrene.agent import session as agent_session
+from cyrene.call_llm import _message_token_estimate
 
 
 def test_dedupe_messages_by_id_keeps_latest_occurrence_in_original_position() -> None:
@@ -25,6 +27,85 @@ def test_dedupe_messages_by_id_keeps_latest_occurrence_in_original_position() ->
         {"role": "user", "message_id": "msg_1", "content": "hello updated", "round_title": "latest"},
         {"role": "assistant", "message_id": "msg_2", "content": "world"},
     ]
+
+
+def test_user_forced_compaction_reuses_flow_below_automatic_threshold() -> None:
+    messages = [
+        {
+            "role": "user" if index % 2 == 0 else "assistant",
+            "content": ("context line %d " % index) * 8,
+        }
+        for index in range(12)
+    ]
+    total = sum(_message_token_estimate(message) for message in messages)
+    ctx_limit = total * 2
+
+    automatic = agent_session._compact_messages_for_storage(
+        messages,
+        ctx_limit=ctx_limit,
+    )
+    forced = agent_session._compact_messages_for_storage(
+        messages,
+        ctx_limit=ctx_limit,
+        force=True,
+    )
+
+    assert total < int(ctx_limit * agent_session._COMPACT_TRIGGER_RATIO)
+    assert automatic is messages
+    assert forced != messages
+    assert forced[0]["compacted_block"] is True
+    assert len(forced) < len(messages)
+
+
+def test_unknown_context_window_does_not_trim_message_count() -> None:
+    messages = [
+        {"role": "user", "content": f"message {index}"}
+        for index in range(80)
+    ]
+
+    compacted = agent_session._compact_messages_for_storage(messages, ctx_limit=0)
+
+    assert compacted is messages
+    assert len(compacted) == 80
+
+
+def test_compaction_drops_tool_only_old_prefix() -> None:
+    messages = [
+        {
+            "role": "tool",
+            "tool_call_id": f"call_{index}",
+            "content": "large tool result " * 30,
+        }
+        for index in range(4)
+    ]
+    messages.append({"role": "user", "content": "keep this recent message"})
+
+    compacted = agent_session._compact_messages_for_storage(messages, ctx_limit=200)
+
+    assert compacted == [{"role": "user", "content": "keep this recent message"}]
+
+
+@pytest.mark.asyncio
+async def test_memory_compression_uses_latest_message_window(monkeypatch) -> None:
+    captured_prompt = ""
+
+    async def fake_call_llm(messages, tools=None, **kwargs):
+        nonlocal captured_prompt
+        captured_prompt = messages[-1]["content"]
+        return {"content": ""}
+
+    monkeypatch.setattr(agent_session, "_call_llm", fake_call_llm)
+    messages = [
+        {"role": "user", "content": f"marker-{index}"}
+        for index in range(60)
+    ]
+
+    await agent_session._compress_old_messages(messages)
+
+    assert "marker-40" in captured_prompt
+    assert "marker-59" in captured_prompt
+    assert "marker-39" not in captured_prompt
+    assert "marker-0" not in captured_prompt
 
 
 @pytest.mark.asyncio

@@ -115,6 +115,12 @@ var WorkbenchChatModel = (function () {
     });
   }
 
+  function compactChat(chatId) {
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/compact", {
+      method: "POST",
+    });
+  }
+
   function interrupt(chatId) {
     return fetch("/api/chat/interrupt?session_id=" + encodeURIComponent(chatId), { method: "POST" })
       .catch(function () {});
@@ -135,9 +141,53 @@ var WorkbenchChatModel = (function () {
     });
   }
 
+  function consumeEventStream(response, handlers) {
+    handlers = handlers || {};
+    if (!response.ok) {
+      return response.json().catch(function () { return {}; }).then(function (payload) {
+        var err = new Error(payload.error || payload.detail || ("HTTP " + response.status));
+        err.code = payload.code || "";
+        err.status = response.status;
+        throw err;
+      });
+    }
+    var reader = response.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = "";
+
+    function handleLine(line) {
+      if (!line.trim()) return;
+      var event;
+      try { event = JSON.parse(line); } catch (e) { return; }
+      var type = String(event.type || "");
+      if (type === "ack" && handlers.onAck) handlers.onAck(event);
+      else if (type === "intermediate_message" && handlers.onIntermediateMessage) handlers.onIntermediateMessage(event);
+      else if (type === "reply_start" && handlers.onReplyStart) handlers.onReplyStart(event);
+      else if (type === "reply_delta" && handlers.onReplyDelta) handlers.onReplyDelta(event.delta || "");
+      else if (type === "reply_done" && handlers.onReplyDone) handlers.onReplyDone(event.response || "");
+      else if (type === "saved" && handlers.onSaved) handlers.onSaved(event);
+      else if (type === "awaiting_user" && handlers.onAwaitingUser) handlers.onAwaitingUser(event);
+      else if (type === "error" && handlers.onError) handlers.onError(new Error(event.message || wbcT("settings.failed", "Failed")));
+    }
+
+    function pump() {
+      return reader.read().then(function (step) {
+        if (step.done) {
+          if (buffer) handleLine(buffer);
+          return null;
+        }
+        buffer += decoder.decode(step.value, { stream: true });
+        var lines = buffer.split("\n");
+        buffer = lines.pop();
+        lines.forEach(handleLine);
+        return pump();
+      });
+    }
+    return pump();
+  }
+
   // Streaming send. handlers: { onAck, onReplyStart, onReplyDelta, onReplyDone, onSaved, onError }
   function sendMessage(chatId, input, handlers, signal) {
-    handlers = handlers || {};
     return fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -153,44 +203,16 @@ var WorkbenchChatModel = (function () {
       }),
       signal: signal,
     }).then(function (response) {
-      if (!response.ok) {
-        return response.json().catch(function () { return {}; }).then(function (payload) {
-          throw new Error(payload.error || payload.detail || ("HTTP " + response.status));
-        });
-      }
-      var reader = response.body.getReader();
-      var decoder = new TextDecoder();
-      var buffer = "";
+      return consumeEventStream(response, handlers);
+    });
+  }
 
-      function handleLine(line) {
-        if (!line.trim()) return;
-        var event;
-        try { event = JSON.parse(line); } catch (e) { return; }
-        var type = String(event.type || "");
-        if (type === "ack" && handlers.onAck) handlers.onAck(event);
-        else if (type === "intermediate_message" && handlers.onIntermediateMessage) handlers.onIntermediateMessage(event);
-        else if (type === "reply_start" && handlers.onReplyStart) handlers.onReplyStart(event);
-        else if (type === "reply_delta" && handlers.onReplyDelta) handlers.onReplyDelta(event.delta || "");
-        else if (type === "reply_done" && handlers.onReplyDone) handlers.onReplyDone(event.response || "");
-        else if (type === "saved" && handlers.onSaved) handlers.onSaved(event);
-        else if (type === "awaiting_user" && handlers.onAwaitingUser) handlers.onAwaitingUser(event);
-        else if (type === "error" && handlers.onError) handlers.onError(new Error(event.message || wbcT("settings.failed", "Failed")));
-      }
-
-      function pump() {
-        return reader.read().then(function (step) {
-          if (step.done) {
-            if (buffer) handleLine(buffer);
-            return null;
-          }
-          buffer += decoder.decode(step.value, { stream: true });
-          var lines = buffer.split("\n");
-          buffer = lines.pop();
-          lines.forEach(handleLine);
-          return pump();
-        });
-      }
-      return pump();
+  function reconnectRun(chatId, handlers, signal) {
+    return fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/run-stream", {
+      method: "GET",
+      signal: signal,
+    }).then(function (response) {
+      return consumeEventStream(response, handlers);
     });
   }
 
@@ -227,9 +249,11 @@ var WorkbenchChatModel = (function () {
     renameChat: renameChat,
     deleteChat: deleteChat,
     toTask: toTask,
+    compactChat: compactChat,
     interrupt: interrupt,
     uploadFiles: uploadFiles,
     sendMessage: sendMessage,
+    reconnectRun: reconnectRun,
     answerChat: answerChat,
     forkChat: forkChat,
   };
@@ -384,6 +408,7 @@ var WBC_ICONS = {
   file: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>,
   trash: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>,
   task: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1.5"/><path d="M9 14 10.5 15.5 15 11"/></svg>,
+  compact: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m8 3 4 4 4-4M12 7V1M8 21l4-4 4 4M12 17v6"/><path d="M4 10h16v4H4z"/></svg>,
   spark: <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M12 2.5 13.7 9 20 10.7 13.7 12.4 12 19l-1.7-6.6L4 10.7 10.3 9Z"/></svg>,
   folder: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>,
   fork: <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M6 8.2v7.6M8.2 6h7.6M8.2 18H15a3 3 0 0 0 3-3V8.2"/></svg>,
@@ -599,21 +624,10 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     });
   }
 
-  // Begin a streamed send for `chatId`. No-op (returns null) when a run is
-  // already in flight for that conversation, keeping message ordering
-  // deterministic; returns the send promise otherwise.
-  function start(chatId, input, model) {
-    if (!chatId || runtimes[chatId]) return null;
-    var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
-    if (ac) aborts[chatId] = ac;
-    update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false });
-    return model.sendMessage(chatId, input, {
+  function streamHandlers(chatId) {
+    return {
       onAck: function (event) {
-        if (event.retry) {
-          // Regenerating: drop the previous reply from the local transcript.
-          fire("onRetryTruncate", chatId, String(event.truncateAfterMessageId || ""));
-          return;
-        }
+        if (event.retry) return;
         if (event.userMessage) fire("onUserMessage", chatId, event.userMessage);
       },
       onReplyStart: function () {
@@ -629,6 +643,11 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
         appendIntermediate(chatId, event && event.message);
       },
       onSaved: function (event) {
+        if (event.retry) {
+          // Commit the transcript replacement only after the regenerated reply
+          // is durable. A failed retry therefore leaves the old reply visible.
+          fire("onRetryTruncate", chatId, String(event.truncateAfterMessageId || ""));
+        }
         var savedMessages = Array.isArray(event.assistantMessages) && event.assistantMessages.length
           ? event.assistantMessages
           : (event.assistantMessage ? [event.assistantMessage] : []);
@@ -638,6 +657,9 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
       },
       onAwaitingUser: function (event) {
         // The run paused for a permission / clarification answer.
+        if (event.retry) {
+          fire("onRetryTruncate", chatId, String(event.truncateAfterMessageId || ""));
+        }
         fire("onAwaitingUser", chatId, event.pending_question || null);
         update(chatId, null);
         fire("onSettled", chatId);
@@ -647,9 +669,13 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
         // same server re-sync used for interrupts and transport failures.
         fire("onError", chatId, err);
       },
-    }, ac ? ac.signal : undefined).catch(function (err) {
+    };
+  }
+
+  function ownStream(chatId, streamPromise, ac) {
+    return streamPromise.catch(function (err) {
       if (err && err.name === "AbortError") return;
-      fire("onError", chatId, err);
+      if (!(err && err.code === "chat_run_not_found")) fire("onError", chatId, err);
     }).finally(function () {
       if (aborts[chatId] === ac) delete aborts[chatId];
       if (runtimes[chatId]) {
@@ -659,6 +685,33 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
         fire("onResync", chatId);
       }
     });
+  }
+
+  // Begin a streamed send for `chatId`. No-op (returns null) when a run is
+  // already in flight for that conversation, keeping message ordering
+  // deterministic; returns the send promise otherwise.
+  function start(chatId, input, model) {
+    if (!chatId || runtimes[chatId]) return null;
+    var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    if (ac) aborts[chatId] = ac;
+    update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false });
+    return ownStream(
+      chatId,
+      model.sendMessage(chatId, input, streamHandlers(chatId), ac ? ac.signal : undefined),
+      ac
+    );
+  }
+
+  function reconnect(chatId, model) {
+    if (!chatId || runtimes[chatId] || !model || !model.reconnectRun) return null;
+    var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    if (ac) aborts[chatId] = ac;
+    update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false, reconnecting: true });
+    return ownStream(
+      chatId,
+      model.reconnectRun(chatId, streamHandlers(chatId), ac ? ac.signal : undefined),
+      ac
+    );
   }
 
   // Persistent SSE subscription: fold live tool / phase / subagent progress into
@@ -698,7 +751,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
   return {
     subscribe: subscribe, snapshot: snapshot, get: get, isRunning: isRunning,
     update: update, clear: clear, abort: abort, interrupt: interrupt,
-    start: start, setHooks: setHooks,
+    start: start, reconnect: reconnect, setHooks: setHooks,
   };
 })();
 window.WorkbenchChatRuntimes = WorkbenchChatRuntimes;
@@ -744,6 +797,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   var revealedSubagentRoundRef = useWbcRef("");
   // True while the backend reads the whole conversation and synthesizes a task.
   var [toTaskBusy, setToTaskBusy] = useWbcState(false);
+  var [compactBusy, setCompactBusy] = useWbcState(false);
   // Streaming runtimes live in the module-level engine so a run survives this
   // page unmounting when the user switches modules mid-reply. We mirror its
   // snapshot into local state only to drive re-renders.
@@ -1032,6 +1086,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
       onUserMessage: function (chatId, userMessage) {
         setActiveChat(function (prev) {
           if (!prev || prev.id !== chatId) return prev;
+          if ((prev.messages || []).some(function (item) { return item.id === userMessage.id; })) return prev;
           return { ...prev, messages: (prev.messages || []).concat([userMessage]) };
         });
       },
@@ -1087,6 +1142,17 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     });
     return function () { runtimeEngine.setHooks(null); };
   });
+
+  useWbcEffect(function () {
+    if (
+      activeChat
+      && activeChat.id
+      && activeChat.status === "running"
+      && !runtimeEngine.isRunning(activeChat.id)
+    ) {
+      runtimeEngine.reconnect(activeChat.id, model);
+    }
+  }, [activeChat && activeChat.id, activeChat && activeChat.status]);
 
   function handleSend(input) {
     setError("");
@@ -1233,6 +1299,40 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     });
   }
 
+  function handleCompact() {
+    if (!activeChat || activeChat.legacy || activeRunning || compactBusy) return;
+    setCompactBusy(true);
+    setError("");
+    model.compactChat(activeChat.id).then(function (payload) {
+      var before = Number(payload.beforeTokens || 0);
+      var after = Number(payload.afterTokens || before);
+      var limit = Number(payload.ctxLimit || 0);
+      if (payload.compacted) {
+        setActiveChat(function (prev) {
+          return prev ? { ...prev, contextRevision: Date.now() } : prev;
+        });
+        window.showToast(wbcT(
+          "workbenchChat.compactSuccess",
+          "Chat compressed: {before}% → {after}%",
+          {
+            before: limit > 0 ? Math.round(before / limit * 100) : "—",
+            after: limit > 0 ? Math.round(after / limit * 100) : "—",
+          }
+        ), "success");
+        return;
+      }
+      if (payload.reason === "empty") {
+        window.showToast(wbcT("workbenchChat.compactEmpty", "There is no agent context to compress."), "warning");
+      } else {
+        window.showToast(wbcT("workbenchChat.compactNoChange", "No earlier context is available to compress."), "warning");
+      }
+    }).catch(function (err) {
+      setError(wbcErrorText(err));
+    }).then(function () {
+      setCompactBusy(false);
+    });
+  }
+
   // The open conversation only renders and controls its own runtime. Other
   // conversations continue streaming in the background.
   var activeRuntime = runtimes[activeChatId] || null;
@@ -1282,6 +1382,8 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         onDelete={handleDelete}
         onToTask={handleToTask}
         toTaskBusy={toTaskBusy}
+        onCompact={handleCompact}
+        compactBusy={compactBusy}
       />
     </div>
   );
@@ -1645,6 +1747,29 @@ function WbcHeader({ project, chat, running, onRename, onDelete, onToTask, toTas
   );
 }
 
+function WbcMessageAttachment({ file, onOpenFile }) {
+  var [imageFailed, setImageFailed] = useWbcState(false);
+  var isImg = file.kind === "image" || String(file.content_type || "").indexOf("image") === 0;
+  var open = function () { if (onOpenFile && file.url) onOpenFile(file); };
+
+  if (isImg && file.url && !imageFailed) {
+    return (
+      <img
+        src={file.url}
+        alt=""
+        onClick={open}
+        onError={function () { setImageFailed(true); }}
+        style={{ cursor: "zoom-in" }}
+      />
+    );
+  }
+  return (
+    <button type="button" className="wbc-attach-chip" onClick={open} title={wbcT("workbenchChat.viewInSide", "View on the right")}>
+      {WBC_ICONS.file}{file.name || "file"}
+    </button>
+  );
+}
+
 function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit }) {
   var attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
   var [editing, setEditing] = useWbcState(false);
@@ -1697,11 +1822,7 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit }) {
           {attachments.length > 0 && (
             <div className="wbc-msg-attachments">
               {attachments.map(function (file, i) {
-                var isImg = file.kind === "image" || String(file.content_type || "").indexOf("image") === 0;
-                var open = function () { if (onOpenFile && file.url) onOpenFile(file); };
-                return isImg && file.url
-                  ? <img key={file.id || i} src={file.url} alt={file.name || "image"} onClick={open} style={{ cursor: "zoom-in" }} />
-                  : <button type="button" key={file.id || i} className="wbc-attach-chip" onClick={open} title={wbcT("workbenchChat.viewInSide", "View on the right")}>{WBC_ICONS.file}{file.name || "file"}</button>;
+                return <WbcMessageAttachment key={file.id || file.url || i} file={file} onOpenFile={onOpenFile} />;
               })}
             </div>
           )}
@@ -1730,11 +1851,7 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit }) {
           {attachments.length > 0 && (
             <div className="wbc-msg-attachments">
               {attachments.map(function (file, i) {
-                var isImg = file.kind === "image" || String(file.content_type || "").indexOf("image") === 0;
-                var open = function () { if (onOpenFile && file.url) onOpenFile(file); };
-                return isImg && file.url
-                  ? <img key={file.id || i} src={file.url} alt={file.name || "image"} onClick={open} style={{ cursor: "zoom-in" }} />
-                  : <button type="button" key={file.id || i} className="wbc-attach-chip" onClick={open} title={wbcT("workbenchChat.viewInSide", "View on the right")}>{WBC_ICONS.file}{file.name || "file"}</button>;
+                return <WbcMessageAttachment key={file.id || file.url || i} file={file} onOpenFile={onOpenFile} />;
               })}
             </div>
           )}
@@ -1980,6 +2097,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   var [mode, setMode] = useWbcState("auto");
   var [command, setCommand] = useWbcState("");
   var [uploading, setUploading] = useWbcState(false);
+  var [failedImagePreviews, setFailedImagePreviews] = useWbcState({});
   var [slashOpen, setSlashOpen] = useWbcState(false);
   var [modeOpen, setModeOpen] = useWbcState(false);
   var [contextState, setContextState] = useWbcState(null);
@@ -2010,6 +2128,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
       wbcSaveAttachments(prev, attachRef.current);
       setDraft(wbcLoadDraft(chatId));
       setAttachments(wbcLoadAttachments(chatId));
+      setFailedImagePreviews({});
       prevChatIdRef.current = chatId;
     }
     setCommand("");
@@ -2038,7 +2157,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   }
 
   function submit() {
-    if (running) { onInterrupt(); return; }
+    if (running) return;
     var text = draft.trim();
     if (!text && attachments.length === 0) return;
     setDraft("");
@@ -2054,6 +2173,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
     if (sc && sc.matches(event, "composer-send")) {
       if (event.nativeEvent && event.nativeEvent.isComposing) return; // IME guard
       event.preventDefault();
+      if (running) return;
       submit();
       return;
     }
@@ -2066,6 +2186,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
     if (!sc && event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
       if (event.nativeEvent && event.nativeEvent.isComposing) return; // IME guard
       event.preventDefault();
+      if (running) return;
       submit();
       return;
     }
@@ -2175,10 +2296,16 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
           <div className="wbc-attach-row">
             {attachments.map(function (file, i) {
               var isImg = file.kind === "image" || String(file.content_type || "").indexOf("image") === 0;
+              var attachmentKey = String(file.id || file.url || i);
+              var showImagePreview = isImg && file.url && !failedImagePreviews[attachmentKey];
               return (
-                <div className={"wbc-attach-card" + (isImg ? " image" : "")} key={file.id || i}>
-                  {isImg && file.url
-                    ? <img src={file.url} alt={file.name || "image"} />
+                <div className={"wbc-attach-card" + (showImagePreview ? " image" : "")} key={attachmentKey}>
+                  {showImagePreview
+                    ? <img src={file.url} alt="" onError={function () {
+                        setFailedImagePreviews(function (prev) {
+                          return Object.assign({}, prev, { [attachmentKey]: true });
+                        });
+                      }} />
                     : <span className="wbc-attach-name" title={file.name}>{file.name || "file"}</span>}
                   <button type="button" className="wbc-attach-x" onClick={function () {
                     setAttachments(attachments.filter(function (_f, idx) { return idx !== i; }));
@@ -2192,10 +2319,9 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
           ref={taRef}
           value={draft}
           rows={2}
-          disabled={running}
           onChange={function (e) { setDraft(e.target.value); syncHeight(); }}
           onKeyDown={onKeyDown}
-          placeholder={running ? wbcT("workbenchChat.placeholderRunning", "The agent is replying. Click stop to interrupt...") : wbcT("workbenchChat.placeholder", "Message Cyrene... (Enter to send, Shift+Enter for a new line)")}
+          placeholder={running ? wbcT("workbenchChat.placeholderRunning", "Keep typing while the agent replies. Stop it before sending.") : wbcT("workbenchChat.placeholder", "Message Cyrene... (Enter to send, Shift+Enter for a new line)")}
         />
         <div className="wbc-context-chips">
           {personaOn && (
@@ -2287,7 +2413,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
           <button
             type="button"
             className={"wbc-send" + (running ? " stop" : "")}
-            onClick={submit}
+            onClick={running ? onInterrupt : submit}
             disabled={sendDisabled}
             title={running ? wbcT("workbenchChat.stop", "Stop") : wbcT("workbenchChat.send", "Send")}
           >
@@ -2363,6 +2489,8 @@ function WbcSide({
   onDelete,
   onToTask,
   toTaskBusy,
+  onCompact,
+  compactBusy,
 }) {
   var hasMap = wbcChatUsedMap(chat, runtime);
   var pendingPlan = wbcPendingPlan(chat);
@@ -2397,7 +2525,7 @@ function WbcSide({
         })}
       </div>
       <div className={"wbc-side-body" + (flush ? " flush" : "")}>
-        {activeTab === "overview" && <WbcOverviewTab chat={chat} runtime={runtime} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} />}
+        {activeTab === "overview" && <WbcOverviewTab chat={chat} runtime={runtime} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} onCompact={onCompact} compactBusy={compactBusy} />}
         {activeTab === "plan" && <WbcPlanTab plan={pendingPlan} />}
         {activeTab === "subagents" && (
           <WbcSubagentsTab
@@ -3066,6 +3194,7 @@ function WbcContextUsage({ chat, running }) {
   var [data, setData] = useWbcState(null);
   var chatId = chat ? chat.id : "";
   var updatedAt = chat ? chat.updatedAt : "";
+  var contextRevision = chat ? chat.contextRevision : 0;
 
   useWbcEffect(function () {
     if (!chatId) { setData(null); return undefined; }
@@ -3079,7 +3208,7 @@ function WbcContextUsage({ chat, running }) {
     load();
     var timer = running ? setInterval(load, 3500) : null;
     return function () { cancelled = true; if (timer) clearInterval(timer); };
-  }, [chatId, updatedAt, running]);
+  }, [chatId, updatedAt, contextRevision, running]);
 
   if (!data) return null;
 
@@ -3158,7 +3287,7 @@ function WbcContextUsage({ chat, running }) {
   );
 }
 
-function WbcOverviewTab({ chat, runtime, onRename, onDelete, onToTask, toTaskBusy }) {
+function WbcOverviewTab({ chat, runtime, onRename, onDelete, onToTask, toTaskBusy, onCompact, compactBusy }) {
   if (!chat) {
     return <p className="workbench-muted">{wbcT("workbenchChat.noMessages", "Select or create a chat.")}</p>;
   }
@@ -3187,6 +3316,12 @@ function WbcOverviewTab({ chat, runtime, onRename, onDelete, onToTask, toTaskBus
             if (next != null) onRename(String(next).trim() || chat.title);
           }}>{WBC_ICONS.edit}<span>{wbcT("workbenchChat.rename", "Rename chat")}</span></button>
           <button type="button" disabled={toTaskBusy} onClick={onToTask}>{WBC_ICONS.task}<span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span></button>
+          {!chat.legacy && (
+            <button type="button" disabled={!!runtime || compactBusy} onClick={onCompact}>
+              {compactBusy ? <span className="wbc-spinner" aria-hidden="true"></span> : WBC_ICONS.compact}
+              <span>{wbcT(compactBusy ? "workbenchChat.compactBusy" : "workbenchChat.compact", compactBusy ? "Compressing…" : "Compress chat")}</span>
+            </button>
+          )}
           <button type="button" className="danger" onClick={onDelete}>{WBC_ICONS.trash}<span>{wbcT("workbenchChat.delete", "Delete chat")}</span></button>
         </div>
         {convertedTitle && (
@@ -3215,6 +3350,7 @@ function WbcContextBlockList({ chat, running }) {
   var [data, setData] = useWbcState(null);
   var chatId = chat ? chat.id : "";
   var updatedAt = chat ? chat.updatedAt : "";
+  var contextRevision = chat ? chat.contextRevision : 0;
 
   useWbcEffect(function () {
     if (!chatId) { setData(null); return undefined; }
@@ -3228,7 +3364,7 @@ function WbcContextBlockList({ chat, running }) {
     load();
     var timer = running ? setInterval(load, 3500) : null;
     return function () { cancelled = true; if (timer) clearInterval(timer); };
-  }, [chatId, updatedAt, running]);
+  }, [chatId, updatedAt, contextRevision, running]);
 
   if (!data || !Array.isArray(data.layers) || data.layers.length === 0) {
     return React.createElement("p", { className: "workbench-muted" },

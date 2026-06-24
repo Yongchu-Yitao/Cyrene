@@ -1064,7 +1064,16 @@ async def _tool_analyze_attachment(args: dict[str, Any], _bot: Any, _chat_id: in
         )
     prompt = str(args.get("prompt", "") or "")
     force_refresh = bool(args.get("force_refresh", False))
-    result = await analyze_attachment(str(path), prompt=prompt, force_refresh=force_refresh)
+    try:
+        result = await analyze_attachment(str(path), prompt=prompt, force_refresh=force_refresh)
+    except FileNotFoundError:
+        return _json_result({
+            "error": "attachment_unavailable",
+            "path": str(path),
+            "message": "The uploaded attachment is no longer available. Ask the user to upload it again.",
+            "action": "stop_attachment_analysis",
+            "search_elsewhere": False,
+        })
     return _json_result(result)
 
 
@@ -1944,6 +1953,34 @@ TOOL_DEFS = [
                     },
                 },
                 "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retire_project_memory",
+            "description": (
+                "Mark one outdated memory in the current Workbench project as retired. "
+                "Use the exact memory_id returned by search_project_memory. Retired memories "
+                "remain visible and recoverable on the Memory page, but are excluded from "
+                "future agent context and normal project-memory searches. Use this when you "
+                "can identify a stale, incorrect, or superseded memory but are not saving a "
+                "replacement fact. This does not permanently delete data."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "Exact project-memory id to retire, such as mem_ab12cd34ef56.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional concise reason the memory is outdated or incorrect.",
+                    },
+                },
+                "required": ["memory_id"],
             },
         },
     },

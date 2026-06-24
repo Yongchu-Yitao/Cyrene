@@ -5,6 +5,7 @@ import pytest
 from webui.routes import (
     _workbench_artifact_download_target,
     _workbench_compose_ephemeral_system,
+    _workbench_compose_static_system,
 )
 
 
@@ -71,12 +72,13 @@ def test_artifact_download_target_rejects_missing_or_non_file_artifacts(tmp_path
         )
 
 
-def test_ephemeral_system_tells_agent_to_declare_shell_artifacts():
+def test_static_system_tells_agent_to_declare_shell_artifacts():
     # Files produced only through Bash/shell are caught as a weak git diff and do
     # not auto-promote to the downloadable 产物 panel. The per-run system block
     # must instruct the agent to declare such deliverables via send_file, or a
-    # shell-produced file silently never reaches the user.
-    text = _workbench_compose_ephemeral_system(
+    # shell-produced file silently never reaches the user. This stable rule
+    # belongs in the cacheable static system block.
+    text = _workbench_compose_static_system(
         {"id": "proj_demo", "name": "Demo"},
         {"id": "sess_demo", "goal": "produce a report"},
     )

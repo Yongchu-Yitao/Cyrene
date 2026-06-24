@@ -61,6 +61,12 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     register_routes(app, bot, db_path)
 
     @app.on_event("startup")
+    async def _start_workbench_chat_runs() -> None:
+        from webui.routes_workbench_chat import startup_chat_runs
+
+        startup_chat_runs()
+
+    @app.on_event("startup")
     async def _start_wechat() -> None:
         try:
             await _setup_wechat(app, db_path)
@@ -92,6 +98,13 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
 
     @app.on_event("shutdown")
     async def _close_browser_session() -> None:
+        try:
+            from webui.routes_workbench_chat import shutdown_chat_runs
+
+            await shutdown_chat_runs()
+        except Exception:
+            logger.warning("Workbench chat run shutdown failed")
+
         try:
             from cyrene.browser import close_session
             await close_session()

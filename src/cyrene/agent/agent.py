@@ -61,6 +61,14 @@ from cyrene.tools import _execute_tool, get_active_tool_defs
 logger = logging.getLogger(__name__)
 
 
+def _tool_def_name(tool_def: dict[str, Any]) -> str:
+    return str(tool_def.get("function", {}).get("name") or "").strip()
+
+
+def _without_tool(tool_defs: list[dict[str, Any]], tool_name: str) -> list[dict[str, Any]]:
+    return [tool_def for tool_def in tool_defs if _tool_def_name(tool_def) != tool_name]
+
+
 def _attach_final_usage(entry: dict[str, Any]) -> dict[str, Any]:
     """Carry the final-reply call's token usage onto the persisted entry."""
     usage = _last_final_reply_usage.get()
@@ -164,6 +172,10 @@ async def _run_main_agent(
     _caller_type.set("main_agent")
     suppress_initial_detail = _ui_round_hide_initial_detail.get()
     round_id = _current_round_id.get()
+    assistant_meta = _ui_round_assistant_meta.get()
+    system_initiated = bool(
+        isinstance(assistant_meta, dict) and assistant_meta.get("system_initiated")
+    )
 
     async def _save(msgs):
         await _save_session_messages(
@@ -188,6 +200,8 @@ async def _run_main_agent(
     # mid-run (an MCP server finishes connecting, a flag is toggled) the tool block
     # — part of the cached prefix — shifts and invalidates the cache. Snapshot once.
     active_tool_defs = get_active_tool_defs()
+    if system_initiated:
+        active_tool_defs = _without_tool(active_tool_defs, "ask_user")
 
     visible_user_message = user_message if public_user_message is None else str(public_user_message)
     user_message_id = f"user_{uuid4().hex}"
@@ -236,6 +250,12 @@ async def _run_main_agent(
         )
     else:
         phase1_decision = _PHASE1_DECISION_PROMPT
+    if system_initiated:
+        phase1_decision += (
+            "\n- This is a proactive system-initiated round. Do not call `ask_user`; "
+            "either complete the check-in autonomously or finish silently."
+        )
+        phase1_tools = _without_tool(phase1_tools, "ask_user")
     phase1_decision_entry = attach_context({"role": "user", "content": phase1_decision}, context_block(
         "phase1.decision_rules",
         "phase_rules",
@@ -338,9 +358,7 @@ async def _run_main_agent(
     # Phase 1: lightweight decision
     response = await _call_llm(_pin_tail(project_history_for_llm(phase1_messages)), tools=phase1_tools)
     tool_calls = response.get("tool_calls") or []
-    dr_tools = {"ask_user", "quit"}
-    general_tools = {"use_tools", "ask_user", "quit"}
-    phase1_allowed = dr_tools if _deep_research_first_round.get() else general_tools
+    phase1_allowed = {_tool_def_name(tool_def) for tool_def in phase1_tools}
     invalid_phase1_tools = [
         str(tc.get("function", {}).get("name") or "").strip()
         for tc in tool_calls
@@ -357,7 +375,9 @@ async def _run_main_agent(
                 "role": "user",
                 "content": (
                     f"[Decision-phase correction] You attempted unavailable tool(s): {', '.join(invalid_phase1_tools)}. "
-                    + (f"Only `ask_user` and `quit` are available in this phase. You MUST ask the user about the report length before starting research."
+                    + ("This is a proactive system-initiated round. `ask_user` is forbidden; use an available tool or finish without pausing for user input."
+                       if system_initiated
+                       else f"Only `ask_user` and `quit` are available in this phase. You MUST ask the user about the report length before starting research."
                        if _deep_research_first_round.get()
                        else "Only `use_tools`, `ask_user`, and `quit` are available in this phase. "
                             "If real tool work is needed, call `use_tools` with the user's exact original message. "
@@ -378,7 +398,7 @@ async def _run_main_agent(
         name = tc.get("function", {}).get("name")
         if name == "use_tools":
             use_tools_call = tc
-        elif name == "ask_user":
+        elif name == "ask_user" and not system_initiated:
             ask_user_call = tc
         elif name == "quit":
             if client_request_id:
@@ -527,7 +547,12 @@ async def _run_main_agent(
                     continue
                 try:
                     args = json.loads(t["function"].get("arguments") or "{}")
-                    if tool_name == "quit":
+                    if system_initiated and tool_name == "ask_user":
+                        result = (
+                            "Tool unavailable: proactive system-initiated rounds "
+                            "cannot ask the user to clarify or pause for an answer."
+                        )
+                    elif tool_name == "quit":
                         quit_requested = True
                         result = "Agent requested to finish after this tool-call batch."
                     elif tool_name == "DeepReflect":

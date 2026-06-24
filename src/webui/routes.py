@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from PIL import Image
-from fastapi import APIRouter, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, BackgroundTasks, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 from cyrene.cc_bridge import get_cc_preview, get_cc_status
@@ -5477,6 +5477,47 @@ def _image_dimensions(path: Path) -> tuple[int | None, int | None]:
         return None, None
 
 
+async def _deduplicate_chat_upload_after_response(
+    target: Path,
+    *,
+    display_name: str,
+    content_type: str,
+    kind: str,
+    size: int,
+) -> None:
+    """Register a durable chat upload in the knowledge base after upload.
+
+    Knowledge-base deduplication owns database rows, not chat attachment files.
+    The exact upload path is persisted in chat/session state and may still be
+    referenced by the composer, transcript, retries, and AnalyzeAttachment, so
+    it must remain valid even when identical content already exists in the KB.
+    """
+    try:
+        from cyrene.config import get_knowledge_db_path
+        from cyrene.knowledge import ingest, store
+
+        if not target.exists() or not target.is_file():
+            logger.warning("Skipping knowledge registration for missing chat upload: %s", target)
+            return
+
+        kb_db_path = str(get_knowledge_db_path())
+        content_hash = await asyncio.to_thread(store.content_hash_file, target)
+        doc = await store.upsert_document_by_path(
+            kb_db_path,
+            path=str(target.resolve()),
+            source="chat_upload",
+            name=display_name,
+            content_type=content_type,
+            kind=kind,
+            size=size,
+            content_hash=content_hash,
+        )
+        if doc.get("status") in {"pending", "error"}:
+            asyncio.create_task(ingest.index_document(kb_db_path, doc["id"]))
+    except Exception:
+        logger.exception("Failed to register chat upload in knowledge base: %s", target)
+
+
 def _attachment_prompt_block(items: list[dict[str, Any]]) -> str:
     if not items:
         return ""
@@ -5487,6 +5528,8 @@ def _attachment_prompt_block(items: list[dict[str, Any]]) -> str:
         "Before answering anything about these files, you MUST inspect the relevant attachment with AnalyzeAttachment.",
         "Do not answer from the filename, extension, or metadata alone.",
         "After AnalyzeAttachment returns extracted content, use that extracted content to answer the user.",
+        "If AnalyzeAttachment reports that an uploaded file is missing or unavailable, stop attachment analysis and ask the user to upload it again.",
+        "Do NOT use Glob, Grep, Bash, find, or directory scans to search for a replacement file elsewhere on the device.",
     ]
     for item in items:
         lines.append(f'- {item["name"]} ({item["content_type"]}): {item["path"]}')
@@ -5752,7 +5795,10 @@ async def _search_workbench_items(query: str, types: set[str], per_type_limit: i
         try:
             from cyrene.config import STORE_DIR
             from cyrene.workbench_store import list_document_keys, read_document
-            from webui.routes_workbench_memory import _entry_id
+            from webui.routes_workbench_memory import (
+                _entry_id,
+                _is_user_visible_entry,
+            )
 
             memory_keys = {
                 key[len("memory:"):]
@@ -5774,6 +5820,8 @@ async def _search_workbench_items(query: str, types: set[str], per_type_limit: i
                 )
                 entries = data if isinstance(data, list) else []
                 for entry in entries:
+                    if not isinstance(entry, dict) or not _is_user_visible_entry(entry):
+                        continue
                     content = str(entry.get("content") or "")
                     tags = [str(t) for t in (entry.get("tags") or [])]
                     tag_text = " ".join(tags)
@@ -5911,7 +5959,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     # ---- Chat API ----
 
     @router.post("/api/chat/upload")
-    async def api_chat_upload(files: list[UploadFile]):
+    async def api_chat_upload(background_tasks: BackgroundTasks, files: list[UploadFile]):
         if not files:
             return JSONResponse({"error": "no files uploaded"}, status_code=400)
 
@@ -5945,29 +5993,17 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 **({"height": height} if isinstance(height, int) else {}),
             })
 
-            # Register document in knowledge base
-            try:
-                from cyrene.config import get_knowledge_db_path
-                from cyrene.knowledge import store, ingest
-
-                _kb_db_path = str(get_knowledge_db_path())
-                content_hash = store.content_hash_file(target)
-                doc = await store.upsert_document_by_path(
-                    _kb_db_path,
-                    path=str(target.resolve()),
-                    source="chat_upload",
-                    name=file.filename or safe_name,
-                    content_type=content_type,
-                    kind=kind,
-                    size=file_size,
-                    content_hash=content_hash,
-                )
-                if doc.get("path") and str(Path(doc["path"]).resolve()) != str(target.resolve()):
-                    target.unlink(missing_ok=True)
-                if doc.get("status") in {"pending", "error"}:
-                    asyncio.create_task(ingest.index_document(_kb_db_path, doc["id"]))
-            except Exception as e:
-                logger.debug(f"Failed to register document in knowledge base: {e}")
+            # The response now owns this exact path. Run KB registration only
+            # after the upload response is ready, and never let content-hash
+            # deduplication delete a file referenced by the current session.
+            background_tasks.add_task(
+                _deduplicate_chat_upload_after_response,
+                target,
+                display_name=file.filename or safe_name,
+                content_type=content_type,
+                kind=kind,
+                size=file_size,
+            )
 
         return {"files": uploaded}
 

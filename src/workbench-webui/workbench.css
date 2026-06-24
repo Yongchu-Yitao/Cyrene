@@ -9151,6 +9151,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 .wbc-attach-card.image {
   padding: 0;
+  overflow: hidden;
 }
 
 .wbc-attach-card.image img {

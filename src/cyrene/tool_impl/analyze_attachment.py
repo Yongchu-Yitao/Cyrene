@@ -27,7 +27,16 @@ async def _tool_analyze_attachment(args: dict[str, Any], _bot: Any, _chat_id: in
         )
     prompt = str(args.get("prompt", "") or "")
     force_refresh = bool(args.get("force_refresh", False))
-    result = await analyze_attachment(str(path), prompt=prompt, force_refresh=force_refresh)
+    try:
+        result = await analyze_attachment(str(path), prompt=prompt, force_refresh=force_refresh)
+    except FileNotFoundError:
+        return _json_result({
+            "error": "attachment_unavailable",
+            "path": str(path),
+            "message": "The uploaded attachment is no longer available. Ask the user to upload it again.",
+            "action": "stop_attachment_analysis",
+            "search_elsewhere": False,
+        })
     return _json_result(result)
 
 

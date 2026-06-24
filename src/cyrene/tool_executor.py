@@ -18,6 +18,15 @@ _BROWSER_TOOL_NAMES = {
 
 
 async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id: int, db_path: str, notify_state: dict[str, bool] | None) -> str:
+    if name == "ask_user":
+        from cyrene.agent.state import _ui_round_assistant_meta
+
+        assistant_meta = _ui_round_assistant_meta.get()
+        if isinstance(assistant_meta, dict) and assistant_meta.get("system_initiated"):
+            return (
+                "Tool unavailable: proactive system-initiated rounds cannot ask "
+                "the user to clarify or pause for an answer."
+            )
     if name == "spawn_subagent":
         from cyrene.settings_store import get_spawn_policy
         if get_spawn_policy() == "off":

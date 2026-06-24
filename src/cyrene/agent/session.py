@@ -32,7 +32,6 @@ from cyrene.agent.state import (
     _current_client_request_id,
     _current_session_id,
     _ensure_session,
-    _MAX_HISTORY_MESSAGES,
     _pending_compressors,
     _pending_label_refreshes,
     _persist_base_messages,
@@ -220,18 +219,6 @@ def _load_round_messages(round_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def _trim_session_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if len(messages) <= _MAX_HISTORY_MESSAGES:
-        return messages
-    trimmed = messages[-_MAX_HISTORY_MESSAGES:]
-    while trimmed and trimmed[0].get("role") == "tool":
-        trimmed = trimmed[1:]
-    for i in range(len(trimmed) - 1, -1, -1):
-        if trimmed[i].get("tool_calls") and (i + 1 >= len(trimmed) or trimmed[i + 1].get("role") != "tool"):
-            return trimmed[:i]
-    return trimmed
-
-
 # ---------------------------------------------------------------------------
 # Token-budget compaction (append-only immutable compacted blocks)
 # ---------------------------------------------------------------------------
@@ -239,6 +226,8 @@ def _trim_session_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
 _COMPACT_TRIGGER_RATIO = 0.6
 _COMPACT_RECENT_RATIO = 0.3
 _COMPACT_BLOCK_PREFIX = "[Compacted earlier context]"
+_MEMORY_COMPRESSION_MIN_MESSAGES = 45
+_MEMORY_COMPRESSION_WINDOW_MESSAGES = 20
 
 
 def _is_compacted_block(message: dict[str, Any]) -> bool:
@@ -289,7 +278,12 @@ def _safe_recent_start(live: list[dict[str, Any]], idx: int) -> int:
     return i
 
 
-def _compact_messages_for_storage(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _compact_messages_for_storage(
+    messages: list[dict[str, Any]],
+    *,
+    ctx_limit: int | None = None,
+    force: bool = False,
+) -> list[dict[str, Any]]:
     """Token-budget compaction with an immutable, append-only compacted-block chain.
 
     - At or below 60% of the model context window: return unchanged (append-only
@@ -299,18 +293,19 @@ def _compact_messages_for_storage(messages: list[dict[str, Any]]) -> list[dict[s
       existing compacted blocks (which are never rewritten). Recent messages are
       kept verbatim within ~30% of the window.
 
-    Falls back to the count-based ``_trim_session_messages`` when the context
-    window is unknown.
+    When the context window is unknown, compaction is disabled so persistence
+    remains lossless.
     """
     from cyrene.config_store import get_current_ctx_limit
     from cyrene.call_llm import _message_token_estimate
 
-    ctx_limit = get_current_ctx_limit()
+    if ctx_limit is None:
+        ctx_limit = get_current_ctx_limit()
     if ctx_limit <= 0:
-        return _trim_session_messages(messages)
+        return messages
 
     total = sum(_message_token_estimate(m) for m in messages)
-    if total <= int(ctx_limit * _COMPACT_TRIGGER_RATIO):
+    if not force and total <= int(ctx_limit * _COMPACT_TRIGGER_RATIO):
         return messages
 
     head_blocks: list[dict[str, Any]] = []
@@ -337,7 +332,10 @@ def _compact_messages_for_storage(messages: list[dict[str, Any]]) -> list[dict[s
 
     block_lines = _strip_tool_episode_text(to_compact)
     if not block_lines:
-        return messages
+        # The compactable prefix contains only tool results. Those results are
+        # intentionally excluded from compacted context, so dropping the prefix
+        # is the successful compacted representation rather than a no-op.
+        return [*head_blocks, *recent]
     block: dict[str, Any] = {
         "role": "system",
         "content": _COMPACT_BLOCK_PREFIX + "\n" + "\n".join(block_lines),
@@ -374,23 +372,141 @@ def _has_pending_compacted_block(messages: list[dict[str, Any]]) -> bool:
     )
 
 
-def _exceeds_compact_threshold(messages: list[dict[str, Any]]) -> bool:
+def _exceeds_compact_threshold(
+    messages: list[dict[str, Any]],
+    *,
+    ctx_limit: int | None = None,
+) -> bool:
     """True if estimated tokens still exceed the compaction trigger ratio.
 
     Evaluated on the post-fold message list: LLM distillation only runs when the
     cheap mechanical fold left the context above the threshold, so a fold that
     already fit within budget never pays for a distillation call. Mirrors the
     ctx-limit handling in ``_compact_messages_for_storage`` (unknown window → no
-    distillation, since the mechanical pass already fell back to count trimming).
+    compaction or distillation).
     """
     from cyrene.config_store import get_current_ctx_limit
     from cyrene.call_llm import _message_token_estimate
 
-    ctx_limit = get_current_ctx_limit()
+    if ctx_limit is None:
+        ctx_limit = get_current_ctx_limit()
     if ctx_limit <= 0:
         return False
     total = sum(_message_token_estimate(m) for m in messages)
     return total > int(ctx_limit * _COMPACT_TRIGGER_RATIO)
+
+
+async def compact_session_if_needed(
+    session_id: str = "",
+    *,
+    ctx_limit: int | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Run the normal context compaction flow for one idle session.
+
+    This is the explicit Workbench entrypoint. It uses the same mechanical
+    compactor and optional background LLM distillation as ordinary session
+    persistence, but does not append a synthetic message just to trigger a save.
+    ``force`` lets a user invoke that flow before the automatic 60% trigger.
+    """
+    from cyrene.call_llm import _message_token_estimate
+    from cyrene.config_store import get_current_ctx_limit
+
+    ctx = _ensure_session(session_id)
+    if ctx.lock.locked():
+        return {"compacted": False, "reason": "running"}
+
+    session_token = _current_session_id.set(session_id)
+    try:
+        async with ctx.lock:
+            async with ctx.session_state_lock:
+                state = _load_session_state()
+                messages = state.get("messages")
+                if not isinstance(messages, list) or not messages:
+                    return {"compacted": False, "reason": "empty"}
+
+                effective_limit = int(
+                    ctx_limit if ctx_limit is not None else get_current_ctx_limit()
+                )
+                before_tokens = sum(_message_token_estimate(m) for m in messages)
+                threshold_tokens = int(effective_limit * _COMPACT_TRIGGER_RATIO)
+                if effective_limit > 0 and not force and before_tokens <= threshold_tokens:
+                    return {
+                        "compacted": False,
+                        "reason": "below_threshold",
+                        "beforeTokens": before_tokens,
+                        "afterTokens": before_tokens,
+                        "ctxLimit": effective_limit,
+                        "triggerRatio": _COMPACT_TRIGGER_RATIO,
+                    }
+
+                trimmed = _compact_messages_for_storage(
+                    messages,
+                    ctx_limit=effective_limit,
+                    force=force,
+                )
+                if trimmed == messages:
+                    distill_scheduled = (
+                        _has_pending_compacted_block(messages)
+                        and _exceeds_compact_threshold(
+                            messages,
+                            ctx_limit=effective_limit,
+                        )
+                    )
+                    if distill_scheduled:
+                        _schedule_compaction_distill()
+                    return {
+                        "compacted": False,
+                        "reason": (
+                            "distill_scheduled"
+                            if distill_scheduled
+                            else "nothing_to_compact"
+                        ),
+                        "beforeTokens": before_tokens,
+                        "afterTokens": before_tokens,
+                        "ctxLimit": effective_limit,
+                        "triggerRatio": _COMPACT_TRIGGER_RATIO,
+                        "distillScheduled": distill_scheduled,
+                    }
+
+                state["messages"] = trimmed
+                _write_session_state(state)
+                after_tokens = sum(_message_token_estimate(m) for m in trimmed)
+                await debug.publish_event({
+                    "type": "session_update",
+                    "message_count": len(trimmed),
+                    "last_role": trimmed[-1].get("role") if trimmed else "",
+                    "round_id": next(
+                        (
+                            str(m.get("round_id", "")).strip()
+                            for m in reversed(trimmed)
+                            if m.get("round_id")
+                        ),
+                        "",
+                    ),
+                })
+
+                distill_scheduled = (
+                    _has_pending_compacted_block(trimmed)
+                    and _exceeds_compact_threshold(
+                        trimmed,
+                        ctx_limit=effective_limit,
+                    )
+                )
+                if distill_scheduled:
+                    _schedule_compaction_distill()
+
+                return {
+                    "compacted": True,
+                    "reason": "compacted",
+                    "beforeTokens": before_tokens,
+                    "afterTokens": after_tokens,
+                    "ctxLimit": effective_limit,
+                    "triggerRatio": _COMPACT_TRIGGER_RATIO,
+                    "distillScheduled": distill_scheduled,
+                }
+    finally:
+        _current_session_id.reset(session_token)
 
 
 def _schedule_compaction_distill() -> None:
@@ -698,7 +814,7 @@ async def _write_session_messages_locked(state: dict[str, Any], messages: list[d
         "round_id": next((str(m.get("round_id", "")).strip() for m in reversed(trimmed) if m.get("round_id")), ""),
     })
 
-    if len(messages) >= _MAX_HISTORY_MESSAGES + 5:
+    if len(messages) >= _MEMORY_COMPRESSION_MIN_MESSAGES:
         _schedule_memory_compression(messages)
 
     # Distill only when the cheap mechanical fold was not enough on its own:
@@ -1247,7 +1363,11 @@ async def _refresh_session_labels(current_user_message: str, round_id: str, sess
 async def _compress_old_messages(all_messages: list[dict[str, Any]]) -> None:
     from cyrene.short_term import touch_entry
 
-    to_compress = [m for m in all_messages[:20] if m["role"] in ("user", "assistant")]
+    eligible = [
+        m for m in all_messages
+        if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+    ]
+    to_compress = eligible[-_MEMORY_COMPRESSION_WINDOW_MESSAGES:]
     if not to_compress:
         return
 

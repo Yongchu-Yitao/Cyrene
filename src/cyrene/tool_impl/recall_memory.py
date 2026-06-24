@@ -34,6 +34,7 @@ async def _tool_recall_memory(args: dict[str, Any], _bot: Any, _chat_id: int, _d
     entries = [
         entry for entry in short_term.load_entries()
         if isinstance(entry, dict)
+        and not entry.get("stale")
         and (not memory_type or str(entry.get("type") or "").strip().lower() == memory_type)
         and (
             not query

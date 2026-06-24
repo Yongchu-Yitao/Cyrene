@@ -214,6 +214,49 @@ class TestUpsertIdempotency:
         assert len(all_docs) == 1
 
     @pytest.mark.asyncio
+    async def test_upsert_recovers_missing_canonical_path(self, temp_db, tmp_path):
+        """A durable duplicate replaces a stale canonical path and reindexes."""
+        payload = b"recover stale canonical document"
+        digest = store.content_hash_bytes(payload)
+        stale_path = tmp_path / "deleted.txt"
+        fresh_path = tmp_path / "fresh.txt"
+
+        doc1 = await store.upsert_document_by_path(
+            temp_db,
+            path=str(stale_path),
+            source="chat_upload",
+            name="deleted.txt",
+            content_hash=digest,
+            content_type="text/plain",
+            kind="code",
+            size=len(payload),
+        )
+        await store.update_document(
+            temp_db,
+            doc1["id"],
+            status="indexed",
+            indexed_at=store._now(),
+        )
+        fresh_path.write_bytes(payload)
+
+        doc2 = await store.upsert_document_by_path(
+            temp_db,
+            path=str(fresh_path),
+            source="chat_upload",
+            name="fresh.txt",
+            content_hash=digest,
+            content_type="text/plain",
+            kind="code",
+            size=len(payload),
+        )
+
+        assert doc2["id"] == doc1["id"]
+        assert doc2["path"] == str(fresh_path)
+        assert doc2["name"] == "fresh.txt"
+        assert doc2["status"] == "pending"
+        assert doc2["indexed_at"] is None
+
+    @pytest.mark.asyncio
     async def test_deduplicate_documents_backfills_existing_rows(self, temp_db, tmp_path):
         """Existing path-only duplicate rows are collapsed by content hash."""
         file1 = tmp_path / "doc1.txt"

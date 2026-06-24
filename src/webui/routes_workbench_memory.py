@@ -85,6 +85,15 @@ _INJECT_CATEGORIES = {"preference", "project", "habit", "fact"}
 _CONFIDENCE_LABELS = {"high": "高", "medium": "中", "low": "低"}
 
 
+def _is_user_visible_entry(entry: dict) -> bool:
+    """Whether an entry belongs on user-facing Workbench memory surfaces.
+
+    Task reports remain stored as internal planning context, but they must not
+    affect the memory page's list, counts, overview, or source chart.
+    """
+    return _entry_category(entry) != "task_report"
+
+
 def _safe_workspace_id(workspace_id: str | None) -> str:
     """Sanitize a workspace id into a filesystem-safe key (defaults to 'default')."""
     raw = str(workspace_id or "").strip()
@@ -358,7 +367,11 @@ def _recent_added(entries: list[dict], days: int = 7) -> int:
 def _build_payload(workspace_id: str | None) -> dict:
     """Assemble the full memory state (items + sidebar aggregates) for a workspace."""
     entries = _load(workspace_id)
-    memories = [_serialize(e) for e in entries]
+    visible_entries = [
+        e for e in entries
+        if isinstance(e, dict) and _is_user_visible_entry(e)
+    ]
+    memories = [_serialize(e) for e in visible_entries]
     memories.sort(key=lambda m: m["updated_at"], reverse=True)
     total = len(memories)
 
@@ -385,7 +398,7 @@ def _build_payload(workspace_id: str | None) -> dict:
 
     overview = {
         "total": total,
-        "recent_added": _recent_added(entries),
+        "recent_added": _recent_added(visible_entries),
         "total_citations": sum(m["citation_count"] for m in memories),
         "last_updated": max((m["updated_at"] for m in memories), default=""),
     }
@@ -830,6 +843,48 @@ def search_project_memories(
         results.append(item)
         used_chars += item_chars
     return results
+
+
+def retire_project_memory(
+    workspace_id: str | None,
+    memory_id: str,
+    *,
+    reason: str = "",
+) -> tuple[dict | None, bool]:
+    """Retire one project memory by exact id.
+
+    Retirement is reversible: the entry remains stored and visible, but stale
+    entries are excluded from normal search and future agent context injection.
+    Returns ``(serialized_entry, changed)`` or ``(None, False)`` when not found.
+    """
+    mem_id = str(memory_id or "").strip()
+    if not mem_id:
+        return None, False
+
+    entries = _load(workspace_id)
+    target = next(
+        (
+            entry
+            for entry in entries
+            if isinstance(entry, dict) and _entry_id(entry) == mem_id
+        ),
+        None,
+    )
+    if target is None:
+        return None, False
+
+    target["id"] = mem_id
+    if target.get("stale"):
+        return _serialize(target), False
+
+    today = _today()
+    target["stale"] = True
+    target["retiredAt"] = today
+    target["last_mentioned"] = today
+    detail = str(reason or "").strip()[:200] or "由 Agent 主动标记过时"
+    _append_history(target, "stale", detail)
+    _save(workspace_id, entries)
+    return _serialize(target), True
 
 
 async def _detect_conflicting_memories(new_content: str, candidates: list[dict]) -> list[str]:

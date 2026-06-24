@@ -34,6 +34,7 @@ from cyrene.conversations import archive_session_exchange
 from cyrene.io_utils import atomic_write_json, read_json_safe
 from cyrene.workbench_store import read_document, write_document
 from webui import api_models
+from webui.workbench_chat_runs import ChatRun, ChatRunManager
 from webui.workbench_notifications import append_notification
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 _CHATS_STORE = DATA_DIR / "workbench_chats.json"
 _STORE_DB_PATH = ""
 _CONFIGURED_CHATS_STORE = None
+_CHAT_RUN_MANAGER = ChatRunManager()
 
 # Internal control tools that say nothing useful in a progress trace.
 _TRACE_SKIP_TOOLS = {"use_tools", "quit", "send_message"}
@@ -59,10 +61,6 @@ def _utc_now_iso() -> str:
 
 def _short_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:10]}"
-
-
-def _ndjson_line(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False) + "\n"
 
 
 def _workbench_chat_run_error_message(exc: Exception, lang: str = "") -> str:
@@ -120,6 +118,14 @@ def configure_store(db_path: str) -> None:
     global _STORE_DB_PATH, _CONFIGURED_CHATS_STORE
     _STORE_DB_PATH = str(db_path or "")
     _CONFIGURED_CHATS_STORE = _CHATS_STORE
+
+
+def startup_chat_runs() -> None:
+    _CHAT_RUN_MANAGER.startup()
+
+
+async def shutdown_chat_runs() -> None:
+    await _CHAT_RUN_MANAGER.shutdown()
 
 
 def _mark_user_activity(chat: dict[str, Any], timestamp: str) -> None:
@@ -1073,6 +1079,37 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         model_name = str(chat.get("model") or getattr(config, "OPENAI_MODEL", "") or "")
         return _chat_context_payload(chat_id, model_name)
 
+    @router.post("/api/workbench/chats/{chat_id}/compact")
+    async def api_workbench_chat_compact(chat_id: str):
+        """Let the user explicitly run the normal session compaction flow."""
+        from cyrene import config
+        from cyrene.agent import compact_session_if_needed
+        from cyrene.config_store import ctx_limit_for_model
+
+        if chat_id.startswith("legacy:"):
+            return JSONResponse(
+                {"error": "legacy chat context is read-only"},
+                status_code=403,
+            )
+        payload = _read_chats_store()
+        chat = _find_chat(payload, chat_id)
+        if not chat:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        model_name = str(
+            chat.get("model") or getattr(config, "OPENAI_MODEL", "") or ""
+        )
+        result = await compact_session_if_needed(
+            chat_id,
+            ctx_limit=ctx_limit_for_model(model_name),
+            force=True,
+        )
+        if result.get("reason") == "running":
+            return JSONResponse(
+                {"error": "chat is currently running", **result},
+                status_code=409,
+            )
+        return {"ok": True, **result}
+
     @router.get("/api/workbench/chats/{chat_id}/context-blocks")
     async def api_workbench_chat_context_blocks(chat_id: str):
         """Context block composition using the same token math as the Overview gauge."""
@@ -1148,6 +1185,21 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         total = sum(layer["totalTokens"] for layer in layers)
         return {"layers": layers, "totalTokensEst": total, "messageTokens": msg_total}
 
+    @router.get("/api/workbench/chats/{chat_id}/run-stream")
+    async def api_workbench_chat_run_stream(chat_id: str):
+        """Reconnect to an existing streamed run without submitting a message."""
+        run = _CHAT_RUN_MANAGER.get(chat_id)
+        if run is None:
+            return JSONResponse(
+                {"error": "chat has no running reply", "code": "chat_run_not_found"},
+                status_code=404,
+            )
+        return StreamingResponse(
+            _CHAT_RUN_MANAGER.stream(run),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-cache"},
+        )
+
     @router.patch("/api/workbench/chats/{chat_id}")
     async def api_workbench_update_chat(
         chat_id: str, body_model: api_models.ChatUpdateBody
@@ -1195,7 +1247,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         chat_id: str, body_model: api_models.ChatMessageBody
     ):
         from cyrene.agent import run_agent
-        from cyrene.agent.state import PERMISSION_MODES, _attachment_paths_by_name, _reply_stream_writer
+        from cyrene.agent.state import PERMISSION_MODES, _attachment_paths_by_name
 
         body = api_models.body_dict(body_model)
         message = str(body.get("message") or "").strip()
@@ -1235,13 +1287,22 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             return JSONResponse({"error": "project not found"}, status_code=404)
         workspace_dir = R._workbench_resolve_workspace_dir(project)
 
+        existing_run = _CHAT_RUN_MANAGER.get(chat_id)
+        if existing_run is not None:
+            return JSONResponse(
+                {"error": "chat already has a running reply", "code": "chat_run_in_progress"},
+                status_code=409,
+            )
+
         now = _utc_now_iso()
         messages = chat.setdefault("messages", [])
         user_entry: dict[str, Any]
         truncate_after_id = ""
+        retry_state_backup: tuple[Any, bytes | None] | None = None
         if retry:
-            # Regenerate: replay the last user message; drop everything after it
-            # from both the public transcript and the agent's raw state.
+            # Regenerate the last exchange transactionally. Keep the public
+            # transcript intact until the replacement reply has been persisted;
+            # otherwise a failed retry permanently deletes the previous answer.
             last_user_index = -1
             for index in range(len(messages) - 1, -1, -1):
                 if messages[index].get("role") == "user":
@@ -1250,7 +1311,6 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             if last_user_index < 0:
                 return JSONResponse({"error": "nothing to retry"}, status_code=400)
             user_entry = messages[last_user_index]
-            del messages[last_user_index + 1:]
             truncate_after_id = str(user_entry.get("id") or "")
             message = str(user_entry.get("content") or "").strip()
             command = ""
@@ -1259,6 +1319,13 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             # A fork already truncated the raw state at the edit boundary; only
             # a plain retry needs to drop the last exchange from the state here.
             if not fork_replay:
+                from cyrene.agent.state import _session_state_file
+
+                state_path = _session_state_file(chat_id)
+                retry_state_backup = (
+                    state_path,
+                    state_path.read_bytes() if state_path.exists() else None,
+                )
                 _truncate_state_for_retry(chat_id)
         else:
             user_entry = {
@@ -1330,6 +1397,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             fresh_chat = _find_chat(fresh, chat_id)
             if not fresh_chat:
                 return {}
+            _commit_retry_cut(fresh_chat)
             model_name = fresh_chat.get("model") or ""
             for entry in intermediate_entries:
                 entry["model"] = model_name
@@ -1390,6 +1458,33 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 "assistantMessages": saved_messages,
             }
 
+        def _restore_retry_state() -> None:
+            if retry_state_backup is None:
+                return
+            state_path, previous = retry_state_backup
+            try:
+                if previous is None:
+                    state_path.unlink(missing_ok=True)
+                else:
+                    state_path.parent.mkdir(parents=True, exist_ok=True)
+                    state_path.write_bytes(previous)
+            except Exception:
+                logger.exception("Failed to restore retry state for %s", chat_id)
+
+        def _commit_retry_cut(target_chat: dict[str, Any]) -> None:
+            if not retry or not truncate_after_id:
+                return
+            target_messages = target_chat.setdefault("messages", [])
+            cut = next(
+                (
+                    index for index, item in enumerate(target_messages)
+                    if str(item.get("id") or "") == truncate_after_id
+                ),
+                -1,
+            )
+            if cut >= 0:
+                del target_messages[cut + 1:]
+
         def _settle_status() -> None:
             fresh = _read_chats_store()
             fresh_chat = _find_chat(fresh, chat_id)
@@ -1412,20 +1507,66 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             fresh_chat["updatedAt"] = _utc_now_iso()
             _write_chats_store(fresh)
 
-        if not wants_stream:
+        async def run_non_streaming(run: ChatRun) -> None:
             try:
                 reply = await _run()
             except Exception as exc:
                 logger.exception("Workbench chat run failed for %s", chat_id)
+                _restore_retry_state()
                 _settle_status()
+                run.outcome = {"kind": "error", "exc": exc}
+                return
+            if reply == R._AWAITING_USER_SENTINEL:
+                if retry:
+                    fresh = _read_chats_store()
+                    fresh_chat = _find_chat(fresh, chat_id)
+                    if fresh_chat:
+                        _commit_retry_cut(fresh_chat)
+                        _write_chats_store(fresh)
+                pending = R._workbench_pending_question_for(chat_id)
+                _stash_chat_pending(pending)
+                run.outcome = {"kind": "awaiting", "pending": pending}
+                return
+            finalized = _finalize(reply)
+            run.outcome = {
+                "kind": "reply",
+                "payload": finalized,
+            }
+
+        if not wants_stream:
+            run, is_new = _CHAT_RUN_MANAGER.start_or_get(
+                chat_id,
+                {"type": "ack", "chatId": chat_id},
+                run_non_streaming,
+                stream=False,
+            )
+            if not is_new:
+                return JSONResponse(
+                    {"error": "chat already has a running reply", "code": "chat_run_in_progress"},
+                    status_code=409,
+                )
+            await run.done.wait()
+            outcome = run.outcome or {}
+            kind = str(outcome.get("kind") or "")
+            if kind == "error":
+                exc = outcome.get("exc")
+                if not isinstance(exc, Exception):
+                    exc = RuntimeError("agent run failed")
                 message = _workbench_chat_run_error_message(exc, lang)
                 error = message if isinstance(exc, httpx.TransportError) else "agent run failed"
                 return JSONResponse({"error": error, "detail": str(exc)}, status_code=502)
-            if reply == R._AWAITING_USER_SENTINEL:
-                pending = R._workbench_pending_question_for(chat_id)
-                _stash_chat_pending(pending)
-                return {"ok": True, "awaitingUser": True, "pendingQuestion": pending, "userMessage": _public_message(user_entry), "retry": retry}
-            finalized = _finalize(reply)
+            if kind == "awaiting":
+                pending = outcome.get("pending")
+                return {
+                    "ok": True,
+                    "awaitingUser": True,
+                    "pendingQuestion": pending,
+                    "userMessage": _public_message(user_entry),
+                    "retry": retry,
+                }
+            finalized = outcome.get("payload")
+            if not isinstance(finalized, dict):
+                finalized = {}
             return {
                 "ok": True,
                 "userMessage": _public_message(user_entry),
@@ -1434,43 +1575,26 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 "retry": retry,
             }
 
-        async def event_stream():
-            queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-            saw_reply_events = False
+        ack: dict[str, Any] = {"type": "ack", "chatId": chat_id}
+        if retry:
+            ack["retry"] = True
+            ack["truncateAfterMessageId"] = truncate_after_id
+        else:
+            ack["userMessage"] = _public_message(user_entry)
 
-            async def publish(event: dict[str, Any]) -> None:
-                await queue.put(dict(event))
-
-            token = _reply_stream_writer.set(publish)
-            task = asyncio.create_task(_run())
-            _reply_stream_writer.reset(token)
-
-            ack: dict[str, Any] = {"type": "ack", "chatId": chat_id}
-            if retry:
-                ack["retry"] = True
-                ack["truncateAfterMessageId"] = truncate_after_id
-            else:
-                ack["userMessage"] = _public_message(user_entry)
-            yield _ndjson_line(ack)
+        async def run_streaming(run: ChatRun) -> None:
             try:
-                while True:
-                    if task.done() and queue.empty():
-                        break
-                    try:
-                        event = await asyncio.wait_for(queue.get(), timeout=0.1)
-                    except asyncio.TimeoutError:
-                        continue
-                    if str(event.get("type") or "").startswith("reply_"):
-                        saw_reply_events = True
-                    yield _ndjson_line(event)
                 try:
-                    reply = await task
+                    reply = await _run()
                 except asyncio.CancelledError:
+                    _restore_retry_state()
                     raise
                 except Exception as exc:
                     logger.exception("Workbench chat streaming run failed for %s", chat_id)
+                    _restore_retry_state()
                     _settle_status()
-                    yield _ndjson_line({
+                    run.outcome = {"kind": "error", "exc": exc}
+                    await run.publish({
                         "type": "error",
                         "error": "model_call_failed",
                         "message": _workbench_chat_run_error_message(exc, lang),
@@ -1479,24 +1603,47 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 if reply == R._AWAITING_USER_SENTINEL:
                     # Run paused for a permission / clarification answer — surface
                     # the question instead of streaming the sentinel as a reply.
+                    if retry:
+                        fresh = _read_chats_store()
+                        fresh_chat = _find_chat(fresh, chat_id)
+                        if fresh_chat:
+                            _commit_retry_cut(fresh_chat)
+                            _write_chats_store(fresh)
                     pending = R._workbench_pending_question_for(chat_id)
                     _stash_chat_pending(pending)
-                    yield _ndjson_line({"type": "awaiting_user", "pending_question": pending})
+                    run.outcome = {"kind": "awaiting", "pending": pending}
+                    await run.publish({
+                        "type": "awaiting_user",
+                        "pending_question": pending,
+                        "retry": retry,
+                        "truncateAfterMessageId": truncate_after_id,
+                    })
                     return
-                if not saw_reply_events:
-                    yield _ndjson_line({"type": "reply_start"})
+                if not run.saw_reply_events:
+                    await run.publish({"type": "reply_start"})
                     for chunk in R._reply_stream_chunks(reply):
-                        yield _ndjson_line({"type": "reply_delta", "delta": chunk})
-                    yield _ndjson_line({"type": "reply_done", "response": reply})
+                        await run.publish({"type": "reply_delta", "delta": chunk})
+                    await run.publish({"type": "reply_done", "response": reply})
                 finalized = _finalize(reply)
-                yield _ndjson_line({"type": "saved", **finalized})
+                saved_event = {
+                    "type": "saved",
+                    **finalized,
+                    "retry": retry,
+                    "truncateAfterMessageId": truncate_after_id,
+                }
+                run.outcome = {"kind": "reply", "payload": saved_event}
+                await run.publish(saved_event)
             finally:
-                if not task.done():
-                    task.cancel()
                 _settle_status()
 
+        run, _is_new = _CHAT_RUN_MANAGER.start_or_get(
+            chat_id,
+            ack,
+            run_streaming,
+            stream=True,
+        )
         return StreamingResponse(
-            event_stream(),
+            _CHAT_RUN_MANAGER.stream(run),
             media_type="application/x-ndjson",
             headers={"Cache-Control": "no-cache"},
         )

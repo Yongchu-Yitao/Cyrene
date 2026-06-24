@@ -166,7 +166,6 @@ _session_state_lock = asyncio.Lock()
 _session_epoch: int = 0
 _interrupt_event = asyncio.Event()
 
-_MAX_HISTORY_MESSAGES = 40
 _MAX_TOOL_ROUNDS = 15  # kept for backward-compat; prefer _get_max_tool_rounds()
 
 

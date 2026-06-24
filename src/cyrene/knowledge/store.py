@@ -504,7 +504,44 @@ async def upsert_document_by_path(
             )
             row = await cursor.fetchone()
             if row:
-                await db.execute("UPDATE kb_documents SET updated_at = ? WHERE id = ?", (now, row["id"]))
+                canonical_path = Path(str(row["path"] or ""))
+                replacement_path = Path(path)
+                recover_missing_path = (
+                    not canonical_path.is_file()
+                    and replacement_path.is_file()
+                )
+                if recover_missing_path:
+                    await db.execute(
+                        """
+                        UPDATE kb_documents SET
+                            name = ?,
+                            path = ?,
+                            content_type = ?,
+                            kind = ?,
+                            size = ?,
+                            source = ?,
+                            status = 'pending',
+                            error = '',
+                            indexed_at = NULL,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            name,
+                            path,
+                            content_type,
+                            kind,
+                            size,
+                            source,
+                            now,
+                            row["id"],
+                        ),
+                    )
+                else:
+                    await db.execute(
+                        "UPDATE kb_documents SET updated_at = ? WHERE id = ?",
+                        (now, row["id"]),
+                    )
                 await db.commit()
                 cursor = await db.execute("SELECT * FROM kb_documents WHERE id = ?", (row["id"],))
                 row = await cursor.fetchone()

@@ -33,6 +33,7 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.recall_conversation",  # RecallConversation
     "cyrene.tool_impl.search_project_memory",  # search_project_memory
     "cyrene.tool_impl.save_project_memory",  # save_project_memory
+    "cyrene.tool_impl.retire_project_memory",  # retire_project_memory
     "cyrene.tool_impl.set_task_goal",  # set_task_goal
     "cyrene.tool_impl.list_knowledge_documents",  # ListKnowledgeDocuments
     "cyrene.tool_impl.search_knowledge",  # SearchKnowledge
@@ -77,6 +78,7 @@ _MAIN_ONLY_TOOLS = {
     "enter_plan_mode",
     "DeepReflect",
     "save_project_memory",
+    "retire_project_memory",
     "set_task_goal",
     "spawn_subagent",
     "query_round",
