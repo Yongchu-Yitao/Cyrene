@@ -1542,7 +1542,13 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         new_chat["forkedAtMessageId"] = message_id
 
         # Prefix transcript: everything before the edited user message.
-        prefix = [dict(entry) for entry in messages[:edit_index]]
+        # Strip usage from copied messages so the branch doesn't inherit the
+        # parent's accumulated token counts in the overview sidebar.
+        prefix = []
+        for entry in messages[:edit_index]:
+            copied = dict(entry)
+            copied.pop("usage", None)
+            prefix.append(copied)
         # New user entry bearing the edited text + original attachments.
         orig = messages[edit_index]
         edited_entry: dict[str, Any] = {
