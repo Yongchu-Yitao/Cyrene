@@ -710,16 +710,27 @@ def _append_exchange_meta(
 
 
 def _extract_exchange_segments(
-    state_messages: list[dict[str, Any]], start_index: int
+    state_messages: list[dict[str, Any]], state_ids_before: set[str]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
-    """Split one agent exchange at persisted mid-run assistant messages."""
+    """Split one agent exchange at persisted mid-run assistant messages.
+
+    Uses message IDs to identify which messages belong to this exchange, so
+    it works correctly even when session compaction reduces the total message
+    count during the agent run (*state_len_before* would overshoot).
+    """
     segments: list[dict[str, Any]] = []
     trace: list[dict[str, Any]] = []
     usage = _exchange_usage()
     files: list[dict[str, Any]] = []
     seen_file_urls: set[str] = set()
 
-    for message in state_messages[start_index:]:
+    for message in state_messages:
+        # Skip messages that existed before this exchange started — their IDs
+        # are in *state_ids_before*.  Compacted blocks (role=system) are
+        # implicitly skipped by the role check below.
+        mid = str(message.get("message_id") or message.get("id") or "").strip()
+        if mid and mid in state_ids_before:
+            continue
         if str(message.get("role") or "") != "assistant":
             continue
         if bool(message.get("intermediate_reply")):
@@ -1287,7 +1298,14 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                     att_map[parts[1]] = full_path
             _attachment_paths_by_name.set(att_map)
 
-        state_len_before = len(_session_state_messages(chat_id))
+        # Capture IDs of messages already in state before this exchange, so
+        # _extract_exchange_segments can identify new messages by ID rather
+        # than by positional index (which would break after session compaction).
+        state_ids_before: set[str] = set()
+        for m in _session_state_messages(chat_id):
+            mid = str(m.get("message_id") or m.get("id") or "").strip()
+            if mid:
+                state_ids_before.add(mid)
 
         async def _run() -> str:
             return await run_agent(
@@ -1306,7 +1324,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         def _finalize(reply_text: str) -> dict[str, Any]:
             """Persist mid-run messages plus the final assistant reply in order."""
             intermediate_entries, trace, usage, files = _extract_exchange_segments(
-                _session_state_messages(chat_id), state_len_before
+                _session_state_messages(chat_id), state_ids_before
             )
             fresh = _read_chats_store()
             fresh_chat = _find_chat(fresh, chat_id)
@@ -1702,7 +1720,11 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         now = _utc_now_iso()
         _mark_user_activity(chat, now)
         _write_chats_store(payload)
-        state_len_before = len(_session_state_messages(chat_id))
+        state_ids_before_resume: set[str] = set()
+        for m in _session_state_messages(chat_id):
+            mid = str(m.get("message_id") or m.get("id") or "").strip()
+            if mid:
+                state_ids_before_resume.add(mid)
         try:
             reply = await R._workbench_answer_pending(
                 chat_id, question_id, answer_text, workspace_dir,
@@ -1717,7 +1739,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             return {"ok": True, "awaitingUser": True, "pendingQuestion": new_pending}
 
         intermediate_entries, trace, usage, files = _extract_exchange_segments(
-            _session_state_messages(chat_id), state_len_before
+            _session_state_messages(chat_id), state_ids_before_resume
         )
         fresh = _read_chats_store()
         fresh_chat = _find_chat(fresh, chat_id)
