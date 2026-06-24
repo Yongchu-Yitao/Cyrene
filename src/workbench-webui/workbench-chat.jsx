@@ -3357,6 +3357,7 @@ function WbcContextBlockList({ chat, running }) {
                     );
                   }).filter(Boolean)
                 : React.createElement("div", { className: "wbc-ctx-legend-item" },
+                    React.createElement("i", { className: "wbc-ctx-dot seg-" + layer.id }),
                     React.createElement("span", null, layerLabel),
                     React.createElement("em", null, wbcCompactNumber(tokens))
                   )

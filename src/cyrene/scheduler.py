@@ -506,6 +506,42 @@ def _build_proactive_user_prompt(context: str, silence_hours: float | None, cons
 # Scheduled-task execution  (preserved from the original scheduler)
 # ---------------------------------------------------------------------------
 
+
+def _user_visible_text(result: str, prompt: str) -> str:
+    """Return *result* if it conveys real user-facing output, else *prompt*.
+
+    The execution-agent returns ``"Done."`` as a default when it produces no
+    text (see ``_run_execution_agent_locked``).  A bare ``"Done."`` or empty
+    string is indistinguishable from "I have nothing to report" — in that case
+    the original task prompt is a better signal than a dead ``"Done."``.
+    """
+    text = (result or prompt).strip()
+    if not text or text.lower().rstrip(".") == "done":
+        return prompt
+    return text
+
+
+def _plaintext(body: str) -> str:
+    """Strip common Markdown formatting for plaintext notification channels.
+
+    macOS ``terminal-notifier``, WeChat, and the in-app SSE notification panel
+    all display the content verbatim — they do not interpret Markdown.
+    """
+    body = _re.sub(r'\*\*(.+?)\*\*', r'\1', body)
+    body = _re.sub(r'\*(.+?)\*', r'\1', body)
+    body = _re.sub(r'`([^`]+)`', r'\1', body)
+    body = _re.sub(r'#{1,6}\s+', '', body)
+    body = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', body)
+    return body
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Truncate *text* to *limit* characters, appending ``…`` when cut."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…"
+
+
 async def _check_and_execute_tasks(bot, db_path: str) -> None:
     """Query all due tasks from the database and execute each one."""
     try:
@@ -540,7 +576,8 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
 
     wrapped_prompt = (
         "You are executing a scheduled task. "
-        "You MUST use the send_message tool to notify the user in Telegram. "
+        "First use tools to complete the task, then use the send_message tool "
+        "to report the result to the user. "
         f"Task: {prompt}"
     )
     notify_state: dict[str, bool] = {"sent": False}
@@ -552,15 +589,20 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
             wrapped_prompt, bot, task_chat_id, db_path, notify_state,
         )
 
-        # Fallback: if the model forgot to call send_message, send a plain
-        # reminder through the Web UI persistence path so the task doesn't go
-        # completely silent in web-only mode.
+        # Fallback: if the model forgot to call send_message, surface what it
+        # actually did so the result doesn't go silent in web-only mode.
+        # Nested try/except so a notification failure never corrupts the result.
         if not notify_state["sent"]:
-            await append_system_message(
-                f"Reminder: {prompt}",
-                message_meta={"scheduled": True},
-                publish_event={"scheduled": True},
-            )
+            try:
+                fallback_text = _user_visible_text(result, prompt)
+                truncated = _truncate(fallback_text, 2000)
+                await append_system_message(
+                    f"Result: {truncated}",
+                    message_meta={"scheduled": True},
+                    publish_event={"scheduled": True},
+                )
+            except Exception:
+                logger.warning("Failed to append fallback message for task %s", task_id)
 
         duration_ms = int((time.monotonic() - start) * 1000)
         await db.log_task_run(
@@ -607,29 +649,23 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
 
     # ── Multi-channel notifications after task execution ─────────────────
     try:
-        summary = prompt[:120] + ("…" if len(prompt) > 120 else "")
+        # Use agent's execution result for notifications; fall back to prompt
+        # when needed.  On error the title already says "Scheduled task error",
+        # so use the safe prompt text rather than the raw exception message.
+        if had_error:
+            notify_body = prompt
+        else:
+            notify_body = _user_visible_text(result, prompt)
+        notify_body = _plaintext(notify_body)  # strip markdown for plain channels
+        summary = _truncate(notify_body, 120)
         status_label = "error" if had_error else "completed"
 
-        # macOS desktop notification
-        await notify(
-            title=f"Scheduled task {status_label}",
-            body=summary,
-            channel="desktop",
-        )
-
-        # SSE event for frontend browser notifications
-        await notify(
-            title=f"Scheduled task {status_label}",
-            body=summary,
-            channel="sse",
-        )
-
-        # WeChat notification — controlled by notify_wechat setting
-        await notify(
-            title=f"Scheduled task {status_label}",
-            body=summary,
-            channel="wechat",
-        )
+        for ch in ("desktop", "sse", "wechat"):
+            await notify(
+                title=f"Scheduled task {status_label}",
+                body=summary,
+                channel=ch,
+            )
         append_notification(
             title="日程提醒",
             body=summary,
