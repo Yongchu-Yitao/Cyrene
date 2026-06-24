@@ -48,9 +48,8 @@ _CATEGORY_LABELS: dict[str, str] = {
     "habit": "工作习惯",
     "fact": "事实信息",
     "conversation": "对话记忆",
-    "task_report": "任务报告",
 }
-_CATEGORY_ORDER = ["preference", "project", "habit", "fact", "conversation", "task_report"]
+_CATEGORY_ORDER = ["preference", "project", "habit", "fact", "conversation"]
 
 # Map a legacy/free-form entry ``type`` onto a Workbench category so memories
 # captured by the agent (which only tags ``fact`` / ``preference`` / …) still
