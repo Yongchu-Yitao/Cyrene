@@ -78,7 +78,30 @@ def _write_crash_log(exc: BaseException) -> None:
         pass
 
 
+def _setup_playwright_browsers_path() -> None:
+    """In frozen builds, point Playwright to the bundled Chromium browser.
+
+    In a PyInstaller frozen build, the Chromium browser binaries are shipped
+    alongside ``_internal/`` at ``ms-playwright/chromium-*/...``.  Playwright
+    finds browsers via ``PLAYWRIGHT_BROWSERS_PATH`` — we set it here so the
+    runtime does not try to download or install browsers on first use.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    import os as _os
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass:
+        return
+    # sys._MEIPASS points to the _internal/ directory; the bundled browsers
+    # live one level up under ms-playwright/
+    bundled = _os.path.join(_os.path.dirname(meipass), "ms-playwright")
+    if _os.path.isdir(bundled):
+        _os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", bundled)
+
+
 if __name__ == "__main__":
+    _setup_playwright_browsers_path()
+
     if "--smoke-test" in sys.argv:
         _run_smoke_test()
         raise SystemExit(0)

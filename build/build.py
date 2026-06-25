@@ -6,6 +6,7 @@
     python build/build.py --clean  # 仅清理
 """
 
+import json
 import os
 import platform
 import shutil
@@ -350,6 +351,53 @@ def _appimage_arch() -> str:
     return arch_map.get(machine, machine or "x86_64")
 
 
+def ensure_playwright_browsers() -> str | None:
+    """Install Playwright and Chromium; return the browser directory path.
+
+    Returns the path to the ms-playwright directory (parent of the chromium-* bundle)
+    so the PyInstaller spec can include it as data, or None on failure.
+    """
+    print("\n[Playwright] Ensuring browser automation runtime...")
+    pip_result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "playwright>=1.40"],
+        capture_output=True, text=True, timeout=120,
+    )
+    if pip_result.returncode != 0:
+        print(f"  [warn] pip install playwright failed:\n{pip_result.stderr.strip()[:200]}")
+        print("  [warn] browser automation tools will be unavailable in the packaged build")
+        return None
+
+    install_result = subprocess.run(
+        [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
+        capture_output=True, text=True, timeout=300,
+    )
+    if install_result.returncode != 0:
+        print(f"  [warn] playwright install chromium failed:\n{install_result.stderr.strip()[:200]}")
+        return None
+    print("  [ok] Chromium installed")
+
+    # Locate the browser directory by asking Playwright for its executable path
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "from playwright.sync_api import sync_playwright; "
+             "p=sync_playwright(); p.start(); "
+             "print(p.chromium.executable_path); p.stop()"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            exe = result.stdout.strip()
+            if exe and Path(exe).exists():
+                # e.g. .../chromium-1223/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/...
+                # -> .../chromium-1223
+                browser_dir = str(Path(exe).parent.parent)
+                print(f"  [ok] Chromium bundle: {browser_dir}")
+                return browser_dir
+    except Exception as exc:
+        print(f"  [warn] could not locate Chromium browser: {exc}")
+    return None
+
+
 def run_electron_builder() -> None:
     """Run electron-builder to package the Electron app around the PyInstaller bundle."""
     electron_dir = PROJECT_ROOT / "electron"
@@ -460,6 +508,12 @@ def main() -> None:
         generate_icons()
 
     build_webui_js()
+
+    # Install Playwright + Chromium and expose the browser path for PyInstaller
+    chromium_dir = ensure_playwright_browsers()
+    if chromium_dir:
+        os.environ["CYRENE_PLAYWRIGHT_CHROMIUM_DIR"] = chromium_dir
+
     run_pyinstaller()
 
     if args.pyinstaller_only:

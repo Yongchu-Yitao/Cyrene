@@ -144,6 +144,8 @@ for _package in (
     "pypdf",
     "reportlab",
     "PIL",
+    # playwright — browser automation (optional, requires Chromium browser data)
+    "playwright",
     # simplexng runtime deps
     "waitress",
     "flask",
@@ -157,6 +159,26 @@ for _package in (
 _datas = list(dict.fromkeys(_datas))
 _binaries = list(dict.fromkeys(_binaries))
 _hidden = list(dict.fromkeys(_hidden))
+
+# ---- Playwright Chromium browser (optional, for browser automation) ----
+# When CYRENE_PLAYWRIGHT_CHROMIUM_DIR is set (by build.py), bundle the browser
+# binaries so the frozen app can launch its own Chromium without requiring
+# the user to run "playwright install".
+_playwright_chromium_dir = os.environ.get("CYRENE_PLAYWRIGHT_CHROMIUM_DIR")
+if _playwright_chromium_dir:
+    _chromium_path = Path(_playwright_chromium_dir)
+    if _chromium_path.is_dir():
+        # Walk the browser bundle and add every file to _datas.
+        # The destination path preserves the directory structure relative to
+        # ms-playwright/ so the bundled Playwright can find it via
+        # PLAYWRIGHT_BROWSERS_PATH at runtime.
+        for f in _chromium_path.rglob("*"):
+            if f.is_file() and f.name != ".DS_Store":
+                rel = str(f.relative_to(_chromium_path.parent.parent))  # .../chromium-1223/file -> ms-playwright/chromium-1223/file
+                _datas.append((str(f), rel))
+        print(f"[spec] Bundled Playwright Chromium from {_chromium_path}")
+    else:
+        print(f"[spec] CYRENE_PLAYWRIGHT_CHROMIUM_DIR={_playwright_chromium_dir!r} not found, skipping")
 
 # ---- 排除 ----
 _excludes = [
