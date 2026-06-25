@@ -17,6 +17,7 @@
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.36.5",
     "@lezer/highlight": "^1.2.1",
-    "esbuild": "^0.28.0"
+    "esbuild": "^0.28.0",
+    "katex": "^0.16.22"
   }
 }

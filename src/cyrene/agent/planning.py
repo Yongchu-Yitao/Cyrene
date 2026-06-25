@@ -58,13 +58,19 @@ _PLAN_SYSTEM = (
 
 def _normalize_plan(args: dict[str, Any]) -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
-    for s in (args.get("steps") or []):
+    for index, s in enumerate((args.get("steps") or []), start=1):
         if not isinstance(s, dict):
             continue
         title = str(s.get("title") or "").strip()
         tasks = [str(t).strip() for t in (s.get("tasks") or []) if str(t).strip()]
         if title or tasks:
-            steps.append({"title": title or "步骤", "tasks": tasks})
+            steps.append({
+                "id": f"step_{index}",
+                "title": title or "步骤",
+                "tasks": tasks,
+                "status": "pending",
+                "note": "",
+            })
     return {
         "title": str(args.get("title") or "执行计划").strip() or "执行计划",
         "summary": str(args.get("summary") or "").strip(),
@@ -167,6 +173,7 @@ async def run_plan_flow(
         "type": "phase_transition",
         "from": "chat", "to": "planning",
         "detail": "计划模式：正在拆解任务…",
+        "detail_key": "phase.planning",
         "round_id": round_id,
     })
     try:
@@ -175,7 +182,22 @@ async def run_plan_flow(
         logger.warning("generate_plan failed", exc_info=True)
         plan = {"title": "计划生成失败", "summary": "无法生成计划，请重试或换种描述。", "steps": []}
 
-    # 3. 推送 plan 事件 → 前端「计划」tab
+    # 3. Persist the plan on the Workbench chat and as workspace/plan/*.md.
+    # Lazy import keeps the agent package usable without the web UI server.
+    try:
+        from cyrene.agent.state import _current_session_id, active_workspace_dir
+        from webui.routes_workbench_chat import persist_chat_plan
+
+        plan = persist_chat_plan(
+            str(_current_session_id.get() or ""),
+            plan,
+            round_id=round_id,
+            workspace_dir=active_workspace_dir(),
+        )
+    except Exception:
+        logger.warning("Failed to persist Workbench chat plan", exc_info=True)
+
+    # 4. 推送 plan 事件 → 前端「计划」tab
     await _publish_runtime_event({
         "type": "plan",
         "status": "proposed",
@@ -184,7 +206,7 @@ async def run_plan_flow(
         "client_request_id": client_request_id,
     })
 
-    # 4. ask_user 三选项（plan_confirmation 不属于权限提权，会作为带选项的普通问题显示）
+    # 5. ask_user 三选项（plan_confirmation 不属于权限提权，会作为带选项的普通问题显示）
     labels = get_session_labels(round_id)
     question = await _upsert_pending_question({
         "text": (

@@ -26,7 +26,7 @@ function readCapability(key, fallback) {
 function createEmptyModel() {
   return {
     id: "candidate-" + Date.now() + "-" + Math.random().toString(16).slice(2, 6),
-    name: "", model: "", desc: "", ctx: "", price: "", api_key: "", base_url: DEFAULT_MODEL_BASE_URL,
+    name: "", model: "", desc: "", ctx: "", price: "", priceHint: "", api_key: "", base_url: DEFAULT_MODEL_BASE_URL,
   };
 }
 
@@ -38,6 +38,7 @@ function normalizeModel(raw, idx, fbBaseUrl, fbKey) {
     desc: String(raw && raw.desc || "").trim(),
     ctx: String(raw && raw.ctx || "").trim(),
     price: String(raw && raw.price || "").trim(),
+    priceHint: String(raw && raw.priceHint || "").trim(),
     api_key: String(raw && raw.api_key || fbKey || "").trim(),
     base_url: String(raw && raw.base_url || fbBaseUrl || DEFAULT_MODEL_BASE_URL).trim() || DEFAULT_MODEL_BASE_URL,
   };
@@ -442,7 +443,12 @@ function ModelsPanel(p) {
   var { t, models, setModels, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, saveModels, config } = p;
 
   function updateModel(id, field, val) {
-    setModels(models.map(function (m) { return m.id === id ? { ...m, [field]: val, name: field === "model" ? val : m.name } : m; }));
+    setModels(models.map(function (m) {
+      if (m.id !== id) return m;
+      // Clear server-supplied priceHint when user changes the model identifier
+      var extra = field === "model" ? { name: val, priceHint: "" } : {};
+      return { ...m, [field]: val, ...extra };
+    }));
   }
   function moveModel(id, dir) {
     var idx = models.findIndex(function (m) { return m.id === id; });
@@ -483,7 +489,7 @@ function ModelsPanel(p) {
         React.createElement("div", { className: "wb-model-meta" },
           React.createElement("div", null, React.createElement("small", null, t("settings.descriptionLabel")), React.createElement("input", { className: "wb-input mono small", value: models[0].desc, onChange: function (e) { updateModel(models[0].id, "desc", e.target.value); }, placeholder: t("settings.placeholderDesc") })),
           React.createElement("div", null, React.createElement("small", null, t("settings.contextLabel")), React.createElement("input", { className: "wb-input mono small", value: models[0].ctx, onChange: function (e) { updateModel(models[0].id, "ctx", e.target.value); }, placeholder: t("settings.placeholderCtx") })),
-          React.createElement("div", null, React.createElement("small", null, t("settings.priceLabel")), React.createElement("input", { className: "wb-input mono small", value: models[0].price, onChange: function (e) { updateModel(models[0].id, "price", e.target.value); }, placeholder: t("settings.placeholderPrice") })),
+          React.createElement("div", null, React.createElement("small", null, t("settings.priceLabel")), React.createElement("input", { className: "wb-input mono small", value: models[0].price, onChange: function (e) { updateModel(models[0].id, "price", e.target.value); }, placeholder: models[0].priceHint || t("settings.placeholderPrice") })),
         ),
       ]),
     ),

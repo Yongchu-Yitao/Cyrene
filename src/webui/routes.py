@@ -200,6 +200,13 @@ def _workbench_project_data_key(project: dict[str, Any] | None) -> str:
     return _safe_workbench_data_key(project.get("dataKey") or project.get("id"))
 
 
+def _workbench_project_memory_key(project: dict[str, Any] | None) -> str:
+    """Return the project identity used for durable Workbench memory."""
+    if not project:
+        return "default"
+    return _safe_workbench_data_key(project.get("id"))
+
+
 def _ndjson_line(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False) + "\n"
 
@@ -4138,7 +4145,7 @@ def _workbench_sink_reflection_insights(
     if not project or not isinstance(packet, dict):
         return
     try:
-        data_key = _workbench_project_data_key(project)
+        data_key = _workbench_project_memory_key(project)
         excluded = packet.get("excluded_paths") if isinstance(packet.get("excluded_paths"), list) else []
         promising = packet.get("promising_directions") if isinstance(packet.get("promising_directions"), list) else []
         for path in excluded[:5]:
@@ -4237,7 +4244,7 @@ def _workbench_compose_static_system(
     # Project durable memories — change only when the user explicitly saves.
     if project:
         try:
-            mem_block = render_memory_for_injection(_workbench_project_data_key(project))
+            mem_block = render_memory_for_injection(_workbench_project_memory_key(project))
         except Exception:
             logger.exception("Failed to render project memory for static system")
             mem_block = ""
@@ -4405,7 +4412,7 @@ def _workbench_render_past_task_reports(project: dict[str, Any] | None) -> str:
     planning time, not during every agent run."""
     if not project:
         return ""
-    data_key = _workbench_project_data_key(project)
+    data_key = _workbench_project_memory_key(project)
     try:
         return render_task_reports_for_planning(data_key, limit=3, max_chars=2500)
     except Exception:
@@ -4477,7 +4484,7 @@ async def _workbench_generate_task_report(
     report = _workbench_compose_task_report_text(session)
     if len(report) < 20:
         return None
-    data_key = _workbench_project_data_key(project)
+    data_key = _workbench_project_memory_key(project)
     try:
         add_agent_memory(
             data_key,
@@ -7605,6 +7612,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     async def api_get_models():
         from cyrene.settings_store import get_models, get_vision_models, get_secondary_model
         from cyrene.config import OPENAI_API_KEY, DEFAULT_OPENAI_BASE_URL, read_env_file
+        from cyrene.model_prices import price_hint as _price_hint
 
         def _normalize_candidates(raw_items: list[dict[str, Any]] | None, fallback_api_key: str, fallback_base_url: str) -> list[dict[str, Any]]:
             normalized_items: list[dict[str, Any]] = []
@@ -7625,6 +7633,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                     model_api_key = fallback_api_key
                 else:
                     model_api_key = ""
+                user_price = str(model.get("price") or "").strip()
                 normalized_items.append(
                     {
                         "id": str(model.get("id") or f"candidate-{index + 1}").strip() or f"candidate-{index + 1}",
@@ -7632,7 +7641,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                         "model": model_identifier,
                         "desc": str(model.get("desc") or "").strip(),
                         "ctx": str(model.get("ctx") or "").strip(),
-                        "price": str(model.get("price") or "").strip(),
+                        "price": user_price,
+                        "priceHint": _price_hint(model_identifier) if not user_price else "",
                         "api_key": model_api_key,
                         "base_url": model_base_url,
                     }
@@ -7688,14 +7698,16 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             }
 
         if not normalized:
+            fallback_model = active_model_name or "deepseek-v4-flash"
             normalized = [
                 {
                     "id": "candidate-1",
-                    "name": active_model_name or "deepseek-v4-flash",
-                    "model": active_model_name or "deepseek-v4-flash",
+                    "name": fallback_model,
+                    "model": fallback_model,
                     "desc": "",
                     "ctx": "",
                     "price": "",
+                    "priceHint": _price_hint(fallback_model),
                     "api_key": active_api_key,
                     "base_url": base_url or DEFAULT_OPENAI_BASE_URL,
                 }
@@ -7709,6 +7721,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                     "desc": "",
                     "ctx": "",
                     "price": "",
+                    "priceHint": _price_hint(normalized[0]["model"]),
                     "api_key": normalized[0]["api_key"],
                     "base_url": normalized[0]["base_url"],
                 }
@@ -7739,6 +7752,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     async def api_update_models(request: Request):
         from cyrene.settings_store import save_models, save_vision_models, save_secondary_model, get_secondary_model
         from cyrene.config import DEFAULT_OPENAI_BASE_URL, write_env_keys
+        from cyrene.model_prices import price_hint as _price_hint
         from cyrene.onboarding import _test_llm_connection
         body = await request.json()
         raw_models = body.get("models")
@@ -7844,12 +7858,28 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 "ctx_limit": 0,
                 "max_concurrency": 0,
             }
+
+        def _with_price_hints(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                {
+                    **model,
+                    "priceHint": (
+                        _price_hint(str(model.get("model") or ""))
+                        if not str(model.get("price") or "").strip()
+                        else ""
+                    ),
+                }
+                for model in items
+            ]
+
+        response_models = _with_price_hints(normalized)
+        response_vision_models = _with_price_hints(normalized_vision)
         return {
             "ok": True,
-            "models": normalized,
-            "primary_candidates": normalized,
-            "vision_models": normalized_vision if raw_vision_models is not None else None,
-            "vision_candidates": normalized_vision if raw_vision_models is not None else None,
+            "models": response_models,
+            "primary_candidates": response_models,
+            "vision_models": response_vision_models if raw_vision_models is not None else None,
+            "vision_candidates": response_vision_models if raw_vision_models is not None else None,
             "secondary_model": normalized_secondary,
             "active": str(primary.get("id") or "candidate-1"),
             "active_model_name": primary_model,
@@ -8160,6 +8190,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             )
         if doomed_project:
             doomed_data_key = _workbench_project_data_key(doomed_project)
+            doomed_memory_key = _workbench_project_memory_key(doomed_project)
             for s in (doomed_project.get("sessions") or []):
                 sid = str(s.get("id") or "").strip()
                 if sid:
@@ -8179,7 +8210,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                     from webui.routes_workbench_memory import delete_workspace_memory
 
                     _remove_path(get_knowledge_db_path(doomed_data_key))
-                    delete_workspace_memory(doomed_data_key)
+                    delete_workspace_memory(doomed_memory_key)
                     import aiosqlite
                     async with aiosqlite.connect(_db_path) as db:
                         await db.execute(
@@ -9107,7 +9138,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 pass
         # Sink durable memories from this exchange into the project's workspace store.
         if not command and not awaiting_user:
-            schedule_capture(_workbench_project_data_key(project), user_input, agent_reply)
+            schedule_capture(_workbench_project_memory_key(project), user_input, agent_reply)
         if not is_step_run and not awaiting_user:
             session["status"] = "planning" if session.get("status") in ("idle", "pending") else session.get("status", "planning")
         session["updatedAt"] = now
@@ -9207,7 +9238,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         session["agentReply"] = agent_reply
         # Sink durable memories from this exchange into the project's workspace store.
         if not command and not awaiting_user:
-            schedule_capture(_workbench_project_data_key(project), message, agent_reply)
+            schedule_capture(_workbench_project_memory_key(project), message, agent_reply)
         session["status"] = "waiting_for_user" if awaiting_user else "completed"
         now = _utc_now_iso()
         session["updatedAt"] = now
@@ -9399,7 +9430,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         _workbench_sync_agent_task_meta(session, session_id, task_meta_before)
         session["agentReply"] = agent_reply
         if not command and not awaiting_user:
-            schedule_capture(_workbench_project_data_key(project), user_input, agent_reply)
+            schedule_capture(_workbench_project_memory_key(project), user_input, agent_reply)
         # On finalize: generate a task completion report for cross-session learning.
         if finalizing and not awaiting_user:
             _schedule_task_report(project, session)
@@ -9566,7 +9597,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if not awaiting_user:
             session.pop("pendingQuestion", None)
             session["status"] = "acted"
-            schedule_capture(_workbench_project_data_key(project), answer_text, agent_reply)
+            schedule_capture(_workbench_project_memory_key(project), answer_text, agent_reply)
 
         run_id = _short_id("run")
         activity_events = _collect_run_activity_events(session_id, run_start_ts, run_id, workspace_root)
@@ -12479,21 +12510,14 @@ def _fmt_tok(n: int) -> str:
 
 
 def _model_pricing() -> dict[str, float] | None:
-    """Return token pricing metadata for known models, or None."""
-    model_lower = _get_model().lower()
-    if "opus-4" in model_lower or "claude-opus-4" in model_lower:
-        return {"input": 15.0, "output": 75.0}
-    if "sonnet-4" in model_lower or "claude-sonnet-4" in model_lower:
-        return {"input": 3.0, "output": 15.0}
-    if "haiku-4" in model_lower or "claude-haiku-4" in model_lower:
-        return {"input": 0.25, "output": 1.25}
-    if "deepseek-v4-flash" in model_lower:
-        return {"input": 0.14, "output": 0.28, "cache_hit": 0.0}
-    if "deepseek-v4" in model_lower or "deepseek-chat" in model_lower:
-        return {"input": 0.14, "output": 0.28, "cache_hit": 0.05}
-    if "deepseek-reasoner" in model_lower:
-        return {"input": 0.55, "output": 2.19, "cache_hit": 0.14}
-    return None
+    """Return token pricing for the active model, or None.
+
+    Checks the user-configured price string for the active model first,
+    then falls back to the built-in pricing database.
+    """
+    from cyrene.model_prices import effective_price
+
+    return effective_price(_get_model())
 
 
 def _calc_spend(usage: dict[str, int | None] | None) -> str:
@@ -12506,20 +12530,25 @@ def _calc_spend(usage: dict[str, int | None] | None) -> str:
     completion_tokens = usage.get("completion_tokens")
     cache_hit_tokens = usage.get("prompt_cache_hit_tokens")
     cache_miss_tokens = usage.get("prompt_cache_miss_tokens")
-    input_price = pricing["input"]
-    output_price = pricing["output"]
-    cache_hit_price = pricing.get("cache_hit", input_price)
-    cost = 0.0
-    if isinstance(cache_hit_tokens, int) and isinstance(cache_miss_tokens, int) and (cache_hit_tokens or cache_miss_tokens):
-        cost += (cache_hit_tokens / 1_000_000) * cache_hit_price
-        cost += (cache_miss_tokens / 1_000_000) * input_price
-    elif prompt_tokens is not None:
-        cost += (prompt_tokens / 1_000_000) * input_price
-    if completion_tokens is not None:
-        cost += (completion_tokens / 1_000_000) * output_price
-    if cost < 0.01:
-        return "<$0.01"
-    return f"${cost:.2f}"
+    from cyrene.model_prices import estimate_cost
+
+    cost = estimate_cost(
+        pricing,
+        int(prompt_tokens or 0),
+        int(completion_tokens or 0),
+        cache_hit_tokens=int(cache_hit_tokens or 0),
+        cache_miss_tokens=int(cache_miss_tokens or 0),
+    )
+    currency = pricing.get("currency", "USD")
+    if currency == "CNY":
+        sym = "¥"
+        threshold = 0.07  # ~$0.01 in CNY
+    else:
+        sym = "$"
+        threshold = 0.01
+    if cost < threshold:
+        return f"<{sym}{threshold:.2g}"
+    return f"{sym}{cost:.2f}"
 
 
 def _calc_current_streak(stats_by_day: dict[str, dict], today: str) -> int:

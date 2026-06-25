@@ -16,6 +16,8 @@ import simplexng
 import sniffio
 import websockets
 
+from playwright_bundle import find_bundled_browser_dir
+
 
 def _run_smoke_test() -> None:
     """Verify frozen runtime can import critical dependencies before release."""
@@ -60,6 +62,22 @@ def _run_smoke_test() -> None:
     for _name, _ver in _smoke_imports.items():
         print(f"{_name}={_ver}")
 
+    import os
+
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        try:
+            from playwright.sync_api import sync_playwright
+
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                browser.close()
+            print("playwright_browser=ok")
+        except Exception as exc:
+            print(f"playwright_browser=FAILED: {exc}")
+            raise SystemExit(1) from exc
+    else:
+        print("playwright_browser=not bundled")
+
 
 def _write_crash_log(exc: BaseException) -> None:
     """Write traceback to cyrene_error.log in the OS temp dir.
@@ -78,7 +96,26 @@ def _write_crash_log(exc: BaseException) -> None:
         pass
 
 
+def _setup_playwright_browsers_path() -> None:
+    """Point frozen Playwright at the browser runtime shipped with the app."""
+    if not getattr(sys, "frozen", False):
+        return
+
+    browser_dir = find_bundled_browser_dir(
+        getattr(sys, "_MEIPASS", None),
+        sys.executable,
+    )
+    if browser_dir is not None:
+        import os
+
+        # The bundled Python driver and browsers must stay on the same revision.
+        # Do not allow a stale inherited environment variable to override them.
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_dir)
+
+
 if __name__ == "__main__":
+    _setup_playwright_browsers_path()
+
     if "--smoke-test" in sys.argv:
         _run_smoke_test()
         raise SystemExit(0)

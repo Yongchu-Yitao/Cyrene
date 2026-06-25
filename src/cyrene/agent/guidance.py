@@ -660,6 +660,8 @@ async def _process_main_inbox_message(message: dict[str, Any], bot: Any, chat_id
             "from": "guidance_queue",
             "to": "subagent_guidance",
             "detail": f"Main agent is applying guidance to {len(snapshot)} subagent(s).",
+            "detail_key": "phase.applyingGuidanceToSubagents",
+            "detail_params": {"count": len(snapshot)},
         })
         await _fan_out_guidance_to_subagents(target_round_id, content, bot, chat_id, db_path)
         interrupted, _summary = await _wait_for_subagent_round(target_round_id, bot, chat_id, db_path)
@@ -708,6 +710,7 @@ async def _process_main_inbox_message(message: dict[str, Any], bot: Any, chat_id
         "from": "guidance_queue",
         "to": "guided_round_continuation",
         "detail": "Main agent is continuing the same round with the new guidance.",
+        "detail_key": "phase.guidedRoundContinuation",
     })
     persist_context = _guidance_persist_context_after_ack(guidance_id)
     return await _run_chat_agent(
@@ -802,6 +805,7 @@ async def _drain_main_inbox(bot: Any, chat_id: int, db_path: str) -> None:
                     "from": "queued_guidance",
                     "to": "guidance_execution",
                     "detail": "Main agent is now applying the queued guidance.",
+                    "detail_key": "phase.guidanceExecution",
                 })
                 async with _agent_lock:
                     _interrupt_event.clear()
@@ -1183,10 +1187,19 @@ async def _handle_plan_confirmation_answer(
     reject = raw in {"拒绝", "取消", "算了", "不用了"} or normalized in {"reject", "cancel", "no", "stop"}
 
     if approve:
+        try:
+            from cyrene.agent.state import _current_session_id
+            from webui.routes_workbench_chat import activate_chat_plan
+
+            plan = activate_chat_plan(str(_current_session_id.get() or ""), plan)
+        except Exception:
+            logger.warning("Failed to activate Workbench chat plan", exc_info=True)
         await _publish_runtime_event({"type": "plan", "status": "accepted", "plan": plan, "round_id": round_id})
         exec_system = (
             "用户已同意以下计划，请严格按计划执行。当前为默认权限模式：碰到 workspace 之外或写/删操作时，"
-            "再按需向用户申请提权。完成后用一段话总结结果。\n\n" + _plan_to_text(plan)
+            "再按需向用户申请提权。执行每个步骤前必须调用 update_plan_progress 将该步骤设为 in_progress；"
+            "完成后必须再次调用它设为 completed（失败则设为 failed），然后才能进入下一步。"
+            "完成后用一段话总结结果。\n\n" + _plan_to_text(plan)
         )
         return await _run_chat_agent(
             user_message or "[按已同意的计划执行]",
@@ -1203,6 +1216,13 @@ async def _handle_plan_confirmation_answer(
         )
 
     if reject:
+        try:
+            from cyrene.agent.state import _current_session_id
+            from webui.routes_workbench_chat import reject_chat_plan
+
+            plan = reject_chat_plan(str(_current_session_id.get() or ""), plan)
+        except Exception:
+            logger.warning("Failed to reject Workbench chat plan", exc_info=True)
         await _publish_runtime_event({"type": "plan", "status": "rejected", "plan": plan, "round_id": round_id})
         reject_system = (
             "用户拒绝了刚才的计划，不要执行任何操作。用一句话礼貌确认已取消，"

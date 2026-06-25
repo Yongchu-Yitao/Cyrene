@@ -100,6 +100,7 @@ async def create_deep_reflection_record(
         "from": "execution",
         "to": "deep_reflection",
         "detail": "正在进行深度反思" if re.search(r"[\u4e00-\u9fff]", str(lang_text or focus or user_requirement or goal_gap or "")) else "Running deep reflection",
+        "detail_key": "phase.deepReflection",
     })
     evidence = build_reflection_evidence(
         messages,

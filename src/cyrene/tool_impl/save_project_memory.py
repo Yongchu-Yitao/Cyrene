@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene import tool_legacy as _legacy
-from cyrene.workbench_context import resolve_project_data_key_for_session
+from cyrene.workbench_context import resolve_workbench_project_id_for_session
 
 TOOL_NAME = 'save_project_memory'
 TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL_NAME)
@@ -34,11 +34,9 @@ async def _tool_save_project_memory(
     category = str(args.get("category", "fact") or "fact").strip().lower()
     tags = args.get("tags")
 
-    data_key = resolve_project_data_key_for_session(_current_session_id.get())
-    if not data_key or data_key == "default":
-        # Not inside a Workbench project (e.g. legacy chat / scheduler run):
-        # there is no project memory to write to, and "default" aliases the
-        # global short-term store, which must never be written here.
+    project_id = resolve_workbench_project_id_for_session(_current_session_id.get())
+    if not project_id:
+        # Not inside a Workbench project (e.g. legacy chat / scheduler run).
         return "Not saved: project memory is only available inside a Workbench project task/chat."
 
     # Lazy import: the store lives in the webui layer (loaded in the server
@@ -49,7 +47,7 @@ async def _tool_save_project_memory(
 
     # Resolves textual duplicates (reinforce) and asks an LLM whether this fact
     # contradicts/supersedes existing memories — retiring the outdated ones.
-    saved, retired = await add_agent_memory_checked(data_key, content, category=category, tags=tags)
+    saved, retired = await add_agent_memory_checked(project_id, content, category=category, tags=tags)
     if not saved:
         return "Not saved (blank, too short, or out of project scope)."
     cat_label = str(saved.get("category_label") or saved.get("category") or "")

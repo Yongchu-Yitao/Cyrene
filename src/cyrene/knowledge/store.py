@@ -845,12 +845,16 @@ async def list_relations(
     db_path: str,
     *,
     src_id: str | None = None,
+    document_id: str | None = None,
 ) -> list[dict]:
-    """List relations, optionally filtered by source ID."""
+    """List relations, optionally filtered by source or either document endpoint."""
     query = "SELECT * FROM kb_relations WHERE 1=1"
     params: list[Any] = []
 
-    if src_id:
+    if document_id:
+        query += " AND (src_id = ? OR dst_id = ?)"
+        params.extend([document_id, document_id])
+    elif src_id:
         query += " AND src_id = ?"
         params.append(src_id)
 

@@ -248,6 +248,22 @@ def test_compact_workbench_chat_is_an_explicit_forced_action(
     assert calls[0]["ctx_limit"] > 0
 
 
+def test_compact_workbench_chat_returns_running_reason_as_promptable_result(
+    client, search_env, monkeypatch,
+):
+    import cyrene.agent as agent
+
+    async def fake_compact(session_id="", *, ctx_limit=None, force=False):
+        return {"compacted": False, "reason": "running"}
+
+    monkeypatch.setattr(agent, "compact_session_if_needed", fake_compact)
+
+    response = client.post("/api/workbench/chats/chat_1/compact")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "compacted": False, "reason": "running"}
+
+
 def test_empty_legacy_live_session_is_not_listed(search_env, monkeypatch):
     from webui import routes_workbench_chat as chat_mod
 

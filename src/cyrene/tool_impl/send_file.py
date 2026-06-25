@@ -66,7 +66,10 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
                 content_type=content_type,
                 kind=kind,
                 size=doc_file.stat().st_size if doc_file.exists() else 0,
-                metadata={"sent_to_chat": True},
+                metadata={
+                    "sent_to_chat": True,
+                    "session_id": str(_current_session_id.get() or ""),
+                },
                 content_hash=content_hash,
             )
             if doc.get("status") in {"pending", "error"}:

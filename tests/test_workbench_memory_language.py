@@ -276,7 +276,7 @@ async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_
     )
     monkeypatch.setattr(
         tool,
-        "resolve_workbench_project_data_key_for_session",
+        "resolve_workbench_project_id_for_session",
         lambda session_id: "project-test",
     )
     token = state._current_session_id.set("chat-test")
@@ -299,23 +299,23 @@ async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_
 
 @pytest.mark.asyncio
 async def test_search_project_memory_allows_default_workbench_project(monkeypatch, tmp_path):
-    from cyrene import short_term
     from cyrene.agent import state
     from cyrene.tool_impl import search_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
-    monkeypatch.setattr(short_term, "_SHORT_TERM_FILE", tmp_path / "short_term.json")
-    short_term.save_entries([{
+    (tmp_path / "wb_memory_project-default.json").write_text(json.dumps([{
         "content": "默认项目使用 pytest。",
         "type": "fact",
+        "category": "fact",
+        "source": "conversation",
         "first_seen": "2026-06-21",
         "last_mentioned": "2026-06-21",
         "mention_count": 1,
-    }])
+    }], ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(
         tool,
-        "resolve_workbench_project_data_key_for_session",
-        lambda session_id: "default",
+        "resolve_workbench_project_id_for_session",
+        lambda session_id: "project-default",
     )
     token = state._current_session_id.set("task-in-default-project")
     try:
@@ -364,7 +364,68 @@ def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp
 
     assert workbench_context.resolve_workbench_project_data_key_for_session("task-default") == "default"
     assert workbench_context.resolve_workbench_project_data_key_for_session("chat-default") == "default"
+    assert workbench_context.resolve_workbench_project_id_for_session("task-default") == "project-default"
+    assert workbench_context.resolve_workbench_project_id_for_session("chat-default") == "project-default"
     assert workbench_context.resolve_workbench_project_data_key_for_session("missing") is None
+    assert workbench_context.resolve_workbench_project_id_for_session("missing") is None
+
+
+def test_default_project_memory_does_not_alias_global_short_term(monkeypatch, tmp_path):
+    from cyrene import short_term
+    from webui import routes
+
+    monkeypatch.setattr(memory, "STORE_DIR", tmp_path)
+    monkeypatch.setattr(memory, "_STORE_DB_PATH", "")
+    monkeypatch.setattr(memory, "_CONFIGURED_STORE_DIR", None)
+    monkeypatch.setattr(short_term, "_SHORT_TERM_FILE", tmp_path / "short_term.json")
+    monkeypatch.setattr(
+        routes,
+        "_read_workbench_store",
+        lambda: {
+            "projects": [{
+                "id": "project-default",
+                "dataKey": "default",
+            }]
+        },
+    )
+    monkeypatch.setattr(
+        routes,
+        "_workbench_find_project",
+        lambda payload, project_id: next(
+            (
+                project
+                for project in payload["projects"]
+                if project["id"] == project_id
+            ),
+            None,
+        ),
+    )
+
+    short_term.save_entries([{
+        "content": "旧 UI 的全局记忆。",
+        "type": "fact",
+        "first_seen": "2026-06-20",
+        "last_mentioned": "2026-06-20",
+        "mention_count": 1,
+    }])
+    (tmp_path / "wb_memory_project-default.json").write_text(
+        json.dumps([{
+            "id": "mem_project",
+            "content": "默认项目自己的记忆。",
+            "type": "fact",
+            "category": "fact",
+            "source": "conversation",
+            "first_seen": "2026-06-21",
+            "last_mentioned": "2026-06-21",
+            "mention_count": 1,
+        }], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    assert memory._resolve_workspace_id("project-default") == "project-default"
+    payload = memory._build_payload("project-default")
+    assert payload["overview"]["total"] == 1
+    assert payload["memories"][0]["content"] == "默认项目自己的记忆。"
 
 
 def test_memory_tools_are_registered_with_distinct_contracts():
@@ -411,7 +472,7 @@ async def test_retire_project_memory_tool_marks_exact_memory_stale(
     )
     monkeypatch.setattr(
         tool,
-        "resolve_workbench_project_data_key_for_session",
+        "resolve_workbench_project_id_for_session",
         lambda session_id: "project-test",
     )
 
@@ -469,7 +530,7 @@ async def test_retire_project_memory_tool_is_idempotent(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         tool,
-        "resolve_workbench_project_data_key_for_session",
+        "resolve_workbench_project_id_for_session",
         lambda session_id: "project-test",
     )
 
@@ -495,25 +556,25 @@ async def test_retire_project_memory_tool_is_idempotent(monkeypatch, tmp_path):
 async def test_retire_project_memory_tool_supports_default_workbench_project(
     monkeypatch, tmp_path
 ):
-    from cyrene import short_term
     from cyrene.agent import state
-    from cyrene.tool_impl import recall_memory
     from cyrene.tool_impl import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
-    monkeypatch.setattr(short_term, "_SHORT_TERM_FILE", tmp_path / "short_term.json")
-    short_term.save_entries([{
+    path = tmp_path / "wb_memory_project-default.json"
+    path.write_text(json.dumps([{
         "id": "mem_default_old",
         "content": "默认项目的旧配置。",
         "type": "fact",
+        "category": "fact",
+        "source": "conversation",
         "first_seen": "2026-06-10",
         "last_mentioned": "2026-06-20",
         "mention_count": 1,
-    }])
+    }], ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(
         tool,
-        "resolve_workbench_project_data_key_for_session",
-        lambda session_id: "default",
+        "resolve_workbench_project_id_for_session",
+        lambda session_id: "project-default",
     )
 
     token = state._current_session_id.set("task-default")
@@ -531,12 +592,11 @@ async def test_retire_project_memory_tool_supports_default_workbench_project(
     payload = json.loads(result)
     assert payload["status"] == "success"
     assert payload["changed"] is True
-    assert short_term.get_context() == ""
-
-    recalled = json.loads(
-        await recall_memory._tool_recall_memory({}, None, 0, "", None)
-    )
-    assert recalled["memories"] == []
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored[0]["stale"] is True
+    assert memory.search_project_memories(
+        "project-default", query="旧配置"
+    ) == []
 
 
 @pytest.mark.asyncio

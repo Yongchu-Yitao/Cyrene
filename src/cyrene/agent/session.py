@@ -247,6 +247,13 @@ def _strip_tool_episode_text(messages: list[dict[str, Any]]) -> list[str]:
     """
     lines: list[str] = []
     for m in messages:
+        if _is_compacted_block(m):
+            content = str(m.get("content") or "").strip()
+            if content.startswith(_COMPACT_BLOCK_PREFIX):
+                content = content[len(_COMPACT_BLOCK_PREFIX):].lstrip("\n")
+            if content:
+                lines.append(content)
+            continue
         role = m.get("role")
         if role == "tool":
             continue  # tool result body stripped
@@ -292,41 +299,52 @@ def _compact_messages_for_storage(
       block (tool results stripped, calls reduced to name+args), appended AFTER any
       existing compacted blocks (which are never rewritten). Recent messages are
       kept verbatim within ~30% of the window.
+    - With ``force=True``: mechanically fold the entire conversation, including
+      prior compacted blocks, into ONE replacement block. No recent raw messages
+      are retained. This is the explicit user-triggered Workbench behavior.
 
-    When the context window is unknown, compaction is disabled so persistence
-    remains lossless.
+    When the context window is unknown, automatic compaction is disabled so
+    persistence remains lossless. Forced full compaction does not need a window.
     """
     from cyrene.config_store import get_current_ctx_limit
     from cyrene.call_llm import _message_token_estimate
 
     if ctx_limit is None:
         ctx_limit = get_current_ctx_limit()
-    if ctx_limit <= 0:
+    if ctx_limit <= 0 and not force:
         return messages
 
-    total = sum(_message_token_estimate(m) for m in messages)
-    if not force and total <= int(ctx_limit * _COMPACT_TRIGGER_RATIO):
-        return messages
+    if not force:
+        total = sum(_message_token_estimate(m) for m in messages)
+        if total <= int(ctx_limit * _COMPACT_TRIGGER_RATIO):
+            return messages
 
-    head_blocks: list[dict[str, Any]] = []
-    i = 0
-    while i < len(messages) and _is_compacted_block(messages[i]):
-        head_blocks.append(messages[i])
-        i += 1
-    live = messages[i:]
+    if force:
+        if len(messages) == 1 and _is_compacted_block(messages[0]):
+            return messages
+        head_blocks: list[dict[str, Any]] = []
+        to_compact = messages
+        recent: list[dict[str, Any]] = []
+    else:
+        head_blocks = []
+        i = 0
+        while i < len(messages) and _is_compacted_block(messages[i]):
+            head_blocks.append(messages[i])
+            i += 1
+        live = messages[i:]
 
-    recent_budget = int(ctx_limit * _COMPACT_RECENT_RATIO)
-    acc = 0
-    cut = 0
-    for j in range(len(live) - 1, -1, -1):
-        acc += _message_token_estimate(live[j])
-        if acc > recent_budget:
-            cut = j + 1
-            break
-    cut = _safe_recent_start(live, cut)
+        recent_budget = int(ctx_limit * _COMPACT_RECENT_RATIO)
+        acc = 0
+        cut = 0
+        for j in range(len(live) - 1, -1, -1):
+            acc += _message_token_estimate(live[j])
+            if acc > recent_budget:
+                cut = j + 1
+                break
+        cut = _safe_recent_start(live, cut)
 
-    to_compact = live[:cut]
-    recent = live[cut:]
+        to_compact = live[:cut]
+        recent = live[cut:]
     if not to_compact:
         return messages
 
@@ -335,7 +353,9 @@ def _compact_messages_for_storage(
         # The compactable prefix contains only tool results. Those results are
         # intentionally excluded from compacted context, so dropping the prefix
         # is the successful compacted representation rather than a no-op.
-        return [*head_blocks, *recent]
+        if not force:
+            return [*head_blocks, *recent]
+        block_lines = ["Earlier context contained only tool results and was omitted."]
     block: dict[str, Any] = {
         "role": "system",
         "content": _COMPACT_BLOCK_PREFIX + "\n" + "\n".join(block_lines),
@@ -370,6 +390,18 @@ def _has_pending_compacted_block(messages: list[dict[str, Any]]) -> bool:
         isinstance(m, dict) and m.get("compacted_block") and not m.get("llm_compacted")
         for m in messages
     )
+
+
+def _has_tool_activity(messages: list[dict[str, Any]]) -> bool:
+    """Whether the stored conversation contains tool activity worth compacting."""
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "tool" or message.get("tool_calls"):
+            return True
+        if message.get("compacted_block") and "[tool]" in str(message.get("content") or ""):
+            return True
+    return False
 
 
 def _exceeds_compact_threshold(
@@ -407,7 +439,8 @@ async def compact_session_if_needed(
     This is the explicit Workbench entrypoint. It uses the same mechanical
     compactor and optional background LLM distillation as ordinary session
     persistence, but does not append a synthetic message just to trigger a save.
-    ``force`` lets a user invoke that flow before the automatic 60% trigger.
+    ``force`` is the explicit user action: it mechanically folds the entire
+    conversation into one block instead of retaining the automatic recent window.
     """
     from cyrene.call_llm import _message_token_estimate
     from cyrene.config_store import get_current_ctx_limit
@@ -415,15 +448,23 @@ async def compact_session_if_needed(
     ctx = _ensure_session(session_id)
     if ctx.lock.locked():
         return {"compacted": False, "reason": "running"}
+    if ctx.pending_distill_task is not None and not ctx.pending_distill_task.done():
+        return {"compacted": False, "reason": "distilling"}
 
     session_token = _current_session_id.set(session_id)
     try:
         async with ctx.lock:
             async with ctx.session_state_lock:
+                if ctx.pending_distill_task is not None and not ctx.pending_distill_task.done():
+                    return {"compacted": False, "reason": "distilling"}
                 state = _load_session_state()
                 messages = state.get("messages")
                 if not isinstance(messages, list) or not messages:
                     return {"compacted": False, "reason": "empty"}
+                if force and isinstance(state.get("pending_question"), dict) and state["pending_question"]:
+                    return {"compacted": False, "reason": "awaiting_user"}
+                if force and not _has_tool_activity(messages):
+                    return {"compacted": False, "reason": "no_tool_activity"}
 
                 effective_limit = int(
                     ctx_limit if ctx_limit is not None else get_current_ctx_limit()
@@ -790,7 +831,7 @@ def _expand_report_reference_history(history: list[dict[str, Any]], user_message
 # ---------------------------------------------------------------------------
 
 def _schedule_memory_compression(messages: list[dict[str, Any]], session_id: str = "") -> None:
-    task = asyncio.create_task(_compress_old_messages(list(messages)))
+    task = asyncio.create_task(_compress_old_messages(list(messages), session_id=session_id))
     ctx = _ensure_session(session_id)
     ctx.pending_compressors.add(task)
     task.add_done_callback(ctx.pending_compressors.discard)
@@ -815,7 +856,7 @@ async def _write_session_messages_locked(state: dict[str, Any], messages: list[d
     })
 
     if len(messages) >= _MEMORY_COMPRESSION_MIN_MESSAGES:
-        _schedule_memory_compression(messages)
+        _schedule_memory_compression(messages, session_id=_current_session_id.get())
 
     # Distill only when the cheap mechanical fold was not enough on its own:
     # the post-fold context still exceeds the compaction threshold. A fold that
@@ -1360,7 +1401,20 @@ async def _refresh_session_labels(current_user_message: str, round_id: str, sess
 # Session lifecycle
 # ---------------------------------------------------------------------------
 
-async def _compress_old_messages(all_messages: list[dict[str, Any]]) -> None:
+async def _compress_old_messages(
+    all_messages: list[dict[str, Any]],
+    *,
+    session_id: str = "",
+) -> None:
+    # Workbench has a separate per-project capture pipeline. Feeding those
+    # sessions into the legacy compressor would write every project's memories
+    # into global short_term.json, which the old default-project page exposed.
+    if session_id:
+        from cyrene.workbench_context import resolve_workbench_project_id_for_session
+
+        if resolve_workbench_project_id_for_session(session_id) is not None:
+            return
+
     from cyrene.short_term import touch_entry
 
     eligible = [

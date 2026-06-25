@@ -731,7 +731,10 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
                 content_type=content_type,
                 kind=kind,
                 size=doc_file.stat().st_size if doc_file.exists() else 0,
-                metadata={"sent_to_chat": True},
+                metadata={
+                    "sent_to_chat": True,
+                    "session_id": str(_current_session_id.get() or ""),
+                },
                 content_hash=content_hash,
             )
             if doc.get("status") in {"pending", "error"}:
@@ -1854,6 +1857,26 @@ TOOL_DEFS = [
                 "properties": {
                     "focus": {"type": "string", "description": "Optional note on what the plan should emphasize or any constraints to respect."},
                 },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_plan_progress",
+            "description": "Main agent only. Update the durable Workbench plan before and after executing a plan step so the user can see exactly which step is active. Use only when an approved plan is being executed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "step": {"type": "integer", "minimum": 1, "description": "1-based plan step number."},
+                    "status": {
+                        "type": "string",
+                        "enum": ["in_progress", "completed", "failed", "skipped"],
+                        "description": "New status for this step.",
+                    },
+                    "note": {"type": "string", "description": "Optional short progress or result note shown to the user."},
+                },
+                "required": ["step", "status"],
             },
         },
     },

@@ -6,6 +6,91 @@ var {
   useRef: useWorkbenchRef,
 } = React;
 
+// Document-level file drop target used by the task, conversation and knowledge
+// pages. Listening on document makes the whole visible module accept files,
+// including its rail and side panels, while the ref keeps the listener stable
+// across renders and avoids stale upload callbacks.
+function useWorkbenchFileDrop(onFiles, enabled) {
+  var [active, setActive] = React.useState(false);
+  var callbackRef = React.useRef(onFiles);
+  var depthRef = React.useRef(0);
+  callbackRef.current = onFiles;
+
+  React.useEffect(function () {
+    if (!enabled) {
+      depthRef.current = 0;
+      setActive(false);
+      return undefined;
+    }
+
+    function hasFiles(event) {
+      var transfer = event && event.dataTransfer;
+      if (!transfer) return false;
+      var types = Array.prototype.slice.call(transfer.types || []);
+      return types.indexOf("Files") >= 0;
+    }
+    function onDragEnter(event) {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      depthRef.current += 1;
+      setActive(true);
+    }
+    function onDragOver(event) {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      setActive(true);
+    }
+    function onDragLeave(event) {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      depthRef.current = Math.max(0, depthRef.current - 1);
+      if (depthRef.current === 0) setActive(false);
+    }
+    function reset() {
+      depthRef.current = 0;
+      setActive(false);
+    }
+    function onDrop(event) {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      reset();
+      var files = event.dataTransfer && event.dataTransfer.files;
+      if (files && files.length && callbackRef.current) callbackRef.current(files);
+    }
+
+    document.addEventListener("dragenter", onDragEnter);
+    document.addEventListener("dragover", onDragOver);
+    document.addEventListener("dragleave", onDragLeave);
+    document.addEventListener("drop", onDrop);
+    window.addEventListener("blur", reset);
+    return function () {
+      document.removeEventListener("dragenter", onDragEnter);
+      document.removeEventListener("dragover", onDragOver);
+      document.removeEventListener("dragleave", onDragLeave);
+      document.removeEventListener("drop", onDrop);
+      window.removeEventListener("blur", reset);
+    };
+  }, [!!enabled]);
+
+  return active;
+}
+
+function WorkbenchFileDropOverlay({ label, busy }) {
+  return (
+    <div className="wb-file-drop-overlay" role="status" aria-live="polite">
+      <div className="wb-file-drop-card">
+        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 16V4" />
+          <path d="m7 9 5-5 5 5" />
+          <path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" />
+        </svg>
+        <b>{busy ? wbT("workbenchChat.uploading", "Uploading...") : label}</b>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Non-blocking feedback: toasts + confirm dialogs that replace window.alert /
 // window.confirm. Native dialogs freeze the page (fatal while a task streams)
@@ -1093,7 +1178,11 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
               onActiveChatIdChange: setActiveChatId,
             })
           ) : isKnowledge ? (
-            React.createElement(window.WorkbenchKnowledgePage || function () { return <div className="workbench-empty">{t("workbench.knowledgeLoading")}</div>; }, { project: store.activeProject, onBack: function () { setFullPage(null); } })
+            React.createElement(window.WorkbenchKnowledgePage || function () { return <div className="workbench-empty">{t("workbench.knowledgeLoading")}</div>; }, {
+              project: store.activeProject,
+              onBack: function () { setFullPage(null); },
+              onNavigate: navigateFromSearch,
+            })
           ) : isSchedule ? (
             React.createElement(window.WorkbenchSchedulePage || function () { return <div className="workbench-empty">{t("workbench.scheduleLoading")}</div>; }, { project: store.activeProject, onBack: function () { setFullPage(null); } })
           ) : isMemory ? (
@@ -2812,6 +2901,12 @@ function TaskWorkArea(props) {
     onOpenGoalLoop: function () { setGoalLoopOpen(true); },
     onOpenGoalLoopLimits: function () { setGoalLoopLimitsOpen(true); },
   });
+  var taskDropEnabled = !!(project && session && session.kind !== "init");
+  var taskFileDropActive = useWorkbenchFileDrop(function (files) {
+    try {
+      window.dispatchEvent(new CustomEvent("cyrene:add-task-attachments", { detail: { files: files } }));
+    } catch (e) {}
+  }, taskDropEnabled);
   if (props.loading) {
     return <main className="workbench-main"><div className="workbench-empty">正在加载工作台...</div></main>;
   }
@@ -2838,6 +2933,7 @@ function TaskWorkArea(props) {
     && Array.isArray(session.plan);
   return (
     <main className="workbench-main">
+      {taskFileDropActive && <WorkbenchFileDropOverlay label={wbT("workbenchChat.dropToAttach", "Release to add files to the task input")} />}
       <TaskHeader project={project} session={session} controller={controller} onRightTab={props.onRightTab} onSelectSession={props.onSelectSession} />
       {props.error && <div className="workbench-error">{props.error}</div>}
       <div className="workbench-stage">
@@ -4221,6 +4317,7 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
   var [uploading, setUploading] = useWorkbenchState(false);
   var taRef = useWorkbenchRef(null);
   var fileRef = useWorkbenchRef(null);
+  var uploadCountRef = useWorkbenchRef(0);
   var status = String(session.status || "idle");
   var running = status === "running";
   // No plan yet → the composer is a free chat: every send goes through the
@@ -4296,15 +4393,34 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
   }
 
   function pickFiles() { if (fileRef.current) fileRef.current.click(); }
-  function onFilePick(event) {
-    var files = event.target.files;
+  function addFiles(files) {
     if (!files || !files.length) return;
+    uploadCountRef.current += 1;
     setUploading(true);
     model.uploadAttachments(files)
-      .then(function (uploaded) { onAttachmentsChange(attachments.concat(uploaded)); })
+      .then(function (uploaded) {
+        onAttachmentsChange(function (current) {
+          return (current || []).concat(uploaded || []);
+        });
+      })
       .catch(function (err) { window.showToast(wbT("workbenchChat.uploadFailed", "Upload failed: {error}", { error: err.message || String(err) }), "error"); })
-      .finally(function () { setUploading(false); if (fileRef.current) fileRef.current.value = ""; });
+      .finally(function () {
+        uploadCountRef.current = Math.max(0, uploadCountRef.current - 1);
+        if (uploadCountRef.current === 0) setUploading(false);
+        if (fileRef.current) fileRef.current.value = "";
+      });
   }
+  function onFilePick(event) {
+    addFiles(event.target.files);
+  }
+  useWorkbenchEffect(function () {
+    function onDroppedFiles(event) {
+      var files = event && event.detail && event.detail.files;
+      addFiles(files);
+    }
+    window.addEventListener("cyrene:add-task-attachments", onDroppedFiles);
+    return function () { window.removeEventListener("cyrene:add-task-attachments", onDroppedFiles); };
+  }, []);
   function removeAttachment(index) {
     onAttachmentsChange(attachments.filter(function (_a, i) { return i !== index; }));
   }

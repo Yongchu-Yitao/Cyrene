@@ -6,7 +6,7 @@ from typing import Any
 
 from cyrene import tool_legacy as _legacy
 from cyrene.tool_legacy import _json_result
-from cyrene.workbench_context import resolve_workbench_project_data_key_for_session
+from cyrene.workbench_context import resolve_workbench_project_id_for_session
 
 TOOL_NAME = "search_project_memory"
 TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL_NAME)
@@ -35,8 +35,8 @@ async def _tool_search_project_memory(
     limit = max(1, min(int(args.get("limit", 10) or 10), 20))
     include_stale = bool(args.get("include_stale", False))
 
-    data_key = resolve_workbench_project_data_key_for_session(_current_session_id.get())
-    if data_key is None:
+    project_id = resolve_workbench_project_id_for_session(_current_session_id.get())
+    if project_id is None:
         return _json_result({
             "status": "error",
             "type": "not_found",
@@ -48,7 +48,7 @@ async def _tool_search_project_memory(
     configure_store(_db_path)
 
     memories = search_project_memories(
-        data_key,
+        project_id,
         query=query,
         category=category,
         source=source,

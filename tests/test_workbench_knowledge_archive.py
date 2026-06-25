@@ -237,3 +237,115 @@ async def test_workbench_knowledge_list_returns_total(tmp_path, monkeypatch):
 
     assert payload["total"] == 3
     assert len(payload["documents"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_workbench_knowledge_related_returns_tasks_chats_and_reverse_relations(
+    tmp_path, monkeypatch
+):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from cyrene import db
+    from cyrene.knowledge import store
+    from webui import routes
+    from webui import routes_workbench_chat
+    from webui import routes_workbench_knowledge
+
+    db_path = str(tmp_path / "knowledge.db")
+    await db.init_knowledge_db(db_path)
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"report")
+    source = tmp_path / "source.md"
+    source.write_text("source", encoding="utf-8")
+    report_doc = await store.upsert_document_by_path(
+        db_path,
+        path=str(report),
+        source="generated",
+        name="report.pdf",
+        metadata={"sent_to_chat": True},
+        content_hash=store.content_hash_file(report),
+    )
+    source_doc = await store.upsert_document_by_path(
+        db_path,
+        path=str(source),
+        source="kb_upload",
+        name="source.md",
+        content_hash=store.content_hash_file(source),
+    )
+    await store.create_relation(
+        db_path,
+        src_id=source_doc["id"],
+        dst_id=report_doc["id"],
+        relation="supports",
+    )
+
+    monkeypatch.setattr(
+        routes,
+        "_read_workbench_store",
+        lambda: {
+            "projects": [{
+                "id": "project-1",
+                "dataKey": "workspace-1",
+                "sessions": [{
+                    "id": "session-1",
+                    "title": "Build report",
+                    "goal": "Produce the final report",
+                    "status": "review",
+                    "updatedAt": "2026-06-25T10:00:00Z",
+                    "runs": [{
+                        "id": "run-1",
+                        "knowledgeDocumentIds": [report_doc["id"]],
+                    }],
+                }],
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        routes_workbench_chat,
+        "_read_chats_store",
+        lambda: {
+            "chats": [{
+                "id": "wbchat-1",
+                "projectId": "project-1",
+                "title": "Review report",
+                "status": "idle",
+                "updatedAt": "2026-06-25T11:00:00Z",
+                "messages": [{
+                    "role": "assistant",
+                    "content": "Here is the report.",
+                    "attachments": [{
+                        "id": report.name,
+                        "name": "report.pdf",
+                        "url": f"/api/chat/export/{report.name}",
+                    }],
+                }],
+            }],
+        },
+    )
+
+    async def _ensure_kb(_workspace):
+        return db_path
+
+    monkeypatch.setattr(routes_workbench_knowledge, "_ensure_kb_db", _ensure_kb)
+    monkeypatch.setattr(
+        routes_workbench_knowledge,
+        "_resolve_workspace_id",
+        lambda workspace: str(workspace),
+    )
+
+    app = FastAPI()
+    routes_workbench_knowledge.register_workbench_knowledge_routes(app.router)
+    client = TestClient(app)
+
+    response = client.get(
+        f"/api/workbench/knowledge/documents/{report_doc['id']}/related"
+        "?workspace=workspace-1"
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["counts"] == {"documents": 1, "conversations": 2}
+    assert {item["type"] for item in payload["conversations"]} == {"task", "chat"}
+    assert payload["document_relations"][0]["direction"] == "incoming"
+    assert payload["document_relations"][0]["document"]["id"] == source_doc["id"]

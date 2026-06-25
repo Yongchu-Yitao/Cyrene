@@ -703,36 +703,34 @@ async def count_stat_days(db_path: str) -> int:
 # Token usage tracking
 # ---------------------------------------------------------------------------
 
-_PRICE_PER_1K: dict[str, tuple[float, float]] = {
-    "deepseek-chat": (0.00027, 0.00110),
-    "deepseek-v4-flash": (0.00027, 0.00110),
-    "deepseek-reasoner": (0.00055, 0.00219),
-    "gpt-4o": (0.00250, 0.01000),
-    "gpt-4o-mini": (0.00015, 0.00060),
-    "gpt-4.1": (0.00200, 0.00800),
-    "gpt-4.1-mini": (0.00040, 0.00160),
-    "gpt-4.1-nano": (0.00010, 0.00040),
-    "claude-sonnet-4-6": (0.00300, 0.01500),
-    "claude-sonnet-4-7": (0.00300, 0.01500),
-    "claude-haiku-4-5": (0.00080, 0.00400),
-    "gemini-2.0-flash": (0.00010, 0.00040),
-    "gemini-2.5-flash": (0.00015, 0.00060),
-}
-
-_DEFAULT_PRICE = (0.00100, 0.00200)  # fallback per-1k prompt/completion cost in USD
+_DEFAULT_PRICE_PER_1K = (0.00100, 0.00200)  # fallback per-1k prompt/completion cost in USD
 
 
-def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    model_key = model.strip().lower()
-    # Partial match against known models
-    prices = _DEFAULT_PRICE
-    for known, p in _PRICE_PER_1K.items():
-        if known in model_key or model_key in known:
-            prices = p
-            break
-    prompt_cost = (prompt_tokens / 1000.0) * prices[0]
-    completion_cost = (completion_tokens / 1000.0) * prices[1]
-    return round(prompt_cost + completion_cost, 6)
+def _estimate_cost(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    *,
+    cache_hit_tokens: int = 0,
+    cache_miss_tokens: int = 0,
+) -> float:
+    from cyrene.model_prices import effective_price, estimate_cost, to_usd
+
+    pricing = effective_price(model)
+    if pricing:
+        cost = estimate_cost(
+            to_usd(pricing),
+            prompt_tokens,
+            completion_tokens,
+            cache_hit_tokens=cache_hit_tokens,
+            cache_miss_tokens=cache_miss_tokens,
+        )
+    else:
+        cost = (
+            (max(prompt_tokens, 0) / 1000.0) * _DEFAULT_PRICE_PER_1K[0]
+            + (max(completion_tokens, 0) / 1000.0) * _DEFAULT_PRICE_PER_1K[1]
+        )
+    return round(cost, 6)
 
 
 async def record_token_usage(
@@ -749,7 +747,13 @@ async def record_token_usage(
     session_id: str = "",
     caller: str = "main",
 ) -> None:
-    cost = _estimate_cost(model, prompt_tokens, completion_tokens)
+    cost = _estimate_cost(
+        model,
+        prompt_tokens,
+        completion_tokens,
+        cache_hit_tokens=cache_hit_tokens,
+        cache_miss_tokens=cache_miss_tokens,
+    )
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(db_path) as db:
         await db.execute(

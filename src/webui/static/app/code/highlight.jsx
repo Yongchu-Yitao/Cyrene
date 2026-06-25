@@ -17,15 +17,17 @@
         var result;
         try {
           if (language && hljs.getLanguage(language)) {
-            try {
-              result = hljs.highlight(code, { language: language, ignoreIllegals: true });
-            } catch (e) {
-              result = hljs.highlightAuto(code);
-              language = result.language || language;
-            }
+            result = hljs.highlight(code, { language: language, ignoreIllegals: true });
           } else {
-            result = hljs.highlightAuto(code);
-            language = result.language || "text";
+            // Automatic detection is unreliable for short snippets, diagrams,
+            // logs and pseudocode (for example, an ASCII diagram can be
+            // labelled as C++). Only apply syntax highlighting when the
+            // markdown fence explicitly declares a supported language.
+            language = "text";
+            result = { value: String(code)
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;") };
           }
         } catch (e) {
           var safe = String(code)
@@ -89,6 +91,7 @@
         go: "Go",
         java: "Java",
         cpp: "C++",
+        "c++": "C++",
         c: "C",
         rb: "Ruby",
         ruby: "Ruby",

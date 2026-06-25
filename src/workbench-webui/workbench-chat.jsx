@@ -3,49 +3,6 @@
 // backend endpoints (/api/workbench/chats*, /api/chat/upload, /api/events SSE)
 // are shared. Layout: chat rail | conversation | right context panel.
 
-// 正在工作中的随机提示语
-var WBC_THINKING_PHRASES = [
-  "还得想一下",
-  "让我想想",
-  "先别急",
-  "在做了",
-  "差不多了",
-  "要仔细想想",
-  "我瞧瞧什么个事",
-  "让我捋一捋",
-  "这事得盘一下",
-  "先过一遍细节",
-  "我再确认下",
-  "我的脑子在转",
-  "马上给你整明白",
-  "得把边界看清楚",
-  "我查一下细节",
-  "先对齐一下信息",
-  "再核一遍",
-  "我把线索串一下",
-  "稍微推一下",
-  "看下哪里最稳",
-  "我确认下结果",
-  "先把上下文过一遍",
-  "这块要算清楚",
-  "我再想深一点",
-  "别急，快好了",
-  "正在盘逻辑",
-  "再跑一轮看看",
-  "快了快了",
-  "别催，在干活了",
-  "我努力一把",
-  "你先喝口水",
-  "快好了再等一下",
-  "让我过一遍",
-  "快了，再等等",
-  "我再想想还有没有更好的办法",
-  "这事有点意思，让我研究研究",
-  "再查一下相关资料",
-  "拼起来看看",
-  "再验证一下结果",
-];
-
 var {
   useState: useWbcState,
   useEffect: useWbcEffect,
@@ -377,6 +334,18 @@ function wbcT(key, fallback, params) {
     });
   }
   return fallback || key;
+}
+
+function wbcThinkingPhrases() {
+  return wbcT(
+    "workbenchChat.thinkingPhrases",
+    "Thinking this through|Checking the details|Reviewing the context|Verifying the result"
+  ).split("|").filter(Boolean);
+}
+
+function wbcRandomThinkingPhrase() {
+  var phrases = wbcThinkingPhrases();
+  return phrases[Math.floor(Math.random() * phrases.length)] || wbcT("workbenchChat.stillWorking", "Still working…");
 }
 
 function wbcErrorText(err) {
@@ -724,7 +693,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     var entry = null;
     if (event.type === "tool_call") {
       var toolName = String(event.tool || "");
-      if (["use_tools", "quit", "send_message"].indexOf(toolName) >= 0) return;
+      if (["use_tools", "quit", "send_message", "update_plan_progress"].indexOf(toolName) >= 0) return;
       var args = event.args || {};
       var preview = Object.values(args).filter(Boolean).map(String).join(", ").slice(0, 60);
       entry = { kind: "tool", text: toolName || wbcT("settings.tools", "Tools"), preview: preview };
@@ -789,6 +758,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     projectIdRef.current = projectId;
   }, [projectId]);
   var [error, setError] = useWbcState("");
+  var [errorKind, setErrorKind] = useWbcState("load");
   var [sideTab, setSideTab] = useWbcState("overview");
   var [viewerFile, setViewerFile] = useWbcState(null);
   var [subagentData, setSubagentData] = useWbcState({ rounds: [], activeRoundId: "", agents: [], messages: [] });
@@ -807,11 +777,16 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     setRuntimes(runtimeEngine.snapshot());
     return runtimeEngine.subscribe(function (snap) { setRuntimes(snap); });
   }, []);
-  // Tracks the pending-question id whose plan we've already auto-revealed, so we
+  // Tracks the durable plan id we've already auto-revealed, so we
   // switch to the 计划 tab once per plan rather than fighting manual tab changes.
   var revealedPlanQidRef = useWbcRef("");
   // Holds a chat id requested by global search until the chat list is loaded.
   var pendingChatIdRef = useWbcRef("");
+  var chatFileDropActive = useWorkbenchFileDrop(function (files) {
+    try {
+      window.dispatchEvent(new CustomEvent("cyrene:add-chat-attachments", { detail: { files: files } }));
+    } catch (e) {}
+  }, !!project);
 
   function openViewer(file) {
     if (!file) return;
@@ -858,6 +833,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   useWbcEffect(function () {
     setLoading(true);
     setError("");
+    setErrorKind("load");
     setActiveChat(null);
     setActiveChatId("");
     if (!projectId) { setChats([]); setLoading(false); return; }
@@ -901,6 +877,8 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
       return;
     }
     var cancelled = false;
+    setError("");
+    setErrorKind("load");
     setSubagentLoading(true);
     Promise.all([model.getChat(activeChatId), model.getSubagents(activeChatId)])
       .then(function (results) {
@@ -923,16 +901,19 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     });
   }, [activeChatId]);
 
-  // When the agent pauses for a plan-mode confirmation, reveal its plan in the
-  // right panel (the prompt text points the user at "右侧「计划」标签"). Only
-  // auto-switch once per plan so we don't override a manual tab change.
+  // Reveal a newly generated durable plan in the right panel. The plan remains
+  // available after approval and across reloads until execution completes.
   useWbcEffect(function () {
-    var pq = activeChat && activeChat.pendingQuestion;
-    if (pq && pq.id && pq.plan && pq.id !== revealedPlanQidRef.current) {
-      revealedPlanQidRef.current = pq.id;
+    var plan = wbcActivePlan(activeChat);
+    var planId = plan && (plan.planId || plan.roundId || plan.title);
+    if (plan && planId && planId !== revealedPlanQidRef.current) {
+      revealedPlanQidRef.current = planId;
       setSideTab("plan");
     }
-  }, [activeChat && activeChat.pendingQuestion && activeChat.pendingQuestion.id]);
+  }, [
+    activeChat && activeChat.activePlan && activeChat.activePlan.planId,
+    activeChat && activeChat.pendingQuestion && activeChat.pendingQuestion.id,
+  ]);
 
   // Surface the active conversation title in the topbar crumbs.
   useWbcEffect(function () {
@@ -1019,6 +1000,18 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
       if (
         chatId
         && activeChatIdRef.current === chatId
+        && (event.type === "plan_progress" || event.type === "plan")
+        && event.plan
+      ) {
+        setActiveChat(function (prev) {
+          if (!prev || prev.id !== chatId) return prev;
+          return { ...prev, activePlan: event.plan };
+        });
+        setSideTab("plan");
+      }
+      if (
+        chatId
+        && activeChatIdRef.current === chatId
         && (event.type === "subagent_update" || event.type === "agent_comm" || event.type === "agent_chat_user_message")
       ) {
         if (subagentRefreshTimerRef.current) clearTimeout(subagentRefreshTimerRef.current);
@@ -1047,6 +1040,11 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   function ensureChat() {
     if (activeChatId) return Promise.resolve(activeChatId);
     return model.createChat(projectId).then(function (chat) {
+      try {
+        window.dispatchEvent(new CustomEvent("cyrene:wbc-chat-created", {
+          detail: { projectId: projectId, chatId: chat.id },
+        }));
+      } catch (e) {}
       setChats(function (prev) { return [chat].concat(prev); });
       setActiveChatId(chat.id);
       setActiveChat(chat);
@@ -1057,6 +1055,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   function retryLoad() {
     if (!projectId) return;
     setError("");
+    setErrorKind("load");
     setLoading(true);
     refreshChats(activeChatId)
       .then(function (list) {
@@ -1125,7 +1124,10 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
           return { ...prev, status: "idle", pendingQuestion: pendingQuestion || null };
         });
       },
-      onError: function (chatId, err) { setError(wbcErrorText(err)); },
+      onError: function (chatId, err) {
+        setErrorKind("message");
+        setError(wbcErrorText(err));
+      },
       onSettled: function (chatId) {
         model.getChat(chatId).then(function (chat) {
           if (activeChatIdRef.current === chatId) setActiveChat(chat);
@@ -1156,6 +1158,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
 
   function handleSend(input) {
     setError("");
+    setErrorKind("load");
     return ensureChat().then(function (chatId) {
       // The engine owns the stream (so it outlives this page) and enforces a
       // single in-flight run per conversation.
@@ -1206,7 +1209,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
             return true;
           }));
         }
-        return { ...prev, status: "idle", pendingQuestion: null, messages: msgs };
+        return { ...prev, status: "idle", pendingQuestion: null, activePlan: null, messages: msgs };
       });
       refreshChats();
     }).catch(function (err) {
@@ -1300,7 +1303,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   }
 
   function handleCompact() {
-    if (!activeChat || activeChat.legacy || activeRunning || compactBusy) return;
+    if (!activeChat || activeChat.legacy || compactBusy) return;
     setCompactBusy(true);
     setError("");
     model.compactChat(activeChat.id).then(function (payload) {
@@ -1323,6 +1326,14 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
       }
       if (payload.reason === "empty") {
         window.showToast(wbcT("workbenchChat.compactEmpty", "There is no agent context to compress."), "warning");
+      } else if (payload.reason === "running") {
+        window.showToast(wbcT("workbenchChat.compactRunning", "The agent is currently working. Try again after it finishes."), "warning");
+      } else if (payload.reason === "awaiting_user") {
+        window.showToast(wbcT("workbenchChat.compactAwaitingUser", "Answer the agent's question before compressing this chat."), "warning");
+      } else if (payload.reason === "no_tool_activity") {
+        window.showToast(wbcT("workbenchChat.compactNoTools", "This chat has no tool activity to compress."), "warning");
+      } else if (payload.reason === "distilling") {
+        window.showToast(wbcT("workbenchChat.compactDistilling", "Background context compression is still running. Try again shortly."), "warning");
       } else {
         window.showToast(wbcT("workbenchChat.compactNoChange", "No earlier context is available to compress."), "warning");
       }
@@ -1340,6 +1351,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
 
   return (
     <div className="wbc-page">
+      {chatFileDropActive && <WorkbenchFileDropOverlay label={wbcT("workbenchChat.dropToAttach", "Release to add files to the message input")} />}
       <WbcRail
         chats={chats}
         activeChatId={activeChatId}
@@ -1354,7 +1366,8 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         chat={activeChat}
         runtime={activeRuntime}
         error={error}
-        onRetry={retryLoad}
+        errorKind={errorKind}
+        onRetry={errorKind === "message" ? handleRetryMessage : retryLoad}
         running={activeRunning}
         onSend={handleSend}
         onInterrupt={handleInterrupt}
@@ -1370,6 +1383,9 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
       <WbcSide
         project={project}
         chat={activeChat}
+        chats={chats}
+        activeChatId={activeChatId}
+        onSelectChat={function (id) { setActiveChatId(id); }}
         runtime={activeRuntime}
         subagentData={subagentData}
         subagentLoading={subagentLoading}
@@ -1494,14 +1510,20 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile }) {
+function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, onSend, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile }) {
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   var isLegacy = !!(chat && chat.legacy);
   var lastAssistantId = "";
+  var lastUserId = "";
   for (var mi = messages.length - 1; mi >= 0; mi--) {
-    if (messages[mi].role !== "user") { lastAssistantId = String(messages[mi].id || ""); break; }
+    if (messages[mi].role === "user") {
+      if (!lastUserId) lastUserId = String(messages[mi].id || "");
+    } else if (!lastAssistantId) {
+      lastAssistantId = String(messages[mi].id || "");
+    }
+    if (lastUserId && lastAssistantId) break;
   }
 
   // Track whether the user is reading scrollback; only auto-stick near bottom.
@@ -1546,7 +1568,7 @@ function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onIn
           </div>
         </div>
       )}
-      {error && <WbcErrorNotice message={error} onRetry={onRetry} />}
+      {error && <WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} />}
       <div className="wbc-thread" ref={scrollRef} onScroll={onScroll}>
         {messages.length === 0 && !runtime && (
           <div className="wbc-empty-thread">
@@ -1556,11 +1578,12 @@ function WbcMain({ project, chat, runtime, error, onRetry, running, onSend, onIn
           </div>
         )}
         {messages.map(function (msg) {
-          var canRetry = !isLegacy && !running && String(msg.id || "") === lastAssistantId;
+          var canRetryAssistant = !isLegacy && !running && String(msg.id || "") === lastAssistantId;
+          var canRetryUser = !isLegacy && !running && msg.role === "user" && String(msg.id || "") === lastUserId;
           var canEdit = !isLegacy && !running && msg.role === "user" && !!onEditMessage;
           return msg.role === "user"
-            ? <WbcUserMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onEditMessage={onEditMessage} canEdit={canEdit} />
-            : <WbcAssistantMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onRetryMessage={canRetry ? onRetryMessage : null} />;
+            ? <WbcUserMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onEditMessage={onEditMessage} canEdit={canEdit} onRetryMessage={canRetryUser ? onRetryMessage : null} />
+            : <WbcAssistantMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onRetryMessage={canRetryAssistant ? onRetryMessage : null} />;
         })}
         {runtime && <WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} />}
         {chat && chat.pendingQuestion && chat.pendingQuestion.id && !runtime && (
@@ -1631,12 +1654,17 @@ function WbcQuestionPrompt({ pending, onAnswer, busy }) {
   );
 }
 
-function WbcErrorNotice({ message, onRetry }) {
-  var title = wbcT("workbenchChat.error.title", "Could not load this chat");
+function WbcErrorNotice({ message, kind, onRetry }) {
+  var isMessageError = kind === "message";
+  var title = isMessageError
+    ? wbcT("workbenchChat.error.messageTitle", "Message processing failed")
+    : wbcT("workbenchChat.error.title", "Could not load this chat");
   var detail = String(message || "").trim() || wbcT("workbenchChat.error.loadFailed", "Load failed");
   var generic = wbcT("workbenchChat.error.loadFailed", "Load failed");
   var body = detail === generic
-    ? wbcT("workbenchChat.error.body", "The conversation data did not load. Check the local service and try again.")
+    ? (isMessageError
+      ? wbcT("workbenchChat.error.messageBody", "The message was saved but could not be processed. Retry to run it again.")
+      : wbcT("workbenchChat.error.body", "The conversation data did not load. Check the local service and try again."))
     : detail;
   return (
     <div className="workbench-error wbc-error-card" role="alert">
@@ -1770,7 +1798,7 @@ function WbcMessageAttachment({ file, onOpenFile }) {
   );
 }
 
-function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit }) {
+function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessage }) {
   var attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
   var [editing, setEditing] = useWbcState(false);
   var [draft, setDraft] = useWbcState(String(msg.content || ""));
@@ -1858,11 +1886,18 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit }) {
           {msg.content ? <p>{msg.content}</p> : null}
         </div>
       </div>
-      {canEdit && onEditMessage && (
+      {((canEdit && onEditMessage) || onRetryMessage) && (
         <div className="wbc-msg-foot wbc-user-foot">
-          <button type="button" className="wbc-msg-action wbc-edit-btn" onClick={startEdit} title={wbcT("workbenchChat.editMessage", "Edit & branch")}>
-            {WBC_ICONS.edit}
-          </button>
+          {canEdit && onEditMessage && (
+            <button type="button" className="wbc-msg-action wbc-edit-btn" onClick={startEdit} title={wbcT("workbenchChat.editMessage", "Edit & branch")}>
+              {WBC_ICONS.edit}
+            </button>
+          )}
+          {onRetryMessage && (
+            <button type="button" className="wbc-msg-action" onClick={onRetryMessage} title={wbcT("workbenchChat.retryUserMessage", "Retry message")}>
+              {WBC_ICONS.retry}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -1977,13 +2012,15 @@ var WBC_HEARTBEAT_STALL_MS = 10000;
 // interval so it re-renders only itself (a leaf), never the whole conversation.
 // Mounts/unmounts with the runtime, so the timer is torn down the moment the run settles.
 function WbcHeartbeat({ startedAt, lastEventAt }) {
+  var heartbeatI18n = useWorkbenchI18n();
+  var heartbeatLang = heartbeatI18n.lang;
   var [now, setNow] = useWbcState(function () { return Date.now(); });
-  var [displayText, setDisplayText] = useWbcState(function () { return WBC_THINKING_PHRASES[Math.floor(Math.random() * WBC_THINKING_PHRASES.length)]; });
+  var [displayText, setDisplayText] = useWbcState(wbcRandomThinkingPhrase);
   var [animClass, setAnimClass] = useWbcState("");
 
   function handleAnimEnd() {
     if (animClass === "wbc-still-leave") {
-      setDisplayText(WBC_THINKING_PHRASES[Math.floor(Math.random() * WBC_THINKING_PHRASES.length)]);
+      setDisplayText(wbcRandomThinkingPhrase());
       setAnimClass("wbc-still-enter");
     } else if (animClass === "wbc-still-enter") {
       setAnimClass("");
@@ -1997,6 +2034,9 @@ function WbcHeartbeat({ startedAt, lastEventAt }) {
     }, 4000);
     return function () { clearInterval(timer); };
   }, []);
+  useWbcEffect(function () {
+    setDisplayText(wbcRandomThinkingPhrase());
+  }, [heartbeatLang]);
   if (!startedAt) return null;
   var elapsed = Math.max(0, Math.round((now - startedAt) / 1000));
   var stalled = !!lastEventAt && (now - lastEventAt) > WBC_HEARTBEAT_STALL_MS;
@@ -2011,15 +2051,11 @@ function WbcHeartbeat({ startedAt, lastEventAt }) {
 
 function WbcLiveMessage({ runtime, onOpenFile }) {
   var completedSegments = Array.isArray(runtime.segments) ? runtime.segments : [];
-  var progressEntries = runtime.progress.map(function (entry) {
-    return { tool: entry.text, preview: entry.preview };
-  });
+  var progressEntries = Array.isArray(runtime.progress) ? runtime.progress : [];
   return (
     <React.Fragment>
       {completedSegments.map(function (segment) {
-        var segmentTrace = (segment.progress || []).map(function (entry) {
-          return { tool: entry.text, preview: entry.preview };
-        });
+        var segmentTrace = Array.isArray(segment.progress) ? segment.progress : [];
         return (
           <WbcAssistantMessage
             key={segment.id}
@@ -2054,6 +2090,7 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
 
 var WBC_DRAFT_PREFIX = "cyrene-wbc-draft-";
 var WBC_ATTACH_PREFIX = "cyrene-wbc-attach-";
+var WBC_WORKSPACE_PREFIX = "cyrene-wbc-workspace-";
 
 function wbcIsPersistableChatId(id) {
   return !!(id && String(id).indexOf("legacy:") !== 0);
@@ -2089,9 +2126,29 @@ function wbcSaveAttachments(id, list) {
   } catch (e) {}
 }
 
+function wbcWorkspaceContextKey(chatId, projectId) {
+  return String(projectId || "") + ":" + (wbcIsPersistableChatId(chatId) ? String(chatId) : "__new__");
+}
+
+function wbcLoadWorkspaceOverride(key) {
+  if (!key) return "";
+  try { return localStorage.getItem(WBC_WORKSPACE_PREFIX + key) || ""; } catch (e) { return ""; }
+}
+
+function wbcSaveWorkspaceOverride(key, path) {
+  if (!key) return;
+  try {
+    if (path) localStorage.setItem(WBC_WORKSPACE_PREFIX + key, path);
+    else localStorage.removeItem(WBC_WORKSPACE_PREFIX + key);
+  } catch (e) {}
+}
+
 function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   var model = window.WorkbenchChatModel;
   var chatId = chat ? chat.id : "";
+  var projectId = (project && project.id) || "";
+  var projectWorkspacePath = (project && project.workspacePath) || "";
+  var workspaceContextKey = wbcWorkspaceContextKey(chatId, projectId);
   var [draft, setDraft] = useWbcState(function () { return wbcLoadDraft(chatId); });
   var [attachments, setAttachments] = useWbcState(function () { return wbcLoadAttachments(chatId); });
   var [mode, setMode] = useWbcState("auto");
@@ -2101,15 +2158,22 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   var [slashOpen, setSlashOpen] = useWbcState(false);
   var [modeOpen, setModeOpen] = useWbcState(false);
   var [contextState, setContextState] = useWbcState(null);
+  var [workspaceOverride, setWorkspaceOverride] = useWbcState(function () {
+    return wbcLoadWorkspaceOverride(workspaceContextKey);
+  });
   var [ctxPickerOpen, setCtxPickerOpen] = useWbcState(false);
   var taRef = useWbcRef(null);
   var fileRef = useWbcRef(null);
+  var uploadCountRef = useWbcRef(0);
   var draftRef = useWbcRef(draft);
   var attachRef = useWbcRef(attachments);
   var prevChatIdRef = useWbcRef(chatId);
+  var workspaceOverrideRef = useWbcRef(workspaceOverride);
+  var prevWorkspaceContextKeyRef = useWbcRef(workspaceContextKey);
 
   useWbcEffect(function () { draftRef.current = draft; });
   useWbcEffect(function () { attachRef.current = attachments; });
+  useWbcEffect(function () { workspaceOverrideRef.current = workspaceOverride; });
 
   useWbcEffect(function () {
     if (prevChatIdRef.current === chatId) wbcSaveDraft(chatId, draft);
@@ -2118,6 +2182,12 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   useWbcEffect(function () {
     if (prevChatIdRef.current === chatId) wbcSaveAttachments(chatId, attachments);
   }, [attachments]);
+
+  useWbcEffect(function () {
+    if (prevWorkspaceContextKeyRef.current === workspaceContextKey) {
+      wbcSaveWorkspaceOverride(workspaceContextKey, workspaceOverride);
+    }
+  }, [workspaceOverride]);
 
   useWbcEffect(function () { syncHeight(); }, [draft]);
 
@@ -2137,6 +2207,28 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
     setCtxPickerOpen(false);
   }, [chatId]);
 
+  useWbcEffect(function () {
+    var prevKey = prevWorkspaceContextKeyRef.current;
+    if (prevKey === workspaceContextKey) return;
+    var currentOverride = workspaceOverrideRef.current;
+    wbcSaveWorkspaceOverride(prevKey, currentOverride);
+    var nextOverride = wbcLoadWorkspaceOverride(workspaceContextKey);
+    setWorkspaceOverride(nextOverride);
+    workspaceOverrideRef.current = nextOverride;
+    prevWorkspaceContextKeyRef.current = workspaceContextKey;
+  }, [workspaceContextKey]);
+
+  useWbcEffect(function () {
+    function onChatCreated(event) {
+      var detail = (event && event.detail) || {};
+      if (String(detail.projectId || "") !== String(projectId || "") || !detail.chatId) return;
+      var nextKey = wbcWorkspaceContextKey(detail.chatId, projectId);
+      wbcSaveWorkspaceOverride(nextKey, workspaceOverrideRef.current);
+    }
+    window.addEventListener("cyrene:wbc-chat-created", onChatCreated);
+    return function () { window.removeEventListener("cyrene:wbc-chat-created", onChatCreated); };
+  }, [projectId]);
+
   function wbcRefreshCtxState() {
     fetch("/api/context/state").then(function (r) { return r.json(); }).then(function (s) {
       setContextState(s);
@@ -2149,7 +2241,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
       if (!cancelled) setContextState(s);
     }).catch(function () {});
     return function () { cancelled = true; };
-  }, []);
+  }, [projectId, projectWorkspacePath]);
 
   function syncHeight() {
     var ta = taRef.current;
@@ -2197,15 +2289,30 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   }
 
   function pickFiles() { if (fileRef.current) fileRef.current.click(); }
-  function onFilePick(event) {
-    var files = event.target.files;
+  function addFiles(files) {
     if (!files || !files.length) return;
+    uploadCountRef.current += 1;
     setUploading(true);
     model.uploadFiles(files)
       .then(function (uploaded) { setAttachments(function (prev) { return prev.concat(uploaded); }); })
       .catch(function (err) { window.showToast(wbcT("workbenchChat.uploadFailed", "Upload failed: {error}", { error: wbcErrorText(err) }), "error"); })
-      .finally(function () { setUploading(false); if (fileRef.current) fileRef.current.value = ""; });
+      .finally(function () {
+        uploadCountRef.current = Math.max(0, uploadCountRef.current - 1);
+        if (uploadCountRef.current === 0) setUploading(false);
+        if (fileRef.current) fileRef.current.value = "";
+      });
   }
+  function onFilePick(event) {
+    addFiles(event.target.files);
+  }
+  useWbcEffect(function () {
+    function onDroppedFiles(event) {
+      var files = event && event.detail && event.detail.files;
+      addFiles(files);
+    }
+    window.addEventListener("cyrene:add-chat-attachments", onDroppedFiles);
+    return function () { window.removeEventListener("cyrene:add-chat-attachments", onDroppedFiles); };
+  }, []);
 
   var slashQuery = draft.indexOf("/") === 0 ? draft.slice(1).toLowerCase() : "";
   var translatedCommands = WBC_COMMANDS.map(function (c) { return wbcCommandMeta(c.id); }).filter(Boolean);
@@ -2218,7 +2325,9 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   var currentMode = wbcModeMeta(mode);
   var personaOn = !contextState || contextState.soul_active !== false;
   var workspaceOn = !!(contextState && contextState.workspace_active !== false);
-  var wsDir = (contextState && contextState.workspace_dir) || "";
+  // Follow the active project's workspace by default. A directory explicitly
+  // chosen from the composer remains selected when the user switches projects.
+  var wsDir = workspaceOverride || projectWorkspacePath || (contextState && contextState.workspace_dir) || "";
   var wsHistory = (contextState && Array.isArray(contextState.workspace_history)) ? contextState.workspace_history : [];
   var modelName = (chat && chat.model) || (project && project.model) || "";
 
@@ -2231,11 +2340,15 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   }
 
   function wbcAddWorkspace(path) {
+    var selectedPath = String(path || "").trim();
     window.WorkbenchAPI.fetch("/api/context/add-workspace", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: path || "" }),
-    }).then(wbcRefreshCtxState, function (err) {
+      body: JSON.stringify({ path: selectedPath }),
+    }).then(function () {
+      setWorkspaceOverride(selectedPath && selectedPath !== projectWorkspacePath ? selectedPath : "");
+      wbcRefreshCtxState();
+    }, function (err) {
       window.WorkbenchAPI.toastError(err, wbcT("workbenchChat.workspaceAddFailed", "Failed to add workspace: "));
     }).catch(function () {});
     setCtxPickerOpen(false);
@@ -2347,7 +2460,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
                 <WbcCtxPicker
                   personaOn={personaOn}
                   workspaceOn={workspaceOn}
-                  defaultWorkspacePath={wsDir}
+                  defaultWorkspacePath={projectWorkspacePath || wsDir}
                   wsHistory={wsHistory}
                   onTogglePersona={wbcTogglePersona}
                   onAddWorkspace={wbcAddWorkspace}
@@ -2471,12 +2584,160 @@ function WbcCtxPicker({ personaOn, workspaceOn, defaultWorkspacePath, wsHistory,
 }
 
 // ---------------------------------------------------------------------------
+// Branch tree (fork lineage navigator)
+// ---------------------------------------------------------------------------
+
+// Resolve the fork lineage the active chat belongs to. Walks up
+// forkedFromChatId to the lineage root, then confirms the lineage spans more
+// than one chat (a lone conversation has no branches to show). Returns
+// { root, byId, children } or null when there's nothing to draw.
+function wbcBranchLineage(chats, activeChatId) {
+  if (!activeChatId || !Array.isArray(chats) || !chats.length) return null;
+  var byId = {};
+  chats.forEach(function (c) { if (c && c.id) byId[c.id] = c; });
+  var active = byId[activeChatId];
+  if (!active) return null;
+  var children = {};
+  chats.forEach(function (c) {
+    var parent = c && c.forkedFromChatId;
+    if (parent && byId[parent]) (children[parent] = children[parent] || []).push(c);
+  });
+  Object.keys(children).forEach(function (key) {
+    children[key].sort(function (a, b) {
+      return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+    });
+  });
+  // Climb to the lineage root (a missing/deleted parent terminates the walk).
+  var root = active;
+  var guard = 0;
+  while (root.forkedFromChatId && byId[root.forkedFromChatId] && guard < 500) {
+    root = byId[root.forkedFromChatId];
+    guard += 1;
+  }
+  var size = 0;
+  (function count(node) {
+    size += 1;
+    (children[node.id] || []).forEach(count);
+  })(root);
+  if (size < 2) return null;
+  return { root: root, byId: byId, children: children };
+}
+
+// Flatten a lineage into render rows via DFS. Each chat is a vertical lane at
+// its depth: a head row (root start or fork divergence) and, once it has a
+// reply, a tip row (its latest message). Children nest between the two at
+// depth+1. Per-row line flags drive the connectors so the lane stays unbroken:
+//   lineDown — own column runs from the dot to the row bottom (head with more
+//              below it); lineUp — own column runs from the top into the dot
+//              (tip closing the lane); elbow — horizontal join from the parent
+//              column (only a fork head taps its parent's trunk).
+function wbcBranchRows(lineage) {
+  if (!lineage) return [];
+  var rows = [];
+  (function walk(chat, depth, isRoot) {
+    var children = lineage.children[chat.id] || [];
+    var head = isRoot
+      ? String(chat.firstMessage || chat.preview || "")
+      : String(chat.forkMessage || chat.firstMessage || chat.preview || "");
+    var tip = String(chat.preview || "");
+    // A branch with no reply yet has tip === head; render only the head node.
+    var hasTip = !!(tip && tip !== head);
+    var hasKids = children.length > 0;
+    rows.push({
+      chatId: chat.id, kind: isRoot ? "root" : "fork", depth: depth,
+      text: head, title: chat.title, isHead: true,
+      lineUp: false, lineDown: hasTip || hasKids, elbow: depth > 0,
+    });
+    children.forEach(function (child) { walk(child, depth + 1, false); });
+    if (hasTip) {
+      rows.push({
+        chatId: chat.id, kind: "tip", depth: depth,
+        text: tip, title: chat.title, isHead: false,
+        lineUp: true, lineDown: false, elbow: false,
+      });
+    }
+  })(lineage.root, 0, true);
+  return rows;
+}
+
+// Connector segments for one row on a 22px-per-depth grid, columns centered at
+// `d*22+13` and the node centered 16px down. Ancestor columns draw full-height
+// guides; the own column draws a half-line up or down; the elbow bridges to the
+// parent column. The node's card-bg halo masks any line crossing behind it.
+function wbcBranchConnectors(row) {
+  var U = 22, CY = 16, BASE = 13, d = row.depth;
+  function x(col) { return (col * U + BASE) + "px"; }
+  var segs = [];
+  for (var c = 0; c < d; c += 1) {
+    segs.push({ cls: "v", style: { left: x(c), top: 0, bottom: 0 } });
+  }
+  if (row.lineDown) segs.push({ cls: "v", style: { left: x(d), top: CY + "px", bottom: 0 } });
+  if (row.lineUp) segs.push({ cls: "v", style: { left: x(d), top: 0, height: CY + "px" } });
+  if (row.elbow) segs.push({ cls: "h", style: { left: x(d - 1), top: CY + "px", width: U + "px" } });
+  return segs;
+}
+
+function wbcBranchKindLabel(kind) {
+  if (kind === "root") return wbcT("workbenchChat.branchStart", "Start");
+  if (kind === "tip") return wbcT("workbenchChat.branchEnd", "Latest");
+  return wbcT("workbenchChat.branchFork", "Branch");
+}
+
+// Right-panel tab rendering the fork lineage as a node-and-line tree. Clicking
+// a node switches to that branch; the active chat's nodes stay highlighted.
+function WbcBranchTab({ chats, activeChatId, onSelectChat }) {
+  var rows = useWbcMemo(function () {
+    return wbcBranchRows(wbcBranchLineage(chats, activeChatId));
+  }, [chats, activeChatId]);
+  if (!rows.length) {
+    return <p className="workbench-muted wbc-branch-empty">{wbcT("workbenchChat.branchEmpty", "This conversation has no branches.")}</p>;
+  }
+  return (
+    <div className="wbc-branch">
+      <p className="wbc-branch-hint">{wbcT("workbenchChat.branchHint", "Click a node to jump to that branch.")}</p>
+      <ul className="wbc-branch-tree">
+        {rows.map(function (row, index) {
+          var isActive = row.chatId === activeChatId;
+          var cls = "wbc-branch-row depth-" + row.depth + " kind-" + row.kind + (isActive ? " active" : "");
+          return (
+            <li
+              key={row.chatId + ":" + row.kind + ":" + index}
+              className={cls}
+              role="button"
+              tabIndex={0}
+              title={row.title || ""}
+              onClick={function () { onSelectChat(row.chatId); }}
+              onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelectChat(row.chatId); } }}
+            >
+              {wbcBranchConnectors(row).map(function (seg, segIndex) {
+                return <span key={"seg" + segIndex} className={"wbc-branch-line " + seg.cls} style={seg.style} aria-hidden="true" />;
+              })}
+              <span className="wbc-branch-node" style={{ left: (row.depth * 22 + 13) + "px" }} aria-hidden="true" />
+              <span className="wbc-branch-card" style={{ marginLeft: (row.depth * 22 + 28) + "px" }}>
+                <span className="wbc-branch-meta">
+                  <span className="wbc-branch-kind">{wbcBranchKindLabel(row.kind)}</span>
+                  {isActive && row.isHead && <span className="wbc-branch-here">{wbcT("workbenchChat.branchHere", "Current")}</span>}
+                </span>
+                <span className="wbc-branch-text">{row.text || wbcT("workbenchChat.branchNoText", "(empty message)")}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Right context panel (column 4)
 // ---------------------------------------------------------------------------
 
 function WbcSide({
   project,
   chat,
+  chats,
+  activeChatId,
+  onSelectChat,
   runtime,
   subagentData,
   subagentLoading,
@@ -2493,7 +2754,10 @@ function WbcSide({
   compactBusy,
 }) {
   var hasMap = wbcChatUsedMap(chat, runtime);
-  var pendingPlan = wbcPendingPlan(chat);
+  var hasBranches = useWbcMemo(function () {
+    return !!wbcBranchLineage(chats, activeChatId);
+  }, [chats, activeChatId]);
+  var pendingPlan = wbcActivePlan(chat);
   var hasSubagents = !!(
     subagentData
     && (
@@ -2508,6 +2772,7 @@ function WbcSide({
   if (hasSubagents) tabs.push({ id: "subagents", label: wbcT("workbenchChat.subagents", "Subagents") });
   tabs.push({ id: "context", label: wbcT("workbenchChat.context", "Context") });
   tabs.push({ id: "artifacts", label: wbcT("workbenchChat.artifacts", "Artifacts") });
+  if (hasBranches) tabs.push({ id: "branches", label: wbcT("chat.side.branches", "Branches") });
   if (viewerFile) tabs.push({ id: "viewer", label: wbcT("workbenchChat.viewer", "Viewer") });
   if (hasMap) tabs.push({ id: "map", label: wbcT("chat.side.map", "Map") });
   var activeTab = tabs.some(function (item) { return item.id === tab; }) ? tab : "overview";
@@ -2536,6 +2801,7 @@ function WbcSide({
         )}
         {activeTab === "context" && <WbcContextTab project={project} chat={chat} runtime={runtime} />}
         {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} onOpenFile={onOpenFile} />}
+        {activeTab === "branches" && <WbcBranchTab chats={chats} activeChatId={activeChatId} onSelectChat={onSelectChat} />}
         {activeTab === "viewer" && <WbcViewerTab file={viewerFile} />}
         {activeTab === "map" && <WbcMapTab chatId={chat ? chat.id : ""} active={true} />}
       </div>
@@ -2825,10 +3091,11 @@ function WbcSubagentBubble({ msg, name, agentIds, grouped, dimmed, onSelectAgent
   );
 }
 
-// The plan attached to a pending plan-mode confirmation, if any. The chat-mode
-// plan is a structured {title, summary, steps:[{title, tasks[]}]} dict carried
-// on the pending question's `plan` field (see _public_pending_question).
-function wbcPendingPlan(chat) {
+// Prefer the durable chat plan. Fall back to the pending confirmation payload
+// during the small window before the chat record is re-fetched.
+function wbcActivePlan(chat) {
+  var active = chat && chat.activePlan;
+  if (active && typeof active === "object") return active;
   var pq = chat && chat.pendingQuestion;
   var plan = pq && pq.plan;
   if (!plan || typeof plan !== "object") return null;
@@ -2836,30 +3103,56 @@ function wbcPendingPlan(chat) {
   return (plan.title || plan.summary || hasSteps) ? plan : null;
 }
 
-// Right-panel 计划 tab — renders the proposed plan the agent is asking the user
-// to confirm. Shown only while a plan_confirmation is pending.
+function wbcPlanStatusText(status) {
+  return {
+    proposed: wbcT("chat.side.planProposed", "Awaiting approval"),
+    active: wbcT("chat.side.planActive", "In progress"),
+    paused: wbcT("chat.side.planPaused", "Paused"),
+  }[status] || "";
+}
+
+function wbcPlanStepStatusText(status) {
+  return {
+    pending: wbcT("chat.side.planStepPending", "Pending"),
+    in_progress: wbcT("chat.side.planStepActive", "Working"),
+    completed: wbcT("chat.side.planStepCompleted", "Completed"),
+    failed: wbcT("chat.side.planStepFailed", "Failed"),
+    skipped: wbcT("chat.side.planStepSkipped", "Skipped"),
+  }[status] || "";
+}
+
+// Right-panel 计划 tab — durable from proposal through execution completion.
 function WbcPlanTab({ plan }) {
   var p = plan || {};
   var steps = Array.isArray(p.steps) ? p.steps : [];
   return (
     <div className="workbench-side-stack">
       <section className="workbench-side-section wbc-plan">
-        <h3>{p.title || wbcT("chat.side.planTitle", "Proposed plan")}</h3>
+        <div className="wbc-plan-head">
+          <h3>{p.title || wbcT("chat.side.planTitle", "Proposed plan")}</h3>
+          {p.status ? <span className={"wbc-plan-state " + p.status}>{wbcPlanStatusText(p.status)}</span> : null}
+        </div>
         {p.summary ? <p className="workbench-muted">{p.summary}</p> : null}
+        {p.markdownPath ? <p className="wbc-plan-path" title={p.markdownPath}>{p.markdownPath}</p> : null}
         {steps.length === 0 ? (
           <p className="workbench-muted">{wbcT("chat.side.planEmpty", "The agent has not detailed any steps yet.")}</p>
         ) : (
           <ol className="wbc-plan-steps">
             {steps.map(function (step, i) {
               var tasks = Array.isArray(step.tasks) ? step.tasks : [];
+              var status = step.status || "pending";
               return (
-                <li key={i} className="wbc-plan-step">
-                  <b>{step.title || (wbcT("chat.side.planStep", "Step") + " " + (i + 1))}</b>
+                <li key={step.id || i} className={"wbc-plan-step " + status}>
+                  <div className="wbc-plan-step-title">
+                    <b>{step.title || (wbcT("chat.side.planStep", "Step") + " " + (i + 1))}</b>
+                    <span>{wbcPlanStepStatusText(status)}</span>
+                  </div>
                   {tasks.length > 0 && (
                     <ul className="wbc-plan-tasks">
                       {tasks.map(function (t, j) { return <li key={j}>{String(t)}</li>; })}
                     </ul>
                   )}
+                  {step.note ? <p className="wbc-plan-note">{step.note}</p> : null}
                 </li>
               );
             })}
@@ -3317,7 +3610,7 @@ function WbcOverviewTab({ chat, runtime, onRename, onDelete, onToTask, toTaskBus
           }}>{WBC_ICONS.edit}<span>{wbcT("workbenchChat.rename", "Rename chat")}</span></button>
           <button type="button" disabled={toTaskBusy} onClick={onToTask}>{WBC_ICONS.task}<span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span></button>
           {!chat.legacy && (
-            <button type="button" disabled={!!runtime || compactBusy} onClick={onCompact}>
+            <button type="button" disabled={compactBusy} onClick={onCompact}>
               {compactBusy ? <span className="wbc-spinner" aria-hidden="true"></span> : WBC_ICONS.compact}
               <span>{wbcT(compactBusy ? "workbenchChat.compactBusy" : "workbenchChat.compact", compactBusy ? "Compressing…" : "Compress chat")}</span>
             </button>
@@ -3526,11 +3819,11 @@ function WbcContextTab({ project, chat, runtime }) {
           <span className={"workbench-status-dot " + (!state || state.soul_active !== false ? "green" : "muted")}></span>
           {wbcT("settings.soulMd", "SOUL.md")}
         </div>
-        <div className="workbench-check">
+        <div className="workbench-check wbc-ws-path-row">
           <span className={"workbench-status-dot " + (!state || state.workspace_active !== false ? "green" : "muted")}></span>
-          {wbcT("settings.workspaceDir", "Workspace directory")}
+          <span className="wbc-ws-path-prefix">{wbcT("workbenchChat.workspacePathLabel", "Path")}</span>
+          <span className="wbc-ws-path-value" title={(state && state.workspace_dir) || ""}>{(state && state.workspace_dir) || "—"}</span>
         </div>
-        {state && state.workspace_dir ? <p className="workbench-muted">{state.workspace_dir}</p> : null}
       </section>
       <section className="workbench-side-section">
         <h3>{wbcT("workbenchChat.stats", "Chat stats")}</h3>

@@ -237,6 +237,119 @@ def test_workbench_chat_retry_truncates_only_after_durable_terminal_event():
     assert 'fire("onRetryTruncate"' in awaiting_block
 
 
+def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    runtime_error = source.split(
+        'onError: function (chatId, err) {', 1
+    )[1].split("onSettled:", 1)[0]
+    main_props = source.split("<WbcMain", 1)[1].split("/>", 1)[0]
+
+    assert 'setErrorKind("message");' in runtime_error
+    assert 'onRetry={errorKind === "message" ? handleRetryMessage : retryLoad}' in main_props
+    assert 'errorKind={errorKind}' in main_props
+    assert '<WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} />' in source
+    assert 'wbcT("workbenchChat.error.messageTitle", "Message processing failed")' in source
+    assert 'wbcT("workbenchChat.error.messageBody"' in source
+
+
+def test_workbench_knowledge_related_tab_loads_and_navigates_conversations():
+    root = Path(__file__).resolve().parent.parent
+    knowledge = (
+        root / "src" / "workbench-webui" / "workbench-knowledge.jsx"
+    ).read_text(encoding="utf-8")
+    shell = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"/related?" + withWs()' in knowledge
+    assert 'detailTab !== "related"' in knowledge
+    assert '{ type: "task", projectId: item.project_id, sessionId: item.session_id' in knowledge
+    assert '{ type: "chat", projectId: item.project_id, chatId: item.chat_id }' in knowledge
+    assert "onNavigate: navigateFromSearch" in shell
+
+
+def test_workbench_chat_plan_tab_uses_durable_plan_and_live_step_events():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function wbcActivePlan(chat)" in source
+    assert "var active = chat && chat.activePlan;" in source
+    assert 'event.type === "plan_progress" || event.type === "plan"' in source
+    assert 'className={"wbc-plan-step " + status}' in source
+    assert "wbcPlanStepStatusText(status)" in source
+
+
+def test_workbench_chat_tool_trace_preserves_i18n_metadata():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    live_message = chat.split("function WbcLiveMessage(", 1)[1].split(
+        "var WBC_DRAFT_PREFIX", 1
+    )[0]
+    assert "var progressEntries = Array.isArray(runtime.progress) ? runtime.progress : [];" in live_message
+    assert "var segmentTrace = Array.isArray(segment.progress) ? segment.progress : [];" in live_message
+    assert "return { tool: entry.text, preview: entry.preview };" not in live_message
+    assert 'wbcT(entry.detailKey, toolKey, entry.detailParams)' in chat
+    assert '"update_plan_progress"].indexOf(toolName)' in chat
+    assert '"toolName.retire_project_memory": "Retire project memory"' in i18n
+    assert '"toolName.retire_project_memory": "停用项目记忆"' in i18n
+    assert '"workbenchChat.thinkingPhrases":' in i18n
+    assert "WBC_THINKING_PHRASES" not in chat
+    assert "var heartbeatI18n = useWorkbenchI18n();" in chat
+    assert "}, [heartbeatLang]);" in chat
+
+
+def test_workbench_phase_events_publish_translation_keys():
+    root = Path(__file__).resolve().parent.parent
+    planning = (root / "src" / "cyrene" / "agent" / "planning.py").read_text(encoding="utf-8")
+    guidance = (root / "src" / "cyrene" / "agent" / "guidance.py").read_text(encoding="utf-8")
+    reflection = (root / "src" / "cyrene" / "agent" / "deep_reflection.py").read_text(encoding="utf-8")
+
+    assert '"detail_key": "phase.planning"' in planning
+    assert '"detail_key": "phase.applyingGuidanceToSubagents"' in guidance
+    assert '"detail_params": {"count": len(snapshot)}' in guidance
+    assert '"detail_key": "phase.guidedRoundContinuation"' in guidance
+    assert '"detail_key": "phase.guidanceExecution"' in guidance
+    assert '"detail_key": "phase.deepReflection"' in reflection
+
+
+def test_workbench_chat_last_user_message_has_retry_action():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    main = source.split("function WbcMain(", 1)[1].split(
+        "function WbcQuestionPrompt(", 1
+    )[0]
+    user_message = source.split("function WbcUserMessage(", 1)[1].split(
+        "function WbcAgentFiles(", 1
+    )[0]
+
+    assert 'var lastUserId = "";' in main
+    assert 'String(msg.id || "") === lastUserId' in main
+    assert "onRetryMessage={canRetryUser ? onRetryMessage : null}" in main
+    assert "function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessage })" in source
+    assert "onClick={onRetryMessage}" in user_message
+    assert "WBC_ICONS.retry" in user_message
+    assert 'wbcT("workbenchChat.retryUserMessage", "Retry message")' in user_message
+    assert '"workbenchChat.retryUserMessage": "重试消息"' in i18n
+
+
 def test_workbench_chat_uses_explicit_run_reconnect_without_resubmitting_message():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
@@ -262,6 +375,22 @@ def test_workbench_copy_uses_electron_clipboard_bridge():
     assert "window.cyrene.writeClipboardText(text);" in chat
     assert "await navigator.clipboard.writeText(text);" in chat
     assert 'console.error("Failed to copy workbench message:", e);' in chat
+
+
+def test_code_blocks_use_declared_language_and_resilient_clipboard_actions():
+    root = Path(__file__).resolve().parent.parent
+    highlight = (root / "src" / "webui" / "static" / "app" / "code" / "highlight.jsx").read_text(encoding="utf-8")
+    actions = (root / "src" / "webui" / "static" / "app" / "code" / "actions.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "static" / "app" / "code" / "highlight.css").read_text(encoding="utf-8")
+
+    assert 'language = "text";' in highlight
+    assert "hljs.highlightAuto(code)" not in highlight
+    assert 'typeof window.cyrene.writeClipboardText === "function"' in actions
+    assert 'navigator.clipboard && typeof navigator.clipboard.writeText === "function"' in actions
+    assert 'document.execCommand("copy")' in actions
+    assert "padding-top: 52px;" in styles
+    assert "top: 0;" in styles
+    assert "bottom: 0;" not in styles.split(".code-block-actions", 1)[1].split("}", 1)[0]
 
 
 def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_native_pdf_zoom():
@@ -399,11 +528,38 @@ def test_workbench_chat_directory_picker_falls_back_on_macos_and_lists_default_w
 
     assert 'window.cyrene.platform === "linux"' in chat
     assert 'fetch("/api/context/pick-directory", { method: "POST" })' in chat
-    assert "defaultWorkspacePath={wsDir}" in chat
+    assert "defaultWorkspacePath={projectWorkspacePath || wsDir}" in chat
     assert "if (defaultWorkspacePath) workspaceOptions.push" in chat
     assert 'wbcT("workbenchChat.defaultWorkspace", "Default workspace")' in chat
     assert '"workbenchChat.defaultWorkspace": "Default workspace"' in i18n
     assert '"workbenchChat.defaultWorkspace": "默认 workspace"' in i18n
+
+
+def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "return wbcLoadWorkspaceOverride(workspaceContextKey);" in chat
+    assert 'var WBC_WORKSPACE_PREFIX = "cyrene-wbc-workspace-";' in chat
+    assert "function wbcWorkspaceContextKey(chatId, projectId)" in chat
+    assert "var workspaceContextKey = wbcWorkspaceContextKey(chatId, projectId);" in chat
+    assert "wbcSaveWorkspaceOverride(prevKey, currentOverride);" in chat
+    assert "var nextOverride = wbcLoadWorkspaceOverride(workspaceContextKey);" in chat
+    assert 'window.dispatchEvent(new CustomEvent("cyrene:wbc-chat-created"' in chat
+    assert 'window.addEventListener("cyrene:wbc-chat-created", onChatCreated);' in chat
+    assert "wbcSaveWorkspaceOverride(nextKey, workspaceOverrideRef.current);" in chat
+    assert 'var projectWorkspacePath = (project && project.workspacePath) || "";' in chat
+    assert (
+        "var wsDir = workspaceOverride || projectWorkspacePath || "
+        "(contextState && contextState.workspace_dir) || \"\";"
+    ) in chat
+    assert "}, [projectId, projectWorkspacePath]);" in chat
+    assert (
+        'setWorkspaceOverride(selectedPath && selectedPath !== '
+        'projectWorkspacePath ? selectedPath : "");'
+    ) in chat
 
 
 def test_workbench_context_picker_contains_long_workspace_paths():
@@ -540,16 +696,41 @@ def test_workbench_chat_quick_actions_include_manual_context_compaction():
     assert 'function compactChat(chatId)' in source
     assert '"/compact"' in source
     assert 'wbcT(compactBusy ? "workbenchChat.compactBusy" : "workbenchChat.compact"' in source
+    assert "activeRunning || compactBusy" not in source
+    assert "disabled={compactBusy} onClick={onCompact}" in source
+    assert 'payload.reason === "running"' in source
+    assert 'payload.reason === "awaiting_user"' in source
+    assert 'payload.reason === "no_tool_activity"' in source
+    assert 'payload.reason === "distilling"' in source
 
     result = _run_workbench_i18n_js(
         """
 [
   window.WorkbenchI18n.t("workbenchChat.compact"),
-  window.WorkbenchI18n.t("workbenchChat.compactBusy")
+  window.WorkbenchI18n.t("workbenchChat.compactBusy"),
+  window.WorkbenchI18n.t("workbenchChat.compactRunning"),
+  window.WorkbenchI18n.t("workbenchChat.compactAwaitingUser"),
+  window.WorkbenchI18n.t("workbenchChat.compactNoTools"),
+  window.WorkbenchI18n.t("workbenchChat.compactDistilling")
 ]
 """
     )
-    assert result == ["压缩对话", "正在压缩…"]
+    assert result == [
+        "压缩对话",
+        "正在压缩…",
+        "Agent 正在工作，请在任务完成后再压缩。",
+        "请先回答 Agent 的问题，再压缩对话。",
+        "当前对话没有工具调用，无需主动压缩。",
+        "后台正在蒸馏上下文，请稍后再试。",
+    ]
+
+
+def test_warning_toast_has_no_colored_left_accent():
+    root = Path(__file__).resolve().parent.parent
+    css = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+
+    assert ".workbench-toast.is-warning { border-left: 1px solid var(--wb-line); }" in css
+    assert ".workbench-toast.is-warning { border-left-color: var(--wb-amber); }" not in css
 
 
 def test_workbench_subagent_payload_recovers_chat_scoped_snapshot(monkeypatch):
@@ -717,6 +898,92 @@ def test_workbench_task_composer_uses_enter_to_send_via_shortcut_module():
     composer_block = source.split("function TaskComposer(", 1)[1].split("function composerPlaceholder", 1)[0]
     assert 'sc.matches(event, "composer-send")' in composer_block
     assert "event.metaKey || event.ctrlKey" not in composer_block.split("function onKeyDown")[1].split("}")[0]
+
+
+def test_workbench_file_drop_routes_files_to_task_chat_and_knowledge():
+    root = Path(__file__).resolve().parent.parent
+    workbench = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    knowledge = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+
+    # The shared document-level target prevents Chromium's default file
+    # navigation and forwards the real DataTransfer FileList.
+    drop_hook = workbench.split("function useWorkbenchFileDrop", 1)[1].split(
+        "function WorkbenchFileDropOverlay", 1
+    )[0]
+    assert 'types.indexOf("Files")' in drop_hook
+    assert 'document.addEventListener("dragover"' in drop_hook
+    assert 'document.addEventListener("drop"' in drop_hook
+    assert "event.preventDefault()" in drop_hook
+    assert "event.dataTransfer.files" in drop_hook
+
+    # Task and chat route a drop from the whole module to their existing upload
+    # pipelines, which append the uploaded files to the composer attachment row.
+    assert 'new CustomEvent("cyrene:add-task-attachments"' in workbench
+    assert 'window.addEventListener("cyrene:add-task-attachments"' in workbench
+    assert "model.uploadAttachments(files)" in workbench
+    assert 'new CustomEvent("cyrene:add-chat-attachments"' in chat
+    assert 'window.addEventListener("cyrene:add-chat-attachments"' in chat
+    assert "model.uploadFiles(files)" in chat
+
+    # Knowledge drops reuse the existing ingestion path rather than chat uploads.
+    assert "knowledgeFileDropActive = useWorkbenchFileDrop" in knowledge
+    assert "handleFiles(files)" in knowledge
+    assert "client.upload(files)" in knowledge
+    assert ".wb-file-drop-overlay" in styles
+
+
+def test_workbench_file_drop_hook_prevents_navigation_and_delivers_files():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    hook_source = "function useWorkbenchFileDrop" + source.split(
+        "function useWorkbenchFileDrop", 1
+    )[1].split("function WorkbenchFileDropOverlay", 1)[0]
+    script = f"""
+const documentListeners = {{}};
+const windowListeners = {{}};
+const stateChanges = [];
+let cleanup = null;
+global.document = {{
+  addEventListener: (name, fn) => {{ documentListeners[name] = fn; }},
+  removeEventListener: (name) => {{ delete documentListeners[name]; }}
+}};
+global.window = {{
+  addEventListener: (name, fn) => {{ windowListeners[name] = fn; }},
+  removeEventListener: (name) => {{ delete windowListeners[name]; }}
+}};
+global.React = {{
+  useState: (value) => [value, (next) => stateChanges.push(next)],
+  useRef: (value) => ({{ current: value }}),
+  useEffect: (fn) => {{ cleanup = fn(); }}
+}};
+eval({json.dumps(hook_source)});
+let delivered = [];
+useWorkbenchFileDrop((files) => {{ delivered = Array.from(files).map((file) => file.name); }}, true);
+let prevented = 0;
+const transfer = {{ types: ["Files"], files: [{{ name: "alpha.txt" }}, {{ name: "beta.pdf" }}], dropEffect: "none" }};
+const event = {{ dataTransfer: transfer, preventDefault: () => {{ prevented += 1; }} }};
+documentListeners.dragenter(event);
+documentListeners.dragover(event);
+documentListeners.drop(event);
+if (cleanup) cleanup();
+process.stdout.write(JSON.stringify({{
+  delivered,
+  prevented,
+  dropEffect: transfer.dropEffect,
+  stateChanges,
+  listenersAfterCleanup: Object.keys(documentListeners)
+}}));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+
+    assert result["delivered"] == ["alpha.txt", "beta.pdf"]
+    assert result["prevented"] == 3
+    assert result["dropEffect"] == "copy"
+    assert result["stateChanges"] == [True, True, False]
+    assert result["listenersAfterCleanup"] == []
 
 
 def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():

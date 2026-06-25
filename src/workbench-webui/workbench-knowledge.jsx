@@ -212,6 +212,10 @@
         var r = await fetch("/api/workbench/knowledge/documents/" + encodeURIComponent(id) + "?" + withWs());
         return jsonOrThrow(r);
       },
+      related: async function (id) {
+        var r = await fetch("/api/workbench/knowledge/documents/" + encodeURIComponent(id) + "/related?" + withWs());
+        return jsonOrThrow(r);
+      },
       upload: async function (files) {
         var fd = new FormData();
         for (var i = 0; i < files.length; i++) fd.append("files", files[i]);
@@ -301,13 +305,15 @@
 
     var chunks = (detail && Array.isArray(detail.chunks)) ? detail.chunks : [];
     var relations = (detail && Array.isArray(detail.relations)) ? detail.relations : [];
+    var related = props.related || { conversations: [], document_relations: [], counts: {} };
     var tags = Array.isArray(doc.tags) ? doc.tags : [];
     var sm = statusMeta(doc.status);
+    var relatedCount = Number((related.counts && related.counts.conversations) || 0);
 
     var tabs = [
       { id: "detail", label: "详情" },
       { id: "content", label: "内容" },
-      { id: "related", label: "关联对话" },
+      { id: "related", label: "关联对话" + (relatedCount ? " (" + relatedCount + ")" : "") },
     ];
 
     return React.createElement(
@@ -343,7 +349,14 @@
           onSaveTags: props.onSaveTags,
         }),
         tab === "content" && React.createElement(KbContentTab, { detail: detail, doc: doc, loading: props.detailLoading }),
-        tab === "related" && React.createElement(KbRelatedTab, { relations: relations, docsById: props.docsById, onSelect: props.onSelect })
+        tab === "related" && React.createElement(KbRelatedTab, {
+          related: related,
+          loading: props.relatedLoading,
+          error: props.relatedError,
+          onRetry: props.onRetryRelated,
+          onSelect: props.onSelect,
+          onNavigate: props.onNavigate,
+        })
       )
     );
   }
@@ -494,25 +507,97 @@
     );
   }
 
+  function relationIcon(type) {
+    var common = { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" };
+    if (type === "task") {
+      return React.createElement("svg", common,
+        React.createElement("path", { d: "M9 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" }),
+        React.createElement("path", { d: "m9 12 2 2 9-9" }));
+    }
+    if (type === "chat") {
+      return React.createElement("svg", common,
+        React.createElement("path", { d: "M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" }));
+    }
+    return React.createElement("svg", common,
+      React.createElement("path", { d: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" }),
+      React.createElement("path", { d: "M14 3v5h5" }));
+  }
+
   function KbRelatedTab(props) {
-    var relations = props.relations || [];
-    if (!relations.length) {
+    var related = props.related || {};
+    var conversations = Array.isArray(related.conversations) ? related.conversations : [];
+    var documentRelations = Array.isArray(related.document_relations) ? related.document_relations : [];
+    if (props.loading) {
+      return React.createElement("div", { className: "wb-kb-related-state" },
+        React.createElement("span", { className: "wb-kb-spin" }),
+        React.createElement("span", null, "正在查找关联对话…"));
+    }
+    if (props.error) {
+      return React.createElement("div", { className: "wb-kb-related-state error" },
+        React.createElement("span", null, props.error),
+        React.createElement("button", { type: "button", className: "wb-btn tonal", onClick: props.onRetry }, "重试"));
+    }
+    if (!conversations.length && !documentRelations.length) {
       return React.createElement("div", { className: "wb-kb-muted pad" }, "暂无关联文档或对话。");
     }
     return React.createElement(
       "div", { className: "wb-kb-related" },
-      relations.map(function (rel, i) {
-        var other = props.docsById[rel.dst_id] || props.docsById[rel.src_id];
-        var label = other ? docTitle(other) : (rel.dst_id || rel.src_id);
-        return React.createElement(
-          "button", {
-            type: "button", className: "wb-kb-related-row", key: rel.id || i,
-            onClick: function () { if (other) props.onSelect(other.id); },
-          },
-          React.createElement("span", { className: "wb-kb-related-rel" }, rel.relation || "related"),
-          React.createElement("span", { className: "wb-kb-related-name" }, label)
-        );
-      })
+      conversations.length > 0 && React.createElement(
+        "section", { className: "wb-kb-related-section" },
+        React.createElement("div", { className: "wb-kb-section-head" },
+          React.createElement("span", null, "关联对话"),
+          React.createElement("small", null, conversations.length + " 条")),
+        conversations.map(function (item) {
+          var reasons = Array.isArray(item.reasons) ? item.reasons : [];
+          var navPayload = item.type === "task"
+            ? { type: "task", projectId: item.project_id, sessionId: item.session_id, runId: item.run_id }
+            : { type: "chat", projectId: item.project_id, chatId: item.chat_id };
+          return React.createElement(
+            "button", {
+              type: "button",
+              className: "wb-kb-related-card " + item.type,
+              key: item.type + ":" + item.id,
+              onClick: function () { if (props.onNavigate) props.onNavigate(navPayload); },
+            },
+            React.createElement("span", { className: "wb-kb-related-icon" }, relationIcon(item.type)),
+            React.createElement(
+              "span", { className: "wb-kb-related-copy" },
+              React.createElement("span", { className: "wb-kb-related-title" }, item.title || "未命名对话"),
+              item.preview && React.createElement("span", { className: "wb-kb-related-preview" }, item.preview),
+              React.createElement(
+                "span", { className: "wb-kb-related-meta" },
+                React.createElement("span", null, item.type === "task" ? "任务" : "对话"),
+                item.updated_at && React.createElement("time", null, formatDateShort(item.updated_at)),
+                reasons.map(function (reason) {
+                  return React.createElement("span", { className: "wb-kb-related-reason", key: reason }, reason);
+                })
+              )
+            ),
+            React.createElement("svg", { className: "wb-kb-related-arrow", width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
+              React.createElement("path", { d: "m9 18 6-6-6-6" }))
+          );
+        })
+      ),
+      documentRelations.length > 0 && React.createElement(
+        "section", { className: "wb-kb-related-section" },
+        React.createElement("div", { className: "wb-kb-section-head" },
+          React.createElement("span", null, "关联文档"),
+          React.createElement("small", null, documentRelations.length + " 个")),
+        documentRelations.map(function (rel, i) {
+          var other = rel.document;
+          var label = other ? docTitle(other) : (rel.dst_id || rel.src_id || "未知文档");
+          return React.createElement(
+            "button", {
+              type: "button", className: "wb-kb-related-row", key: rel.id || i,
+              disabled: !other,
+              onClick: function () { if (other) props.onSelect(other.id); },
+            },
+            React.createElement("span", { className: "wb-kb-related-icon document" }, relationIcon("document")),
+            React.createElement("span", { className: "wb-kb-related-name" }, label),
+            React.createElement("span", { className: "wb-kb-related-rel" }, rel.relation || "related")
+          );
+        })
+      )
     );
   }
 
@@ -536,9 +621,16 @@
     var detailState = useState(null); var detail = detailState[0]; var setDetail = detailState[1];
     var detailLoadState = useState(false); var detailLoading = detailLoadState[0]; var setDetailLoading = detailLoadState[1];
     var detailTabState = useState("detail"); var detailTab = detailTabState[0]; var setDetailTab = detailTabState[1];
+    var relatedState = useState(null); var related = relatedState[0]; var setRelated = relatedState[1];
+    var relatedLoadState = useState(false); var relatedLoading = relatedLoadState[0]; var setRelatedLoading = relatedLoadState[1];
+    var relatedErrorState = useState(""); var relatedError = relatedErrorState[0]; var setRelatedError = relatedErrorState[1];
+    var relatedLoadedIdState = useState(""); var relatedLoadedId = relatedLoadedIdState[0]; var setRelatedLoadedId = relatedLoadedIdState[1];
     var busyState = useState(false); var busy = busyState[0]; var setBusy = busyState[1];
     var totalDocsState = useState(0); var totalDocs = totalDocsState[0]; var setTotalDocs = totalDocsState[1];
     var fileRef = useRef(null);
+    var knowledgeFileDropActive = useWorkbenchFileDrop(function (files) {
+      if (!busy) handleFiles(files);
+    }, !!project);
 
     var client = useMemo(function () { return api(workspace); }, [workspace]);
 
@@ -555,6 +647,8 @@
       // Reset selection when switching workspace/project.
       setSelectedId("");
       setDetail(null);
+      setRelated(null);
+      setRelatedLoadedId("");
       loadDocuments().then(function () {
         // If a search result opened this page, select the requested document.
         var pending = window.__workbenchPendingSelection;
@@ -587,12 +681,42 @@
     function selectDoc(id) {
       setSelectedId(id);
       setDetail(null);
+      setRelated(null);
+      setRelatedError("");
+      setRelatedLoadedId("");
       setDetailLoading(true);
       client.detail(id)
         .then(function (full) { setDetail(full); })
         .catch(function () { setDetail(null); })
         .finally(function () { setDetailLoading(false); });
     }
+
+    function loadRelated(id) {
+      if (!id) return Promise.resolve(null);
+      setRelatedLoading(true);
+      setRelatedError("");
+      return client.related(id)
+        .then(function (payload) {
+          if (selectedId === id) {
+            setRelated(payload || { conversations: [], document_relations: [], counts: {} });
+            setRelatedLoadedId(id);
+          }
+          return payload;
+        })
+        .catch(function (err) {
+          if (selectedId === id) setRelatedError(err.message || String(err));
+          return null;
+        })
+        .finally(function () {
+          if (selectedId === id) setRelatedLoading(false);
+        });
+    }
+
+    useEffect(function () {
+      if (detailTab !== "related" || !selectedId || relatedLoadedId === selectedId || relatedLoading) return;
+      loadRelated(selectedId);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [detailTab, selectedId, relatedLoadedId]);
 
     function handleSaveTags(id, newTags) {
       return client.update(id, { tags: newTags })
@@ -756,6 +880,10 @@
 
     return React.createElement(
       "section", { className: "wb-kb-page" },
+      knowledgeFileDropActive && React.createElement(WorkbenchFileDropOverlay, {
+        label: window.WorkbenchI18n.t("knowledge.dropToUpload", null, "Release to add files to the knowledge base"),
+        busy: busy,
+      }),
       React.createElement("input", {
         ref: fileRef, type: "file", multiple: true, className: "wb-kb-file-input",
         onChange: function (e) { handleFiles(e.target.files); },
@@ -910,6 +1038,11 @@
           doc: selectedDoc, detail: detail, detailLoading: detailLoading,
           tab: detailTab, setTab: setDetailTab,
           rawUrl: client.rawUrl(selectedDoc.id),
+          related: related,
+          relatedLoading: relatedLoading,
+          relatedError: relatedError,
+          onRetryRelated: function () { loadRelated(selectedDoc.id); },
+          onNavigate: props.onNavigate,
           docsById: docsById, onSelect: selectDoc,
           onSaveTags: function (newTags) { return handleSaveTags(selectedDoc.id, newTags); },
         })

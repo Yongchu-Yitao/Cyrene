@@ -18,7 +18,10 @@ async def _tool_query_entities(args, bot, chat_id, db_path, notify_state):
     )
     if not entities:
         return "没有找到匹配的事务。"
-    lines = [f"- [{e['type']}] {e['title']}" for e in entities]
+    lines = [
+        f"- [{e['type']}] {e['title']}" + (f"：{e['content']}" if e.get('content') else "")
+        for e in entities
+    ]
     return f"找到 {len(entities)} 条事务：\n" + "\n".join(lines)
 
 

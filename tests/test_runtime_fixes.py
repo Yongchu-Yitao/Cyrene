@@ -189,7 +189,7 @@ async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkey
         names = {item.get("function", {}).get("name") for item in (tools or [])}
         if tools is None:
             return {"content": "final answer from gathered tool results"}
-        if "use_tools" in names:
+        if tools is _agent_state._LIGHT_TOOL_DEFS:
             return {
                 "content": "",
                 "tool_calls": [{
@@ -2337,7 +2337,7 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
         names = {item.get("function", {}).get("name") for item in (tools or [])}
-        if "use_tools" in names:  # dispatch routes into the execution phase
+        if tools is _agent_state._LIGHT_TOOL_DEFS:  # decision phase → route into execution
             return {"content": "", "tool_calls": [{"id": "d1", "function": {"name": "use_tools", "arguments": "{\"task\":\"看 github 实现\"}"}}]}
         # execution phase: the model believes it is done and quits early
         return {"content": "", "tool_calls": [{"id": "q1", "function": {"name": "quit", "arguments": "{}"}}]}

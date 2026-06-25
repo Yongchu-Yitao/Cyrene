@@ -19,10 +19,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 import httpx
 from fastapi import APIRouter
@@ -45,7 +47,7 @@ _CONFIGURED_CHATS_STORE = None
 _CHAT_RUN_MANAGER = ChatRunManager()
 
 # Internal control tools that say nothing useful in a progress trace.
-_TRACE_SKIP_TOOLS = {"use_tools", "quit", "send_message"}
+_TRACE_SKIP_TOOLS = {"use_tools", "quit", "send_message", "update_plan_progress"}
 _USAGE_KEYS = (
     "prompt_tokens",
     "completion_tokens",
@@ -61,6 +63,178 @@ def _utc_now_iso() -> str:
 
 def _short_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:10]}"
+
+
+_VISIBLE_PLAN_STATUSES = {"proposed", "active", "paused"}
+_PLAN_STEP_STATUSES = {"pending", "in_progress", "completed", "failed", "skipped"}
+
+
+def _plan_markdown(plan: dict[str, Any]) -> str:
+    lines = [f"# {plan.get('title') or '执行计划'}", ""]
+    if plan.get("summary"):
+        lines.extend([str(plan["summary"]), ""])
+    lines.extend([
+        f"- 状态：{plan.get('status') or 'proposed'}",
+        f"- 对话：{plan.get('chatId') or ''}",
+        f"- 计划 ID：{plan.get('planId') or ''}",
+        "",
+        "## 步骤",
+        "",
+    ])
+    icons = {
+        "pending": " ",
+        "in_progress": "~",
+        "completed": "x",
+        "failed": "!",
+        "skipped": "-",
+    }
+    for index, step in enumerate(plan.get("steps") or [], start=1):
+        status = str(step.get("status") or "pending")
+        lines.append(f"- [{icons.get(status, ' ')}] {index}. {step.get('title') or '步骤'}")
+        for task in step.get("tasks") or []:
+            lines.append(f"  - {task}")
+        if step.get("note"):
+            lines.append(f"  - 进度备注：{step['note']}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _write_plan_markdown(plan: dict[str, Any]) -> None:
+    raw_path = str(plan.get("markdownPath") or "").strip()
+    if not raw_path:
+        return
+    path = Path(raw_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_plan_markdown(plan), encoding="utf-8")
+
+
+def _normalize_chat_plan(
+    chat_id: str,
+    plan: dict[str, Any],
+    *,
+    round_id: str = "",
+    workspace_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    out = dict(plan or {})
+    plan_id = str(out.get("planId") or f"plan_{uuid.uuid4().hex[:10]}")
+    now = _utc_now_iso()
+    steps: list[dict[str, Any]] = []
+    for index, raw_step in enumerate(out.get("steps") or [], start=1):
+        if not isinstance(raw_step, dict):
+            continue
+        step = dict(raw_step)
+        step["id"] = str(step.get("id") or f"step_{index}")
+        status = str(step.get("status") or "pending")
+        step["status"] = status if status in _PLAN_STEP_STATUSES else "pending"
+        step["note"] = str(step.get("note") or "")
+        step["tasks"] = [str(item) for item in (step.get("tasks") or [])]
+        steps.append(step)
+    out.update({
+        "planId": plan_id,
+        "chatId": chat_id,
+        "roundId": str(out.get("roundId") or round_id),
+        "status": str(out.get("status") or "proposed"),
+        "steps": steps,
+        "createdAt": str(out.get("createdAt") or now),
+        "updatedAt": now,
+    })
+    if workspace_dir and not out.get("markdownPath"):
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", plan_id).strip("-") or "plan"
+        out["markdownPath"] = str(Path(workspace_dir) / "plan" / f"{slug}.md")
+    return out
+
+
+def persist_chat_plan(
+    chat_id: str,
+    plan: dict[str, Any],
+    *,
+    round_id: str = "",
+    workspace_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    payload = _read_chats_store()
+    chat = _find_chat(payload, str(chat_id or ""))
+    if not chat:
+        return plan
+    stored = _normalize_chat_plan(chat["id"], plan, round_id=round_id, workspace_dir=workspace_dir)
+    chat["activePlan"] = stored
+    chat["updatedAt"] = stored["updatedAt"]
+    _write_chats_store(payload)
+    _write_plan_markdown(stored)
+    return stored
+
+
+def _mutate_chat_plan(chat_id: str, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any] | None:
+    payload = _read_chats_store()
+    chat = _find_chat(payload, str(chat_id or ""))
+    plan = chat.get("activePlan") if chat and isinstance(chat.get("activePlan"), dict) else None
+    if not chat or not plan:
+        return None
+    mutate(plan)
+    plan["updatedAt"] = _utc_now_iso()
+    chat["updatedAt"] = plan["updatedAt"]
+    _write_chats_store(payload)
+    _write_plan_markdown(plan)
+    return dict(plan)
+
+
+def activate_chat_plan(chat_id: str, fallback_plan: dict[str, Any] | None = None) -> dict[str, Any]:
+    def mutate(plan: dict[str, Any]) -> None:
+        plan["status"] = "active"
+        if plan.get("steps") and not any(step.get("status") == "in_progress" for step in plan["steps"]):
+            plan["steps"][0]["status"] = "in_progress"
+
+    updated = _mutate_chat_plan(chat_id, mutate)
+    return updated or dict(fallback_plan or {})
+
+
+def reject_chat_plan(chat_id: str, fallback_plan: dict[str, Any] | None = None) -> dict[str, Any]:
+    def mutate(plan: dict[str, Any]) -> None:
+        plan["status"] = "rejected"
+
+    updated = _mutate_chat_plan(chat_id, mutate)
+    return updated or dict(fallback_plan or {})
+
+
+def update_chat_plan_progress(
+    chat_id: str,
+    step_number: int,
+    status: str,
+    note: str = "",
+) -> dict[str, Any] | None:
+    if status not in _PLAN_STEP_STATUSES - {"pending"}:
+        return None
+
+    def mutate(plan: dict[str, Any]) -> None:
+        if str(plan.get("status") or "") not in {"active", "paused"}:
+            raise ValueError("plan is not active")
+        steps = plan.get("steps") or []
+        if step_number < 1 or step_number > len(steps):
+            raise IndexError("plan step out of range")
+        step = steps[step_number - 1]
+        step["status"] = status
+        step["note"] = note
+        if status == "in_progress":
+            plan["status"] = "active"
+            for index, other in enumerate(steps):
+                if index != step_number - 1 and other.get("status") == "in_progress":
+                    other["status"] = "pending"
+
+    try:
+        return _mutate_chat_plan(chat_id, mutate)
+    except (ValueError, IndexError):
+        return None
+
+
+def complete_chat_plan(chat_id: str) -> dict[str, Any] | None:
+    def mutate(plan: dict[str, Any]) -> None:
+        if str(plan.get("status") or "") not in {"active", "paused"}:
+            return
+        plan["status"] = "completed"
+        for step in plan.get("steps") or []:
+            if step.get("status") in {"pending", "in_progress"}:
+                step["status"] = "completed"
+
+    return _mutate_chat_plan(chat_id, mutate)
 
 
 def _workbench_chat_run_error_message(exc: Exception, lang: str = "") -> str:
@@ -207,6 +381,26 @@ def _chat_preview(chat: dict[str, Any]) -> str:
     return ""
 
 
+def _chat_first_message(chat: dict[str, Any]) -> str:
+    """Opening line of a conversation — the branch tree's root node label.
+
+    Prefers the first user message; falls back to the first non-empty entry of
+    any role so empty-prompt edge cases still surface something.
+    """
+    messages = chat.get("messages") or []
+    for message in messages:
+        if str(message.get("role") or "") != "user":
+            continue
+        text = str(message.get("content") or "").strip()
+        if text:
+            return text.replace("\n", " ")[:80]
+    for message in messages:
+        text = str(message.get("content") or "").strip()
+        if text:
+            return text.replace("\n", " ")[:80]
+    return ""
+
+
 def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
     """Listing payload — transcript omitted to keep the rail cheap."""
     usage = _aggregate_usage(chat.get("messages") or [])
@@ -224,10 +418,18 @@ def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
         "usage": usage,
         "pendingQuestion": chat.get("pendingQuestion") or None,
     }
+    active_plan = chat.get("activePlan")
+    if isinstance(active_plan, dict) and str(active_plan.get("status") or "") in _VISIBLE_PLAN_STATUSES:
+        payload["activePlan"] = active_plan
+    # Branch-tree fields: firstMessage anchors the lineage root node; forkMessage
+    # is the immutable divergence snippet stored when this chat was forked.
+    payload["firstMessage"] = _chat_first_message(chat)
     if chat.get("forkedFromChatId"):
         payload["forkedFromChatId"] = chat.get("forkedFromChatId")
     if chat.get("forkedAtMessageId"):
         payload["forkedAtMessageId"] = chat.get("forkedAtMessageId")
+    if chat.get("forkMessage"):
+        payload["forkMessage"] = str(chat.get("forkMessage"))[:80]
     return payload
 
 
@@ -1103,11 +1305,6 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             ctx_limit=ctx_limit_for_model(model_name),
             force=True,
         )
-        if result.get("reason") == "running":
-            return JSONResponse(
-                {"error": "chat is currently running", **result},
-                status_code=409,
-            )
         return {"ok": True, **result}
 
     @router.get("/api/workbench/chats/{chat_id}/context-blocks")
@@ -1442,7 +1639,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             except Exception:
                 logger.exception("Failed to archive workbench conversation %s", chat_id)
             if not command and not retry:
-                R.schedule_capture(_project_data_key(project_id), message, str(reply_text or ""))
+                R.schedule_capture(project_id, message, str(reply_text or ""))
                 append_notification(
                     title="Agent 回复完成",
                     body=f"Agent 在「{fresh_chat.get('title') or '新对话'}」中回复了你。",
@@ -1705,6 +1902,9 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         new_chat = _new_chat(project_id, str(chat.get("title") or ""), str(chat.get("model") or R._get_model()))
         new_chat["forkedFromChatId"] = chat_id
         new_chat["forkedAtMessageId"] = message_id
+        # Immutable divergence snippet — the edited prompt that started this
+        # branch. Captured here so the branch tree never has to diff transcripts.
+        new_chat["forkMessage"] = new_content.replace("\n", " ").strip()[:80]
 
         # Prefix transcript: everything before the edited user message.
         # Strip usage from copied messages so the branch doesn't inherit the
@@ -1914,6 +2114,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         fresh_chat.pop("pendingQuestion", None)
         fresh_chat["updatedAt"] = assistant_entry["createdAt"]
         _write_chats_store(fresh)
+        complete_chat_plan(chat_id)
         try:
             archive_session_exchange(
                 chat_id,
@@ -1925,7 +2126,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         except Exception:
             logger.exception("Failed to archive workbench conversation %s", chat_id)
         if project_id:
-            R.schedule_capture(_project_data_key(project_id), answer_text, str(reply or ""))
+            R.schedule_capture(project_id, answer_text, str(reply or ""))
         return {
             "ok": True,
             "awaitingUser": False,

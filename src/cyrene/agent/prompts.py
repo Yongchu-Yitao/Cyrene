@@ -160,7 +160,7 @@ You have access to memory. Consult it proactively — do not answer from only th
 """
 
 _PHASE1_DECISION_PROMPT = """Decision phase rules:
-- The only available tools right now are `use_tools`, `ask_user`, and `quit`. You cannot call concrete tools (WebSearch, Bash, Read, etc.) directly — you must use `use_tools` to unlock them.
+- This is the decision phase. The tool list may show many concrete tools (WebSearch, Bash, Read, etc.), but here you may ONLY call `use_tools`, `ask_user`, or `quit`. Do NOT call any concrete tool directly — route real work through `use_tools`, which unlocks them in the execution phase.
 - ALWAYS call `use_tools` when the user asks you to DO anything — file ops, search, web, code, shell, scheduling, data queries, sub-agents, browser automation, notifications, etc.
 - Call `use_tools` when the request may depend on project history, workspace documents, saved user context, or the knowledge base, even if the user did not explicitly ask you to search it.
 - Call `quit` ONLY when the request is pure conversation (greetings, abstract opinions) with zero benefit from real-world data. Most questions — including explanations, how-things-work, recommendations, technical topics, or anything factual — can benefit from a web search: call `use_tools` instead.

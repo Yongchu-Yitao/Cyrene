@@ -1253,7 +1253,7 @@ body.wb-col-resizing {
 .workbench-toast.is-error   .workbench-toast-icon { color: var(--wb-red); }
 .workbench-toast.is-success { border-left-color: var(--wb-green); }
 .workbench-toast.is-success .workbench-toast-icon { color: var(--wb-green); }
-.workbench-toast.is-warning { border-left-color: var(--wb-amber); }
+.workbench-toast.is-warning { border-left: 1px solid var(--wb-line); }
 .workbench-toast.is-warning .workbench-toast-icon { color: var(--wb-amber); }
 .workbench-toast.is-info    { border-left-color: var(--wb-blue); }
 .workbench-toast.is-info    .workbench-toast-icon { color: var(--wb-blue); }
@@ -1748,6 +1748,46 @@ body.wb-col-resizing {
   padding: 18px 18px 12px;
   overflow: hidden;
   background: var(--wb-main-bg);
+}
+
+/* Full-module file drop feedback. The listeners live on document so dropping
+   over rails, side panels or the top bar still reaches the active module. */
+.wb-file-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--wb-accent) 10%, rgba(8, 15, 28, 0.38));
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+.wb-file-drop-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 18px;
+  border: 2px dashed color-mix(in srgb, var(--wb-accent) 70%, #fff);
+  border-radius: 18px;
+}
+.wb-file-drop-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  max-width: min(520px, calc(100vw - 72px));
+  padding: 18px 24px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 38%, var(--wb-line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--wb-card-bg) 94%, transparent);
+  color: var(--wb-text);
+  box-shadow: 0 20px 60px rgba(4, 10, 22, 0.28);
+  font-size: 15px;
+}
+.wb-file-drop-card svg {
+  flex: 0 0 auto;
+  color: var(--wb-accent);
 }
 
 .workbench-task-header {
@@ -3952,6 +3992,17 @@ html[data-theme="dark"] .wb-composer-disclaimer {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.wbc-ws-path-row { overflow: hidden; }
+.wbc-ws-path-prefix { flex-shrink: 0; white-space: nowrap; }
+.wbc-ws-path-prefix::after { content: "："; }
+.wbc-ws-path-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
 
 /* Clickable acceptance criterion — verify one by one (待验证→已通过→未通过). */
@@ -6840,7 +6891,90 @@ html[data-theme="light"] .wb-tool-list .mono {
 .wb-kb-chunk-md th, .wb-kb-chunk-md td { border: 1px solid var(--wb-line); padding: 4px 8px; }
 .wb-kb-chunks.markdown-body .wb-kb-chunk-md { max-height: none; }
 
-.wb-kb-related { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
+.wb-kb-related { display: flex; flex-direction: column; gap: 18px; padding-top: 8px; }
+.wb-kb-related-section { display: flex; flex-direction: column; gap: 8px; }
+.wb-kb-related-section .wb-kb-section-head { margin-bottom: 0; }
+.wb-kb-related-state {
+  min-height: 130px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: var(--wb-muted);
+  font-size: 12.5px;
+}
+.wb-kb-related-state.error { flex-direction: column; color: var(--wb-danger, #d9485f); }
+.wb-kb-related-card {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid var(--wb-line);
+  border-radius: 11px;
+  background: var(--wb-card-bg);
+  color: var(--wb-text);
+  cursor: pointer;
+  text-align: left;
+}
+.wb-kb-related-card:hover {
+  border-color: var(--wb-active-border);
+  background: var(--wb-row-hover-bg, var(--wb-control-hover-bg));
+}
+.wb-kb-related-icon {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+}
+.wb-kb-related-card.task .wb-kb-related-icon {
+  color: #8b5cf6;
+  background: color-mix(in srgb, #8b5cf6 12%, transparent);
+}
+.wb-kb-related-icon.document {
+  width: 28px;
+  height: 28px;
+  color: var(--wb-muted);
+  background: var(--wb-control-bg);
+}
+.wb-kb-related-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.wb-kb-related-title {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: 12.8px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-kb-related-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: 11.8px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.wb-kb-related-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  color: var(--wb-faint);
+  font-size: 10.8px;
+}
+.wb-kb-related-reason {
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 10%, transparent);
+}
+.wb-kb-related-arrow { flex: 0 0 auto; align-self: center; color: var(--wb-faint); }
 .wb-kb-related-row {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px;
@@ -6849,8 +6983,10 @@ html[data-theme="light"] .wb-tool-list .mono {
   background: var(--wb-card-bg);
   cursor: pointer;
   text-align: left;
+  color: var(--wb-text);
 }
 .wb-kb-related-row:hover { border-color: var(--wb-active-border); }
+.wb-kb-related-row:disabled { cursor: default; opacity: .65; }
 .wb-kb-related-rel {
   flex: 0 0 auto;
   font-size: 11px; font-weight: 640;
@@ -8857,6 +8993,152 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   background: color-mix(in srgb, var(--wb-accent) 18%, transparent);
 }
 
+/* ---- branch tree (fork lineage navigator) — timeline styling mirrors the
+   task plan (.wbp-*): circular nodes with a card-bg halo masking the
+   connectors, quiet rounded content slabs, soft accent slab for current. ---- */
+
+.wbc-branch {
+  padding: 2px 0 10px;
+}
+
+.wbc-branch-empty {
+  padding: 8px 2px;
+}
+
+.wbc-branch-hint {
+  margin: 0 4px 14px;
+  font-size: 12px;
+  color: var(--wb-muted);
+}
+
+.wbc-branch-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+
+.wbc-branch-row {
+  position: relative;
+  display: block;
+  cursor: pointer;
+}
+
+/* Connector segments: .v verticals (ancestor guides + own-column half-lines),
+   .h the elbow tapping a parent column. The node halo masks crossings. */
+.wbc-branch-line {
+  position: absolute;
+  z-index: 0;
+  background: color-mix(in srgb, var(--wb-line) 85%, transparent);
+  border-radius: 1px;
+}
+
+.wbc-branch-line.v {
+  width: 2px;
+  transform: translateX(-50%);
+}
+
+.wbc-branch-line.h {
+  height: 2px;
+  transform: translateY(-50%);
+}
+
+.wbc-branch-node {
+  position: absolute;
+  top: 16px;
+  z-index: 1;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--wb-line-2) 78%, transparent);
+  background: var(--wb-right-bg);
+  transform: translate(-50%, -50%);
+  /* Solid ring of the panel bg masks the connector line passing behind the node. */
+  box-shadow: 0 0 0 5px var(--wb-right-bg);
+}
+
+.wbc-branch-row.kind-root .wbc-branch-node {
+  border-color: var(--wb-accent);
+  background: var(--wb-accent);
+}
+
+.wbc-branch-row.kind-fork .wbc-branch-node {
+  border-color: color-mix(in srgb, var(--wb-accent) 55%, var(--wb-line-2));
+}
+
+.wbc-branch-row.active .wbc-branch-node {
+  border-color: var(--wb-accent);
+  box-shadow: 0 0 0 4px var(--wb-right-bg), 0 0 0 6px color-mix(in srgb, var(--wb-accent) 30%, transparent);
+}
+
+.wbc-branch-row.kind-root.active .wbc-branch-node {
+  background: var(--wb-accent);
+}
+
+/* Content slab — transparent until hover/current, mirroring .wbp-row. */
+.wbc-branch-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 8px 12px 9px;
+  transition: background 130ms ease, border-color 130ms ease;
+}
+
+.wbc-branch-row:hover .wbc-branch-card {
+  background: color-mix(in srgb, var(--wb-accent) 4%, transparent);
+}
+
+.wbc-branch-row.active .wbc-branch-card {
+  border-color: color-mix(in srgb, var(--wb-accent) 22%, transparent);
+  background: color-mix(in srgb, var(--wb-accent) 6%, transparent);
+}
+
+.wbc-branch-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 16px;
+}
+
+.wbc-branch-kind {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--wb-muted);
+}
+
+.wbc-branch-row.active .wbc-branch-kind {
+  color: var(--wb-accent);
+}
+
+.wbc-branch-text {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--wb-text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.wbc-branch-here {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.65;
+  letter-spacing: 0.02em;
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 14%, transparent);
+  border-radius: 5px;
+  padding: 0 6px;
+}
+
 /* ---- tool trace card ---- */
 
 .wbc-trace {
@@ -9995,7 +10277,43 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   line-height: 1.55;
 }
 
-/* 计划 tab — proposed plan awaiting confirmation */
+/* 计划 tab — durable proposal/execution progress */
+.wbc-plan-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.wbc-plan-head h3 { margin: 0; }
+.wbc-plan-state {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--wb-muted);
+  background: color-mix(in srgb, var(--wb-muted) 10%, transparent);
+}
+.wbc-plan-state.active {
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 12%, transparent);
+}
+.wbc-plan-state.paused {
+  color: var(--wb-amber);
+  background: color-mix(in srgb, var(--wb-amber) 12%, transparent);
+}
+.wbc-plan-path {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--wb-control-bg);
+  color: var(--wb-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .wbc-plan-steps {
   list-style: none;
   margin: 10px 0 0;
@@ -10023,6 +10341,29 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   line-height: 18px;
   text-align: center;
 }
+.wbc-plan-step.in_progress::before {
+  content: "";
+  box-sizing: border-box;
+  border: 2px solid color-mix(in srgb, var(--wb-accent) 25%, transparent);
+  border-top-color: var(--wb-accent);
+  background: transparent;
+  animation: wbp-spin 0.72s linear infinite;
+}
+.wbc-plan-step.completed::before {
+  content: "✓";
+  background: var(--wb-green);
+  color: #fff;
+}
+.wbc-plan-step.failed::before {
+  content: "!";
+  background: color-mix(in srgb, var(--wb-red) 14%, transparent);
+  color: var(--wb-red);
+}
+.wbc-plan-step.skipped::before {
+  content: "–";
+  background: color-mix(in srgb, var(--wb-muted) 12%, transparent);
+  color: var(--wb-muted);
+}
 .wbc-plan-step:not(:last-child)::after {
   content: "";
   position: absolute;
@@ -10032,11 +10373,26 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   width: 1px;
   background: var(--wb-line);
 }
-.wbc-plan-step > b {
-  display: block;
+.wbc-plan-step-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.wbc-plan-step-title > b {
   font-size: 13px;
   color: var(--wb-text);
 }
+.wbc-plan-step-title > span {
+  flex: 0 0 auto;
+  color: var(--wb-faint);
+  font-size: 10.5px;
+}
+.wbc-plan-step.in_progress .wbc-plan-step-title > b,
+.wbc-plan-step.in_progress .wbc-plan-step-title > span { color: var(--wb-accent); }
+.wbc-plan-step.completed .wbc-plan-step-title > b { color: var(--wb-muted); }
+.wbc-plan-step.failed .wbc-plan-step-title > b,
+.wbc-plan-step.failed .wbc-plan-step-title > span { color: var(--wb-red); }
 .wbc-plan-tasks {
   list-style: disc;
   margin: 4px 0 0;
@@ -10046,6 +10402,14 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   font-size: 12px;
   color: var(--wb-faint);
   margin: 2px 0;
+}
+.wbc-plan-note {
+  margin: 6px 0 0;
+  padding: 5px 7px;
+  border-left: 2px solid color-mix(in srgb, var(--wb-accent) 40%, transparent);
+  color: var(--wb-muted);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .wbc-ring-wrap {

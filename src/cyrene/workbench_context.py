@@ -102,6 +102,46 @@ def resolve_workbench_project_data_key_for_session(session_id: str | None) -> st
     return _safe_workbench_data_key(project_id)
 
 
+def resolve_workbench_project_id_for_session(session_id: str | None) -> str | None:
+    """Resolve a Workbench chat/task session to its owning project id.
+
+    Project memory uses this identity rather than ``dataKey``.  The default
+    project deliberately has ``dataKey == "default"`` for legacy knowledge and
+    workspace compatibility, but its memory must not alias the legacy global
+    ``short_term.json`` store.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+
+    projects = _read_projects()
+    if (
+        _WORKBENCH_DB_PATH
+        and _CONFIGURED_CHATS_STORE == Path(_WORKBENCH_CHATS_STORE)
+    ):
+        chats_payload = read_document(
+            _WORKBENCH_DB_PATH,
+            "chats",
+            lambda: {"chats": []},
+            legacy_path=_WORKBENCH_CHATS_STORE,
+        )
+    else:
+        chats_payload = read_json_safe(_WORKBENCH_CHATS_STORE)
+    chats = chats_payload.get("chats") if isinstance(chats_payload, dict) else None
+    if isinstance(chats, list):
+        for chat in chats:
+            if str(chat.get("id") or "") == sid:
+                project_id = str(chat.get("projectId") or "").strip()
+                return project_id or None
+
+    for project in projects:
+        for session in project.get("sessions") or []:
+            if str(session.get("id") or "") == sid:
+                project_id = str(project.get("id") or "").strip()
+                return project_id or None
+    return None
+
+
 def resolve_project_data_key_for_session(session_id: str | None) -> str:
     """Compatibility resolver that falls back to the legacy ``default`` key."""
     return resolve_workbench_project_data_key_for_session(session_id) or _LEGACY_DATA_KEY
@@ -124,4 +164,5 @@ __all__ = [
     "ensure_knowledge_db_for_session",
     "resolve_project_data_key_for_session",
     "resolve_workbench_project_data_key_for_session",
+    "resolve_workbench_project_id_for_session",
 ]

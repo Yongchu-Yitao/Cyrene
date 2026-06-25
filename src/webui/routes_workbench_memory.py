@@ -5,10 +5,10 @@ This module is intentionally INDEPENDENT from the legacy memory page
 ``--agent`` UI uses. It exposes a parallel set of endpoints under
 ``/api/workbench/memory/*`` so the two UIs never share request code.
 
-Per-workspace isolation: every request carries a ``workspace`` query param
+Per-project isolation: every request carries a ``workspace`` query param
 (the Workbench project id). It resolves to its own SQLite document, so each
-workspace/project owns a separate memory store. A missing/blank workspace
-falls back to ``default``.
+project owns a separate memory store. A missing/blank workspace falls back to
+an isolated ``default`` document; it never aliases legacy ``short_term.json``.
 Cross-workspace memory is intentionally NOT implemented yet.
 
 Each memory item is a structured entry adapted into the rich model the
@@ -104,7 +104,7 @@ def _safe_workspace_id(workspace_id: str | None) -> str:
 
 
 def _resolve_workspace_id(workspace_id: str | None) -> str:
-    """Map a Workbench project id to its storage key when possible."""
+    """Map a Workbench project id to its project-specific memory key."""
     wid = _safe_workspace_id(workspace_id)
     try:
         from webui import routes as R
@@ -112,7 +112,7 @@ def _resolve_workspace_id(workspace_id: str | None) -> str:
         payload = R._read_workbench_store()
         project = R._workbench_find_project(payload, str(workspace_id or "").strip())
         if project:
-            return R._workbench_project_data_key(project)
+            return R._workbench_project_memory_key(project)
     except Exception:
         pass
     return wid
@@ -125,10 +125,6 @@ def _memory_path(workspace_id: str | None) -> Path:
 
 def _load(workspace_id: str | None) -> list[dict]:
     resolved = _resolve_workspace_id(workspace_id)
-    if resolved == "default":
-        from cyrene.short_term import load_entries
-
-        return load_entries()
     if not _STORE_DB_PATH or _CONFIGURED_STORE_DIR != Path(STORE_DIR):
         data = read_json_safe(_memory_path(workspace_id))
         return data if isinstance(data, list) else []
@@ -148,11 +144,6 @@ def _save(
     base_value: list[dict] | None = None,
 ) -> None:
     resolved = _resolve_workspace_id(workspace_id)
-    if resolved == "default":
-        from cyrene.short_term import save_entries
-
-        save_entries(entries)
-        return
     if not _STORE_DB_PATH or _CONFIGURED_STORE_DIR != Path(STORE_DIR):
         atomic_write_json(_memory_path(workspace_id), entries)
         return
@@ -179,8 +170,6 @@ def configure_store(db_path: str) -> None:
 
 def delete_workspace_memory(workspace_id: str | None) -> None:
     resolved = _resolve_workspace_id(workspace_id)
-    if resolved == "default":
-        return
     path = _memory_path(workspace_id)
     if _STORE_DB_PATH and _CONFIGURED_STORE_DIR == Path(STORE_DIR):
         delete_document(_STORE_DB_PATH, f"memory:{resolved}", export_path=path)
@@ -722,14 +711,11 @@ def add_agent_memory(
 
     Reuses the same store + dedup as conversation capture so agent-written items
     show up on the Workbench memory page AND feed back into future runs. Returns
-    the serialized entry, or ``None`` when skipped (blank/too short, or a
-    non-Workbench session that resolves to the global ``default`` store — which
-    aliases short-term memory and must never be written here).
+    the serialized entry, or ``None`` when skipped because content is blank or
+    too short.
     """
     content = str(content or "").strip()
     if len(content) < 4:
-        return None
-    if _resolve_workspace_id(workspace_id) == "default":
         return None
     category = str(category or "").strip().lower()
     if category not in _CATEGORY_LABELS:
@@ -951,8 +937,6 @@ async def add_agent_memory_checked(
     content = str(content or "").strip()
     if len(content) < 4:
         return None, []
-    if _resolve_workspace_id(workspace_id) == "default":
-        return None, []
     content = await _normalize_agent_memory_language(content)
     if len(content) < 4:
         return None, []
@@ -1035,8 +1019,6 @@ def render_memory_for_injection(
     are skipped (noise); strongest (most reinforced, then most recent) first.
     Returns "" when there is nothing worth injecting.
     """
-    if _resolve_workspace_id(workspace_id) == "default":
-        return ""
     entries = _load(workspace_id)
     if not entries:
         return ""
@@ -1084,8 +1066,6 @@ def render_task_reports_for_planning(
 
     NOT used in general agent runs — task reports are too verbose for every step.
     """
-    if _resolve_workspace_id(workspace_id) == "default":
-        return ""
     entries = _load(workspace_id)
     if not entries:
         return ""

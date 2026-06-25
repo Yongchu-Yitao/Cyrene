@@ -203,6 +203,19 @@ async def _run_main_agent(
     if system_initiated:
         active_tool_defs = _without_tool(active_tool_defs, "ask_user")
 
+    # Option B prefix-cache discipline (tools edition). scripts/probe_deepseek_
+    # tools_cache.py confirmed DeepSeek serializes the ``tools`` array at the FRONT
+    # of the cached prefix: change the tool set and the whole prefix (system+history
+    # included) misses. Phase 1 used a 3-tool LIGHT set while Phase 2 used the full
+    # set, so every post-first round the Phase 1 decision call re-processed the
+    # entire prior tool history from scratch. Fix: wire one byte-identical array in
+    # BOTH phases. Phase 1 only needs the virtual ``use_tools`` gateway (absent from
+    # the real registry); fold it into the full set once. Phase 1's "only use_tools/
+    # ask_user/quit" rule is now enforced by the decision prompt + the
+    # ``phase1_allowed`` correction net below, not by withholding tools.
+    _use_tools_def = next((td for td in _LIGHT_TOOL_DEFS if _tool_def_name(td) == "use_tools"), None)
+    wire_tool_defs = [_use_tools_def, *active_tool_defs] if _use_tools_def else list(active_tool_defs)
+
     visible_user_message = user_message if public_user_message is None else str(public_user_message)
     user_message_id = f"user_{uuid4().hex}"
     user_entry = {"role": "user", "content": visible_user_message, "message_id": user_message_id}
@@ -355,8 +368,15 @@ async def _run_main_agent(
         await _save(_session_messages_to_save(routed["messages"]))
         return str(routed["final_text"] or "Done.")
 
-    # Phase 1: lightweight decision
-    response = await _call_llm(_pin_tail(project_history_for_llm(phase1_messages)), tools=phase1_tools)
+    # Phase 1: lightweight decision. From round 2 on, wire the SAME full array as
+    # Phase 2 so the two share the prefix cache (Phase 1 then hits the prior round's
+    # Phase 2 cache instead of re-processing all history). The very first turn has no
+    # prior cache to share and would only miss, so keep its tool set small there.
+    # Deep-research's first round likewise keeps its own tiny ask_user-only set.
+    phase1_wire_tools = (
+        phase1_tools if (_deep_research_first_round.get() or not history) else wire_tool_defs
+    )
+    response = await _call_llm(_pin_tail(project_history_for_llm(phase1_messages)), tools=phase1_wire_tools)
     tool_calls = response.get("tool_calls") or []
     phase1_allowed = {_tool_def_name(tool_def) for tool_def in phase1_tools}
     invalid_phase1_tools = [
@@ -386,7 +406,7 @@ async def _run_main_agent(
                 ),
             },
         ]
-        response = await _call_llm(_pin_tail(project_history_for_llm(retry_messages)), tools=phase1_tools)
+        response = await _call_llm(_pin_tail(project_history_for_llm(retry_messages)), tools=phase1_wire_tools)
     tool_calls = response.get("tool_calls") or []
     messages = [system_entry, *history, llm_user_entry]
     assistant_entry = _assistant_entry_from_response(response, round_id)
@@ -441,7 +461,7 @@ async def _run_main_agent(
         messages = [system_entry, *history, dict(llm_user_entry)]
 
         for _ in range(_get_max_tool_rounds()):
-            response = await _call_llm(_pin_tail(project_history_for_llm(messages)), tools=active_tool_defs)
+            response = await _call_llm(_pin_tail(project_history_for_llm(messages)), tools=wire_tool_defs)
             entry: dict = {"role": "assistant", "content": response.get("content") or ""}
             if response.get("reasoning_content"):
                 entry["reasoning_content"] = response["reasoning_content"]
@@ -466,7 +486,7 @@ async def _run_main_agent(
                     # that the quit-time self-check missed. Honoring a late tool
                     # call beats leaking it as textual markup or answering blind.
                     messages.pop()  # drop the bare quit/empty turn
-                    wrap = await _final_reply_with_tools(project_history_for_llm(messages), active_tool_defs, max_tokens=None)
+                    wrap = await _final_reply_with_tools(project_history_for_llm(messages), wire_tool_defs, max_tokens=None)
                     wrap_real = [t for t in (wrap.get("tool_calls") or []) if str(t.get("function", {}).get("name") or "") != "quit"]
                     if wrap_real:
                         await _publish_runtime_event({"type": "phase_transition", "from": "done", "to": "execution", "detail": "Wrap-up reopened tools", "detail_key": "phase.wrapUpReopen"})
@@ -552,6 +572,11 @@ async def _run_main_agent(
                             "Tool unavailable: proactive system-initiated rounds "
                             "cannot ask the user to clarify or pause for an answer."
                         )
+                    elif tool_name == "use_tools":
+                        # ``use_tools`` is the Phase-1 gateway, wired into the
+                        # execution toolset only for prefix-cache parity with Phase 1.
+                        # There is no gate to open here, so treat it as a no-op nudge.
+                        result = "Already in the execution phase — call the concrete tools you need directly, or quit when done."
                     elif tool_name == "quit":
                         quit_requested = True
                         result = "Agent requested to finish after this tool-call batch."

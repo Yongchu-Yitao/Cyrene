@@ -15,10 +15,13 @@ import struct
 import tempfile
 from pathlib import Path
 
+from playwright_bundle import has_required_chromium_bundles
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BUILD_DIR = PROJECT_ROOT / "build"
 DIST_DIR = PROJECT_ROOT / "dist"
 SPEC_FILE = BUILD_DIR / "cyrene.spec"
+PLAYWRIGHT_BROWSERS_DIR = BUILD_DIR / ".playwright-browsers"
 WEB_LOGO_PATH = PROJECT_ROOT / "src" / "webui" / "static" / "app" / "logo-mark.png"
 
 IS_MAC = sys.platform == "darwin"
@@ -363,6 +366,48 @@ def _appimage_arch() -> str:
     return arch_map.get(machine, machine or "x86_64")
 
 
+def ensure_playwright_browsers() -> Path | None:
+    """Install Playwright and all Chromium runtime bundles used by Cyrene."""
+    print("\n[Playwright] Ensuring browser automation runtime...")
+    try:
+        pip_result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "playwright>=1.40"],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"  [warn] could not install Playwright: {exc}")
+        return None
+    if pip_result.returncode != 0:
+        print(f"  [warn] pip install playwright failed:\n{pip_result.stderr.strip()[:500]}")
+        return None
+
+    PLAYWRIGHT_BROWSERS_DIR.mkdir(parents=True, exist_ok=True)
+    install_env = os.environ.copy()
+    install_env["PLAYWRIGHT_BROWSERS_PATH"] = str(PLAYWRIGHT_BROWSERS_DIR)
+    try:
+        install_result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            capture_output=True,
+            text=True,
+            timeout=900,
+            env=install_env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"  [warn] could not install Chromium: {exc}")
+        return None
+    if install_result.returncode != 0:
+        print(f"  [warn] playwright install chromium failed:\n{install_result.stderr.strip()[:500]}")
+        return None
+    if not has_required_chromium_bundles(PLAYWRIGHT_BROWSERS_DIR):
+        print("  [warn] Playwright install did not produce Chromium and Chromium Headless Shell")
+        return None
+
+    print(f"  [ok] Browser bundle: {PLAYWRIGHT_BROWSERS_DIR}")
+    return PLAYWRIGHT_BROWSERS_DIR
+
+
 def run_electron_builder(arch: str = "x64") -> None:
     """Run electron-builder to package the Electron app around the PyInstaller bundle."""
     electron_dir = PROJECT_ROOT / "electron"
@@ -513,6 +558,11 @@ def main() -> None:
         generate_icons()
 
     build_webui_js()
+
+    os.environ.pop("CYRENE_PLAYWRIGHT_BROWSERS_DIR", None)
+    playwright_browsers = ensure_playwright_browsers()
+    if playwright_browsers is not None:
+        os.environ["CYRENE_PLAYWRIGHT_BROWSERS_DIR"] = str(playwright_browsers)
 
     try:
         write_buildinfo(args.ui_mode)
