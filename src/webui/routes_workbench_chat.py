@@ -1222,6 +1222,73 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             chats.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
         return {"chats": chats}
 
+    @router.get("/api/workbench/quick-chat/targets")
+    async def api_workbench_quick_chat_targets(q: str = "", limit: int = 40):
+        """Send targets for the quick-chat window: writable modern chats across
+        every project plus the resolved default project (where an unselected
+        quick chat starts a new conversation).
+
+        Legacy sessions are read-only and live outside the chats store, so they
+        never appear here. ``running`` reflects the authoritative in-flight run
+        registry (not the persisted status, which can be stale after a crash).
+        """
+        R = _routes()
+        store = R._read_workbench_store()
+        projects = store.get("projects", []) or []
+        # The default project is identified by its data key, not its name — the
+        # name follows the workspace directory and need not be "Cyrene".
+        default_project = next(
+            (p for p in projects if R._workbench_project_data_key(p) == "default"),
+            None,
+        )
+        if default_project is None and projects:
+            default_project = projects[0]
+        project_by_id = {str(p.get("id") or ""): p for p in projects}
+
+        query = str(q or "").strip().lower()
+        limit = max(1, min(int(limit or 40), 200))
+
+        payload = _read_chats_store()
+        targets: list[dict[str, Any]] = []
+        for chat in payload.get("chats", []):
+            chat_id = str(chat.get("id") or "")
+            if not chat_id:
+                continue
+            project_id = str(chat.get("projectId") or "")
+            project = project_by_id.get(project_id) or {}
+            project_name = str(project.get("name") or "")
+            title = str(chat.get("title") or "")
+            preview = _chat_preview(chat)
+            if query and query not in " ".join([title, project_name, preview]).lower():
+                continue
+            targets.append(
+                {
+                    "chatId": chat_id,
+                    "title": title,
+                    "projectId": project_id,
+                    "projectName": project_name,
+                    "workspacePath": str(project.get("workspacePath") or ""),
+                    "model": str(chat.get("model") or project.get("model") or ""),
+                    "preview": preview,
+                    "updatedAt": str(chat.get("updatedAt") or ""),
+                    "running": _CHAT_RUN_MANAGER.get(chat_id) is not None,
+                    "writable": True,
+                }
+            )
+        targets.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
+        targets = targets[:limit]
+
+        default_payload = None
+        if default_project is not None:
+            default_payload = {
+                "id": str(default_project.get("id") or ""),
+                "name": str(default_project.get("name") or ""),
+                "dataKey": R._workbench_project_data_key(default_project),
+                "workspacePath": str(default_project.get("workspacePath") or ""),
+                "model": str(default_project.get("model") or ""),
+            }
+        return {"defaultProject": default_payload, "targets": targets}
+
     @router.post("/api/workbench/chats")
     async def api_workbench_create_chat(body_model: api_models.ChatCreateBody):
         body = api_models.body_dict(body_model)

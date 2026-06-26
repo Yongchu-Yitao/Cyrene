@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.6.0b11] - 2026-06-26
+
+### Added
+
+- **全局快捷键快速对话（Quick Chat）** — 新增 `Ctrl+Shift+Space`（macOS `Cmd+Shift+Space`）全局快捷键，任意界面一键呼出浮动 Quick Chat 窗口。支持截图粘贴、独立窗口复用、常驻系统托盘的 app 生命周期（Electron）。由独立 `window.WbcComposer` 实例渲染，与主 Workbench 互不干扰。
+- **Quick Chat 截图支持** — 快捷键唤起后自动捕获活跃窗口截图并粘贴到输入框；可粘贴多条后续截图，按发送自动清空。
+- **更丰富的思考短语列表** — Agent 思考状态从 20 条扩展到 25 条随机短语，覆盖 more deliberate / 系统性推理表达。
+
+### Fixed
+
+- **Quick Chat 首轮消息带失效的先决条件** — `is_quick_chat` 标记与 `scene = 'quick_chat'` 对齐，确保初轮消息不走 workbench project 锚定路径。
+- **Quick Chat 重复 target 匹配** — `/api/quick-chat/targets` 端点对同 socket 的去重返回，避免浮动窗口重复初始化。
+
+### Changed
+
+- **版本号更新至 0.6.0-beta.11** — Python 包、Electron 应用、lockfile、前端 cache-busting 参数统一更新。
+- **静态资源缓存版本统一** — WebUI 所有 JS/CSS cache-busting 参数统一为 `beta11`。
+
+### Tests
+
+- 新增 Quick Chat targets 端点测试、全局快捷键前端测试覆盖。
+
 ## [0.6.0b10] - 2026-06-24
 
 ### Added

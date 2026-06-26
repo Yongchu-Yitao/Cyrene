@@ -67,6 +67,9 @@ let launchHidden = process.argv.includes('--hidden');
 const DEFAULT_DESKTOP_SETTINGS = Object.freeze({
   launchAtLogin: false,
   runInBackground: false,
+  // Quick chat (global-shortcut assistant) is opt-in and requires background
+  // residency — the global shortcut is only registered when it's enabled.
+  quickChatEnabled: false,
   quickChatShortcut: 'CommandOrControl+Shift+Space',
 });
 
@@ -93,9 +96,12 @@ function readDesktopSettings() {
   try {
     const raw = fs.readFileSync(getDesktopSettingsPath(), 'utf8');
     const parsed = JSON.parse(raw);
+    const runInBackground = parsed.runInBackground === true;
     return {
       launchAtLogin: parsed.launchAtLogin === true,
-      runInBackground: parsed.runInBackground === true,
+      runInBackground,
+      // Quick chat can't be on without background residency.
+      quickChatEnabled: runInBackground && parsed.quickChatEnabled === true,
       quickChatShortcut: normalizeQuickChatShortcut(parsed.quickChatShortcut),
     };
   } catch (_) {
@@ -104,9 +110,11 @@ function readDesktopSettings() {
 }
 
 function writeDesktopSettings(settings) {
+  const runInBackground = settings.runInBackground === true;
   const payload = {
     launchAtLogin: settings.launchAtLogin === true,
-    runInBackground: settings.runInBackground === true,
+    runInBackground,
+    quickChatEnabled: runInBackground && settings.quickChatEnabled === true,
     quickChatShortcut: normalizeQuickChatShortcut(settings.quickChatShortcut),
   };
   fs.mkdirSync(path.dirname(getDesktopSettingsPath()), { recursive: true });
@@ -137,6 +145,21 @@ function getDesktopSettings() {
   };
 }
 
+// The app must keep running — and the Python backend must stay alive — after the
+// last window is closed whenever a global quick-chat shortcut is registered
+// (otherwise pressing it would open a window pointing at a dead backend) or the
+// user opted into background mode. Quitting still tears Python down in
+// before-quit; a hidden main window is restored via 'activate' (macOS) or by
+// relaunching the app (single-instance → second-instance).
+function appStaysResident() {
+  if (registeredQuickChatShortcut) return true;
+  try {
+    return readDesktopSettings().runInBackground === true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function saveDesktopSettings(updates) {
   const current = readDesktopSettings();
   const next = {
@@ -144,20 +167,31 @@ function saveDesktopSettings(updates) {
     ...updates,
   };
   next.quickChatShortcut = normalizeQuickChatShortcut(next.quickChatShortcut);
+  // Quick chat depends on background residency — turning residency off also
+  // disables it (the UI gates the toggle, but enforce it here too).
+  next.quickChatEnabled = next.runInBackground === true && next.quickChatEnabled === true;
 
   let shortcutUpdateOk = true;
-  if (
-    next.quickChatShortcut !== current.quickChatShortcut
-    || registeredQuickChatShortcut !== next.quickChatShortcut
-    || !globalShortcut.isRegistered(next.quickChatShortcut)
-  ) {
-    shortcutUpdateOk = registerQuickChatShortcut(next.quickChatShortcut);
-    if (!shortcutUpdateOk) {
-      return {
-        ...getDesktopSettings(),
-        shortcutUpdateOk: false,
-      };
+  if (next.quickChatEnabled) {
+    // Register (or re-register) the global shortcut. Only attempt it when the
+    // binding is missing or changed so an unrelated toggle doesn't churn it.
+    if (
+      next.quickChatShortcut !== registeredQuickChatShortcut
+      || !globalShortcut.isRegistered(next.quickChatShortcut)
+    ) {
+      shortcutUpdateOk = registerQuickChatShortcut(next.quickChatShortcut);
+      if (!shortcutUpdateOk) {
+        return {
+          ...getDesktopSettings(),
+          shortcutUpdateOk: false,
+        };
+      }
     }
+  } else {
+    // Disabled (or residency off) — release the shortcut and tear down the
+    // transient window so nothing keeps the app resident for it.
+    unregisterQuickChatShortcut();
+    destroyQuickChatWindow();
   }
 
   writeDesktopSettings(next);
@@ -166,6 +200,23 @@ function saveDesktopSettings(updates) {
     ...getDesktopSettings(),
     shortcutUpdateOk,
   };
+}
+
+function unregisterQuickChatShortcut() {
+  if (registeredQuickChatShortcut) {
+    try { globalShortcut.unregister(registeredQuickChatShortcut); } catch (_) {}
+  }
+  registeredQuickChatShortcut = '';
+  quickChatShortcutError = '';
+}
+
+function destroyQuickChatWindow() {
+  pendingQuickChatScreenshot = null;
+  if (quickChatWindow && !quickChatWindow.isDestroyed()) {
+    quickChatWindow.destroy();
+  }
+  quickChatWindow = null;
+  quickChatWindowReady = null;
 }
 
 function normalizeQuickChatShortcut(value) {
@@ -507,6 +558,17 @@ async function captureQuickChatScreenshot() {
     }
 
     const buffer = source.thumbnail.toPNG();
+    // Bound the in-memory screenshot. Dimensions are already capped, but a very
+    // large display can still produce a big PNG — drop it rather than hold tens
+    // of MB resident (and never log the bytes themselves).
+    const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024;
+    if (!buffer || buffer.length === 0 || buffer.length > MAX_SCREENSHOT_BYTES) {
+      pendingQuickChatScreenshot = null;
+      return {
+        ...getQuickChatLaunchContext(),
+        screenshotError: buffer && buffer.length ? 'screenshot_too_large' : 'screen_capture_unavailable',
+      };
+    }
     const imageSize = source.thumbnail.getSize();
     pendingQuickChatScreenshot = {
       buffer,
@@ -583,9 +645,12 @@ async function createQuickChatWindow() {
 
   quickChatWindow = new BrowserWindow({
     width: 680,
-    height: 390,
+    // Initial height is a hint only — the renderer measures its content and
+    // resizes the window to fit (see the 'quick-chat:resize' handler). minHeight
+    // is low so the empty state can shrink to hug its content.
+    height: 300,
     minWidth: 560,
-    minHeight: 320,
+    minHeight: 160,
     title: 'Cyrene Quick Chat',
     show: false,
     frame: false,
@@ -711,13 +776,16 @@ async function createMainWindow(shellOverride) {
   });
 
   mainWindow.on('close', (event) => {
-    const desktopSettings = readDesktopSettings();
-    if (desktopSettings.runInBackground && !isQuitting) {
+    if (!isQuitting && appStaysResident()) {
+      // Stay resident (hide) so the global quick-chat shortcut keeps working and
+      // the backend keeps running. Do NOT kill Python here — a lingering hidden
+      // quick-chat window would otherwise be left pointing at a dead backend.
       event.preventDefault();
       mainWindow.hide();
       return;
     }
-    killPython();
+    // Nothing keeps us resident — let the window close; teardown happens in
+    // window-all-closed (non-mac quit) or before-quit (explicit quit).
   });
 
   mainWindow.on('closed', () => {
@@ -793,7 +861,10 @@ if (!gotSingleInstanceLock) {
     installAuthHeaderInjector();
     const desktopSettings = readDesktopSettings();
     applyLaunchAtLogin(desktopSettings.launchAtLogin);
-    registerQuickChatShortcut(desktopSettings.quickChatShortcut);
+    // Only claim the global shortcut when the user has enabled quick chat.
+    if (desktopSettings.quickChatEnabled) {
+      registerQuickChatShortcut(desktopSettings.quickChatShortcut);
+    }
     ipcMain.handle('desktop-settings:get', () => getDesktopSettings());
     ipcMain.handle('desktop-settings:update', (_event, updates) => saveDesktopSettings(updates || {}));
     ipcMain.handle('quick-chat:get-launch-context', () => getQuickChatLaunchContext());
@@ -812,6 +883,33 @@ if (!gotSingleInstanceLock) {
     ipcMain.handle('quick-chat:close', () => {
       pendingQuickChatScreenshot = null;
       if (quickChatWindow && !quickChatWindow.isDestroyed()) quickChatWindow.hide();
+      return { ok: true };
+    });
+    // The quick-chat renderer measures its content and asks for a matching window
+    // height, so the surface auto-sizes (no dead space, room for the upward menu).
+    // Anchored at the top: the y stays put and the window grows/shrinks downward.
+    ipcMain.handle('quick-chat:resize', (_event, info) => {
+      if (!quickChatWindow || quickChatWindow.isDestroyed()) return { ok: false };
+      const requested = Math.round(Number(info && info.height) || 0);
+      if (!requested) return { ok: false };
+      const bounds = quickChatWindow.getBounds();
+      const workArea = screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y }).workArea;
+      const minH = 200;
+      // Never grow past the bottom of the work area.
+      const maxH = Math.max(minH, workArea.y + workArea.height - bounds.y - 16);
+      const height = Math.max(minH, Math.min(requested, maxH));
+      if (Math.abs(height - bounds.height) < 2) return { ok: true };
+      quickChatWindow.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height }, false);
+      return { ok: true };
+    });
+    ipcMain.handle('quick-chat:notify-sent', (_event, info) => {
+      const payload = {
+        projectId: String((info && info.projectId) || ''),
+        chatId: String((info && info.chatId) || ''),
+      };
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('quick-chat:sent', payload);
+      }
       return { ok: true };
     });
     ipcMain.handle('quick-chat:open-screen-settings', async () => {
@@ -848,6 +946,9 @@ if (!gotSingleInstanceLock) {
   });
 
   app.on('window-all-closed', () => {
+    // Keep the backend alive while the app stays resident for the global
+    // shortcut / background mode; otherwise tear it down and quit on non-mac.
+    if (appStaysResident()) return;
     killPython();
     if (process.platform !== 'darwin') {
       app.quit();

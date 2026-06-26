@@ -60,12 +60,102 @@ def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
     assert 'params.get("surface")' in app
     assert 'readUiSurfaceMode() === "quick-chat"' in app
     assert "<window.QuickChatApp />" in app
-    assert "compiled/workbench-quick-chat.js?v=beta10" in index
-    assert 'quickChatJson("/api/projects")' in quick_chat
-    assert 'quickChatJson("/api/workbench/chats")' in quick_chat
+    assert "compiled/workbench-quick-chat.js?v=beta11" in index
+    # The picker pulls writable targets from the dedicated endpoint.
+    assert "/api/workbench/quick-chat/targets" in quick_chat
     assert "getLaunchContext" in quick_chat
+    # The screenshot is only uploaded if the user clicks "add" — the renderer
+    # never calls /api/chat/upload directly; it hands the file to the shared
+    # composer via the existing attachment event.
     assert "/api/chat/upload" not in quick_chat
+    assert "cyrene:add-chat-attachments" in quick_chat
     assert "window.QuickChatApp = QuickChatApp;" in quick_chat
+
+
+def test_quick_chat_reuses_the_shared_composer_not_a_fork():
+    quick_chat = (
+        ROOT / "src" / "workbench-webui" / "workbench-quick-chat.jsx"
+    ).read_text(encoding="utf-8")
+    chat = (
+        ROOT / "src" / "workbench-webui" / "workbench-chat.jsx"
+    ).read_text(encoding="utf-8")
+
+    # The composer is shared, not duplicated.
+    assert "window.WbcComposer = WbcComposer;" in chat
+    assert "window.WbcComposer" in quick_chat
+    # Quick chat isolates its draft via a namespace. The window now stays open
+    # after a send (continuous conversation), so the composer clears its input on
+    # send using the default behavior rather than passing clearOnSend={false}.
+    assert 'draftNamespace="quick-chat:"' in quick_chat
+    assert "clearOnSend={false}" not in quick_chat
+    # The composer honors the new optional props (defaults preserve main chat).
+    assert "draftNamespace" in chat
+    assert "shouldClearOnSend" in chat
+    assert "autoFocus" in chat
+
+
+def test_quick_chat_send_close_and_sync_contract():
+    quick_chat = (
+        ROOT / "src" / "workbench-webui" / "workbench-quick-chat.jsx"
+    ).read_text(encoding="utf-8")
+    chat = (
+        ROOT / "src" / "workbench-webui" / "workbench-chat.jsx"
+    ).read_text(encoding="utf-8")
+    workbench = (
+        ROOT / "src" / "workbench-webui" / "workbench.jsx"
+    ).read_text(encoding="utf-8")
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    preload = (ROOT / "electron" / "preload.js").read_text(encoding="utf-8")
+
+    # New chat in the default project is created once; existing target sends
+    # directly. The window now stays open after a send so the conversation can
+    # continue: the reply streams into an in-place transcript and follow-ups
+    # reuse the pinned chat. We notify the main window on ack but do NOT close.
+    assert "model.createChat" in quick_chat
+    assert "createdChatIdRef" in quick_chat
+    assert "onAck" in quick_chat
+    assert "chat_run_in_progress" in quick_chat
+    assert "onReplyDelta" in quick_chat
+    assert 'className="wbq-thread"' in quick_chat
+    # closeWindow is wired to ESC only, never to a successful send/ack.
+    assert "resetAfterSend" not in quick_chat
+    # Main-window sync: quick window notifies, main process forwards, the chat
+    # module re-pulls.
+    assert "notifySent" in quick_chat and "notifySent" in preload
+    assert "quick-chat:notify-sent" in main
+    assert "quick-chat:sent" in main and "quick-chat:sent" in preload
+    assert "cyrene:wbc-refresh-chats" in workbench
+    assert "cyrene:wbc-refresh-chats" in chat
+
+
+def test_quick_chat_keeps_backend_alive_for_the_global_shortcut():
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    # Closing a window must not strand the global shortcut on a dead backend.
+    assert "function appStaysResident()" in main
+    assert "if (appStaysResident()) return;" in main
+    # Screenshot memory is bounded and the bytes are never logged.
+    assert "MAX_SCREENSHOT_BYTES" in main
+
+
+def test_quick_chat_is_opt_in_behind_general_settings_toggles():
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    general = (
+        ROOT / "src" / "workbench-webui" / "settings-overlay.jsx"
+    ).read_text(encoding="utf-8")
+
+    # Opt-in: the global shortcut is only claimed when quick chat is enabled,
+    # which itself requires background residency.
+    assert "quickChatEnabled: false" in main
+    assert "if (desktopSettings.quickChatEnabled) {" in main
+    assert "next.runInBackground === true && next.quickChatEnabled === true" in main
+    assert "unregisterQuickChatShortcut()" in main
+    # General settings exposes both toggles; the quick-chat toggle is disabled
+    # until background residency is on.
+    assert 'settings.runInBackground' in general
+    assert 'settings.quickChatAssistant' in general
+    assert "applyDesktop({ runInBackground:" in general
+    assert "applyDesktop({ quickChatEnabled:" in general
+    assert "desktopBusy || !runInBackground" in general
 
 
 def test_quick_chat_javascript_sources_parse():

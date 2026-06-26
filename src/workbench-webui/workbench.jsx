@@ -938,6 +938,21 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     };
   }, [store.projects, store.activeProjectId]);
 
+  // The quick-chat window (separate Electron window) sends straight into a
+  // project. When it does, nudge the chat module to re-pull so the new
+  // conversation / reply shows up here without a manual refresh. Non-disruptive:
+  // it does not yank the user's current view to the chat.
+  useWorkbenchEffect(function () {
+    var bridge = window.cyrene && window.cyrene.quickChat;
+    if (!bridge || typeof bridge.onSent !== "function") return undefined;
+    return bridge.onSent(function (info) {
+      if (!info || !info.chatId) return;
+      window.dispatchEvent(new CustomEvent("cyrene:wbc-refresh-chats", {
+        detail: { projectId: info.projectId || "", selectId: info.chatId },
+      }));
+    });
+  }, []);
+
   // Optimistically merge fields into the active session's `init` object so the
   // init view and the right-panel 初始化进度 (siblings reading store data) stay
   // in sync between server writes. Used while answering onboarding questions.

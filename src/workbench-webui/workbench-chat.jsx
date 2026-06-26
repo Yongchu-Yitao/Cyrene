@@ -954,6 +954,19 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     return function () { window.removeEventListener("cyrene:workbench-navigate", onNavigate); };
   }, []);
 
+  // Re-pull the chat list when another surface (the quick-chat window) sent a
+  // message into this project, so the new conversation / reply shows up without
+  // a manual refresh. Re-registered per project so refreshChats stays current.
+  useWbcEffect(function () {
+    function onRefresh(event) {
+      var detail = (event && event.detail) || {};
+      if (detail.projectId && String(detail.projectId) !== String(projectId)) return;
+      refreshChats(detail.selectId || "");
+    }
+    window.addEventListener("cyrene:wbc-refresh-chats", onRefresh);
+    return function () { window.removeEventListener("cyrene:wbc-refresh-chats", onRefresh); };
+  }, [projectId]);
+
   // Live tool progress: reuse the global SSE feed (data.jsx) and keep only
   // events tagged with a running conversation's session id.
   useWbcEffect(function () {
@@ -2096,33 +2109,38 @@ function wbcIsPersistableChatId(id) {
   return !!(id && String(id).indexOf("legacy:") !== 0);
 }
 
-function wbcLoadDraft(id) {
+// The optional `ns` prefix isolates a surface's drafts/attachments/workspace
+// from the main chat's (the quick-chat window shares localStorage with the main
+// window, so it passes a namespace to avoid clobbering an in-progress draft for
+// the same chat id). The persistability gate still tests the raw chat id, so a
+// brand-new chat (id "") is never stored regardless of namespace.
+function wbcLoadDraft(id, ns) {
   if (!wbcIsPersistableChatId(id)) return "";
-  try { return localStorage.getItem(WBC_DRAFT_PREFIX + id) || ""; } catch (e) { return ""; }
+  try { return localStorage.getItem(WBC_DRAFT_PREFIX + (ns || "") + id) || ""; } catch (e) { return ""; }
 }
 
-function wbcSaveDraft(id, text) {
+function wbcSaveDraft(id, text, ns) {
   if (!wbcIsPersistableChatId(id)) return;
   try {
-    if (text) localStorage.setItem(WBC_DRAFT_PREFIX + id, text);
-    else localStorage.removeItem(WBC_DRAFT_PREFIX + id);
+    if (text) localStorage.setItem(WBC_DRAFT_PREFIX + (ns || "") + id, text);
+    else localStorage.removeItem(WBC_DRAFT_PREFIX + (ns || "") + id);
   } catch (e) {}
 }
 
-function wbcLoadAttachments(id) {
+function wbcLoadAttachments(id, ns) {
   if (!wbcIsPersistableChatId(id)) return [];
   try {
-    var raw = localStorage.getItem(WBC_ATTACH_PREFIX + id);
+    var raw = localStorage.getItem(WBC_ATTACH_PREFIX + (ns || "") + id);
     var parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch (e) { return []; }
 }
 
-function wbcSaveAttachments(id, list) {
+function wbcSaveAttachments(id, list, ns) {
   if (!wbcIsPersistableChatId(id)) return;
   try {
-    if (list && list.length) localStorage.setItem(WBC_ATTACH_PREFIX + id, JSON.stringify(list));
-    else localStorage.removeItem(WBC_ATTACH_PREFIX + id);
+    if (list && list.length) localStorage.setItem(WBC_ATTACH_PREFIX + (ns || "") + id, JSON.stringify(list));
+    else localStorage.removeItem(WBC_ATTACH_PREFIX + (ns || "") + id);
   } catch (e) {}
 }
 
@@ -2130,27 +2148,32 @@ function wbcWorkspaceContextKey(chatId, projectId) {
   return String(projectId || "") + ":" + (wbcIsPersistableChatId(chatId) ? String(chatId) : "__new__");
 }
 
-function wbcLoadWorkspaceOverride(key) {
+function wbcLoadWorkspaceOverride(key, ns) {
   if (!key) return "";
-  try { return localStorage.getItem(WBC_WORKSPACE_PREFIX + key) || ""; } catch (e) { return ""; }
+  try { return localStorage.getItem(WBC_WORKSPACE_PREFIX + (ns || "") + key) || ""; } catch (e) { return ""; }
 }
 
-function wbcSaveWorkspaceOverride(key, path) {
+function wbcSaveWorkspaceOverride(key, path, ns) {
   if (!key) return;
   try {
-    if (path) localStorage.setItem(WBC_WORKSPACE_PREFIX + key, path);
-    else localStorage.removeItem(WBC_WORKSPACE_PREFIX + key);
+    if (path) localStorage.setItem(WBC_WORKSPACE_PREFIX + (ns || "") + key, path);
+    else localStorage.removeItem(WBC_WORKSPACE_PREFIX + (ns || "") + key);
   } catch (e) {}
 }
 
-function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
+function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespace, autoFocus, clearOnSend }) {
   var model = window.WorkbenchChatModel;
   var chatId = chat ? chat.id : "";
   var projectId = (project && project.id) || "";
   var projectWorkspacePath = (project && project.workspacePath) || "";
+  // Surface-scoped storage prefix (empty for the main chat). The quick-chat
+  // window passes one so its draft/attachments never overwrite the main
+  // window's for the same chat id.
+  var draftNs = draftNamespace || "";
+  var shouldClearOnSend = clearOnSend !== false;
   var workspaceContextKey = wbcWorkspaceContextKey(chatId, projectId);
-  var [draft, setDraft] = useWbcState(function () { return wbcLoadDraft(chatId); });
-  var [attachments, setAttachments] = useWbcState(function () { return wbcLoadAttachments(chatId); });
+  var [draft, setDraft] = useWbcState(function () { return wbcLoadDraft(chatId, draftNs); });
+  var [attachments, setAttachments] = useWbcState(function () { return wbcLoadAttachments(chatId, draftNs); });
   var [mode, setMode] = useWbcState("auto");
   var [command, setCommand] = useWbcState("");
   var [uploading, setUploading] = useWbcState(false);
@@ -2159,7 +2182,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   var [modeOpen, setModeOpen] = useWbcState(false);
   var [contextState, setContextState] = useWbcState(null);
   var [workspaceOverride, setWorkspaceOverride] = useWbcState(function () {
-    return wbcLoadWorkspaceOverride(workspaceContextKey);
+    return wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
   });
   var [ctxPickerOpen, setCtxPickerOpen] = useWbcState(false);
   var taRef = useWbcRef(null);
@@ -2176,28 +2199,36 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
   useWbcEffect(function () { workspaceOverrideRef.current = workspaceOverride; });
 
   useWbcEffect(function () {
-    if (prevChatIdRef.current === chatId) wbcSaveDraft(chatId, draft);
+    if (prevChatIdRef.current === chatId) wbcSaveDraft(chatId, draft, draftNs);
   }, [draft]);
 
   useWbcEffect(function () {
-    if (prevChatIdRef.current === chatId) wbcSaveAttachments(chatId, attachments);
+    if (prevChatIdRef.current === chatId) wbcSaveAttachments(chatId, attachments, draftNs);
   }, [attachments]);
 
   useWbcEffect(function () {
     if (prevWorkspaceContextKeyRef.current === workspaceContextKey) {
-      wbcSaveWorkspaceOverride(workspaceContextKey, workspaceOverride);
+      wbcSaveWorkspaceOverride(workspaceContextKey, workspaceOverride, draftNs);
     }
   }, [workspaceOverride]);
 
   useWbcEffect(function () { syncHeight(); }, [draft]);
 
+  // Focus the textarea on mount when the host surface asks for it (the quick
+  // chat window opens straight into typing).
+  useWbcEffect(function () {
+    if (autoFocus && taRef.current) {
+      taRef.current.focus();
+    }
+  }, []);
+
   useWbcEffect(function () {
     var prev = prevChatIdRef.current;
     if (prev !== chatId) {
-      wbcSaveDraft(prev, draftRef.current);
-      wbcSaveAttachments(prev, attachRef.current);
-      setDraft(wbcLoadDraft(chatId));
-      setAttachments(wbcLoadAttachments(chatId));
+      wbcSaveDraft(prev, draftRef.current, draftNs);
+      wbcSaveAttachments(prev, attachRef.current, draftNs);
+      setDraft(wbcLoadDraft(chatId, draftNs));
+      setAttachments(wbcLoadAttachments(chatId, draftNs));
       setFailedImagePreviews({});
       prevChatIdRef.current = chatId;
     }
@@ -2211,8 +2242,8 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
     var prevKey = prevWorkspaceContextKeyRef.current;
     if (prevKey === workspaceContextKey) return;
     var currentOverride = workspaceOverrideRef.current;
-    wbcSaveWorkspaceOverride(prevKey, currentOverride);
-    var nextOverride = wbcLoadWorkspaceOverride(workspaceContextKey);
+    wbcSaveWorkspaceOverride(prevKey, currentOverride, draftNs);
+    var nextOverride = wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
     setWorkspaceOverride(nextOverride);
     workspaceOverrideRef.current = nextOverride;
     prevWorkspaceContextKeyRef.current = workspaceContextKey;
@@ -2223,7 +2254,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
       var detail = (event && event.detail) || {};
       if (String(detail.projectId || "") !== String(projectId || "") || !detail.chatId) return;
       var nextKey = wbcWorkspaceContextKey(detail.chatId, projectId);
-      wbcSaveWorkspaceOverride(nextKey, workspaceOverrideRef.current);
+      wbcSaveWorkspaceOverride(nextKey, workspaceOverrideRef.current, draftNs);
     }
     window.addEventListener("cyrene:wbc-chat-created", onChatCreated);
     return function () { window.removeEventListener("cyrene:wbc-chat-created", onChatCreated); };
@@ -2252,11 +2283,16 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
     if (running) return;
     var text = draft.trim();
     if (!text && attachments.length === 0) return;
-    setDraft("");
-    if (taRef.current) taRef.current.style.height = "";
     var payload = { message: text, attachments: attachments, mode: mode, command: command };
-    setAttachments([]);
-    setCommand("");
+    // The quick-chat surface keeps the draft until the send is acknowledged (it
+    // closes its window on success), so a failed send leaves the text + the
+    // attachments intact for a retry. The main chat clears optimistically.
+    if (shouldClearOnSend) {
+      setDraft("");
+      if (taRef.current) taRef.current.style.height = "";
+      setAttachments([]);
+      setCommand("");
+    }
     onSend(payload);
   }
 
@@ -2539,6 +2575,19 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt }) {
     </div>
   );
 }
+
+// Shared with the quick-chat surface (workbench-quick-chat.jsx), which renders
+// the exact same composer (attachments, commands, permission mode, IME-safe
+// send) rather than forking a second input box.
+window.WbcComposer = WbcComposer;
+
+// Clears a persisted draft + attachments for one chat in a given namespace.
+// The quick-chat window keeps its draft on a failed send (clearOnSend=false),
+// so it calls this on success to wipe the namespaced draft before remounting.
+window.wbcClearComposerDraft = function (chatId, ns) {
+  wbcSaveDraft(chatId, "", ns);
+  wbcSaveAttachments(chatId, [], ns);
+};
 
 // Context picker popup — shown inside the composer when the user clicks "+ Add context".
 // Fully independent from the legacy ModernContextPicker in chat-surface.jsx.

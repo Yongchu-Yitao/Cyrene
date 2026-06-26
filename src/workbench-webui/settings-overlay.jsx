@@ -377,7 +377,7 @@ function SettingsOverlay({
 
         // Content area
         React.createElement("div", { className: "settings-overlay-content" },
-          tab === "general" && GeneralPanel({ t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved }),
+          tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved }),
           tab === "models" && ModelsPanel({ t, models, setModels, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, saveModels, config }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
@@ -396,6 +396,42 @@ function SettingsOverlay({
 // ── General Panel ──
 function GeneralPanel(p) {
   var { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved } = p;
+
+  // Desktop-only (Electron) toggles. Quick chat depends on background residency,
+  // so its toggle is gated on runInBackground.
+  var supportsDesktop = !!(
+    window.cyrene
+    && typeof window.cyrene.getDesktopSettings === "function"
+    && typeof window.cyrene.updateDesktopSettings === "function"
+  );
+  var [runInBackground, setRunInBackground] = useStateSt(false);
+  var [quickChatEnabled, setQuickChatEnabled] = useStateSt(false);
+  var [desktopBusy, setDesktopBusy] = useStateSt(false);
+  var [desktopNotice, setDesktopNotice] = useStateSt("");
+
+  useEffectSt(function () {
+    if (!supportsDesktop) return undefined;
+    var cancelled = false;
+    window.cyrene.getDesktopSettings().then(function (s) {
+      if (cancelled || !s) return;
+      setRunInBackground(s.runInBackground === true);
+      setQuickChatEnabled(s.quickChatEnabled === true);
+    }).catch(function () {});
+    return function () { cancelled = true; };
+  }, []);
+
+  function applyDesktop(updates) {
+    setDesktopBusy(true);
+    setDesktopNotice("");
+    window.cyrene.updateDesktopSettings(updates).then(function (s) {
+      if (!s) return;
+      setRunInBackground(s.runInBackground === true);
+      setQuickChatEnabled(s.quickChatEnabled === true);
+      if (s.shortcutUpdateOk === false) setDesktopNotice(t("settings.quickChatShortcutConflict"));
+    }).catch(function () {
+      setDesktopNotice(t("settings.error"));
+    }).finally(function () { setDesktopBusy(false); });
+  }
 
   function saveAmapKey() {
     if (!amapKey || amapKey.startsWith("••")) { setAmapKeySaved(t("settings.noChanges")); setTimeout(function () { setAmapKeySaved(""); }, 1500); return; }
@@ -435,6 +471,18 @@ function GeneralPanel(p) {
       ),
       amapKeySaved && React.createElement("span", { className: "wb-hint saved" }, amapKeySaved),
     ),
+    supportsDesktop && SectionBlock(t("settings.desktopSection"), null, [
+      FieldRow(t("settings.runInBackground"), t("settings.runInBackgroundHint"),
+        Toggle(runInBackground, function () { applyDesktop({ runInBackground: !runInBackground }); }, desktopBusy),
+        "rib"),
+      FieldRow(t("settings.quickChatAssistant"),
+        runInBackground ? t("settings.quickChatAssistantHint") : t("settings.quickChatAssistantNeedsResident"),
+        Toggle(quickChatEnabled, function () { applyDesktop({ quickChatEnabled: !quickChatEnabled }); }, desktopBusy || !runInBackground),
+        "qca"),
+      desktopNotice
+        ? React.createElement("div", { className: "wb-hint", key: "note", style: { color: "var(--wb-error-text)", marginTop: 8 } }, desktopNotice)
+        : null,
+    ]),
   );
 }
 
@@ -1821,13 +1869,14 @@ function FieldRow(label, hint, controls, key) {
   );
 }
 
-function Toggle(on, onClick) {
+function Toggle(on, onClick, disabled) {
   return React.createElement("button", {
     type: "button",
     className: "wb-toggle" + (on ? " on" : ""),
     role: "switch",
     "aria-checked": on ? "true" : "false",
-    onClick: onClick,
+    disabled: !!disabled,
+    onClick: disabled ? undefined : onClick,
   });
 }
 

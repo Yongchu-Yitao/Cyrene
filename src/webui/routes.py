@@ -5941,7 +5941,14 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     @router.get("/", response_class=HTMLResponse)
     async def spa_root(request: Request):
         ui_mode = getattr(request.app.state, "ui_mode", "workbench")
-        if ui_mode == "legacy" and request.query_params.get("shell") != "legacy":
+        # Self-contained surfaces (e.g. the quick-chat window at
+        # ?surface=quick-chat) render the same regardless of the main UI shell —
+        # don't redirect them to the legacy shell or the surface param is lost.
+        if (
+            ui_mode == "legacy"
+            and request.query_params.get("shell") != "legacy"
+            and not request.query_params.get("surface")
+        ):
             from fastapi.responses import RedirectResponse
             return RedirectResponse("/?shell=legacy")
         return FileResponse(
