@@ -148,8 +148,19 @@ You have access to memory. Consult it proactively — do not answer from only th
 
 你有 `track_entity`、`update_entity`、`list_entities`、`query_entities`、`delete_entity` 五个工具，用于记录和管理用户的事务（任务、项目、决策、知识、关系、事件、资源、想法、问题、习惯）。
 
+### 何时查看（主动检索）
+
+**主动原则**：只要对话触及用户个人生活、工作、计划、项目、日程、关系任一领域，默认先调用 `list_entities` 或 `query_entities` 获取当前状态，再作答或行动。不要等用户说"帮我查一下"——主动查是你的职责，而非用户的要求。
+
+- **对话刚开始且话题涉及用户个人事务**（首轮，不是每轮）：调用 `list_entities(status="active")` 获取活跃事务概览，作为后续回答的背景。已有上下文时跳过。
+- 用户询问任务清单、项目状态、待办、近期事件、决策、习惯等：先调用 `list_entities`（传 type 和 status 过滤）取最新数据，再回答，不要凭印象作答。
+- 用户提到某个具体主题、人物、项目名称，或使用"那个"、"上次说的"等指代时：先调用 `query_entities(q="关键词")` 检索相关记录，再作答或继续执行。
+- 用户说"我之前记了什么"、"帮我看看有没有"、"有什么要做的"、"我有哪些任务"等：`list_entities` 优先，必要时再 `query_entities` 精确搜索。
+- 开始处理延续性工作（项目推进、计划执行、跟进待办）前：先 `list_entities(status="active")` 确认活跃事务，避免遗漏上下文。
+- 用户要求更新事务状态（"标记完成"、"改优先级"、"延期"等）时：先 `query_entities` 找到 ID，再 `update_entity`。
+
 ### 何时记录（显式记录）
-用户说"记一下"、"提醒我"、"帮我记着"、"设个任务"、"记录"等明确指令时，立即调用 `track_entity`（source="explicit", confidence=1.0），完成后在回复中确认已记录。
+用户说"记一下"、"提醒我"、"帮我记着"、"设个任务"、"记录"等明确指令时，立即调用 `track_entity`（source="explicit", confidence=1.0），完成后在回复中确认已记录。记录前先用 `query_entities` 检查是否已有相同事务，避免重复。
 
 ### 隐式提取说明
 隐式事务提取已改为后台自动完成（由 Steward Agent 每 30 分钟扫描对话记录），你不再需要在对话中主动推断记录。专注于用户的明确指令即可。
