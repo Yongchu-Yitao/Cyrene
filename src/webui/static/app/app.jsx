@@ -1040,7 +1040,16 @@ function readUiShellMode() {
   return "workbench";
 }
 
-function App() {
+function readUiSurfaceMode() {
+  try {
+    var params = new URLSearchParams(window.location.search || "");
+    return params.get("surface") || "";
+  } catch (e) {
+    return "";
+  }
+}
+
+function MainApp() {
   useDataVersion();
   const [shellMode, setShellMode] = useStateApp(readUiShellMode);
   const [themeMode, setThemeMode] = useStateApp(function () { return readStoredTweak("theme", "system"); });
@@ -1121,6 +1130,13 @@ function App() {
   }
 
   return <window.WorkbenchApp theme={themeMode} actualTheme={actualTheme} onToggleTheme={toggleWorkbenchTheme} needsOnboarding={needsOnboarding} />;
+}
+
+function App() {
+  if (readUiSurfaceMode() === "quick-chat" && typeof window.QuickChatApp === "function") {
+    return <window.QuickChatApp />;
+  }
+  return <MainApp />;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);

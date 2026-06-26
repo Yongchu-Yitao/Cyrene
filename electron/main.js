@@ -1,4 +1,16 @@
-const { app, BrowserWindow, dialog, ipcMain, Notification, session, shell } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  desktopCapturer,
+  dialog,
+  globalShortcut,
+  ipcMain,
+  Notification,
+  screen,
+  session,
+  shell,
+  systemPreferences,
+} = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -38,6 +50,12 @@ const isLinux = process.platform === 'linux';
 const supportsLoginItem = process.platform === 'darwin' || process.platform === 'win32';
 
 let mainWindow = null;
+let quickChatWindow = null;
+let quickChatWindowReady = null;
+let quickChatOpenPromise = null;
+let pendingQuickChatScreenshot = null;
+let registeredQuickChatShortcut = '';
+let quickChatShortcutError = '';
 let pythonProcess = null;
 let pendingPortResolve = null;
 let backendPort = null;
@@ -49,6 +67,7 @@ let launchHidden = process.argv.includes('--hidden');
 const DEFAULT_DESKTOP_SETTINGS = Object.freeze({
   launchAtLogin: false,
   runInBackground: false,
+  quickChatShortcut: 'CommandOrControl+Shift+Space',
 });
 
 function getNotificationIconPath() {
@@ -77,6 +96,7 @@ function readDesktopSettings() {
     return {
       launchAtLogin: parsed.launchAtLogin === true,
       runInBackground: parsed.runInBackground === true,
+      quickChatShortcut: normalizeQuickChatShortcut(parsed.quickChatShortcut),
     };
   } catch (_) {
     return { ...DEFAULT_DESKTOP_SETTINGS };
@@ -87,6 +107,7 @@ function writeDesktopSettings(settings) {
   const payload = {
     launchAtLogin: settings.launchAtLogin === true,
     runInBackground: settings.runInBackground === true,
+    quickChatShortcut: normalizeQuickChatShortcut(settings.quickChatShortcut),
   };
   fs.mkdirSync(path.dirname(getDesktopSettingsPath()), { recursive: true });
   fs.writeFileSync(getDesktopSettingsPath(), JSON.stringify(payload, null, 2), 'utf8');
@@ -108,17 +129,95 @@ function getDesktopSettings() {
     ...stored,
     supportsLaunchAtLogin: supportsLoginItem,
     platform: process.platform,
+    quickChatShortcutRegistered: (
+      registeredQuickChatShortcut === stored.quickChatShortcut
+      && globalShortcut.isRegistered(stored.quickChatShortcut)
+    ),
+    quickChatShortcutError,
   };
 }
 
 function saveDesktopSettings(updates) {
+  const current = readDesktopSettings();
   const next = {
-    ...readDesktopSettings(),
+    ...current,
     ...updates,
   };
+  next.quickChatShortcut = normalizeQuickChatShortcut(next.quickChatShortcut);
+
+  let shortcutUpdateOk = true;
+  if (
+    next.quickChatShortcut !== current.quickChatShortcut
+    || registeredQuickChatShortcut !== next.quickChatShortcut
+    || !globalShortcut.isRegistered(next.quickChatShortcut)
+  ) {
+    shortcutUpdateOk = registerQuickChatShortcut(next.quickChatShortcut);
+    if (!shortcutUpdateOk) {
+      return {
+        ...getDesktopSettings(),
+        shortcutUpdateOk: false,
+      };
+    }
+  }
+
   writeDesktopSettings(next);
   applyLaunchAtLogin(next.launchAtLogin);
-  return getDesktopSettings();
+  return {
+    ...getDesktopSettings(),
+    shortcutUpdateOk,
+  };
+}
+
+function normalizeQuickChatShortcut(value) {
+  const shortcut = String(value || '').trim();
+  return shortcut || DEFAULT_DESKTOP_SETTINGS.quickChatShortcut;
+}
+
+function registerQuickChatShortcut(accelerator) {
+  const requested = normalizeQuickChatShortcut(accelerator);
+  const previous = registeredQuickChatShortcut;
+
+  if (previous === requested && globalShortcut.isRegistered(requested)) {
+    quickChatShortcutError = '';
+    return true;
+  }
+
+  if (previous) {
+    try { globalShortcut.unregister(previous); } catch (_) {}
+    registeredQuickChatShortcut = '';
+  }
+
+  let registered = false;
+  try {
+    registered = globalShortcut.register(requested, () => {
+      openQuickChat().catch((err) => {
+        console.error('[electron] Failed to open quick chat:', err);
+        appendErrorLog(`[electron] Failed to open quick chat: ${err && err.stack ? err.stack : err}\n`);
+      });
+    });
+  } catch (err) {
+    quickChatShortcutError = String((err && err.message) || err || 'shortcut_registration_failed');
+  }
+
+  if (registered) {
+    registeredQuickChatShortcut = requested;
+    quickChatShortcutError = '';
+    return true;
+  }
+
+  quickChatShortcutError = quickChatShortcutError || 'shortcut_in_use';
+  if (previous) {
+    try {
+      if (globalShortcut.register(previous, () => {
+        openQuickChat().catch((err) => {
+          console.error('[electron] Failed to open quick chat:', err);
+        });
+      })) {
+        registeredQuickChatShortcut = previous;
+      }
+    } catch (_) {}
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +424,227 @@ function installAuthHeaderInjector() {
 // Window management
 // ---------------------------------------------------------------------------
 
+function getScreenPermissionStatus() {
+  if (!isMac) return 'granted';
+  try {
+    return systemPreferences.getMediaAccessStatus('screen');
+  } catch (_) {
+    return 'unknown';
+  }
+}
+
+function quickChatScreenshotMetadata() {
+  if (!pendingQuickChatScreenshot) return null;
+  const screenshot = pendingQuickChatScreenshot;
+  return {
+    capturedAt: screenshot.capturedAt,
+    displayId: screenshot.displayId,
+    width: screenshot.width,
+    height: screenshot.height,
+    mimeType: screenshot.mimeType,
+    size: screenshot.buffer.length,
+  };
+}
+
+function getQuickChatLaunchContext() {
+  return {
+    screenshot: quickChatScreenshotMetadata(),
+    screenPermissionStatus: getScreenPermissionStatus(),
+    desktopSettings: getDesktopSettings(),
+  };
+}
+
+function notifyQuickChatContextUpdated() {
+  if (!quickChatWindow || quickChatWindow.isDestroyed()) return;
+  quickChatWindow.webContents.send('quick-chat:context-updated', getQuickChatLaunchContext());
+}
+
+function waitForCompositor(ms = 120) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function captureQuickChatScreenshot() {
+  const permissionStatus = getScreenPermissionStatus();
+  if (permissionStatus === 'denied' || permissionStatus === 'restricted') {
+    pendingQuickChatScreenshot = null;
+    return getQuickChatLaunchContext();
+  }
+
+  if (quickChatWindow && !quickChatWindow.isDestroyed() && quickChatWindow.isVisible()) {
+    quickChatWindow.hide();
+    await waitForCompositor();
+  }
+
+  const cursorPoint = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursorPoint);
+  const scaleFactor = Math.max(1, Number(display.scaleFactor) || 1);
+  const rawWidth = Math.max(1, Math.round(display.size.width * scaleFactor));
+  const rawHeight = Math.max(1, Math.round(display.size.height * scaleFactor));
+  const maxDimension = 4096;
+  const resizeScale = Math.min(1, maxDimension / Math.max(rawWidth, rawHeight));
+  const thumbnailSize = {
+    width: Math.max(1, Math.round(rawWidth * resizeScale)),
+    height: Math.max(1, Math.round(rawHeight * resizeScale)),
+  };
+
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize,
+      fetchWindowIcons: false,
+    });
+    const displayId = String(display.id);
+    const source = sources.find((item) => String(item.display_id || '') === displayId)
+      || sources.find((item) => String(item.id || '').startsWith(`screen:${displayId}:`))
+      || sources[0];
+
+    if (!source || source.thumbnail.isEmpty()) {
+      pendingQuickChatScreenshot = null;
+      return {
+        ...getQuickChatLaunchContext(),
+        screenshotError: 'screen_capture_unavailable',
+      };
+    }
+
+    const buffer = source.thumbnail.toPNG();
+    const imageSize = source.thumbnail.getSize();
+    pendingQuickChatScreenshot = {
+      buffer,
+      capturedAt: new Date().toISOString(),
+      displayId,
+      width: imageSize.width,
+      height: imageSize.height,
+      mimeType: 'image/png',
+    };
+    return getQuickChatLaunchContext();
+  } catch (err) {
+    pendingQuickChatScreenshot = null;
+    const message = String((err && err.message) || err || 'screen_capture_failed');
+    console.error('[electron] Quick chat screenshot failed:', message);
+    appendErrorLog(`[electron] Quick chat screenshot failed: ${message}\n`);
+    return {
+      ...getQuickChatLaunchContext(),
+      screenshotError: message,
+    };
+  }
+}
+
+function positionQuickChatWindow() {
+  if (!quickChatWindow || quickChatWindow.isDestroyed()) return;
+  const cursorPoint = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursorPoint);
+  const workArea = display.workArea;
+  const bounds = quickChatWindow.getBounds();
+  const x = Math.round(workArea.x + Math.max(0, (workArea.width - bounds.width) / 2));
+  const y = Math.round(workArea.y + Math.max(24, Math.min(96, workArea.height * 0.1)));
+  quickChatWindow.setPosition(x, y, false);
+}
+
+function installLocalNavigationGuards(window, port, { allowLocalPopups = false } = {}) {
+  window.webContents.on('will-navigate', (event, navigationUrl) => {
+    try {
+      const target = new URL(navigationUrl);
+      if (target.hostname !== '127.0.0.1' || target.port !== String(port)) {
+        event.preventDefault();
+      }
+    } catch (_) {
+      event.preventDefault();
+    }
+  });
+
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const target = new URL(url);
+      if (
+        allowLocalPopups
+        && target.hostname === '127.0.0.1'
+        && target.port === String(port)
+        && !/\.html?$/i.test(target.pathname)
+      ) {
+        return { action: 'allow' };
+      }
+      const isLocalBackend = target.hostname === '127.0.0.1' && target.port === String(port);
+      if (!isLocalBackend && (target.protocol === 'https:' || target.protocol === 'http:')) {
+        shell.openExternal(url);
+      }
+    } catch (_) {}
+    return { action: 'deny' };
+  });
+}
+
+async function createQuickChatWindow() {
+  if (quickChatWindow && !quickChatWindow.isDestroyed()) {
+    if (quickChatWindowReady) await quickChatWindowReady;
+    return quickChatWindow;
+  }
+
+  const port = await waitForPort();
+  if (!port) return null;
+
+  quickChatWindow = new BrowserWindow({
+    width: 680,
+    height: 390,
+    minWidth: 560,
+    minHeight: 320,
+    title: 'Cyrene Quick Chat',
+    show: false,
+    frame: false,
+    resizable: true,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    backgroundColor: '#111418',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
+    },
+  });
+
+  if (isMac) {
+    quickChatWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  }
+
+  quickChatWindow.on('close', (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    quickChatWindow.hide();
+    pendingQuickChatScreenshot = null;
+  });
+  quickChatWindow.on('closed', () => {
+    quickChatWindow = null;
+    quickChatWindowReady = null;
+  });
+
+  installLocalNavigationGuards(quickChatWindow, port);
+  quickChatWindowReady = quickChatWindow.loadURL(`http://127.0.0.1:${port}/?surface=quick-chat`);
+  await quickChatWindowReady;
+  return quickChatWindow;
+}
+
+async function openQuickChat() {
+  if (quickChatOpenPromise) return quickChatOpenPromise;
+  quickChatOpenPromise = (async () => {
+    const context = await captureQuickChatScreenshot();
+    const window = await createQuickChatWindow();
+    if (!window || window.isDestroyed()) return context;
+    positionQuickChatWindow();
+    window.show();
+    window.moveTop();
+    window.focus();
+    notifyQuickChatContextUpdated();
+    return context;
+  })();
+  try {
+    return await quickChatOpenPromise;
+  } finally {
+    quickChatOpenPromise = null;
+  }
+}
+
 async function createMainWindow(shellOverride) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
@@ -414,42 +734,7 @@ async function createMainWindow(shellOverride) {
   mainWindow.webContents.session.clearCache();
   mainWindow.loadURL(url);
 
-  // Restrict navigation to the local backend — block any attempt to leave 127.0.0.1:<port>
-  mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
-    try {
-      const target = new URL(navigationUrl);
-      if (target.hostname !== '127.0.0.1' || target.port !== String(port)) {
-        event.preventDefault();
-      }
-    } catch (_) {
-      event.preventDefault();
-    }
-  });
-
-  // Control popup window creation from the renderer:
-  // - local backend URLs: allow (image previews, attachments)
-  // - external http/https: open in system browser via shell
-  // - everything else (file://, data:, …): deny
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    try {
-      const target = new URL(url);
-      if (target.hostname === '127.0.0.1' && target.port === String(port)) {
-        // User-provided HTML must stay in the renderer's sandboxed srcDoc
-        // viewer. A normal child window would inherit the authenticated
-        // default session and could call privileged local API endpoints.
-        if (/\.html?$/i.test(target.pathname)) {
-          return { action: 'deny' };
-        }
-        return { action: 'allow' };
-      }
-      if (target.protocol === 'https:' || target.protocol === 'http:') {
-        shell.openExternal(url);
-      }
-    } catch (_) {
-      // malformed URL — fall through to deny
-    }
-    return { action: 'deny' };
-  });
+  installLocalNavigationGuards(mainWindow, port, { allowLocalPopups: true });
 }
 
 // Swap the window to a different UI shell at runtime (e.g. the workbench's
@@ -506,9 +791,34 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(() => {
     installAuthHeaderInjector();
-    applyLaunchAtLogin(readDesktopSettings().launchAtLogin);
+    const desktopSettings = readDesktopSettings();
+    applyLaunchAtLogin(desktopSettings.launchAtLogin);
+    registerQuickChatShortcut(desktopSettings.quickChatShortcut);
     ipcMain.handle('desktop-settings:get', () => getDesktopSettings());
     ipcMain.handle('desktop-settings:update', (_event, updates) => saveDesktopSettings(updates || {}));
+    ipcMain.handle('quick-chat:get-launch-context', () => getQuickChatLaunchContext());
+    ipcMain.handle('quick-chat:get-screenshot', () => {
+      if (!pendingQuickChatScreenshot) return null;
+      return {
+        ...quickChatScreenshotMetadata(),
+        bytes: pendingQuickChatScreenshot.buffer,
+      };
+    });
+    ipcMain.handle('quick-chat:clear-screenshot', () => {
+      pendingQuickChatScreenshot = null;
+      notifyQuickChatContextUpdated();
+      return { ok: true };
+    });
+    ipcMain.handle('quick-chat:close', () => {
+      pendingQuickChatScreenshot = null;
+      if (quickChatWindow && !quickChatWindow.isDestroyed()) quickChatWindow.hide();
+      return { ok: true };
+    });
+    ipcMain.handle('quick-chat:open-screen-settings', async () => {
+      if (!isMac) return { ok: false, error: 'unsupported_platform' };
+      await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+      return { ok: true };
+    });
     ipcMain.handle('notification:show', (_event, { title, body }) => {
       const icon = getNotificationIconPath();
       new Notification({ title, body, ...(icon ? { icon } : {}) }).show();
@@ -546,6 +856,7 @@ if (!gotSingleInstanceLock) {
 
   app.on('before-quit', () => {
     isQuitting = true;
+    globalShortcut.unregisterAll();
     killPython();
   });
 

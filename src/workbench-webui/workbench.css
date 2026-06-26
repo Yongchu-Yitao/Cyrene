@@ -9025,7 +9025,8 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 /* Connector segments: .v verticals (ancestor guides + own-column half-lines),
-   .h the elbow tapping a parent column. The node halo masks crossings. */
+   .arc the quarter-circle tap from a fork head into its parent column. The
+   opaque node circle covers any line crossing behind it — no halo needed. */
 .wbc-branch-line {
   position: absolute;
   z-index: 0;
@@ -9040,7 +9041,16 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 .wbc-branch-line.h {
   height: 2px;
-  transform: translateY(-50%);
+}
+
+/* Top-right rounded corner = the quarter turn that drops the horizontal lead
+   down into the fork node (horizontal tangent at the trunk side, vertical at
+   the node). */
+.wbc-branch-line.arc {
+  background: transparent;
+  border-top: 2px solid color-mix(in srgb, var(--wb-line) 85%, transparent);
+  border-right: 2px solid color-mix(in srgb, var(--wb-line) 85%, transparent);
+  border-radius: 0 11px 0 0;
 }
 
 .wbc-branch-node {
@@ -9048,14 +9058,12 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   top: 16px;
   z-index: 1;
   box-sizing: border-box;
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   border-radius: 999px;
   border: 2px solid color-mix(in srgb, var(--wb-line-2) 78%, transparent);
   background: var(--wb-right-bg);
   transform: translate(-50%, -50%);
-  /* Solid ring of the panel bg masks the connector line passing behind the node. */
-  box-shadow: 0 0 0 5px var(--wb-right-bg);
 }
 
 .wbc-branch-row.kind-root .wbc-branch-node {
@@ -9067,12 +9075,10 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   border-color: color-mix(in srgb, var(--wb-accent) 55%, var(--wb-line-2));
 }
 
+/* Current = a single solid accent dot (no ring), the card slab carries the
+   rest of the emphasis. */
 .wbc-branch-row.active .wbc-branch-node {
   border-color: var(--wb-accent);
-  box-shadow: 0 0 0 4px var(--wb-right-bg), 0 0 0 6px color-mix(in srgb, var(--wb-accent) 30%, transparent);
-}
-
-.wbc-branch-row.kind-root.active .wbc-branch-node {
   background: var(--wb-accent);
 }
 
@@ -9080,11 +9086,11 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 .wbc-branch-card {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
   border: 1px solid transparent;
   border-radius: 12px;
-  padding: 8px 12px 9px;
+  padding: 8px 14px 16px;
   transition: background 130ms ease, border-color 130ms ease;
 }
 
@@ -11839,4 +11845,239 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
 @media (max-width: 560px) {
   .wb-ob-steps { grid-template-columns: 1fr; }
   .wb-ob-inner { padding-top: 28px; }
+}
+
+/* -------------------------------------------------------------------------
+   Quick Chat surface
+   ------------------------------------------------------------------------- */
+
+.wbq-shell {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  color: var(--wb-text);
+  background:
+    radial-gradient(circle at 18% -20%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 42%),
+    var(--wb-bg);
+  border: 1px solid color-mix(in srgb, var(--wb-line) 82%, transparent);
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+}
+
+.wbq-header {
+  height: 66px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--wb-line);
+  -webkit-app-region: drag;
+}
+
+.wbq-brand {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.wbq-brand .brand-mark {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+
+.wbq-brand div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.wbq-brand strong {
+  font-size: 14px;
+  font-weight: 720;
+}
+
+.wbq-brand small {
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbq-close {
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--wb-line);
+  border-radius: 7px;
+  color: var(--wb-muted);
+  background: var(--wb-control-bg);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.wbq-main {
+  height: calc(100vh - 66px);
+  padding: 16px 18px 18px;
+  overflow: auto;
+}
+
+.wbq-state {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: var(--wb-muted);
+  font-size: 13px;
+}
+
+.wbq-state.is-error { color: var(--wb-error-text); }
+
+.wbq-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.wbq-target {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 5px;
+}
+
+.wbq-target > span {
+  color: var(--wb-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.wbq-target select {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  color: var(--wb-text);
+  background: var(--wb-control-bg);
+  outline: none;
+}
+
+.wbq-target select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-faint);
+}
+
+.wbq-screenshot-status {
+  height: 34px;
+  max-width: 220px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  color: var(--wb-muted);
+  background: var(--wb-control-bg);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.wbq-screenshot-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--wb-muted);
+}
+
+.wbq-screenshot-status.is-ready .wbq-screenshot-dot {
+  background: var(--wb-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-green) 15%, transparent);
+}
+
+.wbq-permission {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--wb-amber) 35%, var(--wb-line));
+  border-radius: 9px;
+  color: var(--wb-muted);
+  background: color-mix(in srgb, var(--wb-amber) 8%, var(--wb-card-bg));
+  font-size: 11px;
+}
+
+.wbq-permission button {
+  flex: 0 0 auto;
+  border: none;
+  color: var(--accent);
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.wbq-composer-shell {
+  overflow: hidden;
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  background: var(--wb-card-bg);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+}
+
+.wbq-composer-shell textarea {
+  width: 100%;
+  min-height: 122px;
+  padding: 14px;
+  border: none;
+  resize: none;
+  color: var(--wb-text);
+  background: transparent;
+  font: inherit;
+  line-height: 1.5;
+  outline: none;
+}
+
+.wbq-composer-shell textarea::placeholder { color: var(--wb-faint); }
+
+.wbq-composer-footer {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 9px 7px 13px;
+  border-top: 1px solid var(--wb-line);
+  color: var(--wb-muted);
+  font-size: 11px;
+}
+
+.wbq-send-placeholder,
+.wbq-send-placeholder:disabled {
+  min-width: 72px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  color: var(--accent-text);
+  background: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.5;
+}
+
+@media (max-width: 620px) {
+  .wbq-toolbar { align-items: stretch; flex-direction: column; }
+  .wbq-screenshot-status { max-width: none; }
 }

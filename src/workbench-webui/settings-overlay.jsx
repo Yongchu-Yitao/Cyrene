@@ -1507,7 +1507,16 @@ function ShortcutsPanel(p) {
   var t = p.t;
   var sc = window.WorkbenchShortcuts;
   var isMac = sc ? sc.isMacPlatform() : false;
+  var supportsSystemShortcut = !!(
+    window.cyrene
+    && typeof window.cyrene.getDesktopSettings === "function"
+    && typeof window.cyrene.updateDesktopSettings === "function"
+  );
   var [items, setItems] = useStateSt(function () { return sc ? sc.list() : []; });
+  var [quickChatKeys, setQuickChatKeys] = useStateSt(["mod", "shift", "Space"]);
+  var [quickChatRegistered, setQuickChatRegistered] = useStateSt(false);
+  var [quickChatError, setQuickChatError] = useStateSt("");
+  var [quickChatBusy, setQuickChatBusy] = useStateSt(false);
   var [capturingId, setCapturingId] = useStateSt("");
   // conflict: { reboundId, withId } — the rebound action now clashes with
   // `withId`. The warning is shown on the rebound row so the user knows which
@@ -1531,6 +1540,66 @@ function ShortcutsPanel(p) {
     return function () { window.removeEventListener("cyrene-shortcuts-change", refresh); };
   }, []);
 
+  useEffectSt(function () {
+    if (!supportsSystemShortcut) return undefined;
+    var cancelled = false;
+    window.cyrene.getDesktopSettings().then(function (settings) {
+      if (cancelled || !settings) return;
+      setQuickChatKeys(acceleratorToKeys(settings.quickChatShortcut));
+      setQuickChatRegistered(settings.quickChatShortcutRegistered === true);
+      setQuickChatError(settings.quickChatShortcutError || "");
+    }).catch(function () {});
+    return function () { cancelled = true; };
+  }, []);
+
+  function acceleratorToKeys(accelerator) {
+    var map = {
+      CommandOrControl: "mod",
+      Command: "mod",
+      Cmd: "mod",
+      Control: "ctrl",
+      Ctrl: "ctrl",
+      Shift: "shift",
+      Alt: "alt",
+      Option: "alt",
+    };
+    var keys = String(accelerator || "CommandOrControl+Shift+Space").split("+").map(function (token) {
+      var clean = token.trim();
+      return map[clean] || clean;
+    }).filter(Boolean);
+    return keys.length ? keys : ["mod", "shift", "Space"];
+  }
+
+  function keysToAccelerator(keys) {
+    var map = { mod: "CommandOrControl", ctrl: "Control", shift: "Shift", alt: "Alt" };
+    return (keys || []).map(function (token) { return map[token] || token; }).join("+");
+  }
+
+  function saveQuickChatShortcut(keys) {
+    if (!supportsSystemShortcut) return;
+    setQuickChatBusy(true);
+    setQuickChatError("");
+    window.cyrene.updateDesktopSettings({ quickChatShortcut: keysToAccelerator(keys) })
+      .then(function (settings) {
+        if (!settings) throw new Error("shortcut_update_failed");
+        setQuickChatKeys(acceleratorToKeys(settings.quickChatShortcut));
+        setQuickChatRegistered(settings.quickChatShortcutRegistered === true);
+        setQuickChatError(settings.quickChatShortcutError || "");
+        if (settings.shortcutUpdateOk === false) {
+          setNotice(t("settings.quickChatShortcutConflict"));
+        } else {
+          setNotice(t("settings.shortcutSaved"));
+        }
+        setTimeout(function () { setNotice(""); }, 1800);
+      })
+      .catch(function () {
+        setQuickChatError("shortcut_update_failed");
+        setNotice(t("settings.quickChatShortcutFailed"));
+        setTimeout(function () { setNotice(""); }, 1800);
+      })
+      .finally(function () { setQuickChatBusy(false); });
+  }
+
   function startCapture(id) {
     setCapturingId(id);
     setConflict(null);
@@ -1553,6 +1622,12 @@ function ShortcutsPanel(p) {
       return tok !== "mod" && tok !== "ctrl" && tok !== "shift" && tok !== "alt";
     });
     if (!hasTerminal) { cancelCapture(); return; }
+    if (capturingId === "system-quick-chat") {
+      setCapturingId("");
+      setConflict(null);
+      saveQuickChatShortcut(result.keys);
+      return;
+    }
     // Detect conflicts with other actions.
     var conflictId = "";
     for (var i = 0; i < items.length; i++) {
@@ -1597,6 +1672,10 @@ function ShortcutsPanel(p) {
     setTimeout(function () { setNotice(""); }, 1500);
   }
 
+  function resetQuickChatShortcut() {
+    saveQuickChatShortcut(["mod", "shift", "Space"]);
+  }
+
   function sameBinding(a, b) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
     var norm = function (arr) { return arr.slice().sort().join("|"); };
@@ -1624,6 +1703,44 @@ function ShortcutsPanel(p) {
     SectionTitle(t("settings.shortcuts"), t("settings.shortcutsSubtitle")),
     React.createElement("p", { className: "wb-shortcuts-platform" },
       t("settings.shortcutPlatformHint", { os: isMac ? "macOS" : "Windows / Linux" })
+    ),
+    supportsSystemShortcut && SectionBlock(t("settings.shortcutGroupSystem"), null,
+      React.createElement("div", { className: "wb-shortcut-row" },
+        React.createElement("div", { className: "wb-shortcut-info" },
+          React.createElement("b", null, t("settings.quickChatShortcut")),
+          React.createElement("small", null, t("settings.quickChatShortcutHint")),
+        ),
+        React.createElement("div", { className: "wb-shortcut-controls" },
+          capturingId === "system-quick-chat"
+            ? React.createElement("span", { className: "wb-shortcut-capture" }, t("settings.shortcutCapture"))
+            : React.createElement("span", { className: "wb-shortcut-keys" + (quickChatRegistered ? "" : " custom") },
+                renderKeys(quickChatKeys)
+              ),
+          capturingId !== "system-quick-chat" && React.createElement("button", {
+            type: "button",
+            className: "wb-btn",
+            disabled: quickChatBusy,
+            onClick: function () { startCapture("system-quick-chat"); },
+          }, t("settings.shortcutRebind")),
+          capturingId === "system-quick-chat" && React.createElement("button", {
+            type: "button",
+            className: "wb-btn ghost",
+            onClick: cancelCapture,
+          }, t("common.cancel")),
+          capturingId !== "system-quick-chat" && React.createElement("button", {
+            type: "button",
+            className: "wb-icon-btn-small",
+            title: t("settings.shortcutReset"),
+            disabled: quickChatBusy,
+            onClick: resetQuickChatShortcut,
+          }, "↺"),
+        ),
+        quickChatError && React.createElement("div", { className: "wb-shortcut-conflict" },
+          quickChatError === "shortcut_in_use"
+            ? t("settings.quickChatShortcutConflict")
+            : t("settings.quickChatShortcutFailed")
+        ),
+      ),
     ),
     groupOrder.map(function (groupKey) {
       var groupItems = groups[groupKey] || [];

@@ -2662,18 +2662,24 @@ function wbcBranchRows(lineage) {
 
 // Connector segments for one row on a 22px-per-depth grid, columns centered at
 // `d*22+13` and the node centered 16px down. Ancestor columns draw full-height
-// guides; the own column draws a half-line up or down; the elbow bridges to the
-// parent column. The node's card-bg halo masks any line crossing behind it.
+// guides; the own column draws a half-line up or down. A fork head taps its
+// parent column with a short horizontal lead from the trunk, then a top-right
+// quarter-circle turn that drops vertically into the node (├──╮ shape). The
+// opaque node circle covers any line crossing behind it.
 function wbcBranchConnectors(row) {
-  var U = 22, CY = 16, BASE = 13, d = row.depth;
-  function x(col) { return (col * U + BASE) + "px"; }
+  var U = 22, CY = 16, BASE = 13, R = 11, d = row.depth;
+  function cx(col) { return col * U + BASE; }
   var segs = [];
   for (var c = 0; c < d; c += 1) {
-    segs.push({ cls: "v", style: { left: x(c), top: 0, bottom: 0 } });
+    segs.push({ cls: "v", style: { left: cx(c) + "px", top: 0, bottom: 0 } });
   }
-  if (row.lineDown) segs.push({ cls: "v", style: { left: x(d), top: CY + "px", bottom: 0 } });
-  if (row.lineUp) segs.push({ cls: "v", style: { left: x(d), top: 0, height: CY + "px" } });
-  if (row.elbow) segs.push({ cls: "h", style: { left: x(d - 1), top: CY + "px", width: U + "px" } });
+  if (row.lineDown) segs.push({ cls: "v", style: { left: cx(d) + "px", top: CY + "px", bottom: 0 } });
+  if (row.lineUp) segs.push({ cls: "v", style: { left: cx(d) + "px", top: 0, height: CY + "px" } });
+  if (row.elbow) {
+    var nodeX = cx(d), parentX = cx(d - 1);
+    segs.push({ cls: "h", style: { left: parentX + "px", top: (CY - R) + "px", width: (nodeX - R - parentX) + "px" } });
+    segs.push({ cls: "arc", style: { left: (nodeX - R) + "px", top: (CY - R) + "px", width: R + "px", height: R + "px" } });
+  }
   return segs;
 }
 
