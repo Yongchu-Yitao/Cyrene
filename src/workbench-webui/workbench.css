@@ -39,6 +39,10 @@
   --wb-muted: var(--text-2);
   --wb-faint: var(--text-3);
   --wb-blue: #3b82f6;
+  /* Markdown / viewer link colour (citations, TOC, external refs). Base = light
+     values; the dark override below lifts them for legibility on dark panels. */
+  --wb-link: #1d6ec9;
+  --wb-link-hover: #134a8f;
   --wb-purple: var(--magenta);
   --wb-green: #1f9d57;
   --wb-amber: var(--warn);
@@ -4423,6 +4427,8 @@ html[data-theme="light"] .workbench-shell {
    live on .workbench-shell above; this swaps them for dark. */
 html[data-theme="dark"] .workbench-shell {
   --wb-surface: #1a2230;
+  --wb-link: #6fb4ff;
+  --wb-link-hover: #9ccbff;
   --wb-card-bg: #232e3e;
   --wb-card-bg-strong: #283447;
   --wb-notif-pop-bg: #1b2230;
@@ -5298,6 +5304,12 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 .wb-input.small {
   width: 100%;
+}
+
+.wb-input[type=number]::-webkit-inner-spin-button,
+.wb-input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .wb-select {
@@ -8876,7 +8888,30 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 .wbc-msg-body.markdown h1, .wbc-msg-body.markdown h2, .wbc-msg-body.markdown h3 { font-size: 14.5px; margin: 12px 0 6px; }
 .wbc-msg-body.markdown table { border-collapse: collapse; margin: 6px 0; }
 .wbc-msg-body.markdown th, .wbc-msg-body.markdown td { border: 1px solid var(--wb-line); padding: 4px 9px; font-size: 12.5px; }
-.wbc-msg-body.markdown blockquote { margin: 6px 0; padding: 2px 12px; border-left: 3px solid var(--wb-line-2); color: var(--wb-muted); }
+.wbc-msg-body.markdown th { background: color-mix(in srgb, var(--wb-muted) 8%, transparent); }
+/* Links (citations / TOC / external refs): theme-aware blue instead of the raw
+   browser default. Softened underline at rest, full-strength on hover; pin the
+   visited colour so references never decay to the default purple. */
+.wbc-msg-body.markdown a {
+  color: var(--wb-link);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--wb-link) 38%, transparent);
+  text-underline-offset: 2px;
+  transition: color 0.12s ease, text-decoration-color 0.12s ease;
+}
+.wbc-msg-body.markdown a:hover {
+  color: var(--wb-link-hover);
+  text-decoration-color: var(--wb-link-hover);
+}
+.wbc-msg-body.markdown a:visited { color: var(--wb-link); }
+.wbc-msg-body.markdown blockquote {
+  margin: 8px 0;
+  padding: 5px 14px;
+  border-left: 3px solid color-mix(in srgb, var(--wb-blue) 55%, var(--wb-line-2));
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--wb-blue) 6%, transparent);
+  color: var(--wb-muted);
+}
 
 .wbc-caret {
   display: inline-block;
@@ -9211,6 +9246,15 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   width: 12px;
   height: 12px;
   border-width: 2px;
+}
+
+.wbc-trace-list li.failed .wbc-trace-mark {
+  color: var(--wb-red);
+}
+
+.wbc-trace-list li.failed .wbc-trace-text {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--wb-red) 55%, transparent);
 }
 
 .wbc-trace-text {
@@ -11864,6 +11908,8 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   color: var(--wb-text);
   background:
     radial-gradient(circle at 18% -20%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 42%),
@@ -11929,22 +11975,22 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
 }
 
 .wbq-main {
-  height: calc(100vh - 48px);
-  padding: 16px 18px 18px;
+  flex: 1;
+  min-height: 0;
+  padding: 14px 16px 16px;
   display: flex;
   flex-direction: column;
-  min-height: 0;
   /* visible so the composer's upward permission / slash menus aren't clipped by
      this container; the rounded window edge still clips via .wbq-shell. */
   overflow: visible;
 }
 
-/* Natural-height content column. flex:0 0 auto so it hugs its content instead of
-   stretching to fill .wbq-main — that lets the ResizeObserver (see
-   workbench-quick-chat.jsx) read the real content height and ask the Electron
-   window to size itself to match, so there's no dead space in any state. */
+/* Content column fills the window so the transcript (.wbq-thread) can flex to
+   the available height and scroll, while the composer stays pinned at the
+   bottom. The window is a normal resizable Electron window — no auto-sizing —
+   so dragging the edge just gives the transcript more/less room. */
 .wbq-content {
-  flex: 0 0 auto;
+  flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -12210,114 +12256,29 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   cursor: pointer;
 }
 
-/* Conversation transcript — the window stays open after a send so the reply
-   streams in-place and the user can keep chatting. */
+/* Conversation transcript. Reuses the full chat's message cards
+   (window.WbcUserMessage / WbcAssistantMessage / WbcLiveMessage) through the
+   shared .wbc-thread layout, so tool-call traces, agent files and the live
+   "thinking / calling tools" card match the main UI exactly. .wbc-thread already
+   provides flex:1 + min-height:0 + overflow-y:auto, so the transcript fills the
+   content column and scrolls; .wbq-thread only tightens spacing for the compact
+   quick-chat window. */
 .wbq-thread {
-  flex: 0 1 auto;
-  min-height: 0;
-  /* caps how tall the transcript can push the auto-sized window; beyond this the
-     thread scrolls internally and the window stops growing. */
-  max-height: 380px;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 2px 2px 10px;
-  margin-bottom: 4px;
+  padding: 12px 14px 6px;
+  gap: 14px;
 }
 
-.wbq-msg {
-  display: flex;
-  max-width: 100%;
+/* Empty state fills the transcript area (keeping the composer pinned at the
+   bottom) and stays vertically centered. */
+.wbq-empty {
+  max-width: 300px;
 }
 
-.wbq-msg.user { justify-content: flex-end; }
-.wbq-msg.assistant { justify-content: flex-start; }
-
-.wbq-bubble {
-  max-width: 86%;
-  padding: 8px 12px;
-  border-radius: 14px;
-  font-size: 13px;
-  line-height: 1.55;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-
-.wbq-msg.user .wbq-bubble {
-  color: var(--wb-accent-text, #fff);
-  background: var(--accent);
-  border-bottom-right-radius: 5px;
-}
-
-.wbq-msg.assistant .wbq-bubble {
-  color: var(--wb-text);
-  background: var(--wb-card-bg);
-  border: 1px solid var(--wb-line);
-  border-bottom-left-radius: 5px;
-}
-
-.wbq-msg-text { white-space: pre-wrap; }
-
-.wbq-msg-attach {
-  display: block;
-  margin-top: 3px;
-  font-size: 11px;
-  opacity: 0.75;
-}
-
-/* Markdown reply: trim outer margins so the bubble hugs the content. */
-.wbq-md > :first-child { margin-top: 0; }
-.wbq-md > :last-child { margin-bottom: 0; }
-.wbq-md p { margin: 6px 0; }
-.wbq-md ul, .wbq-md ol { margin: 6px 0; padding-left: 20px; }
-.wbq-md pre {
-  margin: 6px 0;
-  padding: 8px 10px;
-  overflow: auto;
-  border-radius: 8px;
-  background: var(--wb-panel);
-  font-size: 12px;
-}
-.wbq-md code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
-.wbq-md :not(pre) > code {
-  padding: 1px 5px;
-  border-radius: 5px;
-  background: var(--wb-panel);
-}
-
-.wbq-typing {
-  display: inline-flex;
-  gap: 4px;
-  padding: 3px 0;
-}
-.wbq-typing i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--wb-muted);
-  animation: wbq-typing 1.1s ease-in-out infinite;
-}
-.wbq-typing i:nth-child(2) { animation-delay: 0.18s; }
-.wbq-typing i:nth-child(3) { animation-delay: 0.36s; }
-
-@keyframes wbq-typing {
-  0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
-  30% { opacity: 1; transform: translateY(-2px); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .wbq-typing i { animation: none; }
-}
-
-/* Footer groups the send error + composer. The window auto-sizes to its content
-   (see the ResizeObserver in workbench-quick-chat.jsx), so the composer already
-   sits at the natural bottom — no margin hacks needed. */
+/* Footer groups the send error + composer; flex:0 0 auto pins it at the bottom
+   of the content column while the transcript above flexes to fill the window. */
 .wbq-footer {
   flex: 0 0 auto;
+  padding-top: 4px;
 }
 
 /* Host for the shared composer (window.WbcComposer). It carries its own box

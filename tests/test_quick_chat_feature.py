@@ -60,7 +60,7 @@ def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
     assert 'params.get("surface")' in app
     assert 'readUiSurfaceMode() === "quick-chat"' in app
     assert "<window.QuickChatApp />" in app
-    assert "compiled/workbench-quick-chat.js?v=beta11" in index
+    assert "compiled/workbench-quick-chat.js?v=beta12" in index
     # The picker pulls writable targets from the dedicated endpoint.
     assert "/api/workbench/quick-chat/targets" in quick_chat
     assert "getLaunchContext" in quick_chat
@@ -108,15 +108,24 @@ def test_quick_chat_send_close_and_sync_contract():
     preload = (ROOT / "electron" / "preload.js").read_text(encoding="utf-8")
 
     # New chat in the default project is created once; existing target sends
-    # directly. The window now stays open after a send so the conversation can
-    # continue: the reply streams into an in-place transcript and follow-ups
-    # reuse the pinned chat. We notify the main window on ack but do NOT close.
+    # directly. The window stays open after a send so the conversation can
+    # continue, and follow-ups reuse the pinned chat. The transcript is driven by
+    # the shared singleton run-manager (WorkbenchChatRuntimes) and rendered with
+    # the same message cards as the main chat, so the reply — with tool-call
+    # traces and the live "thinking" card — streams in-place. We notify the main
+    # window on send but do NOT close.
     assert "model.createChat" in quick_chat
     assert "createdChatIdRef" in quick_chat
-    assert "onAck" in quick_chat
+    # Reuses the shared run-manager + transcript hooks instead of a forked
+    # streaming loop, so the run is durable server-side and survives the window.
+    assert "WorkbenchChatRuntimes" in quick_chat
+    assert "runtimeEngine.start" in quick_chat
+    assert "onUserMessage" in quick_chat
     assert "chat_run_in_progress" in quick_chat
-    assert "onReplyDelta" in quick_chat
-    assert 'className="wbq-thread"' in quick_chat
+    # Renders the shared message cards (not a simplified bubble) inside the
+    # shared thread layout.
+    assert "window.WbcLiveMessage" in quick_chat
+    assert 'className="wbc-thread wbq-thread"' in quick_chat
     # closeWindow is wired to ESC only, never to a successful send/ack.
     assert "resetAfterSend" not in quick_chat
     # Main-window sync: quick window notifies, main process forwards, the chat

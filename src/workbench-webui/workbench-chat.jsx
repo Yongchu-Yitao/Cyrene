@@ -521,8 +521,33 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
   var subscribers = new Set();
   var hooks = null;             // live transcript hooks from the mounted page
 
+  // `emit` notifies subscribers (the mounted page → React re-render). Reply
+  // deltas can arrive many times per second, and each re-render re-parses +
+  // re-sanitizes the whole streaming markdown (O(n²) over a long reply). So the
+  // delta path defers emits via rAF coalescing: the text is applied to the
+  // runtime synchronously (so reads stay correct), but the re-render is batched
+  // to at most once per frame. Every other (low-frequency) update emits at once.
+  var emitHandle = 0;
+  var emitIsRaf = false;
   function emit() {
     subscribers.forEach(function (fn) { try { fn(runtimes); } catch (e) {} });
+  }
+  function flushEmit() { emitHandle = 0; emit(); }
+  function scheduleEmit() {
+    if (emitHandle) return;
+    if (typeof requestAnimationFrame === "function") {
+      emitIsRaf = true;
+      emitHandle = requestAnimationFrame(flushEmit);
+    } else {
+      emitIsRaf = false;
+      emitHandle = setTimeout(flushEmit, 16);
+    }
+  }
+  function cancelScheduledEmit() {
+    if (!emitHandle) return;
+    if (emitIsRaf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(emitHandle);
+    else clearTimeout(emitHandle);
+    emitHandle = 0;
   }
 
   function subscribe(fn) {
@@ -534,7 +559,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
   function get(chatId) { return (chatId && runtimes[chatId]) || null; }
   function isRunning(chatId) { return !!(chatId && runtimes[chatId]); }
 
-  function update(chatId, updater) {
+  function update(chatId, updater, defer) {
     if (!chatId) return null;
     var current = runtimes[chatId] || null;
     var next = typeof updater === "function" ? updater(current) : updater;
@@ -542,7 +567,11 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     Object.keys(runtimes).forEach(function (key) { nextMap[key] = runtimes[key]; });
     if (next) nextMap[chatId] = next; else delete nextMap[chatId];
     runtimes = nextMap;
-    emit();
+    // Defer only the high-frequency reply-delta path; everything else (including
+    // the delta's terminal siblings reply_done / saved) emits now and cancels any
+    // pending coalesced emit so the latest state renders without delay.
+    if (defer) scheduleEmit();
+    else { cancelScheduledEmit(); emit(); }
     return next;
   }
 
@@ -603,7 +632,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
         update(chatId, function (cur) { return cur ? { ...cur, replying: true, lastEventAt: Date.now() } : null; });
       },
       onReplyDelta: function (delta) {
-        update(chatId, function (cur) { return cur ? { ...cur, replying: true, text: cur.text + delta, lastEventAt: Date.now() } : null; });
+        update(chatId, function (cur) { return cur ? { ...cur, replying: true, text: cur.text + delta, lastEventAt: Date.now() } : null; }, true);
       },
       onReplyDone: function (text) {
         update(chatId, function (cur) { return cur ? { ...cur, text: text || cur.text, lastEventAt: Date.now() } : null; });
@@ -1955,9 +1984,10 @@ function WbcTraceCard({ trace, live, label }) {
         <ul className="wbc-trace-list">
           {entries.map(function (entry, i) {
             var isLast = live && i === entries.length - 1;
+            var failed = !!entry.failed;
             return (
-              <li key={i} className={isLast ? "active" : "done"}>
-                <span className="wbc-trace-mark">{isLast ? <span className="wb-spinner small" /> : WBC_ICONS.check}</span>
+              <li key={i} className={failed ? "failed" : (isLast ? "active" : "done")}>
+                <span className="wbc-trace-mark">{failed ? WBC_ICONS.x : (isLast ? <span className="wb-spinner small" /> : WBC_ICONS.check)}</span>
                 <span className="wbc-trace-text">
                   {(function () {
                     var toolKey = entry.text || entry.tool || "";
@@ -1979,6 +2009,10 @@ function WbcTraceCard({ trace, live, label }) {
 
 function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
   var [copied, setCopied] = useWbcState(false);
+  // Parse each finalized message's markdown once and reuse it: the whole thread
+  // re-renders on every streaming frame, so without this every prior message
+  // would be re-parsed + re-sanitized per frame.
+  var bodyHtml = useWbcMemo(function () { return wbcRenderMarkdown(msg.content); }, [msg.content]);
   async function copyText() {
     try {
       var text = String(msg.content || "");
@@ -1996,7 +2030,7 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
   return (
     <div className="wbc-msg assistant">
       {msg.trace && msg.trace.length > 0 && <WbcTraceCard trace={msg.trace} />}
-      <div className="wbc-msg-body markdown" dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(msg.content) }} />
+      <div className="wbc-msg-body markdown" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
       <WbcAgentFiles files={msg.attachments} onOpenFile={onOpenFile} />
       <div className="wbc-msg-foot">
         <button type="button" className="wbc-msg-action" onClick={copyText} title={wbcT("workbenchChat.copy", "Copy")}>
@@ -2065,6 +2099,11 @@ function WbcHeartbeat({ startedAt, lastEventAt }) {
 function WbcLiveMessage({ runtime, onOpenFile }) {
   var completedSegments = Array.isArray(runtime.segments) ? runtime.segments : [];
   var progressEntries = Array.isArray(runtime.progress) ? runtime.progress : [];
+  // Re-parse the streaming markdown only when the text actually changed — not on
+  // every heartbeat / progress-driven re-render of this card.
+  var liveHtml = useWbcMemo(function () {
+    return runtime.text ? wbcRenderMarkdown(runtime.text) : "";
+  }, [runtime.text]);
   return (
     <React.Fragment>
       {completedSegments.map(function (segment) {
@@ -2088,7 +2127,7 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
         )}
         {runtime.text && (
           <div className="wbc-msg-body markdown">
-            <div dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(runtime.text) }} />
+            <div dangerouslySetInnerHTML={{ __html: liveHtml }} />
             <span className="wbc-caret" />
           </div>
         )}
@@ -2580,6 +2619,15 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespa
 // the exact same composer (attachments, commands, permission mode, IME-safe
 // send) rather than forking a second input box.
 window.WbcComposer = WbcComposer;
+
+// Also shared with the quick-chat surface so its transcript renders with the
+// exact same message cards (tool-call traces, agent files, attachments, the live
+// "thinking/calling tools" card) as the main conversation instead of a
+// simplified text bubble. They are self-contained (only module-level helpers +
+// optional callbacks), so the quick-chat window can mount them standalone.
+window.WbcUserMessage = WbcUserMessage;
+window.WbcAssistantMessage = WbcAssistantMessage;
+window.WbcLiveMessage = WbcLiveMessage;
 
 // Clears a persisted draft + attachments for one chat in a given namespace.
 // The quick-chat window keeps its draft on a failed send (clearOnSend=false),

@@ -78,6 +78,27 @@ def _attach_final_usage(entry: dict[str, Any]) -> dict[str, Any]:
     return entry
 
 
+def _quit_reply_from_response(response_obj: dict[str, Any]) -> str:
+    """Extract the user-facing answer the model placed in ``quit(reply=...)``.
+
+    The ``quit`` tool carries an optional ``reply`` argument holding the final
+    text for the user. Returning it lets the caller deliver that text directly
+    instead of firing a separate tools=None reconstruction call. Returns "" when
+    there is no quit call, no ``reply``, or the arguments are unparseable."""
+    for tc in (response_obj.get("tool_calls") or []):
+        if not isinstance(tc, dict):
+            continue
+        if str(tc.get("function", {}).get("name") or "") != "quit":
+            continue
+        try:
+            args = json.loads(tc.get("function", {}).get("arguments") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            return ""
+        reply = args.get("reply") if isinstance(args, dict) else None
+        return reply.strip() if isinstance(reply, str) else ""
+    return ""
+
+
 def _annotate_history_context(history: list) -> list[dict[str, Any]]:
     annotated: list[dict[str, Any]] = []
     for index, raw in enumerate(history or []):
@@ -202,6 +223,13 @@ async def _run_main_agent(
     active_tool_defs = get_active_tool_defs()
     if system_initiated:
         active_tool_defs = _without_tool(active_tool_defs, "ask_user")
+    # ``send_wechat_file`` only works when the live channel is a WeChat client
+    # (it exposes ``send_file``). On the WebUI / workbench channel the bot has no
+    # such method, so offering the tool only invites a guaranteed-to-fail call
+    # before the model falls back to ``send_file`` — wasting a turn and leaving a
+    # misleading "sent WeChat file" card. Drop it when delivery can't work.
+    if not hasattr(bot, "send_file"):
+        active_tool_defs = _without_tool(active_tool_defs, "send_wechat_file")
 
     # Option B prefix-cache discipline (tools edition). scripts/probe_deepseek_
     # tools_cache.py confirmed DeepSeek serializes the ``tools`` array at the FRONT
@@ -257,7 +285,7 @@ async def _run_main_agent(
         phase1_decision = (
             "Decision phase rules:\n"
             "- You are in Quick Answer mode. The user wants a fast, text-only answer.\n"
-            "- Call `quit` immediately with your answer. Do NOT call `use_tools`.\n"
+            "- Call `quit` immediately, putting your answer in its `reply` argument (shown to the user verbatim). Do NOT call `use_tools`.\n"
             "- Call `ask_user` ONLY if the question is genuinely unclear.\n"
             "- This mode is for pure conversation only — no tools, no research."
         )
@@ -284,6 +312,14 @@ async def _run_main_agent(
         fallback: str = "Done.",
     ) -> str:
         text = _assistant_text(response_obj).strip()
+        # Prompt-cache discipline: the model signals "done" via the ``quit`` tool
+        # call and now carries its user-facing answer in quit's ``reply`` argument.
+        # Use it directly — this is the whole point of the ``reply`` param: it lets
+        # the common "quit with an answer" turn skip the tools=None reconstruction
+        # call below, which (lacking the tools array at the prefix front) shares no
+        # cache prefix with the main chain and re-processes the entire history.
+        if not text:
+            text = _quit_reply_from_response(response_obj)
         has_tool_results = any(
             (
                 str(message.get("role") or "") == "tool"

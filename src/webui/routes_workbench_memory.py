@@ -104,13 +104,31 @@ def _safe_workspace_id(workspace_id: str | None) -> str:
 
 
 def _resolve_workspace_id(workspace_id: str | None) -> str:
-    """Map a Workbench project id to its project-specific memory key."""
+    """Map a Workbench workspace identifier to its memory storage key.
+
+    The memory page sends a project's ``dataKey`` as the workspace, but memories
+    are stored under ``_workbench_project_memory_key`` (the project id). For the
+    legacy default project these differ (dataKey == "default", id == "project_…"),
+    so matching by id alone misses it and falls back to an empty "default" store —
+    which is why the default project's memory count showed 0. Match by id first,
+    then by dataKey, so either identifier resolves to the same project store.
+    """
     wid = _safe_workspace_id(workspace_id)
+    raw = str(workspace_id or "").strip()
     try:
         from webui import routes as R
 
         payload = R._read_workbench_store()
-        project = R._workbench_find_project(payload, str(workspace_id or "").strip())
+        project = R._workbench_find_project(payload, raw)
+        if project is None:
+            project = next(
+                (
+                    p
+                    for p in payload.get("projects", [])
+                    if R._workbench_project_data_key(p) == wid
+                ),
+                None,
+            )
         if project:
             return R._workbench_project_memory_key(project)
     except Exception:

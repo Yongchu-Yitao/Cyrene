@@ -645,12 +645,14 @@ async function createQuickChatWindow() {
 
   quickChatWindow = new BrowserWindow({
     width: 680,
-    // Initial height is a hint only — the renderer measures its content and
-    // resizes the window to fit (see the 'quick-chat:resize' handler). minHeight
-    // is low so the empty state can shrink to hug its content.
-    height: 300,
+    // Compact-but-roomy idle height: tall enough that the composer's upward
+    // permission / slash menus always fit above it. The renderer grows the
+    // window once on the first send (see 'quick-chat:resize') so the
+    // conversation has space, and the user can freely resize from there — the
+    // flex layout reflows the transcript to whatever height they pick.
+    height: 460,
     minWidth: 560,
-    minHeight: 160,
+    minHeight: 400,
     title: 'Cyrene Quick Chat',
     show: false,
     frame: false,
@@ -885,9 +887,10 @@ if (!gotSingleInstanceLock) {
       if (quickChatWindow && !quickChatWindow.isDestroyed()) quickChatWindow.hide();
       return { ok: true };
     });
-    // The quick-chat renderer measures its content and asks for a matching window
-    // height, so the surface auto-sizes (no dead space, room for the upward menu).
-    // Anchored at the top: the y stays put and the window grows/shrinks downward.
+    // The quick-chat renderer grows the window once on the first send so the
+    // conversation has room (the user can resize freely afterwards). Anchored at
+    // the top: the y stays put and the window grows downward, clamped to the work
+    // area so it never spills past the bottom of the screen.
     ipcMain.handle('quick-chat:resize', (_event, info) => {
       if (!quickChatWindow || quickChatWindow.isDestroyed()) return { ok: false };
       const requested = Math.round(Number(info && info.height) || 0);

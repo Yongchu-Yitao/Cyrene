@@ -876,13 +876,33 @@ def _exchange_usage() -> dict[str, int]:
     return {key: 0 for key in _USAGE_KEYS}
 
 
-def _append_exchange_meta(
-    message: dict[str, Any],
-    trace: list[dict[str, Any]],
-    usage: dict[str, int],
-    files: list[dict[str, Any]],
-    seen_file_urls: set[str],
-) -> None:
+def _tool_result_is_error(result: str) -> bool:
+    """Best-effort detection of a tool call that failed at the tool layer.
+
+    Conservative on purpose: only clear tool-level error strings count, so a
+    trace mark of "failed" is trustworthy. (A non-zero Bash exit code is JSON,
+    not an ``Error:`` prefix, so it is left unmarked.)
+    """
+    text = str(result or "").strip().lower()
+    if not text:
+        return False
+    return text.startswith(("error", "tool failed", "failed to", "failed:"))
+
+
+def _build_tool_result_map(state_messages: list[dict[str, Any]]) -> dict[str, str]:
+    """Map ``tool_call_id`` -> tool result content so a trace entry can know
+    whether its call succeeded."""
+    out: dict[str, str] = {}
+    for message in state_messages:
+        if not isinstance(message, dict) or str(message.get("role") or "") != "tool":
+            continue
+        tcid = str(message.get("tool_call_id") or "").strip()
+        if tcid:
+            out[tcid] = str(message.get("content") or "")
+    return out
+
+
+def _accumulate_usage(message: dict[str, Any], usage: dict[str, int]) -> None:
     raw_usage = message.get("usage")
     if isinstance(raw_usage, dict):
         for key in _USAGE_KEYS:
@@ -890,15 +910,33 @@ def _append_exchange_meta(
                 usage[key] += int(raw_usage.get(key) or 0)
             except (TypeError, ValueError):
                 continue
+
+
+def _accumulate_tools(
+    message: dict[str, Any],
+    trace: list[dict[str, Any]],
+    result_map: dict[str, str] | None = None,
+) -> None:
     for tool_call in message.get("tool_calls") or []:
         fn = tool_call.get("function") if isinstance(tool_call, dict) else None
         name = str((fn or {}).get("name") or "").strip()
         if not name or name in _TRACE_SKIP_TOOLS:
             continue
-        trace.append({
+        entry: dict[str, Any] = {
             "tool": name,
             "preview": _tool_args_preview(str((fn or {}).get("arguments") or "")),
-        })
+        }
+        tcid = str(tool_call.get("id") or "").strip() if isinstance(tool_call, dict) else ""
+        if result_map and tcid and _tool_result_is_error(result_map.get(tcid, "")):
+            entry["failed"] = True
+        trace.append(entry)
+
+
+def _accumulate_attachments(
+    message: dict[str, Any],
+    files: list[dict[str, Any]],
+    seen_file_urls: set[str],
+) -> None:
     for item in message.get("attachments") or []:
         if not isinstance(item, dict):
             continue
@@ -917,22 +955,149 @@ def _append_exchange_meta(
         })
 
 
+def _has_traceable_tools(message: dict[str, Any]) -> bool:
+    """True if the message calls at least one real (non-control) tool — i.e. it
+    does actual work, not just ``quit`` / ``use_tools`` plumbing."""
+    for tool_call in message.get("tool_calls") or []:
+        fn = tool_call.get("function") if isinstance(tool_call, dict) else None
+        name = str((fn or {}).get("name") or "").strip()
+        if name and name not in _TRACE_SKIP_TOOLS:
+            return True
+    return False
+
+
+def _append_exchange_meta(
+    message: dict[str, Any],
+    trace: list[dict[str, Any]],
+    usage: dict[str, int],
+    files: list[dict[str, Any]],
+    seen_file_urls: set[str],
+    result_map: dict[str, str] | None = None,
+) -> None:
+    _accumulate_usage(message, usage)
+    _accumulate_tools(message, trace, result_map)
+    _accumulate_attachments(message, files, seen_file_urls)
+
+
+def _reorder_tool_produced_replies(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Move a tool-delivered reply to *after* the tool call that produced it.
+
+    A delivery tool (``send_file`` / ``send_wechat_file``) inserts its
+    intermediate reply into session state *during* tool execution, before the
+    assistant tool-call message that triggered it is committed — and the live
+    write wins the merge position. The reply therefore lands just *before* its
+    own tool call in storage. Left as-is the transcript renders the delivered
+    file above the "sent file" tool card. Re-sequence each such reply to sit
+    after its triggering tool call and that call's tool results so rendering
+    reads [tool card] -> [delivered file]. Storage (the LLM history) is
+    untouched; this only reshapes the rendered transcript.
+    """
+    if not isinstance(messages, list):
+        return messages
+    out = list(messages)
+    i = 0
+    while i < len(out):
+        msg = out[i]
+        nxt = out[i + 1] if i + 1 < len(out) else None
+        if (
+            isinstance(msg, dict)
+            and str(msg.get("role") or "") == "assistant"
+            and bool(msg.get("intermediate_reply"))
+            and isinstance(nxt, dict)
+            and str(nxt.get("role") or "") == "assistant"
+            and nxt.get("tool_calls")
+        ):
+            reply = out.pop(i)            # lift the prematurely-stored reply
+            j = i + 1                     # the tool-call message is now at i
+            while j < len(out) and str(out[j].get("role") or "") == "tool":
+                j += 1                    # skip the tool call's result messages
+            out.insert(j, reply)
+            continue                      # re-scan from i (now the tool-call msg)
+        i += 1
+    return out
+
+
+def _make_reply_segment(
+    message: dict[str, Any],
+    trace: list[dict[str, Any]],
+    usage: dict[str, int],
+    files: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build one rendered reply block carrying the tool card (trace), token
+    usage and attachments that accumulated up to it."""
+    entry: dict[str, Any] = {
+        "id": str(message.get("message_id") or message.get("id") or _short_id("msg")),
+        "role": "assistant",
+        "content": str(message.get("content") or ""),
+        "createdAt": str(message.get("created_at") or message.get("createdAt") or _utc_now_iso()),
+        "intermediate": True,
+    }
+    if trace:
+        entry["trace"] = trace[:40]
+    if any(usage.values()):
+        if not usage["total_tokens"]:
+            usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+        entry["usage"] = dict(usage)
+    attachments = list(files)
+    attachment_keys = {
+        str(item.get("url") or item.get("name") or "")
+        for item in attachments
+    }
+    for item in message.get("attachments") or []:
+        if not isinstance(item, dict):
+            continue
+        attachment = {
+            "id": str(item.get("id") or "").strip(),
+            "name": str(item.get("name") or "file"),
+            "content_type": str(item.get("content_type") or "application/octet-stream"),
+            "size": int(item.get("size") or 0),
+            "kind": str(item.get("kind") or "file"),
+            "url": str(item.get("url") or "").strip(),
+        }
+        key = str(attachment.get("url") or attachment.get("name") or "")
+        if key and key not in attachment_keys:
+            attachment_keys.add(key)
+            attachments.append(attachment)
+    if attachments:
+        entry["attachments"] = attachments
+    return entry
+
+
 def _extract_exchange_segments(
     state_messages: list[dict[str, Any]], state_ids_before: set[str]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
-    """Split one agent exchange at persisted mid-run assistant messages.
+    """Split one agent exchange into ordered reply blocks + a trailing block.
+
+    Walks the exchange chronologically and emits a reply block whenever the
+    agent says something mid-run — both tool-delivered replies
+    (``intermediate_reply``) and a model turn that carries prose *alongside*
+    its tool calls (a "let me check…" preamble that was previously dropped).
+    Tool calls accumulate into the trace card shown with the next reply.
 
     Uses message IDs to identify which messages belong to this exchange, so
     it works correctly even when session compaction reduces the total message
     count during the agent run (*state_len_before* would overshoot).
     """
+    state_messages = _reorder_tool_produced_replies(state_messages)
+    result_map = _build_tool_result_map(state_messages)
+    # The last in-exchange assistant turn's content is what the caller persists
+    # as the final reply (``reply_text``); never also emit it as a mid-run block.
+    last_assistant_idx = -1
+    for idx, message in enumerate(state_messages):
+        mid = str(message.get("message_id") or message.get("id") or "").strip()
+        if mid and mid in state_ids_before:
+            continue
+        if str(message.get("role") or "") == "assistant" and not bool(message.get("intermediate_reply")):
+            last_assistant_idx = idx
     segments: list[dict[str, Any]] = []
     trace: list[dict[str, Any]] = []
     usage = _exchange_usage()
     files: list[dict[str, Any]] = []
     seen_file_urls: set[str] = set()
 
-    for message in state_messages:
+    for idx, message in enumerate(state_messages):
         # Skip messages that existed before this exchange started — their IDs
         # are in *state_ids_before*.  Compacted blocks (role=system) are
         # implicitly skipped by the role check below.
@@ -941,49 +1106,30 @@ def _extract_exchange_segments(
             continue
         if str(message.get("role") or "") != "assistant":
             continue
+
         if bool(message.get("intermediate_reply")):
-            entry: dict[str, Any] = {
-                "id": str(message.get("message_id") or _short_id("msg")),
-                "role": "assistant",
-                "content": str(message.get("content") or ""),
-                "createdAt": str(message.get("created_at") or _utc_now_iso()),
-                "intermediate": True,
-            }
-            if trace:
-                entry["trace"] = trace[:40]
-            if any(usage.values()):
-                if not usage["total_tokens"]:
-                    usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
-                entry["usage"] = dict(usage)
-            attachments = list(files)
-            attachment_keys = {
-                str(item.get("url") or item.get("name") or "")
-                for item in attachments
-            }
-            for item in message.get("attachments") or []:
-                if not isinstance(item, dict):
-                    continue
-                attachment = {
-                    "id": str(item.get("id") or "").strip(),
-                    "name": str(item.get("name") or "file"),
-                    "content_type": str(item.get("content_type") or "application/octet-stream"),
-                    "size": int(item.get("size") or 0),
-                    "kind": str(item.get("kind") or "file"),
-                    "url": str(item.get("url") or "").strip(),
-                }
-                key = str(attachment.get("url") or attachment.get("name") or "")
-                if key and key not in attachment_keys:
-                    attachment_keys.add(key)
-                    attachments.append(attachment)
-            if attachments:
-                entry["attachments"] = attachments
-            segments.append(entry)
-            trace = []
-            usage = _exchange_usage()
-            files = []
-            seen_file_urls = set()
+            segments.append(_make_reply_segment(message, trace, usage, files))
+            trace, usage, files, seen_file_urls = [], _exchange_usage(), [], set()
             continue
-        _append_exchange_meta(message, trace, usage, files, seen_file_urls)
+
+        # A mid-run turn that both says something AND does real work: surface the
+        # prose as its own reply block (carrying the tools that ran before it),
+        # then start a fresh tool card for the tools this turn requests. Guarded
+        # to genuinely mid-run turns — the final turn's content is the caller's
+        # reply_text, and control-only batches (quit/use_tools) aren't preambles —
+        # so the final answer is never duplicated.
+        if (
+            idx != last_assistant_idx
+            and str(message.get("content") or "").strip()
+            and _has_traceable_tools(message)
+        ):
+            _accumulate_usage(message, usage)
+            segments.append(_make_reply_segment(message, trace, usage, files))
+            trace, usage, files, seen_file_urls = [], _exchange_usage(), [], set()
+            _accumulate_tools(message, trace, result_map)
+            continue
+
+        _append_exchange_meta(message, trace, usage, files, seen_file_urls, result_map)
 
     if not usage["total_tokens"]:
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]

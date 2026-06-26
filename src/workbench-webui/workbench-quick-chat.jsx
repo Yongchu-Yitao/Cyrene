@@ -1,8 +1,11 @@
 // Quick Chat surface. The Electron main process owns the global shortcut,
 // screenshot and window lifecycle; this renderer reuses the workbench data layer
-// (WorkbenchChatModel) and the shared composer (window.WbcComposer) rather than
-// forking a second input box, so attachments / commands / permission mode all
-// stay in sync with the main chat.
+// (WorkbenchChatModel), the shared composer (window.WbcComposer) AND the shared
+// run-manager + message cards (window.WorkbenchChatRuntimes /
+// window.WbcUserMessage / WbcAssistantMessage / WbcLiveMessage) rather than
+// forking a second input box or a simplified transcript — so attachments,
+// commands, permission mode, tool-call traces and the live "thinking" card all
+// stay identical to the main chat.
 
 var {
   useEffect: useQuickChatEffect,
@@ -69,6 +72,11 @@ function quickChatJson(url) {
 
 var QUICK_CHAT_TARGETS_URL = "/api/workbench/quick-chat/targets";
 
+// Window heights (CSS px). Empty/idle stays compact but tall enough that the
+// composer's upward permission / slash menus always have room above them; after
+// the first message the window grows so the conversation has space.
+var QUICK_CHAT_GROW_HEIGHT = 640;
+
 // Inline icon so the surface stays self-contained (no dependency on WBC_ICONS
 // load order). Matches the 1.8-stroke line style used across the composer chips.
 var QUICK_CHAT_ICON = (
@@ -77,13 +85,31 @@ var QUICK_CHAT_ICON = (
   </svg>
 );
 
-function quickChatRenderMarkdown(text) {
-  if (typeof window.wbcRenderMarkdown === "function") return window.wbcRenderMarkdown(text);
-  return String(text == null ? "" : text);
+// Append messages to the local transcript, skipping any whose id is already
+// present (the run-manager hooks can fire more than once across a reconnect).
+function quickChatDedupAppend(prev, additions) {
+  var list = Array.isArray(additions) ? additions : [];
+  if (!list.length) return prev;
+  var seen = {};
+  prev.forEach(function (m) { seen[String((m && m.id) || "")] = true; });
+  var add = [];
+  list.forEach(function (m) {
+    var id = String((m && m.id) || "");
+    if (!id || seen[id]) return;
+    seen[id] = true;
+    add.push(m);
+  });
+  return add.length ? prev.concat(add) : prev;
 }
 
 function QuickChatApp() {
   var model = window.WorkbenchChatModel;
+  // Shared singleton run-manager: owns the send stream and folds live SSE
+  // tool-call / phase / subagent progress into the runtime, exactly like the
+  // main conversation page. This renderer is a separate Electron window (its own
+  // JS context), so its run-manager and transcript hooks never collide with the
+  // main window's.
+  var runtimeEngine = window.WorkbenchChatRuntimes;
   var [loading, setLoading] = useQuickChatState(true);
   var [error, setError] = useQuickChatState("");
   var [defaultProject, setDefaultProject] = useQuickChatState(null);
@@ -95,32 +121,43 @@ function QuickChatApp() {
   var [selected, setSelected] = useQuickChatState(null);
   var [pickerOpen, setPickerOpen] = useQuickChatState(false);
   var [search, setSearch] = useQuickChatState("");
-  var [sending, setSending] = useQuickChatState(false);
   var [sendError, setSendError] = useQuickChatState("");
   var [screenshotAddedAt, setScreenshotAddedAt] = useQuickChatState("");
   // Bumped on a session reset (re-trigger) to remount the composer with a clean
   // slate (the window only hides, so its React state would otherwise survive).
   var [composerKey, setComposerKey] = useQuickChatState(0);
-  // Running transcript for THIS quick session. The window stays open after a
-  // send so the reply streams in-place and the user can keep chatting; a fresh
+  // Committed transcript for THIS quick session (built from run-manager hooks).
+  // The window stays open after a send so the conversation can continue; a fresh
   // shortcut trigger (new screenshot) clears it via resetSession().
-  var [thread, setThread] = useQuickChatState([]);
-  var streamIdRef = useQuickChatRef("");
-  var threadRef = useQuickChatRef(null);
+  var [messages, setMessages] = useQuickChatState([]);
+  // The conversation this session is bound to (an existing target's chat or a
+  // lazily-created new chat). Drives which runtime / hooks we read.
+  var [activeChatId, setActiveChatId] = useQuickChatState("");
+  // Live runtime map mirrored from the run-manager so the live card re-renders.
+  var [runtimes, setRuntimes] = useQuickChatState(function () {
+    return runtimeEngine && runtimeEngine.snapshot ? runtimeEngine.snapshot() : {};
+  });
+  var activeChatIdRef = useQuickChatRef("");
+  var activeProjectIdRef = useQuickChatRef("");
   // Remembers a conversation created for the "new chat" path so a failed send
   // reuses it on retry instead of spawning a second empty chat.
   var createdChatIdRef = useQuickChatRef("");
-  var abortRef = useQuickChatRef(null);
   var searchTimerRef = useQuickChatRef(null);
   var searchRef = useQuickChatRef("");
-  // Measured to auto-size the Electron window to the content height.
-  var headerRef = useQuickChatRef(null);
-  var mainRef = useQuickChatRef(null);
-  var contentRef = useQuickChatRef(null);
+  // One-shot: grow the window the first time a message is sent in a session.
+  var grewRef = useQuickChatRef(false);
+  // Transcript scroller; stickRef tracks whether the user is reading scrollback.
+  var scrollRef = useQuickChatRef(null);
+  var stickRef = useQuickChatRef(true);
+
+  var runtime = activeChatId && runtimes ? (runtimes[activeChatId] || null) : null;
+  var sending = !!runtime;
 
   function bridge() {
     return (window.cyrene && window.cyrene.quickChat) || null;
   }
+
+  useQuickChatEffect(function () { activeChatIdRef.current = activeChatId; }, [activeChatId]);
 
   useQuickChatEffect(function () {
     var cancelled = false;
@@ -167,6 +204,48 @@ function QuickChatApp() {
     };
   }, []);
 
+  // Mirror the run-manager's runtime map so the live tool-call / reply card
+  // re-renders as progress streams in.
+  useQuickChatEffect(function () {
+    if (!runtimeEngine || !runtimeEngine.subscribe) return;
+    setRuntimes(runtimeEngine.snapshot());
+    return runtimeEngine.subscribe(function (snap) { setRuntimes(snap); });
+  }, []);
+
+  // Register transcript hooks so a streaming run patches THIS session's local
+  // transcript. Re-registered every render so closures never go stale; each hook
+  // guards by the active chat id. Mirrors WorkbenchChatPage but scoped to the
+  // quick session (we never re-pull the whole backing chat, keeping the window a
+  // lightweight view of just this session's turns).
+  useQuickChatEffect(function () {
+    if (!runtimeEngine || !runtimeEngine.setHooks) return;
+    runtimeEngine.setHooks({
+      onUserMessage: function (chatId, userMessage) {
+        if (chatId !== activeChatIdRef.current) return;
+        notifySent(activeProjectIdRef.current, chatId);
+        setMessages(function (prev) { return quickChatDedupAppend(prev, [userMessage]); });
+      },
+      onAssistantSaved: function (chatId, assistantMessages) {
+        if (chatId !== activeChatIdRef.current) return;
+        setMessages(function (prev) { return quickChatDedupAppend(prev, assistantMessages); });
+      },
+      onAwaitingUser: function (chatId) {
+        if (chatId !== activeChatIdRef.current) return;
+        // Quick chat has no inline answer prompt; surface a hint and let the user
+        // continue in the main window if a permission/clarification is needed.
+        setSendError(quickChatText(
+          "需要在主窗口里确认权限或回答问题后才能继续。",
+          "Needs a permission/clarification answer in the main window to continue."
+        ));
+      },
+      onError: function (chatId, err) {
+        if (chatId !== activeChatIdRef.current) return;
+        showSendError(err);
+      },
+    });
+    return function () { runtimeEngine.setHooks(null); };
+  });
+
   // Escape closes the picker first, then the window. Re-bound when the picker
   // toggles so it reads the current state without a ref.
   useQuickChatEffect(function () {
@@ -179,11 +258,18 @@ function QuickChatApp() {
     return function () { window.removeEventListener("keydown", onKeyDown); };
   }, [pickerOpen]);
 
-  // Keep the transcript pinned to the newest message as the reply streams in.
+  // Keep the transcript pinned to the newest message as the reply streams in,
+  // but only while the user is near the bottom — so scrolling up to read history
+  // isn't yanked back down.
   useQuickChatEffect(function () {
-    var el = threadRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [thread]);
+    var el = scrollRef.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [
+    messages.length,
+    runtime && runtime.text,
+    runtime && runtime.progress && runtime.progress.length,
+    runtime && runtime.segments && runtime.segments.length,
+  ]);
 
   // Keep the accent live-synced when the user changes the theme color in the
   // main window (it's also applied at module load so the first paint is correct).
@@ -198,35 +284,11 @@ function QuickChatApp() {
     };
   }, []);
 
-  // Auto-size the Electron window to the content height so no state (empty /
-  // permission banner / transcript / multi-line draft) leaves dead space, and
-  // the upward permission menu always has room. .wbq-content hugs its content,
-  // so its height + header + main padding is the exact desired window height.
-  useQuickChatEffect(function () {
-    var b = bridge();
-    if (!b || typeof b.resize !== "function" || typeof ResizeObserver === "undefined") return;
-    var raf = 0;
-    var last = 0;
-    function measure() {
-      raf = 0;
-      var header = headerRef.current, main = mainRef.current, content = contentRef.current;
-      if (!header || !main || !content) return;
-      var cs = window.getComputedStyle(main);
-      var padV = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
-      var h = Math.ceil(header.offsetHeight + content.offsetHeight + padV);
-      if (!h || Math.abs(h - last) < 4) return;
-      last = h;
-      try { b.resize({ height: h }); } catch (e) {}
-    }
-    function schedule() { if (!raf) raf = window.requestAnimationFrame(measure); }
-    var ro = new ResizeObserver(schedule);
-    ro.observe(contentRef.current);
-    schedule();
-    return function () {
-      if (raf) window.cancelAnimationFrame(raf);
-      ro.disconnect();
-    };
-  }, []);
+  function onScroll() {
+    var el = scrollRef.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
 
   function closeWindow() {
     var b = bridge();
@@ -238,6 +300,19 @@ function QuickChatApp() {
     var b = bridge();
     if (b && typeof b.openScreenPermissionSettings === "function") {
       b.openScreenPermissionSettings();
+    }
+  }
+
+  // Grow the window once per session on the first send so the conversation has
+  // room. Never shrink — the user may have already enlarged it, and the layout
+  // (flex transcript that fills the window) adapts to any size they pick.
+  function maybeGrowWindow() {
+    if (grewRef.current) return;
+    grewRef.current = true;
+    try { if (window.outerHeight && window.outerHeight >= QUICK_CHAT_GROW_HEIGHT) return; } catch (e) {}
+    var b = bridge();
+    if (b && typeof b.resize === "function") {
+      try { b.resize({ height: QUICK_CHAT_GROW_HEIGHT }); } catch (e) {}
     }
   }
 
@@ -304,43 +379,30 @@ function QuickChatApp() {
     });
   }
 
-  // Full reset for a brand-new quick session (a fresh shortcut trigger). Clears
-  // the transcript, forgets the pinned/auto-created chat, wipes the namespaced
-  // draft and remounts the composer so its internal state resets.
+  // Full reset for a brand-new quick session (a fresh shortcut trigger). Stops
+  // watching the previous run locally (it stays durable server-side), clears the
+  // transcript, forgets the pinned/auto-created chat, wipes the namespaced draft
+  // and remounts the composer so its internal state resets.
   function resetSession() {
     var composerChatId = selected ? selected.chatId : "";
     if (composerChatId && typeof window.wbcClearComposerDraft === "function") {
       window.wbcClearComposerDraft(composerChatId, "quick-chat:");
     }
-    if (abortRef.current) { try { abortRef.current.abort(); } catch (e) {} }
+    // Abort our local stream consumption only (not a server interrupt) so a run
+    // started here keeps going in the background, visible in the main window.
+    if (runtimeEngine && runtimeEngine.abort && activeChatIdRef.current) {
+      try { runtimeEngine.abort(activeChatIdRef.current); } catch (e) {}
+    }
     createdChatIdRef.current = "";
-    abortRef.current = null;
-    streamIdRef.current = "";
-    setThread([]);
+    activeChatIdRef.current = "";
+    activeProjectIdRef.current = "";
+    grewRef.current = false;
+    stickRef.current = true;
+    setActiveChatId("");
+    setMessages([]);
     setSelected(null);
     setSendError("");
-    setSending(false);
     setComposerKey(function (k) { return k + 1; });
-  }
-
-  function appendThreadMessage(message) {
-    setThread(function (prev) { return prev.concat([message]); });
-  }
-
-  function updateThreadMessage(id, updater) {
-    setThread(function (prev) {
-      return prev.map(function (m) { return m.id === id ? updater(m) : m; });
-    });
-  }
-
-  // Ensure a streaming assistant bubble exists; created lazily so a reply_delta
-  // that lands before reply_start still renders.
-  function ensureAssistantBubble() {
-    if (streamIdRef.current) return streamIdRef.current;
-    var id = "a" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
-    streamIdRef.current = id;
-    appendThreadMessage({ id: id, role: "assistant", text: "", streaming: true });
-    return id;
   }
 
   function notifySent(projectId, chatId) {
@@ -363,63 +425,32 @@ function QuickChatApp() {
   }
 
   // input: { message, attachments, mode, command } from the shared composer.
-  // The window stays open and the reply streams into the in-place transcript so
-  // the user can keep chatting; follow-ups reuse the same (pinned) chat.
+  // The window stays open and the reply (with tool-call cards) streams into the
+  // in-place transcript via the run-manager so the user can keep chatting;
+  // follow-ups reuse the same (pinned) chat.
   function handleSend(input) {
-    if (sending) return;
+    if (sending || !runtimeEngine) return;
     setSendError("");
+    stickRef.current = true;
     var target = selected;
     var projectId = target ? target.projectId : (defaultProject ? defaultProject.id : "");
-    appendThreadMessage({
-      id: "u" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
-      role: "user",
-      text: input.message || "",
-      attachmentCount: (input.attachments || []).length,
-    });
-    streamIdRef.current = "";
-    setSending(true);
     ensureChatId(target, projectId).then(function (resolved) {
-      var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
-      abortRef.current = ac;
-      return model.sendMessage(resolved.chatId, input, {
-        onAck: function () {
-          // The run is durable server-side; tell the main window so its chat list
-          // / transcript stays in sync. We keep our own stream open and render the
-          // reply here rather than closing, so the conversation can continue.
-          notifySent(resolved.projectId, resolved.chatId);
-        },
-        onReplyStart: function () { ensureAssistantBubble(); },
-        onReplyDelta: function (delta) {
-          var id = ensureAssistantBubble();
-          updateThreadMessage(id, function (m) { return { ...m, text: m.text + (delta || "") }; });
-        },
-        onReplyDone: function (full) {
-          var id = ensureAssistantBubble();
-          updateThreadMessage(id, function (m) { return { ...m, text: full || m.text, streaming: false }; });
-          streamIdRef.current = "";
-          abortRef.current = null;
-          setSending(false);
-        },
-        onError: function (err) {
-          streamIdRef.current = "";
-          setSending(false);
-          showSendError(err);
-        },
-      }, ac ? ac.signal : undefined);
+      activeChatIdRef.current = resolved.chatId;
+      activeProjectIdRef.current = resolved.projectId;
+      setActiveChatId(resolved.chatId);
+      maybeGrowWindow();
+      // The engine owns the stream (durable server-side) and enforces a single
+      // in-flight run per conversation; null = a run was already in flight.
+      runtimeEngine.start(resolved.chatId, input || {}, model);
     }).catch(function (err) {
-      if (err && err.name === "AbortError") { setSending(false); return; }
-      setSending(false);
       showSendError(err);
     });
   }
 
   function handleInterrupt() {
-    if (abortRef.current) { try { abortRef.current.abort(); } catch (e) {} }
-    if (streamIdRef.current) {
-      updateThreadMessage(streamIdRef.current, function (m) { return { ...m, streaming: false }; });
-      streamIdRef.current = "";
+    if (runtimeEngine && runtimeEngine.interrupt) {
+      runtimeEngine.interrupt(activeChatIdRef.current, model);
     }
-    setSending(false);
   }
 
   var screenshot = context && context.screenshot;
@@ -451,10 +482,11 @@ function QuickChatApp() {
     : (quickChatText("新建对话", "New chat") + (defaultProject ? " · " + defaultProject.name : ""));
 
   var composerReady = typeof window.WbcComposer === "function" && composerProject;
+  var hasTranscript = messages.length > 0 || !!runtime;
 
   return (
     <div className="workbench-shell wbq-shell" data-screen-label="Cyrene · quick chat">
-      <header className="wbq-header" ref={headerRef}>
+      <header className="wbq-header">
         <div className="wbq-brand">
           <span className="brand-mark" aria-hidden="true"></span>
           <strong>{quickChatText("快捷对话", "Quick Chat")}</strong>
@@ -462,8 +494,8 @@ function QuickChatApp() {
         <button type="button" className="wbq-close" onClick={closeWindow} aria-label={quickChatText("关闭", "Close")}>ESC</button>
       </header>
 
-      <main className="wbq-main" ref={mainRef}>
-        <div className="wbq-content" ref={contentRef}>
+      <main className="wbq-main">
+        <div className="wbq-content">
         {loading ? (
           <div className="wbq-state"><span className="wb-spinner small" />{quickChatText("正在准备快捷对话…", "Preparing quick chat…")}</div>
         ) : error ? (
@@ -525,26 +557,29 @@ function QuickChatApp() {
               </div>
             ) : null}
 
-            {thread.length > 0 ? (
-              <div className="wbq-thread" ref={threadRef}>
-                {thread.map(function (m) {
-                  return (
-                    <div key={m.id} className={"wbq-msg " + m.role}>
-                      <div className={"wbq-bubble" + (m.streaming ? " streaming" : "")}>
-                        {m.role === "assistant"
-                          ? (m.text
-                              ? <div className="wbq-md" dangerouslySetInnerHTML={{ __html: quickChatRenderMarkdown(m.text) }} />
-                              : <span className="wbq-typing" aria-hidden="true"><i></i><i></i><i></i></span>)
-                          : <span className="wbq-msg-text">{m.text}</span>}
-                        {m.role === "user" && m.attachmentCount > 0
-                          ? <span className="wbq-msg-attach">{quickChatText("含截图", "with screenshot")}</span>
-                          : null}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
+            {/* Transcript reuses the full chat's message cards so tool-call
+                traces / attachments / the live "thinking" card all match the
+                main UI. Always rendered (even empty) so it fills the window —
+                the composer stays pinned at the bottom with room above for its
+                upward menus, and the user can scroll the history. */}
+            <div className="wbc-thread wbq-thread" ref={scrollRef} onScroll={onScroll}>
+              {!hasTranscript ? (
+                <div className="wbc-empty-thread wbq-empty">
+                  <div className="wbc-empty-icon">{QUICK_CHAT_ICON}</div>
+                  <p>
+                    {screenshot
+                      ? quickChatText("截图已就绪。输入问题，回复会带工具调用过程直接显示在这里。", "Screenshot ready. Ask a question — the reply (with tool calls) streams in here.")
+                      : quickChatText("输入问题开始快捷对话，回复会直接显示在这里。", "Type a question to start — the reply streams in here.")}
+                  </p>
+                </div>
+              ) : null}
+              {messages.map(function (m) {
+                return m.role === "user"
+                  ? <window.WbcUserMessage key={m.id} msg={m} />
+                  : <window.WbcAssistantMessage key={m.id} msg={m} />;
+              })}
+              {runtime ? <window.WbcLiveMessage runtime={runtime} /> : null}
+            </div>
 
             <div className="wbq-footer">
               {sendError ? <div className="wbq-send-error">{sendError}</div> : null}

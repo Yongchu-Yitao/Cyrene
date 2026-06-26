@@ -471,18 +471,15 @@ function GeneralPanel(p) {
       ),
       amapKeySaved && React.createElement("span", { className: "wb-hint saved" }, amapKeySaved),
     ),
-    supportsDesktop && SectionBlock(t("settings.desktopSection"), null, [
-      FieldRow(t("settings.runInBackground"), t("settings.runInBackgroundHint"),
-        Toggle(runInBackground, function () { applyDesktop({ runInBackground: !runInBackground }); }, desktopBusy),
-        "rib"),
-      FieldRow(t("settings.quickChatAssistant"),
-        runInBackground ? t("settings.quickChatAssistantHint") : t("settings.quickChatAssistantNeedsResident"),
-        Toggle(quickChatEnabled, function () { applyDesktop({ quickChatEnabled: !quickChatEnabled }); }, desktopBusy || !runInBackground),
-        "qca"),
-      desktopNotice
-        ? React.createElement("div", { className: "wb-hint", key: "note", style: { color: "var(--wb-error-text)", marginTop: 8 } }, desktopNotice)
-        : null,
-    ]),
+    supportsDesktop && FieldRow(t("settings.runInBackground"), t("settings.runInBackgroundHint"),
+      Toggle(runInBackground, function () { applyDesktop({ runInBackground: !runInBackground }); }, desktopBusy),
+    ),
+    supportsDesktop && FieldRow(t("settings.quickChatAssistant"),
+      runInBackground ? t("settings.quickChatAssistantHint") : t("settings.quickChatAssistantNeedsResident"),
+      Toggle(quickChatEnabled, function () { applyDesktop({ quickChatEnabled: !quickChatEnabled }); }, desktopBusy || !runInBackground),
+    ),
+    supportsDesktop && desktopNotice
+      && React.createElement("div", { className: "wb-hint", style: { color: "var(--wb-error-text)" } }, desktopNotice),
   );
 }
 
@@ -904,7 +901,7 @@ function AgentsPanel(p) {
     ),
     FieldRow(t("settings.agentProactive"), t("settings.agentProactiveHint"), Toggle(agentProactive, function () { setAgentProactive(!agentProactive); })),
     FieldRow(t("settings.heartbeatInterval"), t("settings.heartbeatIntervalHint"),
-      React.createElement("input", { className: "wb-input mono", type: "number", min: "60", step: "60", value: config.heartbeat_interval, onChange: function (e) { setConfig({ ...config, heartbeat_interval: Number(e.target.value) || 1800 }); }, style: { maxWidth: 120 } }),
+      React.createElement("input", { className: "wb-input mono", type: "number", min: "60", step: "1", value: config.heartbeat_interval, onChange: function (e) { setConfig({ ...config, heartbeat_interval: e.target.value }); }, style: { maxWidth: 120 } }),
     ),
     FieldRow(t("settings.maxToolRounds"), t("settings.maxToolRoundsHint"),
       React.createElement("input", { className: "wb-input mono", type: "number", min: "5", max: "200", step: "1", value: config.max_tool_rounds, onChange: function (e) { setConfig({ ...config, max_tool_rounds: Number(e.target.value) || 15 }); }, style: { maxWidth: 120 } }),

@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.6.0b12] - 2026-06-27
+
+### Added
+
+- **Quick Chat 升级为完整对话体验** — 快捷对话窗口改用与主对话页相同的共享运行管理器（`WorkbenchChatRuntimes`）和消息卡片渲染。回复现在带工具调用轨迹（trace）、生成的文件附件，以及实时“思考 / 调用工具”卡片，与主界面完全一致，不再是简化的文本气泡。运行在服务端持久化：关闭或重新唤起快捷窗口只停止本地流消费，Agent 仍在后台继续执行，进度可在主窗口查看。
+- **Quick Chat 窗口尺寸与滚动优化** — 空闲时保持紧凑但留足上方权限 / 命令菜单空间；首次发送后窗口一次性增高到对话所需高度，之后用户可自由调整、布局随之自适应。滚动具备粘性：仅在贴近底部时跟随最新消息，向上翻阅历史不再被拽回底部。
+
+### Fixed
+
+- **默认项目记忆数显示为 0** — 记忆页用项目 `dataKey` 作 workspace，但记忆按项目 id 存储；旧版默认项目两者不同（`dataKey = default`、`id = project_…`），仅按 id 匹配会落空到空的 “default” store。现先按 id、再按 dataKey 解析，任一标识都能命中同一项目记忆库。
+- **WebUI / Workbench 通道误报“已发送微信文件”** — 当前通道不具备 `send_file` 能力时不再向模型暴露 `send_wechat_file` 工具，避免一次必然失败的调用、浪费一个回合并留下误导性的“已发送”卡片。
+- **`send_file` 把整段回答塞进 caption** — 明确 `send_file` 的 `text` 只是文件旁的简短说明，模型仍需另写完整最终回复，避免一回合塌缩成裸 “Done.”。
+- **心跳间隔被强制为 60 的倍数** — 设置项允许输入任意秒数（step 改为 1），不再在输入时强制取整或回退默认值。
+
+### Changed
+
+- **Prompt 缓存优化 #7 — `quit(reply=)`** — `quit` 工具新增 `reply` 参数承载最终回复文本。模型收尾时把答案写进 `reply` 直接交付，省去原先 tools=None 的“收尾重建”调用——该调用因 `tools` 数组不在前缀最前端，与主链零共享缓存、需重处理整段历史，是此前缓存 miss 的头号来源（约占 53%）。各阶段 prompt 与工具定义同步更新，引导模型把完整答案写进 `reply`。
+- **对话分段渲染改进** — 中途“让我查一下…”这类既有正文、又调用工具的回合现在单独成块呈现（此前正文被丢弃）；失败的工具调用在 trace 卡片中以 ✕ 标记；`send_file` / `send_wechat_file` 交付的文件回复被重排到其工具卡片之后，渲染顺序固定为 [工具卡片] → [交付文件]。
+- **Chat 流式渲染性能** — 回复增量（reply delta）的重渲染按 `requestAnimationFrame` 合并，每帧最多一次；已完成消息的 Markdown 解析做记忆化，实时消息仅在文本变化时重解析，避免长回复每帧 O(n²) 重新解析整段会话。
+- **静态资源缓存版本统一** — WebUI 所有 JS/CSS cache-busting 参数统一为 `beta12`。
+- **版本元数据统一** — Python 包、Electron 应用、Electron lockfile、README badge、WeChat client 标识统一到 beta12（并补齐 beta.11 遗漏的 README badge 与 `uv.lock`）。
+
+### Tests
+
+- 新增 `test_quit_reply`（quit reply 直接交付、跳过收尾重建）、`test_workbench_chat_segments`（中途前导语成块、失败 trace 标记、交付回复重排序）、`test_workbench_memory_resolve`（默认项目按 id / dataKey 双重解析）。
+- 更新 Quick Chat 契约测试以匹配共享 run-manager 架构；前端 cache-bust 断言同步到 beta12；WebUI 42 个 JSX 全量编译通过。
+
 ## [0.6.0b11] - 2026-06-26
 
 ### Added

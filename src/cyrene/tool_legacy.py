@@ -2334,8 +2334,8 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "quit",
-            "description": "Call this when the task is complete and the interaction should end.",
-            "parameters": {"type": "object", "properties": {}},
+            "description": "Call this when the task is complete and the interaction should end. Put your COMPLETE final reply to the user in `reply` — the user is shown this text verbatim, so write the actual answer/result here (in the user's language), not a description of what you did. Omit `reply` only when there is genuinely nothing to say.",
+            "parameters": {"type": "object", "properties": {"reply": {"type": "string", "description": "The final user-facing reply, in the user's language. Shown to the user verbatim — write the real answer, not a summary of your actions."}}},
         },
     },
     {
