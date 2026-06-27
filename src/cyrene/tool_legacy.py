@@ -1944,7 +1944,9 @@ TOOL_DEFS = [
                 "(in any task/chat of this project) automatically see and reuse it. Use proactively "
                 "when you learn something worth remembering: a confirmed constraint or decision, a "
                 "tool/approach that works, a dead-end to avoid, a key file or command, the user's "
-                "stated preference, or an environment fact. Persistent and visible to the user on the "
+                "stated preference, a recurring way they work or want you to collaborate (a working "
+                "`habit` — record these actively; they are easy to miss), or an environment fact. "
+                "Persistent and visible to the user on the "
                 "project's Memory page. Do NOT use it for transient chit-chat, one-off task output, or "
                 "secrets. Duplicates are merged automatically, and if this fact updates/contradicts an "
                 "older memory (e.g. a changed value or a corrected conclusion) the outdated one is "
@@ -1966,8 +1968,16 @@ TOOL_DEFS = [
                     },
                     "category": {
                         "type": "string",
-                        "enum": ["fact", "project", "preference", "habit"],
-                        "description": "fact = factual/technical info (default); project = project background/goal; preference = user's stated preference; habit = a recurring way of working.",
+                        "enum": ["habit", "conversation", "preference", "project", "fact"],
+                        "description": (
+                            "Pick the most specific fit. "
+                            "habit = a RECURRING way the user WORKS / executes tasks (e.g. always plan before acting; have subagents run then only review the summary; self-check for gaps before finishing). "
+                            "conversation = a recurring COMMUNICATION habit — how the user wants you to TALK to them (e.g. give the answer directly, no small talk; reply in Chinese; ask a clarifying question first; keep it brief; use plain terminology over hype). "
+                            "preference = a STATIC taste about an output or tool, not a way of working or talking (e.g. dark theme, prefers PyTorch, reports should include charts). "
+                            "project = project background / goal / main workstream. "
+                            "fact = objective/technical background about the user (default when nothing more specific fits). "
+                            "Rule of thumb: how they WORK → habit; how you should COMMUNICATE with them → conversation; a static taste about an artifact/tool → preference."
+                        ),
                     },
                     "tags": {
                         "type": "array",

@@ -101,18 +101,31 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         # One-time: lift the Workbench default project's own knowledge docs out of
         # the shared legacy kb_default.db (which the catalog fills with every
         # project's files) into its id-scoped db. Idempotent, non-destructive.
-        try:
-            from cyrene.knowledge.workbench import migrate_default_project_knowledge
+        #
+        # Runs in the BACKGROUND. The migration re-indexes every doc it moves —
+        # vision analysis for images, embeddings for the rest — which is an
+        # unbounded series of LLM calls. uvicorn only finishes startup (and our
+        # launcher only then prints PORT=) once every startup handler returns,
+        # and Electron gives up waiting after 30s. A default project with a few
+        # images easily blows past that, leaving the desktop app unable to start
+        # ("The Python backend did not start within 30 seconds"). Fire it off so
+        # the server comes up immediately; keep a reference so the task isn't
+        # garbage-collected mid-flight.
+        async def _run() -> None:
+            try:
+                from cyrene.knowledge.workbench import migrate_default_project_knowledge
 
-            result = await migrate_default_project_knowledge()
-            if result.get("migrated"):
-                logger.info(
-                    "Default project knowledge decoupled: %s docs -> kb_%s.db",
-                    result.get("migrated"),
-                    result.get("target"),
-                )
-        except Exception:
-            logger.warning("Default project knowledge decouple failed (non-fatal)")
+                result = await migrate_default_project_knowledge()
+                if result.get("migrated"):
+                    logger.info(
+                        "Default project knowledge decoupled: %s docs -> kb_%s.db",
+                        result.get("migrated"),
+                        result.get("target"),
+                    )
+            except Exception:
+                logger.warning("Default project knowledge decouple failed (non-fatal)")
+
+        app.state._decouple_task = asyncio.create_task(_run())
 
     @app.on_event("shutdown")
     async def _close_browser_session() -> None:

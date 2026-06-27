@@ -47,7 +47,7 @@ _CATEGORY_LABELS: dict[str, str] = {
     "project": "项目背景",
     "habit": "工作习惯",
     "fact": "事实信息",
-    "conversation": "对话记忆",
+    "conversation": "对话习惯",
 }
 _CATEGORY_ORDER = ["preference", "project", "habit", "fact", "conversation"]
 
@@ -67,6 +67,7 @@ _TYPE_TO_CATEGORY: dict[str, str] = {
     "event": "conversation",
     "emotion": "conversation",
     "task_report": "task_report",
+    "reflection": "reflection",
 }
 
 _SOURCE_LABELS: dict[str, str] = {
@@ -78,9 +79,23 @@ _SOURCE_LABELS: dict[str, str] = {
 }
 _SOURCE_ORDER = ["conversation", "knowledge", "manual", "agent", "other"]
 
-# Memory categories worth injecting into an agent run. "conversation" (idle
-# chatter distilled from talk) is excluded — high noise, low task value.
-_INJECT_CATEGORIES = {"preference", "project", "habit", "fact"}
+# Memory categories worth injecting into an agent run. "conversation" now holds
+# the user's communication/interaction habits (how they want you to talk to
+# them), so it IS injected and helps every run match their style. "reflection"
+# (cross-session dead-ends / promising directions) is injected too — it
+# propagates the learning but stays hidden from the user memory page.
+_INJECT_CATEGORIES = {"preference", "project", "habit", "fact", "conversation", "reflection"}
+
+# Internal categories that are stored (and may feed runs) but must NEVER appear
+# on the user-facing memory page — they are excluded from its list, counts,
+# overview, and source chart. This keeps the page to genuine user memories and
+# stops the "fact" bucket from being inflated by agent bookkeeping: task
+# completion reports and reflection dead-end / promising-direction notes.
+_HIDDEN_CATEGORIES = {"task_report", "reflection"}
+
+# Display labels for the internal hidden categories. Only ever shown on internal
+# tool/debug surfaces (e.g. the save-memory tool result) — never on the page.
+_HIDDEN_CATEGORY_LABELS = {"task_report": "任务报告", "reflection": "反思"}
 
 _CONFIDENCE_LABELS = {"high": "高", "medium": "中", "low": "低"}
 
@@ -88,10 +103,11 @@ _CONFIDENCE_LABELS = {"high": "高", "medium": "中", "low": "低"}
 def _is_user_visible_entry(entry: dict) -> bool:
     """Whether an entry belongs on user-facing Workbench memory surfaces.
 
-    Task reports remain stored as internal planning context, but they must not
-    affect the memory page's list, counts, overview, or source chart.
+    Internal categories (task reports, reflection insights) remain stored as
+    planning/learning context, but they must not affect the memory page's list,
+    counts, overview, or source chart.
     """
-    return _entry_category(entry) != "task_report"
+    return _entry_category(entry) not in _HIDDEN_CATEGORIES
 
 
 def _safe_workspace_id(workspace_id: str | None) -> str:
@@ -341,7 +357,7 @@ def _serialize(entry: dict) -> dict:
         "id": _entry_id(entry),
         "content": str(entry.get("content") or ""),
         "category": cat,
-        "category_label": _CATEGORY_LABELS[cat],
+        "category_label": _CATEGORY_LABELS.get(cat) or _HIDDEN_CATEGORY_LABELS.get(cat, cat),
         "source": src,
         "source_label": _SOURCE_LABELS[src],
         "confidence": conf,
@@ -540,12 +556,13 @@ _EXTRACT_PROMPT = """\
 
 每条记忆的字段：
 - content: %(content_lang_hint)s。简洁、自包含、不含具体某次任务的临时细节。
-- category: 从这五个里选一个——按优先级依次判断：
-  * preference —— 用户的静态口味/长期偏好（例：偏好简洁回答、喜欢深色主题）
-  * project   —— 用户长期正在做/维护的项目或工作主线（例：正在优化 CIFAR-10 分类器 v2）
-  * habit     —— 用户可重复观察到的行为模式（例：习惯让 subagent 执行任务后看汇总）
-  * fact      —— 用户的客观背景信息（例：是数据科学家、使用 Mac M2）
-  * conversation —— 仅当以上四类均不适用时才选，用于一次性情绪/互动状态
+- category: 从这五个里选一个，按"这条信息是关于什么的"来分：
+  * habit（工作习惯）—— 用户推进工作 / 做事的重复方式或对执行的固定要求。例：习惯先列计划再动手；让 subagent 执行后只看汇总；总是要求验收前自查遗漏、防假完成。
+  * conversation（对话习惯）—— 用户希望「你如何与他沟通」的重复偏好 / 互动方式。例：喜欢直接给结论、别寒暄；用中文回复；先反问澄清再动手；不要长篇大论；坚持用基础术语、不要浮夸包装。
+  * preference（个人偏好）—— 对「结果 / 产物 / 工具」本身的静态喜好，不涉及做事或沟通方式。例：用 PyTorch 而非 TF；喜欢深色主题；报告要带图表。
+  * project（项目背景）—— 用户长期正在做 / 维护的项目或工作主线。例：正在优化 CIFAR-10 分类器 v2。
+  * fact（事实信息）—— 用户的客观背景信息。例：是数据科学家、有一块 RTX 5880 显卡。
+  判定提示：描述"用户怎么做事"→habit；描述"用户想让你怎么跟他说话 / 交流"→conversation；只是对某产物或工具的静态喜好→preference；三者都不是再考虑 project / fact。
 - confidence: high / medium / low（这条信息的可靠程度）
 
 %(output_lang_line)s
@@ -658,7 +675,9 @@ async def capture_from_exchange(workspace_id: str, user_text: str, agent_text: s
             continue
         category = str(mem.get("category") or "").strip().lower()
         if category not in _CATEGORY_LABELS:
-            category = "conversation"
+            # "conversation" now means a real communication-habit category, so an
+            # unrecognized label falls back to the neutral "fact" bucket instead.
+            category = "fact"
         confidence = str(mem.get("confidence") or "").strip().lower()
 
         dup = _similar_entry(entries, content)
@@ -736,7 +755,7 @@ def add_agent_memory(
     if len(content) < 4:
         return None
     category = str(category or "").strip().lower()
-    if category not in _CATEGORY_LABELS:
+    if category not in _CATEGORY_LABELS and category not in _HIDDEN_CATEGORIES:
         category = "fact"
     entries = _load(workspace_id)
     today = _today()
@@ -959,7 +978,7 @@ async def add_agent_memory_checked(
     if len(content) < 4:
         return None, []
     category = str(category or "").strip().lower()
-    if category not in _CATEGORY_LABELS:
+    if category not in _CATEGORY_LABELS and category not in _HIDDEN_CATEGORIES:
         category = "fact"
     entries = _load(workspace_id)
     today = _today()
@@ -1036,9 +1055,11 @@ def render_memory_for_injection(
 ) -> str:
     """Render a project's durable memories as a compact prompt block for a run.
 
-    ``conversation`` memories are skipped (noise); strongest (most reinforced,
-    then most recent) first unless ``preserve_id_order`` is set with
-    ``include_ids``. Returns "" when there is nothing worth injecting.
+    Only injectable categories are included (see ``_INJECT_CATEGORIES`` —
+    ``conversation`` now carries communication habits and IS injected).
+    Strongest (most reinforced, then most recent) first unless
+    ``preserve_id_order`` is set with ``include_ids``. Returns "" when there is
+    nothing worth injecting.
     """
     entries = _load(workspace_id)
     if not entries:
@@ -1076,7 +1097,7 @@ def render_memory_for_injection(
     lines: list[str] = []
     used = 0
     for _eid, _mc, _ts, cat, content in items[:limit]:
-        line = f"- [{_CATEGORY_LABELS.get(cat, cat)}] {content}"
+        line = f"- [{_CATEGORY_LABELS.get(cat) or _HIDDEN_CATEGORY_LABELS.get(cat, cat)}] {content}"
         if lines and used + len(line) > max_chars:
             break
         lines.append(line)

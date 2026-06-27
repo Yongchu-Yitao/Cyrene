@@ -55,7 +55,7 @@
     project: { label: "项目背景", tone: "green" },
     habit: { label: "工作习惯", tone: "blue" },
     fact: { label: "事实信息", tone: "amber" },
-    conversation: { label: "对话记忆", tone: "violet" },
+    conversation: { label: "对话习惯", tone: "violet" },
   };
   var CAT_ORDER = ["preference", "project", "habit", "fact", "conversation"];
   var SOURCE_TONE = { conversation: "violet", knowledge: "amber", manual: "green", agent: "blue", other: "slate" };

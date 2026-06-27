@@ -188,19 +188,30 @@ def _resolve_secondary_candidates() -> list[dict[str, Any]]:
 
 
 def _resolve_vision_candidates() -> list[dict[str, Any]]:
-    """Primary chain first (the primary model may be vision-capable), then the
-    dedicated vision entries — same per-entry key semantics as the primary list."""
+    """Dedicated vision entries first, then the primary chain as fallback.
+
+    A user configures a vision model precisely because it handles images, so it
+    must be tried before the primary chat model. Trying a text-only primary
+    first (e.g. DeepSeek, which 400s on ``image_url`` content) wastes a failed
+    round-trip on *every* image — and serialized over many docs it was enough to
+    push startup past Electron's boot timeout. When no vision model is
+    configured this degrades to the primary chain alone, so a vision-capable
+    primary still works. Same per-entry key semantics as the primary list."""
     active_model = str(os.environ.get("OPENAI_MODEL", "deepseek-chat") or "").strip() or "deepseek-chat"
     active_base_url = str(os.environ.get("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL) or "").strip() or DEFAULT_OPENAI_BASE_URL
     active_api_key = _strip_wrapping_quotes(str(os.environ.get("OPENAI_API_KEY", "") or "").strip())
 
-    candidates = _resolve_llm_candidates()
-    seen: set[tuple[str, str, str]] = {
-        (candidate["model"], candidate["base_url"], candidate["api_key"]) for candidate in candidates
-    }
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
 
-    for raw in get_vision_models() or []:
-        candidate = _normalized_candidate(raw, 0, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
+    for index, raw in enumerate(get_vision_models() or []):
+        candidate = _normalized_candidate(raw, index, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
+        key = (candidate["model"], candidate["base_url"], candidate["api_key"])
+        if key not in seen:
+            seen.add(key)
+            candidates.append(candidate)
+
+    for candidate in _resolve_llm_candidates():
         key = (candidate["model"], candidate["base_url"], candidate["api_key"])
         if key not in seen:
             seen.add(key)

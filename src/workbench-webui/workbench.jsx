@@ -1376,9 +1376,9 @@ function WorkbenchTopbar({ project, session, activePage, chatCrumb, notification
         <button
           type="button"
           className="workbench-brand-btn"
-          onClick={function () { onOpenPage && onOpenPage("task"); }}
-          title={t("workbench.brand.home")}
-          aria-label={t("workbench.brand.home")}
+          onClick={function () { onSettings && onSettings("about"); }}
+          title={t("nav.settings")}
+          aria-label={t("nav.settings")}
         >
           <span className="brand-mark" aria-hidden="true"></span>
           <strong>Cyrene</strong>

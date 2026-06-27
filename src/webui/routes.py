@@ -4150,8 +4150,10 @@ def _workbench_sink_reflection_insights(
     packet: dict[str, Any],
 ) -> None:
     """Distill a reflection packet's durable insights (excluded_paths /
-    promising_directions) into the project memory store, so they propagate to
-    every session in the project and surface on the memory page. Best-effort."""
+    promising_directions) into the project memory store under the internal
+    ``reflection`` category, so they still propagate to (and are injected into)
+    every session in the project — but stay HIDDEN from the user memory page
+    rather than inflating the user-facing "fact" bucket. Best-effort."""
     if not project or not isinstance(packet, dict):
         return
     try:
@@ -4161,11 +4163,11 @@ def _workbench_sink_reflection_insights(
         for path in excluded[:5]:
             text = str(path or "").strip()
             if text:
-                add_agent_memory(data_key, "避免：" + text, category="fact", source="agent", tags=["反思", "死路"])
+                add_agent_memory(data_key, "避免：" + text, category="reflection", source="agent", tags=["反思", "死路"])
         for direction in promising[:5]:
             text = str(direction or "").strip()
             if text:
-                add_agent_memory(data_key, "有效方向：" + text, category="fact", source="agent", tags=["反思", "有效方向"])
+                add_agent_memory(data_key, "有效方向：" + text, category="reflection", source="agent", tags=["反思", "有效方向"])
     except Exception:
         logger.exception("Failed to sink reflection insights into project memory")
 

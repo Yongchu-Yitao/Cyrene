@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.0b14] - 2026-06-28
+
+### Fixed
+
+- **Electron 30s 启动超时（知识迁移阻塞）** — `migrate_default_project_knowledge` 现在以 `asyncio.create_task` 后台化运行，不再在 lifespan `startup` 钩子里同步等待。迁移涉及逐文档的 vision/embedding LLM 调用，耗时无上界；之前它阻塞 uvicorn 全部 startup 事件，`PORT=` 迟迟无法打印，桌面端因超 30s 超时无法启动。现在服务器立即就绪，迁移在后台继续进行。
+- **Vision 候选链顺序反转** — `_resolve_vision_candidates` 修复：视觉专属模型（用户配置的视觉端点）现在排在候选链首位，文本主模型（如 DeepSeek）作为兜底降级。此前文本主模型被先尝试，每张图片必然 400 失败一次再回落视觉模型，在大批量文档分析时累积拖慢启动。
+- **反思记忆污染 `fact` bucket** — goal loop 反思产生的 `excluded_paths`（死路）和 `promising_directions`（有效方向）现在写入内部 `reflection` 分类，而非 `fact`，不再虚增用户记忆页的"事实信息"计数，且不在记忆页展示。反思条目仍注入每次 agent run（跨 session 传递学习成果）。
+
+### Changed
+
+- **记忆分类体系重构** — `conversation` 分类从"对话记忆"重定义为"**对话习惯**"（用户希望 agent 如何与其沟通的重复偏好，例如"用中文回复"、"直接给结论"），现在会注入每次 agent run（之前因认为高噪低价值而被排除）。新增内部 `reflection` 分类（agent bookkeeping 专用，不在用户页显示）。`_EXTRACT_PROMPT` 和 `save_project_memory` 工具描述同步重写，区分 `habit`（如何做事）、`conversation`（如何沟通）、`preference`（对产物/工具的静态喜好），提示模型选到最精确的分类。
+- **Agent 实体查询铁律** — 提示词新增明确约束："任何涉及用户任务 / 项目 / 待办 / 决策 / 日程的回答，一律先查实体、以记录为准，不得凭记忆或印象作答。"同时新增规则：生成或执行项目任务计划前，先 `list_entities(status="active")` + 相关 `query_entities` 拉活跃任务与决策，复用已有结论、避免与既有事务冲突。
+- **Cyrene 品牌按钮** — Workbench 顶栏 Cyrene Logo 按钮由跳转任务页改为打开"设置 → 关于"页。
+
+### Tests
+
+- 前端 cache-bust 断言同步到 beta14。
+
 ## [0.6.0b13] - 2026-06-28
 
 ### Added
