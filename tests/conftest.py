@@ -23,6 +23,7 @@ cancellation). The autouse fixture below forcibly resets the shared state before
 every test so one test can never poison the next.
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -78,6 +79,13 @@ def _reset_agent_global_state():
     from cyrene import call_llm as _call_llm_mod
     _call_llm_mod._candidate_cooldowns.clear()
 
+    # Knowledge indexing has the same shape: routes may spawn detached indexing
+    # tasks, and a closed per-test event loop can otherwise leave the module lock
+    # stale-locked for a later test.
+    from cyrene.knowledge import ingest as _knowledge_ingest
+
+    _cancel_pending_tasks(_knowledge_ingest._ACTIVE_INDEX_TASKS)
+    _knowledge_ingest._INDEX_LOCK = asyncio.Lock()
 
     # 3/4. Cancel + clear all fire-and-forget task registries.
     _cancel_pending_tasks(_state._pending_interrupt_clearers)

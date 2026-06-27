@@ -1029,23 +1029,35 @@ def render_memory_for_injection(
     *,
     limit: int = 20,
     max_chars: int = 2000,
+    include_ids: list[str] | set[str] | tuple[str, ...] | None = None,
+    exclude_ids: list[str] | set[str] | tuple[str, ...] | None = None,
+    preserve_id_order: bool = False,
+    header: str | None = None,
 ) -> str:
     """Render a project's durable memories as a compact prompt block for a run.
 
-    Cache note: callers inject this via ``ephemeral_system`` (prompt tail), so it
-    never invalidates the cached system+history prefix. ``conversation`` memories
-    are skipped (noise); strongest (most reinforced, then most recent) first.
-    Returns "" when there is nothing worth injecting.
+    ``conversation`` memories are skipped (noise); strongest (most reinforced,
+    then most recent) first unless ``preserve_id_order`` is set with
+    ``include_ids``. Returns "" when there is nothing worth injecting.
     """
     entries = _load(workspace_id)
     if not entries:
         return ""
-    items: list[tuple[int, str, str, str]] = []
+    include_filter_active = include_ids is not None
+    include_set = {str(item) for item in include_ids or [] if str(item).strip()}
+    exclude_set = {str(item) for item in exclude_ids or [] if str(item).strip()}
+    order_index = {mem_id: index for index, mem_id in enumerate(include_ids or [])}
+    items: list[tuple[str, int, str, str, str]] = []
     for e in entries:
         if not isinstance(e, dict):
             continue
         if e.get("stale"):
             continue  # retired memory — never inject into a run
+        eid = _entry_id(e)
+        if include_filter_active and eid not in include_set:
+            continue
+        if eid in exclude_set:
+            continue
         cat = _entry_category(e)
         if cat not in _INJECT_CATEGORIES:
             continue
@@ -1054,13 +1066,16 @@ def render_memory_for_injection(
             continue
         mc = int(e.get("mention_count") or 1)
         ts = str(e.get("last_mentioned") or e.get("first_seen") or "")
-        items.append((mc, ts, cat, content))
+        items.append((eid, mc, ts, cat, content))
     if not items:
         return ""
-    items.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    if preserve_id_order and include_filter_active:
+        items.sort(key=lambda x: order_index.get(x[0], len(order_index)))
+    else:
+        items.sort(key=lambda x: (x[1], x[2]), reverse=True)
     lines: list[str] = []
     used = 0
-    for _mc, _ts, cat, content in items[:limit]:
+    for _eid, _mc, _ts, cat, content in items[:limit]:
         line = f"- [{_CATEGORY_LABELS.get(cat, cat)}] {content}"
         if lines and used + len(line) > max_chars:
             break
@@ -1068,8 +1083,28 @@ def render_memory_for_injection(
         used += len(line)
     if not lines:
         return ""
-    header = "## 项目记忆（本项目此前沉淀/记录的长期信息，执行时请参考复用、避免重复摸索；与当前任务无关则忽略）"
-    return header + "\n" + "\n".join(lines)
+    block_header = header or "## 项目记忆（本项目此前沉淀/记录的长期信息，执行时请参考复用、避免重复摸索；与当前任务无关则忽略）"
+    return block_header + "\n" + "\n".join(lines)
+
+
+def memory_injection_ids(workspace_id: str | None) -> list[str]:
+    """Return injectable project-memory ids in the default injection order."""
+    entries = _load(workspace_id)
+    items: list[tuple[int, str, str]] = []
+    for e in entries:
+        if not isinstance(e, dict) or e.get("stale"):
+            continue
+        if _entry_category(e) not in _INJECT_CATEGORIES:
+            continue
+        if not str(e.get("content") or "").strip():
+            continue
+        items.append((
+            int(e.get("mention_count") or 1),
+            str(e.get("last_mentioned") or e.get("first_seen") or ""),
+            _entry_id(e),
+        ))
+    items.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [eid for _mc, _ts, eid in items]
 
 
 def render_task_reports_for_planning(

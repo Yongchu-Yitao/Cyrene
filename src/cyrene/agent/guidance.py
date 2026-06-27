@@ -918,6 +918,7 @@ async def answer_pending_question(
                 answer_text=content,
                 client_request_id=client_request_id,
                 context=context,
+                permission_mode=permission_mode,
             )
         except Exception:
             await _restore_pending_question(pending)
@@ -1171,6 +1172,7 @@ async def _handle_plan_confirmation_answer(
     answer_text: str,
     client_request_id: str,
     context: dict[str, Any],
+    permission_mode: str = "default",
 ) -> str:
     """处理「计划模式」确认回答：同意并开始 / 拒绝 / 修改。"""
     from cyrene.agent.coordinator import _run_chat_agent
@@ -1185,6 +1187,9 @@ async def _handle_plan_confirmation_answer(
 
     approve = raw in {"同意并开始", "同意并开始执行", "同意并执行", "同意", "开始"} or normalized in {"approve", "start", "yes", "ok", "okay", "go"}
     reject = raw in {"拒绝", "取消", "算了", "不用了"} or normalized in {"reject", "cancel", "no", "stop"}
+    resume_mode = normalized if normalized in {"default", "auto", "full_access"} else str(permission_mode or "default").strip().lower()
+    if resume_mode not in {"default", "auto", "full_access"}:
+        resume_mode = "default"
 
     if approve:
         try:
@@ -1212,7 +1217,7 @@ async def _handle_plan_confirmation_answer(
             client_request_id=client_request_id,
             persist_user_message=False,
             command=str(context.get("command", "") or "").strip(),
-            permission_mode="default",
+            permission_mode=resume_mode,
         )
 
     if reject:

@@ -189,6 +189,7 @@ async def _run_main_agent(
     lang: str = "",
     system_context: list[dict[str, Any]] | None = None,
     ephemeral_system: str = "",
+    fixed_ephemeral_system: str = "",
 ) -> str:
     _caller_type.set("main_agent")
     suppress_initial_detail = _ui_round_hide_initial_detail.get()
@@ -199,18 +200,21 @@ async def _run_main_agent(
     )
 
     async def _save(msgs):
+        saved_ephemeral = "\n\n".join(
+            part for part in (fixed_ephemeral_system, ephemeral_system) if part
+        )
         await _save_session_messages(
             msgs,
             system_context_blocks=system_context,
-            ephemeral_context=ephemeral_system,
+            ephemeral_context=saved_ephemeral,
         )
 
-    # Option B prefix-cache discipline: the per-run ephemeral block (Workbench task
-    # brief / project memory / reflection seed) is pinned at the ABSOLUTE tail of
-    # every LLM call rather than parked between history and the current turn. Since
-    # it is re-appended at call time (never stored in ``messages``/history), the
-    # append-only system+history prefix stays byte-identical across rounds, so the
-    # previous round remains a cache hit instead of being re-processed from scratch.
+    # Prefix-cache discipline:
+    # - fixed_ephemeral_system is stable for this run, so it sits before the
+    #   current user turn. Tool rounds then append assistant/tool messages after
+    #   it, making the previous request a true prefix of the next request.
+    # - ephemeral_system remains an escape hatch for genuinely volatile tail
+    #   context. It should be rare because it cannot share the full prior prompt.
     def _pin_tail(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if ephemeral_system:
             return [*msgs, {"role": "system", "content": ephemeral_system}]
@@ -268,6 +272,18 @@ async def _run_main_agent(
         )
     ])
     system_entry = attach_context({"role": "system", "content": effective_system}, system_blocks)
+    fixed_ephemeral_entry = None
+    if fixed_ephemeral_system:
+        fixed_ephemeral_entry = attach_context(
+            {"role": "system", "content": fixed_ephemeral_system},
+            context_block(
+                "run.fixed_ephemeral",
+                "system",
+                source="run_agent(fixed_ephemeral_system)",
+                reason="run-scoped context fixed before the current user turn for prompt-cache stability",
+                content=fixed_ephemeral_system,
+            ),
+        )
     llm_user_entry = attach_context(llm_user_entry, context_block(
         "user.current.raw",
         "user",
@@ -277,6 +293,9 @@ async def _run_main_agent(
         metadata={"visible_differs": public_user_message is not None and public_user_message != user_message},
     ))
     history = _annotate_history_context(history)
+    run_prefix = [system_entry, *history]
+    if fixed_ephemeral_entry is not None:
+        run_prefix.append(fixed_ephemeral_entry)
     phase1_tools = _LIGHT_TOOL_DEFS
     if _deep_research_first_round.get():
         phase1_decision = _DEEP_RESEARCH_PHASE1_DECISION
@@ -304,7 +323,7 @@ async def _run_main_agent(
         reason="decision-phase tool-gating rules",
         content=phase1_decision,
     ))
-    phase1_messages = [system_entry, *history, llm_user_entry, phase1_decision_entry]
+    phase1_messages = [*run_prefix, llm_user_entry, phase1_decision_entry]
 
     async def _ensure_text_reply(
         response_obj: dict[str, Any],
@@ -404,13 +423,12 @@ async def _run_main_agent(
         await _save(_session_messages_to_save(routed["messages"]))
         return str(routed["final_text"] or "Done.")
 
-    # Phase 1: lightweight decision. From round 2 on, wire the SAME full array as
-    # Phase 2 so the two share the prefix cache (Phase 1 then hits the prior round's
-    # Phase 2 cache instead of re-processing all history). The very first turn has no
-    # prior cache to share and would only miss, so keep its tool set small there.
-    # Deep-research's first round likewise keeps its own tiny ask_user-only set.
+    # Phase 1: lightweight decision. Wire the SAME full array as Phase 2 so the
+    # two phases share DeepSeek's tool-sensitive prefix cache even on the first
+    # ordinary round. Deep-research's first round keeps its tiny ask_user-only set
+    # because it has a separate length-preference handshake.
     phase1_wire_tools = (
-        phase1_tools if (_deep_research_first_round.get() or not history) else wire_tool_defs
+        phase1_tools if _deep_research_first_round.get() else wire_tool_defs
     )
     response = await _call_llm(_pin_tail(project_history_for_llm(phase1_messages)), tools=phase1_wire_tools)
     tool_calls = response.get("tool_calls") or []
@@ -444,7 +462,7 @@ async def _run_main_agent(
         ]
         response = await _call_llm(_pin_tail(project_history_for_llm(retry_messages)), tools=phase1_wire_tools)
     tool_calls = response.get("tool_calls") or []
-    messages = [system_entry, *history, llm_user_entry]
+    messages = [*run_prefix, llm_user_entry]
     assistant_entry = _assistant_entry_from_response(response, round_id)
     messages.append(assistant_entry)
 
@@ -494,7 +512,7 @@ async def _run_main_agent(
             event["detail_key"] = "phase.useTools"
             event["detail_params"] = {"task": user_message[:120]}
         await _publish_runtime_event(event)
-        messages = [system_entry, *history, dict(llm_user_entry)]
+        messages = [*run_prefix, dict(llm_user_entry)]
 
         for _ in range(_get_max_tool_rounds()):
             response = await _call_llm(_pin_tail(project_history_for_llm(messages)), tools=wire_tool_defs)
@@ -833,6 +851,7 @@ async def _run_main_agent(
             final_entry["client_request_id"] = client_request_id
         if round_id:
             final_entry["round_id"] = round_id
+        _ensure_message_identity([final_entry])
         messages.append(_apply_assistant_meta(final_entry))
         await _save(_session_messages_to_save(messages))
         return final_text

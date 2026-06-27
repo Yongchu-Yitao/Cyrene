@@ -203,6 +203,8 @@ async def run_agent(
     session_id: str = "",
     workspace_dir: str = "",
     ephemeral_system: str = "",
+    fixed_ephemeral_system: str = "",
+    volatile_ephemeral_system: str = "",
     static_system_extra: str = "",
 ) -> str:
     """Main entry point. Runs the main agent loop with full tools.
@@ -210,10 +212,11 @@ async def run_agent(
     ``workspace_dir`` scopes the agent's file tools + Bash cwd to a specific
     directory (a Workbench project's workspacePath). Empty → global WORKSPACE_DIR.
 
-    ``ephemeral_system`` is an extra system block injected for this run only
-    (e.g. a Workbench project's memory / reflection seed). It is appended at the
-    prompt tail and never persisted, so it leaves the cached system+history
-    prefix intact — keep it out of the base system prompt for cache hit rate.
+    ``ephemeral_system`` is kept as a compatibility alias for run-scoped context.
+    It is fixed for the duration of the run and inserted before the current user
+    turn, so tool rounds can reuse the full previous prompt prefix. Use
+    ``volatile_ephemeral_system`` only for context that can differ between calls
+    inside the same run; it is appended at the prompt tail.
 
     ``static_system_extra`` is a run-invariant block (e.g. Workbench task-mode
     framing) concatenated into the SYSTEM prefix right after the base prompt,
@@ -234,6 +237,8 @@ async def run_agent(
                 client_request_id=client_request_id, lang=lang, command=command,
                 public_user_message=public_user_message, public_attachments=public_attachments,
                 permission_mode=permission_mode, ephemeral_system=ephemeral_system,
+                fixed_ephemeral_system=fixed_ephemeral_system,
+                volatile_ephemeral_system=volatile_ephemeral_system,
                 static_system_extra=static_system_extra,
             )
     finally:
@@ -277,6 +282,8 @@ async def _run_chat_agent(
     chat_id: int,
     db_path: str,
     ephemeral_system: str = "",
+    fixed_ephemeral_system: str = "",
+    volatile_ephemeral_system: str = "",
     static_system_extra: str = "",
     forced_round_id: str = "",
     history_override: list[dict[str, Any]] | None = None,
@@ -362,14 +369,10 @@ async def _run_chat_agent(
             if st:
                 history = [{"role": "system", "content": "[Restored context]\n" + st}]
                 restored_short_term = True
-        # ``ephemeral_system`` is NOT folded into ``history`` here. Doing so would
-        # park a non-persisted system block between the append-only history and the
-        # current turn; because it is stripped on save, next round the real history
-        # grows into that slot and the block's position shifts — diverging the prefix
-        # right after the static history and forcing the *entire previous round* to be
-        # re-processed as a cache miss. Instead it is pinned at the absolute tail of
-        # every LLM call inside ``_run_main_agent`` (option B), keeping the
-        # system+history prefix byte-stable so the prior round stays cached.
+        # Run-scoped ephemeral context is not persisted into history. It is inserted
+        # immediately before the current user turn inside ``_run_main_agent`` so a
+        # tool loop evolves by pure append (system/history/fixed-context/user →
+        # assistant/tool...), preserving the full prior request as a cache prefix.
 
         if command != DEEP_REFLECT_COMMAND_ID:
             try:
@@ -410,6 +413,30 @@ async def _run_chat_agent(
                 content=_MAIN_AGENT_PROMPT,
             ),
         ]
+        plan_mode_active = _state._permission_mode.get() == "plan"
+        if plan_mode_active:
+            revision_note = (
+                "\n- The user is revising a previous proposed plan. Their revision request is:\n"
+                f"{plan_modification.strip()}\n"
+                if str(plan_modification or "").strip() else ""
+            )
+            plan_mode_prompt = (
+                "## Plan Mode Discovery\n"
+                "- The user selected plan mode. Your goal is to prepare a proposed plan for approval, not to complete the work yet.\n"
+                "- You may call tools before generating the plan when they help you inspect the workspace, search project memory, read files, gather public/current facts, or understand constraints.\n"
+                "- Before approval, avoid mutating tools and side effects: do not write/edit/delete files, commit, schedule tasks, send files/messages, or change external state unless the user explicitly requested that as part of planning.\n"
+                f"{revision_note}"
+                "- After enough context is collected, call `enter_plan_mode` to submit the structured plan and pause for the user's decision. Do not finish with a normal answer instead of presenting the plan.\n"
+                "- If no exploration is needed, still call `enter_plan_mode` directly."
+            )
+            main_system = main_system + "\n\n" + plan_mode_prompt
+            main_system_context.append(context_block(
+                "mode.plan.discovery",
+                "mode_policy",
+                source="cyrene.agent.coordinator",
+                reason="Workbench chat plan mode allows pre-plan tool discovery",
+                content=plan_mode_prompt,
+            ))
         # Caller-provided static system extension (e.g. Workbench task-mode framing).
         # Concatenated right after the base prompt — ahead of every volatile block
         # (memory, temporal, workspace) — so it stays inside the byte-stable cached
@@ -458,9 +485,7 @@ async def _run_chat_agent(
             ))
         # ``temporal_context`` is deliberately NOT concatenated into the system
         # prefix: the date rolls over daily, which would invalidate the entire
-        # system+history prefix every midnight. It is pinned to the prompt tail via
-        # ``effective_ephemeral`` (below) instead, riding along with the per-run
-        # ephemeral block that is re-sent each round anyway — at no extra cache cost.
+        # system+history prefix every midnight. It is run-fixed context instead.
         try:
             from cyrene.shell_runtime import resolve_shell
             _shell_kind = resolve_shell()[0]
@@ -732,49 +757,34 @@ async def _run_chat_agent(
                 metadata={"policy": spawn_policy},
             ))
 
-        # Pin per-run / per-session dynamic blocks to the prompt tail so none of
-        # them ride in the cached system+history prefix.  The conversation identity
-        # (session-specific chat id) lives here too — putting it in the system prefix
-        # would make every conversation's prefix unique and prevent cache sharing
-        # across fork / chat boundaries.
+        # Keep per-run / per-session dynamic blocks out of the base system prefix.
+        # They are fixed for this run and inserted before the current user turn, so
+        # each tool round can still reuse the full previous prompt as a prefix.
         conversation_identity = conversation_identity_block(_current_session_id.get())
-        effective_ephemeral = "\n\n".join(
-            part for part in (ephemeral_system, temporal_context, conversation_identity) if part
+        effective_fixed_ephemeral = "\n\n".join(
+            part
+            for part in (
+                fixed_ephemeral_system,
+                ephemeral_system,
+                temporal_context,
+                conversation_identity,
+            )
+            if part
+        )
+        effective_volatile_ephemeral = "\n\n".join(
+            part for part in (volatile_ephemeral_system,) if part
         )
 
-        # 计划模式：先拆解成步骤/任务，展示并请用户确认，不直接执行。
-        if _state._permission_mode.get() == "plan":
-            from cyrene.agent.planning import run_plan_flow
-            from cyrene.agent.message import _tool_result_requests_user_input
-            # Plan generation is single-shot (no multi-round tool loop), so prefix
-            # caching across rounds is moot here — fold the ephemeral block into the
-            # history tail so the planner still sees the project memory / task brief.
-            plan_history = (
-                [*history, {"role": "system", "content": effective_ephemeral}]
-                if effective_ephemeral else history
-            )
-            main_text = await run_plan_flow(
-                user_message=user_message,
-                history=plan_history,
-                round_id=round_id,
-                public_user_message=public_user_message,
-                public_attachments=public_attachments,
-                client_request_id=client_request_id,
-                persist_user_message=persist_user_message,
-                modification=plan_modification,
-            )
-            # run_plan_flow 返回 awaiting_user JSON；归一化为 sentinel 让本轮像 ask_user 一样暂停。
-            if _tool_result_requests_user_input(main_text):
-                main_text = _AWAITING_USER_SENTINEL
-        else:
-            from cyrene.agent.agent import _run_main_agent
+        from cyrene.agent.agent import _run_main_agent
 
-            main_text = await _run_main_agent(
-                user_message, history, bot, chat_id, db_path, main_system,
-                client_request_id=client_request_id, persist_user_message=persist_user_message,
-                public_user_message=public_user_message, public_attachments=public_attachments, lang=lang,
-                system_context=main_system_context, ephemeral_system=effective_ephemeral,
-            )
+        main_text = await _run_main_agent(
+            user_message, history, bot, chat_id, db_path, main_system,
+            client_request_id=client_request_id, persist_user_message=persist_user_message,
+            public_user_message=public_user_message, public_attachments=public_attachments, lang=lang,
+            system_context=main_system_context,
+            fixed_ephemeral_system=effective_fixed_ephemeral,
+            ephemeral_system=effective_volatile_ephemeral,
+        )
 
         if refresh_labels:
             _schedule_session_label_refresh(user_message, round_id)

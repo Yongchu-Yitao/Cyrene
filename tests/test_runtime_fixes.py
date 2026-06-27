@@ -185,11 +185,13 @@ async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkey
     _patch_data_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(_agent_core, "_get_max_tool_rounds", lambda: 1)
 
+    calls = []
+
     async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
-        names = {item.get("function", {}).get("name") for item in (tools or [])}
         if tools is None:
             return {"content": "final answer from gathered tool results"}
-        if tools is _agent_state._LIGHT_TOOL_DEFS:
+        calls.append(tools)
+        if len(calls) == 1:
             return {
                 "content": "",
                 "tool_calls": [{
@@ -1964,7 +1966,8 @@ async def test_ask_user_wait_state_does_not_persist_assistant_trace(monkeypatch,
     monkeypatch.setattr(_agent_session, "_refresh_session_labels", AsyncMock())
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000):
-        if tools is _agent_state._LIGHT_TOOL_DEFS:
+        names = {item.get("function", {}).get("name") for item in (tools or [])}
+        if "use_tools" in names:
             return {
                 "content": "我应该先问清楚。",
                 "tool_calls": [
@@ -2335,9 +2338,11 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
     streamed = []
     stream_calls = {"n": 0}
 
+    llm_calls = []
+
     async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
-        names = {item.get("function", {}).get("name") for item in (tools or [])}
-        if tools is _agent_state._LIGHT_TOOL_DEFS:  # decision phase → route into execution
+        llm_calls.append(tools)
+        if len(llm_calls) == 1:  # decision phase → route into execution
             return {"content": "", "tool_calls": [{"id": "d1", "function": {"name": "use_tools", "arguments": "{\"task\":\"看 github 实现\"}"}}]}
         # execution phase: the model believes it is done and quits early
         return {"content": "", "tool_calls": [{"id": "q1", "function": {"name": "quit", "arguments": "{}"}}]}
@@ -4556,8 +4561,10 @@ async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_expl
     result = await agent._run_main_agent("现在先看看多伦多的天气", [], None, 0, "db.sqlite3")
 
     assert result == "当前阶段没有合适工具，请改用 use_tools 进入完整工具阶段。"
-    assert calls[0] is _agent_state._LIGHT_TOOL_DEFS
-    assert calls[1] is _agent_state._LIGHT_TOOL_DEFS
+    assert calls[0] is calls[1]
+    tool_names = {item.get("function", {}).get("name") for item in calls[0]}
+    assert {"use_tools", "ask_user", "quit", "WebSearch"} <= tool_names
+    assert calls[0] is not _agent_state._LIGHT_TOOL_DEFS
     assert saved
 
 

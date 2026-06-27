@@ -37,6 +37,7 @@ from webui.routes_knowledge import register_knowledge_routes
 from webui.routes_workbench_knowledge import register_workbench_knowledge_routes
 from webui.routes_workbench_memory import (
     add_agent_memory,
+    memory_injection_ids,
     register_workbench_memory_routes,
     render_memory_for_injection,
     render_task_reports_for_planning,
@@ -115,6 +116,11 @@ from cyrene.short_term import load_entries
 from cyrene.soul import get_default_soul_content, read_soul, get_soul_path
 from cyrene.version import get_version_label
 from cyrene.workbench_store import read_document, write_document
+from cyrene.workbench_task_context import (
+    build_main_context as _workbench_task_build_main_context,
+    build_volatile_context as _workbench_task_build_volatile_context,
+    ensure_shared_context as _workbench_task_ensure_shared_context,
+)
 from cyrene.io_utils import atomic_write_json, read_json_safe
 
 logger = logging.getLogger(__name__)
@@ -2195,6 +2201,7 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
         project.setdefault("model", _get_model())
         project.setdefault("accountTier", "Pro")
         project.setdefault("context", {"summary": "", "stack": [], "decisions": [], "knowledgeDocumentIds": []})
+        _workbench_task_ensure_shared_context(project)
         project.setdefault("createdAt", now)
         project.setdefault("updatedAt", now)
         if not project.get("dataKey"):
@@ -4236,32 +4243,61 @@ def _workbench_compose_static_system(
 ) -> str:
     """Cache-stable system block for Workbench (system prefix).
 
-    Includes the constant task-mode framing plus session-stable context that
-    changes rarely enough to belong in the byte-stable system prefix rather
-    than the per-run ``ephemeral_system`` tail.
-
-    Injected via ``run_agent(static_system_extra=...)`` so it lands ahead of
-    memory/temporal/workspace blocks.
+    Only includes invariant task-mode framing. Project memory and reflection
+    packets are session/run scoped, so they are injected via ephemeral context
+    instead of changing the byte-stable system prefix.
     """
-    parts: list[str] = [_WORKBENCH_TASK_MODE_SYSTEM]
-    # Project durable memories — change only when the user explicitly saves.
-    if project:
-        try:
-            mem_block = render_memory_for_injection(_workbench_project_memory_key(project))
-        except Exception:
-            logger.exception("Failed to render project memory for static system")
-            mem_block = ""
-        if mem_block:
-            parts.append(mem_block)
-    # Reflection seed — changes only on reflection cycles (infrequent).
-    if session:
-        reflection_seed = _workbench_render_reflection_block(session)
-        if reflection_seed:
-            parts.append(
-                "## 深度反思结论（执行时请避开 excluded_paths，优先 promising_directions）\n"
-                + reflection_seed
-            )
-    return "\n\n".join(parts).strip()
+    return _WORKBENCH_TASK_MODE_SYSTEM
+
+
+def _workbench_compose_memory_ephemeral(
+    project: dict[str, Any] | None,
+    session: dict[str, Any],
+) -> tuple[str, str]:
+    """Return (run_fixed_memory, volatile_tail_memory) for this Workbench session.
+
+    A session snapshots the project-memory ids it first saw. Those memories stay
+    in the run-fixed block for cache stability. Memories created later in the
+    same session are rendered in the volatile tail so they remain visible without
+    invalidating the already-established fixed prefix. A new session snapshots
+    again and promotes them back into the fixed block.
+    """
+    if not project:
+        return "", ""
+    memory_key = _workbench_project_memory_key(project)
+    try:
+        current_ids = memory_injection_ids(memory_key)
+    except Exception:
+        logger.exception("Failed to list project memory ids for prompt injection")
+        return "", ""
+
+    stored_key = str(session.get("_promptMemoryKey") or "")
+    raw_base_ids = session.get("_promptMemoryBaseIds")
+    if stored_key != memory_key or not isinstance(raw_base_ids, list):
+        base_ids = list(current_ids)
+        session["_promptMemoryKey"] = memory_key
+        session["_promptMemoryBaseIds"] = list(base_ids)
+    else:
+        base_ids = [str(item) for item in raw_base_ids if str(item).strip()]
+
+    base_set = set(base_ids)
+    new_ids = [mem_id for mem_id in current_ids if mem_id not in base_set]
+    try:
+        fixed = render_memory_for_injection(
+            memory_key,
+            include_ids=base_ids,
+            preserve_id_order=True,
+        )
+        volatile = render_memory_for_injection(
+            memory_key,
+            include_ids=new_ids,
+            preserve_id_order=True,
+            header="## 本 session 新增项目记忆（刚写入，放在最后供本轮参考；与当前任务无关则忽略）",
+        ) if new_ids else ""
+    except Exception:
+        logger.exception("Failed to render project memory for prompt injection")
+        return "", ""
+    return fixed, volatile
 
 
 # ── Per-run context enrichment (ephemeral_system tail, cache-safe) ──────
@@ -4527,29 +4563,52 @@ def _workbench_compose_ephemeral_system(
     step_id: str = "",
     workspace_root: Path | None = None,
 ) -> str:
-    """Assemble the per-run ephemeral block for a Workbench agent run.
+    """Assemble run-fixed context for a Workbench agent run.
 
-    Injected via ``ephemeral_system`` (prompt tail, never persisted), so it never
-    invalidates the cached system+history prefix. Only carry truly per-run content;
-    stable blocks (project memory, reflection seed) ride in the system prefix via
-    ``_workbench_compose_static_system``.
+    The coordinator inserts this block before the current user turn, not into the
+    base system prefix and not at the absolute prompt tail. That keeps volatile
+    Workbench context out of cross-run system caching while allowing tool rounds
+    in this run to reuse the full previous prompt as a prefix.
 
-    Blocks (in order): task brief → step context cascade → workspace state.
+    Blocks (in order): Workbench task shared context → project memory snapshot →
+    reflection seed → step context cascade → workspace state.
     """
     parts: list[str] = []
-    # 1. Task brief: goal / title / plan — lives only in the Workbench store.
-    brief_block = _workbench_render_task_brief_block(session)
-    if brief_block:
-        parts.append(brief_block)
-    # 2. Step context cascade: what preceding steps produced (same session).
+    # 1. Workbench task shared context: project blocks first, then session task /
+    # plan / acceptance.  This applies only to Workbench task sessions.
+    shared_task_context = _workbench_task_build_main_context(project, session)
+    if shared_task_context:
+        parts.append(shared_task_context)
+    # 2. Project durable memories: snapshot at session start for cache stability.
+    memory_block, _new_memory_tail = _workbench_compose_memory_ephemeral(project, session)
+    if memory_block:
+        parts.append(memory_block)
+    # 3. Reflection seed: session scoped; keep out of the base system prefix.
+    reflection_seed = _workbench_render_reflection_block(session)
+    if reflection_seed:
+        parts.append(
+            "## 深度反思结论（执行时请避开 excluded_paths，优先 promising_directions）\n"
+            + reflection_seed
+        )
+    # 4. Step context cascade: what preceding steps produced (same session).
     step_block = _workbench_render_step_context_block(session, current_step_id=step_id)
     if step_block:
         parts.append(step_block)
-    # 3. Workspace state: recent file changes, git status, recent run summaries.
+    # 5. Workspace state: recent file changes, git status, recent run summaries.
     state_block = _workbench_render_workspace_state_block(session, workspace_root)
     if state_block:
         parts.append(state_block)
     return "\n\n".join(parts).strip()
+
+
+def _workbench_compose_volatile_ephemeral_system(
+    project: dict[str, Any] | None,
+    session: dict[str, Any],
+) -> str:
+    """Context that intentionally stays at the absolute prompt tail."""
+    _fixed, new_memory_tail = _workbench_compose_memory_ephemeral(project, session)
+    shared_tail = _workbench_task_build_volatile_context(project, session)
+    return "\n\n".join(part for part in (shared_tail, new_memory_tail) if part).strip()
 
 
 def _workbench_finalize_directive(session: dict[str, Any]) -> str:
@@ -5090,6 +5149,7 @@ async def _workbench_agent_reply(
     command: str = "",
     project_workspace: str = "",
     ephemeral_system: str = "",
+    volatile_ephemeral_system: str = "",
     static_system_extra: str = "",
 ) -> str:
     """Execute a real agent run for a workbench session.
@@ -5148,6 +5208,7 @@ async def _workbench_agent_reply(
             public_attachments=public_attachments,
             workspace_dir=workspace_dir,
             ephemeral_system=str(ephemeral_system or ""),
+            volatile_ephemeral_system=str(volatile_ephemeral_system or ""),
             static_system_extra=str(static_system_extra or ""),
         )
     except Exception:
@@ -9128,7 +9189,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         ephemeral_system = _workbench_compose_ephemeral_system(
             project, session, step_id=step_id if is_step_run else "", workspace_root=workspace_root
         )
-        agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+        volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
+        agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         # A run that hit a permission / clarification boundary pauses awaiting the
@@ -9246,7 +9308,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         ephemeral_system = _workbench_compose_ephemeral_system(
             project, session, workspace_root=workspace_root
         )
-        agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+        volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
+        agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
@@ -9439,7 +9502,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         )
         if finalizing:
             ephemeral_system = (ephemeral_system + "\n\n" + _workbench_finalize_directive(session)).strip()
-        agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+        volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
+        agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)

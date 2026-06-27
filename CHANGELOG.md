@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.6.0b13] - 2026-06-28
+
+### Added
+
+- **Workbench 项目共享上下文（`workbench_task_context`）** — 新模块，专为 Workbench 任务 session 提供项目级共享上下文。`sharedContext` 字段挂载在 project 对象上，记录任务描述、最终目标和当前成果（`currentOutcome`）。主 agent 运行时自动注入项目固定块 + session 任务/计划/验收标准；子代理（subagent）同样获得项目上下文，并在完成后把最终回复追加到 `currentOutcome.entries` 供同一项目下所有 session 共享。
+- **计划模式预探索** — 计划模式下，主 agent 在提交计划前现在可以调用只读探索工具（读文件、搜索项目记忆、查询外部信息），完成后再调用 `enter_plan_mode`。规划器接收到压缩后的工具调用摘要（`_history_context_text`），计划将真正基于工作区实际状态生成，而不再是纯推断。
+- **项目记忆 Session 基线快照** — Session 启动时记录当前记忆 ID 集合作为固定前缀（cache-stable），Session 期间新增的记忆条目自动进入 volatile 尾部独立渲染，不影响已缓存的固定前缀。下一个新 Session 开始时再次快照，把 volatile 条目提升为固定块。
+
+### Fixed
+
+- **对话分段渲染 — 多文件交付顺序** — `_reorder_tool_produced_replies` 修复：同一回合内多个文件分段交付时，每段交付回复现在都能正确排列到其对应工具卡片之后（而不仅限于单文件场景）。
+- **知识 workspace 隔离** — `_resolve_workspace_id` 修复：默认项目记忆不再跨项目泄漏；新增启动事件将默认项目知识从旧版共享数据库中解耦，写入项目专属存储。
+- **Subagent 收尾超时** — goal loop 等待 subagent settle 时现在带超时，不再因 subagent 意外挂起而无限阻塞。
+
+### Changed
+
+- **Prompt 缓存优化 — `fixed_ephemeral_system`** — `run_agent` / coordinator / `_run_main_agent` 新增 `fixed_ephemeral_system` 参数。Run 级上下文（Workbench 任务简报、项目记忆快照、temporal context、conversation identity）现在插入到当前用户消息之前，而非 prompt 尾部；工具回合通过纯 append 演进，前一轮请求是下一轮请求的完整前缀，缓存命中显著提升。原 `ephemeral_system` 仅保留给真正需要每轮变化的 volatile 尾部内容。
+- **Phase 1 首轮也使用完整工具集** — 移除首轮使用轻量 phase1 工具集的例外：常规对话的第一轮 Phase 1 decision 现在与后续轮次一样使用 `wire_tool_defs`，利用 DeepSeek 工具敏感前缀缓存，首轮不再因工具集差异导致额外 cache miss。
+- **记忆注入 API 增强** — `render_memory_for_injection` 新增 `include_ids`、`exclude_ids`、`preserve_id_order`、`header` 参数，支持精确控制哪些记忆条目注入、以什么顺序、使用什么标题头部；新增 `memory_injection_ids` 辅助函数返回当前可注入的 ID 有序列表。
+- **macOS 流量灯间距修复** — Workbench UI 在 macOS 上正确保留 traffic light 按钮空间，避免布局重叠。
+- **静态资源缓存版本统一** — WebUI 所有 JS/CSS cache-busting 参数统一为 `beta13`。
+- **版本元数据统一** — Python 包、Electron 应用、Electron lockfile、README badge、WeChat client 标识统一到 beta13。
+
+### Tests
+
+- 新增 `test_workbench_task_context`（共享上下文构建与 outcome 写入）、`test_workbench_chat_plan`（计划模式预探索与修订）、`test_cache_fixes`（fixed ephemeral 注入位置、首轮 phase1 工具集）。
+- 更新 `test_runtime_fixes`；前端 cache-bust 断言同步到 beta13。
+
 ## [0.6.0b12] - 2026-06-27
 
 ### Added

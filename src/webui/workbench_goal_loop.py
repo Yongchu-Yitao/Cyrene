@@ -737,6 +737,9 @@ class GoalLoopManager:
                     current_project, current_session,
                     step_id=step_id, workspace_root=workspace_root,
                 )
+                volatile_ephemeral = R._workbench_compose_volatile_ephemeral_system(
+                    current_project, current_session,
+                )
                 # Run-invariant — rides in the cache-stable system prefix (static
                 # extra), not the per-run ephemeral tail.
                 loop_instruction = (
@@ -765,6 +768,7 @@ class GoalLoopManager:
                             permission_mode=str(run.get("permission_mode") or "auto"),
                             project_workspace=str(current_project.get("workspacePath") or ""),
                             ephemeral_system=ephemeral,
+                            volatile_ephemeral_system=volatile_ephemeral,
                             static_system_extra=R._workbench_compose_static_system(current_project, current_session) + loop_instruction,
                         )
                 except asyncio.CancelledError:

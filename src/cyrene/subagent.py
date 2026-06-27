@@ -1206,11 +1206,27 @@ You are a **participant** in this discussion. Rules:
     except Exception:
         _shell_kind = "bash"
     subagent_prompt += "\n\n" + temporal_context + "\n\n" + workspace_scope_block(active_workspace_dir(), shell_kind=_shell_kind)
+    workbench_context = ""
+    if _subagent_session_id:
+        try:
+            from cyrene.workbench_task_context import build_subagent_context, resolve_task_scope
+
+            _payload, workbench_project, workbench_session = resolve_task_scope(
+                _subagent_session_id,
+                db_path=db_path,
+            )
+            workbench_context = build_subagent_context(workbench_project, workbench_session, task)
+            if workbench_context:
+                subagent_prompt += "\n\n" + workbench_context
+        except Exception:
+            logger.debug("Failed to inject Workbench task context for sub-agent %s", agent_id, exc_info=True)
 
     if resume_messages:
         # 被唤醒：从已有历史续跑，注入一条提示让 LLM 知道发生了什么
         messages = list(resume_messages)
         messages.append({"role": "user", "content": "[你已被唤醒 — inbox 中有新消息需要处理。处理完后再决定是否 quit。]"})
+        if workbench_context:
+            messages.append({"role": "user", "content": "[Workbench 任务共享上下文已刷新]\n" + workbench_context})
     else:
         messages = [
             {"role": "system", "content": subagent_prompt},
@@ -1403,5 +1419,18 @@ You are a **participant** in this discussion. Rules:
         if round_token is not None:
             _current_round_id.reset(round_token)
 
+    if _subagent_session_id and final_text:
+        try:
+            from cyrene.workbench_task_context import append_shared_outcome
+
+            append_shared_outcome(
+                db_path=db_path,
+                session_id=_subagent_session_id,
+                agent_id=agent_id,
+                source="subagent",
+                text=final_text,
+            )
+        except Exception:
+            logger.debug("Failed to append Workbench shared outcome for sub-agent %s", agent_id, exc_info=True)
     await mark_done(agent_id, final_text)
     return final_text

@@ -175,13 +175,14 @@ var WorkbenchChatModel = (function () {
 
   // Answer a paused chat run's permission / clarification question → resume.
   // Resolves to { awaitingUser, assistantMessage?, pendingQuestion? }.
-  function answerChat(chatId, questionId, answerText) {
+  function answerChat(chatId, questionId, answerText, options) {
+    options = options || {};
     // Resumes an agent round (open-ended LLM work) — no death timeout. toast:false
     // because handleAnswer restores the prompt and surfaces the error itself.
     return window.WorkbenchAPI.json("/api/workbench/chats/" + encodeURIComponent(chatId) + "/answer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question_id: questionId || "", answer: answerText || "" }),
+      body: JSON.stringify({ question_id: questionId || "", answer: answerText || "", mode: options.mode || undefined }),
       timeout: 0,
       toast: false,
     });
@@ -1217,7 +1218,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   // Answer the pending permission / clarification question → resume the round.
   // The server returns the continued reply (append it) or a follow-up question
   // (swap the prompt). Optimistically clears the prompt while resuming.
-  function handleAnswer(questionId, optionText) {
+  function handleAnswer(questionId, optionText, resumeMode) {
     var chatId = activeChatId;
     if (!chatId || !questionId || !optionText) return;
     setError("");
@@ -1231,7 +1232,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     // Without it the resume ran invisibly — an empty thread while the side panel
     // showed a frozen "Replying" — and the composer offered no way to stop it.
     runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: true });
-    model.answerChat(chatId, questionId, optionText).then(function (res) {
+    model.answerChat(chatId, questionId, optionText, { mode: resumeMode || undefined }).then(function (res) {
       runtimeEngine.update(chatId, null);
       setActiveChat(function (prev) {
         if (!prev || prev.id !== chatId) return prev;
@@ -1651,6 +1652,7 @@ function WbcQuestionPrompt({ pending, onAnswer, busy }) {
   var options = Array.isArray(pq.options) ? pq.options : [];
   var kind = String(pq.kind || "");
   var isPermission = window.wbIsPermissionQuestionKind(kind);
+  var isPlanConfirmation = kind === "plan_confirmation";
   var customState = useWbcState("");
   var customText = customState[0], setCustomText = customState[1];
   function submitCustom() {
@@ -1680,6 +1682,11 @@ function WbcQuestionPrompt({ pending, onAnswer, busy }) {
               {options.map(function (opt, i) {
                 return <button key={i} type="button" className={"wbc-question-opt" + (i === 0 ? " primary" : "")} disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, opt); }}>{opt}</button>;
               })}
+              {isPlanConfirmation && options.length > 0 && (
+                <button type="button" className="wbc-question-opt primary" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options[0], "auto"); }}>
+                  {wbcT("workbenchChat.approveAuto", "Confirm and continue in Auto")}
+                </button>
+              )}
             </div>
           )}
           {pq.allowCustom && (

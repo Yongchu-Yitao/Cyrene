@@ -162,6 +162,7 @@ class AnswerBody(APIBody):
     question_id: str = Field(min_length=1, max_length=500)
     answer: str | None = Field(default=None, max_length=200_000)
     selected_option: str | None = Field(default=None, max_length=200_000)
+    mode: str | None = Field(default=None, max_length=80)
 
 
 class InitSubmitBody(APIBody):

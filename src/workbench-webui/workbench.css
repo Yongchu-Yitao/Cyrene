@@ -1294,6 +1294,7 @@ body.wb-col-resizing {
 
 .workbench-toast.is-error   .workbench-toast-icon { color: var(--wb-red); }
 .workbench-toast.is-success .workbench-toast-icon { color: var(--wb-green); }
+.workbench-toast.is-warning { border-left: 1px solid var(--wb-line); }
 .workbench-toast.is-warning .workbench-toast-icon { color: var(--wb-amber); }
 .workbench-toast.is-info    .workbench-toast-icon { color: var(--wb-blue); }
 

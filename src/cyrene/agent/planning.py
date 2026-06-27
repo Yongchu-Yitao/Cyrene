@@ -2,7 +2,8 @@
 并用 ask_user 请用户确认（同意并开始 / 拒绝 / 修改）。同意后按默认模式执行。
 
 触发途径：
-  1. 用户在输入框选「计划模式」 → coordinator._run_chat_agent 在执行前调用 run_plan_flow。
+  1. 用户在输入框选「计划模式」 → coordinator._run_chat_agent 先允许主 agent
+     调用只读探索工具，随后由 enter_plan_mode 调用 run_plan_flow。
   2. agent 自发调用 enter_plan_mode 工具（tool_impl/enter_plan_mode.py）。
 确认回答由 guidance._handle_plan_confirmation_answer 处理。
 """
@@ -51,6 +52,7 @@ _PLAN_TOOL_DEFS = [{
 _PLAN_SYSTEM = (
     "你正处于「计划模式」。现在不要执行任何实际操作，只做规划。\n"
     "把用户的请求拆解成清晰的执行计划：先给出多个有序步骤，再把每个步骤拆解成具体、可操作的任务。\n"
+    "如果前文包含工具探索结果、文件摘要、搜索结果或用户修改意见，必须把这些上下文纳入计划。\n"
     "步骤应覆盖完成请求的完整路径；任务要具体到可以照着做。\n"
     "完成后只调用 submit_plan 提交结构化计划，不要输出其他文字、不要调用其他工具。"
 )
@@ -90,6 +92,42 @@ def _plan_to_text(plan: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _history_context_text(history: list[dict[str, Any]] | None) -> str:
+    """Render recent exploration history as plain planner context.
+
+    The planner only receives the submit_plan tool, so replaying raw assistant
+    tool-call messages can create invalid tool-message chains. A compact text
+    digest preserves the useful evidence without binding it to old tool ids.
+    """
+    if not history:
+        return ""
+    lines: list[str] = []
+    for raw in list(history)[-24:]:
+        if not isinstance(raw, dict):
+            continue
+        role = str(raw.get("role") or "").strip() or "message"
+        if role == "system":
+            continue
+        parts: list[str] = []
+        content = str(raw.get("content") or "").strip()
+        if content:
+            parts.append(content[:2000])
+        tool_calls = raw.get("tool_calls")
+        if isinstance(tool_calls, list):
+            names = []
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                name = str(call.get("function", {}).get("name") or "").strip()
+                if name:
+                    names.append(name)
+            if names:
+                parts.append("tool calls: " + ", ".join(names))
+        if parts:
+            lines.append(f"[{role}] " + "\n".join(parts))
+    return "\n\n".join(lines)[-12000:]
+
+
 async def generate_plan(
     user_message: str,
     history: list[dict[str, Any]] | None = None,
@@ -99,6 +137,9 @@ async def generate_plan(
     import cyrene.agent.state as _state
 
     parts = [f"用户的请求：\n{user_message}"]
+    history_text = _history_context_text(history)
+    if history_text:
+        parts.append(f"\n生成计划前已收集到的上下文：\n{history_text}")
     if modification:
         parts.append(
             f"\n用户对上一版计划的修改意见：\n{modification}\n请在新计划中采纳这些意见。"

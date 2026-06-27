@@ -1010,6 +1010,7 @@ def _reorder_tool_produced_replies(
             isinstance(m, dict)
             and str(m.get("role") or "") == "assistant"
             and bool(m.get("intermediate_reply"))
+            and bool(m.get("attachments"))
         )
 
     def _is_tool_call_msg(m: Any) -> bool:
@@ -2286,6 +2287,10 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         body = api_models.body_dict(body_model)
         question_id = str(body.get("question_id") or "").strip()
         answer_text = str(body.get("answer") or body.get("selected_option") or "").strip()
+        from cyrene.agent.state import PERMISSION_MODES
+        mode = str(body.get("mode") or "default").strip().lower()
+        if mode not in PERMISSION_MODES:
+            mode = "default"
         if not question_id or not answer_text:
             return JSONResponse({"error": "question_id and answer are required"}, status_code=400)
         payload = _read_chats_store()
@@ -2312,9 +2317,15 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             if mid:
                 state_ids_before_resume.add(mid)
         try:
-            reply = await R._workbench_answer_pending(
-                chat_id, question_id, answer_text, workspace_dir,
-            )
+            if mode == "default":
+                reply = await R._workbench_answer_pending(
+                    chat_id, question_id, answer_text, workspace_dir,
+                )
+            else:
+                reply = await R._workbench_answer_pending(
+                    chat_id, question_id, answer_text, workspace_dir,
+                    permission_mode=mode,
+                )
         except Exception as exc:
             logger.exception("Workbench chat answer-resume failed for %s", chat_id)
             return JSONResponse({"error": "answer resume failed", "detail": str(exc)}, status_code=502)
