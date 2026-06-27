@@ -54,15 +54,35 @@ def _safe_workspace_id(workspace_id: str | None) -> str:
 
 
 def _resolve_workspace_id(workspace_id: str | None) -> str:
-    """Map a Workbench project id to its storage key when possible."""
+    """Map a Workbench workspace identifier to its knowledge storage key.
+
+    The knowledge page sends a project's ``dataKey`` (or id) as the workspace,
+    but knowledge is stored under the project **id** key — the same key project
+    memory uses (see ``resolve_project_knowledge_key_for_session``). For the
+    legacy default project these differ (dataKey == "default", id ==
+    "project_…"): returning "default" would alias the global ``kb_default.db``
+    catalog and leak every project's uploaded/generated files into the default
+    project's view. Match by id first, then by dataKey, and always return the
+    id-based key so reads and writes agree.
+    """
     wid = _safe_workspace_id(workspace_id)
+    raw = str(workspace_id or "").strip()
     try:
         from webui import routes as R
 
         payload = R._read_workbench_store()
-        project = R._workbench_find_project(payload, str(workspace_id or "").strip())
+        project = R._workbench_find_project(payload, raw)
+        if project is None:
+            project = next(
+                (
+                    p
+                    for p in payload.get("projects", [])
+                    if R._workbench_project_data_key(p) == wid
+                ),
+                None,
+            )
         if project:
-            return R._workbench_project_data_key(project)
+            return R._workbench_project_memory_key(project)
     except Exception:
         pass
     return wid
@@ -138,13 +158,20 @@ def _project_for_workspace(
     payload: dict[str, Any],
     workspace: str,
 ) -> dict[str, Any] | None:
+    from webui import routes as R
+
     resolved = _resolve_workspace_id(workspace)
+    raw = str(workspace or "").strip()
     for project in payload.get("projects", []):
         if not isinstance(project, dict):
             continue
-        if str(project.get("id") or "") == str(workspace or ""):
+        if str(project.get("id") or "") == raw:
             return project
-        if str(project.get("dataKey") or "") == resolved:
+        # ``resolved`` is the id-based knowledge key; match it so the legacy
+        # default project (dataKey "default" != id) still resolves.
+        if R._workbench_project_memory_key(project) == resolved:
+            return project
+        if str(project.get("dataKey") or "") == raw:
             return project
     return None
 

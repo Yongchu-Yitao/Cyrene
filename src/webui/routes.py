@@ -3935,7 +3935,10 @@ async def _workbench_archive_run_knowledge(
 
         archive_root = workspace_root or WORKSPACE_DIR.resolve()
         documents = await archive_workbench_run(
-            data_key=_workbench_project_data_key(project),
+            # Knowledge is keyed on the project id (like memory), not dataKey, so
+            # the legacy default project does not archive into the shared global
+            # kb_default.db catalog. See routes_workbench_knowledge._resolve_workspace_id.
+            data_key=_workbench_project_memory_key(project),
             session_id=str(session.get("id") or ""),
             run_id=str(run.get("id") or ""),
             title=str(session.get("title") or "Workbench task"),
@@ -5670,14 +5673,20 @@ async def _search_workbench_items(query: str, types: set[str], per_type_limit: i
         pid: str(p.get("name") or p.get("id") or "").strip() or "Workspace"
         for pid, p in project_by_id.items()
     }
-    project_data_keys: dict[str, str] = {
-        pid: _workbench_project_data_key(p) for pid, p in project_by_id.items()
+    # Knowledge is keyed on the project id (memory key), not dataKey. For the
+    # legacy default project these differ, so knowledge search must iterate the
+    # id-based keys to read the same kb_<id>.db the Workbench UI reads.
+    project_kb_keys: dict[str, str] = {
+        pid: _workbench_project_memory_key(p) for pid, p in project_by_id.items()
     }
 
-    # Build reverse map from data key -> project id (first wins for legacy key).
+    # Build reverse map -> project id. Index by BOTH the data key (scheduled
+    # tasks / entity project_id) and the memory/knowledge key (memory + knowledge
+    # search) so the default project, whose two keys differ, resolves either way.
     data_key_to_project: dict[str, str] = {}
-    for pid, dk in project_data_keys.items():
-        data_key_to_project.setdefault(dk, pid)
+    for pid, p in project_by_id.items():
+        data_key_to_project.setdefault(_workbench_project_data_key(p), pid)
+        data_key_to_project.setdefault(_workbench_project_memory_key(p), pid)
 
     # ---- projects ----
     if "project" in types:
@@ -5764,7 +5773,7 @@ async def _search_workbench_items(query: str, types: set[str], per_type_limit: i
             from cyrene.db import init_knowledge_db
 
             seen_docs: set[str] = set()
-            for pid, dk in project_data_keys.items():
+            for pid, dk in project_kb_keys.items():
                 db_path_kb = str(get_knowledge_db_path(dk))
                 try:
                     await init_knowledge_db(db_path_kb)
@@ -8216,7 +8225,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                     from cyrene.config import get_knowledge_db_path, STORE_DIR
                     from webui.routes_workbench_memory import delete_workspace_memory
 
-                    _remove_path(get_knowledge_db_path(doomed_data_key))
+                    # Knowledge db is keyed on the project id (memory key).
+                    _remove_path(get_knowledge_db_path(doomed_memory_key))
                     delete_workspace_memory(doomed_memory_key)
                     import aiosqlite
                     async with aiosqlite.connect(_db_path) as db:

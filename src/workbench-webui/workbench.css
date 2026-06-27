@@ -102,10 +102,23 @@
 }
 
 .workbench-traffic-space {
-  width: 70px;
+  /* No reserved gutter by default. Windows / Linux / web have no inset traffic
+     lights, so the space left of the logo must not be wasted. Only macOS — where
+     titleBarStyle is 'hidden' and the traffic lights are inset over the topbar —
+     reserves the 70px gap below. */
+  width: 0;
   height: 38px;
   flex: 0 0 auto;
   -webkit-app-region: no-drag;
+}
+
+html[data-platform="darwin"] .workbench-traffic-space {
+  width: 70px;
+}
+
+/* Off macOS the logo would otherwise sit flush against the window edge. */
+html:not([data-platform="darwin"]) .workbench-brand {
+  padding-left: 14px;
 }
 
 .workbench-brand .brand-mark {
@@ -132,6 +145,33 @@ html[data-theme="dark"] .brand-mark {
 .workbench-brand span {
   color: var(--wb-muted);
   font-size: 13px;
+}
+
+/* Clickable logo (mark + wordmark) — navigates home. Looks like the old static
+   brand but adds a padded hit area, hover affordance and keyboard focus ring.
+   margin-left cancels the left padding so the mark keeps its original x. */
+.workbench-brand-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  margin-left: -8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  border-radius: 9px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.workbench-brand-btn:hover {
+  background: color-mix(in srgb, var(--wb-text) 8%, transparent);
+}
+
+.workbench-brand-btn:focus-visible {
+  outline: 2px solid var(--wb-accent);
+  outline-offset: 2px;
 }
 
 .workbench-crumbs {
@@ -1211,9 +1251,8 @@ body.wb-col-resizing {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 11px 12px 11px 13px;
+  padding: 11px 12px;
   border: 1px solid var(--wb-line);
-  border-left: 3px solid var(--wb-muted);
   border-radius: 10px;
   background: var(--wb-card-bg);
   color: var(--wb-text);
@@ -1253,13 +1292,9 @@ body.wb-col-resizing {
 }
 .workbench-toast-close:hover { background: var(--wb-control-hover-bg); color: var(--wb-text); }
 
-.workbench-toast.is-error   { border-left-color: var(--wb-red); }
 .workbench-toast.is-error   .workbench-toast-icon { color: var(--wb-red); }
-.workbench-toast.is-success { border-left-color: var(--wb-green); }
 .workbench-toast.is-success .workbench-toast-icon { color: var(--wb-green); }
-.workbench-toast.is-warning { border-left: 1px solid var(--wb-line); }
 .workbench-toast.is-warning .workbench-toast-icon { color: var(--wb-amber); }
-.workbench-toast.is-info    { border-left-color: var(--wb-blue); }
 .workbench-toast.is-info    .workbench-toast-icon { color: var(--wb-blue); }
 
 @keyframes wb-toast-in {
@@ -5240,7 +5275,10 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 .wb-label {
   min-width: 100px;
-  flex-shrink: 0;
+  /* Allow the label (title + hint) to shrink and wrap. With flex-shrink:0 a long
+     hint laid out on one line at its max-content width and starved the control
+     column, collapsing right-aligned inputs to ~0 (looked like an empty box). */
+  flex-shrink: 1;
   font-size: 13px;
   font-weight: 650;
   display: flex;
@@ -5256,7 +5294,9 @@ html[data-theme="light"] .wb-tool-list .mono {
 }
 
 .wb-controls {
-  flex: 1;
+  /* Size to the control's own width and never collapse, so the label column
+     (now shrinkable) gives up space to it instead of the other way around. */
+  flex: 0 0 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;

@@ -43,6 +43,10 @@ _PERMISSION_MODES = {"auto", "full_access"}
 # treated as stuck: the loop reflects once, then blocks instead of retrying the
 # same step until the runtime budget is burned.
 _STEP_FAILURE_CAP = 3
+# A step is only finished once the subagents it spawned settle. Cap that wait so
+# a wedged subagent can't stall the loop forever — on timeout the step proceeds
+# to verification with a warning rather than hanging.
+_SUBAGENT_SETTLE_TIMEOUT_SECONDS = 30 * 60
 _SQLITE_TIMEOUT_SECONDS = 15
 # db_paths whose schema + WAL pragma have already been ensured this process.
 # The durable goal-loop tables are created once instead of on every query,
@@ -772,8 +776,6 @@ class GoalLoopManager:
                 latest_run = await _get_run_by_id(self.db_path, run_id)
                 if not latest_run or str(latest_run.get("status") or "") != "running":
                     return
-                git_after = R._workbench_git_status_snapshot(workspace_root)
-                workspace_files_after = R._workbench_workspace_file_snapshot(workspace_root)
                 _, latest_project, latest_session = _read_session(str(run["session_id"]))
                 display_reply, awaiting = R._workbench_apply_pending(latest_session, str(run["session_id"]), reply)
                 if awaiting or reply == _AWAITING_USER_SENTINEL:
@@ -802,6 +804,47 @@ class GoalLoopManager:
                         await self._sync_projection(waiting, message=display_reply)
                     return
 
+                # A step isn't finished while subagents it spawned are still
+                # running. run_agent can return before its fire-and-forget
+                # subagents settle (its own monitoring caps at ~60s, and a
+                # spawn+quit in one turn skips monitoring entirely), which used
+                # to let the loop mark a step "completed" while a subagent kept
+                # working. Block until they settle so the file snapshots and
+                # verification below see the finished work.
+                from cyrene import subagent as _subagent
+
+                last_lease = _utc_now()
+
+                async def _keep_waiting() -> bool:
+                    nonlocal last_lease
+                    current = await _get_run_by_id(self.db_path, run_id)
+                    if not current or str(current.get("status") or "") != "running":
+                        return False
+                    # Renew the 10-min lease well before it lapses so a peer
+                    # worker can't steal the run during a long subagent wait.
+                    if _utc_now() - last_lease >= timedelta(minutes=5):
+                        if not await self._lease(current):
+                            return False
+                        last_lease = _utc_now()
+                    return True
+
+                leftover = await _subagent.wait_until_settled(
+                    session_id=str(run["session_id"]),
+                    timeout=_SUBAGENT_SETTLE_TIMEOUT_SECONDS,
+                    on_poll=_keep_waiting,
+                )
+                if leftover:
+                    logger.warning(
+                        "Goal-loop step %s proceeding with %d subagent(s) unsettled: %s",
+                        step_id, len(leftover), leftover,
+                    )
+                latest_run = await _get_run_by_id(self.db_path, run_id)
+                if not latest_run or str(latest_run.get("status") or "") != "running":
+                    return
+
+                git_after = R._workbench_git_status_snapshot(workspace_root)
+                workspace_files_after = R._workbench_workspace_file_snapshot(workspace_root)
+                _, latest_project, latest_session = _read_session(str(run["session_id"]))
                 verification = await _verify_step(latest_session, latest_project, step, display_reply)
                 activity_events = R._collect_run_activity_events(
                     str(run["session_id"]), started_at, R._short_id("run"), workspace_root

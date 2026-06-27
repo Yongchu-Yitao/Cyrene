@@ -21,13 +21,16 @@ async def test_resolve_and_initialize_session_scoped_knowledge_db(tmp_path, monk
         }),
         encoding="utf-8",
     )
+    monkeypatch.setattr(workbench_context, "_WORKBENCH_DB_PATH", "")
     monkeypatch.setattr(workbench_context, "_WORKBENCH_STORE", projects_path)
     monkeypatch.setattr(workbench_context, "_WORKBENCH_CHATS_STORE", tmp_path / "missing.json")
     monkeypatch.setattr(config, "STORE_DIR", tmp_path / "store")
 
     db_path = await workbench_context.ensure_knowledge_db_for_session("session-1")
 
-    assert Path(db_path).name == "kb_customer_alpha.db"
+    # Knowledge is keyed on the project id, NOT dataKey, so the legacy default
+    # project (dataKey "default") cannot alias the global kb_default.db catalog.
+    assert Path(db_path).name == "kb_project-1.db"
     assert Path(db_path).exists()
 
 

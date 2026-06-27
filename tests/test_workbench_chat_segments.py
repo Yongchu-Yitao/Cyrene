@@ -1,9 +1,11 @@
 """Regression tests for workbench chat transcript segmentation.
 
-Covers the four fixes for the "send me the file" exchange:
+Covers the fixes for the "send me the file" exchange:
 
 * a tool-delivered reply (``send_file``) is rendered *after* the tool call
   that produced it, not before (ordering);
+* when one turn delivers several files at once, the tool card sits above *all*
+  of them, not just the last (batched ``send_file`` ordering);
 * a failed tool call is marked in the trace instead of showing a success
   check (``send_wechat_file`` on the WebUI channel);
 * a mid-run turn that carries prose *and* tool calls keeps its prose as its
@@ -28,6 +30,32 @@ def _asst_tool(mid, name, call_id, args="{}", content=""):
 
 def _tool_result(call_id, content):
     return {"role": "tool", "tool_call_id": call_id, "content": content}
+
+
+def _asst_tools(mid, calls, content=""):
+    """An assistant turn that batches several tool calls into one message.
+
+    *calls* is a list of (name, call_id, args) tuples."""
+    return {
+        "role": "assistant",
+        "message_id": mid,
+        "content": content,
+        "tool_calls": [
+            {"id": cid, "function": {"name": name, "arguments": args}}
+            for (name, cid, args) in calls
+        ],
+    }
+
+
+def _delivered(mid, name):
+    """A tool-delivered (``send_file``) intermediate reply carrying one file."""
+    return {
+        "role": "assistant",
+        "message_id": mid,
+        "intermediate_reply": True,
+        "content": f"图 {name}",
+        "attachments": [{"id": name, "name": name, "url": f"/f/{name}", "content_type": "image/png"}],
+    }
 
 
 # The recorded exchange: ls -> cp -> send_wechat_file (fails on WebUI) ->
@@ -69,6 +97,62 @@ def test_delivered_file_renders_after_its_send_file_call():
     assert tools == ["Bash", "Bash", "send_wechat_file", "send_file"]
 
     # The final "Done." reply carries no leftover tool card.
+    assert trailing == []
+
+
+def test_batched_send_file_card_sits_above_all_delivered_files():
+    # One turn calls send_file three times; all three delivery replies stack up
+    # in storage *before* that single tool-call message (each live write lands
+    # ahead of the batched tool call). The tool card must render above ALL three
+    # files, not just the last one.
+    messages = [
+        {"role": "user", "message_id": "u1", "content": "把三张图发过来"},
+        _delivered("r1", "01.png"),
+        _delivered("r2", "02.png"),
+        _delivered("r3", "03.png"),
+        _asst_tools("a1", [
+            ("send_file", "c1", '{"path":"deliverables/01.png"}'),
+            ("send_file", "c2", '{"path":"deliverables/02.png"}'),
+            ("send_file", "c3", '{"path":"deliverables/03.png"}'),
+        ]),
+        _tool_result("c1", '{"status":"sent"}'),
+        _tool_result("c2", '{"status":"sent"}'),
+        _tool_result("c3", '{"status":"sent"}'),
+        {"role": "assistant", "message_id": "a2", "content": "三张图都发好了。"},
+    ]
+    segments, trailing, _usage, _files = _extract_exchange_segments(messages, set())
+
+    # Three reply blocks, in delivery order.
+    assert [a["name"] for s in segments for a in s["attachments"]] == ["01.png", "02.png", "03.png"]
+
+    # The whole 3-call card sits with the FIRST file (so it renders above all
+    # files); the later files carry no leftover card.
+    assert [t["tool"] for t in segments[0]["trace"]] == ["send_file", "send_file", "send_file"]
+    assert all(seg.get("trace") in (None, []) for seg in segments[1:])
+    assert trailing == []
+
+
+def test_send_file_replies_from_separate_turns_keep_their_own_cards():
+    # Two independent send_file turns: each delivery reply belongs to its own
+    # tool call. They must NOT be merged into one card — the batch reorder only
+    # groups replies that share a single tool-call message, and across turns each
+    # reply is split from the next by its own tool call + result.
+    messages = [
+        {"role": "user", "message_id": "u1", "content": "发两个文件"},
+        _delivered("r1", "a.png"),
+        _asst_tool("a1", "send_file", "c1", '{"path":"deliverables/a.png"}'),
+        _tool_result("c1", '{"status":"sent"}'),
+        _delivered("r2", "b.png"),
+        _asst_tool("a2", "send_file", "c2", '{"path":"deliverables/b.png"}'),
+        _tool_result("c2", '{"status":"sent"}'),
+        {"role": "assistant", "message_id": "a3", "content": "两个都发了。"},
+    ]
+    segments, trailing, _usage, _files = _extract_exchange_segments(messages, set())
+
+    assert [a["name"] for s in segments for a in s["attachments"]] == ["a.png", "b.png"]
+    # Each file keeps its own single-call card.
+    assert [t["tool"] for t in segments[0]["trace"]] == ["send_file"]
+    assert [t["tool"] for t in segments[1]["trace"]] == ["send_file"]
     assert trailing == []
 
 

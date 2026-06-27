@@ -154,4 +154,87 @@ async def archive_workbench_run(
     return documents
 
 
-__all__ = ["archive_workbench_run"]
+async def migrate_default_project_knowledge() -> dict[str, Any]:
+    """Move the Workbench default project's own docs out of the shared legacy KB.
+
+    The legacy default project keys knowledge on ``dataKey == "default"`` →
+    ``kb_default.db``, which the startup catalog also fills with the entire
+    global attachment domain (every project's uploads/exports). Knowledge now
+    keys on the project **id**, so the default project reads ``kb_<id>.db``. This
+    one-time, non-destructive migration re-ingests the default project's own
+    docs (its task archives + files produced by its own agent sessions) into the
+    id db, leaving ``kb_default.db`` intact for the ``--agent`` UI. Idempotent:
+    paths already present in the target are skipped.
+    """
+    from cyrene import workbench_context as wc
+
+    projects = wc._read_projects()
+    default_project = next(
+        (
+            p
+            for p in projects
+            if wc._safe_workbench_data_key(p.get("dataKey") or p.get("id")) == "default"
+        ),
+        None,
+    )
+    if not default_project:
+        return {"migrated": 0, "reason": "no_default_project"}
+
+    default_id = str(default_project.get("id") or "")
+    target_key = wc._safe_workbench_data_key(default_id)
+    if target_key == "default":
+        # Id sanitizes back to "default" — nothing to decouple.
+        return {"migrated": 0, "reason": "key_not_decoupled"}
+
+    source_db = str(get_knowledge_db_path("default"))
+    target_db = str(get_knowledge_db_path(target_key))
+    if source_db == target_db or not Path(source_db).exists():
+        return {"migrated": 0, "reason": "no_source"}
+
+    await init_knowledge_db(target_db)
+    existing_paths = {
+        str(doc.get("path") or "")
+        for doc in await store.list_documents(target_db, limit=0)
+    }
+
+    migrated = 0
+    for doc in await store.list_documents(source_db, limit=0):
+        path = str(doc.get("path") or "")
+        if not path or path in existing_paths:
+            continue
+        source = str(doc.get("source") or "")
+        metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+        session_id = str(metadata.get("session_id") or "")
+        # Attributable to the default project: a Workbench run archive (those are
+        # only ever written for the project that produced them) or a file from one
+        # of the default project's own agent sessions. Catalog-synced uploads and
+        # exports (no session linkage) are NOT the default project's — they are the
+        # global domain and must stay behind in kb_default.db.
+        attributable = source in {"workbench_task", "workbench_artifact"} or (
+            bool(session_id)
+            and wc.resolve_workbench_project_id_for_session(session_id) == default_id
+        )
+        if not attributable or not Path(path).exists():
+            continue
+        new_doc = await store.upsert_document_by_path(
+            target_db,
+            path=path,
+            source=source or "import",
+            name=doc.get("name") or Path(path).name,
+            title=doc.get("title") or "",
+            content_type=doc.get("content_type") or "application/octet-stream",
+            kind=doc.get("kind") or "",
+            size=int(doc.get("size") or 0),
+            tags=doc.get("tags") or [],
+            metadata=metadata,
+            content_hash=doc.get("content_hash") or store.content_hash_file(Path(path)),
+        )
+        existing_paths.add(str(new_doc.get("path") or path))
+        if new_doc.get("status") in {"pending", "error"}:
+            await ingest.index_document(target_db, new_doc["id"])
+        migrated += 1
+
+    return {"migrated": migrated, "target": target_key, "reason": "ok"}
+
+
+__all__ = ["archive_workbench_run", "migrate_default_project_knowledge"]

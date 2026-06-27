@@ -21,7 +21,7 @@ import logging
 from contextvars import ContextVar
 import random
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from cyrene import debug
 from cyrene.config import DATA_DIR
@@ -1030,6 +1030,57 @@ async def cancel_subagent_tasks(round_id: str, session_id: str = "") -> None:
 
     if cancelled_ids:
         await asyncio.sleep(0.1)  # brief yield so CancelledError can propagate
+
+
+async def wait_until_settled(
+    *,
+    session_id: str = "",
+    round_id: str = "",
+    timeout: float = 1800.0,
+    poll_interval: float = 2.0,
+    on_poll: Callable[[], Awaitable[bool]] | None = None,
+) -> list[str]:
+    """Block until every in-scope subagent stops actively working.
+
+    A subagent counts as *settled* once it leaves the active states (``RUNNING``
+    / ``RESUMED``) — i.e. it reached ``DONE`` / ``TIMEOUT``, or went idle in
+    ``WAITING`` with no live orchestrator left to reactivate it. Summary
+    subagents are ignored; the orchestrator spawns and awaits those itself.
+    Scope is the ``round_id`` / ``session_id`` filter (same semantics as
+    :func:`get_snapshot`); at least one is required or the call no-ops, so a
+    caller can never accidentally block on every run's subagents at once.
+
+    This exists because ``run_agent`` can return while subagents it spawned are
+    still fire-and-forget tasks: its own monitoring loop caps at ~60s, and a
+    spawn+quit in a single turn skips monitoring entirely. Callers that treat
+    "run_agent returned" as "the work is finished" — e.g. the goal loop marking
+    a step complete — use this to actually wait for that work to land.
+
+    Returns the agent_ids still active when the wait ends: empty once everything
+    settles, non-empty when ``timeout`` elapsed or ``on_poll`` aborted.
+    ``on_poll`` is awaited once per cycle before sleeping; return ``False`` to
+    stop early (e.g. the surrounding run was paused or cancelled).
+    """
+    if not session_id and not round_id:
+        return []
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout)
+    while True:
+        async with _lock:
+            active = [
+                aid
+                for aid, info in _registry.items()
+                if not aid.startswith(_SUMMARY_AGENT_PREFIX)
+                and _matches_round(info, round_id, session_id)
+                and str(info.get("status") or "") in (RUNNING, RESUMED)
+            ]
+        if not active:
+            return []
+        if loop.time() >= deadline:
+            return active
+        if on_poll is not None and not await on_poll():
+            return active
+        await asyncio.sleep(poll_interval)
 
 
 def _log_task_exception(task: asyncio.Task, agent_id: str) -> None:

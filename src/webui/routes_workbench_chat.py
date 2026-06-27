@@ -982,7 +982,7 @@ def _append_exchange_meta(
 def _reorder_tool_produced_replies(
     messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Move a tool-delivered reply to *after* the tool call that produced it.
+    """Move tool-delivered replies to *after* the tool call that produced them.
 
     A delivery tool (``send_file`` / ``send_wechat_file``) inserts its
     intermediate reply into session state *during* tool execution, before the
@@ -993,28 +993,54 @@ def _reorder_tool_produced_replies(
     after its triggering tool call and that call's tool results so rendering
     reads [tool card] -> [delivered file]. Storage (the LLM history) is
     untouched; this only reshapes the rendered transcript.
+
+    When a single tool-call message delivers *several* files at once (e.g. eight
+    ``send_file`` calls batched into one turn), all of their replies stack up
+    consecutively right before that one tool-call message. Move the whole run as
+    a unit so the tool card lands above *all* the delivered files, not just the
+    last one. A single forward pass (rather than move-and-rescan) keeps replies
+    from distinct delivery turns separate — across turns each reply is split off
+    from the next by its own tool call and results, so they never form one run.
     """
     if not isinstance(messages, list):
         return messages
-    out = list(messages)
+
+    def _is_delivered_reply(m: Any) -> bool:
+        return (
+            isinstance(m, dict)
+            and str(m.get("role") or "") == "assistant"
+            and bool(m.get("intermediate_reply"))
+        )
+
+    def _is_tool_call_msg(m: Any) -> bool:
+        return (
+            isinstance(m, dict)
+            and str(m.get("role") or "") == "assistant"
+            and bool(m.get("tool_calls"))
+        )
+
+    out: list[dict[str, Any]] = []
     i = 0
-    while i < len(out):
-        msg = out[i]
-        nxt = out[i + 1] if i + 1 < len(out) else None
-        if (
-            isinstance(msg, dict)
-            and str(msg.get("role") or "") == "assistant"
-            and bool(msg.get("intermediate_reply"))
-            and isinstance(nxt, dict)
-            and str(nxt.get("role") or "") == "assistant"
-            and nxt.get("tool_calls")
-        ):
-            reply = out.pop(i)            # lift the prematurely-stored reply
-            j = i + 1                     # the tool-call message is now at i
-            while j < len(out) and str(out[j].get("role") or "") == "tool":
-                j += 1                    # skip the tool call's result messages
-            out.insert(j, reply)
-            continue                      # re-scan from i (now the tool-call msg)
+    n = len(messages)
+    while i < n:
+        msg = messages[i]
+        if _is_delivered_reply(msg):
+            run_end = i                   # maximal run of consecutive replies
+            while run_end < n and _is_delivered_reply(messages[run_end]):
+                run_end += 1
+            if run_end < n and _is_tool_call_msg(messages[run_end]):
+                out.append(messages[run_end])     # the triggering tool-call msg
+                j = run_end + 1                   # then its tool-result messages
+                while j < n and str(messages[j].get("role") or "") == "tool":
+                    out.append(messages[j])
+                    j += 1
+                out.extend(messages[i:run_end])   # then the delivered replies
+                i = j
+                continue
+            out.extend(messages[i:run_end])        # not a delivery — leave as-is
+            i = run_end
+            continue
+        out.append(msg)
         i += 1
     return out
 

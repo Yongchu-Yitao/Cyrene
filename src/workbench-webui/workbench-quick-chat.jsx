@@ -60,6 +60,20 @@ function quickChatApplyAccent() {
   root.setProperty("--accent-text", (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.55 ? "#0d1612" : "#ffffff");
 }
 
+// Same story for light/dark: this window never mounts MainApp, so the theme
+// effect that sets html[data-theme] (app.jsx) never runs here. The index.html
+// boot script paints it once on first load, but the window is then only
+// hidden/shown — never reloaded — so without this it stays frozen on whatever
+// theme was active when it first opened. Re-read the shared mode and resolve
+// "system" against the OS, matching app.jsx's resolveActualTheme.
+function quickChatApplyTheme() {
+  var mode = quickChatReadTweak("theme", "system");
+  var actual = mode === "dark" || mode === "light"
+    ? mode
+    : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  document.documentElement.dataset.theme = actual;
+}
+
 function quickChatJson(url) {
   if (window.WorkbenchAPI && typeof window.WorkbenchAPI.json === "function") {
     return window.WorkbenchAPI.json(url, { toast: false });
@@ -271,16 +285,37 @@ function QuickChatApp() {
     runtime && runtime.segments && runtime.segments.length,
   ]);
 
-  // Keep the accent live-synced when the user changes the theme color in the
-  // main window (it's also applied at module load so the first paint is correct).
+  // Keep accent + light/dark live-synced with the main window. Both are applied
+  // at module load too so the first paint is correct.
   useQuickChatEffect(function () {
     quickChatApplyAccent();
-    function onAccentChange() { quickChatApplyAccent(); }
-    window.addEventListener("cyrene-tweak-accent-change", onAccentChange);
-    window.addEventListener("cyrene-tweak-theme-change", onAccentChange);
+    quickChatApplyTheme();
+    function onChange() { quickChatApplyAccent(); quickChatApplyTheme(); }
+
+    // The settings overlay lives in the main window, so its custom events fire
+    // on a different renderer's `window` and never reach us — but the
+    // localStorage writes they trigger surface here as `storage` events. That's
+    // the only reliable cross-window signal; the custom-event listeners below
+    // are kept only for parity in case this surface ever gains its own settings.
+    function onStorage(e) {
+      if (!e || !e.key) { onChange(); return; }
+      if (e.key === "cyrene-tweak-theme" || e.key === "cyrene-theme-mode") quickChatApplyTheme();
+      else if (e.key === "cyrene-tweak-accent") quickChatApplyAccent();
+    }
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("cyrene-tweak-accent-change", onChange);
+    window.addEventListener("cyrene-tweak-theme-change", onChange);
+
+    // Follow the OS while the user is on "system" mode.
+    var mq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+    function onSystem() { quickChatApplyTheme(); }
+    if (mq && mq.addEventListener) mq.addEventListener("change", onSystem);
+
     return function () {
-      window.removeEventListener("cyrene-tweak-accent-change", onAccentChange);
-      window.removeEventListener("cyrene-tweak-theme-change", onAccentChange);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("cyrene-tweak-accent-change", onChange);
+      window.removeEventListener("cyrene-tweak-theme-change", onChange);
+      if (mq && mq.removeEventListener) mq.removeEventListener("change", onSystem);
     };
   }, []);
 
@@ -568,8 +603,8 @@ function QuickChatApp() {
                   <div className="wbc-empty-icon">{QUICK_CHAT_ICON}</div>
                   <p>
                     {screenshot
-                      ? quickChatText("截图已就绪。输入问题，回复会带工具调用过程直接显示在这里。", "Screenshot ready. Ask a question — the reply (with tool calls) streams in here.")
-                      : quickChatText("输入问题开始快捷对话，回复会直接显示在这里。", "Type a question to start — the reply streams in here.")}
+                      ? quickChatText("截图好了，问我点什么吧", "Screenshot ready — ask away")
+                      : quickChatText("问我点什么吧", "Ask me anything")}
                   </p>
                 </div>
               ) : null}
@@ -675,12 +710,12 @@ function QuickChatPicker({ targets, defaultProject, selectedChatId, search, onSe
   );
 }
 
-// Apply the user's accent before first paint when this bundle loads inside the
-// quick-chat window (the main window drives its own accent via app.jsx).
+// Apply the user's accent + light/dark before first paint when this bundle
+// loads inside the quick-chat window (the main window drives both via app.jsx).
 (function () {
   try {
     var surface = new URLSearchParams(window.location.search || "").get("surface");
-    if (surface === "quick-chat") quickChatApplyAccent();
+    if (surface === "quick-chat") { quickChatApplyAccent(); quickChatApplyTheme(); }
   } catch (e) {}
 })();
 

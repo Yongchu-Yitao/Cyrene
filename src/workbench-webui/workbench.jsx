@@ -6,6 +6,18 @@ var {
   useRef: useWorkbenchRef,
 } = React;
 
+// Tag the host platform on <html> so CSS can reserve the macOS traffic-light
+// gutter only where it actually exists. window.cyrene.platform comes from the
+// Electron preload ('darwin' | 'win32' | 'linux'); fall back to 'web' in a
+// plain browser. Runs at script load, before React paints the topbar, so macOS
+// gets the gutter with no flash and other platforms never reserve dead space.
+(function tagWorkbenchPlatform() {
+  try {
+    document.documentElement.dataset.platform =
+      (window.cyrene && window.cyrene.platform) || "web";
+  } catch (e) {}
+})();
+
 // Document-level file drop target used by the task, conversation and knowledge
 // pages. Listening on document makes the whole visible module accept files,
 // including its rail and side panels, while the ref keeps the listener stable
@@ -1123,7 +1135,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         <div className="wb-ob-topbar">
           <div className="workbench-brand">
             <div className="workbench-traffic-space"></div>
-            <div className="brand-mark"></div>
+            <span className="brand-mark" aria-hidden="true"></span>
             <strong>Cyrene</strong>
           </div>
           <button type="button" className="workbench-icon-btn" onClick={onToggleTheme} title={t("workbench.theme." + (theme === "system" ? "system" : actualTheme === "dark" ? "dark" : "light"))}>
@@ -1227,7 +1239,16 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             onDeleteSession={handleDeleteSession}
             loading={loading}
           />
+          {/* Key by session id so each task gets its OWN controller instance:
+              the controller's transient `busy` marker (and draft/attachments)
+              must not bleed across tasks. Without this, switching to another
+              task while one is running (its dispatch request still in flight)
+              leaks busy=true onto the new task — its send button spins and is
+              unclickable. Stable within a task (id unchanged on live merges),
+              remounts only on a real switch; no unmount-abort, so the running
+              task keeps going server-side. */}
           <TaskWorkArea
+            key={store.activeSessionId || "none"}
             project={store.activeProject}
             session={store.activeSession}
             expandedStepId={expandedStepId}
@@ -1352,8 +1373,16 @@ function WorkbenchTopbar({ project, session, activePage, chatCrumb, notification
     <div className="workbench-topbar">
       <div className="workbench-brand">
         <div className="workbench-traffic-space"></div>
-        <div className="brand-mark"></div>
-        <strong>Cyrene</strong>
+        <button
+          type="button"
+          className="workbench-brand-btn"
+          onClick={function () { onOpenPage && onOpenPage("task"); }}
+          title={t("workbench.brand.home")}
+          aria-label={t("workbench.brand.home")}
+        >
+          <span className="brand-mark" aria-hidden="true"></span>
+          <strong>Cyrene</strong>
+        </button>
       </div>
       <div className="workbench-crumbs">
         <span>{title}</span>

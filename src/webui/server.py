@@ -96,6 +96,24 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         except Exception:
             logger.warning("Knowledge catalog sync failed — check your knowledge base")
 
+    @app.on_event("startup")
+    async def _decouple_default_project_knowledge() -> None:
+        # One-time: lift the Workbench default project's own knowledge docs out of
+        # the shared legacy kb_default.db (which the catalog fills with every
+        # project's files) into its id-scoped db. Idempotent, non-destructive.
+        try:
+            from cyrene.knowledge.workbench import migrate_default_project_knowledge
+
+            result = await migrate_default_project_knowledge()
+            if result.get("migrated"):
+                logger.info(
+                    "Default project knowledge decoupled: %s docs -> kb_%s.db",
+                    result.get("migrated"),
+                    result.get("target"),
+                )
+        except Exception:
+            logger.warning("Default project knowledge decouple failed (non-fatal)")
+
     @app.on_event("shutdown")
     async def _close_browser_session() -> None:
         try:

@@ -147,12 +147,30 @@ def resolve_project_data_key_for_session(session_id: str | None) -> str:
     return resolve_workbench_project_data_key_for_session(session_id) or _LEGACY_DATA_KEY
 
 
+def resolve_project_knowledge_key_for_session(session_id: str | None) -> str:
+    """Resolve a Workbench session to its knowledge-base storage key.
+
+    Knowledge is keyed on the project **id** (like project memory), NOT the
+    project ``dataKey``. The legacy default project deliberately uses
+    ``dataKey == "default"`` to share the ``--agent`` UI's global knowledge base;
+    keying knowledge on that would make the Workbench default project alias the
+    global ``kb_default.db`` catalog and surface files from every other project.
+    Keying on the id decouples it, exactly as
+    :func:`resolve_workbench_project_id_for_session` does for memory. Sessions not
+    attached to any project (the legacy ``--agent`` UI) fall back to ``default``.
+    """
+    project_id = resolve_workbench_project_id_for_session(session_id)
+    if project_id:
+        return _safe_workbench_data_key(project_id)
+    return _LEGACY_DATA_KEY
+
+
 async def ensure_knowledge_db_for_session(session_id: str | None) -> str:
     """Return the initialized knowledge DB scoped to a Workbench session."""
     from cyrene.config import get_knowledge_db_path
     from cyrene.db import init_knowledge_db
 
-    data_key = resolve_project_data_key_for_session(session_id)
+    data_key = resolve_project_knowledge_key_for_session(session_id)
     db_path = str(get_knowledge_db_path(data_key))
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     await init_knowledge_db(db_path)
@@ -163,6 +181,7 @@ __all__ = [
     "configure_store",
     "ensure_knowledge_db_for_session",
     "resolve_project_data_key_for_session",
+    "resolve_project_knowledge_key_for_session",
     "resolve_workbench_project_data_key_for_session",
     "resolve_workbench_project_id_for_session",
 ]
