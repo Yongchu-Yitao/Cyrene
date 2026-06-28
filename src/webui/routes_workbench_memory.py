@@ -448,6 +448,15 @@ def _normalize_tags(value: Any) -> list[str]:
     return out[:12]
 
 
+def _split_memory_query(query: str) -> tuple[str, list[str]]:
+    """Return the folded full query plus whitespace-separated OR terms."""
+    needle = str(query or "").strip().casefold()
+    if not needle:
+        return "", []
+    terms = [term for term in re.split(r"\s+", needle) if term]
+    return needle, terms
+
+
 def _preferred_memory_language() -> str:
     """Return the configured language used for user-visible memory content."""
     try:
@@ -811,7 +820,7 @@ def search_project_memories(
     This is the read-side counterpart to ``save_project_memory``. Results are
     bounded, project-scoped, and ranked by direct content match, then recency.
     """
-    needle = str(query or "").strip().casefold()
+    needle, terms = _split_memory_query(query)
     if not needle:
         return []
     category = str(category or "").strip().lower()
@@ -834,9 +843,18 @@ def search_project_memories(
         tags = [str(tag) for tag in entry.get("tags") or []]
         content_folded = content.casefold()
         tags_folded = " ".join(tags).casefold()
-        if needle not in content_folded and needle not in tags_folded:
+        content_phrase = needle in content_folded
+        tags_phrase = needle in tags_folded
+        content_term_hits = sum(1 for term in terms if term in content_folded)
+        tag_term_hits = sum(1 for term in terms if term in tags_folded)
+        if not content_phrase and not tags_phrase and not content_term_hits and not tag_term_hits:
             continue
-        score = 2 if needle in content_folded else 1
+        score = (
+            (100 if content_phrase else 0)
+            + (50 if tags_phrase else 0)
+            + content_term_hits * 2
+            + tag_term_hits
+        )
         updated = str(entry.get("last_mentioned") or entry.get("first_seen") or "")
         matches.append((score, updated, entry))
 

@@ -99,6 +99,20 @@ def _quit_reply_from_response(response_obj: dict[str, Any]) -> str:
     return ""
 
 
+def _materialize_quit_reply_for_history(response_obj: dict[str, Any], assistant_entry: dict[str, Any]) -> None:
+    """Mirror ``quit(reply=...)`` into assistant content before persisting history.
+
+    Workbench shows the value returned by ``_ensure_text_reply()``, but the next
+    model turn reads ``data/sessions/<id>/state.json``. If the reply stays only in
+    the quit tool arguments, the visible transcript and LLM history diverge.
+    """
+    if str(assistant_entry.get("content") or "").strip():
+        return
+    reply = _quit_reply_from_response(response_obj)
+    if reply:
+        assistant_entry["content"] = reply
+
+
 def _annotate_history_context(history: list) -> list[dict[str, Any]]:
     annotated: list[dict[str, Any]] = []
     for index, raw in enumerate(history or []):
@@ -464,6 +478,7 @@ async def _run_main_agent(
     tool_calls = response.get("tool_calls") or []
     messages = [*run_prefix, llm_user_entry]
     assistant_entry = _assistant_entry_from_response(response, round_id)
+    _materialize_quit_reply_for_history(response, assistant_entry)
     messages.append(assistant_entry)
 
     use_tools_call = None
@@ -525,6 +540,7 @@ async def _run_main_agent(
                 entry["usage"] = response["usage"]
             if round_id:
                 entry["round_id"] = round_id
+            _materialize_quit_reply_for_history(response, entry)
             messages.append(_apply_assistant_meta(entry))
 
             tcs = response.get("tool_calls") or []

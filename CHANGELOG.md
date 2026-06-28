@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.6.0b15] - 2026-06-28
+
+### Added
+
+- **Workbench 无 Git diff 捕获** — Workbench 运行前后现在会记录有界 UTF-8 文本快照；即使项目目录不是 Git 仓库，也能为新增、修改、删除文件生成统一 diff，并把 diff 写入 run、step related files 与 artifact，避免后续查看文件变化时只能看到“整文件快照”或空 diff。
+- **Workbench 会话召回进入项目 workspace** — `RecallConversation` 在 Workbench 任务/聊天上下文中优先搜索当前项目 `conversations/*.md`，返回 `scope=workbench_workspace`、session id 和 source file，避免跨项目或 legacy archive 召回不相关对话。
+
+### Fixed
+
+- **`quit(reply=...)` 历史不再丢失最终回复** — 直接通过 `quit(reply=...)` 收尾的回答现在会同步写入 assistant history content，确保用户可见 transcript 与下一轮 LLM 读取的会话历史一致。
+- **多词记忆召回过窄** — `RecallMemory` 与 Workbench 项目记忆搜索支持空格分词 OR 匹配并按短语/term 命中排序，像“照片 人物 头像 识别”这类查询不再要求整段完全连续命中。
+- **文件 diff 查看更稳** — Workbench diff API 会优先使用 recorded diff；Git diff 为空时补查 staged diff，对无内容变化的 timestamp-only 变动返回记录原因，避免误导性地把当前整文件当作变更。
+
+### Changed
+
+- **静态资源缓存版本统一** — WebUI 所有 JS/CSS cache-busting 参数统一为 `beta15`。
+- **版本元数据统一** — Python 包、Electron 应用、Electron lockfile、README badge、WeChat client 标识与 `uv.lock` 统一到 beta15。
+
+### Tests
+
+- 新增/更新 `test_quit_reply`、`test_runtime_fixes`、`test_workbench_init_plan`、`test_workbench_memory_language` 覆盖 quit reply 持久化、workspace conversation recall、记忆 OR 查询和 Workbench diff 记录。
+- 前端 cache-bust 断言同步到 beta15。
+
 ## [0.6.0b14] - 2026-06-28
 
 ### Fixed

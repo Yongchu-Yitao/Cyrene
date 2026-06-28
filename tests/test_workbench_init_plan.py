@@ -1,4 +1,6 @@
 import sys
+import os
+import asyncio
 import subprocess
 import json
 from pathlib import Path
@@ -1440,26 +1442,129 @@ def test_workbench_workspace_snapshot_detects_named_shell_output(tmp_path):
     from webui.routes import (
         _workbench_workspace_file_snapshot,
         _workbench_workspace_snapshot_delta,
+        _workbench_workspace_text_snapshot,
     )
 
     before = _workbench_workspace_file_snapshot(tmp_path)
+    before_text = _workbench_workspace_text_snapshot(tmp_path)
     output = tmp_path / "exports" / "report.pdf"
     output.parent.mkdir()
     output.write_bytes(b"%PDF-1.7\n")
     scratch = tmp_path / "scratch.tmp"
     scratch.write_text("temporary", encoding="utf-8")
     after = _workbench_workspace_file_snapshot(tmp_path)
+    after_text = _workbench_workspace_text_snapshot(tmp_path)
 
     changes = _workbench_workspace_snapshot_delta(
         before,
         after,
         "已生成 exports/report.pdf，可直接交付。",
+        before_text=before_text,
+        after_text=after_text,
     )
     by_path = {item["path"]: item for item in changes}
     assert by_path["exports/report.pdf"]["status"] == "produced"
     assert by_path["exports/report.pdf"]["source"] == "workspace_output"
     assert by_path["scratch.tmp"]["status"] == "created"
     assert by_path["scratch.tmp"]["source"] == "workspace"
+    assert "+temporary" in by_path["scratch.tmp"]["diff"]
+
+
+def test_workbench_workspace_snapshot_delta_records_text_diffs_without_git(tmp_path):
+    from webui.routes import (
+        _workbench_merge_file_changes,
+        _workbench_recorded_diff_for_path,
+        _workbench_workspace_file_snapshot,
+        _workbench_workspace_snapshot_delta,
+        _workbench_workspace_text_snapshot,
+    )
+
+    existing = tmp_path / "notes.md"
+    existing.write_text("old line\nkeep\n", encoding="utf-8")
+    removed = tmp_path / "old.txt"
+    removed.write_text("remove me\n", encoding="utf-8")
+    before = _workbench_workspace_file_snapshot(tmp_path)
+    before_text = _workbench_workspace_text_snapshot(tmp_path)
+
+    existing.write_text("new line\nkeep\n", encoding="utf-8")
+    created = tmp_path / "created.md"
+    created.write_text("# Created\n", encoding="utf-8")
+    removed.unlink()
+    after = _workbench_workspace_file_snapshot(tmp_path)
+    after_text = _workbench_workspace_text_snapshot(tmp_path)
+
+    changes = _workbench_workspace_snapshot_delta(
+        before,
+        after,
+        "",
+        before_text=before_text,
+        after_text=after_text,
+    )
+    by_path = {item["path"]: item for item in changes}
+    assert by_path["notes.md"]["status"] == "modified"
+    assert "-old line" in by_path["notes.md"]["diff"]
+    assert "+new line" in by_path["notes.md"]["diff"]
+    assert by_path["created.md"]["status"] == "created"
+    assert "--- /dev/null" in by_path["created.md"]["diff"]
+    assert "+# Created" in by_path["created.md"]["diff"]
+    assert by_path["old.txt"]["status"] == "deleted"
+    assert "-remove me" in by_path["old.txt"]["diff"]
+    assert "+++ /dev/null" in by_path["old.txt"]["diff"]
+
+    merged = _workbench_merge_file_changes([
+        {"path": "notes.md", "status": "modified", "source": "Edit"},
+        by_path["notes.md"],
+    ])
+    assert merged[0]["source"] == "Edit"
+    assert "+new line" in merged[0]["diff"]
+
+    recorded = _workbench_recorded_diff_for_path({"runs": [{"fileChanges": merged}]}, "notes.md", tmp_path)
+    assert recorded is not None
+    assert recorded["source"] == "workspace_snapshot"
+    assert "+new line" in recorded["diff"]
+
+
+def test_workbench_recorded_diff_blocks_misleading_current_snapshot_fallback(tmp_path):
+    from webui.routes import (
+        _workbench_git_diff_for_path,
+        _workbench_recorded_diff_for_path,
+        _workbench_workspace_file_snapshot,
+        _workbench_workspace_snapshot_delta,
+        _workbench_workspace_text_snapshot,
+    )
+
+    target = tmp_path / "same.md"
+    target.write_text("same content\n", encoding="utf-8")
+    before = _workbench_workspace_file_snapshot(tmp_path)
+    before_text = _workbench_workspace_text_snapshot(tmp_path)
+    stat = target.stat()
+    os.utime(target, (stat.st_atime + 10, stat.st_mtime + 10))
+    after = _workbench_workspace_file_snapshot(tmp_path)
+    after_text = _workbench_workspace_text_snapshot(tmp_path)
+
+    changes = _workbench_workspace_snapshot_delta(
+        before,
+        after,
+        "",
+        before_text=before_text,
+        after_text=after_text,
+    )
+    assert changes[0]["path"] == "same.md"
+    assert changes[0]["diffUnavailableReason"] == "no_text_difference"
+    assert "diff" not in changes[0]
+
+    recorded = _workbench_recorded_diff_for_path({"runs": [{"fileChanges": changes}]}, "same.md", tmp_path)
+    assert recorded == {
+        "path": "same.md",
+        "diff": "",
+        "has_changes": False,
+        "source": "no_text_difference",
+        "reason": "no_text_difference",
+    }
+
+    fallback = asyncio.run(_workbench_git_diff_for_path(tmp_path, "same.md"))
+    assert fallback["source"] == "snapshot"
+    assert "+same content" in fallback["diff"]
 
 
 import pytest
@@ -1487,6 +1592,42 @@ async def test_workbench_git_diff_for_tracked_and_untracked_files(tmp_path):
     assert "--- /dev/null" in untracked_diff["diff"]
     assert "+++ b/notes.md" in untracked_diff["diff"]
     assert "+# Notes" in untracked_diff["diff"]
+
+    staged = tmp_path / "staged.md"
+    staged.write_text("staged\n", encoding="utf-8")
+    subprocess.run(["git", "add", "staged.md"], cwd=tmp_path, check=True, capture_output=True)
+    staged_diff = await _workbench_git_diff_for_path(tmp_path, "staged.md")
+    assert staged_diff["source"] == "git"
+    assert "+++ b/staged.md" in staged_diff["diff"]
+    assert "+staged" in staged_diff["diff"]
+
+
+@pytest.mark.asyncio
+async def test_workbench_file_diff_falls_back_to_current_text_snapshot(tmp_path):
+    from webui.routes import _workbench_git_diff_for_path
+
+    report = tmp_path / "report.tex"
+    report.write_text("\\section{Result}\n", encoding="utf-8")
+
+    no_git_diff = await _workbench_git_diff_for_path(tmp_path, "report.tex")
+    assert no_git_diff["source"] == "snapshot"
+    assert no_git_diff["has_changes"] is True
+    assert "--- /dev/null" in no_git_diff["diff"]
+    assert "+++ b/report.tex" in no_git_diff["diff"]
+    assert "+\\section{Result}" in no_git_diff["diff"]
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "add", "report.tex"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "initial"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
+    clean_diff = await _workbench_git_diff_for_path(tmp_path, "report.tex")
+    assert clean_diff["source"] == "snapshot"
+    assert "+\\section{Result}" in clean_diff["diff"]
 
 
 @pytest.mark.asyncio
@@ -1615,6 +1756,26 @@ def test_workbench_promote_file_artifacts_promotes_and_dedups():
 
     # idempotent: re-running adds nothing
     assert _workbench_promote_file_artifacts(session, changes, "2026-06-14T01:00:00Z") == 0
+
+
+def test_workbench_promote_file_artifacts_relabels_moved_diff_headers(tmp_path):
+    from webui.routes import _workbench_promote_file_artifacts
+
+    (tmp_path / "report.md").write_text("# Report\n", encoding="utf-8")
+    session = {"artifacts": []}
+    changes = [{
+        "path": "report.md",
+        "status": "produced",
+        "source": "workspace_output",
+        "diff": "--- /dev/null\n+++ b/report.md\n@@ -0,0 +1 @@\n+# Report\n",
+        "diffSource": "workspace_snapshot",
+    }]
+
+    assert _workbench_promote_file_artifacts(session, changes, "2026-06-14T00:00:00Z", tmp_path) == 1
+    artifact = session["artifacts"][0]
+    assert artifact["path"] == "deliverables/report.md"
+    assert "+++ b/deliverables/report.md" in artifact["diff"]
+    assert "+++ b/report.md" not in artifact["diff"]
 
 
 def test_workbench_backfill_file_artifacts_from_runs_and_steps():

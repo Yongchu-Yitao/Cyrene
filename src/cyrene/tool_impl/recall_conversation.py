@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene import tool_legacy as _legacy
-from cyrene.conversations import recall_conversations
+from cyrene.conversations import recall_conversations, recall_workspace_conversations
 from cyrene.tool_legacy import _json_result
 
 TOOL_NAME = "RecallConversation"
@@ -25,26 +25,44 @@ async def _tool_recall_conversation(
     date = str(args.get("date", "") or "").strip()
     limit = max(1, min(int(args.get("limit", 5) or 5), 10))
 
-    matches = recall_conversations(
-        query=query,
-        session_id=session_id,
-        date=date,
-        limit=limit,
-    )
+    from cyrene.agent.state import _active_workspace_dir
+
+    workspace_dir = str(_active_workspace_dir.get() or "").strip()
+    if workspace_dir:
+        matches = recall_workspace_conversations(
+            workspace_dir=workspace_dir,
+            query=query,
+            session_id=session_id,
+            date=date,
+            limit=limit,
+        )
+        scope = "workbench_workspace"
+    else:
+        matches = recall_conversations(
+            query=query,
+            session_id=session_id,
+            date=date,
+            limit=limit,
+        )
+        scope = "legacy_archive"
     payload: dict[str, Any] = {
         "query": query,
         "session_id": session_id,
         "date": date,
+        "scope": scope,
         "matches": [
             {
                 "date": item.get("date", ""),
                 "timestamp": item.get("timestamp", ""),
                 "archive_session_id": item.get("archive_session_id", ""),
+                "session_id": item.get("session_id", item.get("archive_session_id", "")),
                 "session_title": item.get("session_title", ""),
                 "round_id": item.get("round_id", ""),
                 "round_title": item.get("round_title", ""),
                 "user": item.get("user_body", ""),
                 "assistant": item.get("assistant_body", ""),
+                "source": item.get("source", scope),
+                "source_file": item.get("source_file", ""),
             }
             for item in matches
         ],

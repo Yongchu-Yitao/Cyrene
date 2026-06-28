@@ -6,6 +6,7 @@ conversation archives are handled by the separate RecallConversation tool.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from cyrene import tool_legacy as _legacy
@@ -25,9 +26,17 @@ def _bounded_content(value: Any) -> tuple[str, bool]:
     return text[:_MAX_CONTENT_CHARS] + "…", True
 
 
+def _split_memory_query(query: str) -> tuple[str, list[str]]:
+    needle = str(query or "").strip().casefold()
+    if not needle:
+        return "", []
+    return needle, [term for term in re.split(r"\s+", needle) if term]
+
+
 async def _tool_recall_memory(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
     """Return recent short-term memories, optionally filtered by keyword/type."""
     query = str(args.get("query", "") or "").strip()
+    needle, terms = _split_memory_query(query)
     memory_type = str(args.get("type", "") or "").strip().lower()
     limit = max(1, min(int(args.get("limit", 10) or 10), 20))
 
@@ -37,8 +46,9 @@ async def _tool_recall_memory(args: dict[str, Any], _bot: Any, _chat_id: int, _d
         and not entry.get("stale")
         and (not memory_type or str(entry.get("type") or "").strip().lower() == memory_type)
         and (
-            not query
-            or query.casefold() in str(entry.get("content") or "").casefold()
+            not needle
+            or needle in str(entry.get("content") or "").casefold()
+            or any(term in str(entry.get("content") or "").casefold() for term in terms)
         )
     ]
     entries.sort(

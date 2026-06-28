@@ -378,6 +378,35 @@ async def test_recall_memory_tool_returns_recent_short_term_entries(tmp_path):
     assert "soul_memory" not in payload
 
 
+async def test_recall_memory_tool_uses_or_for_multiple_terms(tmp_path):
+    from cyrene import short_term
+    from cyrene import tools
+
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([
+        {
+            "content": "用户本人照片可用于身份识别",
+            "type": "fact",
+            "first_seen": "2026-06-20",
+            "last_mentioned": "2026-06-21",
+            "mention_count": 1,
+            "emotional_valence": 0,
+        },
+    ])
+
+    result = await tools._tool_recall_memory(
+        {"query": "照片 人物 头像 识别", "limit": 10},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    payload = json.loads(result)
+
+    assert payload["available_matches"] == 1
+    assert payload["memories"][0]["content"] == "用户本人照片可用于身份识别"
+
+
 async def test_recall_memory_tool_bounds_large_results(tmp_path):
     from cyrene import short_term
     from cyrene import tools
@@ -453,6 +482,57 @@ async def test_recall_conversation_tool_returns_archived_matches(tmp_path, monke
     assert payload["matches"][0]["session_title"] == "第二场"
     assert payload["matches"][0]["assistant"] == "已记录你偏好简洁回答。"
     assert "memories" not in payload
+
+
+async def test_recall_conversation_tool_searches_active_workbench_workspace(tmp_path):
+    from cyrene import conversations
+    from cyrene import tools
+    from cyrene.agent import state as agent_state
+
+    workspace = tmp_path / "project"
+    other_workspace = tmp_path / "other"
+    conversations.archive_session_exchange(
+        "wbchat_alpha",
+        "我们讨论 photo identification skill 的安装",
+        "已安装全局 skill。",
+        workspace_dir=workspace,
+        session_title="技能安装",
+    )
+    conversations.archive_session_exchange(
+        "wbchat_beta",
+        "photo identification skill 后续清理",
+        "需要检查实体和项目记忆。",
+        workspace_dir=workspace,
+        session_title="清理讨论",
+    )
+    conversations.archive_session_exchange(
+        "wbchat_other",
+        "photo identification skill 在另一个 workspace",
+        "不应被当前 workspace 搜到。",
+        workspace_dir=other_workspace,
+        session_title="其他项目",
+    )
+
+    token = agent_state._active_workspace_dir.set(str(workspace))
+    try:
+        result = await tools._tool_recall_conversation(
+            {"query": "photo identification", "limit": 10},
+            None,
+            0,
+            "db.sqlite3",
+            None,
+        )
+    finally:
+        agent_state._active_workspace_dir.reset(token)
+
+    payload = json.loads(result)
+    assert payload["scope"] == "workbench_workspace"
+    assert {item["session_id"] for item in payload["matches"]} == {
+        "wbchat_alpha",
+        "wbchat_beta",
+    }
+    assert all(item["source"] == "workbench_workspace" for item in payload["matches"])
+    assert all(str(workspace) in item["source_file"] for item in payload["matches"])
 
 
 async def test_run_chat_agent_avoids_duplicate_short_term_memory_in_system_prompt(monkeypatch, tmp_path):
@@ -891,7 +971,6 @@ async def test_run_vision_chat_uses_vision_candidates_after_primary_failure(monk
     assert payload["vision_text"] == "vision fallback ok"
     assert payload["vision_model"] == "vision-model"
     assert attempts == [
-        ("primary-model", "https://primary.example/v1/chat/completions"),
         ("vision-model", "https://vision.example/v1/chat/completions"),
     ]
 

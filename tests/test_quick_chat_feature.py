@@ -60,7 +60,7 @@ def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
     assert 'params.get("surface")' in app
     assert 'readUiSurfaceMode() === "quick-chat"' in app
     assert "<window.QuickChatApp />" in app
-    assert "compiled/workbench-quick-chat.js?v=beta14" in index
+    assert "compiled/workbench-quick-chat.js?v=beta15" in index
     # The picker pulls writable targets from the dedicated endpoint.
     assert "/api/workbench/quick-chat/targets" in quick_chat
     assert "getLaunchContext" in quick_chat

@@ -4,7 +4,7 @@ tools=None reconstruction call (a prompt-cache prefix-root break)."""
 import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -68,3 +68,48 @@ def test_assistant_text_empty_for_quit_so_reply_is_used():
     from cyrene.llm import _assistant_text
 
     assert _assistant_text(_quit_call(json.dumps({"reply": "x"}))) == ""
+
+
+async def test_quit_reply_is_persisted_as_assistant_content(monkeypatch):
+    """A direct quit(reply=...) answer must be visible in the next LLM history."""
+    from cyrene.agent import agent as agent_core
+    from cyrene import behavior_learning
+
+    saved_messages = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "q1",
+                    "function": {
+                        "name": "quit",
+                        "arguments": json.dumps({"reply": "上一轮已经回答"}),
+                    },
+                }
+            ],
+        }
+
+    async def fake_save(messages, **kwargs):
+        saved_messages.append(messages)
+
+    monkeypatch.setattr(agent_core, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(agent_core, "get_active_tool_defs", lambda: [])
+    monkeypatch.setattr(agent_core, "_save_session_messages", fake_save)
+    monkeypatch.setattr(agent_core, "_append_session_message", AsyncMock())
+    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
+
+    result = await agent_core._run_main_agent(
+        "你在什么时候会找 entities",
+        [{"role": "user", "content": "RecallConversation 之后你能看到什么"}],
+        None,
+        0,
+        "db.sqlite3",
+        persist_user_message=False,
+    )
+
+    assert result == "上一轮已经回答"
+    assert saved_messages
+    assert saved_messages[-1][-1]["role"] == "assistant"
+    assert saved_messages[-1][-1]["content"] == "上一轮已经回答"

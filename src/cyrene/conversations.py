@@ -338,6 +338,65 @@ def _parse_archive_sections(content: str, date_str: str) -> list[dict[str, str]]
     return sections_out
 
 
+def _split_session_entry_blocks(content: str) -> list[str]:
+    blocks: list[str] = []
+    matches = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", content))
+    for index, match in enumerate(matches):
+        start = match.start()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(content)
+        block = content[start:end].strip()
+        block = re.sub(r"\n+---\s*\Z", "", block).strip()
+        if block:
+            blocks.append(block)
+    return blocks
+
+
+def _parse_session_file_sections(content: str, filepath: Path) -> list[dict[str, str]]:
+    """Parse Workbench per-session conversation files.
+
+    Workbench archives one Markdown file per conversation id:
+    ``conversations/<session_id>.md``. This parser mirrors the legacy archive
+    shape closely enough that RecallConversation can return a consistent
+    payload while searching the project workspace directly.
+    """
+    sections_out: list[dict[str, str]] = []
+    session_id = _parse_archive_meta(content, "session_id")
+    if not session_id:
+        header_match = re.search(r"(?m)^#\s+Conversation\s+(.+?)\s*$", content)
+        session_id = header_match.group(1).strip() if header_match else filepath.stem
+    session_title = _parse_archive_meta(content, "session_title")
+
+    round_index = 0
+    for section in _split_session_entry_blocks(content):
+        if "**User**:" not in section:
+            continue
+        ts_match = re.search(r"^##\s*(.+?)\s*$", section, re.MULTILINE)
+        dialogue_match = re.search(r"\*\*User\*\*:\s*(.*?)\n+\*\*[^*]+\*\*:\s*(.*)\Z", section, re.DOTALL)
+        if not ts_match or not dialogue_match:
+            continue
+
+        timestamp = ts_match.group(1).strip()
+        date_match = re.match(r"(\d{4}-\d{2}-\d{2})\b", timestamp)
+        round_id = f"{session_id}:{round_index}" if session_id else f"{filepath.stem}:{round_index}"
+        sections_out.append({
+            "date": date_match.group(1) if date_match else "",
+            "timestamp": timestamp,
+            "archive_session_id": session_id,
+            "session_id": session_id,
+            "session_title": session_title,
+            "round_id": round_id,
+            "round_title": "",
+            "user_body": dialogue_match.group(1).strip(),
+            "assistant_body": dialogue_match.group(2).strip(),
+            "raw_entry": section.strip(),
+            "source_file": str(filepath),
+            "source": "workbench_workspace",
+        })
+        round_index += 1
+
+    return sections_out
+
+
 async def search_conversations_structured(
     query: str,
     limit: int = 30,
@@ -425,6 +484,80 @@ def _build_search_snippet(text: str, query: str, max_chars: int = 300) -> str:
     if end < len(body):
         snippet = snippet + "…"
     return snippet
+
+
+def recall_workspace_conversations(
+    workspace_dir: str | Path,
+    query: str = "",
+    session_id: str = "",
+    date: str = "",
+    limit: int = 5,
+) -> list[dict[str, str]]:
+    """Return Workbench conversation entries from one workspace.
+
+    Searches every ``conversations/*.md`` file under *workspace_dir*, which is
+    the storage layout used by Workbench chats/tasks. Results are newest first.
+    """
+    directory = session_conversations_dir(workspace_dir)
+    normalized_query = query.strip().lower()
+    normalized_session_id = session_id.strip()
+    normalized_date = date.strip()
+
+    try:
+        files = sorted(directory.glob("*.md"), reverse=True)
+    except Exception:
+        logger.exception("Failed to list workspace conversation files in %s", directory)
+        return []
+
+    if normalized_session_id:
+        exact_file = directory / f"{_safe_session_filename(normalized_session_id)}.md"
+        if exact_file.exists():
+            files = [exact_file]
+
+    matches: list[dict[str, str]] = []
+    for filepath in files:
+        if not filepath.exists():
+            continue
+        try:
+            content = filepath.read_text(encoding="utf-8")
+        except Exception:
+            logger.exception("Failed to read workspace conversation file %s", filepath)
+            continue
+
+        for section in _parse_session_file_sections(content, filepath):
+            section_session_id = str(
+                section.get("session_id") or section.get("archive_session_id") or ""
+            ).strip()
+            safe_filter_id = _safe_session_filename(normalized_session_id)
+            if (
+                normalized_session_id
+                and section_session_id != normalized_session_id
+                and filepath.stem != safe_filter_id
+            ):
+                continue
+            if normalized_date and section.get("date", "") != normalized_date:
+                continue
+            if normalized_query:
+                haystack = "\n".join([
+                    section.get("session_title", ""),
+                    section.get("round_title", ""),
+                    section.get("user_body", ""),
+                    section.get("assistant_body", ""),
+                    section.get("raw_entry", ""),
+                ]).lower()
+                if normalized_query not in haystack:
+                    continue
+            matches.append(section)
+
+    matches.sort(
+        key=lambda item: (
+            str(item.get("timestamp") or ""),
+            str(item.get("source_file") or ""),
+            str(item.get("round_id") or ""),
+        ),
+        reverse=True,
+    )
+    return matches[:max(1, limit)]
 
 
 def recall_conversations(

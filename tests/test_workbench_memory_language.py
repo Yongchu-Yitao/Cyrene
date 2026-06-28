@@ -176,6 +176,34 @@ def test_search_project_memories_filters_and_excludes_stale(monkeypatch, tmp_pat
     assert [item["id"] for item in results] == ["mem_new"]
 
 
+def test_search_project_memories_uses_or_for_multiple_terms(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    entries = [
+        {
+            "id": "mem_photo",
+            "content": "用户本人照片可用于身份识别。",
+            "type": "fact",
+            "category": "fact",
+            "source": "agent",
+            "tags": ["用户"],
+            "first_seen": "2026-06-20",
+            "last_mentioned": "2026-06-21",
+            "mention_count": 1,
+        },
+    ]
+    (tmp_path / "wb_memory_project-test.json").write_text(
+        json.dumps(entries, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    results = memory.search_project_memories(
+        "project-test",
+        query="照片 人物 头像 识别",
+    )
+
+    assert [item["id"] for item in results] == ["mem_photo"]
+
+
 def test_search_project_memories_bounds_large_results(monkeypatch, tmp_path):
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     entries = [

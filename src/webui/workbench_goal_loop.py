@@ -732,6 +732,7 @@ class GoalLoopManager:
                 workspace_root = R._workbench_workspace_root(current_project)
                 git_before = R._workbench_git_status_snapshot(workspace_root)
                 workspace_files_before = R._workbench_workspace_file_snapshot(workspace_root)
+                workspace_text_before = R._workbench_workspace_text_snapshot(workspace_root)
                 started_at = _utc_iso()
                 ephemeral = R._workbench_compose_ephemeral_system(
                     current_project, current_session,
@@ -848,6 +849,7 @@ class GoalLoopManager:
 
                 git_after = R._workbench_git_status_snapshot(workspace_root)
                 workspace_files_after = R._workbench_workspace_file_snapshot(workspace_root)
+                workspace_text_after = R._workbench_workspace_text_snapshot(workspace_root)
                 _, latest_project, latest_session = _read_session(str(run["session_id"]))
                 verification = await _verify_step(latest_session, latest_project, step, display_reply)
                 activity_events = R._collect_run_activity_events(
@@ -863,6 +865,8 @@ class GoalLoopManager:
                     workspace_files_after,
                     workspace_root,
                     f"{step_prompt}\n{display_reply}",
+                    workspace_text_before=workspace_text_before,
+                    workspace_text_after=workspace_text_after,
                 )
                 run_record = {
                     "id": R._short_id("run"),

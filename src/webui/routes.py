@@ -3340,6 +3340,12 @@ def _workbench_merge_file_changes(changes: list[dict[str, Any]]) -> list[dict[st
                 old["source"] = item.get("source")
         if item.get("source") and not old.get("source"):
             old["source"] = item.get("source")
+        if item.get("diff") and not old.get("diff"):
+            old["diff"] = item.get("diff")
+            if item.get("diffSource"):
+                old["diffSource"] = item.get("diffSource")
+        if item.get("diffUnavailableReason") and not old.get("diff") and not old.get("diffUnavailableReason"):
+            old["diffUnavailableReason"] = item.get("diffUnavailableReason")
     return [merged[key] for key in order]
 
 
@@ -3347,6 +3353,9 @@ _WORKBENCH_SNAPSHOT_IGNORED_DIRS = {
     ".git", ".hg", ".svn", ".idea", ".vscode", ".pytest_cache", ".mypy_cache",
     ".ruff_cache", ".tox", ".venv", "__pycache__", "node_modules",
 }
+_WORKBENCH_TEXT_SNAPSHOT_MAX_BYTES = 1_000_000
+_WORKBENCH_TEXT_SNAPSHOT_MAX_TOTAL_BYTES = 8_000_000
+_WORKBENCH_TEXT_SNAPSHOT_MAX_FILES = 500
 
 
 def _workbench_workspace_file_snapshot(workspace_root: Path | None) -> dict[str, tuple[int, int]]:
@@ -3385,13 +3394,69 @@ def _workbench_workspace_file_snapshot(workspace_root: Path | None) -> dict[str,
     return snapshot
 
 
+def _workbench_workspace_text_snapshot(workspace_root: Path | None) -> dict[str, str]:
+    """Capture bounded UTF-8 file content so Workbench can diff without Git."""
+    if not workspace_root:
+        return {}
+    try:
+        root = workspace_root.resolve()
+    except OSError:
+        return {}
+    if not root.exists() or not root.is_dir():
+        return {}
+
+    snapshot: dict[str, str] = {}
+    total_bytes = 0
+    try:
+        for current, dirnames, filenames in os.walk(root):
+            dirnames[:] = [
+                name for name in dirnames
+                if name not in _WORKBENCH_SNAPSHOT_IGNORED_DIRS and not name.startswith(".")
+            ]
+            if len(snapshot) >= _WORKBENCH_TEXT_SNAPSHOT_MAX_FILES:
+                break
+            current_path = Path(current)
+            for filename in filenames:
+                if len(snapshot) >= _WORKBENCH_TEXT_SNAPSHOT_MAX_FILES:
+                    break
+                if filename.startswith("."):
+                    continue
+                target = current_path / filename
+                try:
+                    if not target.is_file() or target.is_symlink():
+                        continue
+                    stat = target.stat()
+                    if stat.st_size > _WORKBENCH_TEXT_SNAPSHOT_MAX_BYTES:
+                        continue
+                    if total_bytes + stat.st_size > _WORKBENCH_TEXT_SNAPSHOT_MAX_TOTAL_BYTES:
+                        return snapshot
+                    rel = target.relative_to(root).as_posix()
+                    data = target.read_bytes()
+                except OSError:
+                    continue
+                if b"\x00" in data:
+                    continue
+                try:
+                    snapshot[rel] = data.decode("utf-8")
+                    total_bytes += len(data)
+                except UnicodeDecodeError:
+                    continue
+    except OSError:
+        return snapshot
+    return snapshot
+
+
 def _workbench_workspace_snapshot_delta(
     before: dict[str, tuple[int, int]],
     after: dict[str, tuple[int, int]],
     evidence: str = "",
+    before_text: dict[str, str] | None = None,
+    after_text: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return workspace changes and mark files explicitly named as outputs."""
     evidence_text = str(evidence or "")
+    before_text = before_text or {}
+    after_text = after_text or {}
     changes: list[dict[str, Any]] = []
     for path, signature in after.items():
         previous = before.get(path)
@@ -3406,6 +3471,40 @@ def _workbench_workspace_snapshot_delta(
             source="workspace_output" if explicitly_named else "workspace",
         )
         if change:
+            if path in after_text and (previous is None or path in before_text):
+                diff = _workbench_unified_diff(
+                    before_text.get(path, ""),
+                    after_text[path],
+                    f"a/{path}" if previous is not None else "/dev/null",
+                    f"b/{path}",
+                )
+                if diff.strip():
+                    change["diff"] = diff
+                    change["diffSource"] = "workspace_snapshot"
+                else:
+                    change["diffUnavailableReason"] = "no_text_difference"
+            else:
+                change["diffUnavailableReason"] = "text_snapshot_unavailable"
+            changes.append(change)
+    for path, previous in before.items():
+        if path in after:
+            continue
+        change = _workbench_file_change(path, "deleted", source="workspace")
+        if change:
+            if path in before_text:
+                diff = _workbench_unified_diff(
+                    before_text[path],
+                    "",
+                    f"a/{path}",
+                    "/dev/null",
+                )
+                if diff.strip():
+                    change["diff"] = diff
+                    change["diffSource"] = "workspace_snapshot"
+                else:
+                    change["diffUnavailableReason"] = "no_text_difference"
+            else:
+                change["diffUnavailableReason"] = "text_snapshot_unavailable"
             changes.append(change)
     return changes
 
@@ -3418,11 +3517,19 @@ def _workbench_collect_run_file_changes(
     workspace_after: dict[str, tuple[int, int]],
     workspace_root: Path | None,
     evidence: str = "",
+    workspace_text_before: dict[str, str] | None = None,
+    workspace_text_after: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     return _workbench_merge_file_changes([
         *[change for event in tool_events for change in (event.get("fileChanges") or [])],
         *_workbench_git_status_delta(git_before, git_after, workspace_root),
-        *_workbench_workspace_snapshot_delta(workspace_before, workspace_after, evidence),
+        *_workbench_workspace_snapshot_delta(
+            workspace_before,
+            workspace_after,
+            evidence,
+            before_text=workspace_text_before,
+            after_text=workspace_text_after,
+        ),
     ])
 
 
@@ -3565,13 +3672,97 @@ def _workbench_unified_diff(left_text: str, right_text: str, left_label: str, ri
     ))
 
 
+def _workbench_relabel_diff_paths(diff: str, old_path: str, new_path: str) -> str:
+    if not diff or not old_path or not new_path or old_path == new_path:
+        return diff
+    old_left = f"--- a/{old_path}"
+    old_right = f"+++ b/{old_path}"
+    new_left = f"--- a/{new_path}"
+    new_right = f"+++ b/{new_path}"
+    old_created = f"+++ b/{old_path}"
+    new_created = f"+++ b/{new_path}"
+    lines = diff.splitlines(keepends=True)
+    for idx, line in enumerate(lines[:4]):
+        suffix = "\n" if line.endswith("\n") else ""
+        bare = line[:-1] if suffix else line
+        if bare == old_left:
+            lines[idx] = new_left + suffix
+        elif bare == old_right or bare == old_created:
+            lines[idx] = new_right + suffix
+    return "".join(lines)
+
+
+_WORKBENCH_DIFF_SNAPSHOT_MAX_BYTES = 1_000_000
+
+
+def _workbench_current_file_snapshot_diff(target: Path, rel: str) -> str:
+    """Return a displayable text snapshot when no historical/git diff exists."""
+    try:
+        if not target.is_file() or target.stat().st_size > _WORKBENCH_DIFF_SNAPSHOT_MAX_BYTES:
+            return ""
+        right_text = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    if not right_text:
+        return ""
+    return _workbench_unified_diff("", right_text, "/dev/null", f"b/{rel}")
+
+
+def _workbench_recorded_diff_for_path(session: dict[str, Any], path_value: Any, workspace_root: Path | None = None) -> dict[str, Any] | None:
+    rel = _workbench_display_path(path_value, workspace_root) or str(path_value or "").strip()
+    if not rel:
+        return None
+
+    candidates: list[dict[str, Any]] = []
+    for run in reversed(session.get("runs") or []):
+        if isinstance(run, dict):
+            candidates.extend(
+                item for item in reversed(run.get("fileChanges") or [])
+                if isinstance(item, dict)
+            )
+    for step in reversed(session.get("plan") or []):
+        if isinstance(step, dict):
+            candidates.extend(
+                item for item in reversed(step.get("relatedFiles") or [])
+                if isinstance(item, dict)
+            )
+    candidates.extend(
+        item for item in reversed(session.get("artifacts") or [])
+        if isinstance(item, dict) and item.get("type") == "file_change"
+    )
+
+    for item in candidates:
+        item_path = _workbench_display_path(item.get("path") or item.get("name"), workspace_root)
+        if item_path != rel:
+            continue
+        diff = str(item.get("diff") or "")
+        if diff.strip():
+            return {
+                "path": rel,
+                "diff": diff,
+                "has_changes": True,
+                "source": str(item.get("diffSource") or "recorded"),
+            }
+        reason = str(item.get("diffUnavailableReason") or "").strip()
+        if reason:
+            return {
+                "path": rel,
+                "diff": "",
+                "has_changes": False,
+                "source": reason,
+                "reason": reason,
+            }
+    return None
+
+
 async def _workbench_git_diff_for_path(workspace_root: Path | None, path_value: Any) -> dict[str, Any]:
     target = _workbench_resolve_workspace_file(workspace_root, path_value)
     root = workspace_root.resolve() if workspace_root else None
     rel = target.relative_to(root).as_posix() if root else str(path_value)
     context = _workbench_git_context(root)
     if context is None:
-        return {"path": rel, "diff": "", "has_changes": False}
+        diff = _workbench_current_file_snapshot_diff(target, rel)
+        return {"path": rel, "diff": diff, "has_changes": bool(diff.strip()), "source": "snapshot" if diff else "none"}
     repo_root, prefix = context
     git_rel = f"{prefix}{rel}" if prefix else rel
 
@@ -3595,6 +3786,23 @@ async def _workbench_git_diff_for_path(workspace_root: Path | None, path_value: 
         raise RuntimeError(stderr.decode("utf-8", errors="replace") or "git diff failed")
 
     diff = stdout.decode("utf-8", errors="replace")
+    diff_source = "git" if diff.strip() else "none"
+    if not diff.strip() and target.is_file():
+        staged = await asyncio.create_subprocess_exec(
+            "git",
+            "diff",
+            "--cached",
+            "--",
+            git_rel,
+            cwd=str(repo_root),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        staged_stdout, _ = await staged.communicate()
+        if staged.returncode in (0, 1):
+            diff = staged_stdout.decode("utf-8", errors="replace")
+            if diff.strip():
+                diff_source = "git"
     if not diff.strip() and target.is_file():
         tracked = await asyncio.create_subprocess_exec(
             "git",
@@ -3608,14 +3816,15 @@ async def _workbench_git_diff_for_path(workspace_root: Path | None, path_value: 
         )
         await tracked.communicate()
         if tracked.returncode != 0:
-            try:
-                right_text = target.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                right_text = ""
-            if right_text:
-                diff = _workbench_unified_diff("", right_text, "/dev/null", f"b/{rel}")
+            diff = _workbench_current_file_snapshot_diff(target, rel)
+            if diff.strip():
+                diff_source = "snapshot"
+    if not diff.strip() and target.is_file():
+        diff = _workbench_current_file_snapshot_diff(target, rel)
+        if diff.strip():
+            diff_source = "snapshot"
 
-    return {"path": rel, "diff": diff, "has_changes": bool(diff.strip())}
+    return {"path": rel, "diff": diff, "has_changes": bool(diff.strip()), "source": diff_source}
 
 
 def _workbench_apply_step_file_changes(session: dict[str, Any], step_id: str, file_changes: list[dict[str, Any]]) -> None:
@@ -3725,6 +3934,7 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
             status = "ready"
         if not status:
             continue
+        original_path = path
         # Move send_file deliverables into deliverables/ so the workspace root
         # doesn't accumulate flat files. Skip files already under deliverables/.
         if change_type == "produced" and deliverables_dir:
@@ -3744,7 +3954,7 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
                         shutil.move(str(src_path), str(dest_path))
                         path = str(dest_path.relative_to(workspace_root))  # type: ignore[union-attr]
         known_paths.add(path)
-        artifacts.append({
+        artifact = {
             "id": _short_id("artifact"),
             "type": "file_change",
             "name": path.rsplit("/", 1)[-1] or path,
@@ -3753,7 +3963,12 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
             "createdAt": now,
             "summary": path,
             "source": change.get("source"),
-        })
+        }
+        if change.get("diff"):
+            artifact["diff"] = _workbench_relabel_diff_paths(str(change.get("diff") or ""), original_path, path)
+            if change.get("diffSource"):
+                artifact["diffSource"] = change.get("diffSource")
+        artifacts.append(artifact)
         added += 1
     session["artifacts"] = artifacts
     return added
@@ -8469,8 +8684,12 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
+        workspace_root = _workbench_workspace_root(project)
+        recorded = _workbench_recorded_diff_for_path(session, path, workspace_root)
+        if recorded and recorded.get("has_changes"):
+            return recorded
         try:
-            result = await _workbench_git_diff_for_path(_workbench_workspace_root(project), path)
+            result = await _workbench_git_diff_for_path(workspace_root, path)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except TimeoutError as exc:
@@ -8480,6 +8699,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 "Failed to compute Workbench diff for session %s", session_id
             )
             return error_response("Diff failed", 500, "workbench_diff_failed")
+        if recorded and not (result.get("has_changes") and result.get("source") == "git"):
+            return recorded
         return result
 
     @router.get("/api/task-sessions/{session_id}/workspace/exists")
@@ -9188,6 +9409,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         workspace_root = _workbench_workspace_root(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
+        workspace_text_before = _workbench_workspace_text_snapshot(workspace_root)
         ephemeral_system = _workbench_compose_ephemeral_system(
             project, session, step_id=step_id if is_step_run else "", workspace_root=workspace_root
         )
@@ -9195,6 +9417,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         agent_reply = await _workbench_agent_reply(user_input, session, constraints, attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
+        workspace_text_after = _workbench_workspace_text_snapshot(workspace_root)
         # A run that hit a permission / clarification boundary pauses awaiting the
         # user's answer — surface the question on the card instead of the sentinel.
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
@@ -9238,6 +9461,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             workspace_files_after,
             workspace_root,
             f"{user_input}\n{agent_reply}",
+            workspace_text_before=workspace_text_before,
+            workspace_text_after=workspace_text_after,
         )
         if is_step_run and step_id:
             _workbench_apply_step_file_changes(session, step_id, file_changes)
@@ -9307,6 +9532,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         workspace_root = _workbench_workspace_root(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
+        workspace_text_before = _workbench_workspace_text_snapshot(workspace_root)
         ephemeral_system = _workbench_compose_ephemeral_system(
             project, session, workspace_root=workspace_root
         )
@@ -9314,6 +9540,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
+        workspace_text_after = _workbench_workspace_text_snapshot(workspace_root)
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
         # Preserve any title/goal/summary the agent changed mid-run via set_task_goal.
         _workbench_sync_agent_task_meta(session, session_id, task_meta_before)
@@ -9335,6 +9562,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             workspace_files_after,
             workspace_root,
             f"{message}\n{agent_reply}",
+            workspace_text_before=workspace_text_before,
+            workspace_text_after=workspace_text_after,
         )
         if chat_tool_events:
             session.setdefault("events", []).extend(chat_tool_events)
@@ -9499,6 +9728,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         workspace_root = _workbench_workspace_root(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
+        workspace_text_before = _workbench_workspace_text_snapshot(workspace_root)
         ephemeral_system = _workbench_compose_ephemeral_system(
             project, session, workspace_root=workspace_root
         )
@@ -9508,6 +9738,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
+        workspace_text_after = _workbench_workspace_text_snapshot(workspace_root)
         agent_reply, awaiting_user = _workbench_apply_pending(session, session_id, agent_reply)
         # Preserve any title/goal/summary the agent changed mid-run via set_task_goal.
         _workbench_sync_agent_task_meta(session, session_id, task_meta_before)
@@ -9537,6 +9768,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             workspace_files_after,
             workspace_root,
             f"{user_input}\n{agent_reply}",
+            workspace_text_before=workspace_text_before,
+            workspace_text_after=workspace_text_after,
         )
         events = [
             {"id": _short_id("event"), "type": "UserMessageEvent", "runId": run_id, "createdAt": now, "body": user_input or "[附件]", "attachments": public_attachments},
@@ -9665,6 +9898,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         workspace_dir = _workbench_resolve_workspace_dir(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
         workspace_files_before = _workbench_workspace_file_snapshot(workspace_root)
+        workspace_text_before = _workbench_workspace_text_snapshot(workspace_root)
         try:
             agent_reply = await _workbench_answer_pending(session_id, question_id, answer_text, workspace_dir)
         except Exception:
@@ -9672,6 +9906,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             return JSONResponse({"error": "answer resume failed"}, status_code=502)
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
+        workspace_text_after = _workbench_workspace_text_snapshot(workspace_root)
 
         # Another boundary may have been hit while resuming → re-surface the new
         # question; otherwise clear the card and settle on the continued reply.
@@ -9693,6 +9928,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             workspace_files_after,
             workspace_root,
             f"{answer_text}\n{agent_reply}",
+            workspace_text_before=workspace_text_before,
+            workspace_text_after=workspace_text_after,
         )
         events = [
             {"id": _short_id("event"), "type": "UserMessageEvent", "runId": run_id, "createdAt": now, "body": f"[确认] {answer_text}"},
