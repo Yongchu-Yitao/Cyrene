@@ -1,8 +1,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.6.0b16-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.6.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
-  <img src="https://img.shields.io/badge/status-alpha-yellow" alt="Status">
+  <img src="https://img.shields.io/badge/status-beta-orange" alt="Status">
 </p>
 
 <p align="center">
@@ -22,49 +22,74 @@
 
 Cyrene is an AI agent that **runs continuously** — it has a self-rewriting personality (`SOUL.md`), remembers conversations across sessions, spawns sub-agents for parallel work, and can act proactively via scheduled tasks.
 
-It runs as a local daemon with two web front-ends (and optional Telegram/WeChat bots), connecting to any OpenAI-compatible LLM API.
+It runs as a local daemon with two web front-ends (and optional Telegram/WeChat bots), connecting to any OpenAI-compatible LLM API. Everything — memory, knowledge, scheduler, browser automation, search — lives in a single Python process backed by SQLite and flat files. There is no external infrastructure to stand up: no Docker, no Redis, no vector database service.
+
+A quick map of the moving parts:
+
+- **One process** hosts the agent loop, the FastAPI web server, the scheduler, and the bundled search engine.
+- **Two UIs** ship side by side — a project-centric **Workbench** (default) and the classic single-agent **Legacy** UI — sharing the same backend.
+- **Any OpenAI-compatible API** works (DeepSeek by default; Claude, GPT, Qwen, and local models all fit).
 
 ---
 
-## Feature Overview
+## Features
 
-| Feature | Status |
-|---|---|
-| **Two-phase agent loop** — chat-only (1 LLM call) or full tool use | Stable |
-| **SOUL.md personality** — agent rewrites its own personality document | Stable |
-| **Three-tier memory** — context window → short-term → long-term | Stable |
-| **Parallel sub-agents** — spawn agents with full tool access, inbox coordination | Stable |
-| **Deep research** — multi-round research pipeline with PDF report export | Stable |
-| **Deep Reflection** — multi-round context reframing for complex or ambiguous queries | Beta |
-| **Built-in web search** — SimpleXNG, no Docker needed | Stable |
-| **MCP protocol** — connect any stdio/SSE MCP server | Stable |
-| **Task scheduler** — cron, interval, one-shot tasks + proactive lottery system | Stable |
-| **Knowledge base** — upload documents/PDFs/images, embed, and search | Stable |
-| **Entities** — track, query, and update structured project entities | Stable |
-| **Skills installer** — install `.md`/`.zip` prompt skills at runtime | Stable |
-| **Behavior learning** — learn reusable action patterns from conversations | Beta |
-| **Claude Code bridge** — detect, launch, and chat with Claude Code tmux sessions | Beta |
-| **Code tools** — codebase indexing, symbol search, git helpers | Beta |
-| **Browser live view** — WebSocket screencasting, in-panel live control, and headed login takeover | Beta |
-| **Context debugger** — inspect exactly what context was sent to each LLM call | Stable |
-| **Workbench UI** — project-centric dashboard, schedule, knowledge, memory, chat | Stable |
-| **Legacy agent UI** — real-time chat, agent flow timeline, sessions, settings | Stable |
-| **Electron desktop app** — CI builds for macOS/Windows/Linux; OS keyring auth | Beta |
-| **Telegram bot** — full agent access via Telegram | Stable |
-| **WeChat bot** — basic WeChat integration | Alpha |
-| **Map engine** — AMap/Leaflet interactive map with pins | Beta |
+Cyrene packs a lot into that single process. Here is the full picture, grouped by what you would reach for.
+
+### 🧠 Agent core
+
+The reasoning loop and the pieces that make Cyrene feel less like a stateless chatbot.
+
+- **Two-phase agent loop** — every turn first decides whether it can answer directly (one LLM call, no tools) or whether it needs to act; only then does it enter the tool-using phase. Simple chat stays cheap and fast, while real work still gets the full toolset. *Stable*
+- **`SOUL.md` personality** — Cyrene keeps a personality document it rewrites itself. As it learns your preferences, voice, and the people and projects in your life, it edits its own `SOUL.md`, so the personality evolves across sessions instead of resetting every time. *Stable*
+- **Deep Research** — a multi-round research pipeline that plans sub-questions, searches and reads sources across several rounds, and exports a structured PDF report at the end. *Stable*
+- **Deep Reflection** — for complex or ambiguous requests, Cyrene reframes the problem over several internal rounds before answering, trading a little latency for a better-aimed response. *Beta*
+- **Behavior learning** — distills reusable action patterns from past conversations, so recurring workflows get faster and more consistent over time. *Beta*
+
+### 🗂️ Memory & knowledge
+
+How Cyrene remembers across sessions and works with your documents.
+
+- **Three-tier memory** — context window → short-term cross-session summaries → long-term `SOUL.md`. Conversations are compressed into short-term entries; a "steward" promotes the durable ones to long-term. Stale or superseded short-term memories can be **retired** so they stop being injected and recalled, without being destructively deleted. *Stable*
+- **Knowledge base** — upload documents, PDFs, and images; Cyrene embeds and indexes them (including vision indexing for images) so the agent can search and cite them mid-task. *Stable*
+- **Entities** — track structured project entities (people, systems, items) that the agent can query and update as facts change. *Stable*
+
+### 🛠️ Tools & automation
+
+What Cyrene can actually *do* beyond talking.
+
+- **Parallel sub-agents** — spawn independent agents with full tool access to work in parallel, coordinated through an inbox so their results flow back into the main run. *Stable*
+- **Built-in web search** — bundled SimpleXNG (SearXNG engine) means web search works out of the box, with no Docker and no external search API key. *Stable*
+- **MCP protocol** — connect any stdio or SSE [Model Context Protocol](https://modelcontextprotocol.io) server to extend the toolset with third-party capabilities. *Stable*
+- **Task scheduler** — cron, interval, and one-shot scheduled tasks, plus a proactive "lottery" system that lets Cyrene act on its own initiative rather than only when prompted. *Stable*
+- **Browser live view** — drives a real, persistent Playwright browser (logins survive across runs) and screencasts it live into the UI over WebSocket. You can take **live control in-panel**, or hand off to a **headed window** for login walls, CAPTCHAs, and 2FA, then resume in the same authenticated session. *Beta*
+- **Code tools** — codebase indexing, symbol search, and git helpers for working inside repositories. *Beta*
+- **Claude Code bridge** — detect, launch, and chat with Claude Code tmux sessions directly from within Cyrene. *Beta*
+- **Skills installer** — install `.md` / `.zip` prompt skills at runtime to teach Cyrene new procedures without a redeploy. *Stable*
+
+### 🖥️ Interfaces & channels
+
+Where you actually talk to Cyrene.
+
+- **Workbench UI** — a project-centric desktop experience: per-project dashboard, schedule, knowledge, memory, and chat, with honest step-by-step task execution you can follow and steer. *Stable*
+- **Legacy agent UI** — the classic single-agent web UI: real-time chat, an agent-flow timeline, session history, and settings. *Stable*
+- **Context debugger** — inspect exactly what context (system prompt, memory, conversation history, tool set) was sent to each individual LLM call. *Stable*
+- **Electron desktop app** — packaged builds for macOS, Windows (x64 + ARM64), and Linux via CI, with credentials stored in the OS keyring. *Beta*
+- **Telegram bot** — full agent access from Telegram. *Stable*
+- **WeChat bot** — basic WeChat integration. *Alpha*
+- **Map engine** — interactive AMap / Leaflet map with pins for location-based tasks. *Beta*
 
 ---
 
-## Limitations (current as of v0.6.0b16)
+## Limitations (current as of v0.6.0)
 
-- **Single-user** — one workspace, one SOUL.md, no user isolation
-- **Local-only Web UI** — binds to `127.0.0.1`; desktop app uses OS keyring auth, raw web server has no auth layer
+- **Single-user** — one workspace, one `SOUL.md`, no user isolation
+- **Local-only Web UI** — binds to `127.0.0.1`; the desktop app uses OS keyring auth, but the raw web server has no auth layer
 - **No data retention policy** — session history grows indefinitely
-- **Limited error recovery** — agent crashes are silently caught, user isn't notified
-- **No API versioning** — all endpoints under bare `/api/`
-- **No rate/cost limiting** — no LLM call quota protection
-- **Windows from source** — requires manual patching of vendored dependencies; pre-built installer recommended
+- **Limited error recovery** — agent crashes are caught silently; the user is not always notified
+- **No API versioning** — all endpoints live under a bare `/api/`
+- **No rate/cost limiting** — there is no LLM call quota or spend protection
+- **Windows from source** — requires manual patching of vendored dependencies; the pre-built installer is recommended
 - **Testing** — unit tests exist (`uv run pytest -q`) but the pytest suite is not run in CI (CI only smoke-tests the packaged app), and there are no integration/E2E tests
 
 ---
