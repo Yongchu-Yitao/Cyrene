@@ -18,7 +18,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -2283,6 +2283,112 @@ def _workbench_find_session(payload: dict[str, Any], session_id: str) -> tuple[d
             if str(session.get("id") or "") == session_id:
                 return project, session
     return None, None
+
+
+def _launch_update_restart(
+    download_progress: dict[str, Any],
+    *,
+    get_restart_script_fn: Callable[[Path], str] | None = None,
+    popen_fn: Any | None = None,
+) -> tuple[bool, str, str, int]:
+    """Write and spawn the updater script.
+
+    Returns ``(ok, message, code, status_code)``. The caller is responsible for
+    exiting only when ``ok`` is true.
+    """
+    if not bool(download_progress.get("done")):
+        return (
+            False,
+            "Update download has not completed. Download the update before restarting.",
+            "update_download_incomplete",
+            409,
+        )
+
+    dest_str = str(download_progress.get("path") or "").strip()
+    if not dest_str:
+        return (
+            False,
+            "No downloaded update package found. Download the update before restarting.",
+            "update_package_missing",
+            409,
+        )
+
+    dest = Path(dest_str)
+    try:
+        if not dest.is_file():
+            return (
+                False,
+                f"Downloaded update package is missing: {dest}",
+                "update_package_missing",
+                409,
+            )
+        file_size = dest.stat().st_size
+    except OSError as exc:
+        return (
+            False,
+            f"Unable to inspect downloaded update package: {exc}",
+            "update_package_unreadable",
+            409,
+        )
+    if file_size <= 0:
+        return (
+            False,
+            f"Downloaded update package is empty: {dest}",
+            "update_package_empty",
+            409,
+        )
+    try:
+        expected_size = int(download_progress.get("total") or 0)
+    except (TypeError, ValueError):
+        expected_size = 0
+    if expected_size > 0 and file_size < expected_size:
+        return (
+            False,
+            f"Downloaded update package is incomplete: {file_size} of {expected_size} bytes.",
+            "update_package_incomplete",
+            409,
+        )
+
+    if get_restart_script_fn is None:
+        from cyrene.updater import get_restart_script as get_restart_script_fn
+    if popen_fn is None:
+        popen_fn = subprocess.Popen
+
+    try:
+        script = get_restart_script_fn(dest)
+        if not str(script or "").strip():
+            return (
+                False,
+                "Updater script generation returned an empty script.",
+                "update_restart_script_empty",
+                500,
+            )
+
+        if sys.platform == "win32":
+            script_path = dest.parent / "update.bat"
+            script_path.write_text(script, encoding="utf-8")
+            popen_fn(
+                ["cmd", "/c", str(script_path)],
+                creationflags=(
+                    0x00000200 |  # CREATE_NEW_PROCESS_GROUP
+                    0x00000008    # DETACHED_PROCESS
+                ),
+            )
+        else:
+            script_path = dest.parent / "update.sh"
+            script_path.write_text(script, encoding="utf-8")
+            script_path.chmod(0o755)
+            popen_fn(["bash", str(script_path)], start_new_session=True)
+    except Exception as exc:
+        logger.warning("Failed to spawn updater script", exc_info=True)
+        return (
+            False,
+            f"Failed to launch updater script: {exc}",
+            "update_restart_launch_failed",
+            500,
+        )
+
+    return True, "", "", 200
 
 
 def _workbench_extract_constraints(text: str) -> list[str]:
@@ -10426,47 +10532,14 @@ def register_routes(app, bot: Any, db_path: str) -> None:
 
     @router.post("/api/update/restart")
     async def api_update_restart():
-        """写入重启脚本并退出进程（安装更新后调用）。
+        """写入重启脚本并退出进程（安装更新后调用）。"""
+        from cyrene.updater import _download_progress
 
-        无论更新文件是否存在，都通过退出码 42 通知 Electron 重启，
-        避免因提前返回导致进程继续运行、关闭时误弹"崩溃"对话框。
-        """
-        from cyrene.updater import get_restart_script, _download_progress
-        import subprocess as _sp
+        ok, message, code, status_code = _launch_update_restart(_download_progress)
+        if not ok:
+            return error_response(message, status_code, code)
 
-        dest_str = _download_progress.get("path", "")
-        if dest_str:
-            dest = Path(dest_str)
-            if dest.exists():
-                try:
-                    script = get_restart_script(dest)
-                    if sys.platform == "win32":
-                        script_path = dest.parent / "update.bat"
-                        script_path.write_text(script)
-                        _sp.Popen(
-                            ["cmd", "/c", str(script_path)],
-                            creationflags=(
-                                0x00000200 |  # CREATE_NEW_PROCESS_GROUP
-                                0x00000008    # DETACHED_PROCESS
-                            ),
-                        )
-                    else:
-                        script_path = dest.parent / "update.sh"
-                        script_path.write_text(script)
-                        script_path.chmod(0o755)
-                        _sp.Popen(
-                            ["bash", str(script_path)], start_new_session=True
-                        )
-                except Exception:
-                    logger.warning(
-                        "Failed to spawn updater script", exc_info=True
-                    )
-            else:
-                logger.warning("Update file vanished: %s", dest)
-        else:
-            logger.warning("Restart called but no downloaded update found")
-
-        # 始终用退出码 42 退出，通知 Electron 释放 single-instance lock
+        # 只有 updater 脚本成功启动后才退出，通知 Electron 释放 single-instance lock。
         import os as _os
         _os._exit(42)
 

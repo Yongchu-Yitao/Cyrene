@@ -6,8 +6,10 @@
 * #52 — browser tools are reserved for the main agent (no subagent access)
 * #12 — macOS desktop channel fires a real OS notification via
   terminal-notifier, not merely an SSE event requiring an open browser tab
+* #56 — update restart exits only after the updater script launches
 """
 
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -395,6 +397,188 @@ async def test_macos_desktop_reports_notifier_failure(monkeypatch):
 
     assert res["ok"] is False
     assert "permission denied" in res["error"]
+
+
+# ---------------------------------------------------------------------------
+# #56 — update restart exits only after updater script launch succeeds
+# ---------------------------------------------------------------------------
+
+
+def test_update_restart_missing_package_skips_spawn(tmp_path):
+    from webui import routes
+
+    popen = MagicMock()
+    ok, message, code, status = routes._launch_update_restart(
+        {"done": True, "path": str(tmp_path / "missing.dmg")},
+        get_restart_script_fn=lambda _path: "echo ok\n",
+        popen_fn=popen,
+    )
+
+    assert ok is False
+    assert status == 409
+    assert code == "update_package_missing"
+    assert "missing" in message.lower()
+    popen.assert_not_called()
+
+
+def test_update_restart_empty_package_skips_spawn(tmp_path):
+    from webui import routes
+
+    package = tmp_path / "Cyrene-update.dmg"
+    package.write_bytes(b"")
+    popen = MagicMock()
+
+    ok, message, code, status = routes._launch_update_restart(
+        {"done": True, "path": str(package)},
+        get_restart_script_fn=lambda _path: "echo ok\n",
+        popen_fn=popen,
+    )
+
+    assert ok is False
+    assert status == 409
+    assert code == "update_package_empty"
+    assert "empty" in message.lower()
+    popen.assert_not_called()
+
+
+def test_update_restart_incomplete_package_skips_spawn(tmp_path):
+    from webui import routes
+
+    package = tmp_path / "Cyrene-update.dmg"
+    package.write_bytes(b"partial")
+    popen = MagicMock()
+
+    ok, message, code, status = routes._launch_update_restart(
+        {"done": True, "path": str(package), "total": package.stat().st_size + 1},
+        get_restart_script_fn=lambda _path: "echo ok\n",
+        popen_fn=popen,
+    )
+
+    assert ok is False
+    assert status == 409
+    assert code == "update_package_incomplete"
+    assert "incomplete" in message.lower()
+    popen.assert_not_called()
+
+
+def test_update_restart_spawn_failure_reports_error(tmp_path):
+    from webui import routes
+
+    package = tmp_path / "Cyrene-update.dmg"
+    package.write_bytes(b"fake update")
+    popen = MagicMock(side_effect=OSError("spawn denied"))
+
+    ok, message, code, status = routes._launch_update_restart(
+        {"done": True, "path": str(package)},
+        get_restart_script_fn=lambda _path: "echo ok\n",
+        popen_fn=popen,
+    )
+
+    assert ok is False
+    assert status == 500
+    assert code == "update_restart_launch_failed"
+    assert "spawn denied" in message
+    popen.assert_called_once()
+
+
+def test_update_restart_success_spawns_detached_script(tmp_path):
+    from webui import routes
+
+    package = tmp_path / "Cyrene-update.dmg"
+    package.write_bytes(b"fake update")
+    popen = MagicMock()
+
+    ok, message, code, status = routes._launch_update_restart(
+        {"done": True, "path": str(package)},
+        get_restart_script_fn=lambda _path: "echo ok\n",
+        popen_fn=popen,
+    )
+
+    assert ok is True
+    assert message == ""
+    assert code == ""
+    assert status == 200
+    popen.assert_called_once()
+    argv = popen.call_args.args[0]
+    kwargs = popen.call_args.kwargs
+    if sys.platform == "win32":
+        assert argv[:2] == ["cmd", "/c"]
+        assert Path(argv[2]).name == "update.bat"
+        assert kwargs["creationflags"] & 0x00000200
+        assert kwargs["creationflags"] & 0x00000008
+    else:
+        assert argv == ["bash", str(tmp_path / "update.sh")]
+        assert kwargs["start_new_session"] is True
+        assert os.access(tmp_path / "update.sh", os.X_OK)
+
+
+def _update_restart_client(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from webui import routes
+
+    app = FastAPI()
+    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    return TestClient(app)
+
+
+def test_update_restart_api_missing_package_keeps_process_running(monkeypatch, tmp_path):
+    from cyrene import updater
+
+    monkeypatch.setitem(updater._download_progress, "downloaded", 0)
+    monkeypatch.setitem(updater._download_progress, "total", 0)
+    monkeypatch.setitem(updater._download_progress, "done", True)
+    monkeypatch.setitem(updater._download_progress, "path", str(tmp_path / "missing.dmg"))
+    exit_mock = MagicMock()
+    monkeypatch.setattr(os, "_exit", exit_mock)
+
+    response = _update_restart_client(tmp_path).post("/api/update/restart")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "update_package_missing"
+    exit_mock.assert_not_called()
+
+
+def test_update_restart_api_spawn_failure_keeps_process_running(monkeypatch, tmp_path):
+    from cyrene import updater
+    from webui import routes
+
+    package = tmp_path / "Cyrene-update.dmg"
+    package.write_bytes(b"fake update")
+    monkeypatch.setitem(updater._download_progress, "downloaded", package.stat().st_size)
+    monkeypatch.setitem(updater._download_progress, "total", package.stat().st_size)
+    monkeypatch.setitem(updater._download_progress, "done", True)
+    monkeypatch.setitem(updater._download_progress, "path", str(package))
+    monkeypatch.setattr(updater, "get_restart_script", lambda _path: "echo ok\n")
+    monkeypatch.setattr(routes.subprocess, "Popen", MagicMock(side_effect=OSError("spawn denied")))
+    exit_mock = MagicMock()
+    monkeypatch.setattr(os, "_exit", exit_mock)
+
+    response = _update_restart_client(tmp_path).post("/api/update/restart")
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "update_restart_launch_failed"
+    exit_mock.assert_not_called()
+
+
+def test_update_restart_api_success_exits_with_restart_code(monkeypatch, tmp_path):
+    from cyrene import updater
+    from webui import routes
+
+    monkeypatch.setitem(updater._download_progress, "downloaded", 1)
+    monkeypatch.setitem(updater._download_progress, "total", 1)
+    monkeypatch.setitem(updater._download_progress, "done", True)
+    monkeypatch.setitem(updater._download_progress, "path", str(tmp_path / "Cyrene-update.dmg"))
+    launch = MagicMock(return_value=(True, "", "", 200))
+    monkeypatch.setattr(routes, "_launch_update_restart", launch)
+    exit_mock = MagicMock()
+    monkeypatch.setattr(os, "_exit", exit_mock)
+
+    response = _update_restart_client(tmp_path).post("/api/update/restart")
+
+    assert response.status_code == 200
+    launch.assert_called_once_with(updater._download_progress)
+    exit_mock.assert_called_once_with(42)
 
 
 # ---------------------------------------------------------------------------
