@@ -2,33 +2,61 @@
 
 ## [0.6.0] - 2026-06-29
 
-首个正式版本。0.6.0 将 `feat/workbench` 分支的全部工作合并进 `main`，并把版本号从 beta 序列正式定为 `0.6.0`。
+首个正式版本，汇总自 **v0.5.1** 以来的累积更新。0.6.0 的主线是全新的 **Workbench 工作台**——以项目为中心的桌面工作环境，以及围绕它的可恢复任务执行、并发对话、记忆 / 知识体系，加上大量提示词缓存与稳定性优化。本版本把 `feat/workbench` 分支的全部工作合并进 `main`，并将版本号正式定为 `0.6.0`。
 
-### 亮点
+> 各 `0.6.0-beta.*` 预发布的逐版本明细见下方 beta 段。
 
-- **Workbench 工作台 UI** — 以项目为中心的桌面界面：看板、日程、知识、记忆、对话，任务按步骤诚实执行、可跟随可干预。
-- **浏览器实时直播与接管** — 驱动真实持久化的 Playwright 浏览器（登录态跨运行保留），通过 WebSocket 实时投屏；支持在面板内直接接管操作，或切换有头窗口完成登录墙 / 验证码 / 2FA，再回到同一已登录会话继续。
-- **三层记忆 + 短期记忆退场** — 上下文 → 短期跨会话摘要 → 长期 `SOUL.md`；过期短期记忆可退场，不再注入与召回（保留留档）。
-- **并行子 agent 与运行打断** — 子 agent 全工具并行协作；打断当前运行时连同在跑的子 agent 一起取消。
-- **知识库、实体、MCP、调度器、技能安装、Claude Code 桥接** 等能力随本版本一同稳定。
+### 🏗️ Workbench 工作台（全新）
 
-### 自 0.6.0b16 以来的变更
+- **以项目为中心的工作台** — 全新桌面 UI：每个项目独立的看板、日程、知识、记忆、对话与个人资料页，与经典单 agent UI 并存、共享后端。
+- **诚实的逐步任务执行** — 计划基于工作区实况生成（计划模式提交前可只读预探索），任务按步骤推进、可跟随可干预、可中途修订并保留进度；意图分流（问题 / 指令 / 任务）与「任务完成」收尾（finalize）。
+- **可恢复的对话运行** — Chat 运行由进程级运行管理器持有，断线、切页或网络抖动后 agent 仍在后台继续并持久化结果，前端经独立只读接口重连追上；支持并发多会话。
+- **对话编辑与分叉** — 可编辑已发送消息并从该点分叉新对话（原对话保留、标注 Forked），也可从任意位置重新生成回复（事务式替换，失败不丢旧回复）。
+- **SQLite 事务存储** — 以 SQLite 为单一真相源（`BEGIN IMMEDIATE` + 三方合并 + WAL），并发消息 / 会话 / 通知 / 记忆互不覆盖，取代旧的整文件 JSON 读改写。
+- **工作区隔离与安全** — 每个项目限定到自身 `workspacePath`（主 agent 与 subagent 一致），新建项目走空工作区引导；workspace 路径安全校验防穿越。
+- **产物与文件变更** — Artifact 一键下载（服务端校验不逃逸 workspace）；即使非 Git 仓库也能记录有界文本快照生成统一 diff；`send_file` 显式产物信号优先于 git 推断。
+- **上下文可视化** — 上下文分段 token 仪表 + 手动压缩对话；Settings 浮层、平台感知的全局快捷键管理器、subagent 状态 / 载荷面板。
 
-#### Added
+### 💬 Quick Chat 全局快捷对话（全新）
 
-- **浏览器面板内实时控制** — 用户可在直播面板内直接通过 CDP 注入鼠标 / 键盘 / IME 操作 headless 页面；用户接管期间 agent 的浏览器动作自动让位。新增 `/api/browser/takeover`、`/api/browser/release`，以及对反 headless 站点的逃生原生窗口（关闭后自动回退 headless）。
-- **短期记忆退场工具** — 新增 `retire_short_term_memory`；`RecallMemory` 现在为每条短期记忆返回稳定 `memory_id`，退场条目保留在本地留档但不再进入记忆上下文与召回结果。
+- **全局快捷键唤起** — `Ctrl/Cmd+Shift+Space` 任意界面呼出浮动窗口，支持活跃窗口截图粘贴、独立窗口复用、常驻托盘生命周期。
+- **完整对话体验** — 与主对话页共享运行管理器与消息卡片：工具调用轨迹、生成附件、实时思考卡片；运行服务端持久化，关窗后 agent 仍在后台继续。
 
-#### Changed
+### 🧠 记忆与知识
 
-- **运行打断更彻底** — `SessionContext` 跟踪当前运行任务，打断时取消该任务及该 session / round 下仍在运行的子 agent。
-- **Workbench 过程文件不再污染知识库** — Workbench 任务 / 初始化会话中途 `send_file` 的文件不再自动入库，仅审核 / 完成后的最终产物才归档到项目知识。
-- **更新器** — 按平台 / 架构匹配安装包、读取 GitHub release asset 的 sha256 校验、后台检查并在工作台提示新版本与体积。
-- **版本元数据统一** — Python 包、Electron 应用与 lockfile、README badge、WeChat client 标识、`uv.lock` 与 WebUI 静态资源 cache-busting 统一为 `0.6.0`；README 功能总览由表格改写为分类详述。
+- **三层记忆 + 退场** — 上下文 → 短期跨会话摘要 → 长期 `SOUL.md`；短期与项目记忆均可按精确 ID 退场（`retire_short_term_memory` / `retire_project_memory`），退场条目留档但不再注入与召回。
+- **记忆分类重构** — 区分 `habit`（如何做事）/ `conversation`（如何沟通）/ `preference`（静态喜好），新增内部 `reflection` 分类（agent bookkeeping，不在用户页显示）；多词记忆召回支持分词 OR 匹配。
+- **检索工具** — 新增 `RecallConversation`（按关键词 / session / 日期检索历史对话）与 `search_project_memory`（项目内记忆搜索）；`RecallMemory` 为每条短期记忆返回稳定 `memory_id`。
+- **知识库** — `ListKnowledgeDocuments` 枚举文档与索引状态；Workbench 步骤摘要自动归档进项目知识库供后续检索；按 workspace 隔离；支持图片 vision 索引。
+- **实体优先** — 涉及任务 / 计划 / 待办 / 决策的回答先查实体、以记录为准，执行计划前先拉取活跃事务与决策以复用。
 
-#### Tests
+### 🌐 浏览器自动化
 
-- 新增 / 更新 `test_browser_session`、`test_updater_platform`、`test_workbench_knowledge_archive`、`test_workbench_knowledge_resolve`、`test_workbench_init_plan`、`test_workbench_memory_language`、`test_issue_fixes`、`test_runtime_fixes`，覆盖浏览器接管与实时控制、更新器平台匹配、知识归档 / 解析、记忆退场等。前端 cache-bust 断言同步到 `0.6.0`。
+- **实时直播不堵流** — 画面经 `/ws/browser` 以二进制 JPEG 帧传输，SSE 只走轻量元数据，避免 base64 截图挤占事件流。
+- **面板内实时控制 + 登录接管** — 用户可在直播面板内经 CDP 注入鼠标 / 键盘 / IME 直接操作 headless 页面（agent 动作自动让位）；遇登录墙 / 验证码 / 2FA 可经 `browser_request_takeover` 或切换有头窗口完成，再回到同一已登录会话继续；Workbench 自动打开浏览器侧栏。
+
+### ⚙️ Agent 运行时与提示词缓存
+
+- **提示词缓存优化** — 静态系统块前缀化（`static_system_extra`）、run 级上下文前置于用户消息（`fixed_ephemeral_system`）、temporal 上下文移到尾部、统一 phase1/2 工具集、`quit(reply=)` 直接交付（消除收尾重建——曾占缓存 miss 约 53%），显著提升前缀缓存命中。
+- **运行打断** — 跟踪当前运行任务，打断时连同在跑的 subagent 一并取消。
+- **稳定性** — LLM 瞬时错误有限重试、蒸馏上限与压缩阈值预检、SSE 心跳保活；DSML 流式工具标记抑制，防止泄露到 UI。
+- **跨平台 Shell 与破坏性操作确认** — 自动识别 Shell 类型并调整执行策略；`rm` / `git reset --hard` / `dd` 等高危命令即使 full/auto 模式也强制二次确认，外发文件纳入不可逆副作用确认。
+
+### 📦 平台、打包与更新器
+
+- **Windows on ARM** — CI 同时构建 ARM64 与 x64 安装包；Release 默认捆绑 Workbench UI。
+- **运行时目录治理** — 新增 `cyrene.app_paths` 统一解析数据 / 缓存 / 临时目录，打包后不再把运行时数据写入只读资源或系统临时目录。
+- **更新器** — 按平台 / 架构正确匹配安装包（修复 Windows 被推 macOS `.dmg`）、读取 release asset 的 sha256 校验、可选 beta 更新通道、后台检查并在工作台提示新版本与体积。
+- **启动不阻塞** — 知识迁移 / vision 索引后台化，修复打包桌面端 30s 启动超时；修复更新重启的 launch guard。
+
+### 🔒 安全
+
+- **HTML artifact 隔离** — 用户生成的 HTML 仅在沙盒 `srcDoc` iframe 预览，不允许在继承后端 session 的子窗口打开。
+- **路径校验与敏感信息脱敏** — workspace 路径穿越防护；错误文本中的 token / 密钥自动脱敏。
+
+### ✅ 测试
+
+- 全周期新增 / 更新数十个测试套件，覆盖 Workbench 任务 / 计划 / 对话 / 记忆 / 知识 / 存储并发、Quick Chat、浏览器接管与实时控制、更新器平台匹配、提示词缓存、Shell 守卫与破坏性操作确认等。前端 cache-bust 断言与各处版本元数据统一为 `0.6.0`。
 
 ## [0.6.0b16] - 2026-06-29
 
