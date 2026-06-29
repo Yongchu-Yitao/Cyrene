@@ -122,8 +122,13 @@ async def create_entity(
     source_round_id: str | None = None,
     confidence: float = 1.0,
     metadata: dict | None = None,
+    project_id: str = "default",
 ) -> dict:
     """Create a new entity and return it with all fields populated.
+
+    ``project_id`` scopes the entity to a Workbench project so its deadline shows
+    on that project's calendar (日程). Defaults to ``"default"`` for globally /
+    auto-extracted entities.
 
     If source=="explicit" and due_date is set, automatically creates a reminder task.
     """
@@ -145,8 +150,9 @@ async def create_entity(
             INSERT INTO entities (
                 id, type, title, content, status, tags, priority, effort,
                 created_at, updated_at, last_referenced_at, due_date, parent_id,
-                linked_ids, people, source, source_round_id, confidence, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                linked_ids, people, source, source_round_id, confidence, metadata,
+                project_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entity_id,
@@ -168,6 +174,7 @@ async def create_entity(
                 source_round_id,
                 confidence,
                 _serialize_dict(metadata),
+                str(project_id or "default"),
             ),
         )
         await db.commit()
@@ -272,6 +279,7 @@ async def list_entities(
     type: str | None = None,
     status: str | None = None,
     has_due_date: bool = False,
+    project_id: str | None = None,
     limit: int = 100,
 ) -> list[dict]:
     """List entities with optional filtering.
@@ -280,6 +288,7 @@ async def list_entities(
         type: Filter by entity type (optional)
         status: Filter by status (default: None = all)
         has_due_date: If True, only return entities with due_date
+        project_id: Scope to a Workbench project (optional; None = all projects)
         limit: Maximum number of results
     """
     query = "SELECT * FROM entities WHERE 1=1"
@@ -297,6 +306,10 @@ async def list_entities(
 
     if has_due_date:
         query += " AND due_date IS NOT NULL"
+
+    if project_id is not None:
+        query += " AND COALESCE(project_id, 'default') = ?"
+        params.append(project_id or "default")
 
     query += " ORDER BY updated_at DESC LIMIT ?"
     params.append(limit)

@@ -6,18 +6,19 @@ from typing import Any
 
 from cyrene import tool_legacy as _legacy
 from cyrene.tool_legacy import (
-    WORKSPACE_DIR,
+    _classify_destructive_shell_command,
     _command_is_file_deletion,
+    _guard_nonbash_shell_command,
     _guard_shell_command_workspace_write,
     _is_dangerous_subshell,
     _json_result,
     _request_delete_confirmation,
+    _request_destructive_confirmation,
     _request_scope_elevation,
     _request_write_elevation,
     _truncate,
     asyncio,
     json,
-    os,
 )
 
 TOOL_NAME = 'Bash'
@@ -28,34 +29,57 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
     from cyrene.agent.state import _temporary_full_access
     command = str(args["command"])
     _full_access = _temporary_full_access.get()
-    # 命令替换无法提前验证路径，先拦截并询问用户
+    # 命令替换无法提前验证路径，先拦截（默认模式问用户 / 自动模式交审核 agent）
     if not _full_access and _is_dangerous_subshell(command):
-        return await _request_scope_elevation(
+        elev = await _request_scope_elevation(
             tool_name="Bash",
             path_hint="",
             operation="包含命令替换的 Shell 操作",
             reason=f"命令包含 $() 或反引号，其展开路径无法静态验证。\n命令：{command[:240]}",
             permission_kind="subshell_elevation",
             options=["允许执行", "拒绝"],
+            scope_hint="",
         )
+        if elev is not None:
+            return elev
+    from cyrene.shell_runtime import command_argv, resolve_shell
     try:
-        _guard_shell_command_workspace_write(command)
-    except ValueError:
-        return await _request_write_elevation(tool_name="Bash", path_hint="", reason=command[:240])
-    # 即使是 workspace 内的文件删除操作，也需要用户确认
-    if not _full_access and _command_is_file_deletion(command):
-        delete_result = await _request_delete_confirmation(tool_name="Bash", command=command)
-        status = json.loads(delete_result)
-        if str(status.get("status", "")).strip() == "awaiting_user":
-            return delete_result
+        shell_kind = resolve_shell()[0]
+    except Exception:
+        shell_kind = "bash"
+    if shell_kind == "bash":
+        try:
+            _guard_shell_command_workspace_write(command)
+        except ValueError:
+            elev = await _request_write_elevation(tool_name="Bash", path_hint="", reason=command[:240])
+            if elev is not None:
+                return elev
+        destructive = _classify_destructive_shell_command(command)
+        if destructive is not None:
+            delete_result = await _request_destructive_confirmation(
+                tool_name="Bash",
+                operation=destructive["operation"],
+                detail=destructive["detail"],
+                destructive_kind=destructive["kind"],
+            )
+            if delete_result is not None:
+                return delete_result
+        # Backward-compatible fallback for deletion forms not classified above.
+        elif _command_is_file_deletion(command):
+            delete_result = await _request_delete_confirmation(tool_name="Bash", command=command)
+            if delete_result is not None:
+                return delete_result
+    else:
+        # 非 POSIX shell：POSIX 护栏无法验证路径，对写/删一律 fail-closed 拒绝
+        refusal = _guard_nonbash_shell_command(command, shell_kind)
+        if refusal is not None:
+            return refusal
     timeout_ms = int(args.get("timeout_ms", 120000))
     timeout_sec = timeout_ms / 1000
-    shell = os.environ.get("SHELL") or "/bin/sh"
+    from cyrene.agent.state import active_workspace_dir
     proc = await asyncio.create_subprocess_exec(
-        shell,
-        "-lc",
-        command,
-        cwd=str(WORKSPACE_DIR),
+        *command_argv(command),
+        cwd=str(active_workspace_dir()),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

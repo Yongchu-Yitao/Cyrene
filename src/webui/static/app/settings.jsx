@@ -52,6 +52,7 @@ function createEmptyModelCandidate() {
     desc: "",
     ctx: "",
     price: "",
+    priceHint: "",
     api_key: "",
     base_url: DEFAULT_MODEL_BASE_URL,
   };
@@ -66,6 +67,7 @@ function normalizeModelCandidate(raw, index, fallbackBaseUrl, fallbackApiKey) {
     desc: String(raw && raw.desc || "").trim(),
     ctx: String(raw && raw.ctx || "").trim(),
     price: String(raw && raw.price || "").trim(),
+    priceHint: String(raw && raw.priceHint || "").trim(),
     api_key: String(raw && raw.api_key || fallbackApiKey || "").trim(),
     base_url: String(raw && raw.base_url || fallbackBaseUrl || DEFAULT_MODEL_BASE_URL).trim() || DEFAULT_MODEL_BASE_URL,
   };
@@ -337,9 +339,9 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
 
   function updateModel(id, field, value) {
     setModels(models.map(function (model) {
-      return model.id === id
-        ? { ...model, [field]: value, name: field === "model" ? value : model.name }
-        : model;
+      if (model.id !== id) return model;
+      const extra = field === "model" ? { name: value, priceHint: "" } : {};
+      return { ...model, [field]: value, ...extra };
     }));
   }
 
@@ -1053,7 +1055,7 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
                         className="input mono"
                         value={models[0].price}
                         onChange={(e) => updateModel(models[0].id, "price", e.target.value)}
-                        placeholder={t("settings.placeholderPrice")}
+                        placeholder={models[0].priceHint || t("settings.placeholderPrice")}
                       />
                     </div>
                   </div>
@@ -1127,7 +1129,7 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
                           </div>
                           <div className="settings-mini-field">
                             <span>{t("settings.priceLabel")}</span>
-                            <input className="input mono" value={model.price} onChange={(e) => isDraft ? setNewModel({ ...newModel, price: e.target.value }) : updateModel(model.id, "price", e.target.value)} placeholder={t("settings.placeholderPrice")} />
+                            <input className="input mono" value={model.price} onChange={(e) => isDraft ? setNewModel({ ...newModel, price: e.target.value }) : updateModel(model.id, "price", e.target.value)} placeholder={model.priceHint || t("settings.placeholderPrice")} />
                           </div>
                         </div>
                       </div>

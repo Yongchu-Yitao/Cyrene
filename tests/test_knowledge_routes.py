@@ -22,6 +22,7 @@ pil_mock.__version__ = "9.0.0"
 sys.modules["PIL"] = pil_mock
 pil_mock.Image = MagicMock()
 
+from cyrene import config as cyrene_config
 from cyrene import db
 from webui.routes import register_routes
 
@@ -33,7 +34,9 @@ def temp_db():
         db_path = str(Path(tmpdir) / "test.db")
         import asyncio
         asyncio.run(db.init_db(db_path))
+        cyrene_config.set_knowledge_db_path_override(db_path)
         yield db_path
+        cyrene_config.set_knowledge_db_path_override(None)
 
 
 @pytest.fixture
@@ -236,6 +239,41 @@ class TestKnowledgeRoutes:
         assert len(list(tmp_path.iterdir())) == 1
 
     @pytest.mark.asyncio
+    async def test_chat_upload_duplicate_keeps_each_session_attachment(
+        self, client, temp_db, tmp_path, monkeypatch
+    ):
+        """KB deduplication must not delete paths returned to chat sessions."""
+        import webui.routes as routes
+
+        monkeypatch.setattr(routes, "_UPLOADS_DIR", tmp_path)
+        payload = b"same chat attachment bytes"
+
+        first = client.post(
+            "/api/chat/upload",
+            files={"files": ("first.txt", payload, "text/plain")},
+        )
+        second = client.post(
+            "/api/chat/upload",
+            files={"files": ("second.txt", payload, "text/plain")},
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        first_file = first.json()["files"][0]
+        second_file = second.json()["files"][0]
+        assert first_file["id"] != second_file["id"]
+        assert Path(first_file["path"]).read_bytes() == payload
+        assert Path(second_file["path"]).read_bytes() == payload
+        assert client.get(first_file["url"]).content == payload
+        assert client.get(second_file["url"]).content == payload
+
+        from cyrene.knowledge import store
+
+        all_docs = await store.list_documents(temp_db)
+        assert len(all_docs) == 1
+        assert len(list(tmp_path.iterdir())) == 2
+
+    @pytest.mark.asyncio
     async def test_import_missing_path(self, client):
         """Test importing with missing path."""
         response = client.post("/api/knowledge/import", json={})
@@ -356,3 +394,51 @@ class TestKnowledgeToolSearchKnowledge:
         assert isinstance(result, str)
         # Should find the document
         assert "test.md" in result or "Found" in result
+
+
+class TestKnowledgeToolListDocuments:
+    """Test the ListKnowledgeDocuments tool handler."""
+
+    @pytest.mark.asyncio
+    async def test_lists_all_documents_and_searchability(self, temp_db):
+        from cyrene.knowledge import store
+        from cyrene.tools import _tool_list_knowledge_documents
+
+        searchable = await store.create_document(
+            temp_db,
+            name="searchable.md",
+            path="/tmp/searchable.md",
+        )
+        await store.replace_chunks(
+            temp_db,
+            searchable["id"],
+            [{
+                "content": "searchable content",
+                "char_start": 0,
+                "char_end": 18,
+            }],
+        )
+        await store.update_document(
+            temp_db,
+            searchable["id"],
+            status="indexed",
+            chunk_count=1,
+        )
+        await store.create_document(
+            temp_db,
+            name="empty.pdf",
+            path="/tmp/empty.pdf",
+        )
+
+        result = await _tool_list_knowledge_documents(
+            {"limit": 100},
+            _bot=None,
+            _chat_id=-1,
+            _db_path=temp_db,
+            _notify_state=None,
+        )
+
+        assert "searchable.md" in result
+        assert "empty.pdf" in result
+        assert "1 searchable and 1 without searchable text" in result
+        assert "path=/tmp/searchable.md" in result

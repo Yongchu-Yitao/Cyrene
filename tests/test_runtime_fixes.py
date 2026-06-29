@@ -94,6 +94,7 @@ async def test_execution_agent_returns_quit_text(monkeypatch):
 
 def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch):
     from cyrene import memory
+    from cyrene import settings_store
     from cyrene import short_term
 
     short_term.init_short_term(tmp_path)
@@ -107,6 +108,7 @@ def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch
             "emotional_valence": 0,
         }
     ])
+    monkeypatch.setattr(settings_store, "is_soul_active", lambda: True)
     monkeypatch.setattr(memory, "read_shallow_memory", lambda: "## SELF:IDENTITY\n- test memory")
     context = memory.get_memory_context()
 
@@ -117,6 +119,7 @@ def test_get_memory_context_includes_short_term_by_default(tmp_path, monkeypatch
 
 def test_get_memory_context_can_skip_short_term(tmp_path, monkeypatch):
     from cyrene import memory
+    from cyrene import settings_store
     from cyrene import short_term
 
     short_term.init_short_term(tmp_path)
@@ -130,6 +133,7 @@ def test_get_memory_context_can_skip_short_term(tmp_path, monkeypatch):
             "emotional_valence": 0,
         }
     ])
+    monkeypatch.setattr(settings_store, "is_soul_active", lambda: True)
     monkeypatch.setattr(memory, "read_shallow_memory", lambda: "## SELF:BELIEFS\n- test belief")
     context = memory.get_memory_context(include_short_term=False)
 
@@ -153,7 +157,7 @@ async def test_execute_tool_awaits_event_publish(monkeypatch):
     async def fake_handler(arguments, bot, chat_id, db_path, notify_state):
         return "ok"
 
-    async def fake_publish_event(event):
+    async def fake_publish_event(event, **kwargs):
         seen["published"] = True
         seen["event"] = event
 
@@ -179,13 +183,15 @@ async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkey
     state_file.write_text(json.dumps({"_session_epoch": _agent_state._session_epoch, "messages": []}), encoding="utf-8")
     _patch_state_file(monkeypatch, state_file)
     _patch_data_dir(monkeypatch, tmp_path)
-    monkeypatch.setattr(_agent_core, "_MAX_TOOL_ROUNDS", 1)
+    monkeypatch.setattr(_agent_core, "_get_max_tool_rounds", lambda: 1)
+
+    calls = []
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
-        names = {item.get("function", {}).get("name") for item in (tools or [])}
         if tools is None:
             return {"content": "final answer from gathered tool results"}
-        if "use_tools" in names:
+        calls.append(tools)
+        if len(calls) == 1:
             return {
                 "content": "",
                 "tool_calls": [{
@@ -323,9 +329,172 @@ def test_subagent_tool_defs_hide_main_only_tools():
     assert "send_agent_message" in sub_defs
 
 
-async def test_recall_memory_tool_returns_archived_matches_and_persisted_memory(tmp_path, monkeypatch):
-    from cyrene import conversations
+async def test_recall_memory_tool_returns_recent_short_term_entries(tmp_path):
     from cyrene import short_term
+    from cyrene import tools
+
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([
+        {
+            "content": "user prefers concise replies",
+            "type": "preference",
+            "first_seen": "2026-05-18",
+            "last_mentioned": "2026-05-20",
+            "mention_count": 1,
+            "emotional_valence": 0,
+        },
+        {
+            "content": "user prefers detailed reports",
+            "type": "preference",
+            "first_seen": "2026-05-17",
+            "last_mentioned": "2026-05-19",
+            "mention_count": 2,
+            "emotional_valence": 0,
+        },
+        {
+            "content": "user uses macOS",
+            "type": "fact",
+            "first_seen": "2026-05-16",
+            "last_mentioned": "2026-05-21",
+            "mention_count": 1,
+            "emotional_valence": 0,
+        },
+    ])
+
+    result = await tools._tool_recall_memory(
+        {"query": "prefers", "type": "preference", "limit": 2},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    payload = json.loads(result)
+
+    assert [item["content"] for item in payload["memories"]] == [
+        "user prefers concise replies",
+        "user prefers detailed reports",
+    ]
+    assert all(item["memory_id"].startswith("stm_") for item in payload["memories"])
+    assert "matches" not in payload
+    assert "soul_memory" not in payload
+
+
+async def test_retire_short_term_memory_tool_marks_entry_stale(tmp_path):
+    from cyrene import short_term
+    from cyrene import tools
+
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([
+        {
+            "content": "user incorrectly prefers verbose replies",
+            "type": "preference",
+            "first_seen": "2026-05-18",
+            "last_mentioned": "2026-05-20",
+            "mention_count": 1,
+            "emotional_valence": 0,
+        },
+        {
+            "content": "user uses macOS",
+            "type": "fact",
+            "first_seen": "2026-05-16",
+            "last_mentioned": "2026-05-21",
+            "mention_count": 1,
+            "emotional_valence": 0,
+        },
+    ])
+    memory_id = short_term.entry_id(short_term.load_entries()[0])
+
+    result = await tools._tool_retire_short_term_memory(
+        {"memory_id": memory_id, "reason": "user corrected this"},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    payload = json.loads(result)
+
+    assert payload["status"] == "success"
+    assert payload["changed"] is True
+    entries = short_term.load_entries()
+    assert entries[0]["id"] == memory_id
+    assert entries[0]["stale"] is True
+    assert entries[0]["retire_reason"] == "user corrected this"
+    assert "user incorrectly prefers verbose replies" not in short_term.get_context()
+
+    recall_result = await tools._tool_recall_memory(
+        {"query": "verbose", "limit": 10},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    recall_payload = json.loads(recall_result)
+    assert recall_payload["available_matches"] == 0
+
+
+async def test_recall_memory_tool_uses_or_for_multiple_terms(tmp_path):
+    from cyrene import short_term
+    from cyrene import tools
+
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([
+        {
+            "content": "用户本人照片可用于身份识别",
+            "type": "fact",
+            "first_seen": "2026-06-20",
+            "last_mentioned": "2026-06-21",
+            "mention_count": 1,
+            "emotional_valence": 0,
+        },
+    ])
+
+    result = await tools._tool_recall_memory(
+        {"query": "照片 人物 头像 识别", "limit": 10},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    payload = json.loads(result)
+
+    assert payload["available_matches"] == 1
+    assert payload["memories"][0]["content"] == "用户本人照片可用于身份识别"
+
+
+async def test_recall_memory_tool_bounds_large_results(tmp_path):
+    from cyrene import short_term
+    from cyrene import tools
+
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([
+        {
+            "content": f"memory-{index}-" + ("x" * 10_000),
+            "type": "fact",
+            "first_seen": "2026-05-18",
+            "last_mentioned": f"2026-05-{20 - index:02d}",
+            "mention_count": 1,
+            "emotional_valence": 0,
+        }
+        for index in range(20)
+    ])
+
+    result = await tools._tool_recall_memory(
+        {"limit": 20},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    payload = json.loads(result)
+
+    assert payload["truncated"] is True
+    assert len(result) < 10_000
+    assert all(len(item["content"]) <= 801 for item in payload["memories"])
+    assert all(item["content_truncated"] is True for item in payload["memories"])
+
+
+async def test_recall_conversation_tool_returns_archived_matches(tmp_path, monkeypatch):
+    from cyrene import conversations
     from cyrene import tools
 
     conversations_dir = tmp_path / "conversations"
@@ -354,20 +523,7 @@ async def test_recall_memory_tool_returns_archived_matches_and_persisted_memory(
         encoding="utf-8",
     )
 
-    short_term.init_short_term(tmp_path)
-    short_term.save_entries([
-        {
-            "content": "user prefers concise replies",
-            "type": "preference",
-            "first_seen": "2026-05-19",
-            "last_mentioned": "2026-05-19",
-            "mention_count": 1,
-            "emotional_valence": 0,
-        }
-    ])
-    monkeypatch.setattr(tools, "read_shallow_memory", lambda: "## RELATIONSHIP:USER\n- Trust level: warm")
-
-    result = await tools._tool_recall_memory(
+    result = await tools._tool_recall_conversation(
         {"session_id": "archive_2026-05-19_session_beta", "limit": 2},
         None,
         0,
@@ -379,8 +535,58 @@ async def test_recall_memory_tool_returns_archived_matches_and_persisted_memory(
     assert payload["matches"][0]["archive_session_id"] == "session_beta"
     assert payload["matches"][0]["session_title"] == "第二场"
     assert payload["matches"][0]["assistant"] == "已记录你偏好简洁回答。"
-    assert "user prefers concise replies" in payload["short_term_memory"]
-    assert "Trust level: warm" in payload["soul_memory"]
+    assert "memories" not in payload
+
+
+async def test_recall_conversation_tool_searches_active_workbench_workspace(tmp_path):
+    from cyrene import conversations
+    from cyrene import tools
+    from cyrene.agent import state as agent_state
+
+    workspace = tmp_path / "project"
+    other_workspace = tmp_path / "other"
+    conversations.archive_session_exchange(
+        "wbchat_alpha",
+        "我们讨论 photo identification skill 的安装",
+        "已安装全局 skill。",
+        workspace_dir=workspace,
+        session_title="技能安装",
+    )
+    conversations.archive_session_exchange(
+        "wbchat_beta",
+        "photo identification skill 后续清理",
+        "需要检查实体和项目记忆。",
+        workspace_dir=workspace,
+        session_title="清理讨论",
+    )
+    conversations.archive_session_exchange(
+        "wbchat_other",
+        "photo identification skill 在另一个 workspace",
+        "不应被当前 workspace 搜到。",
+        workspace_dir=other_workspace,
+        session_title="其他项目",
+    )
+
+    token = agent_state._active_workspace_dir.set(str(workspace))
+    try:
+        result = await tools._tool_recall_conversation(
+            {"query": "photo identification", "limit": 10},
+            None,
+            0,
+            "db.sqlite3",
+            None,
+        )
+    finally:
+        agent_state._active_workspace_dir.reset(token)
+
+    payload = json.loads(result)
+    assert payload["scope"] == "workbench_workspace"
+    assert {item["session_id"] for item in payload["matches"]} == {
+        "wbchat_alpha",
+        "wbchat_beta",
+    }
+    assert all(item["source"] == "workbench_workspace" for item in payload["matches"])
+    assert all(str(workspace) in item["source_file"] for item in payload["matches"])
 
 
 async def test_run_chat_agent_avoids_duplicate_short_term_memory_in_system_prompt(monkeypatch, tmp_path):
@@ -416,6 +622,50 @@ async def test_run_chat_agent_avoids_duplicate_short_term_memory_in_system_promp
     assert result == "ok"
     assert seen["include_short_term"] is False
     assert seen["history"][0]["content"].startswith("[Restored context]")
+    assert "stable trait" in seen["system_prompt"]
+
+
+async def test_run_chat_agent_keeps_global_short_term_out_of_workbench_sessions(monkeypatch, tmp_path):
+    """Per-session workbench runs must not inherit the default session's
+    short-term context (regression: fresh task sessions answered stale topics)."""
+    from cyrene import agent
+    from cyrene.agent import state as _agent_state
+    from cyrene.agent import session as _agent_session
+    from cyrene.agent import agent as _agent_core
+
+    seen: dict[str, Any] = {}
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(_agent_session, "_refresh_session_labels", AsyncMock())
+    _patch_runtime_context(monkeypatch, get_context=lambda max_chars=5000: "[Previous context:]\n- stale paper topic")
+
+    def fake_get_memory_context(include_short_term: bool = True):
+        seen["include_short_term"] = include_short_term
+        return "## Memory Context\n- stable trait"
+
+    async def fake_run_main_agent(user_message, history, bot, chat_id, db_path, system_prompt="", client_request_id="", persist_user_message=True, lang="", **kwargs):
+        seen["history"] = history
+        seen["system_prompt"] = system_prompt
+        return "ok"
+
+    _patch_runtime_context(monkeypatch, get_memory_context=fake_get_memory_context)
+    monkeypatch.setattr(_agent_core, "_run_main_agent", fake_run_main_agent)
+
+    token = _agent_state._current_session_id.set("wbchat_test123")
+    try:
+        result = await agent._run_chat_agent("hello", None, 0, "db.sqlite3")
+    finally:
+        _agent_state._current_session_id.reset(token)
+
+    assert result == "ok"
+    assert seen["include_short_term"] is False
+    assert not any(
+        "[Restored context]" in str(message.get("content") or "")
+        for message in seen["history"]
+        if isinstance(message, dict)
+    )
+    assert "stale paper topic" not in seen["system_prompt"]
     assert "stable trait" in seen["system_prompt"]
 
 
@@ -506,6 +756,8 @@ async def test_call_llm_falls_back_to_next_model_candidate(monkeypatch):
     assert message["content"] == "fallback ok"
     assert attempts == [
         ("primary-model", "https://primary.example/v1/chat/completions"),
+        ("primary-model", "https://primary.example/v1/chat/completions"),
+        ("primary-model", "https://primary.example/v1/chat/completions"),
         ("fallback-model", "https://fallback.example/v1/chat/completions"),
     ]
 
@@ -583,6 +835,8 @@ async def test_call_llm_stream_falls_back_to_next_model_candidate(monkeypatch):
     assert message["content"] == "hello world"
     assert message["usage"]["total_tokens"] == 3
     assert attempts == [
+        ("primary-model", "https://primary.example/v1/chat/completions"),
+        ("primary-model", "https://primary.example/v1/chat/completions"),
         ("primary-model", "https://primary.example/v1/chat/completions"),
         ("fallback-model", "https://fallback.example/v1/chat/completions"),
     ]
@@ -771,7 +1025,6 @@ async def test_run_vision_chat_uses_vision_candidates_after_primary_failure(monk
     assert payload["vision_text"] == "vision fallback ok"
     assert payload["vision_model"] == "vision-model"
     assert attempts == [
-        ("primary-model", "https://primary.example/v1/chat/completions"),
         ("vision-model", "https://vision.example/v1/chat/completions"),
     ]
 
@@ -932,6 +1185,7 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
     monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
     monkeypatch.setattr(scheduler, "notify", AsyncMock())
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=0, cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
@@ -940,7 +1194,7 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
     async def fake_context(_db_path=""):
         return "## Recent memories about the user\n- user is preparing a launch"
 
-    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path):
+    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path, lang=""):
         seen["prompt"] = prompt
         seen["chat_id"] = chat_id
         seen["db_path"] = db_path
@@ -971,6 +1225,7 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
     monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=0, cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
     )
@@ -978,7 +1233,7 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
     async def fake_context(_db_path):
         return "## Recent conversation\n- user already closed the loop"
 
-    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path):
+    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path, lang=""):
         seen["prompt"] = prompt
         return ""
 
@@ -1014,6 +1269,7 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
     monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
     monkeypatch.setattr(scheduler, "notify", AsyncMock())
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=0, cooldown_until=0.0, last_proactive_time=0.0, probability=0.0,
@@ -1025,7 +1281,7 @@ async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(
     # Deliver exactly one message on the first tick; stay silent ever after.
     calls = {"n": 0}
 
-    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path):
+    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path, lang=""):
         calls["n"] += 1
         return "hey, how did the launch go?" if calls["n"] == 1 else ""
 
@@ -1056,6 +1312,7 @@ async def test_proactive_cooldown_arms_when_streak_reaches_threshold(monkeypatch
     monkeypatch.setattr(scheduler, "_save_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_is_daytime", lambda: True)
     monkeypatch.setattr(scheduler, "_silence_hours", lambda: 96.0)
+    monkeypatch.setattr(scheduler, "_latest_workbench_user_activity", lambda: None)
     monkeypatch.setattr(scheduler, "notify", AsyncMock())
     scheduler._LOTTERY_STATE.update(
         consecutive_unanswered=scheduler._PROACTIVE_COOLDOWN_THRESHOLD,
@@ -1065,7 +1322,7 @@ async def test_proactive_cooldown_arms_when_streak_reaches_threshold(monkeypatch
     async def fake_context(_db_path=""):
         return ""
 
-    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path):
+    async def fake_run_heartbeat_agent(prompt, bot, chat_id, db_path, lang=""):
         sent["count"] += 1
         return "hi"
 
@@ -1125,6 +1382,183 @@ async def test_system_initiated_silent_quit_yields_no_message(tmp_path, monkeypa
     assert result == ""
 
 
+async def test_system_initiated_round_cannot_use_ask_user(tmp_path, monkeypatch):
+    """Proactive rounds must neither expose nor execute ask_user."""
+    from cyrene import agent
+    from cyrene.agent import agent as _agent_core
+    from cyrene.agent import session as _agent_session
+    from cyrene import debug
+
+    calls = []
+    executed = []
+
+    async def fake_publish_event(event):
+        return None
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+        tool_names = {
+            str(tool.get("function", {}).get("name") or "")
+            for tool in (tools or [])
+        }
+        calls.append(tool_names)
+        assert "ask_user" not in tool_names
+        if len(calls) == 1:
+            return {
+                "content": "",
+                "tool_calls": [{
+                    "id": "use_1",
+                    "function": {
+                        "name": "use_tools",
+                        "arguments": json.dumps({"task": "hidden proactive instruction"}),
+                    },
+                }],
+            }
+        if len(calls) == 2:
+            # Simulate a provider/model emitting a tool that was not advertised.
+            return {
+                "content": "",
+                "tool_calls": [{
+                    "id": "ask_1",
+                    "function": {
+                        "name": "ask_user",
+                        "arguments": json.dumps({"text": "How are you?"}),
+                    },
+                }],
+            }
+        return {
+            "content": "Just checking in.",
+            "tool_calls": [],
+        }
+
+    async def fake_execute_tool(name, arguments, bot, chat_id, db_path, notify_state):
+        executed.append(name)
+        return "ok"
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(_agent_session, "_refresh_session_labels", AsyncMock())
+    monkeypatch.setattr(agent, "get_memory_context", lambda include_short_term=True: "")
+    monkeypatch.setattr(_agent_core, "_call_llm", fake_call_llm)
+    monkeypatch.setattr(_agent_core, "_execute_tool", fake_execute_tool)
+    monkeypatch.setattr(debug, "publish_event", fake_publish_event)
+
+    result = await agent._run_chat_agent(
+        "hidden proactive instruction",
+        None,
+        0,
+        "db.sqlite3",
+        persist_user_message=False,
+        public_prompt="",
+        refresh_labels=False,
+        hide_initial_detail=True,
+        assistant_message_meta={"proactive": True, "system_initiated": True},
+    )
+
+    assert result == "Just checking in."
+    assert "ask_user" not in executed
+    assert len(calls) == 3
+
+
+async def test_tool_executor_rejects_ask_user_for_system_initiated_round(monkeypatch):
+    from cyrene import tool_executor
+    from cyrene.agent import state as _agent_state
+
+    handler = AsyncMock(return_value="should not run")
+    monkeypatch.setitem(tool_executor.TOOL_HANDLERS, "ask_user", handler)
+    token = _agent_state._ui_round_assistant_meta.set({
+        "proactive": True,
+        "system_initiated": True,
+    })
+    try:
+        result = await tool_executor._execute_tool(
+            "ask_user",
+            {"text": "How are you?"},
+            None,
+            0,
+            "db.sqlite3",
+            None,
+        )
+    finally:
+        _agent_state._ui_round_assistant_meta.reset(token)
+
+    assert result.startswith("Tool unavailable:")
+    handler.assert_not_awaited()
+
+
+def test_assistant_text_ignores_reasoning_when_tool_calls_present():
+    """Regression: a turn that emits tool_calls (e.g. ``quit``) with empty
+    content must NOT surface ``reasoning_content`` as user-facing text — that
+    leaked the model's chain-of-thought into proactive messages. Pure-text
+    turns (no tool_calls) still fall back to reasoning for Qwen-style models."""
+    from cyrene.llm import _assistant_text
+
+    quit_turn = {
+        "role": "assistant",
+        "content": "",
+        "reasoning_content": "The user hasn't replied yet... Let me just quit.",
+        "tool_calls": [{"id": "c1", "function": {"name": "quit", "arguments": "{}"}}],
+    }
+    assert _assistant_text(quit_turn) == ""
+
+    # No tool_calls: the reasoning fallback is still honored (Qwen-style models).
+    plain_turn = {"role": "assistant", "content": "", "reasoning_content": "final answer"}
+    assert _assistant_text(plain_turn) == "final answer"
+
+    # Real content always wins, even alongside tool_calls.
+    spoke_turn = {
+        "role": "assistant",
+        "content": "scheduled task completed",
+        "reasoning_content": "scratch",
+        "tool_calls": [{"id": "c2", "function": {"name": "quit", "arguments": "{}"}}],
+    }
+    assert _assistant_text(spoke_turn) == "scheduled task completed"
+
+
+async def test_system_initiated_quit_does_not_leak_reasoning(tmp_path, monkeypatch):
+    """A proactive round where the agent quits with only ``reasoning_content``
+    (its internal deliberation) and no ``content`` must stay silent — the
+    reasoning must never be delivered to the user as the proactive message."""
+    from cyrene import agent
+    from cyrene.agent import session as _agent_session
+    from cyrene import debug
+
+    async def fake_publish_event(event):
+        return None
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000):
+        return {
+            "content": "",
+            "reasoning_content": (
+                "The user hasn't replied to my last proactive check-in yet. "
+                "Reaching out again would feel pushy. Let me just quit."
+            ),
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "quit", "arguments": "{}"}},
+            ],
+        }
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(_agent_session, "_refresh_session_labels", AsyncMock())
+    monkeypatch.setattr(agent, "get_memory_context", lambda include_short_term=True: "")
+    _patch_call_llm(monkeypatch, fake_call_llm)
+    monkeypatch.setattr(debug, "publish_event", fake_publish_event)
+
+    result = await agent._run_chat_agent(
+        "internal proactive instruction",
+        None,
+        0,
+        "db.sqlite3",
+        persist_user_message=False,
+        public_prompt="",
+        refresh_labels=False,
+        hide_initial_detail=True,
+        assistant_message_meta={"proactive": True, "system_initiated": True},
+    )
+
+    assert result == ""
+
+
 def test_last_user_time_prefers_archive_over_state_mtime(tmp_path, monkeypatch):
     """Silence detection must read the real user-turn timestamp from the
     conversation archive, not state.json's mtime. The agent rewrites state.json
@@ -1155,6 +1589,7 @@ def test_last_user_time_prefers_archive_over_state_mtime(tmp_path, monkeypatch):
 
     monkeypatch.setattr(scheduler, "CONVERSATIONS_DIR", conv_dir)
     monkeypatch.setattr(scheduler, "STATE_FILE", state_file)
+    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
 
     result = scheduler._last_user_message_time()
 
@@ -1174,6 +1609,7 @@ def test_last_user_time_mtime_fallback_requires_user_spoke_last(tmp_path, monkey
     state_file = tmp_path / "state.json"
     monkeypatch.setattr(scheduler, "CONVERSATIONS_DIR", conv_dir)
     monkeypatch.setattr(scheduler, "STATE_FILE", state_file)
+    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
 
     # (a) User spoke last → mtime is a valid proxy.
     state_file.write_text(
@@ -1232,6 +1668,7 @@ async def test_execute_task_fallback_persists_webui_reminder(monkeypatch, tmp_pa
     monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
     monkeypatch.setattr(debug, "publish_event", fake_publish_event)
     monkeypatch.setattr(scheduler, "run_task_agent", fake_run_task_agent)
+    monkeypatch.setattr(scheduler, "notify", AsyncMock())
     monkeypatch.setattr(scheduler.db, "log_task_run", fake_log_task_run)
     monkeypatch.setattr(scheduler.db, "update_task_after_run", fake_update_task_after_run)
 
@@ -1251,7 +1688,7 @@ async def test_execute_task_fallback_persists_webui_reminder(monkeypatch, tmp_pa
 
     saved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))["messages"]
 
-    assert saved[-1]["content"] == "Reminder: 提醒我喝水"
+    assert saved[-1]["content"] == "Result: task finished without explicit message"
     assert saved[-1]["system_initiated"] is True
     assert saved[-1]["scheduled"] is True
     assert any(event.get("type") == "assistant_message" and event.get("scheduled") is True for event in seen)
@@ -1356,6 +1793,13 @@ async def test_send_message_tool_persists_intermediate_reply(monkeypatch, tmp_pa
     request_token = agent._current_client_request_id.set("req_1")
     pending_token = agent._pending_intermediate_user_replies.set([])
     sender_token = agent._current_agent_id.set("main")
+    destructive_token = _agent_state._destructive_confirmation_allow_all.set(True)
+    streamed = []
+
+    async def collect_stream_event(event):
+        streamed.append(event)
+
+    stream_token = agent._reply_stream_writer.set(collect_stream_event)
     try:
         result = await tools._tool_send_user_message(
             {"text": "先给你一个中途结论：方向是对的，我继续细化。"},
@@ -1365,6 +1809,8 @@ async def test_send_message_tool_persists_intermediate_reply(monkeypatch, tmp_pa
             None,
         )
     finally:
+        agent._reply_stream_writer.reset(stream_token)
+        _agent_state._destructive_confirmation_allow_all.reset(destructive_token)
         agent._current_agent_id.reset(sender_token)
         agent._pending_intermediate_user_replies.reset(pending_token)
         agent._current_client_request_id.reset(request_token)
@@ -1379,6 +1825,16 @@ async def test_send_message_tool_persists_intermediate_reply(monkeypatch, tmp_pa
     assert saved[-1]["client_request_id"] == "req_1"
     assert saved[-1]["intermediate_reply"] is True
     assert any(event.get("type") == "assistant_message" and event.get("intermediate") is True for event in seen)
+    assert streamed == [{
+        "type": "intermediate_message",
+        "message": {
+            "id": saved[-1]["message_id"],
+            "role": "assistant",
+            "content": "先给你一个中途结论：方向是对的，我继续细化。",
+            "createdAt": saved[-1]["created_at"],
+            "intermediate": True,
+        },
+    }]
 
 
 async def test_send_message_tool_from_scheduler_persists_system_message(monkeypatch, tmp_path):
@@ -1435,7 +1891,7 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
 
     seen = {}
 
-    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only"):
+    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default"):
         seen["db_path"] = db_path
         seen["chat_id"] = chat_id
         seen["prompt"] = prompt
@@ -1443,6 +1899,7 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
         seen["schedule_value"] = schedule_value
         seen["next_run"] = next_run
         seen["permission_mode"] = permission_mode
+        seen["project_id"] = project_id
         return "task_local"
 
     class _FakeLocalNow(datetime):
@@ -1471,6 +1928,62 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
     assert seen["schedule_value"] == "2026-05-20T11:35:35+00:00"
     assert seen["next_run"] == "2026-05-20T11:35:35+00:00"
     assert seen["permission_mode"] == "workspace_only"
+    assert seen["project_id"] == "default"
+
+
+async def test_schedule_task_uses_workbench_project_scope(monkeypatch, tmp_path):
+    import json
+
+    from cyrene import tools
+    from cyrene.agent import state as agent_state
+    import cyrene.workbench_context as workbench_context
+
+    seen = {}
+
+    projects_store = tmp_path / "workbench_projects.json"
+    projects_store.write_text(json.dumps({
+        "projects": [
+            {
+                "id": "proj_demo",
+                "dataKey": "proj_demo_scope",
+                "sessions": [{"id": "task_session_1"}],
+            }
+        ]
+    }), encoding="utf-8")
+
+    chats_store = tmp_path / "workbench_chats.json"
+    chats_store.write_text(json.dumps({
+        "chats": [
+            {"id": "wbchat_1", "projectId": "proj_demo"}
+        ]
+    }), encoding="utf-8")
+
+    async def fake_create_task(db_path, chat_id, prompt, schedule_type, schedule_value, next_run, permission_mode="workspace_only", project_id="default"):
+        seen["project_id"] = project_id
+        return "task_scope"
+
+    monkeypatch.setattr(workbench_context, "_WORKBENCH_STORE", projects_store)
+    monkeypatch.setattr(workbench_context, "_WORKBENCH_CHATS_STORE", chats_store)
+    monkeypatch.setattr(tools.db, "create_task", fake_create_task)
+
+    token = agent_state._current_session_id.set("wbchat_1")
+    try:
+        result = await tools._tool_schedule_task(
+            {
+                "prompt": "send_message(\"scope\")",
+                "schedule_type": "interval",
+                "schedule_value": "3600",
+            },
+            None,
+            -1,
+            "db.sqlite3",
+            None,
+        )
+    finally:
+        agent_state._current_session_id.reset(token)
+
+    assert result.startswith("Task task_scope scheduled.")
+    assert seen["project_id"] == "proj_demo_scope"
 
 
 async def test_ask_user_tool_persists_pending_question(monkeypatch, tmp_path):
@@ -1588,7 +2101,8 @@ async def test_ask_user_wait_state_does_not_persist_assistant_trace(monkeypatch,
     monkeypatch.setattr(_agent_session, "_refresh_session_labels", AsyncMock())
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000):
-        if tools is _agent_state._LIGHT_TOOL_DEFS:
+        names = {item.get("function", {}).get("name") for item in (tools or [])}
+        if "use_tools" in names:
             return {
                 "content": "我应该先问清楚。",
                 "tool_calls": [
@@ -1686,6 +2200,7 @@ async def test_answer_pending_question_resumes_same_round(monkeypatch, tmp_path)
         assistant_message_meta=None,
         lang="",
         command="",
+        permission_mode="default",
     ):
         seen["user_message"] = user_message
         seen["ephemeral_system"] = ephemeral_system
@@ -1696,6 +2211,7 @@ async def test_answer_pending_question_resumes_same_round(monkeypatch, tmp_path)
         seen["client_request_id"] = client_request_id
         seen["persist_user_message"] = persist_user_message
         seen["command"] = command
+        seen["permission_mode"] = permission_mode
         return "继续完成后的最终答案"
 
     monkeypatch.setattr(_agent_coordinator, "_run_chat_agent", fake_run_chat_agent)
@@ -1818,6 +2334,152 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
     assert seen["persist_user_message"] is False
 
 
+async def test_bash_destructive_command_requires_confirmation_in_full_access(monkeypatch, tmp_path):
+    from cyrene import agent
+    from cyrene.agent import state as agent_state
+    from cyrene.tool_impl import bash as bash_tool
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "victim").mkdir()
+    agent.STATE_FILE.write_text(json.dumps({
+        "messages": [{"role": "user", "content": "清理目录", "round_id": "round_1"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    round_token = agent_state._current_round_id.set("round_1")
+    workspace_token = agent_state._active_workspace_dir.set(str(workspace))
+    full_token = agent_state._temporary_full_access.set(True)
+    mode_token = agent_state._permission_mode.set("full_access")
+    try:
+        result = await bash_tool._tool_bash(
+            {"command": "rm -rf victim", "timeout_ms": 1000},
+            None,
+            0,
+            "",
+            {},
+        )
+    finally:
+        agent_state._permission_mode.reset(mode_token)
+        agent_state._temporary_full_access.reset(full_token)
+        agent_state._active_workspace_dir.reset(workspace_token)
+        agent_state._current_round_id.reset(round_token)
+
+    payload = json.loads(result)
+    saved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
+
+    assert payload["status"] == "awaiting_user"
+    assert payload["permission"] == "destructive_confirmation"
+    assert saved["pending_question"]["hidden_from_chat"] is True
+    assert saved["pending_question"]["meta"]["kind"] == "destructive_confirmation"
+    assert saved["pending_question"]["meta"]["destructive_kind"] == "file_delete"
+    assert (workspace / "victim").exists()
+
+
+async def test_destructive_confirmation_answer_remembers_single_operation(monkeypatch, tmp_path):
+    from cyrene import agent
+    from cyrene.agent import coordinator as _agent_coordinator
+    from cyrene.agent import state as agent_state
+    from cyrene.tool_legacy import _destructive_operation_fingerprint
+
+    seen = {}
+    fingerprint = _destructive_operation_fingerprint(
+        tool_name="Bash",
+        operation="文件删除操作",
+        detail="命令：rm -rf victim",
+        destructive_kind="file_delete",
+    )
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    agent.STATE_FILE.write_text(json.dumps({
+        "messages": [{"role": "user", "content": "清理目录", "round_id": "round_1"}],
+        "pending_question": {
+            "id": "question_destructive_1",
+            "text": "确认删除",
+            "round_id": "round_1",
+            "client_request_id": "req_destructive_1",
+            "options": [{"id": "option_1", "label": "允许这次"}, {"id": "option_2", "label": "拒绝"}],
+            "asked_at": "2026-06-29T00:00:00+00:00",
+            "hidden_from_chat": True,
+            "hide_answer_in_chat": True,
+            "meta": {
+                "kind": "destructive_confirmation",
+                "tool_name": "Bash",
+                "operation": "文件删除操作",
+                "reason": "命令：rm -rf victim",
+                "fingerprint": fingerprint,
+            },
+        },
+    }, ensure_ascii=False), encoding="utf-8")
+
+    async def fake_run_chat_agent(*args, **kwargs):
+        seen["ephemeral_system"] = kwargs.get("ephemeral_system", "")
+        seen["fingerprints"] = agent_state._destructive_confirmation_fingerprints.get()
+        seen["full_access"] = agent_state._temporary_full_access.get()
+        return "继续执行"
+
+    monkeypatch.setattr(_agent_coordinator, "_run_chat_agent", fake_run_chat_agent)
+
+    original_fingerprints = agent_state._destructive_confirmation_fingerprints.set(frozenset())
+    original_allow_all = agent_state._destructive_confirmation_allow_all.set(False)
+    try:
+        result = await agent.answer_pending_question(
+            "question_destructive_1",
+            "允许这次",
+            None,
+            0,
+            "db.sqlite3",
+            client_request_id="req_answer_destructive_1",
+        )
+    finally:
+        agent_state._destructive_confirmation_allow_all.reset(original_allow_all)
+        agent_state._destructive_confirmation_fingerprints.reset(original_fingerprints)
+
+    assert result == "继续执行"
+    assert fingerprint in seen["fingerprints"]
+    assert seen["full_access"] is False
+    assert "confirmed the destructive" in seen["ephemeral_system"]
+
+
+async def test_send_message_posts_intermediate_reply_without_permission(monkeypatch, tmp_path):
+    from cyrene import agent
+    from cyrene.agent import state as agent_state
+    from cyrene.tool_impl import send_message as send_message_tool
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    agent.STATE_FILE.write_text(json.dumps({
+        "messages": [{"role": "user", "content": "发个进度", "round_id": "round_1"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    round_token = agent_state._current_round_id.set("round_1")
+    agent_token = agent_state._current_agent_id.set("main")
+    request_token = agent_state._current_client_request_id.set("req_1")
+    try:
+        result = await send_message_tool._tool_send_user_message(
+            {"text": "我正在处理"},
+            None,
+            0,
+            "",
+            {},
+        )
+    finally:
+        agent_state._current_client_request_id.reset(request_token)
+        agent_state._current_agent_id.reset(agent_token)
+        agent_state._current_round_id.reset(round_token)
+
+    saved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
+
+    assert result == "Mid-run message sent to the user."
+    assert "pending_question" not in saved
+    assert saved["messages"][-1]["role"] == "assistant"
+    assert saved["messages"][-1]["content"] == "我正在处理"
+    assert saved["messages"][-1]["intermediate_reply"] is True
+    assert saved["messages"][-1]["client_request_id"] == "req_1"
+
+
 def test_build_current_session_exposes_pending_question(monkeypatch, tmp_path):
     from webui import routes
 
@@ -1902,7 +2564,7 @@ async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
         await agent._emit_reply_stream_event({"type": "reply_done", "response": "真实流式"})
         return {"content": "真实流式"}
 
-    async def fake_save_session_messages(messages):
+    async def fake_save_session_messages(messages, **_kwargs):
         saved["messages"] = list(messages)
 
     _patch_call_llm(monkeypatch, fake_call_llm)
@@ -1935,6 +2597,90 @@ async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
     assert [event["type"] for event in streamed] == ["reply_start", "reply_delta", "reply_delta", "reply_done"]
     assert saved["messages"][-1]["content"] == "真实流式"
     assert saved["messages"][-1]["client_request_id"] == "req_stream"
+
+
+async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeypatch):
+    """A tool intent the model only surfaces while writing the final answer is
+    executed (re-entering the tool loop) instead of being leaked or discarded."""
+    from cyrene.agent import agent as _agent_core
+    from cyrene.agent import state as _agent_state
+    from cyrene import behavior_learning
+
+    state_file = tmp_path / "state.json"
+    state_file.write_text(json.dumps({"_session_epoch": _agent_state._session_epoch, "messages": []}), encoding="utf-8")
+    _patch_state_file(monkeypatch, state_file)
+    _patch_data_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(_agent_core, "_get_max_tool_rounds", lambda: 5)
+    monkeypatch.setattr(_agent_core, "_publish_runtime_event", AsyncMock())
+    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
+
+    saved = {}
+    executed = []
+    streamed = []
+    stream_calls = {"n": 0}
+
+    llm_calls = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        llm_calls.append(tools)
+        if len(llm_calls) == 1:  # decision phase → route into execution
+            return {"content": "", "tool_calls": [{"id": "d1", "function": {"name": "use_tools", "arguments": "{\"task\":\"看 github 实现\"}"}}]}
+        # execution phase: the model believes it is done and quits early
+        return {"content": "", "tool_calls": [{"id": "q1", "function": {"name": "quit", "arguments": "{}"}}]}
+
+    async def fake_call_llm_stream(messages, max_tokens=32000, tools=None):
+        stream_calls["n"] += 1
+        if stream_calls["n"] == 1:
+            # while composing the answer the model realizes it must fetch the source
+            await _agent_core._emit_reply_stream_event({"type": "reply_start"})
+            await _agent_core._emit_reply_stream_event({"type": "reply_delta", "delta": "让我核对 GitHub 源。"})
+            return {
+                "role": "assistant", "content": "让我核对 GitHub 源。",
+                "tool_calls": [{"id": "wf1", "type": "function", "function": {"name": "WebFetch", "arguments": "{\"url\":\"https://example.com/x\"}"}}],
+            }
+        await _agent_core._emit_reply_stream_event({"type": "reply_delta", "delta": "已对比完成"})
+        await _agent_core._emit_reply_stream_event({"type": "reply_done", "response": "让我核对 GitHub 源。已对比完成"})
+        return {"role": "assistant", "content": "已对比完成"}
+
+    async def fake_execute_tool(name, args, *rest, **kw):
+        executed.append(name)
+        return f"result of {name}"
+
+    async def fake_save(messages, **_kwargs):
+        saved["messages"] = list(messages)
+
+    _patch_call_llm(monkeypatch, fake_call_llm)
+    _patch_call_llm_stream(monkeypatch, fake_call_llm_stream)
+    _patch_save_session(monkeypatch, fake_save)
+    _patch_append_session(monkeypatch, AsyncMock())
+    monkeypatch.setattr(_agent_core, "_execute_tool", fake_execute_tool)
+    monkeypatch.setattr(_agent_core, "get_active_tool_defs", lambda: [
+        {"type": "function", "function": {"name": "WebFetch", "parameters": {}}},
+        {"type": "function", "function": {"name": "quit", "parameters": {}}},
+    ])
+
+    async def collect(event):
+        streamed.append(event)
+
+    writer_token = _agent_state._reply_stream_writer.set(collect)
+    round_token = _agent_core._current_round_id.set("round_reenter")
+    try:
+        result = await _agent_core._run_main_agent(
+            "你确定吗，看 github 链接",
+            [], None, 0, "db.sqlite3",
+            system_prompt="system", client_request_id="req_reenter",
+        )
+    finally:
+        _agent_core._current_round_id.reset(round_token)
+        _agent_state._reply_stream_writer.reset(writer_token)
+
+    assert result == "已对比完成"
+    assert "WebFetch" in executed              # the late tool intent was honored
+    assert stream_calls["n"] == 2              # wrap-up: reopen tools, then finalize
+    deltas = "".join(e.get("delta", "") for e in streamed if e["type"] == "reply_delta")
+    assert "DSML" not in deltas
+    assert "已对比完成" in deltas
+    assert saved["messages"][-1]["content"] == "已对比完成"
 
 
 async def test_stream_agent_reply_forwards_live_events_before_completion(monkeypatch):
@@ -2397,6 +3143,7 @@ async def test_main_inbox_guidance_continuation_keeps_ack_before_final_reply(mon
     _patch_call_llm(monkeypatch, fake_call_llm)
     monkeypatch.setattr(_agent_guidance, "_generate_guidance_ack", AsyncMock(return_value=ack_text))
     monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
+    monkeypatch.setattr(behavior_learning, "begin_turn", AsyncMock(return_value=None))
     monkeypatch.setattr(conversations, "archive_exchange", fake_archive_exchange)
     events = []
     monkeypatch.setattr(debug, "publish_event", lambda event: events.append(event) or asyncio.sleep(0))
@@ -3952,6 +4699,45 @@ async def test_interrupt_active_run_clears_after_locked_run_finishes():
     assert agent._interrupt_event.is_set() is False
 
 
+async def test_interrupt_active_run_cancels_active_session_task(monkeypatch):
+    from cyrene import agent
+    from cyrene.agent import coordinator as _agent_coordinator
+    from cyrene.agent import state as _agent_state
+
+    session_id = "interrupt_active_task_test"
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def fake_run_chat_agent(*args, **kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(_agent_coordinator, "_run_chat_agent", fake_run_chat_agent)
+
+    task = asyncio.create_task(agent.run_agent("hi", None, 0, "db.sqlite3", session_id=session_id))
+    await started.wait()
+
+    assert agent.is_session_running(session_id) is True
+    assert agent.interrupt_active_run(session_id=session_id) is True
+
+    await asyncio.wait_for(cancelled.wait(), timeout=1)
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("run_agent task should have been cancelled")
+
+    await asyncio.sleep(0.1)
+    ctx = _agent_state._ensure_session(session_id)
+    assert ctx.active_task is None
+    assert agent.is_session_running(session_id) is False
+
+
 async def test_run_agent_clears_stale_interrupt_before_starting(monkeypatch):
     from cyrene import agent
     from cyrene.agent import state as _agent_state
@@ -3982,6 +4768,7 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
     # and proceeds to the summary phase (it no longer returns an early "still working
     # in the background" notice — that path was removed).
     from cyrene import agent
+    from cyrene import behavior_learning
     from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
@@ -4016,7 +4803,7 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
     async def fake_execute_tool(name, args, bot, chat_id, db_path, notify_state):
         return "spawned"
 
-    async def fake_save(messages):
+    async def fake_save(messages, **_kwargs):
         saved.append(messages)
 
     async def fake_snapshot(round_id=None):
@@ -4034,6 +4821,7 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
     _patch_call_llm(monkeypatch, fake_call_llm)
     _patch_execute_tool(monkeypatch, fake_execute_tool)
     _patch_save_session(monkeypatch, fake_save)
+    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
     monkeypatch.setattr(subagent, "get_snapshot", fake_snapshot)
     monkeypatch.setattr(subagent, "cancel_subagent_tasks", fake_cancel_subagent_tasks)
     monkeypatch.setattr(subagent, "run_summary_subagent", fake_summary)
@@ -4056,6 +4844,7 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
 
 async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_explanation(monkeypatch):
     from cyrene import agent
+    from cyrene import behavior_learning
     from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
@@ -4082,17 +4871,20 @@ async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_expl
         calls.append(tools)
         return next(responses)
 
-    async def fake_save(messages):
+    async def fake_save(messages, **_kwargs):
         saved.append(messages)
 
     _patch_call_llm(monkeypatch, fake_call_llm)
     _patch_save_session(monkeypatch, fake_save)
+    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
 
     result = await agent._run_main_agent("现在先看看多伦多的天气", [], None, 0, "db.sqlite3")
 
     assert result == "当前阶段没有合适工具，请改用 use_tools 进入完整工具阶段。"
-    assert calls[0] is _agent_state._LIGHT_TOOL_DEFS
-    assert calls[1] is _agent_state._LIGHT_TOOL_DEFS
+    assert calls[0] is calls[1]
+    tool_names = {item.get("function", {}).get("name") for item in calls[0]}
+    assert {"use_tools", "ask_user", "quit", "WebSearch"} <= tool_names
+    assert calls[0] is not _agent_state._LIGHT_TOOL_DEFS
     assert saved
 
 
@@ -4434,3 +5226,48 @@ def test_resolve_vision_candidates_cross_provider_no_key_not_inherited(monkeypat
     vision = next((c for c in candidates if c.get("model") == "vision-model"), None)
     assert vision is not None
     assert vision["api_key"] == ""
+
+
+async def test_streamed_chat_only_final_reply_persists_usage(monkeypatch, tmp_path):
+    """Streaming finals return plain text; the saved assistant entry must still
+    carry the reply call's token usage (regression: workbench chat usage was 0)."""
+    from cyrene import agent, behavior_learning
+    from cyrene.agent import state as _agent_state
+    from cyrene.agent import agent as _agent_core
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
+
+    async def fake_phase1(messages, tools=None, max_tokens=32000, **kwargs):
+        return {"content": "plain phase1 text", "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}}
+
+    async def fake_stream(messages, max_tokens=None, **kwargs):
+        return {"content": "streamed final answer", "usage": {"prompt_tokens": 30, "completion_tokens": 7, "total_tokens": 37}}
+
+    saved: dict[str, Any] = {}
+
+    async def fake_save(messages, **_kwargs):
+        saved["messages"] = messages
+
+    _patch_call_llm(monkeypatch, fake_phase1)
+    _patch_call_llm_stream(monkeypatch, fake_stream)
+    _patch_save_session(monkeypatch, fake_save)
+    _patch_append_session(monkeypatch, AsyncMock())
+
+    async def noop_writer(event):
+        return None
+
+    token = _agent_state._reply_stream_writer.set(noop_writer)
+    try:
+        result = await agent._run_main_agent("hello", [], None, 0, "db.sqlite3")
+    finally:
+        _agent_state._reply_stream_writer.reset(token)
+
+    assert result == "streamed final answer"
+    final_entries = [
+        message for message in saved["messages"]
+        if message.get("role") == "assistant" and message.get("content") == "streamed final answer"
+    ]
+    assert final_entries, "streamed final reply should be persisted"
+    assert final_entries[-1].get("usage", {}).get("total_tokens") == 37

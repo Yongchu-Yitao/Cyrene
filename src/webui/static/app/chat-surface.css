@@ -237,6 +237,27 @@
   vertical-align: top;
 }
 
+.markdown .katex,
+.modern-msg-body.markdown .katex {
+  font-size: 1.06em;
+}
+
+.markdown .katex-display,
+.modern-msg-body.markdown .katex-display {
+  max-width: 100%;
+  margin: 0.9em 0;
+  padding: 0.15em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown .katex-error,
+.modern-msg-body.markdown .katex-error {
+  color: var(--danger, #c53b3b);
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
 .modern-msg-body.streaming-reply {
   opacity: 0;
   animation: modern-agent-stream-in 220ms ease-out 80ms both;

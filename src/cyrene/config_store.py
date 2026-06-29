@@ -13,10 +13,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 from pathlib import Path
 
 from cryptography.fernet import Fernet
+from cyrene import app_paths
 
 try:
     import keyring
@@ -36,46 +36,9 @@ _KEYRING_USERNAME = "config_key"
 # ---------------------------------------------------------------------------
 
 
-def _bundle_contents_dir() -> Path | None:
-    exe = Path(sys.executable).resolve()
-    parts = exe.parts
-    for idx, part in enumerate(parts):
-        if part.endswith(".app") and idx + 2 < len(parts) and parts[idx + 1] == "Contents":
-            return Path(*parts[: idx + 2])
-    return None
-
-
-def _is_bundled() -> bool:
-    return getattr(sys, "frozen", False) or _bundle_contents_dir() is not None
-
-
-def _get_user_data_dir() -> Path:
-    if sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    elif sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-    else:
-        xdg = os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
-        base = Path(xdg)
-    return base / "Cyrene"
-
-
-def _get_source_root() -> Path:
-    if _is_bundled() and hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS)
-    bundle_contents = _bundle_contents_dir()
-    if bundle_contents is not None:
-        for candidate in (bundle_contents / "Resources", bundle_contents / "Frameworks"):
-            if (candidate / "pyproject.toml").exists() or (candidate / ".env.example").exists():
-                return candidate
-    return Path(__file__).resolve().parent.parent.parent
-
-
-_SOURCE_ROOT = _get_source_root()
-if _is_bundled():
-    _BASE_DIR = _get_user_data_dir()
-else:
-    _BASE_DIR = _SOURCE_ROOT
+_PATHS = app_paths.resolve_app_paths()
+_SOURCE_ROOT = _PATHS.install_resources
+_BASE_DIR = _PATHS.runtime_base
 
 DATA_DIR = _BASE_DIR / "data"
 _ENCRYPTED_PATH = DATA_DIR / "config.enc"
@@ -147,7 +110,11 @@ _DEFAULT_SETTINGS: dict = {
     "workspace_active": True,
     "soul_active": True,
     "agent_proactive": True,
+    "app_language": "",
     "max_tool_rounds": 15,
+    "redact_secrets": True,
+    "notify_telegram": True,
+    "notify_wechat": True,
 }
 
 _EDITABLE_ENV_KEYS = {
@@ -419,6 +386,38 @@ def _apply_settings_migrations(config: dict) -> dict:
         settings["notify_wechat"] = settings.pop("wechat_notify_scheduled")
         changed = True
 
+    # Fix model entries created by older onboarding that lacked model/base_url/api_key.
+    env_base_url = config.get("env", {}).get("OPENAI_BASE_URL", _DEFAULT_ENV.get("OPENAI_BASE_URL", "https://api.deepseek.com/v1"))
+    env_api_key = config.get("env", {}).get("OPENAI_API_KEY", _DEFAULT_ENV.get("OPENAI_API_KEY", ""))
+    for model_key in ("models", "vision_models"):
+        items = settings.get(model_key)
+        if not isinstance(items, list):
+            continue
+        fixed = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("model") or item.get("name") or item.get("id") or "").strip()
+            if not model_id:
+                continue
+            if not item.get("model"):
+                item["model"] = model_id
+                changed = True
+            if not item.get("name"):
+                item["name"] = model_id
+                changed = True
+            if not item.get("base_url"):
+                item["base_url"] = env_base_url
+                changed = True
+            if "api_key" not in item:
+                # Only backfill the active env key when the model uses the same endpoint.
+                item["api_key"] = env_api_key if str(item.get("base_url") or "").rstrip("/") == env_base_url.rstrip("/") else ""
+                changed = True
+            fixed.append(item)
+        if len(fixed) != len(items):
+            settings[model_key] = fixed
+            changed = True
+
     if changed:
         _persist(config)
         logger.info("Applied settings migration")
@@ -557,10 +556,16 @@ def _parse_ctx_str(ctx_str: str) -> int:
         return 0
 
 
-def get_current_ctx_limit() -> int:
-    """Context-window size (in tokens) of the active primary model. 0 if unknown."""
-    from cyrene import config
-    model_name = str(getattr(config, "OPENAI_MODEL", "") or "").strip()
+def ctx_limit_for_model(model_name: str) -> int:
+    """Context-window size (in tokens) for a specific model name. 0 if unknown.
+
+    Resolves a configured ``ctx`` first, then falls back to a family heuristic.
+    Used per-conversation so each chat's context gauge reflects its OWN model,
+    not just the globally-active one.
+    """
+    model_name = str(model_name or "").strip()
+    if not model_name:
+        return 0
     for model in (get_models() or []):
         if model.get("model") == model_name or model.get("name") == model_name:
             limit = _parse_ctx_str(model.get("ctx", ""))
@@ -578,11 +583,23 @@ def get_current_ctx_limit() -> int:
         return 128_000
     if "gpt-3.5" in ml:
         return 16_000
-    if any(x in ml for x in ("deepseek", "qwen")):
+    if "deepseek" in ml:
+        # V4 family (deepseek-v4-flash / deepseek-v4-pro) ships a 1M-token
+        # window; older deepseek-chat (V3) / deepseek-reasoner (R1) cap at 128K.
+        # Over-reporting would push compaction past the model's real limit and
+        # the API would hard-reject oversized requests, so only widen for V4.
+        return 1_000_000 if "v4" in ml else 128_000
+    if "qwen" in ml:
         return 128_000
     if "gemini" in ml:
         return 1_000_000
     return 0
+
+
+def get_current_ctx_limit() -> int:
+    """Context-window size (in tokens) of the active primary model. 0 if unknown."""
+    from cyrene import config
+    return ctx_limit_for_model(str(getattr(config, "OPENAI_MODEL", "") or ""))
 
 
 def save_vision_models(models: list[dict]) -> None:

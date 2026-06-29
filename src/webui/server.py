@@ -15,6 +15,7 @@ from cyrene.config import WEB_PORT
 logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
+_WORKBENCH_UI_DIR = Path(__file__).parent.parent / "workbench-webui"
 
 
 class WebBot:
@@ -40,7 +41,7 @@ class WebBot:
         return matched
 
 
-def create_app(bot: Any, db_path: str, instance_id: str = "") -> FastAPI:
+def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "workbench") -> FastAPI:
     from cyrene.channels.wechat import setup_wechat as _setup_wechat
     from webui.routes import register_routes
 
@@ -49,6 +50,8 @@ def create_app(bot: Any, db_path: str, instance_id: str = "") -> FastAPI:
     app = FastAPI(title="Cyrene")
     app.add_middleware(LocalAuthMiddleware)
     app.state.instance_id = instance_id
+    app.state.ui_mode = ui_mode
+    app.mount("/static/workbench-ui", StaticFiles(directory=str(_WORKBENCH_UI_DIR)), name="workbench-ui")
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     @app.get("/api/instance-id")
@@ -58,6 +61,12 @@ def create_app(bot: Any, db_path: str, instance_id: str = "") -> FastAPI:
     register_routes(app, bot, db_path)
 
     @app.on_event("startup")
+    async def _start_workbench_chat_runs() -> None:
+        from webui.routes_workbench_chat import startup_chat_runs
+
+        startup_chat_runs()
+
+    @app.on_event("startup")
     async def _start_wechat() -> None:
         try:
             await _setup_wechat(app, db_path)
@@ -65,27 +74,110 @@ def create_app(bot: Any, db_path: str, instance_id: str = "") -> FastAPI:
             logger.warning("WeChat bot setup failed — check your config / proxy setup")
 
     @app.on_event("startup")
+    async def _migrate_knowledge_db() -> None:
+        try:
+            from cyrene.config import migrate_knowledge_to_workspace_db
+            result = await migrate_knowledge_to_workspace_db()
+            if result["migrated"]:
+                logger.info("Knowledge base migrated: %s", result["reason"])
+        except Exception:
+            logger.warning("Knowledge base migration failed (non-fatal)")
+
+    @app.on_event("startup")
     async def _sync_knowledge_catalog() -> None:
         try:
+            from cyrene.config import get_knowledge_db_path
+            from cyrene.db import init_knowledge_db
             from cyrene.knowledge import store, ingest
-            await store.sync_filesystem(db_path)
-            asyncio.create_task(ingest.process_pending(db_path))
+            _kb_db_path = str(get_knowledge_db_path())
+            await init_knowledge_db(_kb_db_path)
+            await store.sync_filesystem(_kb_db_path)
+            asyncio.create_task(ingest.process_pending(_kb_db_path))
         except Exception:
             logger.warning("Knowledge catalog sync failed — check your knowledge base")
 
+    @app.on_event("startup")
+    async def _decouple_default_project_knowledge() -> None:
+        # One-time: lift the Workbench default project's own knowledge docs out of
+        # the shared legacy kb_default.db (which the catalog fills with every
+        # project's files) into its id-scoped db. Idempotent, non-destructive.
+        #
+        # Runs in the BACKGROUND. The migration re-indexes every doc it moves —
+        # vision analysis for images, embeddings for the rest — which is an
+        # unbounded series of LLM calls. uvicorn only finishes startup (and our
+        # launcher only then prints PORT=) once every startup handler returns,
+        # and Electron gives up waiting after 30s. A default project with a few
+        # images easily blows past that, leaving the desktop app unable to start
+        # ("The Python backend did not start within 30 seconds"). Fire it off so
+        # the server comes up immediately; keep a reference so the task isn't
+        # garbage-collected mid-flight.
+        async def _run() -> None:
+            try:
+                from cyrene.knowledge.workbench import migrate_default_project_knowledge
+
+                result = await migrate_default_project_knowledge()
+                if result.get("migrated"):
+                    logger.info(
+                        "Default project knowledge decoupled: %s docs -> kb_%s.db",
+                        result.get("migrated"),
+                        result.get("target"),
+                    )
+            except Exception:
+                logger.warning("Default project knowledge decouple failed (non-fatal)")
+
+        app.state._decouple_task = asyncio.create_task(_run())
+
     @app.on_event("shutdown")
     async def _close_browser_session() -> None:
+        try:
+            from webui.routes_workbench_chat import shutdown_chat_runs
+
+            await shutdown_chat_runs()
+        except Exception:
+            logger.warning("Workbench chat run shutdown failed")
+
         try:
             from cyrene.browser import close_session
             await close_session()
         except Exception:
             logger.warning("Browser session shutdown failed")
 
+        # Cancel all active session tasks
+        try:
+            from cyrene.agent.state import _sessions
+            from cyrene.subagent import _subagent_tasks
+
+            for session_id, ctx in list(_sessions.items()):
+                ctx.interrupt_event.set()
+                for tasks in (ctx.pending_compressors, ctx.pending_label_refreshes, ctx.pending_interrupt_clearers):
+                    for t in list(tasks):
+                        try:
+                            if not t.done() and not t.get_loop().is_closed():
+                                t.cancel()
+                        except RuntimeError:
+                            pass
+                    tasks.clear()
+                if ctx.main_inbox_worker is not None:
+                    try:
+                        if not ctx.main_inbox_worker.done() and not ctx.main_inbox_worker.get_loop().is_closed():
+                            ctx.main_inbox_worker.cancel()
+                    except RuntimeError:
+                        pass
+                    ctx.main_inbox_worker = None
+            for t in _subagent_tasks.values():
+                try:
+                    if not t.done() and not t.get_loop().is_closed():
+                        t.cancel()
+                except RuntimeError:
+                    pass
+        except Exception:
+            logger.warning("Session cleanup during shutdown failed")
+
     return app
 
 
-async def run_web(bot: Any, db_path: str, port: int = WEB_PORT, instance_id: str = "") -> None:
-    app = create_app(bot, db_path, instance_id=instance_id)
+async def run_web(bot: Any, db_path: str, port: int = WEB_PORT, instance_id: str = "", ui_mode: str = "workbench") -> None:
+    app = create_app(bot, db_path, instance_id=instance_id, ui_mode=ui_mode)
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info", loop="asyncio")
     server = uvicorn.Server(config)
     logger.info("Web UI at http://0.0.0.0:%d", port)

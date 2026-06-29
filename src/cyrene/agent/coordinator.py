@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import cyrene.agent.state as _state
 
@@ -43,6 +43,8 @@ from cyrene.agent.prompts import (
     _QUICK_ANSWER_PROMPT,
     _WORKSPACE_SCOPE_BLOCK,
     _spawn_policy_prompt_block,
+    conversation_identity_block,
+    workspace_scope_block,
 )
 from cyrene.agent.session import (
     _expand_report_reference_history,
@@ -57,6 +59,7 @@ from cyrene.agent.state import (
     _active_main_round_prompt,
     _active_main_round_public_prompt,
     _active_main_round_started_at,
+    _active_workspace_dir,
     _agent_lock,
     _AWAITING_USER_SENTINEL,
     _call_llm,
@@ -64,8 +67,10 @@ from cyrene.agent.state import (
     _current_client_request_id,
     _current_command,
     _current_round_id,
+    _current_session_id,
     _deep_research_first_round,
     _deep_research_mode,
+    _ensure_session,
     _interrupt_event,
     _LIGHT_TOOL_DEFS,
     _get_max_tool_rounds,
@@ -80,6 +85,7 @@ from cyrene.agent.state import (
     _tool_quit,
     _ui_round_assistant_meta,
     _ui_round_hide_initial_detail,
+    active_workspace_dir,
 )
 from cyrene.config import ASSISTANT_NAME
 from cyrene.context_trace import context_block
@@ -125,11 +131,12 @@ async def _kick_behavior_learning_processing() -> None:
 # ---------------------------------------------------------------------------
 
 async def _run_execution_agent(task: str, bot: Any, chat_id: int, db_path: str, notify_state: dict[str, bool] | None = None) -> str:
-    # 使用 agent_lock 防止与用户聊天并发执行
-    if _agent_lock.locked():
+    # 使用默认 session 的锁防止与用户聊天并发执行
+    default_ctx = _ensure_session("")
+    if default_ctx.lock.locked():
         return ""
-    async with _agent_lock:
-        _interrupt_event.clear()
+    async with default_ctx.lock:
+        default_ctx.interrupt_event.clear()
         return await _run_execution_agent_locked(task, bot, chat_id, db_path, notify_state)
 
 
@@ -192,35 +199,99 @@ async def run_agent(
     command: str = "",
     public_user_message: str | None = None,
     public_attachments: list[dict[str, Any]] | None = None,
+    permission_mode: str = "default",
+    session_id: str = "",
+    workspace_dir: str = "",
+    ephemeral_system: str = "",
+    fixed_ephemeral_system: str = "",
+    volatile_ephemeral_system: str = "",
+    static_system_extra: str = "",
 ) -> str:
-    """Main entry point. Runs the main agent loop with full tools."""
-    if _agent_lock.locked():
-        interrupt_active_run()
-    async with _agent_lock:
-        _interrupt_event.clear()
-        return await _run_chat_agent(
-            user_message, bot, chat_id, db_path,
-            client_request_id=client_request_id, lang=lang, command=command,
-            public_user_message=public_user_message, public_attachments=public_attachments,
-        )
+    """Main entry point. Runs the main agent loop with full tools.
 
+    ``workspace_dir`` scopes the agent's file tools + Bash cwd to a specific
+    directory (a Workbench project's workspacePath). Empty → global WORKSPACE_DIR.
 
-async def _clear_interrupt_when_idle() -> None:
+    ``ephemeral_system`` is kept as a compatibility alias for run-scoped context.
+    It is fixed for the duration of the run and inserted before the current user
+    turn, so tool rounds can reuse the full previous prompt prefix. Use
+    ``volatile_ephemeral_system`` only for context that can differ between calls
+    inside the same run; it is appended at the prompt tail.
+
+    ``static_system_extra`` is a run-invariant block (e.g. Workbench task-mode
+    framing) concatenated into the SYSTEM prefix right after the base prompt,
+    ahead of every volatile block. Use it for instructions that never change
+    between runs so they stay in the cache-stable prefix; use ``ephemeral_system``
+    for anything that varies per run.
+    """
+    session_token = _current_session_id.set(session_id)
+    workspace_token = _active_workspace_dir.set(workspace_dir or "")
     try:
-        while _agent_lock.locked():
+        ctx = _ensure_session(session_id)
+        if ctx.lock.locked():
+            interrupt_active_run(session_id=session_id)
+        async with ctx.lock:
+            ctx.interrupt_event.clear()
+            current_task = asyncio.current_task()
+            ctx.active_task = current_task
+            try:
+                return await _run_chat_agent(
+                    user_message, bot, chat_id, db_path,
+                    client_request_id=client_request_id, lang=lang, command=command,
+                    public_user_message=public_user_message, public_attachments=public_attachments,
+                    permission_mode=permission_mode, ephemeral_system=ephemeral_system,
+                    fixed_ephemeral_system=fixed_ephemeral_system,
+                    volatile_ephemeral_system=volatile_ephemeral_system,
+                    static_system_extra=static_system_extra,
+                )
+            finally:
+                if ctx.active_task is current_task:
+                    ctx.active_task = None
+    finally:
+        _current_session_id.reset(session_token)
+        _active_workspace_dir.reset(workspace_token)
+
+
+def is_session_running(session_id: str = "") -> bool:
+    """Return whether an agent run currently owns the requested session."""
+    return _ensure_session(session_id).lock.locked()
+
+
+async def _clear_interrupt_when_idle(session_id: str = "") -> None:
+    ctx = _ensure_session(session_id)
+    try:
+        while ctx.lock.locked():
             await asyncio.sleep(0.05)
     finally:
-        _interrupt_event.clear()
+        ctx.interrupt_event.clear()
 
 
-def interrupt_active_run() -> bool:
-    if not _agent_lock.locked():
-        _interrupt_event.clear()
+def interrupt_active_run(session_id: str = "") -> bool:
+    ctx = _ensure_session(session_id)
+    if not ctx.lock.locked():
+        ctx.interrupt_event.clear()
         return False
-    _interrupt_event.set()
-    task = asyncio.create_task(_clear_interrupt_when_idle())
-    _pending_interrupt_clearers.add(task)
-    task.add_done_callback(_pending_interrupt_clearers.discard)
+    ctx.interrupt_event.set()
+    task = ctx.active_task
+    if task is not None and not task.done() and task is not asyncio.current_task():
+        task.cancel()
+    round_id = str(ctx.active_main_round_id or "").strip()
+    if round_id or session_id:
+        async def _cancel_subagents() -> None:
+            try:
+                from cyrene.subagent import cancel_subagent_tasks
+
+                await cancel_subagent_tasks(round_id=round_id, session_id=session_id)
+            except Exception:
+                logger.exception("Failed to cancel subagents for interrupted session %s", session_id)
+
+        try:
+            asyncio.create_task(_cancel_subagents())
+        except RuntimeError:
+            pass
+    task = asyncio.create_task(_clear_interrupt_when_idle(session_id=session_id))
+    ctx.pending_interrupt_clearers.add(task)
+    task.add_done_callback(ctx.pending_interrupt_clearers.discard)
     return True
 
 
@@ -234,6 +305,9 @@ async def _run_chat_agent(
     chat_id: int,
     db_path: str,
     ephemeral_system: str = "",
+    fixed_ephemeral_system: str = "",
+    volatile_ephemeral_system: str = "",
+    static_system_extra: str = "",
     forced_round_id: str = "",
     history_override: list[dict[str, Any]] | None = None,
     persist_base_messages: list[dict[str, Any]] | None = None,
@@ -248,6 +322,8 @@ async def _run_chat_agent(
     assistant_message_meta: dict[str, Any] | None = None,
     lang: str = "",
     command: str = "",
+    permission_mode: str = "default",
+    plan_modification: str = "",
 ) -> str:
     import time as _time
 
@@ -264,7 +340,13 @@ async def _run_chat_agent(
     round_id = str(forced_round_id or "").strip() or f"round_{int(_time.time() * 1000)}"
     round_token = _current_round_id.set(round_id)
     full_session_messages = _load_session_messages()
-    # Update state module globals so reads via cyrene.agent.state are visible
+    # Update per-session context so reads via cyrene.agent.state are visible
+    _ctx = _ensure_session(_current_session_id.get())
+    _ctx.active_main_round_id = round_id
+    _ctx.active_main_round_prompt = user_message
+    _ctx.active_main_round_public_prompt = user_message if public_prompt is None else str(public_prompt)
+    _ctx.active_main_round_started_at = _time.time()
+    # Keep module-level globals in sync for the default session (backward compat)
     _state._active_main_round_id = round_id
     _state._active_main_round_prompt = user_message
     _state._active_main_round_public_prompt = user_message if public_prompt is None else str(public_prompt)
@@ -289,17 +371,31 @@ async def _run_chat_agent(
     intermediate_reply_token = _pending_intermediate_user_replies.set([])
     hide_initial_detail_token = _ui_round_hide_initial_detail.set(bool(hide_initial_detail))
     assistant_meta_token = _ui_round_assistant_meta.set(dict(assistant_message_meta) if assistant_message_meta else None)
+    _mode = permission_mode if permission_mode in _state.PERMISSION_MODES else "default"
+    mode_token = _state._permission_mode.set(_mode)
+    # 完全访问模式：复用现有 _temporary_full_access 短路，所有工具零额外改动即放行。
+    if _mode == "full_access":
+        _state._temporary_full_access.set(True)
     behavior_turn_context: dict[str, Any] | None = None
+    dr_token = None
+    dr_first_token = None
+    cmd_token = None
     final_output = ""
     try:
+        # 全局 short_term 只属于默认会话（旧 UI 单线程对话的跨重启恢复）。
+        # workbench 的任务/对话会话有独立 session_id，注入会把别的话题带进
+        # 全新会话造成答非所问，因此一律跳过。
+        is_default_session = not _current_session_id.get()
         restored_short_term = False
-        if not history:
+        if not history and is_default_session:
             st = get_context(max_chars=5000)
             if st:
                 history = [{"role": "system", "content": "[Restored context]\n" + st}]
                 restored_short_term = True
-        if ephemeral_system:
-            history = [*history, {"role": "system", "content": ephemeral_system}]
+        # Run-scoped ephemeral context is not persisted into history. It is inserted
+        # immediately before the current user turn inside ``_run_main_agent`` so a
+        # tool loop evolves by pure append (system/history/fixed-context/user →
+        # assistant/tool...), preserving the full prior request as a cache prefix.
 
         if command != DEEP_REFLECT_COMMAND_ID:
             try:
@@ -315,7 +411,10 @@ async def _run_chat_agent(
                 behavior_turn_context = None
 
         try:
-            memory_context = get_memory_context(include_short_term=not restored_short_term)
+            # 同理：system prompt 里的 short_term 摘要也只给默认会话。
+            memory_context = get_memory_context(
+                include_short_term=is_default_session and not restored_short_term
+            )
         except TypeError as exc:
             if "include_short_term" not in str(exc):
                 raise
@@ -337,6 +436,44 @@ async def _run_chat_agent(
                 content=_MAIN_AGENT_PROMPT,
             ),
         ]
+        plan_mode_active = _state._permission_mode.get() == "plan"
+        if plan_mode_active:
+            revision_note = (
+                "\n- The user is revising a previous proposed plan. Their revision request is:\n"
+                f"{plan_modification.strip()}\n"
+                if str(plan_modification or "").strip() else ""
+            )
+            plan_mode_prompt = (
+                "## Plan Mode Discovery\n"
+                "- The user selected plan mode. Your goal is to prepare a proposed plan for approval, not to complete the work yet.\n"
+                "- You may call tools before generating the plan when they help you inspect the workspace, search project memory, read files, gather public/current facts, or understand constraints.\n"
+                "- Before approval, avoid mutating tools and side effects: do not write/edit/delete files, commit, schedule tasks, send files/messages, or change external state unless the user explicitly requested that as part of planning.\n"
+                f"{revision_note}"
+                "- After enough context is collected, call `enter_plan_mode` to submit the structured plan and pause for the user's decision. Do not finish with a normal answer instead of presenting the plan.\n"
+                "- If no exploration is needed, still call `enter_plan_mode` directly."
+            )
+            main_system = main_system + "\n\n" + plan_mode_prompt
+            main_system_context.append(context_block(
+                "mode.plan.discovery",
+                "mode_policy",
+                source="cyrene.agent.coordinator",
+                reason="Workbench chat plan mode allows pre-plan tool discovery",
+                content=plan_mode_prompt,
+            ))
+        # Caller-provided static system extension (e.g. Workbench task-mode framing).
+        # Concatenated right after the base prompt — ahead of every volatile block
+        # (memory, temporal, workspace) — so it stays inside the byte-stable cached
+        # prefix instead of being re-processed each tool round at the prompt tail.
+        if static_system_extra:
+            main_system = main_system + "\n\n" + static_system_extra
+            main_system_context.append(context_block(
+                "main.system.static_extra",
+                "system",
+                source="run_agent(static_system_extra)",
+                reason="caller-provided static system extension; cache-stable prefix",
+                transforms=["concat_into_system"],
+                content=static_system_extra,
+            ))
         if lang and lang != "en":
             lang_prompt = f"The user has set their preferred language to {lang}. Reply in this language."
             main_system += "\n\n" + lang_prompt
@@ -369,24 +506,23 @@ async def _run_chat_agent(
                 transforms=["preview", "concat_into_system"],
                 content=skill_prompt_block,
             ))
-        main_system += "\n\n" + temporal_context
-        main_system_context.append(context_block(
-            "runtime.temporal_context",
-            "system",
-            source="datetime.now().astimezone()",
-            reason="anchor relative dates and current/recent searches",
-            content=temporal_context,
-            metadata={"date": f"{now:%Y-%m-%d}", "timezone": now.tzname()},
-            transforms=["concat_into_system"],
-        ))
-        main_system += "\n\n" + _WORKSPACE_SCOPE_BLOCK
+        # ``temporal_context`` is deliberately NOT concatenated into the system
+        # prefix: the date rolls over daily, which would invalidate the entire
+        # system+history prefix every midnight. It is run-fixed context instead.
+        try:
+            from cyrene.shell_runtime import resolve_shell
+            _shell_kind = resolve_shell()[0]
+        except Exception:
+            _shell_kind = "bash"
+        current_workspace_scope = workspace_scope_block(active_workspace_dir(), shell_kind=_shell_kind)
+        main_system += "\n\n" + current_workspace_scope
         main_system_context.append(context_block(
             "runtime.workspace_scope",
             "system",
-            source="cyrene.agent.prompts._WORKSPACE_SCOPE_BLOCK",
+            source="cyrene.agent.prompts.workspace_scope_block",
             reason="constrain agent to workspace; prevent unnecessary permission prompts",
             transforms=["concat_into_system"],
-            content=_WORKSPACE_SCOPE_BLOCK,
+            content=current_workspace_scope,
         ))
 
         is_deep_research = command == "deep-research"
@@ -644,6 +780,24 @@ async def _run_chat_agent(
                 metadata={"policy": spawn_policy},
             ))
 
+        # Keep per-run / per-session dynamic blocks out of the base system prefix.
+        # They are fixed for this run and inserted before the current user turn, so
+        # each tool round can still reuse the full previous prompt as a prefix.
+        conversation_identity = conversation_identity_block(_current_session_id.get())
+        effective_fixed_ephemeral = "\n\n".join(
+            part
+            for part in (
+                fixed_ephemeral_system,
+                ephemeral_system,
+                temporal_context,
+                conversation_identity,
+            )
+            if part
+        )
+        effective_volatile_ephemeral = "\n\n".join(
+            part for part in (volatile_ephemeral_system,) if part
+        )
+
         from cyrene.agent.agent import _run_main_agent
 
         main_text = await _run_main_agent(
@@ -651,6 +805,8 @@ async def _run_chat_agent(
             client_request_id=client_request_id, persist_user_message=persist_user_message,
             public_user_message=public_user_message, public_attachments=public_attachments, lang=lang,
             system_context=main_system_context,
+            fixed_ephemeral_system=effective_fixed_ephemeral,
+            ephemeral_system=effective_volatile_ephemeral,
         )
 
         if refresh_labels:
@@ -691,9 +847,12 @@ async def _run_chat_agent(
                 _behavior_learning.clear_turn_context(behavior_turn_context)
             except Exception:
                 logger.debug("Failed to clear behavior-learning context", exc_info=True)
-        _current_command.reset(cmd_token)
-        _deep_research_mode.reset(dr_token)
-        _deep_research_first_round.reset(dr_first_token)
+        if cmd_token is not None:
+            _current_command.reset(cmd_token)
+        if dr_token is not None:
+            _deep_research_mode.reset(dr_token)
+        if dr_first_token is not None:
+            _deep_research_first_round.reset(dr_first_token)
         _ui_round_assistant_meta.reset(assistant_meta_token)
         _ui_round_hide_initial_detail.reset(hide_initial_detail_token)
         _pending_intermediate_user_replies.reset(intermediate_reply_token)
@@ -702,11 +861,18 @@ async def _run_chat_agent(
         _persist_history_prefix_len.reset(prefix_token)
         _persist_merge_live_state.reset(merge_live_token)
         _persist_base_messages.reset(base_token)
+        _ctx = _ensure_session(_current_session_id.get())
+        _ctx.active_main_round_id = ""
+        _ctx.active_main_round_prompt = ""
+        _ctx.active_main_round_public_prompt = ""
+        _ctx.active_main_round_started_at = 0.0
+        # Keep module-level globals in sync (backward compat)
         _state._active_main_round_id = ""
         _state._active_main_round_prompt = ""
         _state._active_main_round_public_prompt = ""
         _state._active_main_round_started_at = 0.0
         _state._temporary_full_access.set(False)
+        _state._permission_mode.reset(mode_token)
         _current_round_id.reset(round_token)
 
 
@@ -718,14 +884,35 @@ async def run_task_agent(prompt: str, bot: Any, chat_id: int, db_path: str, noti
     return await _run_execution_agent(prompt, bot, chat_id, db_path, notify_state=notify_state)
 
 
-async def run_heartbeat_agent(prompt: str, bot: Any, chat_id: int, db_path: str) -> str:
+async def run_heartbeat_agent(
+    prompt: str,
+    bot: Any,
+    chat_id: int,
+    db_path: str,
+    session_id: str = "",
+    on_reply: Callable[[str], Awaitable[Any]] | None = None,
+    lang: str = "",
+) -> str:
+    # The scheduler runs server-side with no HTTP request, so it cannot read the
+    # per-request UI ``lang`` that normal chats carry. When a language preference
+    # has been persisted (``app_language``), pin the reply to it explicitly;
+    # otherwise fall back to inferring from the user's past messages.
+    lang = (lang or "").strip().lower()
+    if lang == "en":
+        lang_line = "Always write your reply in English (the user's configured language).\n"
+    elif lang == "zh":
+        lang_line = "Always write your reply in Chinese / 简体中文 (the user's configured language).\n"
+    elif lang:
+        lang_line = f"Always write your reply in the user's configured language ({lang}).\n"
+    else:
+        lang_line = "Match the user's preferred language based on their past messages.\n"
     proactive_system = (
         "This round was initiated by the scheduler, not by a user chat message.\n"
         "The hidden task you receive is internal guidance, not text to answer literally.\n"
         "Your final assistant reply will be shown directly to the user in the Web UI.\n"
         "Write to the user in a natural, user-facing voice.\n"
-        "Match the user's preferred language based on their past messages.\n"
-        "Do not mention the scheduler, heartbeat, lottery, hidden prompt, or internal instructions.\n"
+        + lang_line
+        + "Do not mention the scheduler, heartbeat, lottery, hidden prompt, or internal instructions.\n"
         "\n"
         "DECISION RULE — a warm, light-touch check-in:\n"
         "- This is a chance to reach out the way a thoughtful friend would. If something specific comes to mind — a topic, plan, or feeling the user shared — follow up on it warmly.\n"
@@ -735,16 +922,29 @@ async def run_heartbeat_agent(prompt: str, bot: Any, chat_id: int, db_path: str)
         "- Keep it to 1–2 sentences. Be direct, warm, and specific.\n"
         "- If tools are useful, use them before composing the reply."
     )
-    if _agent_lock.locked():
-        return ""
-    async with _agent_lock:
-        _interrupt_event.clear()
-        return await _run_chat_agent(
-            prompt, bot, chat_id, db_path,
-            ephemeral_system=proactive_system, persist_user_message=False,
-            public_prompt="", refresh_labels=False, hide_initial_detail=True,
-            assistant_message_meta={"proactive": True, "system_initiated": True},
-        )
+    session_token = _current_session_id.set(session_id)
+    try:
+        ctx = _ensure_session(session_id)
+        # Proactive work is strictly non-preemptive. A user-owned run always
+        # wins; unlike run_agent(), this path must never interrupt or queue
+        # behind an active conversation.
+        if ctx.lock.locked():
+            return ""
+        async with ctx.lock:
+            ctx.interrupt_event.clear()
+            reply = await _run_chat_agent(
+                prompt, bot, chat_id, db_path,
+                ephemeral_system=proactive_system, persist_user_message=False,
+                public_prompt="", refresh_labels=False, hide_initial_detail=True,
+                assistant_message_meta={"proactive": True, "system_initiated": True},
+            )
+            if reply and on_reply is not None:
+                delivered = await on_reply(reply)
+                if delivered is None or delivered is False:
+                    return ""
+            return reply
+    finally:
+        _current_session_id.reset(session_token)
 
 
 async def run_steward_agent(conversation_text: str, soulmd_content: str, bot: Any, chat_id: int, db_path: str) -> str:

@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 _DATA_DIR: Path | None = None
 _WORKSPACE_DIR: Path | None = None
 _DB_FILE: Path = DATA_DIR / "behavior-learning.db"
+# SQLite busy-wait (seconds). Block instead of failing instantly when another
+# connection holds a write lock — e.g. background pattern processing running
+# concurrently with the per-tool-call record_action writes.
+_SQLITE_BUSY_TIMEOUT = 15.0
 _INIT_DONE = False
 _PROCESS_LOCK: asyncio.Lock | None = None
 _PROCESS_LOCK_LOOP: asyncio.AbstractEventLoop | None = None
@@ -531,7 +535,9 @@ class _Conn:
 
     async def __aenter__(self) -> aiosqlite.Connection:
         _DB_FILE.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = aiosqlite.connect(str(_DB_FILE))
+        # timeout maps to SQLite's busy_timeout: wait for a held write lock
+        # instead of raising "database is locked" immediately.
+        self._conn = aiosqlite.connect(str(_DB_FILE), timeout=_SQLITE_BUSY_TIMEOUT)
         await self._conn.__aenter__()
         self._conn.row_factory = sqlite3.Row
         return self._conn
@@ -867,6 +873,11 @@ def _default_skill_stats() -> dict[str, Any]:
 
 async def _ensure_tables() -> None:
     async with _conn() as conn:
+        # WAL lets the writer and readers proceed concurrently and removes the
+        # rollback-journal SHARED→EXCLUSIVE deadlock that surfaced as
+        # "database is locked" under concurrent record_action + pattern
+        # processing. journal_mode is persisted in the DB header (set once here).
+        await conn.execute("PRAGMA journal_mode = WAL")
         await conn.executescript(_CREATE_TABLES)
         await conn.commit()
         # Migration: add permission_snapshot to pre-existing learned_skill_runs tables
@@ -1083,47 +1094,53 @@ async def record_action(
         "raw_args": dict(args or {}),
         "action_domain": domain,
     }
-    async with _conn() as conn:
-        cursor = await conn.execute(
-            "SELECT COALESCE(MAX(action_index), -1) AS max_idx FROM behavior_actions WHERE turn_id = ?",
-            (turn_id,),
-        )
-        row = await cursor.fetchone()
-        next_index = int(row["max_idx"] or -1) + 1
-        await conn.execute(
-            """
-            INSERT INTO behavior_actions
-            (action_id, turn_id, session_id, round_id, created_at, action_index, action_type, action_subtype,
-             tool_name, input_summary, output_summary, success, error_summary, requires_llm, risk_level, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'none', ?)
-            """,
-            (
-                action_id,
-                turn_id,
-                session_id,
-                str(round_id or _current_round_id.get()),
-                now,
-                next_index,
-                action_type,
-                action_subtype,
-                tool_name,
-                _truncate_text(_json_dumps(args or {}), 500),
-                _truncate_text(result, 500),
-                1 if success else 0,
-                _truncate_text(error, 400),
-                requires_llm,
-                _json_dumps(metadata),
-            ),
-        )
-        await conn.execute(
-            "UPDATE behavior_turns SET updated_at = ? WHERE turn_id = ?",
-            (now, turn_id),
-        )
-        await conn.execute(
-            "UPDATE behavior_sessions SET updated_at = ? WHERE session_id = ?",
-            (now, session_id),
-        )
-        await conn.commit()
+    try:
+        async with _conn() as conn:
+            cursor = await conn.execute(
+                "SELECT COALESCE(MAX(action_index), -1) AS max_idx FROM behavior_actions WHERE turn_id = ?",
+                (turn_id,),
+            )
+            row = await cursor.fetchone()
+            next_index = int(row["max_idx"] or -1) + 1
+            await conn.execute(
+                """
+                INSERT INTO behavior_actions
+                (action_id, turn_id, session_id, round_id, created_at, action_index, action_type, action_subtype,
+                 tool_name, input_summary, output_summary, success, error_summary, requires_llm, risk_level, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'none', ?)
+                """,
+                (
+                    action_id,
+                    turn_id,
+                    session_id,
+                    str(round_id or _current_round_id.get()),
+                    now,
+                    next_index,
+                    action_type,
+                    action_subtype,
+                    tool_name,
+                    _truncate_text(_json_dumps(args or {}), 500),
+                    _truncate_text(result, 500),
+                    1 if success else 0,
+                    _truncate_text(error, 400),
+                    requires_llm,
+                    _json_dumps(metadata),
+                ),
+            )
+            await conn.execute(
+                "UPDATE behavior_turns SET updated_at = ? WHERE turn_id = ?",
+                (now, turn_id),
+            )
+            await conn.execute(
+                "UPDATE behavior_sessions SET updated_at = ? WHERE session_id = ?",
+                (now, session_id),
+            )
+            await conn.commit()
+    except Exception:
+        # Behaviour-learning is fire-and-forget telemetry: a write failure here
+        # (e.g. a transient "database is locked") must never propagate and turn
+        # a successful tool call into a failure. Log and drop.
+        logger.debug("record_action telemetry write failed (ignored)", exc_info=True)
 
 
 async def mark_turn_skill_routed(skill_id: str) -> None:

@@ -14,6 +14,7 @@ def _patch_paths(monkeypatch, tmp_path, soul_content, default_content):
     soul_path.write_text(soul_content, encoding="utf-8")
 
     monkeypatch.setattr(onboarding, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(onboarding, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(onboarding, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(onboarding, "get_soul_path", lambda: soul_path)
     monkeypatch.setattr(onboarding, "read_soul", lambda: soul_path.read_text(encoding="utf-8"))
@@ -57,7 +58,7 @@ def test_get_onboarding_status_infers_existing_setup(monkeypatch, tmp_path):
 
 
 async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path):
-    from cyrene import onboarding
+    from cyrene import onboarding, config_store
 
     default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"
     _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
@@ -65,12 +66,32 @@ async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path
     monkeypatch.setattr(onboarding, "write_env_keys", lambda updates: True)
     monkeypatch.setattr(onboarding, "_test_llm_connection", AsyncMock(return_value="OK"))
 
-    payload = await onboarding.save_and_test_llm_setup("", "http://localhost:11434/v1", "qwen3")
+    # Isolate the encrypted config store so the test does not touch user data.
+    monkeypatch.setattr(config_store, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config_store, "_ENCRYPTED_PATH", tmp_path / "data" / "config.enc")
+    monkeypatch.setattr(config_store, "_KEY_PATH", tmp_path / "data" / ".config_key")
+    monkeypatch.setattr(config_store, "_LEGACY_ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(config_store, "_LEGACY_SETTINGS_PATH", tmp_path / "data" / "web_settings.json")
+    monkeypatch.setattr(config_store, "_cache", None)
+    monkeypatch.setattr(config_store, "_migrated", False)
+    monkeypatch.setattr(config_store, "_fernet", None)
+    monkeypatch.setattr(config_store, "_SETTINGS_MIGRATIONS_DONE", False)
+
+    payload = await onboarding.save_and_test_llm_setup("sk-test", "http://localhost:11434/v1", "qwen3")
 
     assert payload["ok"] is True
     assert payload["preview"] == "OK"
     assert payload["onboarding"]["llm"]["configured"] is True
     assert payload["onboarding"]["activeStep"] == "personality"
+
+    from cyrene.settings_store import get_models
+    models = get_models()
+    assert len(models) == 1
+    assert models[0]["id"] == "qwen3"
+    assert models[0]["name"] == "qwen3"
+    assert models[0]["model"] == "qwen3"
+    assert models[0]["base_url"] == "http://localhost:11434/v1"
+    assert models[0]["api_key"] == "sk-test"
 
 
 async def test_save_personality_setup_marks_setup_done(monkeypatch, tmp_path):

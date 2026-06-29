@@ -1,9 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for Cyrene — macOS / Windows / Linux 三平台支持。"""
 
+import os
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, copy_metadata
+
+sys.path.insert(0, str(Path(SPECPATH).resolve()))
+from playwright_bundle import collect_browser_toc
 
 _PROJECT_ROOT = Path(SPECPATH).resolve().parent
 _SRC = _PROJECT_ROOT / "src"
@@ -25,6 +29,15 @@ _static_dir = _SRC / "webui" / "static"
 if _static_dir.is_dir():
     for f in _static_dir.rglob("*"):
         if f.is_file() and "__pycache__" not in f.parts:
+            dest = str(f.relative_to(_SRC).parent)
+            _datas.append((str(f), dest))
+
+# workbench-webui static files (CSS served via /static/workbench-ui/ route)
+# .jsx source files are excluded — they compile to webui/static/app/compiled/*.js
+_workbench_ui_dir = _SRC / "workbench-webui"
+if _workbench_ui_dir.is_dir():
+    for f in _workbench_ui_dir.rglob("*"):
+        if f.is_file() and "__pycache__" not in f.parts and f.suffix != ".jsx":
             dest = str(f.relative_to(_SRC).parent)
             _datas.append((str(f), dest))
 
@@ -144,6 +157,8 @@ for _package in (
     "pypdf",
     "reportlab",
     "PIL",
+    # Browser automation. Browser executables are collected separately below.
+    "playwright",
     # simplexng runtime deps
     "waitress",
     "flask",
@@ -157,6 +172,19 @@ for _package in (
 _datas = list(dict.fromkeys(_datas))
 _binaries = list(dict.fromkeys(_binaries))
 _hidden = list(dict.fromkeys(_hidden))
+
+# ---- Playwright Chromium browser runtime (optional) ----
+_playwright_browser_toc = []
+_playwright_browser_root = os.environ.get("CYRENE_PLAYWRIGHT_BROWSERS_DIR")
+if _playwright_browser_root:
+    try:
+        _playwright_browser_toc = collect_browser_toc(Path(_playwright_browser_root))
+        print(
+            f"[spec] Bundling {len(_playwright_browser_toc)} Playwright browser entries "
+            f"from {_playwright_browser_root}"
+        )
+    except ValueError as exc:
+        print(f"[warn] skipping Playwright browser bundle: {exc}")
 
 # ---- 排除 ----
 _excludes = [
@@ -185,6 +213,8 @@ a = Analysis(
     excludes=_excludes,
     noarchive=False,
 )
+if _playwright_browser_toc:
+    a.datas += _playwright_browser_toc
 
 pyz = PYZ(a.pure)
 
@@ -196,6 +226,7 @@ exe = EXE(
     name="Cyrene",
     icon=_icon,
     console=False,
+    target_arch="arm64" if os.environ.get("PYINSTALLER_TARGET_ARCH") == "ARM64" else None,
 )
 
 coll = COLLECT(

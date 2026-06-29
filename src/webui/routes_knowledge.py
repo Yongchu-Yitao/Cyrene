@@ -14,21 +14,29 @@ from cyrene.attachments import (
     attachment_kind_from_meta,
     is_uploaded_attachment_path,
     is_exported_attachment_path,
+    safe_attachment_filename,
 )
 from cyrene.tools import _resolve_workspace_path
 
 
 def _safe_upload_name(filename: str) -> str:
     """Sanitize a filename for upload."""
-    import re
-    raw = Path(str(filename or "upload.bin")).name
-    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._")
-    return sanitized or "upload.bin"
+    return safe_attachment_filename(filename, fallback_stem="upload")
 
 
-def register_knowledge_routes(router: APIRouter, db_path: str) -> None:
+def register_knowledge_routes(router: APIRouter, workspace_id: str = "default") -> None:
     """Register knowledge base API routes."""
+    from cyrene.config import get_knowledge_db_path
+    from cyrene.db import init_knowledge_db
     from cyrene.knowledge import store, ingest, retrieve
+
+    db_path = str(get_knowledge_db_path(workspace_id))
+    # Defer init — lazily initialised on first use when inside a running loop.
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(init_knowledge_db(db_path))
+    except RuntimeError:
+        asyncio.run(init_knowledge_db(db_path))
 
     @router.post("/api/knowledge/documents")
     async def api_upload_documents(files: list[UploadFile]):

@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.5.1-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.6.0b16-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-alpha-yellow" alt="Status">
 </p>
@@ -13,16 +13,16 @@
 
 <p align="center">
   An open-source AI agent framework with a living personality, parallel subagents,<br>
-  and zero infrastructure. No Docker, no Redis, just Python.
+  a workbench-style desktop UI, and zero infrastructure. No Docker, no Redis, just Python.
 </p>
 
 ---
 
 ## What is Cyrene?
 
-Cyrene is an AI agent that **runs continuously** — it has a personality (SOUL.md) it rewrites itself, remembers conversations across sessions, spawns sub-agents for parallel work, and can act proactively via scheduled tasks.
+Cyrene is an AI agent that **runs continuously** — it has a self-rewriting personality (`SOUL.md`), remembers conversations across sessions, spawns sub-agents for parallel work, and can act proactively via scheduled tasks.
 
-It runs as a local daemon with a Web UI (and optional Telegram/WeChat bot), connecting to any OpenAI-compatible LLM API.
+It runs as a local daemon with two web front-ends (and optional Telegram/WeChat bots), connecting to any OpenAI-compatible LLM API.
 
 ---
 
@@ -36,12 +36,19 @@ It runs as a local daemon with a Web UI (and optional Telegram/WeChat bot), conn
 | **Parallel sub-agents** — spawn agents with full tool access, inbox coordination | Stable |
 | **Deep research** — multi-round research pipeline with PDF report export | Stable |
 | **Deep Reflection** — multi-round context reframing for complex or ambiguous queries | Beta |
-| **Built-in web search** — SearXNG via SimpleXNG, no Docker needed | Stable |
+| **Built-in web search** — SimpleXNG, no Docker needed | Stable |
 | **MCP protocol** — connect any stdio/SSE MCP server | Stable |
 | **Task scheduler** — cron, interval, one-shot tasks + proactive lottery system | Stable |
-| **Behavior learning** — learns reusable skills from conversation patterns | Beta |
-| **Browser live view** — WebSocket screencasting of agent's browser; headed takeover for login | Beta |
-| **Web UI** — real-time chat, agent flow timeline, sessions, settings | Stable |
+| **Knowledge base** — upload documents/PDFs/images, embed, and search | Stable |
+| **Entities** — track, query, and update structured project entities | Stable |
+| **Skills installer** — install `.md`/`.zip` prompt skills at runtime | Stable |
+| **Behavior learning** — learn reusable action patterns from conversations | Beta |
+| **Claude Code bridge** — detect, launch, and chat with Claude Code tmux sessions | Beta |
+| **Code tools** — codebase indexing, symbol search, git helpers | Beta |
+| **Browser live view** — WebSocket screencasting, in-panel live control, and headed login takeover | Beta |
+| **Context debugger** — inspect exactly what context was sent to each LLM call | Stable |
+| **Workbench UI** — project-centric dashboard, schedule, knowledge, memory, chat | Stable |
+| **Legacy agent UI** — real-time chat, agent flow timeline, sessions, settings | Stable |
 | **Electron desktop app** — CI builds for macOS/Windows/Linux; OS keyring auth | Beta |
 | **Telegram bot** — full agent access via Telegram | Stable |
 | **WeChat bot** — basic WeChat integration | Alpha |
@@ -49,7 +56,7 @@ It runs as a local daemon with a Web UI (and optional Telegram/WeChat bot), conn
 
 ---
 
-## Limitations (current as of v0.5.1)
+## Limitations (current as of v0.6.0b16)
 
 - **Single-user** — one workspace, one SOUL.md, no user isolation
 - **Local-only Web UI** — binds to `127.0.0.1`; desktop app uses OS keyring auth, raw web server has no auth layer
@@ -57,8 +64,8 @@ It runs as a local daemon with a Web UI (and optional Telegram/WeChat bot), conn
 - **Limited error recovery** — agent crashes are silently caught, user isn't notified
 - **No API versioning** — all endpoints under bare `/api/`
 - **No rate/cost limiting** — no LLM call quota protection
-- **Windows from source** — requires manual patching of vendored dependencies
-- **Testing** — unit tests exist but no CI test run, no integration/E2E tests
+- **Windows from source** — requires manual patching of vendored dependencies; pre-built installer recommended
+- **Testing** — unit tests exist (`uv run pytest -q`) but the pytest suite is not run in CI (CI only smoke-tests the packaged app), and there are no integration/E2E tests
 
 ---
 
@@ -68,20 +75,34 @@ It runs as a local daemon with a Web UI (and optional Telegram/WeChat bot), conn
 
 Download the latest release for your platform from the [Releases page](https://github.com/Yongchu-Yitao/Cyrene/releases).
 
+> Windows ARM64 and x64 installers are provided separately.
+
 ### Option B: From source
 
+Requires Python 3.12+ and [Node.js 20+](https://nodejs.org/) (for the WebUI JSX precompilation step).
+
 ```bash
-conda create -n cyrene python=3.12 -y
-conda activate cyrene
-pip install -e .
-PYTHONPATH=src python -m cyrene.local_cli --web
+# 1. Install dependencies (uv recommended — uv.lock is committed for reproducible builds)
+uv sync           # or: pip install -e .
+
+# 2. Precompile the WebUI JSX → JS (required from source; releases bundle this already)
+cd src/webui && npm install && node build-jsx.mjs && cd ../..
+
+# 3. Run
+python -m cyrene --workbench     # Workbench UI (default)
+python -m cyrene --agent         # Classic agent UI (legacy)
 ```
 
 Open `http://localhost:4242`. First launch runs an onboarding wizard that guides you through API key configuration and personality setup.
 
-> No `.env` file needed. All configuration is stored in an encrypted store (`data/config.enc`) and managed through the Web UI settings or onboarding wizard.
+> No `.env` file is required. All configuration is stored in an encrypted store (`data/config.enc` by default) and managed through the Web UI settings or onboarding wizard. A legacy `.env.example` is kept for backward compatibility.
 
-> **Windows?** Pre-built binary recommended. For source, see [docs/installation.md](docs/installation.md#windows).
+Optional extras:
+
+- **Browser live view & login takeover** — `uv pip install -e ".[browser]"` then `playwright install chromium`
+- **Development & tests** — `uv pip install -e ".[dev]"` then `uv run pytest -q`
+
+> **Windows?** Pre-built binary recommended. For source (requires patching vendored SimpleXNG deps), see [docs/installation.md](docs/installation.md#windows).
 
 ---
 
@@ -89,17 +110,20 @@ Open `http://localhost:4242`. First launch runs an onboarding wizard that guides
 
 - [Installation](docs/installation.md) — Linux, macOS, Windows
 - [Architecture](docs/architecture.md) — Two-phase loop, features, project structure
-- [Usage](docs/usage.md) — Web UI, CLI commands, in-conversation commands
+- [Usage](docs/usage.md) — Workbench UI, legacy UI, CLI commands, in-conversation commands
 - [Configuration](docs/configuration.md) — Environment variables reference
 - [Development](docs/development.md) — Debugging, verbose logging, testing
+- [Browser Live View](docs/browser-live-view.md) — Browser screencasting and login takeover
 
 ---
 
 ## Tech Stack
 
 - **Runtime** — Python 3.12+, FastAPI, Uvicorn, SQLite
+- **Package manager** — uv (lock file committed); pip also supported
+- **Linting** — Ruff (line length 180)
 - **LLM** — OpenAI-compatible API (default: DeepSeek, works with Claude/GPT/Qwen)
-- **Search** — SearXNG via SimpleXNG (bundled, no Docker)
+- **Search** — SimpleXNG (bundled, no Docker)
 - **Browser** — Playwright (headless/headed), WebSocket screencasting
 - **Desktop** — Electron + electron-builder, OS keyring (keyring)
 - **Channels** — python-telegram-bot, WeChat (itchat)

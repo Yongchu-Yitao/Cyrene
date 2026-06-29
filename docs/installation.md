@@ -12,13 +12,15 @@
 conda create -n cyrene python=3.12 -y
 conda activate cyrene
 pip install -e .
-cp .env.example .env
-# Edit .env with your API key
 ```
+
+On first run, the onboarding wizard will ask for your API key and guide you through personality setup.
+
+> You do **not** need to create a `.env` file. Configuration is stored in an encrypted config store and managed through the Web UI or onboarding wizard. A legacy `.env.example` is still provided for backward compatibility.
 
 ## Windows
 
-Windows requires extra steps because `uvloop` (used by the built-in SearXNG) is Unix-only.
+Windows requires extra steps because `uvloop` (used by the built-in SimpleXNG) is Unix-only.
 
 ### 1. Environment
 
@@ -44,7 +46,7 @@ pip install -e . --no-build-isolation
 
 ### 3. Windows Compatibility Patches
 
-These patches fix SearXNG's vendored code for Windows:
+These patches fix SimpleXNG's vendored code for Windows:
 
 **Replace uvloop with winloop**
 Edit `Lib/site-packages/simplexng/_vendor/searx/network/client.py`:
@@ -81,7 +83,7 @@ def getpwuid(uid):
     return type("pw", (), {"pw_name": name, "pw_uid": uid})()
 ```
 
-**Enable JSON API in SearXNG**
+**Enable JSON API in SimpleXNG**
 Edit `Lib/site-packages/simplexng/settings/settings_template.yml`:
 ```yaml
 search:
@@ -90,26 +92,38 @@ search:
     - json    # ← add this line
 ```
 
-### 4. Configure
+### 4. Launch
 
 ```bash
-cp .env.example .env
-# Edit .env with your API key
+python -m cyrene --workbench
 ```
+
+The onboarding wizard will run on first launch.
 
 ### Alternative: External SearXNG
 
-If you prefer not to patch, set `SEARXNG_URL` in `.env` to point to an external SearXNG instance and skip the built-in one entirely.
+If you prefer not to patch, set `SEARXNG_URL` in the encrypted config (or `.env`) to point to an external SearXNG instance and set `SEARXNG_AUTO_START=0`.
 
 ## Verify Installation
 
 ```bash
 conda activate cyrene
 cd /path/to/Cyrene
-PYTHONPATH=src python -m cyrene.local_cli --web
+python -m cyrene --workbench
 ```
 
 Open `http://localhost:4242`. You should see the onboarding wizard on first launch.
+
+To test the agent without the web server:
+
+```bash
+python -m cyrene.local_cli
+```
+
+## Optional Extras
+
+- **Browser live view & login takeover**: `pip install -e ".[browser]"` then `playwright install chromium`
+- **Development/test dependencies**: `pip install -e ".[dev]"`
 
 ## Next Steps
 

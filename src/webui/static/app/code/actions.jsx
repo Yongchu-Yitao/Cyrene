@@ -27,9 +27,46 @@
   function getLanguage(pre) {
     var code = pre.querySelector("code");
     if (code && code.dataset.language) return code.dataset.language;
+    if (pre.dataset.language) return pre.dataset.language;
     var cls = pre.className || "";
     var m = cls.match(/language-(\S+)/);
     return m ? m[1] : "";
+  }
+
+  function writeClipboardText(text) {
+    try {
+      if (window.cyrene && typeof window.cyrene.writeClipboardText === "function") {
+        var result = window.cyrene.writeClipboardText(text);
+        return Promise.resolve(result).then(function (ok) {
+          if (ok === false) throw new Error("Desktop clipboard write failed");
+        });
+      }
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        return navigator.clipboard.writeText(text);
+      }
+    } catch (error) {
+      return Promise.reject(error);
+    }
+
+    // Browser fallback for localhost/non-secure contexts where the async
+    // Clipboard API is unavailable.
+    return new Promise(function (resolve, reject) {
+      var input = document.createElement("textarea");
+      input.value = text;
+      input.setAttribute("readonly", "");
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.appendChild(input);
+      input.select();
+      try {
+        if (!document.execCommand("copy")) throw new Error("Clipboard copy was rejected");
+        resolve();
+      } catch (error) {
+        reject(error);
+      } finally {
+        input.remove();
+      }
+    });
   }
 
   function addActions(pre) {
@@ -56,17 +93,24 @@
 
     bar.appendChild(
       createButton("Copy", "Copy code", function () {
-        navigator.clipboard.writeText(code).then(
+        var button = this;
+        writeClipboardText(code).then(
           function () {
-            this.textContent = "Copied!";
-            var self = this;
+            button.textContent = "Copied!";
+            button.dataset.state = "success";
             setTimeout(function () {
-              self.textContent = "Copy";
+              button.textContent = "Copy";
+              delete button.dataset.state;
             }, 1500);
-          }.bind(this),
+          },
           function () {
-            this.textContent = "Failed";
-          }.bind(this)
+            button.textContent = "Failed";
+            button.dataset.state = "error";
+            setTimeout(function () {
+              button.textContent = "Copy";
+              delete button.dataset.state;
+            }, 1800);
+          }
         );
       })
     );
@@ -94,17 +138,19 @@
     if (root.tagName === "PRE") addActions(root);
   }
 
-  var _retryCount = 0;
-  var _maxRetries = 100;
+  // Legacy chat uses .msg-list; Workbench chat uses .wbc-thread; the
+  // Workbench side panel (viewer, context, artifacts) uses .wbc-side-body.
+  // These are stable containers that survive tab/session switches within a
+  // page. A light 2s poll re-attaches observers after full page navigations
+  // (the app is an SPA — pages unmount/remount on navigation).
+  var _selectors = [".msg-list", ".wbc-thread", ".wbc-side-body"];
+  var _watched = {};
 
-  function start() {
-    var container = document.querySelector(".msg-list");
-    if (!container) {
-      _retryCount++;
-      if (_retryCount <= _maxRetries) {
-        setTimeout(start, 300);
-      }
-      return;
+  function watchContainer(selector, container) {
+    var prev = _watched[selector];
+    if (prev) {
+      if (prev.node === container) return;
+      prev.observer.disconnect();
     }
     scanMessages(container);
     var observer = new MutationObserver(function (mutations) {
@@ -116,11 +162,30 @@
       }
     });
     observer.observe(container, { childList: true, subtree: true });
+    _watched[selector] = { node: container, observer: observer };
+  }
+
+  function start() {
+    for (var i = 0; i < _selectors.length; i++) {
+      var selector = _selectors[i];
+      var container = document.querySelector(selector);
+      if (container) {
+        watchContainer(selector, container);
+      } else if (_watched[selector]) {
+        _watched[selector].observer.disconnect();
+        delete _watched[selector];
+      }
+    }
+  }
+
+  function init() {
+    start();
+    setInterval(start, 2000);
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", start);
+    document.addEventListener("DOMContentLoaded", init);
   } else {
-    start();
+    init();
   }
 })();

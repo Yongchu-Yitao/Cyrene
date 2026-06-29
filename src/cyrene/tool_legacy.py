@@ -35,7 +35,6 @@ from cyrene.config import (
     STATE_FILE,
     WORKSPACE_DIR,
 )
-from cyrene.conversations import recall_conversations
 from cyrene.llm import _truncate
 from cyrene.schedule_spec import compute_next_run
 from cyrene.search import deep_search
@@ -43,7 +42,6 @@ from cyrene.shells import close_shell as _close_shell_session
 from cyrene.shells import list_shells as _list_shell_sessions
 from cyrene.shells import send_shell as _send_shell_session
 from cyrene.shells import start_shell as _start_shell_session
-from cyrene.short_term import get_context as _get_short_term_context
 from cyrene.skills_registry import (
     build_skills as _build_skills,
     install_skill_from_path as _install_skill,
@@ -51,7 +49,7 @@ from cyrene.skills_registry import (
 )
 from cyrene.subagent import register as _reg_subagent, can_receive, _run_subagent, _spawn_subagent_task
 from cyrene.inbox import send_message as _send_inbox
-from cyrene.soul import read_shallow_memory
+from cyrene.workbench_context import resolve_project_data_key_for_session
 
 logger = logging.getLogger(__name__)
 _CC_PROJECT_DIR = WORKSPACE_DIR.parent
@@ -81,10 +79,11 @@ _MAIN_ONLY_TOOLS = {
 
 
 def _resolve_workspace_path(path_str: str) -> Path:
+    from cyrene.agent.state import active_workspace_dir
+    workspace = active_workspace_dir()
     candidate = Path(path_str)
-    path = candidate if candidate.is_absolute() else WORKSPACE_DIR / candidate
+    path = candidate if candidate.is_absolute() else workspace / candidate
     resolved = path.resolve()
-    workspace = WORKSPACE_DIR.resolve()
     if resolved != workspace and workspace not in resolved.parents:
         raise ValueError(
             f"⛔ 已禁止：路径超出 workspace 范围。\n"
@@ -101,11 +100,11 @@ def _workspace_permission_error() -> str:
 
 
 def _resolve_workspace_write_target(path_str: str) -> Path:
-    from cyrene.agent.state import _temporary_full_access
+    from cyrene.agent.state import _temporary_full_access, active_workspace_dir
     from cyrene.settings_store import get_write_permission_mode
     if get_write_permission_mode() == "full_access" or _temporary_full_access.get():
         candidate = Path(path_str)
-        path = candidate if candidate.is_absolute() else WORKSPACE_DIR / candidate
+        path = candidate if candidate.is_absolute() else active_workspace_dir() / candidate
         return path.resolve()
     try:
         return _resolve_workspace_path(path_str)
@@ -121,11 +120,20 @@ async def _request_scope_elevation(
     reason: str = "",
     permission_kind: str = "scope_elevation",
     options: list[str] | None = None,
-) -> str:
-    """Request the user's permission for an operation outside the workspace.
+    scope_hint: str = "workspace 之外的 ",
+    meta_extra: dict[str, Any] | None = None,
+) -> str | None:
+    """Resolve a permission boundary according to the active permission mode.
 
-    Creates a pending question in the WebUI.  The agent loop detects the
-    "awaiting_user" status and pauses until the user answers.
+    Returns ``None`` when the operation is **allowed** (caller should proceed),
+    or a ``str`` otherwise:
+
+    - ``default`` mode → creates a pending question and returns the
+      ``awaiting_user`` JSON; the agent loop pauses until the user answers.
+    - ``auto`` mode → a review agent decides autonomously. Approve → sets
+      temporary full access and returns ``None``; deny → returns a denial
+      message string for the agent to see.
+    - ``full_access`` mode → returns ``None`` (normally short-circuited earlier).
 
     Args:
         tool_name: The tool being used (e.g. "Read", "Write").
@@ -135,11 +143,13 @@ async def _request_scope_elevation(
         permission_kind: Meta field to identify the permission type.
         options: Custom options for the question UI.
     """
+    import cyrene.agent.state as _state
     from cyrene.agent.state import (
         _current_agent_id,
         _current_client_request_id,
         _current_command,
         _current_round_id,
+        _publish_runtime_event,
     )
     from cyrene.agent.session import (
         _upsert_pending_question,
@@ -156,13 +166,58 @@ async def _request_scope_elevation(
             f"⛔ 已禁止：{operation} 超出 workspace 范围。\n"
             f"当前不在活动对话轮次中，无法申请权限。"
         )
+
+    mode = _state._permission_mode.get()
+    # 破坏性/不可逆操作必须由真人确认，不能被 full_access 或 auto mode 短路。
+    requires_human_confirmation = permission_kind == "destructive_confirmation"
+    # 完全访问模式：工具层通常已用 _temporary_full_access 短路，这里保险直接放行。
+    if mode == "full_access" and not requires_human_confirmation:
+        return None
+    # 自动模式：审核 agent 自主裁决，从不打扰用户。
+    if mode == "auto" and not requires_human_confirmation:
+        from cyrene.agent.auto_review import review_elevation
+        approved, rationale = await review_elevation(
+            tool_name=tool_name,
+            operation=operation,
+            path_hint=path_hint,
+            reason=reason,
+        )
+        await _publish_runtime_event({
+            "type": "auto_review",
+            "approved": approved,
+            "operation": operation,
+            "tool_name": tool_name,
+            "path_hint": path_hint,
+            "rationale": rationale,
+            "round_id": round_id,
+        })
+        if approved:
+            _state._temporary_full_access.set(True)
+            return None
+        return (
+            f"⛔ 审核 agent 拒绝了此操作（{operation}）。\n"
+            f"原因：{rationale}\n"
+            f"请改用更安全的方式（如限制在 workspace 内、避免破坏性命令），或向用户说明此操作的必要性。"
+        )
+
+    # 默认模式（计划模式同意后也已回退为 default）：弹出提问让用户授权。
     labels = get_session_labels(round_id)
     detail = f"\n📂 目标路径：{path_hint}" if path_hint else ""
     why = f"\n💡 原因：{reason}" if reason else ""
     effective_options = options or ["允许这次", "拒绝"]
+    meta = {
+        "kind": permission_kind,
+        "tool_name": tool_name,
+        "path_hint": path_hint,
+        "reason": reason,
+        "operation": operation,
+        "command": _current_command.get() or "",
+    }
+    if meta_extra:
+        meta.update(meta_extra)
     question = await _upsert_pending_question({
         "text": (
-            f"⚠️ **Agent 尝试执行 workspace 之外的 {operation}**\n\n"
+            f"⚠️ Agent 尝试执行 {scope_hint}{operation}\n\n"
             f"工具：{tool_name}{detail}{why}\n\n"
             f"请确认是否允许此操作。如果不允许，Agent 将仅能在当前 workspace 内工作。"
         ),
@@ -171,14 +226,7 @@ async def _request_scope_elevation(
         "client_request_id": str(_current_client_request_id.get() or "").strip(),
         "options": effective_options,
         "allow_custom": True,
-        "meta": {
-            "kind": permission_kind,
-            "tool_name": tool_name,
-            "path_hint": path_hint,
-            "reason": reason,
-            "operation": operation,
-            "command": _current_command.get() or "",
-        },
+        "meta": meta,
     })
     return _json_result({
         "status": "awaiting_user",
@@ -195,7 +243,7 @@ async def _request_write_elevation(
     tool_name: str,
     path_hint: str,
     reason: str = "",
-) -> str:
+) -> str | None:
     return await _request_scope_elevation(
         tool_name=tool_name,
         path_hint=path_hint,
@@ -211,7 +259,7 @@ async def _request_read_elevation(
     tool_name: str,
     path_hint: str,
     reason: str = "",
-) -> str:
+) -> str | None:
     return await _request_scope_elevation(
         tool_name=tool_name,
         path_hint=path_hint,
@@ -243,17 +291,107 @@ async def _request_delete_confirmation(
     *,
     tool_name: str,
     command: str,
-) -> str:
+) -> str | None:
     """Request user confirmation before a destructive file operation in the workspace."""
     cmd_preview = command[:240]
+    return await _request_destructive_confirmation(
+        tool_name=tool_name,
+        operation="文件删除操作",
+        detail=f"Agent 尝试删除文件。\n命令：{cmd_preview}",
+        destructive_kind="file_delete",
+    )
+
+
+def _destructive_operation_fingerprint(
+    *,
+    tool_name: str,
+    operation: str,
+    detail: str = "",
+    path_hint: str = "",
+    destructive_kind: str = "",
+) -> str:
+    payload = {
+        "tool": str(tool_name or "").strip(),
+        "operation": str(operation or "").strip(),
+        "detail": str(detail or "").strip()[:500],
+        "path": str(path_hint or "").strip(),
+        "kind": str(destructive_kind or "").strip(),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+async def _request_destructive_confirmation(
+    *,
+    tool_name: str,
+    operation: str,
+    detail: str = "",
+    path_hint: str = "",
+    destructive_kind: str = "destructive_operation",
+    risk_level: str = "high",
+) -> str | None:
+    """Require human confirmation before irreversible/destructive side effects."""
+    from cyrene.agent import state as _state
+
+    fingerprint = _destructive_operation_fingerprint(
+        tool_name=tool_name,
+        operation=operation,
+        detail=detail,
+        path_hint=path_hint,
+        destructive_kind=destructive_kind,
+    )
+    if _state._destructive_confirmation_allow_all.get():
+        return None
+    if fingerprint in _state._destructive_confirmation_fingerprints.get():
+        return None
+
+    await _state._publish_runtime_event({
+        "type": "destructive_confirmation",
+        "decision": "requested",
+        "tool_name": tool_name,
+        "operation": operation,
+        "destructive_kind": destructive_kind,
+        "risk_level": risk_level,
+        "path_hint": path_hint,
+        "fingerprint": fingerprint,
+    })
     return await _request_scope_elevation(
         tool_name=tool_name,
-        path_hint="",
-        operation="文件删除操作",
-        reason=f"Agent 尝试删除 workspace 中的文件。\n命令：{cmd_preview}",
-        permission_kind="delete_confirmation",
-        options=["允许删除", "拒绝"],
+        path_hint=path_hint,
+        operation=operation,
+        reason=detail,
+        permission_kind="destructive_confirmation",
+        options=["允许这次", "本次会话内总是允许", "拒绝"],
+        scope_hint="破坏性/不可逆的 ",
+        meta_extra={
+            "fingerprint": fingerprint,
+            "destructive_kind": destructive_kind,
+            "risk_level": risk_level,
+        },
     )
+
+
+def _classify_destructive_shell_command(command: str) -> dict[str, str] | None:
+    """Best-effort shell destructive-operation classifier."""
+    raw = str(command or "").strip()
+    if not raw:
+        return None
+    lowered = raw.lower()
+    first = _extract_first_command(raw)
+    if first in {"rm", "rmdir", "unlink"} or re.search(r'(?:^|[;&|]\s*)(?:sudo\s+)?(?:\\|/[\w./-]+/)?(?:rm|rmdir|unlink)\b', lowered):
+        return {"operation": "文件删除操作", "kind": "file_delete", "detail": f"命令：{raw[:240]}"}
+    if re.search(r'\bgit\s+reset\b[^\n;&|]*\s--hard\b', lowered):
+        return {"operation": "Git 硬重置", "kind": "git_reset_hard", "detail": f"命令：{raw[:240]}"}
+    if re.search(r'\bgit\s+clean\b[^\n;&|]*\s-[^\s;&|]*f', lowered):
+        return {"operation": "Git 清理未跟踪文件", "kind": "git_clean_force", "detail": f"命令：{raw[:240]}"}
+    if first in {"mkfs", "shred"} or re.search(r'(?:^|[;&|]\s*)(?:sudo\s+)?(?:mkfs(?:\.[\w-]+)?|shred)\b', lowered):
+        return {"operation": "磁盘/文件破坏性操作", "kind": "destructive_system_command", "detail": f"命令：{raw[:240]}"}
+    if first == "dd" or re.search(r'(?:^|[;&|]\s*)(?:sudo\s+)?dd\b', lowered):
+        return {"operation": "低级别写入操作", "kind": "dd_write", "detail": f"命令：{raw[:240]}"}
+    if first == "truncate" or re.search(r'(?:^|[;&|]\s*)(?:sudo\s+)?truncate\b', lowered):
+        return {"operation": "截断文件操作", "kind": "file_truncate", "detail": f"命令：{raw[:240]}"}
+    if re.search(r'(?:^|[;&|]\s*)(?:sudo\s+)?(?:mv|cp|install)\b[^\n;&|]*(?:\s-f\b|\s--force\b)', lowered):
+        return {"operation": "覆盖文件操作", "kind": "file_overwrite", "detail": f"命令：{raw[:240]}"}
+    return None
 
 
 def _extract_first_command(raw: str) -> str:
@@ -320,6 +458,62 @@ def _check_command_substitution(command: str) -> None:
             f"  命令：{command[:240]}\n"
             f"  命令替换的路径无法提前验证，请使用明确的路径。"
         )
+
+
+# Commands/cmdlets that write or delete under PowerShell or cmd. The workspace
+# write/delete guards assume POSIX syntax and command names, so under a non-bash
+# shell they cannot reason about a command — we fail closed instead. This list is
+# deliberately over-broad: a false positive only costs a clear "install bash"
+# message, whereas a false negative is a workspace sandbox escape.
+_NONBASH_WRITE_TOKENS = (
+    # PowerShell cmdlets
+    "remove-item", "set-content", "add-content", "out-file", "new-item",
+    "move-item", "copy-item", "clear-content", "set-itemproperty", "rename-item",
+    "export-csv", "export-clixml", "tee-object",
+    # cmd builtins / Windows utilities
+    "del", "erase", "copy", "move", "ren", "rename", "md", "mkdir",
+    "rd", "rmdir", "xcopy", "robocopy", "fsutil", "takeown", "icacls", "attrib",
+    # POSIX names (also aliased inside PowerShell, and valid in Git-less setups)
+    "rm", "mv", "cp", "tee", "touch", "dd", "truncate", "ln",
+)
+
+
+def _nonbash_command_writes(command: str) -> bool:
+    """Heuristically detect a write/delete command under a non-POSIX shell."""
+    raw = str(command or "")
+    if not raw.strip():
+        return False
+    lowered = raw.lower()
+    for token in _NONBASH_WRITE_TOKENS:
+        if re.search(r'(?:^|[\s;&|(])' + re.escape(token) + r'(?=[\s;&|)]|$)', lowered):
+            return True
+    # File redirect (> / >>) writes a file in every shell. Skip handle dups (2>&1).
+    for match in re.finditer(r'>>?\s*(\S)', raw):
+        if match.group(1) != "&":
+            return True
+    return False
+
+
+def _guard_nonbash_shell_command(command: str, shell_kind: str) -> str | None:
+    """Fail-closed guard for non-POSIX shells (PowerShell/cmd).
+
+    Returns a refusal payload if the command looks like it writes or deletes, or
+    ``None`` to allow it (read-only commands pass through). The POSIX workspace
+    guards cannot protect a PowerShell/cmd command, so rather than run it
+    unguarded — which would bypass the workspace sandbox — we refuse.
+    """
+    if not _nonbash_command_writes(command):
+        return None
+    return _json_result({
+        "exit_code": -1,
+        "stdout": "",
+        "stderr": (
+            f"⛔ 已拒绝：当前系统 shell 是 {shell_kind}(非 bash)，"
+            f"workspace 写入/删除保护依赖 POSIX 语义，无法验证此命令是否越界。\n"
+            f"  命令：{command[:200]}\n"
+            f"  请安装 Git Bash 或启用 WSL 后重试；只读命令不受此限制。"
+        ),
+    })
 
 
 def _expand_shell_path(token: str) -> str:
@@ -464,7 +658,7 @@ def _resolve_tool_path(path_str: str) -> Path:
     if is_uploaded_attachment_path(path_str) or is_exported_attachment_path(path_str):
         return Path(path_str).resolve()
     # Auto-resolve filename to the correct upload path when the agent guesses wrong paths.
-    from cyrene.agent.state import _attachment_paths_by_name, _temporary_full_access
+    from cyrene.agent.state import _attachment_paths_by_name, _temporary_full_access, active_workspace_dir
     from cyrene.settings_store import get_write_permission_mode
     att_map = _attachment_paths_by_name.get()
     if att_map:
@@ -474,24 +668,26 @@ def _resolve_tool_path(path_str: str) -> Path:
     # Honour temporary full-access grants (write-once, read-always) and permanent mode.
     if _temporary_full_access.get() or get_write_permission_mode() == "full_access":
         candidate = Path(path_str)
-        path = candidate if candidate.is_absolute() else WORKSPACE_DIR / candidate
+        path = candidate if candidate.is_absolute() else active_workspace_dir() / candidate
         return path.resolve()
     return _resolve_workspace_path(path_str)
 
 
 def _resolve_exportable_path(path_str: str) -> Path:
+    # The active project workspace (Workbench task) — falls back to the global
+    # WORKSPACE_DIR for legacy chat / scheduler runs, so behaviour there is
+    # unchanged. This is where the agent's file tools (Write/Bash) actually
+    # write, so a deliverable created inside the project workspace must be
+    # sendable even when that workspace lives outside the global WORKSPACE_DIR.
+    from cyrene.agent.state import active_workspace_dir
+    active_ws = active_workspace_dir().resolve()
     candidate = Path(path_str)
-    path = candidate if candidate.is_absolute() else WORKSPACE_DIR / candidate
+    path = candidate if candidate.is_absolute() else active_ws / candidate
     resolved = path.resolve()
-    workspace = WORKSPACE_DIR.resolve()
-    data_root = DATA_DIR.resolve()
-    if (
-        resolved == workspace
-        or workspace in resolved.parents
-        or resolved == data_root
-        or data_root in resolved.parents
-    ):
-        return resolved
+    allowed_roots = (active_ws, WORKSPACE_DIR.resolve(), DATA_DIR.resolve())
+    for root in allowed_roots:
+        if resolved == root or root in resolved.parents:
+            return resolved
     raise ValueError(f"Path cannot be sent to WebUI: {path_str}")
 
 
@@ -588,7 +784,12 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
     if not path_arg:
         return "Error: 'path' is required."
 
-    from cyrene.agent.state import _current_agent_id, _current_client_request_id, _current_round_id
+    from cyrene.agent.state import (
+        _current_agent_id,
+        _current_client_request_id,
+        _current_round_id,
+        _current_session_id,
+    )
     from cyrene.agent.session import append_system_message
     from cyrene.agent.message import _insert_intermediate_user_reply
 
@@ -603,12 +804,20 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
     registered = register_generated_attachment(str(path), display_name=str(args.get("name", "") or "").strip() or None)
     attachment = build_public_attachment_payload(registered)
 
-    # Register in knowledge base
+    # Register in knowledge base for legacy/non-Workbench sessions. Workbench
+    # tasks archive only final deliverables after review/completion, so sending
+    # a file mid-run must not immediately pollute project knowledge.
     try:
         from cyrene.knowledge import store, ingest
+        from cyrene.workbench_context import (
+            ensure_knowledge_db_for_session,
+            resolve_workbench_session_kind,
+        )
         import mimetypes
         doc_path = registered.get("path", "")
-        if doc_path:
+        current_session_id = str(_current_session_id.get() or "")
+        session_kind = resolve_workbench_session_kind(current_session_id)
+        if doc_path and session_kind not in {"task", "init"}:
             from pathlib import Path
             import mimetypes
             doc_file = Path(doc_path)
@@ -616,19 +825,23 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
             from cyrene.attachments import attachment_kind_from_meta
             kind = attachment_kind_from_meta(content_type, doc_file.name)
             content_hash = store.content_hash_file(doc_file)
+            _kb_db_path = await ensure_knowledge_db_for_session(_current_session_id.get())
             doc = await store.upsert_document_by_path(
-                _db_path,
+                _kb_db_path,
                 path=str(doc_file.resolve()),
                 source="generated",
                 name=registered.get("name", doc_file.name),
                 content_type=content_type,
                 kind=kind,
                 size=doc_file.stat().st_size if doc_file.exists() else 0,
-                metadata={"sent_to_chat": True},
+                metadata={
+                    "sent_to_chat": True,
+                    "session_id": str(_current_session_id.get() or ""),
+                },
                 content_hash=content_hash,
             )
             if doc.get("status") in {"pending", "error"}:
-                asyncio.create_task(ingest.index_document(_db_path, doc["id"]))
+                asyncio.create_task(ingest.index_document(_kb_db_path, doc["id"]))
     except Exception as e:
         logger.debug(f"Failed to register generated file in knowledge base: {e}")
 
@@ -819,6 +1032,8 @@ async def _tool_prompt_claude_code(args: dict[str, Any], _bot: Any, _chat_id: in
 
 
 async def _tool_schedule_task(args: dict[str, Any], _bot: Any, chat_id: int, db_path: str, _notify_state: dict[str, bool] | None) -> str:
+    from cyrene.agent.state import _current_session_id
+
     stype = str(args["schedule_type"])
     svalue = str(args["schedule_value"])
     now = datetime.now(timezone.utc)
@@ -847,7 +1062,17 @@ async def _tool_schedule_task(args: dict[str, Any], _bot: Any, chat_id: int, db_
         if str(status.get("status", "")).strip() == "awaiting_user":
             return elevation_result
 
-    task_id = await db.create_task(db_path, chat_id, str(args["prompt"]), stype, svalue, next_run, permission_mode=permission_mode)
+    project_id = resolve_project_data_key_for_session(_current_session_id.get())
+    task_id = await db.create_task(
+        db_path,
+        chat_id,
+        str(args["prompt"]),
+        stype,
+        svalue,
+        next_run,
+        permission_mode=permission_mode,
+        project_id=project_id,
+    )
     return f"Task {task_id} scheduled. Next run: {next_run} 权限模式：{permission_mode}"
 
 
@@ -945,7 +1170,16 @@ async def _tool_analyze_attachment(args: dict[str, Any], _bot: Any, _chat_id: in
         )
     prompt = str(args.get("prompt", "") or "")
     force_refresh = bool(args.get("force_refresh", False))
-    result = await analyze_attachment(str(path), prompt=prompt, force_refresh=force_refresh)
+    try:
+        result = await analyze_attachment(str(path), prompt=prompt, force_refresh=force_refresh)
+    except FileNotFoundError:
+        return _json_result({
+            "error": "attachment_unavailable",
+            "path": str(path),
+            "message": "The uploaded attachment is no longer available. Ask the user to upload it again.",
+            "action": "stop_attachment_analysis",
+            "search_elsewhere": False,
+        })
     return _json_result(result)
 
 
@@ -953,8 +1187,10 @@ async def _tool_glob(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
     from cyrene.settings_store import is_workspace_active
     if not is_workspace_active():
         return "Workspace access is disabled. Ask the user to add workspace via '+ add context' in the chat input, or set a workspace directory in Settings."
+    from cyrene.agent.state import active_workspace_dir
     pattern = str(args["pattern"])
-    matches = sorted(str(path.relative_to(WORKSPACE_DIR)) for path in WORKSPACE_DIR.glob(pattern))
+    workspace = active_workspace_dir()
+    matches = sorted(str(path.relative_to(workspace)) for path in workspace.glob(pattern))
     return "\n".join(matches[:200]) if matches else "No matches."
 
 
@@ -962,9 +1198,11 @@ async def _tool_grep(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
     from cyrene.settings_store import is_workspace_active
     if not is_workspace_active():
         return "Workspace access is disabled. Ask the user to add workspace via '+ add context' in the chat input, or set a workspace directory in Settings."
+    from cyrene.agent.state import active_workspace_dir
     pattern = re.compile(str(args["pattern"]))
     search_root = _resolve_workspace_path(str(args.get("path", ".")))
     glob_pattern = str(args.get("glob", "**/*"))
+    workspace = active_workspace_dir()
     lines: list[str] = []
 
     for path in search_root.glob(glob_pattern):
@@ -976,7 +1214,7 @@ async def _tool_grep(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
             continue
         for index, line in enumerate(content.splitlines(), start=1):
             if pattern.search(line):
-                rel = path.relative_to(WORKSPACE_DIR)
+                rel = path.relative_to(workspace)
                 lines.append(f"{rel}:{index}:{line}")
                 if len(lines) >= 200:
                     return "\n".join(lines)
@@ -994,25 +1232,35 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
             reason=f"命令包含 $() 或反引号，其展开路径无法静态验证。\n命令：{command[:240]}",
             permission_kind="subshell_elevation",
             options=["允许执行", "拒绝"],
+            scope_hint="",
         )
+    from cyrene.shell_runtime import command_argv, resolve_shell
     try:
-        _guard_shell_command_workspace_write(command)
-    except ValueError:
-        return await _request_write_elevation(tool_name="Bash", path_hint="", reason=command[:240])
-    # 即使是 workspace 内的文件删除操作，也需要用户确认
-    if _command_is_file_deletion(command):
-        delete_result = await _request_delete_confirmation(tool_name="Bash", command=command)
-        status = json.loads(delete_result)
-        if str(status.get("status", "")).strip() == "awaiting_user":
-            return delete_result
+        shell_kind = resolve_shell()[0]
+    except Exception:
+        shell_kind = "bash"
+    if shell_kind == "bash":
+        try:
+            _guard_shell_command_workspace_write(command)
+        except ValueError:
+            return await _request_write_elevation(tool_name="Bash", path_hint="", reason=command[:240])
+        # 即使是 workspace 内的文件删除操作，也需要用户确认
+        if _command_is_file_deletion(command):
+            delete_result = await _request_delete_confirmation(tool_name="Bash", command=command)
+            status = json.loads(delete_result)
+            if str(status.get("status", "")).strip() == "awaiting_user":
+                return delete_result
+    else:
+        # 非 POSIX shell：POSIX 护栏无法验证路径，对写/删一律 fail-closed 拒绝
+        refusal = _guard_nonbash_shell_command(command, shell_kind)
+        if refusal is not None:
+            return refusal
     timeout_ms = int(args.get("timeout_ms", 120000))
     timeout_sec = timeout_ms / 1000
-    shell = os.environ.get("SHELL") or "/bin/sh"
+    from cyrene.agent.state import active_workspace_dir
     proc = await asyncio.create_subprocess_exec(
-        shell,
-        "-lc",
-        command,
-        cwd=str(WORKSPACE_DIR),
+        *command_argv(command),
+        cwd=str(active_workspace_dir()),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -1190,10 +1438,11 @@ async def _tool_spawn_subagent(args: dict[str, Any], bot: Any, chat_id: int, db_
         role = ""
     if not agent_id or not task:
         return "Error: agent_id and task are required."
-    from cyrene.agent.state import _current_agent_id, _current_round_id
+    from cyrene.agent.state import _current_agent_id, _current_round_id, _current_session_id
     if _current_agent_id.get() != "main":
         return "Only the main agent can spawn subagents."
-    await _reg_subagent(agent_id, task, round_id=_current_round_id.get(), role=role)
+    session_id = _current_session_id.get()
+    await _reg_subagent(agent_id, task, round_id=_current_round_id.get(), role=role, session_id=session_id)
     _spawn_subagent_task(_run_subagent(agent_id, task, bot, chat_id, db_path, use_secondary=use_secondary, role=role), agent_id)
     suffix = " (secondary model)" if use_secondary else ""
     role_suffix = f" [role={role}]" if role else ""
@@ -1212,48 +1461,10 @@ async def _tool_query_round(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
 
 
 async def _tool_recall_memory(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    """Recall archived session history plus persisted memory."""
-    query = str(args.get("query", "") or "").strip()
-    session_id = str(args.get("session_id", "") or "").strip()
-    date = str(args.get("date", "") or "").strip()
-    limit = max(1, min(int(args.get("limit", 5) or 5), 10))
-    include_soul = bool(args.get("include_soul", True))
-    include_short_term = bool(args.get("include_short_term", True))
+    """Compatibility entry point for the recent-memory tool."""
+    from cyrene.tool_impl.recall_memory import _tool_recall_memory as _impl
 
-    matches = recall_conversations(
-        query=query,
-        session_id=session_id,
-        date=date,
-        limit=limit,
-    )
-    payload: dict[str, Any] = {
-        "query": query,
-        "session_id": session_id,
-        "date": date,
-        "matches": [
-            {
-                "date": item.get("date", ""),
-                "timestamp": item.get("timestamp", ""),
-                "archive_session_id": item.get("archive_session_id", ""),
-                "session_title": item.get("session_title", ""),
-                "round_id": item.get("round_id", ""),
-                "round_title": item.get("round_title", ""),
-                "user": item.get("user_body", ""),
-                "assistant": item.get("assistant_body", ""),
-            }
-            for item in matches
-        ],
-    }
-    if include_short_term:
-        payload["short_term_memory"] = _get_short_term_context(
-            max_chars=1800,
-            header="[Short-term cross-session memory:]",
-        )
-    if include_soul:
-        payload["soul_memory"] = _truncate(read_shallow_memory(), 3000)
-    if not payload["matches"]:
-        payload["note"] = "No archived session matches found for the given filters."
-    return _json_result(payload)
+    return await _impl(args, _bot, _chat_id, _db_path, _notify_state)
 
 
 async def _tool_search_knowledge(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
@@ -1266,8 +1477,11 @@ async def _tool_search_knowledge(args: dict[str, Any], _bot: Any, _chat_id: int,
 
     try:
         from cyrene.knowledge import retrieve
+        from cyrene.workbench_context import ensure_knowledge_db_for_session
+        from cyrene.agent.state import _current_session_id
 
-        results = await retrieve.search_knowledge(_db_path, query, k=k)
+        db_path = await ensure_knowledge_db_for_session(_current_session_id.get())
+        results = await retrieve.search_knowledge(db_path, query, k=k)
         if not results:
             return "No matching documents found in the knowledge base."
 
@@ -1297,6 +1511,7 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
                 reason=f"命令包含 $() 或反引号，其展开路径无法静态验证。\n命令：{command[:240]}",
                 permission_kind="subshell_elevation",
                 options=["允许执行", "拒绝"],
+                scope_hint="",
             )
         try:
             _guard_shell_command_workspace_write(command)
@@ -1331,6 +1546,7 @@ async def _tool_send_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_p
             reason=f"命令包含 $() 或反引号，其展开路径无法静态验证。\n命令：{command[:240]}",
             permission_kind="subshell_elevation",
             options=["允许执行", "拒绝"],
+            scope_hint="",
         )
     try:
         _guard_shell_command_workspace_write(command)
@@ -1520,7 +1736,7 @@ async def _tool_browser_type(args: dict[str, Any], _bot: Any, _chat_id: int, _db
 async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
     from cyrene import debug
     from cyrene.browser import get_session
-    from cyrene.agent.state import _current_agent_id, _current_client_request_id, _current_round_id
+    from cyrene.agent.state import _current_agent_id, _current_client_request_id, _current_round_id, _current_session_id
     from cyrene.agent.session import _clear_pending_question, _upsert_pending_question, get_session_labels
 
     if _current_agent_id.get() != "main":
@@ -1538,14 +1754,8 @@ async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_
     current_url = await session.current_url()
 
     # Ask in the app FIRST (the standard question popup), then open the real
-    # browser window. The confirmation lives in the app's question UI — the
-    # browser panel only shows a passive "waiting for login" placeholder.
-    await debug.publish_event({
-        "type": "browser_takeover_request",
-        "round_id": round_id,
-        "url": current_url,
-        "reason": reason,
-    })
+    # browser window. The browser side panel also receives the question id so it
+    # can offer the same "finished login" confirmation in place.
     labels = get_session_labels(round_id)
     question = await _upsert_pending_question({
         "text": reason,
@@ -1556,6 +1766,14 @@ async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_
         "allow_custom": False,
         "meta": {"kind": "browser_takeover", "url": current_url},
     })
+    await debug.publish_event({
+        "type": "browser_takeover_request",
+        "session_id": str(_current_session_id.get() or ""),
+        "round_id": round_id,
+        "url": current_url,
+        "reason": reason,
+        "question_id": question.get("id", ""),
+    })
     try:
         await session.switch_to_headed(current_url)
     except Exception as exc:
@@ -1564,7 +1782,11 @@ async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_
             await _clear_pending_question(str(question.get("id", "")))
         except Exception:
             pass
-        await debug.publish_event({"type": "browser_takeover_cancelled", "round_id": round_id})
+        await debug.publish_event({
+            "type": "browser_takeover_cancelled",
+            "session_id": str(_current_session_id.get() or ""),
+            "round_id": round_id,
+        })
         return f"Failed to open the browser window for takeover: {exc}"
     return _json_result({
         "status": "awaiting_user",
@@ -1737,6 +1959,39 @@ TOOL_DEFS = [
     {
         "type": "function",
         "function": {
+            "name": "enter_plan_mode",
+            "description": "Main agent only. Enter PLAN MODE: decompose the user's request into ordered steps, each broken into concrete tasks, show the plan in the right sidebar's 计划 tab, and ask the user to approve / reject / revise before doing any real work. Use this proactively for complex, multi-step, or risky tasks where the user would benefit from reviewing the approach first. Do NOT combine with other tools in the same turn; calling this pauses the round for the user's decision.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "focus": {"type": "string", "description": "Optional note on what the plan should emphasize or any constraints to respect."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_plan_progress",
+            "description": "Main agent only. Update the durable Workbench plan before and after executing a plan step so the user can see exactly which step is active. Use only when an approved plan is being executed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "step": {"type": "integer", "minimum": 1, "description": "1-based plan step number."},
+                    "status": {
+                        "type": "string",
+                        "enum": ["in_progress", "completed", "failed", "skipped"],
+                        "description": "New status for this step.",
+                    },
+                    "note": {"type": "string", "description": "Optional short progress or result note shown to the user."},
+                },
+                "required": ["step", "status"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "DeepReflect",
             "description": "Main agent only. Reframe the next working context when the current approach is not satisfying the user's goal, repeated work is not converging, or user guidance shows the direction is wrong. Do not use this merely because one tool failed. The visible transcript is preserved; future LLM context uses a compressed reflection packet.",
             "parameters": {
@@ -1786,6 +2041,123 @@ TOOL_DEFS = [
                     },
                 },
                 "required": ["prompt", "schedule_type", "schedule_value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_project_memory",
+            "description": (
+                "Save a durable fact about THIS project into its long-term memory so future runs "
+                "(in any task/chat of this project) automatically see and reuse it. Use proactively "
+                "when you learn something worth remembering: a confirmed constraint or decision, a "
+                "tool/approach that works, a dead-end to avoid, a key file or command, the user's "
+                "stated preference, a recurring way they work or want you to collaborate (a working "
+                "`habit` — record these actively; they are easy to miss), or an environment fact. "
+                "Persistent and visible to the user on the "
+                "project's Memory page. Do NOT use it for transient chit-chat, one-off task output, or "
+                "secrets. Duplicates are merged automatically, and if this fact updates/contradicts an "
+                "older memory (e.g. a changed value or a corrected conclusion) the outdated one is "
+                "retired automatically — so always record your latest understanding without worrying "
+                "about stale entries. Write the memory content in the user's configured language "
+                "(Chinese UI/user → Chinese; English UI/user → English), while preserving code, paths, "
+                "commands, identifiers, and proper nouns exactly."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "The fact to remember, as one concise self-contained sentence. It MUST use "
+                            "the user's configured language; preserve code, paths, commands, identifiers, "
+                            "and proper nouns exactly."
+                        ),
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["habit", "conversation", "preference", "project", "fact"],
+                        "description": (
+                            "Pick the most specific fit. "
+                            "habit = a RECURRING way the user WORKS / executes tasks (e.g. always plan before acting; have subagents run then only review the summary; self-check for gaps before finishing). "
+                            "conversation = a recurring COMMUNICATION habit — how the user wants you to TALK to them (e.g. give the answer directly, no small talk; reply in Chinese; ask a clarifying question first; keep it brief; use plain terminology over hype). "
+                            "preference = a STATIC taste about an output or tool, not a way of working or talking (e.g. dark theme, prefers PyTorch, reports should include charts). "
+                            "project = project background / goal / main workstream. "
+                            "fact = objective/technical background about the user (default when nothing more specific fits). "
+                            "Rule of thumb: how they WORK → habit; how you should COMMUNICATE with them → conversation; a static taste about an artifact/tool → preference."
+                        ),
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional short keyword tags for grouping (e.g. ['training', 'MPS']).",
+                    },
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retire_project_memory",
+            "description": (
+                "Mark one outdated memory in the current Workbench project as retired. "
+                "Use the exact memory_id returned by search_project_memory. Retired memories "
+                "remain visible and recoverable on the Memory page, but are excluded from "
+                "future agent context and normal project-memory searches. Use this when you "
+                "can identify a stale, incorrect, or superseded memory but are not saving a "
+                "replacement fact. This does not permanently delete data."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "Exact project-memory id to retire, such as mem_ab12cd34ef56.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional concise reason the memory is outdated or incorrect.",
+                    },
+                },
+                "required": ["memory_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_task_goal",
+            "description": (
+                "Set or correct THE CURRENT Workbench task's goal, short title, and/or one-line summary "
+                "(简介 — the brief shown under the title on the task card). Provide at least one of them. "
+                "Use this when the task's goal/title/summary don't match what the work is actually about — "
+                "for example after you've explored the project and understood what should be done, or when "
+                "the user's first message was a question rather than a goal. These are shown on the task "
+                "card and in the task list. IMPORTANT: once the user has manually edited the title, you can "
+                "no longer change the title (the call keeps the user's title and tells you so) — you can "
+                "still update the goal and summary. Only valid inside a Workbench task; does nothing in a "
+                "plain chat."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "The task objective as one concise, self-contained sentence (e.g. 'Add OAuth login to the web app.').",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Short task title, a few words (<= 24 chars). Ignored if the user has manually edited the title.",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "One short sentence (简介) shown as the task's subtitle, summarizing what this task is about.",
+                    },
+                },
+                "required": [],
             },
         },
     },
@@ -1858,7 +2230,7 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "AnalyzeAttachment",
-            "description": "Analyze an uploaded attachment or workspace file. PDFs are parsed to text locally. Images return metadata and, when the current model appears multimodal, a vision-based description/OCR. Use this whenever the user uploaded a PDF or image and you need its contents.",
+            "description": "Analyze an uploaded attachment or workspace file. PDFs and Office documents (DOCX/PPTX/XLSX, including extensionless uploads) are parsed to text locally. Images return metadata and, when supported, a vision-based description/OCR. Use the exact path returned by ListKnowledgeDocuments for knowledge-base files.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1910,7 +2282,31 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "RecallMemory",
-            "description": "Recall relevant memory from other archived sessions. Searches conversation archives by keyword, session ID, or date, and can include short-term memory plus SOUL.md memory in the result.",
+            "description": (
+                "Read the most recently mentioned short-term memories across sessions. "
+                "Use this for recent preferences, facts, events, or context remembered about the user. "
+                "Use RecallConversation instead when you need the actual text of an older conversation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Optional keyword or phrase to filter recent memory content."},
+                    "type": {"type": "string", "description": "Optional memory type filter, such as fact, preference, event, or emotion."},
+                    "limit": {"type": "integer", "description": "Maximum number of recent memories to return (1-20, default 10)."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "RecallConversation",
+            "description": (
+                "Search historical conversation archives and return matching user/assistant exchanges. "
+                "Use this when the user refers to a previous discussion, decision, promise, or exact wording. "
+                "Use RecallMemory instead for recent distilled memory rather than conversation text."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1918,8 +2314,80 @@ TOOL_DEFS = [
                     "session_id": {"type": "string", "description": "Optional archive session id, such as session_abcd1234 or archive_2026-05-19_session_abcd1234."},
                     "date": {"type": "string", "description": "Optional date filter in YYYY-MM-DD format."},
                     "limit": {"type": "integer", "description": "Maximum number of archived conversation matches to return (1-10)."},
-                    "include_soul": {"type": "boolean", "description": "Whether to include SOUL.md shallow memory in the result."},
-                    "include_short_term": {"type": "boolean", "description": "Whether to include short-term cross-session memory in the result."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retire_short_term_memory",
+            "description": (
+                "Mark one recent cross-session short-term memory as retired. "
+                "Use the exact memory_id returned by RecallMemory. Retired short-term "
+                "memories remain in the local store for auditability, but are excluded "
+                "from future memory context and RecallMemory results. Use this when "
+                "the user says a recalled short-term memory is wrong, stale, or should "
+                "no longer be used. This does not permanently delete data."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "Exact short-term memory id returned by RecallMemory, such as stm_ab12cd34ef56ab78.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional concise reason the memory is wrong, stale, or superseded.",
+                    },
+                },
+                "required": ["memory_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_project_memory",
+            "description": (
+                "Search durable memory belonging to the current Workbench project. "
+                "Use this for prior project decisions, constraints, working approaches, user preferences, "
+                "or environment facts that may not be present in the automatically injected memory subset. "
+                "Read-only; only works inside a Workbench project task or chat."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Keyword or phrase to search for in project memory."},
+                    "category": {
+                        "type": "string",
+                        "enum": ["preference", "project", "habit", "fact", "conversation"],
+                        "description": "Optional memory category filter.",
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["conversation", "knowledge", "manual", "agent", "other"],
+                        "description": "Optional memory source filter.",
+                    },
+                    "limit": {"type": "integer", "description": "Maximum number of matches to return (1-20, default 10)."},
+                    "include_stale": {"type": "boolean", "description": "Include retired/superseded memories (default false)."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ListKnowledgeDocuments",
+            "description": "List files in the current Workbench project's knowledge base, including size, searchable-chunk status, document ID, and exact readable path. Use SearchKnowledge for indexed passages or AnalyzeAttachment with the returned path to inspect a specific file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Maximum number of files to return (default: 100, maximum: 500)."},
+                    "status": {"type": "string", "description": "Optional document status filter, such as indexed, pending, or error."},
                 },
                 "required": [],
             },
@@ -1929,7 +2397,7 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "SearchKnowledge",
-            "description": "Search the user's knowledge base (uploaded/imported/generated documents) for relevant passages via hybrid keyword+vector retrieval. Use this whenever the user references their documents, files, notes, or materials.",
+            "description": "Search the current Workbench project's knowledge base for the most relevant passages via hybrid keyword+vector retrieval. Use ListKnowledgeDocuments first when the user asks what files are available or requests coverage of all files.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2013,8 +2481,8 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "quit",
-            "description": "Call this when the task is complete and the interaction should end.",
-            "parameters": {"type": "object", "properties": {}},
+            "description": "Call this when the task is complete and the interaction should end. Put your COMPLETE final reply to the user in `reply` — the user is shown this text verbatim, so write the actual answer/result here (in the user's language), not a description of what you did. Omit `reply` only when there is genuinely nothing to say.",
+            "parameters": {"type": "object", "properties": {"reply": {"type": "string", "description": "The final user-facing reply, in the user's language. Shown to the user verbatim — write the real answer, not a summary of your actions."}}},
         },
     },
     {

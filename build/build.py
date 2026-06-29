@@ -15,10 +15,13 @@ import struct
 import tempfile
 from pathlib import Path
 
+from playwright_bundle import has_required_chromium_bundles
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BUILD_DIR = PROJECT_ROOT / "build"
 DIST_DIR = PROJECT_ROOT / "dist"
 SPEC_FILE = BUILD_DIR / "cyrene.spec"
+PLAYWRIGHT_BROWSERS_DIR = BUILD_DIR / ".playwright-browsers"
 WEB_LOGO_PATH = PROJECT_ROOT / "src" / "webui" / "static" / "app" / "logo-mark.png"
 
 IS_MAC = sys.platform == "darwin"
@@ -66,35 +69,43 @@ def _generate_icns(img: "Image.Image", out_path: Path) -> None:
 def _load_logo_image() -> "Image.Image | None":
     try:
         from PIL import Image, ImageDraw
+        import numpy as np
     except ImportError:
         print("  [warn] Pillow not installed, skipping icon generation")
         return None
 
     logo_src = BUILD_DIR / "logo-source.png"
     if logo_src.exists():
-        raw = Image.open(logo_src).convert("RGBA")
-        # Source artwork includes a wordmark below the emblem; crop it out and
-        # turn the near-white background transparent so platform icons stay clean.
-        crop = raw.crop((260, 140, 1015, 800))
-        pixels = crop.load()
-        for y in range(crop.height):
-            for x in range(crop.width):
-                r, g, b, a = pixels[x, y]
-                if r > 245 and g > 245 and b > 245:
-                    pixels[x, y] = (255, 255, 255, 0)
-        bbox = crop.getbbox()
-        if not bbox:
-            return crop
-        trimmed = crop.crop(bbox)
-        size = 1024
-        padding = 110
-        scale = min((size - 2 * padding) / trimmed.width, (size - 2 * padding) / trimmed.height)
-        resized = trimmed.resize((int(trimmed.width * scale), int(trimmed.height * scale)), Image.LANCZOS)
-        canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-        left = (size - resized.width) // 2
-        top = (size - resized.height) // 2
-        canvas.alpha_composite(resized, (left, top))
-        return canvas
+        img = Image.open(logo_src).convert("RGBA")
+        arr = np.array(img)
+        h, w, _ = arr.shape
+
+        # If the corners are near-white, treat the surrounding margin as
+        # background and flood-fill it transparent so the rounded-rectangle
+        # icon keeps its shape on macOS / other platforms.
+        tol = 15
+        near_white = (
+            (arr[:, :, 0] >= 255 - tol) &
+            (arr[:, :, 1] >= 255 - tol) &
+            (arr[:, :, 2] >= 255 - tol)
+        )
+        corners = [(0, 0), (0, w - 1), (h - 1, 0), (h - 1, w - 1)]
+        if all(near_white[y, x] for y, x in corners):
+            visited = np.zeros((h, w), dtype=bool)
+            stack = [(y, x) for y, x in corners if near_white[y, x]]
+            for y, x in stack:
+                visited[y, x] = True
+            while stack:
+                y, x = stack.pop()
+                for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    ny, nx = y + dy, x + dx
+                    if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx] and near_white[ny, nx]:
+                        visited[ny, nx] = True
+                        stack.append((ny, nx))
+            arr[visited, 3] = 0
+            img = Image.fromarray(arr)
+
+        return img.resize((1024, 1024), Image.LANCZOS)
 
     size = 512
     img = Image.new("RGBA", (size, size), (30, 30, 50, 255))
@@ -154,7 +165,7 @@ def build_webui_js() -> None:
     print("  [ok] JSX compiled")
 
 
-def run_pyinstaller() -> None:
+def run_pyinstaller(arch: str = "x64") -> None:
     """运行 PyInstaller。"""
     print("\n[PyInstaller] Building...")
     cmd = [
@@ -164,6 +175,10 @@ def run_pyinstaller() -> None:
         "--noconfirm",
         str(SPEC_FILE),
     ]
+    # Windows cross-compilation support (x64 or ARM64 runners building ARM64 binaries).
+    if sys.platform == "win32" and arch == "arm64":
+        os.environ["PYINSTALLER_TARGET_ARCH"] = "ARM64"
+        print("  [target] ARM64")
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     if result.returncode != 0:
         print("  [error] PyInstaller failed")
@@ -224,7 +239,7 @@ def package_mac() -> Path:
     return dmg_path
 
 
-def package_win() -> Path:
+def package_win(arch: str = "x64") -> Path:
     """Windows: onedir → .zip。"""
     version = get_version()
     dir_path = DIST_DIR / "Cyrene"
@@ -233,7 +248,8 @@ def package_win() -> Path:
         print("  [error] Cyrene dir not found, check PyInstaller output")
         sys.exit(1)
 
-    zip_path = DIST_DIR / f"Cyrene-{version}-win64.zip"
+    suffix = "win64" if arch == "x64" else "win-arm64"
+    zip_path = DIST_DIR / f"Cyrene-{version}-{suffix}.zip"
     print(f"\n[ZIP] Creating {zip_path.name}...")
     shutil.make_archive(
         str(zip_path.with_suffix("")),
@@ -350,7 +366,49 @@ def _appimage_arch() -> str:
     return arch_map.get(machine, machine or "x86_64")
 
 
-def run_electron_builder() -> None:
+def ensure_playwright_browsers() -> Path | None:
+    """Install Playwright and all Chromium runtime bundles used by Cyrene."""
+    print("\n[Playwright] Ensuring browser automation runtime...")
+    try:
+        pip_result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "playwright>=1.40"],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"  [warn] could not install Playwright: {exc}")
+        return None
+    if pip_result.returncode != 0:
+        print(f"  [warn] pip install playwright failed:\n{pip_result.stderr.strip()[:500]}")
+        return None
+
+    PLAYWRIGHT_BROWSERS_DIR.mkdir(parents=True, exist_ok=True)
+    install_env = os.environ.copy()
+    install_env["PLAYWRIGHT_BROWSERS_PATH"] = str(PLAYWRIGHT_BROWSERS_DIR)
+    try:
+        install_result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            capture_output=True,
+            text=True,
+            timeout=900,
+            env=install_env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"  [warn] could not install Chromium: {exc}")
+        return None
+    if install_result.returncode != 0:
+        print(f"  [warn] playwright install chromium failed:\n{install_result.stderr.strip()[:500]}")
+        return None
+    if not has_required_chromium_bundles(PLAYWRIGHT_BROWSERS_DIR):
+        print("  [warn] Playwright install did not produce Chromium and Chromium Headless Shell")
+        return None
+
+    print(f"  [ok] Browser bundle: {PLAYWRIGHT_BROWSERS_DIR}")
+    return PLAYWRIGHT_BROWSERS_DIR
+
+
+def run_electron_builder(arch: str = "x64") -> None:
     """Run electron-builder to package the Electron app around the PyInstaller bundle."""
     electron_dir = PROJECT_ROOT / "electron"
 
@@ -382,6 +440,10 @@ def run_electron_builder() -> None:
         cmd.append("--mac")
     elif IS_WIN:
         cmd.append("--win")
+        if arch == "arm64":
+            cmd.append("--arm64")
+        else:
+            cmd.append("--x64")
     elif IS_LINUX:
         cmd.append("--linux")
 
@@ -439,16 +501,52 @@ def run_electron_builder() -> None:
             print(f"  created: {dmg_path.name}")
 
 
+def write_buildinfo(ui_mode: str) -> None:
+    """Write _buildinfo.py with the target UI mode before PyInstaller bundles it."""
+    buildinfo = PROJECT_ROOT / "src" / "cyrene" / "_buildinfo.py"
+    buildinfo.write_text(
+        f"# Generated at build time by build/build.py — do not edit manually.\n"
+        f'DEFAULT_UI_MODE: str = "{ui_mode}"\n',
+        encoding="utf-8",
+    )
+    print(f"  [buildinfo] DEFAULT_UI_MODE = {ui_mode!r}")
+
+
+def restore_buildinfo() -> None:
+    """Restore _buildinfo.py to the default 'workbench' after building."""
+    buildinfo = PROJECT_ROOT / "src" / "cyrene" / "_buildinfo.py"
+    buildinfo.write_text(
+        "# Generated at build time by build/build.py — do not edit manually.\n"
+        "# Committed default is \"workbench\"; overwritten per-build via --ui-mode flag.\n"
+        'DEFAULT_UI_MODE: str = "workbench"\n',
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Build Cyrene")
     parser.add_argument("--clean", action="store_true", help="仅清理构建产物")
     parser.add_argument("--skip-icons", action="store_true", help="跳过图标生成")
     parser.add_argument("--pyinstaller-only", action="store_true", help="只跑 PyInstaller，跳过 Electron 打包")
+    parser.add_argument(
+        "--ui-mode",
+        choices=["workbench", "agent"],
+        default="workbench",
+        help="默认启动的 UI（workbench 或 agent），打包进二进制",
+    )
+    parser.add_argument(
+        "--arch",
+        choices=["x64", "arm64"],
+        default="x64",
+        help="目标架构（目前仅 Windows 构建生效）",
+    )
     args = parser.parse_args()
 
     print(f"Cyrene Builder — {sys.platform}")
     print(f"  project: {PROJECT_ROOT}")
+    print(f"  ui-mode: {args.ui_mode}")
+    print(f"  arch: {args.arch}")
 
     if args.clean:
         clean()
@@ -460,14 +558,24 @@ def main() -> None:
         generate_icons()
 
     build_webui_js()
-    run_pyinstaller()
+
+    os.environ.pop("CYRENE_PLAYWRIGHT_BROWSERS_DIR", None)
+    playwright_browsers = ensure_playwright_browsers()
+    if playwright_browsers is not None:
+        os.environ["CYRENE_PLAYWRIGHT_BROWSERS_DIR"] = str(playwright_browsers)
+
+    try:
+        write_buildinfo(args.ui_mode)
+        run_pyinstaller(arch=args.arch)
+    finally:
+        restore_buildinfo()
 
     if args.pyinstaller_only:
         print(f"\nDone: {DIST_DIR / 'Cyrene'}")
         return
 
     # Electron 打包
-    run_electron_builder()
+    run_electron_builder(arch=args.arch)
 
     # 列出产物
     electron_dist = PROJECT_ROOT / "dist-electron"

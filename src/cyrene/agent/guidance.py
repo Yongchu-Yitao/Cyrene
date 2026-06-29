@@ -547,8 +547,42 @@ async def _final_reply_from_history(messages: list[dict], max_tokens: int | None
     return (await _validated_final_no_tool_reply(messages, max_tokens=max_tokens)) or "Done."
 
 
+async def _final_reply_with_tools(messages: list[dict], tools: list, max_tokens: int | None = None) -> dict[str, Any]:
+    """Stream the wrap-up reply while keeping the tool channel open.
+
+    The synthesis step normally forbids tools, but the model sometimes only
+    realizes mid-answer that it still needs one (e.g. a source it never fetched).
+    Keeping tools available lets the caller honor that intent and re-enter the
+    tool loop instead of leaking it as textual markup. Returns the full assistant
+    message (content + any tool calls); the streamed text is already filtered of
+    DSML markup by the stream handler."""
+    response = await _call_llm_stream(messages, max_tokens=max_tokens, tools=tools)
+    _record_final_reply_usage(response)
+    return response
+
+
 def _strip_visible_dsml_tool_blocks(text: str) -> str:
     return _VISIBLE_DSML_TOOL_BLOCK_RE.sub("", str(text or "")).strip()
+
+
+def _record_final_reply_usage(*responses: Any) -> None:
+    """Stash the merged usage of the final-reply call(s) for the persist layer.
+
+    Streaming finals return plain text to their callers, so without this the
+    token usage of the reply call never reaches the saved assistant entry.
+    """
+    from cyrene.agent.state import _last_final_reply_usage
+    merged: dict[str, Any] = {}
+    for response in responses:
+        usage = response.get("usage") if isinstance(response, dict) else None
+        if not isinstance(usage, dict):
+            continue
+        for key, value in usage.items():
+            if isinstance(value, (int, float)) and isinstance(merged.get(key), (int, float)):
+                merged[key] = merged[key] + value
+            else:
+                merged.setdefault(key, value)
+    _last_final_reply_usage.set(merged or None)
 
 
 async def _validated_final_no_tool_reply(messages: list[dict], max_tokens: int | None = None) -> str:
@@ -557,6 +591,7 @@ async def _validated_final_no_tool_reply(messages: list[dict], max_tokens: int |
         response = await _call_llm_stream(messages, max_tokens=max_tokens)
     else:
         response = await _call_llm(messages, tools=None, max_tokens=max_tokens)
+    _record_final_reply_usage(response)
     text = _assistant_text(response).strip()
     if not _VISIBLE_DSML_TOOL_BLOCK_RE.search(text):
         return text
@@ -574,6 +609,7 @@ async def _validated_final_no_tool_reply(messages: list[dict], max_tokens: int |
         },
     ]
     retry_response = await _call_llm(retry_messages, tools=None, max_tokens=max_tokens)
+    _record_final_reply_usage(response, retry_response)
     retry_text = _assistant_text(retry_response).strip()
     if _VISIBLE_DSML_TOOL_BLOCK_RE.search(retry_text):
         return _strip_visible_dsml_tool_blocks(retry_text)
@@ -624,6 +660,8 @@ async def _process_main_inbox_message(message: dict[str, Any], bot: Any, chat_id
             "from": "guidance_queue",
             "to": "subagent_guidance",
             "detail": f"Main agent is applying guidance to {len(snapshot)} subagent(s).",
+            "detail_key": "phase.applyingGuidanceToSubagents",
+            "detail_params": {"count": len(snapshot)},
         })
         await _fan_out_guidance_to_subagents(target_round_id, content, bot, chat_id, db_path)
         interrupted, _summary = await _wait_for_subagent_round(target_round_id, bot, chat_id, db_path)
@@ -672,6 +710,7 @@ async def _process_main_inbox_message(message: dict[str, Any], bot: Any, chat_id
         "from": "guidance_queue",
         "to": "guided_round_continuation",
         "detail": "Main agent is continuing the same round with the new guidance.",
+        "detail_key": "phase.guidedRoundContinuation",
     })
     persist_context = _guidance_persist_context_after_ack(guidance_id)
     return await _run_chat_agent(
@@ -692,8 +731,9 @@ async def _process_main_inbox_message(message: dict[str, Any], bot: Any, chat_id
 
 def _ensure_main_inbox_worker(bot: Any, chat_id: int, db_path: str) -> None:
     import cyrene.agent.state as _state
-    if _state._main_inbox_worker is None or _state._main_inbox_worker.done():
-        _state._main_inbox_worker = asyncio.create_task(_drain_main_inbox(bot, chat_id, db_path))
+    _def_ctx = _state._ensure_session("")
+    if _def_ctx.main_inbox_worker is None or _def_ctx.main_inbox_worker.done():
+        _def_ctx.main_inbox_worker = asyncio.create_task(_drain_main_inbox(bot, chat_id, db_path))
 
 
 async def queue_round_guidance(
@@ -765,6 +805,7 @@ async def _drain_main_inbox(bot: Any, chat_id: int, db_path: str) -> None:
                     "from": "queued_guidance",
                     "to": "guidance_execution",
                     "detail": "Main agent is now applying the queued guidance.",
+                    "detail_key": "phase.guidanceExecution",
                 })
                 async with _agent_lock:
                     _interrupt_event.clear()
@@ -803,7 +844,7 @@ async def _drain_main_inbox(bot: Any, chat_id: int, db_path: str) -> None:
     except Exception:
         logger.exception("Failed to drain main inbox")
     finally:
-        _state._main_inbox_worker = None
+        _state._ensure_session("").main_inbox_worker = None
         if get_live_rounds() and _main_inbox_pending_by_round():
             _ensure_main_inbox_worker(bot, chat_id, db_path)
 
@@ -819,7 +860,12 @@ async def answer_pending_question(
     chat_id: int,
     db_path: str,
     client_request_id: str = "",
+    permission_mode: str = "default",
 ) -> str:
+    # ``permission_mode`` lets a caller keep a non-default permission mode across
+    # the resume (e.g. a Workbench goal loop running in "auto" / "full_access").
+    # It only applies to the normal clarification-resume path below; the
+    # permission-elevation / plan-confirmation handlers keep their own modes.
     from cyrene.agent.coordinator import _run_chat_agent
 
     context = _pending_question_resume_context(question_id)
@@ -864,6 +910,20 @@ async def answer_pending_question(
             await _restore_pending_question(pending)
             raise
 
+    if isinstance(pending_meta, dict) and str(pending_meta.get("kind", "")).strip() == "plan_confirmation":
+        try:
+            return await _handle_plan_confirmation_answer(
+                round_id=round_id,
+                pending=cleared,
+                answer_text=content,
+                client_request_id=client_request_id,
+                context=context,
+                permission_mode=permission_mode,
+            )
+        except Exception:
+            await _restore_pending_question(pending)
+            raise
+
     if isinstance(pending_meta, dict) and str(pending_meta.get("kind", "")).strip() == "browser_takeover":
         # The user finished logging in via the native window. Return the browser
         # session to headless (same profile → now authenticated), then fall through
@@ -894,6 +954,7 @@ async def answer_pending_question(
             client_request_id=client_request_id,
             persist_user_message=True,
             command=str(context.get("command", "") or "").strip(),
+            permission_mode=permission_mode,
         )
     except Exception:
         await _restore_pending_question(pending)
@@ -1003,6 +1064,7 @@ def _permission_answer_granted(text: str) -> bool:
     return normalized in {
         "仅这次允许", "allow once", "仅此次", "这次", "once",
         "始终允许", "always allow", "always", "永久允许", "allow",
+        "本次会话内总是允许", "本轮总是允许", "always allow this session",
         "允许这次", "允许这次读取", "允许执行", "允许删除", "仅此任务允许 full_access",
         "同意", "确认", "好", "好的", "可以", "行", "yes", "y", "ok", "okay",
         "allow_once",
@@ -1019,7 +1081,11 @@ async def _handle_permission_elevation_answer(
 ) -> str:
     from cyrene.agent.coordinator import _run_chat_agent
     from cyrene.settings_store import set_write_permission_mode
-    from cyrene.agent.state import _temporary_full_access
+    from cyrene.agent.state import (
+        _destructive_confirmation_allow_all,
+        _destructive_confirmation_fingerprints,
+        _temporary_full_access,
+    )
 
     normalized = str(answer_text or "").strip().lower()
     meta = pending.get("meta") if isinstance(pending.get("meta"), dict) else {}
@@ -1063,6 +1129,36 @@ async def _handle_permission_elevation_answer(
                 "The user denied read access outside the workspace. "
                 "Do not retry; stay within the workspace and choose a safe alternative."
             )
+    elif permission_kind == "destructive_confirmation":
+        fingerprint = str(meta.get("fingerprint", "") or "").strip()
+        from cyrene.agent.state import _publish_runtime_event
+        await _publish_runtime_event({
+            "type": "destructive_confirmation",
+            "decision": "approved" if granted else "denied",
+            "tool_name": tool_name,
+            "operation": operation,
+            "destructive_kind": str(meta.get("destructive_kind", "") or "").strip(),
+            "risk_level": str(meta.get("risk_level", "") or "").strip(),
+            "path_hint": path_hint,
+            "fingerprint": fingerprint,
+        })
+        if granted:
+            if normalized in {"本次会话内总是允许", "本轮总是允许", "always allow this session"}:
+                _destructive_confirmation_allow_all.set(True)
+            else:
+                if fingerprint:
+                    existing = set(_destructive_confirmation_fingerprints.get())
+                    existing.add(fingerprint)
+                    _destructive_confirmation_fingerprints.set(frozenset(existing))
+            system = (
+                "The user confirmed the destructive/irreversible operation. "
+                "Retry the blocked action if it is still required."
+            )
+        else:
+            system = (
+                "The user denied the destructive/irreversible operation. "
+                "Treat the operation as refused, do not retry it, and choose a safer alternative."
+            )
     elif granted:
         _temporary_full_access.set(True)
         system = (
@@ -1101,4 +1197,102 @@ async def _handle_permission_elevation_answer(
         client_request_id=client_request_id,
         persist_user_message=False,
         command=str(context.get("command", "") or "").strip(),
+    )
+
+
+async def _handle_plan_confirmation_answer(
+    *,
+    round_id: str,
+    pending: dict[str, Any],
+    answer_text: str,
+    client_request_id: str,
+    context: dict[str, Any],
+    permission_mode: str = "default",
+) -> str:
+    """处理「计划模式」确认回答：同意并开始 / 拒绝 / 修改。"""
+    from cyrene.agent.coordinator import _run_chat_agent
+    from cyrene.agent.state import _publish_runtime_event
+    from cyrene.agent.planning import _plan_to_text
+
+    meta = pending.get("meta") if isinstance(pending.get("meta"), dict) else {}
+    plan = meta.get("plan") if isinstance(meta.get("plan"), dict) else {}
+    user_message = str(meta.get("user_message") or "").strip()
+    raw = str(answer_text or "").strip()
+    normalized = raw.lower()
+
+    approve = raw in {"同意并开始", "同意并开始执行", "同意并执行", "同意", "开始"} or normalized in {"approve", "start", "yes", "ok", "okay", "go"}
+    reject = raw in {"拒绝", "取消", "算了", "不用了"} or normalized in {"reject", "cancel", "no", "stop"}
+    resume_mode = normalized if normalized in {"default", "auto", "full_access"} else str(permission_mode or "default").strip().lower()
+    if resume_mode not in {"default", "auto", "full_access"}:
+        resume_mode = "default"
+
+    if approve:
+        try:
+            from cyrene.agent.state import _current_session_id
+            from webui.routes_workbench_chat import activate_chat_plan
+
+            plan = activate_chat_plan(str(_current_session_id.get() or ""), plan)
+        except Exception:
+            logger.warning("Failed to activate Workbench chat plan", exc_info=True)
+        await _publish_runtime_event({"type": "plan", "status": "accepted", "plan": plan, "round_id": round_id})
+        exec_system = (
+            "用户已同意以下计划，请严格按计划执行。当前为默认权限模式：碰到 workspace 之外或写/删操作时，"
+            "再按需向用户申请提权。执行每个步骤前必须调用 update_plan_progress 将该步骤设为 in_progress；"
+            "完成后必须再次调用它设为 completed（失败则设为 failed），然后才能进入下一步。"
+            "完成后用一段话总结结果。\n\n" + _plan_to_text(plan)
+        )
+        return await _run_chat_agent(
+            user_message or "[按已同意的计划执行]",
+            None, 0, "",
+            ephemeral_system=exec_system,
+            forced_round_id=round_id,
+            history_override=context.get("round_history") or [],
+            persist_base_messages=context.get("persist_base_messages") or [],
+            persist_insert_at=context.get("persist_insert_at"),
+            client_request_id=client_request_id,
+            persist_user_message=False,
+            command=str(context.get("command", "") or "").strip(),
+            permission_mode=resume_mode,
+        )
+
+    if reject:
+        try:
+            from cyrene.agent.state import _current_session_id
+            from webui.routes_workbench_chat import reject_chat_plan
+
+            plan = reject_chat_plan(str(_current_session_id.get() or ""), plan)
+        except Exception:
+            logger.warning("Failed to reject Workbench chat plan", exc_info=True)
+        await _publish_runtime_event({"type": "plan", "status": "rejected", "plan": plan, "round_id": round_id})
+        reject_system = (
+            "用户拒绝了刚才的计划，不要执行任何操作。用一句话礼貌确认已取消，"
+            "并邀请用户提出新的方向或调整后的需求。"
+        )
+        return await _run_chat_agent(
+            "[用户拒绝了计划]",
+            None, 0, "",
+            ephemeral_system=reject_system,
+            forced_round_id=round_id,
+            history_override=context.get("round_history") or [],
+            persist_base_messages=context.get("persist_base_messages") or [],
+            persist_insert_at=context.get("persist_insert_at"),
+            client_request_id=client_request_id,
+            persist_user_message=False,
+            command=str(context.get("command", "") or "").strip(),
+            permission_mode="default",
+        )
+
+    # 其他（含「修改」或任意自定义意见）→ 带着修改意见重新规划
+    return await _run_chat_agent(
+        user_message or raw,
+        None, 0, "",
+        forced_round_id=round_id,
+        history_override=context.get("round_history") or [],
+        persist_base_messages=context.get("persist_base_messages") or [],
+        persist_insert_at=context.get("persist_insert_at"),
+        client_request_id=client_request_id,
+        persist_user_message=True,
+        command=str(context.get("command", "") or "").strip(),
+        permission_mode="plan",
+        plan_modification=raw,
     )

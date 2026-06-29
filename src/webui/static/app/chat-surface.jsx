@@ -33,7 +33,7 @@ var CYRENE_CHAT_PHRASES = {
       "这事得盘一下",
       "先过一遍细节",
       "我再确认下",
-      "脑子转一下",
+      "我的脑子在转",
       "马上给你整明白",
       "得把边界看清楚",
       "我查一下细节",
@@ -136,6 +136,8 @@ var CYRENE_TOOL_NAME_I18N = {
     PromptClaudeCode: "提示 Claude Code",
     Read: "读取文件",
     RecallMemory: "回忆记忆",
+    RecallConversation: "回忆历史对话",
+    retire_short_term_memory: "停用短期记忆",
     RejectScript: "停用脚本",
     RunScript: "运行脚本",
     SearchKnowledge: "搜索知识库",
@@ -166,6 +168,8 @@ var CYRENE_TOOL_NAME_I18N = {
     quit: "结束任务",
     resume_task: "恢复计划",
     schedule_task: "创建计划",
+    search_project_memory: "搜索项目记忆",
+    retire_project_memory: "停用项目记忆",
     send_agent_message: "发送代理消息",
     send_file: "发送文件",
     send_message: "发送进度消息",
@@ -208,6 +212,8 @@ var CYRENE_TOOL_NAME_I18N = {
     PromptClaudeCode: "Prompt Claude Code",
     Read: "Read file",
     RecallMemory: "Recall memory",
+    RecallConversation: "Recall conversation",
+    retire_short_term_memory: "Retire short-term memory",
     RejectScript: "Reject script",
     RunScript: "Run script",
     SearchKnowledge: "Search knowledge",
@@ -238,6 +244,8 @@ var CYRENE_TOOL_NAME_I18N = {
     quit: "Finish task",
     resume_task: "Resume task",
     schedule_task: "Schedule task",
+    search_project_memory: "Search project memory",
+    retire_project_memory: "Retire project memory",
     send_agent_message: "Send agent message",
     send_file: "Send file",
     send_message: "Send progress message",
@@ -794,6 +802,7 @@ function ModernQuestionComposer({ pendingQuestion, draft, onDraftChange, onOptio
   var [expanded, setExpanded] = useModernState(false);
   if (!pendingQuestion) return null;
   var options = Array.isArray(pendingQuestion.options) ? pendingQuestion.options : [];
+  var isPlanConfirm = String(pendingQuestion.kind || "") === "plan_confirmation";
   var questionText = String(pendingQuestion.text || "");
   var canCollapse = questionText.length > 260;
   return (
@@ -817,7 +826,7 @@ function ModernQuestionComposer({ pendingQuestion, draft, onDraftChange, onOptio
           disabled={answering}
           placeholder={optionCount ? t("chat.typeYourAnswer") : t("chat.customAnswer")}
         />
-        <button type="button" disabled={answering || !String(draft || "").trim()} onClick={onSubmit}>{t("chat.answer")}</button>
+        <button type="button" disabled={answering || !String(draft || "").trim()} onClick={onSubmit}>{isPlanConfirm ? t("chat.plan.revise") : t("chat.answer")}</button>
       </div>
     </div>
   );
@@ -968,13 +977,12 @@ function ModernChatComposer(props) {
             )}
           </span>
           <span className="modern-popover-anchor">
-            <button type="button" className={"iconbtn" + (props.mentionedAgents.length > 0 ? " active" : "")} title={t("chat.mention")} disabled={props.session.subagents.length === 0} onClick={function () { props.setMentionMenuOpen(!props.mentionMenuOpen); }}>@</button>
-            {props.mentionMenuOpen && (
-              <ModernMentionMenu
-                session={props.session}
-                mentionedAgents={props.mentionedAgents}
-                setMentionedAgents={props.setMentionedAgents}
-              />
+            <button type="button" className={"iconbtn mode-switch-btn" + ((props.mode && props.mode !== "default") ? " active" : "")} title={t("chat.mode.switcherTitle")} onClick={function () { props.setModeMenuOpen(!props.modeMenuOpen); }}>
+              <span className="mode-switch-icon">{chatModeMeta(props.mode).icon}</span>
+              <span className="mode-switch-label">{t(chatModeMeta(props.mode).labelKey)}</span>
+            </button>
+            {props.modeMenuOpen && (
+              <ModernModeMenu mode={props.mode} setMode={props.setMode} setModeMenuOpen={props.setModeMenuOpen} />
             )}
           </span>
           <span className="modern-composer-spacer"></span>
@@ -1107,6 +1115,48 @@ function ModernMentionMenu(props) {
             <span className="mention-option-body">
               <span className="mention-option-name">@{agent.name}</span>
               <span className="mention-option-task">{agent.task || agent.status}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// 四种权限模式（取代旧的 @ 按钮）。
+var CHAT_MODES = [
+  { id: "default",     icon: "🛡️", labelKey: "chat.mode.default",     descKey: "chat.mode.defaultDesc" },
+  { id: "full_access", icon: "🔓", labelKey: "chat.mode.fullAccess",  descKey: "chat.mode.fullAccessDesc" },
+  { id: "auto",        icon: "🤖", labelKey: "chat.mode.auto",        descKey: "chat.mode.autoDesc" },
+  { id: "plan",        icon: "📋", labelKey: "chat.mode.plan",        descKey: "chat.mode.planDesc" },
+];
+
+function chatModeMeta(id) {
+  for (var i = 0; i < CHAT_MODES.length; i++) {
+    if (CHAT_MODES[i].id === id) return CHAT_MODES[i];
+  }
+  return CHAT_MODES[0];
+}
+
+function ModernModeMenu(props) {
+  var t = useI18n().t;
+  var current = props.mode || "default";
+  return (
+    <div className="mode-menu modern-menu">
+      <div className="mode-menu-head">{t("chat.mode.menuHead")}</div>
+      {CHAT_MODES.map(function (m) {
+        var active = current === m.id;
+        return (
+          <button
+            type="button"
+            key={m.id}
+            className={"mode-option" + (active ? " active" : "")}
+            onClick={function () { props.setMode(m.id); props.setModeMenuOpen(false); }}
+          >
+            <span className="mode-option-icon">{m.icon}</span>
+            <span className="mode-option-body">
+              <span className="mode-option-label">{t(m.labelKey)}{active ? " ✓" : ""}</span>
+              <span className="mode-option-desc">{t(m.descKey)}</span>
             </span>
           </button>
         );

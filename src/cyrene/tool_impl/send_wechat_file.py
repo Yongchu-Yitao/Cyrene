@@ -6,6 +6,7 @@ from typing import Any
 
 from cyrene import tool_legacy as _legacy
 from cyrene.tool_legacy import (
+    _request_destructive_confirmation,
     _resolve_exportable_path,
     logger,
 )
@@ -43,6 +44,16 @@ async def _tool_send_wechat_file(args: dict[str, Any], bot: Any, chat_id: int, _
         sent_wechat_files = notify_state.setdefault("sent_wechat_files", set())
         if dedupe_key in sent_wechat_files:
             return f"Skipped duplicate WeChat file send: {name}"
+
+    confirm = await _request_destructive_confirmation(
+        tool_name="send_wechat_file",
+        operation="外发 WeChat 文件",
+        detail=f"文件：{path}\n名称：{name}\n附言：{text[:200]}",
+        path_hint=str(path),
+        destructive_kind="external_file_send",
+    )
+    if confirm is not None:
+        return confirm
 
     # Send via WeChat if the bot supports it
     send_file_fn = getattr(bot, "send_file", None)

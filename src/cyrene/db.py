@@ -15,6 +15,7 @@ _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
     id TEXT PRIMARY KEY,
     chat_id INTEGER NOT NULL,
+    project_id TEXT DEFAULT 'default',
     prompt TEXT NOT NULL,
     schedule_type TEXT NOT NULL,
     schedule_value TEXT NOT NULL,
@@ -39,6 +40,59 @@ CREATE TABLE IF NOT EXISTS task_run_logs (
     FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id)
 );
 CREATE INDEX IF NOT EXISTS idx_task_run_logs_task_id ON task_run_logs(task_id);
+
+CREATE TABLE IF NOT EXISTS goal_loop_drafts (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    base_plan_revision INTEGER NOT NULL,
+    goal TEXT NOT NULL,
+    goal_changed INTEGER NOT NULL DEFAULT 0,
+    plan_json TEXT NOT NULL,
+    acceptance_json TEXT NOT NULL,
+    limits_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_goal_loop_drafts_session ON goal_loop_drafts(session_id);
+CREATE INDEX IF NOT EXISTS idx_goal_loop_drafts_expires ON goal_loop_drafts(expires_at);
+
+CREATE TABLE IF NOT EXISTS goal_runs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE,
+    project_id TEXT NOT NULL,
+    objective TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    phase TEXT NOT NULL DEFAULT 'executing',
+    plan_definition_revision INTEGER NOT NULL,
+    current_step_id TEXT,
+    permission_mode TEXT NOT NULL DEFAULT 'auto',
+    reflection_mode TEXT NOT NULL DEFAULT 'proactive',
+    max_active_seconds INTEGER NOT NULL,
+    max_repair_rounds INTEGER NOT NULL,
+    active_seconds REAL NOT NULL DEFAULT 0,
+    active_started_at TEXT,
+    repair_round INTEGER NOT NULL DEFAULT 0,
+    lease_owner TEXT,
+    lease_until TEXT,
+    stop_reason TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_goal_runs_status ON goal_runs(status);
+CREATE INDEX IF NOT EXISTS idx_goal_runs_lease ON goal_runs(lease_until);
+
+CREATE TABLE IF NOT EXISTS goal_run_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    step_id TEXT,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES goal_runs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_goal_run_events_run ON goal_run_events(run_id);
 
 CREATE TABLE IF NOT EXISTS daily_stats (
     day TEXT PRIMARY KEY,
@@ -78,6 +132,14 @@ CREATE TABLE IF NOT EXISTS daily_topic_terms (
     PRIMARY KEY (day, term)
 );
 CREATE INDEX IF NOT EXISTS idx_daily_topic_terms_day ON daily_topic_terms(day);
+
+CREATE TABLE IF NOT EXISTS daily_tool_stats (
+    day TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, tool)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_tool_stats_day ON daily_tool_stats(day);
 
 CREATE TABLE IF NOT EXISTS analytics_backfills (
     source TEXT PRIMARY KEY,
@@ -122,11 +184,14 @@ CREATE TABLE IF NOT EXISTS entities (
     source              TEXT DEFAULT 'extracted',
     source_round_id     TEXT,
     confidence          REAL DEFAULT 1.0,
-    metadata            TEXT DEFAULT '{}'
+    metadata            TEXT DEFAULT '{}',
+    project_id          TEXT DEFAULT 'default'
 );
 CREATE INDEX IF NOT EXISTS idx_entities_type   ON entities(type);
 CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status);
 CREATE INDEX IF NOT EXISTS idx_entities_due    ON entities(due_date);
+-- idx_entities_project_id is created in init_db() AFTER the ALTER migration, so
+-- it also lands on pre-existing DBs whose CREATE TABLE above was a no-op.
 
 CREATE TABLE IF NOT EXISTS entity_candidates (
     id              TEXT PRIMARY KEY,
@@ -203,6 +268,12 @@ CREATE TABLE IF NOT EXISTS kb_relations (
 );
 CREATE INDEX IF NOT EXISTS idx_kb_relations_src ON kb_relations(src_id);
 CREATE INDEX IF NOT EXISTS idx_kb_relations_dst ON kb_relations(dst_id);
+
+CREATE TABLE IF NOT EXISTS workbench_state (
+    key TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 _TOPIC_RE = re.compile(r"[\u4e00-\u9fff]{2,}|[a-z][a-z0-9_-]{2,}")
@@ -218,12 +289,33 @@ _TOPIC_STOPWORDS = {
 
 async def init_db(db_path: str) -> None:
     async with aiosqlite.connect(db_path) as db:
+        # WAL: readers and the writer no longer block each other, and the
+        # rollback-journal SHARED→EXCLUSIVE deadlock (seen as "database is
+        # locked" when the goal loop and tool/chat writes overlap) disappears.
+        # journal_mode is persisted in the DB header, so this one call applies
+        # to every later connection that opens this database.
+        await db.execute("PRAGMA journal_mode = WAL")
         await db.executescript(_CREATE_TABLES)
         # Migration: add permission_mode column to existing tables
         try:
             await db.execute("ALTER TABLE scheduled_tasks ADD COLUMN permission_mode TEXT DEFAULT 'workspace_only'")
         except Exception:
             pass  # Column already exists
+        try:
+            await db.execute("ALTER TABLE scheduled_tasks ADD COLUMN project_id TEXT DEFAULT 'default'")
+        except Exception:
+            pass  # Column already exists
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_project_id ON scheduled_tasks(project_id)"
+        )
+        # Migration: scope entities to a Workbench project (calendar 日程 view).
+        try:
+            await db.execute("ALTER TABLE entities ADD COLUMN project_id TEXT DEFAULT 'default'")
+        except Exception:
+            pass  # Column already exists
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entities_project_id ON entities(project_id)"
+        )
         try:
             await db.execute("ALTER TABLE kb_documents ADD COLUMN content_hash TEXT DEFAULT ''")
         except Exception:
@@ -234,6 +326,94 @@ async def init_db(db_path: str) -> None:
         )
         await db.commit()
     await _maybe_backfill_analytics(db_path)
+
+
+# Knowledge base tables SQL (used to initialize per-workspace KB databases)
+KB_TABLES_SQL: str = """
+CREATE TABLE IF NOT EXISTS kb_documents (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    path          TEXT NOT NULL,
+    content_hash  TEXT DEFAULT '',
+    content_type  TEXT DEFAULT '',
+    kind          TEXT DEFAULT 'file',
+    size          INTEGER DEFAULT 0,
+    status        TEXT DEFAULT 'pending',
+    source        TEXT DEFAULT 'upload',
+    title         TEXT DEFAULT '',
+    summary       TEXT DEFAULT '',
+    tags          TEXT DEFAULT '[]',
+    char_count    INTEGER DEFAULT 0,
+    chunk_count   INTEGER DEFAULT 0,
+    entity_id     TEXT,
+    error         TEXT DEFAULT '',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    indexed_at    TEXT,
+    metadata      TEXT DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_kb_documents_status ON kb_documents(status);
+CREATE INDEX IF NOT EXISTS idx_kb_documents_kind   ON kb_documents(kind);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_documents_path ON kb_documents(path);
+
+CREATE TABLE IF NOT EXISTS kb_chunks (
+    id              TEXT PRIMARY KEY,
+    document_id     TEXT NOT NULL,
+    ordinal         INTEGER NOT NULL,
+    content         TEXT NOT NULL,
+    char_start      INTEGER DEFAULT 0,
+    char_end        INTEGER DEFAULT 0,
+    token_count     INTEGER DEFAULT 0,
+    embedding       BLOB,
+    embedding_dim   INTEGER DEFAULT 0,
+    embedding_model TEXT DEFAULT '',
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_kb_chunks_document ON kb_chunks(document_id);
+
+CREATE TABLE IF NOT EXISTS kb_relations (
+    id          TEXT PRIMARY KEY,
+    src_id      TEXT NOT NULL,
+    dst_id      TEXT NOT NULL,
+    relation    TEXT DEFAULT 'related',
+    weight      REAL DEFAULT 1.0,
+    source      TEXT DEFAULT 'manual',
+    created_at  TEXT NOT NULL,
+    UNIQUE(src_id, dst_id, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_kb_relations_src ON kb_relations(src_id);
+CREATE INDEX IF NOT EXISTS idx_kb_relations_dst ON kb_relations(dst_id);
+"""
+
+KB_FTS_SQL: str = (
+    "CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_fts USING fts5("
+    "content, chunk_id UNINDEXED, document_id UNINDEXED, tokenize='trigram'"
+    ");"
+)
+
+
+async def init_knowledge_db(db_path: str) -> None:
+    """Create knowledge base tables in a database file.
+
+    Used for per-workspace knowledge base databases (kb_<workspace_id>.db).
+    Safe to call multiple times — uses IF NOT EXISTS.
+    """
+    async with aiosqlite.connect(db_path) as db:
+        await db.executescript(KB_TABLES_SQL)
+        await db.execute(KB_FTS_SQL)
+        # Migration: add content_hash column to existing tables
+        try:
+            await db.execute("ALTER TABLE kb_documents ADD COLUMN content_hash TEXT DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            await db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_documents_content_hash "
+                "ON kb_documents(content_hash) WHERE content_hash <> ''"
+            )
+        except Exception:
+            pass
+        await db.commit()
 
 
 def _local_tzinfo():
@@ -267,6 +447,32 @@ def _activity_column(hour: int) -> str:
     if hour < 20:
         return "activity_16_20"
     return "activity_20_24"
+
+
+def bump_activity_sync(db_path: str, timestamp: str | None = None) -> None:
+    """Increment the correct daily activity bucket for the given timestamp.
+
+    Synchronous counterpart used by Workbench's per-session archiving, which
+    runs synchronously so callers are not forced to be async.
+    """
+    ts = str(timestamp or datetime.now(_local_tzinfo()).isoformat())
+    day = _normalize_day(timestamp=ts)
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        hour = int(dt.astimezone(_local_tzinfo()).strftime("%H"))
+    except Exception:
+        hour = 0
+    activity_col = _activity_column(hour)
+    with sqlite3.connect(db_path, timeout=30) as db:
+        db.execute("PRAGMA busy_timeout = 30000")
+        db.execute("INSERT OR IGNORE INTO daily_stats (day) VALUES (?)", (day,))
+        db.execute(
+            f"UPDATE daily_stats SET {activity_col} = {activity_col} + 1 WHERE day = ?",
+            (day,),
+        )
+        db.commit()
 
 
 def _extract_topic_terms(text: str, limit: int = 12) -> list[str]:
@@ -379,15 +585,42 @@ async def get_model_stats_range(db_path: str, day_from: str, day_to: str) -> lis
         return [dict(row) for row in rows]
 
 
-async def record_tool_call(db_path: str, timestamp: str) -> None:
+async def record_tool_call(db_path: str, timestamp: str, tool_name: str = "") -> None:
     day = _normalize_day(timestamp=timestamp)
+    tool = str(tool_name or "").strip()
     async with aiosqlite.connect(db_path) as db:
         await db.execute("INSERT OR IGNORE INTO daily_stats (day) VALUES (?)", (day,))
         await db.execute(
             "UPDATE daily_stats SET tool_calls = tool_calls + 1 WHERE day = ?",
             (day,),
         )
+        if tool:
+            await db.execute(
+                """
+                INSERT INTO daily_tool_stats (day, tool, count) VALUES (?, ?, 1)
+                ON CONFLICT(day, tool) DO UPDATE SET count = count + 1
+                """,
+                (day, tool),
+            )
         await db.commit()
+
+
+async def get_tool_counts_range(db_path: str, day_from: str, day_to: str, limit: int = 5) -> list[dict]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT tool, SUM(count) AS count
+            FROM daily_tool_stats
+            WHERE day >= ? AND day <= ?
+            GROUP BY tool
+            ORDER BY count DESC, tool ASC
+            LIMIT ?
+            """,
+            (day_from, day_to, int(limit)),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
 
 
 async def record_archive_exchange(
@@ -470,36 +703,34 @@ async def count_stat_days(db_path: str) -> int:
 # Token usage tracking
 # ---------------------------------------------------------------------------
 
-_PRICE_PER_1K: dict[str, tuple[float, float]] = {
-    "deepseek-chat": (0.00027, 0.00110),
-    "deepseek-v4-flash": (0.00027, 0.00110),
-    "deepseek-reasoner": (0.00055, 0.00219),
-    "gpt-4o": (0.00250, 0.01000),
-    "gpt-4o-mini": (0.00015, 0.00060),
-    "gpt-4.1": (0.00200, 0.00800),
-    "gpt-4.1-mini": (0.00040, 0.00160),
-    "gpt-4.1-nano": (0.00010, 0.00040),
-    "claude-sonnet-4-6": (0.00300, 0.01500),
-    "claude-sonnet-4-7": (0.00300, 0.01500),
-    "claude-haiku-4-5": (0.00080, 0.00400),
-    "gemini-2.0-flash": (0.00010, 0.00040),
-    "gemini-2.5-flash": (0.00015, 0.00060),
-}
-
-_DEFAULT_PRICE = (0.00100, 0.00200)  # fallback per-1k prompt/completion cost in USD
+_DEFAULT_PRICE_PER_1K = (0.00100, 0.00200)  # fallback per-1k prompt/completion cost in USD
 
 
-def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    model_key = model.strip().lower()
-    # Partial match against known models
-    prices = _DEFAULT_PRICE
-    for known, p in _PRICE_PER_1K.items():
-        if known in model_key or model_key in known:
-            prices = p
-            break
-    prompt_cost = (prompt_tokens / 1000.0) * prices[0]
-    completion_cost = (completion_tokens / 1000.0) * prices[1]
-    return round(prompt_cost + completion_cost, 6)
+def _estimate_cost(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    *,
+    cache_hit_tokens: int = 0,
+    cache_miss_tokens: int = 0,
+) -> float:
+    from cyrene.model_prices import effective_price, estimate_cost, to_usd
+
+    pricing = effective_price(model)
+    if pricing:
+        cost = estimate_cost(
+            to_usd(pricing),
+            prompt_tokens,
+            completion_tokens,
+            cache_hit_tokens=cache_hit_tokens,
+            cache_miss_tokens=cache_miss_tokens,
+        )
+    else:
+        cost = (
+            (max(prompt_tokens, 0) / 1000.0) * _DEFAULT_PRICE_PER_1K[0]
+            + (max(completion_tokens, 0) / 1000.0) * _DEFAULT_PRICE_PER_1K[1]
+        )
+    return round(cost, 6)
 
 
 async def record_token_usage(
@@ -516,7 +747,13 @@ async def record_token_usage(
     session_id: str = "",
     caller: str = "main",
 ) -> None:
-    cost = _estimate_cost(model, prompt_tokens, completion_tokens)
+    cost = _estimate_cost(
+        model,
+        prompt_tokens,
+        completion_tokens,
+        cache_hit_tokens=cache_hit_tokens,
+        cache_miss_tokens=cache_miss_tokens,
+    )
     now = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
@@ -730,21 +967,27 @@ async def _maybe_backfill_analytics(db_path: str) -> None:
 
 # --- Task CRUD ---
 
-async def create_task(db_path: str, chat_id: int, prompt: str, schedule_type: str, schedule_value: str, next_run: str, permission_mode: str = "workspace_only") -> str:
+async def create_task(db_path: str, chat_id: int, prompt: str, schedule_type: str, schedule_value: str, next_run: str, permission_mode: str = "workspace_only", project_id: str = "default") -> str:
     task_id = uuid.uuid4().hex[:8]
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
-            "INSERT INTO scheduled_tasks (id, chat_id, prompt, schedule_type, schedule_value, next_run, created_at, permission_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (task_id, chat_id, prompt, schedule_type, schedule_value, next_run, datetime.now(timezone.utc).isoformat(), permission_mode),
+            "INSERT INTO scheduled_tasks (id, chat_id, project_id, prompt, schedule_type, schedule_value, next_run, created_at, permission_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (task_id, chat_id, project_id or "default", prompt, schedule_type, schedule_value, next_run, datetime.now(timezone.utc).isoformat(), permission_mode),
         )
         await db.commit()
     return task_id
 
 
-async def get_all_tasks(db_path: str) -> list[dict]:
+async def get_all_tasks(db_path: str, project_id: str | None = None) -> list[dict]:
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT * FROM scheduled_tasks")
+        if project_id is None:
+            cursor = await db.execute("SELECT * FROM scheduled_tasks")
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM scheduled_tasks WHERE COALESCE(project_id, 'default') = ?",
+                (project_id or "default",),
+            )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
@@ -795,3 +1038,27 @@ async def log_task_run(db_path: str, task_id: str, duration_ms: int, status: str
             (task_id, datetime.now(timezone.utc).isoformat(), duration_ms, status, result, error),
         )
         await db.commit()
+
+
+async def get_task_time_totals(db_path: str) -> dict:
+    """Aggregate agent work time across scheduled-task runs and goal-loop runs.
+
+    ``task_run_logs.duration_ms`` is already milliseconds; ``goal_runs.active_seconds``
+    is seconds and gets scaled up. Returns total/longest in ms plus a run count.
+    """
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            "SELECT COALESCE(SUM(duration_ms), 0), COALESCE(MAX(duration_ms), 0), COUNT(*) FROM task_run_logs",
+        )
+        task_total, task_longest, task_runs = await cursor.fetchone()
+        cursor = await db.execute(
+            "SELECT COALESCE(SUM(active_seconds), 0), COALESCE(MAX(active_seconds), 0), COUNT(*) FROM goal_runs",
+        )
+        goal_total_s, goal_longest_s, goal_runs = await cursor.fetchone()
+    goal_total_ms = int(round(float(goal_total_s or 0) * 1000))
+    goal_longest_ms = int(round(float(goal_longest_s or 0) * 1000))
+    return {
+        "total_ms": int(task_total or 0) + goal_total_ms,
+        "longest_ms": max(int(task_longest or 0), goal_longest_ms),
+        "runs": int(task_runs or 0) + int(goal_runs or 0),
+    }

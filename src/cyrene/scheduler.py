@@ -29,7 +29,13 @@ import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from cyrene import db
-from cyrene.agent import append_system_message, run_heartbeat_agent, run_steward_agent, run_task_agent
+from cyrene.agent import (
+    append_system_message,
+    is_session_running,
+    run_heartbeat_agent,
+    run_steward_agent,
+    run_task_agent,
+)
 from cyrene.channels.wechat import get_current_client
 from cyrene.config import BASE_DIR, DATA_DIR, OWNER_ID, SCHEDULER_INTERVAL, STATE_FILE, STEWARD_INTERVAL
 from cyrene.conversations import CONVERSATIONS_DIR, get_recent_conversations
@@ -38,10 +44,12 @@ from cyrene.notifications import notify
 from cyrene.schedule_spec import compute_next_run
 from cyrene.short_term import clear_old_entries, get_context as get_short_term_context
 from cyrene.soul import apply_soul_update, read_shallow_memory, read_soul
+from webui.workbench_notifications import append_notification
 
 logger = logging.getLogger(__name__)
 
 _scheduler: AsyncIOScheduler | None = None
+_workbench_db_path: str = ""
 
 # ---------------------------------------------------------------------------
 # Lottery state  (persisted to disk)
@@ -171,17 +179,24 @@ def _lottery_draw() -> bool:
 def _last_user_message_time() -> datetime | None:
     """Infer the timestamp of the user's most recent message.
 
-    The conversation archive is authoritative: its ``## HH:MM:SS UTC`` headings
-    are written once per user turn, so they track *when the user actually
-    spoke*. ``state.json``'s modification time is only a degraded fallback — the
-    agent rewrites that file on its own (proactive replies, steward, behaviour
-    learning, pattern detection), so its mtime is NOT a reliable proxy for user
-    activity and is trusted only when the most recent persisted message is
-    itself the user's.
+    Workbench ``lastUserMessageAt`` values and conversation archive
+    ``## HH:MM:SS UTC`` headings track real user turns. ``state.json``'s
+    modification time is only a degraded fallback — the agent rewrites that
+    file on its own (proactive replies, steward, behaviour learning, pattern
+    detection), so its mtime is trusted only when the latest message is the
+    user's.
 
     Returns ``None`` when no user message can be found.
     """
-    # 1. Conversation archives — authoritative per-user-turn timestamps.
+    candidates: list[datetime] = []
+
+    # 1. Workbench chats — use explicit user-activity timestamps, never the
+    # generic updatedAt field (assistant replies and renames also change it).
+    workbench = _latest_workbench_user_activity()
+    if workbench is not None:
+        candidates.append(workbench["timestamp"])
+
+    # 2. Conversation archives — authoritative per-user-turn timestamps.
     try:
         if CONVERSATIONS_DIR.exists():
             files = sorted(CONVERSATIONS_DIR.glob("*.md"), reverse=True)
@@ -200,9 +215,12 @@ def _last_user_message_time() -> datetime | None:
                     clean_ts = latest_ts.replace(" UTC", "")
                     dt_str = f"{date_str} {clean_ts}"
                     try:
-                        return datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S").replace(
-                            tzinfo=timezone.utc,
+                        candidates.append(
+                            datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S").replace(
+                                tzinfo=timezone.utc,
+                            )
                         )
+                        break
                     except ValueError:
                         logger.debug(
                             "Unparseable timestamp in %s: %s",
@@ -217,7 +235,7 @@ def _last_user_message_time() -> datetime | None:
             exc_info=True,
         )
 
-    # 2. Degraded fallback: state.json mtime, trusted only when the most recent
+    # 3. Degraded fallback: state.json mtime, trusted only when the most recent
     #    non-empty message is the user's (otherwise the mtime reflects one of the
     #    agent's own writes and would make the user look more recently active
     #    than they really are). Mostly relevant before any exchange is archived.
@@ -235,11 +253,69 @@ def _last_user_message_time() -> datetime | None:
             )
             if last_msg is not None and str(last_msg.get("role") or "") == "user":
                 mtime = STATE_FILE.stat().st_mtime
-                return datetime.fromtimestamp(mtime, tz=timezone.utc)
+                candidates.append(datetime.fromtimestamp(mtime, tz=timezone.utc))
     except Exception:
         logger.debug("Could not read state.json for silence detection", exc_info=True)
 
-    return None
+    return max(candidates) if candidates else None
+
+
+def _parse_activity_timestamp(value: object) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _latest_workbench_user_activity() -> dict[str, object] | None:
+    """Return the Workbench chat most recently touched by the user."""
+    if _workbench_db_path:
+        from cyrene.workbench_store import read_document
+
+        data = read_document(
+            _workbench_db_path,
+            "chats",
+            lambda: {"chats": []},
+            legacy_path=DATA_DIR / "workbench_chats.json",
+        )
+    else:
+        data = read_json_safe(DATA_DIR / "workbench_chats.json")
+    if not isinstance(data, dict) or not isinstance(data.get("chats"), list):
+        return None
+
+    latest: dict[str, object] | None = None
+    for chat in data["chats"]:
+        if not isinstance(chat, dict):
+            continue
+        activity_times = [
+            value
+            for value in [_parse_activity_timestamp(chat.get("lastUserMessageAt"))]
+            if value is not None
+        ]
+        for message in reversed(chat.get("messages") or []):
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            message_time = _parse_activity_timestamp(message.get("createdAt"))
+            if message_time is not None:
+                activity_times.append(message_time)
+                break
+        timestamp = max(activity_times) if activity_times else None
+        if timestamp is None:
+            continue
+        if latest is None or timestamp > latest["timestamp"]:
+            latest = {
+                "chat_id": str(chat.get("id") or ""),
+                "project_id": str(chat.get("projectId") or ""),
+                "title": str(chat.get("title") or ""),
+                "timestamp": timestamp,
+            }
+    return latest
 
 
 def _silence_hours() -> float | None:
@@ -430,6 +506,42 @@ def _build_proactive_user_prompt(context: str, silence_hours: float | None, cons
 # Scheduled-task execution  (preserved from the original scheduler)
 # ---------------------------------------------------------------------------
 
+
+def _user_visible_text(result: str, prompt: str) -> str:
+    """Return *result* if it conveys real user-facing output, else *prompt*.
+
+    The execution-agent returns ``"Done."`` as a default when it produces no
+    text (see ``_run_execution_agent_locked``).  A bare ``"Done."`` or empty
+    string is indistinguishable from "I have nothing to report" — in that case
+    the original task prompt is a better signal than a dead ``"Done."``.
+    """
+    text = (result or prompt).strip()
+    if not text or text.lower().rstrip(".") == "done":
+        return prompt
+    return text
+
+
+def _plaintext(body: str) -> str:
+    """Strip common Markdown formatting for plaintext notification channels.
+
+    macOS ``terminal-notifier``, WeChat, and the in-app SSE notification panel
+    all display the content verbatim — they do not interpret Markdown.
+    """
+    body = _re.sub(r'\*\*(.+?)\*\*', r'\1', body)
+    body = _re.sub(r'\*(.+?)\*', r'\1', body)
+    body = _re.sub(r'`([^`]+)`', r'\1', body)
+    body = _re.sub(r'#{1,6}\s+', '', body)
+    body = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', body)
+    return body
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Truncate *text* to *limit* characters, appending ``…`` when cut."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…"
+
+
 async def _check_and_execute_tasks(bot, db_path: str) -> None:
     """Query all due tasks from the database and execute each one."""
     try:
@@ -464,7 +576,8 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
 
     wrapped_prompt = (
         "You are executing a scheduled task. "
-        "You MUST use the send_message tool to notify the user in Telegram. "
+        "First use tools to complete the task, then use the send_message tool "
+        "to report the result to the user. "
         f"Task: {prompt}"
     )
     notify_state: dict[str, bool] = {"sent": False}
@@ -476,15 +589,20 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
             wrapped_prompt, bot, task_chat_id, db_path, notify_state,
         )
 
-        # Fallback: if the model forgot to call send_message, send a plain
-        # reminder through the Web UI persistence path so the task doesn't go
-        # completely silent in web-only mode.
+        # Fallback: if the model forgot to call send_message, surface what it
+        # actually did so the result doesn't go silent in web-only mode.
+        # Nested try/except so a notification failure never corrupts the result.
         if not notify_state["sent"]:
-            await append_system_message(
-                f"Reminder: {prompt}",
-                message_meta={"scheduled": True},
-                publish_event={"scheduled": True},
-            )
+            try:
+                fallback_text = _user_visible_text(result, prompt)
+                truncated = _truncate(fallback_text, 2000)
+                await append_system_message(
+                    f"Result: {truncated}",
+                    message_meta={"scheduled": True},
+                    publish_event={"scheduled": True},
+                )
+            except Exception:
+                logger.warning("Failed to append fallback message for task %s", task_id)
 
         duration_ms = int((time.monotonic() - start) * 1000)
         await db.log_task_run(
@@ -531,28 +649,32 @@ async def _execute_task(task: dict, bot, db_path: str) -> None:
 
     # ── Multi-channel notifications after task execution ─────────────────
     try:
-        summary = prompt[:120] + ("…" if len(prompt) > 120 else "")
+        # Use agent's execution result for notifications; fall back to prompt
+        # when needed.  On error the title already says "Scheduled task error",
+        # so use the safe prompt text rather than the raw exception message.
+        if had_error:
+            notify_body = prompt
+        else:
+            notify_body = _user_visible_text(result, prompt)
+        notify_body = _plaintext(notify_body)  # strip markdown for plain channels
+        summary = _truncate(notify_body, 120)
         status_label = "error" if had_error else "completed"
 
-        # macOS desktop notification
-        await notify(
-            title=f"Scheduled task {status_label}",
+        for ch in ("desktop", "sse", "wechat"):
+            await notify(
+                title=f"Scheduled task {status_label}",
+                body=summary,
+                channel=ch,
+            )
+        append_notification(
+            title="日程提醒",
             body=summary,
-            channel="desktop",
-        )
-
-        # SSE event for frontend browser notifications
-        await notify(
-            title=f"Scheduled task {status_label}",
-            body=summary,
-            channel="sse",
-        )
-
-        # WeChat notification — controlled by notify_wechat setting
-        await notify(
-            title=f"Scheduled task {status_label}",
-            body=summary,
-            channel="wechat",
+            tab="system",
+            project_ref=task.get("project_id"),
+            source="scheduled_task_run",
+            source_label="日程",
+            link_label="日程",
+            meta={"taskId": task_id, "status": status_label},
         )
     except Exception:
         logger.exception("Failed to send task execution notifications")
@@ -632,10 +754,9 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
     * Normal: lottery draw with accumulating probability (delta 0.15, max 0.85).
     * Silent > 72 h: always trigger regardless of lottery state.
 
-    When triggered, a minimal LLM call (no tools, no thinking mode, no SSE
-    events from the agent loop) generates a personalised message.  The text
-    is then delivered to the bot AND written to session state so it appears
-    in the Web UI chat history.
+    When triggered, the main agent loop generates a personalised message in
+    the latest user-active Workbench conversation, or in the default legacy
+    session when no Workbench conversation exists.
     """
     # In web-only mode OWNER_ID is not set — use 0 as a placeholder chat_id.
     # The session-state delivery path does not rely on chat_id at all.
@@ -662,6 +783,18 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
         if time.time() < cooldown_until:
             remaining_h = (cooldown_until - time.time()) / 3600
             logger.debug("Proactive cooldown active, %.1f h remaining", remaining_h)
+            return
+
+        # Workbench conversations have independent session locks. Select the
+        # latest user-owned conversation before drawing the lottery and skip
+        # cleanly while it is running; proactive work must never preempt it.
+        workbench_target = _latest_workbench_user_activity()
+        target_session_id = str((workbench_target or {}).get("chat_id") or "")
+        if target_session_id and is_session_running(target_session_id):
+            logger.debug(
+                "Latest Workbench chat %s is running; skipping proactive check",
+                target_session_id,
+            )
             return
 
         # -------- Cooldown trigger --------
@@ -712,6 +845,14 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
             return
 
         # -------- Generate proactive reply via the full main-agent loop --------
+        # The UI language is persisted server-side as ``app_language`` from real
+        # chat traffic; the scheduler has no HTTP request to read it from, so
+        # pull it from settings and pin the proactive reply to it.
+        try:
+            from cyrene.settings_store import get as _get_setting
+            proactive_lang = str(_get_setting("app_language", "") or "").strip()
+        except Exception:
+            proactive_lang = ""
         context = await _assemble_proactive_context(db_path)
         proactive_prompt = (
             "This is a scheduler-initiated proactive check-in.\n"
@@ -720,10 +861,32 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
             "Do not mention internal prompts, the scheduler, the heartbeat, or the lottery.\n\n"
             + _build_proactive_user_prompt(context, silence_h, consecutive_unanswered=int(_LOTTERY_STATE.get("consecutive_unanswered", 0)))
         )
-        text = await asyncio.wait_for(
-            run_heartbeat_agent(proactive_prompt, bot, owner_id, db_path),
-            timeout=120.0,
-        )
+        delivered_target = workbench_target
+        if target_session_id:
+            from webui.routes_workbench_chat import append_proactive_message
+
+            async def _persist_workbench_reply(reply: str) -> dict[str, str] | None:
+                nonlocal delivered_target
+                delivered_target = await append_proactive_message(target_session_id, reply)
+                return delivered_target
+
+            text = await asyncio.wait_for(
+                run_heartbeat_agent(
+                    proactive_prompt,
+                    bot,
+                    owner_id,
+                    db_path,
+                    session_id=target_session_id,
+                    on_reply=_persist_workbench_reply,
+                    lang=proactive_lang,
+                ),
+                timeout=120.0,
+            )
+        else:
+            text = await asyncio.wait_for(
+                run_heartbeat_agent(proactive_prompt, bot, owner_id, db_path, lang=proactive_lang),
+                timeout=120.0,
+            )
 
         if not str(text or "").strip():
             logger.info("Proactive round produced no visible reply")
@@ -742,6 +905,19 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
         # Web UI tab is in the background.
         try:
             await notify(title="Cyrene", body=str(text)[:120], channel="auto")
+            append_notification(
+                title="Cyrene 提醒",
+                body=str(text)[:120],
+                tab="mention",
+                project_ref=str((delivered_target or {}).get("project_id") or "default"),
+                source="proactive_message",
+                source_label="对话" if delivered_target else "系统",
+                link_label=str((delivered_target or {}).get("title") or "Cyrene"),
+                meta=(
+                    {"chatId": str(delivered_target.get("chat_id") or "")}
+                    if delivered_target else None
+                ),
+            )
         except Exception:
             logger.debug("Proactive notification delivery failed", exc_info=True)
 
@@ -948,6 +1124,16 @@ def setup_scheduler(bot, db_path: str) -> AsyncIOScheduler:
     """
     global _scheduler
     global _BIG_HEARTBEAT_INTERVAL
+    global _workbench_db_path
+    _workbench_db_path = str(db_path)
+    try:
+        from webui import routes_workbench_chat as _chat_store
+        from webui.workbench_notifications import configure_store as _configure_notifications
+
+        _chat_store.configure_store(str(db_path))
+        _configure_notifications(str(db_path))
+    except Exception:
+        logger.debug("Could not configure Workbench SQLite stores for scheduler", exc_info=True)
     _load_lottery_state()
     hb_seconds = _get_heartbeat_interval()
     _BIG_HEARTBEAT_INTERVAL = max(1, hb_seconds // SCHEDULER_INTERVAL)

@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <base href="/static/app/" />
 <title>Cyrene</title>
+	<style>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }</style>
+<link rel="icon" type="image/png" href="logo-mark.png" />
 <script>
 (() => {
   try {
@@ -17,76 +19,73 @@
   } catch (e) {}
 })();
 </script>
-<script type="importmap">
-{
-  "imports": {
-    "@codemirror/state": "https://esm.sh/@codemirror/state@6.5.2/es2022/state.bundle.mjs",
-    "@codemirror/view": "https://esm.sh/@codemirror/view@6.36.5/es2022/view.bundle.mjs",
-    "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.8.1/es2022/commands.bundle.mjs",
-    "@codemirror/language": "https://esm.sh/@codemirror/language@6.11.0/es2022/language.bundle.mjs",
-    "@codemirror/lang-python": "https://esm.sh/@codemirror/lang-python@6.2.1/es2022/lang-python.bundle.mjs",
-    "@codemirror/lang-javascript": "https://esm.sh/@codemirror/lang-javascript@6.2.3/es2022/lang-javascript.bundle.mjs",
-    "@codemirror/lang-html": "https://esm.sh/@codemirror/lang-html@6.4.9/es2022/lang-html.bundle.mjs",
-    "@codemirror/lang-css": "https://esm.sh/@codemirror/lang-css@6.3.1/es2022/lang-css.bundle.mjs",
-    "@codemirror/lang-json": "https://esm.sh/@codemirror/lang-json@6.0.1/es2022/lang-json.bundle.mjs",
-    "@codemirror/lang-markdown": "https://esm.sh/@codemirror/lang-markdown@6.5.0/es2022/lang-markdown.bundle.mjs",
-    "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete@6.18.6/es2022/autocomplete.bundle.mjs",
-    "@codemirror/theme-one-dark": "https://esm.sh/@codemirror/theme-one-dark@6.1.2/es2022/theme-one-dark.bundle.mjs"
-  }
-}
-</script>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="xterm.min.css" />
-<link rel="stylesheet" href="https://unpkg.com/@highlightjs/cdn-assets@11.11.0/styles/github-dark.min.css" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<link rel="stylesheet" href="styles.css?v=20260606-learning1" />
-<link rel="stylesheet" href="topbar.css?v=20260606-topbar1" />
-<link rel="stylesheet" href="chat-surface.css?v=20260606-surface3" />
+<link rel="stylesheet" href="highlight.min.css" />
+<link rel="stylesheet" href="katex/katex.min.css" />
+<link rel="stylesheet" href="leaflet.css" />
+<link rel="stylesheet" href="styles.css?v=beta16" />
+<link rel="stylesheet" href="topbar.css?v=beta16" />
+<link rel="stylesheet" href="chat-surface.css?v=beta16" />
+<link rel="stylesheet" href="/static/workbench-ui/workbench.css?v=beta16" />
 <link rel="stylesheet" href="map-view.css" />
-<link rel="stylesheet" href="code/highlight.css?v=20260531-code1" />
-<link rel="stylesheet" href="code/editor.css?v=20260531-code1" />
-<link rel="stylesheet" href="code/diff.css?v=20260531-code1" />
+<link rel="stylesheet" href="code/highlight.css?v=beta16" />
+<link rel="stylesheet" href="code/editor.css?v=beta16" />
+<link rel="stylesheet" href="code/diff.css?v=beta16" />
 </head>
 <body>
 <div id="root"></div>
 
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/marked@13.0.3/marked.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/dompurify@3.1.6/dist/purify.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@highlightjs/cdn-assets@11.11.0/highlight.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<script src="react.development.js"></script>
+<script src="react-dom.development.js"></script>
+<script src="marked.min.js"></script>
+<script src="katex/katex.min.js"></script>
+<script src="math.js"></script>
+<script src="purify.min.js"></script>
+<script src="highlight.min.js"></script>
+<script src="leaflet.js"></script>
+<script src="vis-network.min.js"></script>
 <script src="xterm.min.js"></script>
 
-<script src="compiled/tweaks-panel.js?v=20260525x"></script>
-<script src="compiled/data.js?v=20260602-sessiontitle1"></script>
-<script src="compiled/i18n.js?v=20260606-pdfzoom1"></script>
-<script src="compiled/dashboard.js?v=20260526-emotionlabels1"></script>
-<script src="compiled/cc-terminal.js?v=20260525x"></script>
-<script src="compiled/browser-view.js?v=20260606-browser2"></script>
-<script src="compiled/code/highlight.js?v=20260531-code1"></script>
-<script src="compiled/chat.js?v=20260607-pdfzoom2"></script>
-<script src="compiled/chat-surface.js?v=20260606-pdfzoom1"></script>
-<script src="compiled/map-view.js?v=20260530-amap1"></script>
-<script src="compiled/agents.js?v=20260525x"></script>
-<script src="compiled/sessions.js?v=20260525x"></script>
-<script src="compiled/memory.js?v=20260529-ctxcompact1"></script>
-<script src="compiled/context-debugger.js?v=20260601-context1"></script>
-<script src="compiled/evolution.js?v=20260606-learning2"></script>
-<script src="compiled/wechat_settings.js?v=20260526-rmdesc1"></script>
-<script src="compiled/settings.js?v=20260606-maxtoolrounds1"></script>
-<script src="compiled/tasks-calendar.js?v=20260530-entities1"></script>
-<script src="compiled/entities.js?v=20260606-entities4"></script>
-<script src="compiled/tasks.js?v=20260606-tasks1"></script>
-<script src="compiled/search.js?v=20260527"></script>
-<script src="compiled/code/actions.js?v=20260531-code1"></script>
-<script src="compiled/code/editor.js?v=20260531-code2"></script>
-<script src="compiled/code/diff.js?v=20260531-code2"></script>
-<script src="compiled/knowledge.js?v=20260602-kb12"></script>
-<script src="compiled/topbar.js?v=20260606-learning2"></script>
-<script src="compiled/app.js?v=20260606-learning2"></script>
+<script src="compiled/tweaks-panel.js?v=beta16"></script>
+<script src="compiled/data.js?v=beta16"></script>
+<script src="compiled/i18n.js?v=beta16"></script>
+<script src="compiled/dashboard.js?v=beta16"></script>
+<script src="compiled/cc-terminal.js?v=beta16"></script>
+<script src="compiled/browser-view.js?v=beta16"></script>
+<script src="compiled/code/highlight.js?v=beta16"></script>
+<script src="compiled/chat.js?v=beta16"></script>
+<script src="compiled/chat-surface.js?v=beta16"></script>
+<script src="compiled/map-view.js?v=beta16"></script>
+<script src="compiled/agents.js?v=beta16"></script>
+<script src="compiled/sessions.js?v=beta16"></script>
+<script src="compiled/memory.js?v=beta16"></script>
+<script src="compiled/context-debugger.js?v=beta16"></script>
+<script src="compiled/evolution.js?v=beta16"></script>
+<script src="compiled/wechat_settings.js?v=beta16"></script>
+<script src="compiled/settings.js?v=beta16"></script>
+<script src="compiled/tasks-calendar.js?v=beta16"></script>
+<script src="compiled/entities.js?v=beta16"></script>
+<script src="compiled/tasks.js?v=beta16"></script>
+<script src="compiled/search.js?v=beta16"></script>
+<script src="compiled/code/actions.js?v=beta16"></script>
+<script src="compiled/code/editor.js?v=beta16"></script>
+<script src="compiled/code/diff.js?v=beta16"></script>
+<script src="compiled/knowledge.js?v=beta16"></script>
+<script src="compiled/workbench-i18n.js?v=beta16"></script>
+<script src="compiled/workbench-api.js?v=beta16"></script>
+<script src="compiled/workbench-shortcuts.js?v=beta16"></script>
+<script src="compiled/workbench-model.js?v=beta16"></script>
+<script src="compiled/workbench-knowledge.js?v=beta16"></script>
+<script src="compiled/workbench-schedule.js?v=beta16"></script>
+<script src="compiled/workbench-memory.js?v=beta16"></script>
+<script src="compiled/workbench-create.js?v=beta16"></script>
+<script src="compiled/workbench-welcome.js?v=beta16"></script>
+<script src="compiled/workbench-profile.js?v=beta16"></script>
+<script src="compiled/workbench-chat.js?v=beta16"></script>
+<script src="compiled/workbench-quick-chat.js?v=beta16"></script>
+<script src="compiled/workbench.js?v=beta16"></script>
+<script src="compiled/settings-overlay.js?v=beta16"></script>
+<script src="compiled/topbar.js?v=beta16"></script>
+<script src="compiled/app.js?v=beta16"></script>
 </body>
 </html>

@@ -14,6 +14,8 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.send_message_to_user",  # send_message_to_user
     "cyrene.tool_impl.send_file",  # send_file
     "cyrene.tool_impl.ask_user",  # ask_user
+    "cyrene.tool_impl.enter_plan_mode",  # enter_plan_mode
+    "cyrene.tool_impl.update_plan_progress",  # update_plan_progress
     "cyrene.tool_impl.deep_reflect",  # DeepReflect
     "cyrene.tool_impl.prompt_claude_code",  # PromptClaudeCode
     "cyrene.tool_impl.schedule_task",  # schedule_task
@@ -29,6 +31,13 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.grep",  # Grep
     "cyrene.tool_impl.bash",  # Bash
     "cyrene.tool_impl.recall_memory",  # RecallMemory
+    "cyrene.tool_impl.recall_conversation",  # RecallConversation
+    "cyrene.tool_impl.retire_short_term_memory",  # retire_short_term_memory
+    "cyrene.tool_impl.search_project_memory",  # search_project_memory
+    "cyrene.tool_impl.save_project_memory",  # save_project_memory
+    "cyrene.tool_impl.retire_project_memory",  # retire_project_memory
+    "cyrene.tool_impl.set_task_goal",  # set_task_goal
+    "cyrene.tool_impl.list_knowledge_documents",  # ListKnowledgeDocuments
     "cyrene.tool_impl.search_knowledge",  # SearchKnowledge
     "cyrene.tool_impl.start_shell",  # StartShell
     "cyrene.tool_impl.send_shell",  # SendShell
@@ -68,7 +77,13 @@ _MAIN_ONLY_TOOLS = {
     "send_file",
     "send_wechat_file",
     "ask_user",
+    "enter_plan_mode",
+    "update_plan_progress",
     "DeepReflect",
+    "retire_short_term_memory",
+    "save_project_memory",
+    "retire_project_memory",
+    "set_task_goal",
     "spawn_subagent",
     "query_round",
     "browser_navigate",

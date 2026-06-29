@@ -44,6 +44,44 @@ def _bg_token_task(task: asyncio.Task) -> None:
 _secondary_in_flight: int = 0
 
 # ---------------------------------------------------------------------------
+# Candidate failure cooldown — a dead endpoint must not slow down every call
+# ---------------------------------------------------------------------------
+# 连不上的候选（如下线的本地模型机器）会让每次调用都先撞一遍超时。失败后把该候选
+# 冷却一段时间，期间直接跳过；全部候选都在冷却时照常尝试，避免无模型可用。
+_CANDIDATE_COOLDOWN_SECONDS = 120.0
+_candidate_cooldowns: dict[tuple[str, str], float] = {}
+
+# httpx 连接超时与读超时分开：对不可达主机快速失败，而不是吃满整个调用超时。
+_CONNECT_TIMEOUT_SECONDS = 5.0
+
+# A model request may be dropped before the provider sends response headers.
+# Retry transport failures locally before surfacing them to the user. HTTP
+# responses (including 4xx/5xx) are deliberately excluded from this budget.
+NETWORK_RETRY_LIMIT = 3
+_NETWORK_RETRY_BASE_DELAY_SECONDS = 0.5
+# Bounded same-endpoint retry for transient upstream 5xx (incl. non-standard
+# overload codes like 550 / 529) before rotating to the next endpoint/candidate.
+# 4xx is a real client error and is never retried here.
+SERVER_ERROR_RETRY_LIMIT = 2
+_SERVER_ERROR_RETRY_BASE_DELAY_SECONDS = 1.0
+
+
+def _candidate_key(candidate: dict[str, Any]) -> tuple[str, str]:
+    return (str(candidate.get("model") or ""), str(candidate.get("base_url") or ""))
+
+
+def _candidate_cooling(key: tuple[str, str]) -> bool:
+    return _candidate_cooldowns.get(key, 0.0) > _time.monotonic()
+
+
+def _set_candidate_cooldown(key: tuple[str, str]) -> None:
+    _candidate_cooldowns[key] = _time.monotonic() + _CANDIDATE_COOLDOWN_SECONDS
+
+
+def _clear_candidate_cooldown(key: tuple[str, str]) -> None:
+    _candidate_cooldowns.pop(key, None)
+
+# ---------------------------------------------------------------------------
 # Helpers moved from agent.py / attachments.py
 # ---------------------------------------------------------------------------
 
@@ -77,20 +115,41 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
     }
 
 
+def _base_root(url: str) -> str:
+    """Normalize a base URL for equality checks ("…/v1" 与不带 /v1 视为同端点)."""
+    normalized = str(url or "").strip().rstrip("/")
+    if normalized.endswith("/v1"):
+        normalized = normalized[: -len("/v1")].rstrip("/")
+    return normalized.lower()
+
+
+def _inherit_sibling_keys(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keyless candidates inherit the key of the first same-endpoint candidate
+    that has one ("…/v1" 与不带 /v1 视为同端点)。跨提供商不继承；本地端点可以
+    始终无 key（请求时不会带 Authorization 头）。"""
+    keyed_roots: dict[str, str] = {}
+    for candidate in candidates:
+        root = _base_root(candidate.get("base_url") or "")
+        if candidate.get("api_key") and root not in keyed_roots:
+            keyed_roots[root] = candidate["api_key"]
+    for candidate in candidates:
+        if not candidate.get("api_key"):
+            candidate["api_key"] = keyed_roots.get(_base_root(candidate.get("base_url") or ""), "")
+    return candidates
+
+
 def _resolve_llm_candidates() -> list[dict[str, Any]]:
+    """模型列表是唯一事实来源：每个候选自带「标识符 + API Key + Base URL」，
+    按列表顺序逐个尝试、失败回退下一条。env 里的 OPENAI_* 只是「保存模型设置时
+    镜像 models[0]」的派生值，仅用于补全某条目缺失的 base_url/key，本身不作为
+    独立候选参与调用。列表为空（从未配置过任何模型）时返回空——调用方会抛出一个
+    明确的「未配置模型」错误，而不是用空 key 撞一个必然 401 的默认端点。"""
     active_model = str(os.environ.get("OPENAI_MODEL", "deepseek-chat") or "").strip() or "deepseek-chat"
     active_base_url = str(os.environ.get("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL) or "").strip() or DEFAULT_OPENAI_BASE_URL
     active_api_key = _strip_wrapping_quotes(str(os.environ.get("OPENAI_API_KEY", "") or "").strip())
 
     candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
-
-    active_candidate = _normalized_candidate({}, 0, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
-    active_candidate["id"] = "runtime-active"
-    active_key = (active_candidate["model"], active_candidate["base_url"], active_candidate["api_key"])
-    seen.add(active_key)
-    candidates.append(active_candidate)
-
     for index, raw in enumerate(get_models() or []):
         candidate = _normalized_candidate(raw, index, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
         key = (candidate["model"], candidate["base_url"], candidate["api_key"])
@@ -99,7 +158,7 @@ def _resolve_llm_candidates() -> list[dict[str, Any]]:
         seen.add(key)
         candidates.append(candidate)
 
-    return candidates
+    return _inherit_sibling_keys(candidates)
 
 
 def _resolve_secondary_candidates() -> list[dict[str, Any]]:
@@ -129,34 +188,36 @@ def _resolve_secondary_candidates() -> list[dict[str, Any]]:
 
 
 def _resolve_vision_candidates() -> list[dict[str, Any]]:
+    """Dedicated vision entries first, then the primary chain as fallback.
+
+    A user configures a vision model precisely because it handles images, so it
+    must be tried before the primary chat model. Trying a text-only primary
+    first (e.g. DeepSeek, which 400s on ``image_url`` content) wastes a failed
+    round-trip on *every* image — and serialized over many docs it was enough to
+    push startup past Electron's boot timeout. When no vision model is
+    configured this degrades to the primary chain alone, so a vision-capable
+    primary still works. Same per-entry key semantics as the primary list."""
     active_model = str(os.environ.get("OPENAI_MODEL", "deepseek-chat") or "").strip() or "deepseek-chat"
     active_base_url = str(os.environ.get("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL) or "").strip() or DEFAULT_OPENAI_BASE_URL
     active_api_key = _strip_wrapping_quotes(str(os.environ.get("OPENAI_API_KEY", "") or "").strip())
 
-    seen: set[tuple[str, str, str]] = set()
     candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
 
-    active_candidate = _normalized_candidate({}, 0, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
-    active_candidate["id"] = "runtime-active-vision"
-    active_key = (active_candidate["model"], active_candidate["base_url"], active_candidate["api_key"])
-    seen.add(active_key)
-    candidates.append(active_candidate)
-
-    for raw in get_models() or []:
-        candidate = _normalized_candidate(raw, 0, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
+    for index, raw in enumerate(get_vision_models() or []):
+        candidate = _normalized_candidate(raw, index, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
         key = (candidate["model"], candidate["base_url"], candidate["api_key"])
         if key not in seen:
             seen.add(key)
             candidates.append(candidate)
 
-    for raw in get_vision_models() or []:
-        candidate = _normalized_candidate(raw, 0, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
+    for candidate in _resolve_llm_candidates():
         key = (candidate["model"], candidate["base_url"], candidate["api_key"])
         if key not in seen:
             seen.add(key)
             candidates.append(candidate)
 
-    return candidates
+    return _inherit_sibling_keys(candidates)
 
 
 def _resolve_candidates(model_type: str) -> list[dict[str, Any]]:
@@ -187,10 +248,19 @@ def _resolve_candidates(model_type: str) -> list[dict[str, Any]]:
 _INTERNAL_MSG_KEYS = frozenset({
     "message_id", "round_id", "round_title", "client_request_id",
     "hidden_from_ui", "system_initiated", "usage", "attachments",
-    "compacted_block", "llm_compacted", "report_expanded_for_turn",
+    "compacted_block", "llm_compacted", "distill_attempts", "report_expanded_for_turn",
     "report_ref", "report_archive_session_id", "report_round_id",
     "report_title", "deep_reflection_record", "reflection_id",
     "subagent_flow_snapshot", "proactive",
+    # Per-response metadata we attach to the returned message for callers to
+    # inspect (e.g. detecting a max_tokens truncation), but which must not be
+    # echoed back upstream when the message is replayed in history.
+    "finish_reason",
+    # Past-turn chain-of-thought must never be echoed back upstream: it bloats the
+    # context (accelerating cache-breaking compaction) and DeepSeek's reasoner API
+    # rejects inputs that carry reasoning_content. It stays in the stored history
+    # for the UI; this strip only applies to the payload sent to the model.
+    "reasoning_content",
 })
 
 
@@ -315,6 +385,7 @@ def _build_payload(
     stream: bool,
     model: str,
     thinking: str,
+    response_format: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -325,6 +396,11 @@ def _build_payload(
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
+    # Constrained JSON mode (OpenAI/DeepSeek `response_format`). Only meaningful
+    # without tools — providers reject/ignore it alongside function calling — so
+    # callers pass it on tool-less "just emit JSON" rounds.
+    if response_format is not None and not tools:
+        payload["response_format"] = response_format
     if stream:
         payload["stream"] = True
         payload["stream_options"] = {"include_usage": True}
@@ -445,9 +521,12 @@ def _normalize_dsml_tool_calls(message: dict[str, Any], tools: list | None) -> d
 
 
 def _normalized_usage(usage: Any, messages: list[dict[str, Any]], response_message: dict[str, Any]) -> dict[str, int]:
-    if isinstance(usage, dict) and any(isinstance(usage.get(key), int) for key in ("prompt_tokens", "completion_tokens", "total_tokens")):
-        prompt = int(usage.get("prompt_tokens") or 0)
-        completion = int(usage.get("completion_tokens") or 0)
+    if isinstance(usage, dict) and any(
+        isinstance(usage.get(key), int)
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "output_tokens")
+    ):
+        prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
         total = int(usage.get("total_tokens") or (prompt + completion))
         normalized: dict[str, int] = {
             "prompt_tokens": prompt,
@@ -457,6 +536,15 @@ def _normalized_usage(usage: Any, messages: list[dict[str, Any]], response_messa
         for key in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
             if isinstance(usage.get(key), int):
                 normalized[key] = int(usage.get(key))
+        prompt_details = usage.get("prompt_tokens_details")
+        if isinstance(prompt_details, dict) and isinstance(prompt_details.get("cached_tokens"), int):
+            cached = int(prompt_details.get("cached_tokens") or 0)
+            normalized["prompt_cache_hit_tokens"] = cached
+            normalized.setdefault("prompt_cache_miss_tokens", max(0, prompt - cached))
+        if isinstance(usage.get("cache_read_input_tokens"), int):
+            normalized["prompt_cache_hit_tokens"] = int(usage.get("cache_read_input_tokens") or 0)
+        if isinstance(usage.get("cache_creation_input_tokens"), int):
+            normalized["prompt_cache_miss_tokens"] = int(usage.get("cache_creation_input_tokens") or 0)
         return normalized
     prompt = sum(_message_token_estimate(message) for message in messages) + 8
     completion = _message_token_estimate(response_message) + 8
@@ -569,10 +657,12 @@ async def _publish_llm_event(
     response: dict,
     model: str,
     duration_ms: int,
+    session_id: str = "",
+    round_id: str = "",
 ) -> None:
     from cyrene import debug
 
-    await debug.publish_event({
+    event = {
         "type": "llm_call",
         "caller": caller,
         "phase": phase,
@@ -583,7 +673,10 @@ async def _publish_llm_event(
         "response": response,
         "usage": response.get("usage") or {},
         "duration_ms": duration_ms,
-    })
+    }
+    if round_id:
+        event["round_id"] = round_id
+    await debug.publish_event(event, session_id=session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -602,12 +695,14 @@ async def call_llm(
     stream: bool = False,
     stream_callback: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     thinking: str = "auto",
+    response_format: dict[str, Any] | None = None,
     caller: str = "unknown",
     phase: str = "unknown",
     return_text: bool = False,
     publish_events: bool = True,
     record_usage: bool = True,
     round_id: str = "",
+    session_id: str = "",
 ) -> dict | str:
     """Unified LLM calling entry point.
 
@@ -643,6 +738,16 @@ async def call_llm(
     resolved = candidates if candidates is not None else _resolve_candidates(model_type)
     if not resolved:
         resolved = _resolve_llm_candidates()
+    if not resolved:
+        # No model configured at all (fresh install, never onboarded / saved a
+        # model). Keep the historical "return empty string" contract so callers
+        # degrade exactly as before, but log it — previously a phantom env
+        # candidate masked this by 401'ing on a default endpoint instead.
+        logger.error(
+            "call_llm has no model candidates [caller=%s phase=%s]; configure one in Settings → Models.",
+            caller, phase,
+        )
+        return ""
 
     # ctx_limit check for secondary model: if messages exceed the limit,
     # skip secondary and fall through to primary candidates
@@ -653,11 +758,26 @@ async def call_llm(
             if total_tokens > ctx_limit:
                 resolved = resolved[1:] if len(resolved) > 1 else _resolve_llm_candidates()
 
-    transport = httpx.AsyncHTTPTransport(retries=1)
-    async with httpx.AsyncClient(transport=transport, timeout=timeout) as client:
+    # Skip candidates that recently failed (dead endpoint / bad key). If that
+    # would leave nothing, ignore cooldowns and try the full list anyway.
+    available = [c for c in resolved if not _candidate_cooling(_candidate_key(c))]
+    skipped_cooling = [c for c in resolved if _candidate_cooling(_candidate_key(c))]
+    if not available:
+        available = resolved
+        skipped_cooling = []
+    failed_this_call: list[str] = []
+
+    def _candidate_label(c: dict[str, Any]) -> str:
+        return f"{c.get('id')}({c.get('model')}@{c.get('base_url')})"
+
+    # Keep the transport's connect-only retry disabled so the explicit policy
+    # below is the single bounded retry budget for all transport failures.
+    transport = httpx.AsyncHTTPTransport(retries=0)
+    client_timeout = httpx.Timeout(timeout, connect=min(_CONNECT_TIMEOUT_SECONDS, timeout))
+    async with httpx.AsyncClient(transport=transport, timeout=client_timeout) as client:
         last_error: Exception | None = None
 
-        for candidate in resolved:
+        for candidate in available:
             is_secondary = candidate.get("id") == "secondary"
             max_conc = int(candidate.get("max_concurrency") or 0)
 
@@ -669,7 +789,7 @@ async def call_llm(
                 if is_secondary and max_conc > 0:
                     _secondary_in_flight += 1
                 model = str(candidate.get("model") or "").strip()
-                payload = _build_payload(messages, tools, max_tokens, stream, model, thinking)
+                payload = _build_payload(messages, tools, max_tokens, stream, model, thinking, response_format)
 
                 headers = {"Content-Type": "application/json"}
                 api_key = str(candidate.get("api_key") or "").strip()
@@ -681,15 +801,88 @@ async def call_llm(
 
                 for endpoint in endpoints:
                     try:
-                        if stream:
-                            msg = await _handle_stream(client, endpoint, payload, headers, stream_callback)
-                        else:
-                            resp = await client.post(endpoint, json=payload, headers=headers)
-                            if resp.status_code != 200:
-                                resp.raise_for_status()
-                            data = resp.json()
-                            msg = _message_from_upstream_payload(data)
-                            msg["usage"] = _normalized_usage(data.get("usage"), messages, msg)
+                        network_retries = 0
+                        server_error_retries = 0
+                        while True:
+                            stream_event_emitted = False
+
+                            async def _tracked_stream_callback(event: dict[str, Any]) -> None:
+                                nonlocal stream_event_emitted
+                                stream_event_emitted = True
+                                if stream_callback:
+                                    await stream_callback(event)
+
+                            try:
+                                if stream:
+                                    msg = await _handle_stream(
+                                        client,
+                                        endpoint,
+                                        payload,
+                                        headers,
+                                        _tracked_stream_callback,
+                                    )
+                                else:
+                                    resp = await client.post(endpoint, json=payload, headers=headers)
+                                    if resp.status_code != 200:
+                                        resp.raise_for_status()
+                                    data = resp.json()
+                                    msg = _message_from_upstream_payload(data)
+                                    msg["usage"] = _normalized_usage(data.get("usage"), messages, msg)
+                                    _choices = data.get("choices")
+                                    if isinstance(_choices, list) and _choices and isinstance(_choices[0], dict):
+                                        _finish = _choices[0].get("finish_reason")
+                                        if _finish:
+                                            msg["finish_reason"] = str(_finish)
+                                break
+                            except httpx.TransportError as exc:
+                                # Restarting a stream after visible deltas would
+                                # duplicate text in the UI. Only retry before the
+                                # first stream event reaches the caller.
+                                if stream_event_emitted or network_retries >= NETWORK_RETRY_LIMIT:
+                                    raise
+                                network_retries += 1
+                                delay = _NETWORK_RETRY_BASE_DELAY_SECONDS * (2 ** (network_retries - 1))
+                                logger.warning(
+                                    "call_llm transient network failure; retrying "
+                                    "[caller=%s phase=%s model=%s endpoint=%s retry=%d/%d delay=%.1fs]: %s",
+                                    caller,
+                                    phase,
+                                    model,
+                                    endpoint,
+                                    network_retries,
+                                    NETWORK_RETRY_LIMIT,
+                                    delay,
+                                    _format_httpx_error(exc),
+                                )
+                                await asyncio.sleep(delay)
+                            except httpx.HTTPStatusError as exc:
+                                # Transient upstream 5xx (incl. non-standard overload
+                                # codes like 550 / 529): back off and retry the same
+                                # endpoint before rotating. A 4xx is a real client
+                                # error, so let it propagate. Never retry once stream
+                                # deltas have already reached the caller.
+                                status = exc.response.status_code
+                                if (
+                                    status < 500
+                                    or stream_event_emitted
+                                    or server_error_retries >= SERVER_ERROR_RETRY_LIMIT
+                                ):
+                                    raise
+                                server_error_retries += 1
+                                delay = _SERVER_ERROR_RETRY_BASE_DELAY_SECONDS * (2 ** (server_error_retries - 1))
+                                logger.warning(
+                                    "call_llm transient upstream error; retrying "
+                                    "[caller=%s phase=%s model=%s endpoint=%s status=%d retry=%d/%d delay=%.1fs]",
+                                    caller,
+                                    phase,
+                                    model,
+                                    endpoint,
+                                    status,
+                                    server_error_retries,
+                                    SERVER_ERROR_RETRY_LIMIT,
+                                    delay,
+                                )
+                                await asyncio.sleep(delay)
 
                         msg = _normalize_dsml_tool_calls(msg, tools)
                         msg.setdefault("role", "assistant")
@@ -699,6 +892,15 @@ async def call_llm(
 
                         duration_ms = round((_time.monotonic() - _t0) * 1000)
 
+                        _clear_candidate_cooldown(_candidate_key(candidate))
+                        if failed_this_call or skipped_cooling:
+                            logger.warning(
+                                "call_llm succeeded on %s after %d failed and %d cooled-down candidate(s)%s "
+                                "— check the model settings for stale entries",
+                                _candidate_label(candidate), len(failed_this_call), len(skipped_cooling),
+                                (": " + "; ".join(failed_this_call)) if failed_this_call else "",
+                            )
+
                         # Success — publish events, record usage, return
                         from cyrene import debug as cy_debug
 
@@ -706,7 +908,10 @@ async def call_llm(
                             cy_debug.log_llm_call(caller, phase, messages, tools, msg, duration_ms)
 
                         if publish_events:
-                            await _publish_llm_event(caller, phase, messages, tools, msg, model, duration_ms)
+                            await _publish_llm_event(
+                                caller, phase, messages, tools, msg, model, duration_ms,
+                                session_id=session_id, round_id=round_id,
+                            )
 
                         if record_usage:
                             _record_token_usage_faf(
@@ -730,13 +935,19 @@ async def call_llm(
                         )
 
                 if candidate_error:
-                    # All endpoints for this candidate failed — try the next one.
-                    # The error is preserved in last_error and re-raised only
-                    # after all candidates are exhausted.
+                    # All endpoints for this candidate failed — cool it down and
+                    # try the next one. The error is preserved in last_error and
+                    # re-raised only after all candidates are exhausted.
+                    _set_candidate_cooldown(_candidate_key(candidate))
+                    failed_this_call.append(
+                        f"{_candidate_label(candidate)}: {_format_httpx_error(candidate_error)}"
+                    )
                     continue
 
             except Exception as exc:
                 last_error = exc
+                _set_candidate_cooldown(_candidate_key(candidate))
+                failed_this_call.append(f"{_candidate_label(candidate)}: {exc.__class__.__name__}: {exc}")
                 if model_type == "vision" and _looks_like_vision_capability_error(exc):
                     continue
                 continue
@@ -757,6 +968,144 @@ async def call_llm(
 # Streaming handler
 # ---------------------------------------------------------------------------
 
+# Textual DSML tool-call markers can be streamed as ordinary content deltas
+# (DeepSeek's fallback when it cannot use the structured tool-call channel).
+# The block is parsed back into real tool calls *after* the stream completes
+# (`_normalize_dsml_tool_calls`), but the raw deltas would otherwise reach the
+# UI verbatim mid-stream. `_DsmlStreamFilter` withholds the markup from the
+# forwarded stream while the caller keeps the raw text for normalization.
+_DSML_STREAM_OPENERS = ("<｜｜DSML｜｜tool_calls>", "<||DSML||tool_calls>")
+_DSML_STREAM_CLOSERS = ("</｜｜DSML｜｜tool_calls>", "</||DSML||tool_calls>")
+_DSML_STREAM_MAX_OPENER = max(len(opener) for opener in _DSML_STREAM_OPENERS)
+
+
+def _first_marker(text: str, markers: tuple[str, ...]) -> tuple[int, int]:
+    """Earliest (index, length) of any marker in ``text``; (-1, 0) if none."""
+    best_index = -1
+    best_len = 0
+    for marker in markers:
+        index = text.find(marker)
+        if index >= 0 and (best_index < 0 or index < best_index):
+            best_index, best_len = index, len(marker)
+    return best_index, best_len
+
+
+def _trailing_marker_prefix(text: str, markers: tuple[str, ...]) -> int:
+    """Length of the longest suffix of ``text`` that is a prefix of any marker."""
+    limit = min(len(text), _DSML_STREAM_MAX_OPENER)
+    for k in range(limit, 0, -1):
+        suffix = text[-k:]
+        if any(marker.startswith(suffix) for marker in markers):
+            return k
+    return 0
+
+
+class _DsmlStreamFilter:
+    """Strip DSML tool-call blocks from a forwarded delta stream incrementally."""
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._suppressing = False
+        self._emitted: list[str] = []
+
+    def feed(self, text: str) -> str:
+        if not text:
+            return ""
+        self._buf += text
+        out: list[str] = []
+        while self._buf:
+            if self._suppressing:
+                close_index, close_len = _first_marker(self._buf, _DSML_STREAM_CLOSERS)
+                if close_index < 0:
+                    # Still inside the block — drop everything but retain a
+                    # possible partial closer at the tail for the next chunk.
+                    keep = _trailing_marker_prefix(self._buf, _DSML_STREAM_CLOSERS)
+                    self._buf = self._buf[len(self._buf) - keep:] if keep else ""
+                    break
+                self._buf = self._buf[close_index + close_len:]
+                self._suppressing = False
+                continue
+            open_index, open_len = _first_marker(self._buf, _DSML_STREAM_OPENERS)
+            if open_index < 0:
+                keep = _trailing_marker_prefix(self._buf, _DSML_STREAM_OPENERS)
+                emit_upto = len(self._buf) - keep
+                if emit_upto > 0:
+                    out.append(self._buf[:emit_upto])
+                self._buf = self._buf[emit_upto:]
+                break
+            if open_index > 0:
+                out.append(self._buf[:open_index])
+            self._buf = self._buf[open_index + open_len:]
+            self._suppressing = True
+        result = "".join(out)
+        if result:
+            self._emitted.append(result)
+        return result
+
+    def flush(self) -> str:
+        # A held buffer is, by construction, only ever a partial opener prefix
+        # (ambiguous tail). If the stream ended there it was an incomplete DSML
+        # opener, so dropping it is correct; emit only genuine leftover text.
+        out = ""
+        if not self._suppressing and self._buf:
+            if _trailing_marker_prefix(self._buf, _DSML_STREAM_OPENERS) != len(self._buf):
+                out = self._buf
+        self._buf = ""
+        if out:
+            self._emitted.append(out)
+        return out
+
+    def emitted(self) -> str:
+        return "".join(self._emitted)
+
+
+def _accumulate_tool_call_deltas(
+    deltas: Any, fragments: dict[int, dict[str, Any]]
+) -> None:
+    """Merge OpenAI streamed ``delta.tool_calls`` fragments by index."""
+    if not isinstance(deltas, list):
+        return
+    for delta in deltas:
+        if not isinstance(delta, dict):
+            continue
+        index = delta.get("index")
+        if not isinstance(index, int):
+            index = len(fragments)
+        fragment = fragments.setdefault(
+            index, {"id": None, "type": "function", "name": "", "arguments": ""}
+        )
+        if delta.get("id"):
+            fragment["id"] = delta["id"]
+        if delta.get("type"):
+            fragment["type"] = delta["type"]
+        function = delta.get("function")
+        if isinstance(function, dict):
+            if function.get("name"):
+                fragment["name"] = function["name"]
+            if isinstance(function.get("arguments"), str):
+                fragment["arguments"] += function["arguments"]
+
+
+def _finalize_tool_call_fragments(
+    fragments: dict[int, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    for index in sorted(fragments):
+        fragment = fragments[index]
+        name = str(fragment.get("name") or "").strip()
+        if not name:
+            continue
+        calls.append({
+            "index": len(calls),
+            "id": fragment.get("id") or f"call_stream_{uuid.uuid4().hex[:16]}",
+            "type": fragment.get("type") or "function",
+            "function": {
+                "name": name,
+                "arguments": fragment.get("arguments") or "{}",
+            },
+        })
+    return calls
+
 
 async def _handle_stream(
     client: httpx.AsyncClient,
@@ -765,10 +1114,22 @@ async def _handle_stream(
     headers: dict[str, str],
     stream_callback: Callable[[dict[str, Any]], Awaitable[None]] | None,
 ) -> dict[str, Any]:
-    accumulated: list[str] = []
+    accumulated: list[str] = []  # raw content — kept for tool-call normalization
     reasoning_parts: list[str] = []
+    tool_call_fragments: dict[int, dict[str, Any]] = {}
     usage: dict[str, Any] = {}
     started = False
+    dsml_filter = _DsmlStreamFilter()
+
+    async def _forward(text: str) -> None:
+        nonlocal started
+        if not text:
+            return
+        if not started and stream_callback:
+            await stream_callback({"type": "reply_start"})
+            started = True
+        if stream_callback:
+            await stream_callback({"type": "reply_delta", "delta": text})
 
     async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
         if resp.status_code != 200:
@@ -791,27 +1152,30 @@ async def _handle_stream(
                 usage = data["usage"]
             for choice in data.get("choices") or []:
                 delta = choice.get("delta") or {}
-                text = _extract_stream_delta_text(delta)
                 rc = delta.get("reasoning_content")
                 if isinstance(rc, str) and rc.strip():
                     reasoning_parts.append(rc)
+                _accumulate_tool_call_deltas(delta.get("tool_calls"), tool_call_fragments)
+                text = _extract_stream_delta_text(delta)
                 if not text:
                     continue
-                if not started and stream_callback:
-                    await stream_callback({"type": "reply_start"})
-                    started = True
                 accumulated.append(text)
-                if stream_callback:
-                    await stream_callback({"type": "reply_delta", "delta": text})
+                await _forward(dsml_filter.feed(text))
+    await _forward(dsml_filter.flush())
 
     full_text = "".join(accumulated)
     if not started and stream_callback:
         await stream_callback({"type": "reply_start"})
     if stream_callback:
-        await stream_callback({"type": "reply_done", "response": full_text})
+        # The UI accumulates filtered deltas, so the final payload must match
+        # what was forwarded — never the raw text (which may carry DSML markup).
+        await stream_callback({"type": "reply_done", "response": dsml_filter.emitted()})
 
     msg: dict[str, Any] = {"role": "assistant", "content": full_text}
     if reasoning_parts:
         msg["reasoning_content"] = "".join(reasoning_parts)
+    tool_calls = _finalize_tool_call_fragments(tool_call_fragments)
+    if tool_calls:
+        msg["tool_calls"] = tool_calls
     msg["usage"] = _normalized_usage(usage, payload.get("messages", []), msg)
     return msg

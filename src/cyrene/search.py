@@ -7,14 +7,16 @@ Architecture:
 """
 
 import asyncio
+import ipaddress
 import logging
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
 from cyrene.call_llm import call_llm as _unified_call_llm
-from cyrene.config import SEARCH_PROXY
+from cyrene.config import SEARCH_PROXY, SEARXNG_URL
 
 logger = logging.getLogger(__name__)
 
@@ -83,11 +85,26 @@ async def _generate_queries(topic: str) -> list[str]:
 
 def _get_simplexng_url() -> str:
     """Resolve the app-managed SimpleXNG search API URL."""
+    external_url = str(SEARXNG_URL or "").strip().rstrip("/")
+    if external_url:
+        return external_url
     from cyrene.searxng_manager import get_manager
     manager = get_manager()
     if manager.is_running:
         return manager.url
     return ""
+
+
+def _is_loopback_url(url: str) -> bool:
+    hostname = urlparse(url).hostname
+    if not hostname:
+        return False
+    if hostname.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 async def _search_simplexng(query: str) -> list[dict]:
@@ -99,9 +116,13 @@ async def _search_simplexng(query: str) -> list[dict]:
     headers = {"Accept": "application/json"}
 
     def _fetch() -> list[dict]:
-        # SimpleXNG 是本地服务，必须忽略系统代理环境变量。
-        sess = requests.Session()
-        sess.trust_env = False
+        if _is_loopback_url(base_url):
+            # Local SimpleXNG traffic must not be routed through a system proxy.
+            sess = requests.Session()
+            sess.trust_env = False
+        else:
+            # External SearXNG may require Cyrene's configured search proxy.
+            sess = _proxied_session()
         r = sess.get(url, params={"q": query, "format": "json", "language": "zh-CN", "safesearch": "0"}, headers=headers, timeout=_HTTP_TIMEOUT)
         r.raise_for_status()
         data = r.json()

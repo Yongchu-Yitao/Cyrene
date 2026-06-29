@@ -13,8 +13,8 @@ from uuid import uuid4
 
 from cyrene.agent.state import (
     _current_round_id,
+    _emit_reply_stream_event,
     _pending_intermediate_user_replies,
-    _reply_stream_writer,
     _ui_round_assistant_meta,
 )
 
@@ -151,11 +151,13 @@ async def _insert_intermediate_user_reply(
     client_request_id: str = "",
     attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    created_at = datetime.now(timezone.utc).isoformat()
     assistant_entry: dict[str, Any] = {
         "role": "assistant",
         "content": content,
         "round_id": round_id,
         "intermediate_reply": True,
+        "created_at": created_at,
     }
     if attachments:
         assistant_entry["attachments"] = [dict(item) for item in attachments if isinstance(item, dict)]
@@ -175,9 +177,9 @@ async def _insert_intermediate_user_reply(
         pending.append(dict(assistant_entry))
 
     from cyrene.agent.session import _load_session_state, _write_session_messages_locked
-    from cyrene.agent.state import _session_state_lock, _publish_runtime_event
+    from cyrene.agent.state import _ensure_session, _current_session_id, _publish_runtime_event
 
-    async with _session_state_lock:
+    async with _ensure_session(_current_session_id.get()).session_state_lock:
         state = _load_session_state()
         existing = state.get("messages", [])
         full_messages = list(existing) if isinstance(existing, list) else []
@@ -185,12 +187,26 @@ async def _insert_intermediate_user_reply(
         _ensure_message_identity(full_messages)
         await _write_session_messages_locked(state, full_messages)
 
+    public_message: dict[str, Any] = {
+        "id": assistant_entry.get("message_id", ""),
+        "role": "assistant",
+        "content": content,
+        "createdAt": created_at,
+        "intermediate": True,
+    }
+    if attachments:
+        public_message["attachments"] = [dict(item) for item in attachments if isinstance(item, dict)]
+    await _emit_reply_stream_event({
+        "type": "intermediate_message",
+        "message": public_message,
+    })
     await _publish_runtime_event({
         "type": "assistant_message",
         "round_id": round_id,
         "client_request_id": client_request_id,
         "intermediate": True,
         "message_id": assistant_entry.get("message_id", ""),
+        "message": public_message,
     })
     return assistant_entry
 

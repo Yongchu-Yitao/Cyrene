@@ -214,7 +214,7 @@ async def test_deep_reflect_tool_projects_next_llm_call_without_cleaning_saved_t
 
     save_calls: list[list[dict]] = []
 
-    async def fake_save(messages):
+    async def fake_save(messages, **_kwargs):
         save_calls.append(messages)
 
     monkeypatch.setattr(agent_core, "_call_llm", fake_main_llm)
@@ -282,7 +282,7 @@ async def test_deep_reflect_mixed_tool_turn_compresses_same_turn_tool_results(mo
 
     save_calls: list[list[dict]] = []
 
-    async def fake_save(messages):
+    async def fake_save(messages, **_kwargs):
         save_calls.append(messages)
 
     monkeypatch.setattr(agent_core, "_call_llm", fake_main_llm)
@@ -348,7 +348,7 @@ async def test_deep_reflect_mixed_with_quit_preserves_tool_result_pairing(monkey
 
     save_calls: list[list[dict]] = []
 
-    async def fake_save(messages):
+    async def fake_save(messages, **_kwargs):
         save_calls.append(messages)
 
     monkeypatch.setattr(agent_core, "_call_llm", fake_main_llm)

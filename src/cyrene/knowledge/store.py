@@ -222,7 +222,10 @@ async def list_documents(
     source: str | None = None,
     limit: int = 200,
 ) -> list[dict]:
-    """List documents with optional filtering."""
+    """List documents with optional filtering.
+
+    ``limit <= 0`` means no limit (return all matches).
+    """
     query = "SELECT * FROM kb_documents WHERE 1=1"
     params: list[Any] = []
 
@@ -249,8 +252,10 @@ async def list_documents(
         tag_pattern = f'%"{tag}"%'
         params.append(tag_pattern)
 
-    query += " ORDER BY updated_at DESC LIMIT ?"
-    params.append(limit)
+    query += " ORDER BY updated_at DESC"
+    if limit and limit > 0:
+        query += " LIMIT ?"
+        params.append(limit)
 
     async with aiosqlite.connect(db_path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
@@ -259,6 +264,47 @@ async def list_documents(
         results = [_row_to_document(row) for row in rows]
 
     return results
+
+
+async def count_documents(
+    db_path: str,
+    *,
+    q: str | None = None,
+    kind: str | None = None,
+    status: str | None = None,
+    tag: str | None = None,
+    source: str | None = None,
+) -> int:
+    """Count documents matching the given filters (ignores limit)."""
+    query = "SELECT COUNT(*) as cnt FROM kb_documents WHERE 1=1"
+    params: list[Any] = []
+
+    if q:
+        query += " AND (name LIKE ? OR title LIKE ? OR summary LIKE ?)"
+        search_pattern = f"%{q}%"
+        params.extend([search_pattern, search_pattern, search_pattern])
+
+    if kind:
+        query += " AND kind = ?"
+        params.append(kind)
+
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+
+    if source:
+        query += " AND source = ?"
+        params.append(source)
+
+    if tag:
+        query += " AND tags LIKE ?"
+        tag_pattern = f'%"{tag}"%'
+        params.append(tag_pattern)
+
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        cursor = await db.execute(query, params)
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
 
 
 async def update_document(db_path: str, doc_id: str, **fields) -> dict | None:
@@ -458,7 +504,44 @@ async def upsert_document_by_path(
             )
             row = await cursor.fetchone()
             if row:
-                await db.execute("UPDATE kb_documents SET updated_at = ? WHERE id = ?", (now, row["id"]))
+                canonical_path = Path(str(row["path"] or ""))
+                replacement_path = Path(path)
+                recover_missing_path = (
+                    not canonical_path.is_file()
+                    and replacement_path.is_file()
+                )
+                if recover_missing_path:
+                    await db.execute(
+                        """
+                        UPDATE kb_documents SET
+                            name = ?,
+                            path = ?,
+                            content_type = ?,
+                            kind = ?,
+                            size = ?,
+                            source = ?,
+                            status = 'pending',
+                            error = '',
+                            indexed_at = NULL,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            name,
+                            path,
+                            content_type,
+                            kind,
+                            size,
+                            source,
+                            now,
+                            row["id"],
+                        ),
+                    )
+                else:
+                    await db.execute(
+                        "UPDATE kb_documents SET updated_at = ? WHERE id = ?",
+                        (now, row["id"]),
+                    )
                 await db.commit()
                 cursor = await db.execute("SELECT * FROM kb_documents WHERE id = ?", (row["id"],))
                 row = await cursor.fetchone()
@@ -481,6 +564,18 @@ async def upsert_document_by_path(
                 title = excluded.title,
                 tags = excluded.tags,
                 metadata = excluded.metadata,
+                status = CASE
+                    WHEN kb_documents.content_hash != excluded.content_hash THEN 'pending'
+                    ELSE kb_documents.status
+                END,
+                error = CASE
+                    WHEN kb_documents.content_hash != excluded.content_hash THEN ''
+                    ELSE kb_documents.error
+                END,
+                indexed_at = CASE
+                    WHEN kb_documents.content_hash != excluded.content_hash THEN NULL
+                    ELSE kb_documents.indexed_at
+                END,
                 updated_at = ?
             """,
             (
@@ -750,12 +845,16 @@ async def list_relations(
     db_path: str,
     *,
     src_id: str | None = None,
+    document_id: str | None = None,
 ) -> list[dict]:
-    """List relations, optionally filtered by source ID."""
+    """List relations, optionally filtered by source or either document endpoint."""
     query = "SELECT * FROM kb_relations WHERE 1=1"
     params: list[Any] = []
 
-    if src_id:
+    if document_id:
+        query += " AND (src_id = ? OR dst_id = ?)"
+        params.extend([document_id, document_id])
+    elif src_id:
         query += " AND src_id = ?"
         params.append(src_id)
 

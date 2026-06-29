@@ -5,8 +5,10 @@ Handles text extraction, chunking, embedding, and indexing.
 
 import asyncio
 import re
+import zipfile
 import aiosqlite
 from pathlib import Path
+from xml.etree import ElementTree
 
 from cyrene.attachments import (
     is_pdf_path,
@@ -15,6 +17,47 @@ from cyrene.attachments import (
 )
 from cyrene.call_llm import _approx_token_count
 from cyrene.knowledge import store, embeddings
+
+
+def _extract_office_xml_text(path: Path) -> str:
+    """Extract Office XML text, including uploads whose extension was lost."""
+    suffix = path.suffix.lower()
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            slide_names = sorted(
+                name for name in names
+                if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
+            )
+            sheet_names = [
+                name for name in names
+                if name == "xl/sharedStrings.xml"
+                or re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
+            ]
+            if suffix == ".docx" or "word/document.xml" in names:
+                targets = [name for name in names if name == "word/document.xml"]
+            elif suffix == ".pptx" or slide_names:
+                targets = slide_names
+            elif suffix == ".xlsx" or sheet_names:
+                targets = sheet_names
+            else:
+                return ""
+            blocks: list[str] = []
+            for name in targets:
+                try:
+                    root = ElementTree.fromstring(archive.read(name))
+                except Exception:
+                    continue
+                text = " ".join(
+                    node.text.strip()
+                    for node in root.iter()
+                    if node.text and node.text.strip()
+                )
+                if text:
+                    blocks.append(text)
+            return "\n\n".join(blocks)
+    except (OSError, zipfile.BadZipFile):
+        return ""
 
 
 async def extract_document_text(path: Path, kind: str) -> str:
@@ -57,6 +100,10 @@ async def extract_document_text(path: Path, kind: str) -> str:
                 return result.get("vision_text", "").strip()
             except Exception:
                 return ""
+
+        office_text = _extract_office_xml_text(path)
+        if office_text:
+            return office_text
 
         # Everything else: read as text, but guard against binaries. Files whose
         # kind is "file" (unknown) may be real text (e.g. .html) or binary
@@ -134,6 +181,19 @@ def chunk_text(
 
 
 _INDEX_LOCK = asyncio.Lock()
+_ACTIVE_INDEX_TASKS: set[asyncio.Task] = set()
+
+
+async def cancel_pending_tasks() -> None:
+    """Cancel active knowledge indexing before destructive data operations."""
+    current = asyncio.current_task()
+    known_tasks = list(_ACTIVE_INDEX_TASKS)
+    tasks = [task for task in known_tasks if task is not current and not task.done()]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _ACTIVE_INDEX_TASKS.difference_update(known_tasks)
 
 
 async def index_document(db_path: str, doc_id: str) -> None:
@@ -144,8 +204,16 @@ async def index_document(db_path: str, doc_id: str) -> None:
     raise "database is locked". This also enforces the intended sequential,
     burst-free indexing.
     """
-    async with _INDEX_LOCK:
-        await _index_document_inner(db_path, doc_id)
+    task = asyncio.current_task()
+    already_active = task in _ACTIVE_INDEX_TASKS if task is not None else False
+    if task is not None:
+        _ACTIVE_INDEX_TASKS.add(task)
+    try:
+        async with _INDEX_LOCK:
+            await _index_document_inner(db_path, doc_id)
+    finally:
+        if task is not None and not already_active:
+            _ACTIVE_INDEX_TASKS.discard(task)
 
 
 async def _index_document_inner(db_path: str, doc_id: str) -> None:
@@ -232,14 +300,22 @@ async def process_pending(db_path: str, *, limit: int | None = None) -> None:
     Indexes up to `limit` pending documents. Failures are marked as error without retry.
     Sequential processing avoids overwhelming vision/embedding APIs.
     """
-    async with aiosqlite.connect(db_path, timeout=30) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT id FROM kb_documents WHERE status = ? ORDER BY created_at ASC LIMIT ?",
-            ("pending", limit or 999999),
-        )
-        rows = await cursor.fetchall()
+    task = asyncio.current_task()
+    already_active = task in _ACTIVE_INDEX_TASKS if task is not None else False
+    if task is not None:
+        _ACTIVE_INDEX_TASKS.add(task)
+    try:
+        async with aiosqlite.connect(db_path, timeout=30) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT id FROM kb_documents WHERE status = ? ORDER BY created_at ASC LIMIT ?",
+                ("pending", limit or 999999),
+            )
+            rows = await cursor.fetchall()
 
-    for row in rows:
-        doc_id = row["id"]
-        await index_document(db_path, doc_id)
+        for row in rows:
+            doc_id = row["id"]
+            await index_document(db_path, doc_id)
+    finally:
+        if task is not None and not already_active:
+            _ACTIVE_INDEX_TASKS.discard(task)

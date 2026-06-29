@@ -32,7 +32,16 @@ def _assistant_text(message: dict[str, Any]) -> str:
         text = "".join(parts)
         if text.strip():
             return text
-    # Fallback: use reasoning_content if content is empty (Qwen-style models)
+    # Fallback: some models (Qwen-style) put a final, user-facing answer in
+    # ``reasoning_content`` instead of ``content``. Only honor that fallback on
+    # *terminal* turns. When the message also carries ``tool_calls`` (e.g.
+    # ``quit``), the reasoning is internal scratch work — the model's
+    # deliberation about whether/what to act — NOT a reply, and must never be
+    # surfaced to the user (this is what leaked chain-of-thought into proactive
+    # messages). Return "" so callers reconstruct a proper final reply or, for
+    # system-initiated rounds, stay silent.
+    if message.get("tool_calls"):
+        return ""
     reasoning = message.get("reasoning_content")
     if reasoning and isinstance(reasoning, str):
         return reasoning.strip()

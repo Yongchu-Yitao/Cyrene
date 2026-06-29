@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from cyrene.config import OPENAI_BASE_URL, OPENAI_MODEL, DATA_DIR, STATE_FILE, write_env_keys
+from cyrene.config import OPENAI_BASE_URL, OPENAI_MODEL, DATA_DIR, STORE_DIR, STATE_FILE, write_env_keys
 from cyrene.setup import mark_setup_done, normalize_custom_soul_content
 from cyrene.soul import get_default_soul_content, get_soul_path, read_soul
 
@@ -109,6 +109,65 @@ def _has_runtime_activity() -> bool:
     return CONVERSATIONS_DIR.exists() and any(CONVERSATIONS_DIR.glob("*.md"))
 
 
+def _has_existing_data() -> bool:
+    """True when the install already holds user content from prior use — any
+    signal that this is not a brand-new first run.
+
+    Covers both the legacy agent (runtime state / conversations) and the
+    Workbench (chat threads, accumulated per-workspace memory). The first-run
+    onboarding takeover is suppressed whenever this is True, so an existing user
+    is never dragged back into setup just because their SOUL.md is still the
+    default. Only a full "reset app data" — which clears every source below —
+    returns the app to a genuine fresh start.
+    """
+    if _has_runtime_activity():
+        return True
+
+    # Workbench chat threads. SQLite is authoritative; legacy JSON remains an
+    # import fallback for installations that have not started the new version.
+    try:
+        from cyrene.workbench_store import has_document_data, list_document_keys
+
+        workbench_db = STORE_DIR / "cyrene.db"
+        if workbench_db.exists() and has_document_data(workbench_db, "chats"):
+            return True
+        if workbench_db.exists() and list_document_keys(workbench_db, prefix="memory:"):
+            return True
+    except Exception:
+        pass
+
+    # Note: projects are excluded on purpose — an empty default project is
+    # auto-created and is not evidence of prior use.
+    chats_path = DATA_DIR / "workbench_chats.json"
+    if chats_path.exists():
+        try:
+            if json.loads(chats_path.read_text(encoding="utf-8")):
+                return True
+        except Exception:
+            return True
+
+    # Accumulated per-workspace agent memory (store/wb_memory_<ws>.json).
+    try:
+        if any(STORE_DIR.glob("wb_memory_*.json")):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def _is_absolute_fresh_start(soul_content: str) -> bool:
+    """A pristine first run: no onboarding markers, no API key, default/empty
+    SOUL.md, and no pre-existing user data of any kind."""
+    return (
+        not _onboarding_state_path().exists()
+        and not _setup_flag_path().exists()
+        and not _api_key_present()
+        and (not soul_content.strip() or _is_default_soul(soul_content))
+        and not _has_existing_data()
+    )
+
+
 def _merge_inferred_state(state: dict[str, Any]) -> tuple[dict[str, Any], str]:
     merged = _normalize_state(state)
     soul_content = read_soul()
@@ -142,7 +201,21 @@ def get_onboarding_status() -> dict[str, Any]:
     state, soul_content = _merge_inferred_state(load_onboarding_state())
     llm_configured = bool(state["llm"]["completed_at"]) or _api_key_present()
     personality_configured = bool(state["personality"]["completed_at"]) or _personality_inferred_configured(soul_content)
-    needs_onboarding = not (llm_configured and personality_configured)
+    both_configured = llm_configured and personality_configured
+
+    fresh_start = _is_absolute_fresh_start(soul_content)
+    # The wizard is mid-flow only when a step was completed *through the wizard*
+    # (legacy inference tags its sources "legacy-*") and setup isn't finished —
+    # e.g. a fresh user saved the model step but hasn't picked a personality.
+    wizard_in_progress = not both_configured and (
+        state["llm"].get("source") == "wizard"
+        or state["personality"].get("source") == "wizard"
+    )
+    # Only take over with first-run onboarding for a genuine fresh start, or to
+    # finish a wizard already in progress. An existing install — any prior data
+    # or LLM config — is never forced back into onboarding even if its SOUL.md is
+    # still the default; only a full data reset returns it to a fresh start.
+    needs_onboarding = not both_configured and (fresh_start or wizard_in_progress)
     active_step = "done"
     if not llm_configured:
         active_step = "llm"
@@ -151,13 +224,7 @@ def get_onboarding_status() -> dict[str, Any]:
 
     return {
         "needsOnboarding": needs_onboarding,
-        "isAbsoluteFreshStart": (
-            not _onboarding_state_path().exists()
-            and not _setup_flag_path().exists()
-            and not _api_key_present()
-            and (not soul_content.strip() or _is_default_soul(soul_content))
-            and not _has_runtime_activity()
-        ),
+        "isAbsoluteFreshStart": fresh_start,
         "activeStep": active_step,
         "completedAt": state.get("completed_at", ""),
         "llm": {
@@ -229,9 +296,12 @@ async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> di
         new_entry = {
             "id": clean_model,
             "name": clean_model,
+            "model": clean_model,
             "desc": "",
             "ctx": "",
             "price": "",
+            "api_key": clean_api_key,
+            "base_url": clean_base_url,
         }
         save_models([new_entry] + list(current_models or []))
 

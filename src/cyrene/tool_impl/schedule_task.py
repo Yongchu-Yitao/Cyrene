@@ -10,15 +10,17 @@ from cyrene.tool_legacy import (
     compute_next_run,
     datetime,
     db,
-    json,
     timezone,
 )
+from cyrene.workbench_context import resolve_project_data_key_for_session
 
 TOOL_NAME = 'schedule_task'
 TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL_NAME)
 
 
 async def _tool_schedule_task(args: dict[str, Any], _bot: Any, chat_id: int, db_path: str, _notify_state: dict[str, bool] | None) -> str:
+    from cyrene.agent.state import _current_session_id
+
     stype = str(args["schedule_type"])
     svalue = str(args["schedule_value"])
     now = datetime.now(timezone.utc)
@@ -45,11 +47,22 @@ async def _tool_schedule_task(args: dict[str, Any], _bot: Any, chat_id: int, db_
                 permission_kind="task_permission_request",
                 options=["仅此任务允许 full_access", "拒绝，保持 workspace_only"],
             )
-            status = json.loads(elevation_result)
-            if str(status.get("status", "")).strip() == "awaiting_user":
+            # None=已授权(auto 模式批准/full_access 短路)，继续创建任务；
+            # 非 None=拒绝串或 awaiting_user JSON，直接回传给 agent。
+            if elevation_result is not None:
                 return elevation_result
 
-    task_id = await db.create_task(db_path, chat_id, str(args["prompt"]), stype, svalue, next_run, permission_mode=permission_mode)
+    project_id = resolve_project_data_key_for_session(_current_session_id.get())
+    task_id = await db.create_task(
+        db_path,
+        chat_id,
+        str(args["prompt"]),
+        stype,
+        svalue,
+        next_run,
+        permission_mode=permission_mode,
+        project_id=project_id,
+    )
     return f"Task {task_id} scheduled. Next run: {next_run} 权限模式：{permission_mode}"
 
 

@@ -4,8 +4,8 @@ Uses ``httpx`` for basic HTTP fetching (always available, used as a fallback whe
 Playwright is missing). When Playwright is installed, a single **persistent browser
 context** (with an on-disk profile, so logins survive across runs) is launched lazily
 and reused across navigate / click / type. After every action a JPEG screenshot is
-published as a ``browser_frame`` SSE event so the WebUI can show, in real time, what
-the agent sees and does.
+rendered by the WebSocket screencast; the ``browser_frame`` SSE event only carries
+lightweight action metadata.
 
 Tools exposed to the agent (see ``tools.py``):
   - ``browser_navigate`` — open a page in the shared session, return readable text
@@ -14,8 +14,8 @@ Tools exposed to the agent (see ``tools.py``):
   - ``browser_type`` — type text into an input (Playwright required)
 
 Live-view / takeover design lives in ``~/.claude/plans/browser-live-view-takeover.md``.
-This module currently implements M1 (persistent session + frame events); screencast
-WebSocket (M2) and native-window login takeover (M3) slot in on top of ``_BrowserSession``.
+This module implements the persistent session, WebSocket screencast, and
+native-window login takeover on top of ``_BrowserSession``.
 
 Playwright is supplied by the Cyrene runtime/environment. If it cannot be loaded,
 browser automation degrades to text-only HTTP fetching where possible.
@@ -38,6 +38,8 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
+
+from cyrene.app_paths import TEMP_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +128,7 @@ async def _ssrf_redirect_hook(response: httpx.Response) -> None:
 
 _PLAYWRIGHT_AVAILABLE: bool | None = None
 
-# Screenshot/frame tuning — keep base64 frames small enough to ride the SSE bus.
+# Screencast tuning.
 # Defaults below; each is overridable through the config store (env keys).
 _DEFAULT_FRAME_QUALITY = 60
 _DEFAULT_WIDTH = 1280
@@ -316,7 +318,18 @@ class _BrowserSession:
         self._page: Any = None
         self._mode: str = "headless"
         self._takeover_active = False
+        self._takeover_session_id = ""
         self._closing_deliberately = False
+        # User live-control (S3): the panel forwards mouse/keyboard over /ws/browser
+        # and we inject it into the (headless) page via CDP. ``_user_window_open``
+        # tracks a user-initiated native window (escape hatch for sites that block
+        # headless) so closing it auto-returns to headless.
+        self._user_control = False
+        self._user_window_open = False
+        # Set == agent is clear to act; cleared while the user holds live control,
+        # so agent browser actions yield instead of fighting the user for the page.
+        self._control_released = asyncio.Event()
+        self._control_released.set()
         self._action_lock = asyncio.Lock()
         self._mode_lock = asyncio.Lock()
         # Screencast (M2): live JPEG frames fanned out to WebSocket subscribers.
@@ -358,10 +371,16 @@ class _BrowserSession:
         )
 
     async def page(self) -> Any:
+        if self._page is not None:
+            return self._page
         await self._ensure_started()
         return self._page
 
     async def current_url(self) -> str:
+        return self._safe_url()
+
+    def _safe_url(self) -> str:
+        """Read the current page URL without raising if the page/context is gone."""
         if self._page is None:
             return ""
         try:
@@ -409,9 +428,14 @@ class _BrowserSession:
         """
         async with self._mode_lock:
             await self._ensure_started()
-            target = url or (self._page.url if self._page is not None else "")
+            target = url or self._safe_url()
             await self._relaunch(headless=False, url=target)
             self._takeover_active = True
+            try:
+                from cyrene.agent.state import _current_session_id
+                self._takeover_session_id = str(_current_session_id.get() or "").strip()
+            except Exception:
+                self._takeover_session_id = ""
             try:
                 self._context.on("close", self._on_headed_close)
             except Exception:
@@ -424,30 +448,70 @@ class _BrowserSession:
 
     def _on_headed_close(self, *_args: Any) -> None:
         """User closed the takeover window manually (vs. our deliberate relaunch)."""
-        if self._takeover_active and not self._closing_deliberately:
+        if self._closing_deliberately:
+            return
+        if self._user_window_open:
+            # User-initiated escape-hatch window: silently return to headless so the
+            # in-panel live view keeps working without a dangling pending question.
+            self._user_window_open = False
+            try:
+                asyncio.create_task(self._auto_return_headless())
+            except Exception:
+                pass
+        elif self._takeover_active:
             try:
                 asyncio.create_task(self._publish_takeover_cancelled())
             except Exception:
                 pass
 
+    async def _auto_return_headless(self) -> None:
+        try:
+            await self.end_takeover("")
+        except Exception:
+            logger.debug("auto return-to-headless failed", exc_info=True)
+        try:
+            from cyrene import debug
+            event = {"type": "browser_takeover_cancelled"}
+            if self._takeover_session_id:
+                event["session_id"] = self._takeover_session_id
+            await debug.publish_event(event)
+        except Exception:
+            pass
+
     async def _publish_takeover_cancelled(self) -> None:
         self._takeover_active = False
         try:
             from cyrene import debug
-            await debug.publish_event({"type": "browser_takeover_cancelled"})
+            event = {"type": "browser_takeover_cancelled"}
+            if self._takeover_session_id:
+                event["session_id"] = self._takeover_session_id
+            await debug.publish_event(event)
         except Exception:
             pass
 
     async def end_takeover(self, url: str = "") -> None:
         """Return to headless after the user finished logging in, same profile."""
         async with self._mode_lock:
-            target = url or (self._page.url if self._page is not None else "")
+            target = url or self._safe_url()
             await self._relaunch(headless=_headless_default(), url=target)
             self._takeover_active = False
+            self._user_window_open = False
             if self._frame_subs:
                 async with self._screencast_lock:
                     if not self._screencasting:
                         await self._attach_screencast()
+
+    async def open_user_window(self, url: str = "") -> None:
+        """User-initiated native window — escape hatch for sites that block headless
+        (e.g. reCAPTCHA). Unlike the agent takeover, no pending question is created;
+        the user returns via ``close_user_window`` (or by closing the window)."""
+        await self.switch_to_headed(url)
+        self._user_window_open = True
+
+    async def close_user_window(self, url: str = "") -> None:
+        """Return the user-initiated native window to the in-panel headless view."""
+        self._user_window_open = False
+        await self.end_takeover(url)
 
     async def _os_focus(self) -> None:
         """Best-effort: raise the Chromium app to the foreground (macOS only)."""
@@ -464,6 +528,8 @@ class _BrowserSession:
             pass
 
     async def navigate(self, url: str, *, max_chars: int = 8000) -> dict[str, Any]:
+        if not await self._wait_for_control():
+            return {"url": url, "status": 0, "title": "", "text": "", "error": _USER_CONTROL_MSG}
         async with self._action_lock:
             page = await self.page()
             response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -483,6 +549,8 @@ class _BrowserSession:
             return {"url": page.url, "status": status, "title": title, "text": text, "error": None}
 
     async def click(self, selector: str) -> dict[str, Any]:
+        if not await self._wait_for_control():
+            return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
         async with self._action_lock:
             from playwright.async_api import expect
 
@@ -497,6 +565,8 @@ class _BrowserSession:
             return {"ok": True, "url": page.url, "title": title}
 
     async def type_text(self, selector: str, text: str, *, submit: bool = False) -> dict[str, Any]:
+        if not await self._wait_for_control():
+            return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
         async with self._action_lock:
             page = await self.page()
             el = page.locator(selector)
@@ -511,7 +581,8 @@ class _BrowserSession:
 
     async def screenshot_path(self, *, full_page: bool = True) -> str:
         page = await self.page()
-        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", dir=TEMP_DIR, delete=False)
         tmp.close()  # Playwright writes via path; release fd immediately
         try:
             await page.screenshot(path=tmp.name, full_page=full_page)
@@ -524,19 +595,19 @@ class _BrowserSession:
         return tmp.name
 
     async def _emit_frame(self, action: str, *, target: str | None = None, box: Any = None, url: str = "", title: str = "") -> None:
-        """Publish a ``browser_frame`` SSE event with a JPEG snapshot of the page.
+        """Publish a lightweight ``browser_frame`` SSE event with action metadata.
 
-        Best-effort: a failed frame must never break the underlying browser action.
+        Pixel frames stream over ``/ws/browser``. This SSE event intentionally
+        avoids screenshots/base64 payloads so browser activity cannot clog the
+        shared notification/chat SSE bus.
         """
         try:
             from cyrene import debug
-            from cyrene.agent.state import _current_round_id
+            from cyrene.agent.state import _current_round_id, _current_session_id
 
             page = self._page
             if page is None:
                 return
-            raw = await page.screenshot(type="jpeg", quality=_frame_quality())
-            image = "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
             norm_box = None
             if isinstance(box, dict) and box:
                 norm_box = {
@@ -547,13 +618,13 @@ class _BrowserSession:
                 }
             await debug.publish_event({
                 "type": "browser_frame",
+                "session_id": _current_session_id.get(),
                 "round_id": _current_round_id.get(),
                 "url": url or page.url,
                 "title": title,
                 "action": action,
                 "target": target,
                 "box": norm_box,
-                "image": image,
                 "ts": time.time(),
             })
         except Exception:
@@ -615,9 +686,14 @@ class _BrowserSession:
         session_id = params.get("sessionId")
         if self._cdp is not None and session_id is not None:
             asyncio.create_task(self._safe_ack(session_id))
+        try:
+            data = base64.b64decode(str(params.get("data") or ""), validate=False)
+        except Exception:
+            return
         frame = {
-            "data": params.get("data", ""),
+            "data": data,
             "url": self._page.url if self._page is not None else "",
+            "content_type": "image/jpeg",
         }
         for queue in list(self._frame_subs):
             try:
@@ -631,6 +707,115 @@ class _BrowserSession:
                 await self._cdp.send("Page.screencastFrameAck", {"sessionId": session_id})
         except Exception:
             pass
+
+    # -- User live-control (S3): mouse/keyboard injection over CDP -----------
+    #
+    # When the user "takes control" of the live view, the panel forwards input
+    # here. CDP ``Input.*`` events drive the headless page directly, so the user
+    # operates the same authenticated session the agent uses — no native window.
+    # Sites that fingerprint headless still need ``open_user_window`` instead.
+
+    def set_user_control(self, on: bool) -> None:
+        self._user_control = bool(on)
+        # Pause/resume agent browser actions: cleared blocks them, set lets them run.
+        if self._user_control:
+            self._control_released.clear()
+        else:
+            self._control_released.set()
+
+    @property
+    def user_control(self) -> bool:
+        return self._user_control
+
+    async def _wait_for_control(self, timeout: float = 600.0) -> bool:
+        """Block while the user holds live control so an agent action doesn't fight
+        them for the page. Returns True when clear to proceed, or False if the user
+        still controls after *timeout* (the action should be skipped, not forced)."""
+        if not self._user_control:
+            return True
+        try:
+            await asyncio.wait_for(self._control_released.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        return not self._user_control
+
+    async def _ensure_input_cdp(self) -> Any:
+        """Return a CDP session usable for Input.* events.
+
+        Reuses the screencast session when present (the panel is normally
+        streaming while the user controls); otherwise attaches a fresh one.
+        """
+        if self._cdp is not None:
+            return self._cdp
+        await self._ensure_started()
+        self._cdp = await self._context.new_cdp_session(self._page)
+        return self._cdp
+
+    async def dispatch_mouse(
+        self,
+        *,
+        type: str,
+        x: float,
+        y: float,
+        button: str = "none",
+        click_count: int = 0,
+        delta_x: float = 0.0,
+        delta_y: float = 0.0,
+        modifiers: int = 0,
+    ) -> None:
+        """Inject a mouse event. ``x``/``y`` are viewport CSS pixels."""
+        if not self._user_control:
+            return
+        cdp = await self._ensure_input_cdp()
+        params: dict[str, Any] = {"type": type, "x": float(x), "y": float(y), "modifiers": int(modifiers)}
+        if type in ("mousePressed", "mouseReleased"):
+            params["button"] = button or "left"
+            params["clickCount"] = click_count or 1
+        elif type == "mouseMoved":
+            params["button"] = button or "none"
+        elif type == "mouseWheel":
+            params["button"] = "none"
+            params["deltaX"] = float(delta_x)
+            params["deltaY"] = float(delta_y)
+        await cdp.send("Input.dispatchMouseEvent", params)
+
+    async def dispatch_key(
+        self,
+        *,
+        type: str,
+        key: str = "",
+        code: str = "",
+        text: str = "",
+        key_code: int = 0,
+        modifiers: int = 0,
+    ) -> None:
+        """Inject a keyboard event (``type`` is keyDown/keyUp/char)."""
+        if not self._user_control:
+            return
+        cdp = await self._ensure_input_cdp()
+        params: dict[str, Any] = {"type": type, "modifiers": int(modifiers)}
+        if key:
+            params["key"] = key
+        if code:
+            params["code"] = code
+        if key_code:
+            params["windowsVirtualKeyCode"] = int(key_code)
+            params["nativeVirtualKeyCode"] = int(key_code)
+        if text and type in ("keyDown", "char"):
+            params["text"] = text
+        await cdp.send("Input.dispatchKeyEvent", params)
+
+    async def insert_text(self, text: str) -> None:
+        """Insert a finished string (IME composition result / paste) at the caret.
+
+        ``Input.insertText`` commits text directly, which is how CJK/IME input is
+        delivered — the per-keystroke ``dispatch_key`` path only carries the Latin
+        composition keys, not the composed characters.
+        """
+        if not self._user_control or not text:
+            return
+        cdp = await self._ensure_input_cdp()
+        await cdp.send("Input.insertText", {"text": text})
 
     async def close(self) -> None:
         try:
@@ -651,6 +836,16 @@ class _BrowserSession:
         self._context = None
         self._page = None
         self._pw = None
+        self._user_control = False
+        self._user_window_open = False
+        self._control_released.set()
+
+
+# Returned to the agent when it tries a browser action while the user is driving.
+_USER_CONTROL_MSG = (
+    "用户正在手动操作浏览器（已接管控制权），agent 的浏览器操作已暂停。"
+    "请等待用户交还控制权后再继续，不要反复重试。"
+)
 
 
 _session: _BrowserSession | None = None
@@ -686,7 +881,12 @@ async def end_browser_takeover(url: str = "") -> None:
     # Clear the panel's "waiting for login" placeholder so the live view returns.
     try:
         from cyrene import debug
-        await debug.publish_event({"type": "browser_takeover_cancelled"})
+        from cyrene.agent.state import _current_session_id
+        event = {"type": "browser_takeover_cancelled"}
+        session_id = str(_current_session_id.get() or getattr(session, "_takeover_session_id", "") or "").strip()
+        if session_id:
+            event["session_id"] = session_id
+        await debug.publish_event(event)
     except Exception:
         pass
 

@@ -23,7 +23,12 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
     if not path_arg:
         return "Error: 'path' is required."
 
-    from cyrene.agent.state import _current_agent_id, _current_client_request_id, _current_round_id
+    from cyrene.agent.state import (
+        _current_agent_id,
+        _current_client_request_id,
+        _current_round_id,
+        _current_session_id,
+    )
     from cyrene.agent.session import append_system_message
     from cyrene.agent.message import _insert_intermediate_user_reply
 
@@ -38,12 +43,20 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
     registered = register_generated_attachment(str(path), display_name=str(args.get("name", "") or "").strip() or None)
     attachment = build_public_attachment_payload(registered)
 
-    # Register in knowledge base
+    # Register in knowledge base for legacy/non-Workbench sessions. Workbench
+    # tasks archive only final deliverables after review/completion, so sending
+    # a file mid-run must not immediately pollute project knowledge.
     try:
         from cyrene.knowledge import store, ingest
+        from cyrene.workbench_context import (
+            ensure_knowledge_db_for_session,
+            resolve_workbench_session_kind,
+        )
         import mimetypes
         doc_path = registered.get("path", "")
-        if doc_path:
+        current_session_id = str(_current_session_id.get() or "")
+        session_kind = resolve_workbench_session_kind(current_session_id)
+        if doc_path and session_kind not in {"task", "init"}:
             from pathlib import Path
             import mimetypes
             doc_file = Path(doc_path)
@@ -51,19 +64,23 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
             from cyrene.attachments import attachment_kind_from_meta
             kind = attachment_kind_from_meta(content_type, doc_file.name)
             content_hash = store.content_hash_file(doc_file)
+            _kb_db_path = await ensure_knowledge_db_for_session(_current_session_id.get())
             doc = await store.upsert_document_by_path(
-                _db_path,
+                _kb_db_path,
                 path=str(doc_file.resolve()),
                 source="generated",
                 name=registered.get("name", doc_file.name),
                 content_type=content_type,
                 kind=kind,
                 size=doc_file.stat().st_size if doc_file.exists() else 0,
-                metadata={"sent_to_chat": True},
+                metadata={
+                    "sent_to_chat": True,
+                    "session_id": str(_current_session_id.get() or ""),
+                },
                 content_hash=content_hash,
             )
             if doc.get("status") in {"pending", "error"}:
-                asyncio.create_task(ingest.index_document(_db_path, doc["id"]))
+                asyncio.create_task(ingest.index_document(_kb_db_path, doc["id"]))
     except Exception as e:
         logger.debug(f"Failed to register generated file in knowledge base: {e}")
 

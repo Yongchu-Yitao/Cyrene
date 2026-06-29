@@ -28,13 +28,12 @@ async def _tool_ask_user(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pat
     if not round_id:
         return "Cannot ask the user a question outside an active chat round."
 
+    # Pass options through as-is; _normalize_pending_question (via
+    # _upsert_pending_question) handles both plain strings and the option objects
+    # models sometimes emit, extracting the label and capping the count. Calling
+    # str() on a dict here would leak `{'id':.., 'label':..}` into the UI labels.
     raw_options = args.get("options", [])
-    options: list[str] = []
-    if isinstance(raw_options, list):
-        for item in raw_options:
-            label = str(item or "").strip()
-            if label:
-                options.append(label)
+    options = raw_options if isinstance(raw_options, list) else []
 
     from cyrene.agent.session import get_session_labels
 

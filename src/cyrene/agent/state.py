@@ -8,12 +8,14 @@ import from it without circular-dependency risk.
 import asyncio
 import json
 import logging
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from contextvars import ContextVar
 
 from cyrene import debug
-from cyrene.config import ASSISTANT_NAME, DATA_DIR as _DATA_DIR, STATE_FILE as _STATE_FILE
+from cyrene.config import ASSISTANT_NAME, DATA_DIR as _DATA_DIR, STATE_FILE as _STATE_FILE, WORKSPACE_DIR as _WORKSPACE_DIR
 
 # Mutable references so tests that swap STATE_FILE/DATA_DIR are visible to all
 # ``agent.*`` sub-modules (which import ``state.STATE_FILE`` / ``state.DATA_DIR``).
@@ -21,6 +23,110 @@ STATE_FILE = _STATE_FILE
 DATA_DIR = _DATA_DIR
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# SessionContext — per-session state container
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SessionContext:
+    """Holds all mutable state for a single agent session.
+
+    Each active session (including the default "" session) gets its own
+    ``SessionContext`` instance.  Fields previously stored as module-level
+    globals are migrated here incrementally across the multi‑session phases.
+    """
+    session_id: str = ""
+    state_file: Path | None = None  # None → DATA_DIR / "state.json" (default session)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    session_state_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    session_epoch: int = 0
+    interrupt_event: asyncio.Event = field(default_factory=asyncio.Event)
+    active_main_round_id: str = ""
+    active_main_round_prompt: str = ""
+    active_main_round_public_prompt: str = ""
+    active_main_round_started_at: float = 0.0
+    pending_compressors: set[asyncio.Task] = field(default_factory=set)
+    pending_label_refreshes: set[asyncio.Task] = field(default_factory=set)
+    pending_interrupt_clearers: set[asyncio.Task] = field(default_factory=set)
+    pending_distill_task: asyncio.Task | None = None
+    main_inbox_worker: asyncio.Task | None = None
+    active_task: asyncio.Task | None = None
+
+# Per‑session identifier carried by ContextVar — set at entry to run_agent()
+_current_session_id: ContextVar[str] = ContextVar("_current_session_id", default="")
+
+# Per‑run workspace root for the agent's FILE operations (Read/Write/Edit/Glob)
+# and Bash cwd. Empty → fall back to the global WORKSPACE_DIR. Set at run_agent()
+# entry from the active Workbench project's workspacePath so each project's agent
+# stays confined to its own workspace.
+#
+# NOTE: SOUL.md / memory / behaviour‑learning files keep using the global
+# WORKSPACE_DIR directly — they are cross‑project runtime state, not project
+# files, so they must NOT be redirected here.
+_active_workspace_dir: ContextVar[str] = ContextVar("_active_workspace_dir", default="")
+
+
+def active_workspace_dir() -> Path:
+    """Return the workspace root for the current agent run.
+
+    Falls back to the global ``WORKSPACE_DIR`` when no per‑run override is set
+    (legacy chat, scheduler runs, or any agent outside a Workbench project)."""
+    raw = _active_workspace_dir.get()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return _WORKSPACE_DIR.resolve()
+
+# Lazily populated cache of SessionContext instances, keyed by session_id.
+# The default session (id="") is created on first access and lives forever.
+_sessions: dict[str, SessionContext] = {}
+
+
+def _ensure_session(session_id: str = "") -> SessionContext:
+    """Return the ``SessionContext`` for *session_id*, creating it if needed."""
+    global _session_epoch
+    if session_id not in _sessions:
+        if not session_id:
+            state_file: Path | None = None  # signal "use DATA_DIR / state.json"
+        else:
+            state_file = _DATA_DIR / "sessions" / session_id / "state.json"
+            state_file.parent.mkdir(parents=True, exist_ok=True)
+        ctx = SessionContext(session_id=session_id, state_file=state_file)
+        # The default session MUST share the existing module-level globals
+        # so that code holding a reference to ``_agent_lock`` or importing
+        # ``_interrupt_event`` from this module still works correctly.
+        if not session_id:
+            ctx.lock = _agent_lock
+            ctx.session_state_lock = _session_state_lock
+            ctx.session_epoch = _session_epoch
+            ctx.interrupt_event = _interrupt_event
+            ctx.pending_compressors = _pending_compressors
+            ctx.pending_label_refreshes = _pending_label_refreshes
+            ctx.pending_interrupt_clearers = _pending_interrupt_clearers
+            ctx.main_inbox_worker = _main_inbox_worker
+            ctx.active_main_round_id = _active_main_round_id
+            ctx.active_main_round_prompt = _active_main_round_prompt
+            ctx.active_main_round_public_prompt = _active_main_round_public_prompt
+            ctx.active_main_round_started_at = _active_main_round_started_at
+        _sessions[session_id] = ctx
+    return _sessions[session_id]
+
+
+def _get_session() -> SessionContext:
+    """Return the ``SessionContext`` for the currently active session."""
+    return _ensure_session(_current_session_id.get())
+
+
+def _session_state_file(session_id: str = "") -> Path:
+    """Return the state‑file path for *session_id*.
+
+    The default session still reads from ``DATA_DIR / "state.json"`` for full
+    backward compatibility.
+    """
+    ctx = _ensure_session(session_id)
+    if ctx.state_file is not None:
+        return ctx.state_file
+    return STATE_FILE
 
 # ---------------------------------------------------------------------------
 # ContextVars — per-request state
@@ -36,6 +142,9 @@ _persist_history_prefix_len: ContextVar[int] = ContextVar("_persist_history_pref
 _persist_insert_at: ContextVar[int | None] = ContextVar("_persist_insert_at", default=None)
 _pending_intermediate_user_replies: ContextVar[list[dict[str, Any]] | None] = ContextVar("_pending_intermediate_user_replies", default=None)
 _reply_stream_writer: ContextVar[Callable[[dict[str, Any]], Awaitable[None]] | None] = ContextVar("_reply_stream_writer", default=None)
+# Usage dict of the most recent final-reply LLM call (streaming finals return
+# plain text, so token usage would otherwise be lost before persisting).
+_last_final_reply_usage: ContextVar[dict[str, Any] | None] = ContextVar("_last_final_reply_usage", default=None)
 
 _ui_round_hide_initial_detail: ContextVar[bool] = ContextVar("_ui_round_hide_initial_detail", default=False)
 _ui_round_assistant_meta: ContextVar[dict[str, Any] | None] = ContextVar("_ui_round_assistant_meta", default=None)
@@ -58,7 +167,6 @@ _session_state_lock = asyncio.Lock()
 _session_epoch: int = 0
 _interrupt_event = asyncio.Event()
 
-_MAX_HISTORY_MESSAGES = 40
 _MAX_TOOL_ROUNDS = 15  # kept for backward-compat; prefer _get_max_tool_rounds()
 
 
@@ -79,6 +187,26 @@ _active_main_round_started_at = 0.0
 # 使用 ContextVar 确保 asyncio 任务间隔离
 _temporary_full_access: ContextVar[bool] = ContextVar("_temporary_full_access", default=False)
 
+# 破坏性/不可逆操作的二次确认与 full_access 解耦。单次确认使用
+# fingerprint 避免同一工具重试时反复弹窗；"本次会话内总是允许" 使用
+# allow_all，均随当前 async round 上下文结束而清理。
+_destructive_confirmation_fingerprints: ContextVar[frozenset[str]] = ContextVar(
+    "_destructive_confirmation_fingerprints",
+    default=frozenset(),
+)
+_destructive_confirmation_allow_all: ContextVar[bool] = ContextVar(
+    "_destructive_confirmation_allow_all",
+    default=False,
+)
+
+# 本轮权限模式 —— 由 /api/chat 的 mode 字段决定，round 起始设置、结束重置。
+#   "default"     —— 碰到权限边界时提问让用户授权（现状）
+#   "full_access" —— 默认放行所有操作（round 起始时同时置 _temporary_full_access）
+#   "auto"        —— 由审核 agent 自主裁决提权请求，从不打扰用户
+#   "plan"        —— 先规划再执行（同意后回退默认模式）
+PERMISSION_MODES = ("default", "full_access", "auto", "plan")
+_permission_mode: ContextVar[str] = ContextVar("_permission_mode", default="default")
+
 _MAIN_INBOX_AGENT_ID = "main"
 _AWAITING_USER_SENTINEL = "[[cyrene.awaiting_user]]"
 
@@ -92,12 +220,12 @@ _REPORT_REF_MAX_PREVIEW = 280
 _LIGHT_TOOL_DEFS = [
     {"type": "function", "function": {"name": "use_tools", "description": "MANDATORY gateway to full tool access. Call this for ANY request that involves doing things — file ops, search, web, code, shell, scheduling, sub-agents, data, browser automation, notifications, etc. This is the ONLY way to reach real tools. Skip ONLY for pure conversation (opinions, greetings, conceptual explanations). IMPORTANT: set task to the user's EXACT original message, do not rewrite it.", "parameters": {"type": "object", "properties": {"task": {"type": "string"}}, "required": ["task"]}}},
     {"type": "function", "function": {"name": "ask_user", "description": "Ask the user a clarification question. Use this proactively whenever: the request is ambiguous, a critical detail is missing, multiple approaches exist and the choice matters, or you need confirmation before a destructive/irreversible action. Guessing is worse than asking. If you need to ask the user anything, use this tool instead of writing a question in assistant text. Use freeform text, or add a short options array when structured choices help. Do not combine with other tools in the same turn.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}, "required": ["text"]}}},
-    {"type": "function", "function": {"name": "quit", "description": "Call this when the interaction is done.", "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "quit", "description": "Call this when the interaction is done — pure conversation that needs no tools. Put your COMPLETE reply to the user in `reply`; the user is shown it verbatim, so write the actual answer here.", "parameters": {"type": "object", "properties": {"reply": {"type": "string", "description": "The final user-facing reply, in the user's language. Shown to the user verbatim."}}}}},
 ]
 
 _DEEP_RESEARCH_LIGHT_TOOL_DEFS = [
     {"type": "function", "function": {"name": "ask_user", "description": "Ask the user a clarification question. Use this to ask about the desired report length before starting research. Use freeform text, or add a short options array when structured choices help. Do not combine with other tools in the same turn.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}, "required": ["text"]}}},
-    {"type": "function", "function": {"name": "quit", "description": "Call this if the user does not want deep research.", "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "quit", "description": "Call this if the user does not want deep research. Put a short acknowledgement to the user in `reply`.", "parameters": {"type": "object", "properties": {"reply": {"type": "string", "description": "The final user-facing reply, in the user's language. Shown to the user verbatim."}}}}},
 ]
 
 
@@ -111,7 +239,9 @@ def _init_session_epoch() -> None:
         if STATE_FILE.exists():
             data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                _session_epoch = data.get("_session_epoch", 0)
+                epoch = data.get("_session_epoch", 0)
+                _session_epoch = epoch
+                _ensure_session("").session_epoch = epoch
     except Exception:
         pass
 
@@ -124,6 +254,9 @@ async def _publish_runtime_event(event: dict[str, Any]) -> None:
     round_id = _current_round_id.get()
     if round_id and not str(event.get("round_id", "")).strip():
         event = {**event, "round_id": round_id}
+    session_id = _current_session_id.get()
+    if session_id:
+        event = {**event, "session_id": session_id}
     await debug.publish_event(event)
 
 
@@ -153,6 +286,7 @@ async def _call_llm(
     *,
     secondary: bool = False,
     thinking: str = "auto",
+    response_format: dict | None = None,
 ) -> dict:
     from cyrene.call_llm import call_llm as _unified_call_llm
 
@@ -162,13 +296,21 @@ async def _call_llm(
         max_tokens=max_tokens,
         model_type="secondary" if secondary else "primary",
         thinking=thinking,
+        response_format=response_format,
         caller=_caller_type.get(),
         phase=_llm_phase_name(tools),
         round_id=_current_round_id.get(),
+        session_id=_current_session_id.get(),
     )
 
 
-async def _call_llm_stream(messages: list[dict], max_tokens: int | None = 32000, *, secondary: bool = False) -> dict[str, Any]:
+async def _call_llm_stream(
+    messages: list[dict],
+    max_tokens: int | None = 32000,
+    *,
+    secondary: bool = False,
+    tools: list | None = None,
+) -> dict[str, Any]:
     from cyrene.call_llm import call_llm as _unified_call_llm
 
     return await _unified_call_llm(
@@ -177,9 +319,11 @@ async def _call_llm_stream(messages: list[dict], max_tokens: int | None = 32000,
         model_type="secondary" if secondary else "primary",
         stream=True,
         stream_callback=_reply_stream_writer.get(),
+        tools=tools,
         caller=_caller_type.get(),
         phase=_llm_phase_name(None),
         round_id=_current_round_id.get(),
+        session_id=_current_session_id.get(),
     )
 
 

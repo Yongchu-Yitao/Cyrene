@@ -17,6 +17,15 @@ from cyrene.soul import ensure_soul
 logger = logging.getLogger(__name__)
 
 
+def _get_default_ui_mode() -> str:
+    """Return the UI mode baked in at build time, defaulting to 'workbench'."""
+    try:
+        from cyrene._buildinfo import DEFAULT_UI_MODE
+        return DEFAULT_UI_MODE
+    except Exception:
+        return "workbench"
+
+
 def _pick_web_port(preferred_port: int = WEB_PORT) -> int:
     """Return the preferred port when free, otherwise choose an ephemeral port."""
     for candidate in (preferred_port, 0):
@@ -358,6 +367,12 @@ def _run_electron_mode() -> None:
     so Electron can discover the server.
     """
     import sys as _sys
+    if "--agent" in _sys.argv:
+        ui_mode = "legacy"
+    elif "--workbench" in _sys.argv:
+        ui_mode = "workbench"
+    else:
+        ui_mode = _get_default_ui_mode()
     if "--verbose" in _sys.argv:
         import cyrene.debug as _debug
         _debug.VERBOSE = True
@@ -430,14 +445,14 @@ def _run_electron_mode() -> None:
 
         try:
             from cyrene.updater import background_check
-            _ = asyncio.create_task(background_check())
+            update_check_task = asyncio.create_task(background_check())
         except Exception:
-            pass
+            update_check_task = None
 
         # Fire-and-forget: background services don't block server start
-        _ = asyncio.create_task(_start_background_services())
+        background_services_task = asyncio.create_task(_start_background_services())
 
-        app = create_app(bot, str(DB_PATH), instance_id=instance_id)
+        app = create_app(bot, str(DB_PATH), instance_id=instance_id, ui_mode=ui_mode)
         import uvicorn
         config = uvicorn.Config(app, host="127.0.0.1", port=selected_port, log_level="info")
         server = uvicorn.Server(config)
@@ -451,6 +466,10 @@ def _run_electron_mode() -> None:
         async def _startup_and_notify(sockets=None):
             await _orig_startup(sockets=sockets)
             if not server.should_exit:
+                # Tell Electron which UI is being served (before PORT) so it can
+                # pick the matching window chrome: the workbench draws its own
+                # inset title bar, the legacy/agent UI needs the native one.
+                print(f"UIMODE={ui_mode}", flush=True)
                 print(f"PORT={selected_port}", flush=True)
 
         server.startup = _startup_and_notify
@@ -466,8 +485,8 @@ def _run_electron_mode() -> None:
         _stop_mcp()
 
 
-def _run_web_mode() -> None:
-    """Start web UI mode (python -m cyrene.local_cli --web)."""
+def _run_web_mode(ui_mode: str = "workbench") -> None:
+    """Start web UI mode."""
     import sys as _sys
     if "--verbose" in _sys.argv:
         import cyrene.debug as _debug
@@ -517,12 +536,12 @@ def _run_web_mode() -> None:
         # 后台检查更新（不阻塞启动）
         try:
             from cyrene.updater import background_check
-            _ = asyncio.create_task(background_check())
+            update_check_task = asyncio.create_task(background_check())
         except Exception:
-            pass
+            update_check_task = None
 
         try:
-            await run_web(bot, str(DB_PATH), port=selected_port)
+            await run_web(bot, str(DB_PATH), port=selected_port, ui_mode=ui_mode)
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         finally:
@@ -541,6 +560,11 @@ def _dump_error(message: str) -> None:
     """Write an error message to temp files so the user can inspect it."""
     import os as _os
     _paths = []
+    try:
+        from cyrene.app_paths import TEMP_DIR as _CYRENE_TEMP_DIR
+        _paths.append(str(_CYRENE_TEMP_DIR))
+    except Exception:
+        pass
     for _key in ("TMPDIR", "TEMP", "TMP"):
         if _os.environ.get(_key):
             _paths.append(_os.environ[_key])
@@ -551,6 +575,7 @@ def _dump_error(message: str) -> None:
         pass
     for _dir in _paths:
         try:
+            _os.makedirs(_dir, exist_ok=True)
             _log_path = _os.path.join(_dir, "cyrene_error.log")
             with open(_log_path, "a", encoding="utf-8") as _f:
                 _f.write(message + "\n")
@@ -578,6 +603,12 @@ def _run_web_gui() -> None:
     Server init runs in a background thread; pywebview window on the main thread.
     """
     import sys as _sys
+    if "--agent" in _sys.argv:
+        ui_mode = "legacy"
+    elif "--workbench" in _sys.argv:
+        ui_mode = "workbench"
+    else:
+        ui_mode = _get_default_ui_mode()
     if "--verbose" in _sys.argv:
         import cyrene.debug as _debug
         _debug.VERBOSE = True
@@ -637,16 +668,16 @@ def _run_web_gui() -> None:
 
         try:
             from cyrene.updater import background_check
-            _ = asyncio.create_task(background_check())
+            update_check_task = asyncio.create_task(background_check())
         except Exception:
-            pass
+            update_check_task = None
 
         # Fire-and-forget: SearXNG + MCP start in the background so the
         # web server is available immediately (SearXNG health-check can
         # take up to 30 s, which would otherwise cause "Server not responding").
-        _ = asyncio.create_task(_start_background_services())
+        background_services_task = asyncio.create_task(_start_background_services())
 
-        app = create_app(bot, str(DB_PATH), instance_id=instance_id)
+        app = create_app(bot, str(DB_PATH), instance_id=instance_id, ui_mode=ui_mode)
         import uvicorn
         config = uvicorn.Config(app, host="127.0.0.1", port=selected_port, log_level="info")
         server = uvicorn.Server(config)
@@ -810,8 +841,14 @@ def main() -> None:
     if "--gui" in sys.argv:
         _run_web_gui()
         return
+    if "--workbench" in sys.argv:
+        _run_web_mode(ui_mode="workbench")
+        return
+    if "--agent" in sys.argv:
+        _run_web_mode(ui_mode="legacy")
+        return
     if "--web" in sys.argv:
-        _run_web_mode()
+        _run_web_mode(ui_mode="workbench")
         return
 
     # One-shot MCP commands (no interactive loop)

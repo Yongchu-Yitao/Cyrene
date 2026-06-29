@@ -1,7 +1,8 @@
 /* ── Code block syntax highlighting ── */
 
 /* Line numbers */
-.msg-body.markdown pre code .hljs-ln-n {
+.msg-body.markdown pre code .hljs-ln-n,
+.wbc-msg-body.markdown pre code .hljs-ln-n {
   user-select: none;
   -webkit-user-select: none;
   text-align: right;
@@ -14,43 +15,41 @@
 }
 
 /* Language tag on code blocks */
-.msg-body.markdown pre[data-language]::before {
-  content: attr(data-language);
-  position: absolute;
-  top: 0;
-  right: 0;
-  padding: 3px 10px;
-  font-size: 11px;
-  font-family: var(--mono);
-  color: var(--text-4);
-  background: var(--surface-2);
-  border-radius: 0 var(--r-s) 0 var(--r-s);
-  text-transform: lowercase;
-  letter-spacing: 0.3px;
-  pointer-events: none;
-  z-index: 1;
+.msg-body.markdown pre[data-language]::before,
+.wbc-msg-body.markdown pre[data-language]::before {
+  content: none;
 }
 
 /* ── Code block action bar ── */
 
+.msg-body.markdown pre:has(> .code-block-actions),
+.wbc-msg-body.markdown pre:has(> .code-block-actions),
+.wbc-side-body pre:has(> .code-block-actions) {
+  box-sizing: border-box;
+  padding-top: 52px;
+}
+
 .code-block-actions {
   position: absolute;
-  bottom: 0;
+  top: 0;
   left: 0;
   right: 0;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
+  min-height: 36px;
+  padding: 5px 10px;
   background: var(--surface-2);
-  border-top: 1px solid var(--line);
-  border-radius: 0 0 var(--r-s) var(--r-s);
-  opacity: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: var(--r-s) var(--r-s) 0 0;
+  opacity: 0.88;
   transition: opacity 0.15s;
   z-index: 2;
 }
 
 .msg-body.markdown pre:hover .code-block-actions,
+.wbc-msg-body.markdown pre:hover .code-block-actions,
+.wbc-side-body pre:hover .code-block-actions,
 .code-block-actions:hover {
   opacity: 1;
 }
@@ -80,16 +79,30 @@
   border-color: var(--accent);
 }
 
+.code-action-btn[data-state="success"] {
+  color: #fff;
+  background: #1f9d57;
+  border-color: #1f9d57;
+}
+
+.code-action-btn[data-state="error"] {
+  color: #fff;
+  background: #c2413b;
+  border-color: #c2413b;
+}
+
 /* ── Highlight.js theme overrides for Cyrene ── */
 
 /* Light theme */
-[data-theme="light"] .msg-body.markdown pre code.hljs {
+[data-theme="light"] .msg-body.markdown pre code.hljs,
+[data-theme="light"] .wbc-msg-body.markdown pre code.hljs {
   color: var(--text-2);
   background: transparent;
 }
 
 /* Dark theme — use a soft dark background matching the shell bg */
-[data-theme="dark"] .msg-body.markdown pre code.hljs {
+[data-theme="dark"] .msg-body.markdown pre code.hljs,
+[data-theme="dark"] .wbc-msg-body.markdown pre code.hljs {
   color: var(--text-2);
   background: transparent;
 }

@@ -19,6 +19,32 @@ sys.modules["PIL"].Image = MagicMock()
 
 
 # ===========================================================================
+# Main-agent operating contract  (agent/prompts.py)
+# ===========================================================================
+
+def test_main_agent_prompt_requires_result_verification_before_quit():
+    from cyrene.agent.prompts import _MAIN_AGENT_PROMPT
+
+    assert "Before calling `quit`, perform a final self-check" in _MAIN_AGENT_PROMPT
+    assert "Never claim verification you did not perform" in _MAIN_AGENT_PROMPT
+    assert "Inspect the resulting state" in _MAIN_AGENT_PROMPT
+
+
+def test_main_agent_prompt_proactively_consults_knowledge_base():
+    from cyrene.agent.prompts import (
+        _EXECUTION_SYSTEM_PROMPT,
+        _MAIN_AGENT_PROMPT,
+        _PHASE1_DECISION_PROMPT,
+    )
+
+    assert "Do not wait for the user to explicitly say" in _MAIN_AGENT_PROMPT
+    assert "call `SearchKnowledge` before deciding or acting" in _MAIN_AGENT_PROMPT
+    assert "retry with concrete entities, filenames, synonyms" in _MAIN_AGENT_PROMPT
+    assert "may depend on project history" in _PHASE1_DECISION_PROMPT
+    assert "consult the knowledge base" in _EXECUTION_SYSTEM_PROMPT
+
+
+# ===========================================================================
 # report_export_filename  (modules/deep_research.py)
 # ===========================================================================
 

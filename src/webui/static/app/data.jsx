@@ -5,7 +5,7 @@
 const APP_VERSION = "—";
 
 const DATA = {
-  user: { name: "loading…", handle: "loading", initials: "…" },
+  user: { name: "loading…", handle: "loading", initials: "…", avatar: "", avatar_emoji: "", avatar_color: "", bio: "" },
   assistantName: "Cyrene",
   appVersion: APP_VERSION,
   dashboard: {
@@ -70,6 +70,7 @@ const DATA = {
   },
 
   skills: [],
+  browserByChat: {},
 
   onboarding: {
     needsOnboarding: false,
@@ -123,6 +124,21 @@ function useDataVersion() {
     return () => __dataSubscribers.delete(setV);
   }, []);
   return v;
+}
+
+function browserEventChatId(data) {
+  return String((data && (data.session_id || data.chat_id || data.chatId)) || "").trim();
+}
+
+function updateBrowserForChat(chatId, apply) {
+  const id = String(chatId || "").trim();
+  if (!id) return null;
+  DATA.browserByChat = DATA.browserByChat || {};
+  const next = { ...(DATA.browserByChat[id] || {}) };
+  apply(next);
+  next.sessionId = id;
+  DATA.browserByChat[id] = next;
+  return next;
 }
 
 window.DATA = DATA;
@@ -232,6 +248,31 @@ async function refreshStatus() {
   } catch (e) { /* swallow */ }
 }
 
+let __dashboardRequestSeq = 0;
+let __dashboardRefreshTimer = null;
+async function refreshDashboard() {
+  const seq = ++__dashboardRequestSeq;
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    const r = await fetch("/api/dashboard?tz=" + encodeURIComponent(tz));
+    if (!r.ok) return;
+    const dashboard = await r.json();
+    if (seq !== __dashboardRequestSeq) return;
+    if (dashboard) {
+      const prev = JSON.stringify(DATA.dashboard);
+      DATA.dashboard = dashboard;
+      if (prev !== JSON.stringify(dashboard)) bumpData();
+    }
+  } catch (e) { /* swallow */ }
+}
+function scheduleDashboardRefresh() {
+  if (__dashboardRefreshTimer) return;
+  __dashboardRefreshTimer = window.setTimeout(() => {
+    __dashboardRefreshTimer = null;
+    void refreshDashboard();
+  }, 3000);
+}
+
 function scheduleRealtimeRefresh() {
   if (__refreshTimer) return;
   __refreshTimer = window.setTimeout(() => {
@@ -248,6 +289,7 @@ function scheduleRealtimeRefresh() {
 
 window.refreshSessions = refreshSessions;
 window.refreshStatus = refreshStatus;
+window.refreshDashboard = refreshDashboard;
 window.reloadUiData = bootstrapData;
 
 // ── Global SSE event bus for real-time chat progress ──
@@ -312,6 +354,7 @@ function connectEvents() {
           "entity_deleted",
         ].includes(data.type)) {
           scheduleRealtimeRefresh();
+          scheduleDashboardRefresh();
         }
 
         // Map pin events — update global state for the MapView component.
@@ -322,8 +365,10 @@ function connectEvents() {
           __bump();
         }
 
-        // Live browser view — the agent's screencast actions (M2).
+        // Live browser view — lightweight action metadata. Pixel frames stream
+        // over /ws/browser, not the shared SSE bus.
         if (data.type === "browser_frame") {
+          const chatId = browserEventChatId(data);
           DATA.browser = DATA.browser || {};
           DATA.browser.active = true;
           DATA.browser.url = data.url || DATA.browser.url || "";
@@ -331,24 +376,62 @@ function connectEvents() {
           DATA.browser.action = data.action || "";
           DATA.browser.target = data.target || null;
           DATA.browser.box = data.box || null;
+          DATA.browser.sessionId = chatId || DATA.browser.sessionId || "";
           DATA.browser.roundId = data.round_id || "";
+          // Frames only flow in the embedded (headless) view, so any user-opened
+          // native window is no longer the active surface.
+          DATA.browser.userWindow = false;
+          updateBrowserForChat(chatId, function (state) {
+            state.active = true;
+            state.url = data.url || state.url || "";
+            state.title = data.title || "";
+            state.action = data.action || "";
+            state.target = data.target || null;
+            state.box = data.box || null;
+            state.roundId = data.round_id || "";
+            state.userWindow = false;
+          });
           bumpData();
         }
         // Browser login takeover (M3): the panel shows a passive "waiting for
         // login" placeholder. The actual confirmation is the app's standard
         // question popup (QuestionPanel), not a control inside the panel.
         if (data.type === "browser_takeover_request") {
+          const chatId = browserEventChatId(data);
           DATA.browser = DATA.browser || {};
           DATA.browser.active = true;
           DATA.browser.url = data.url || DATA.browser.url || "";
+          DATA.browser.sessionId = chatId || DATA.browser.sessionId || "";
           DATA.browser.roundId = data.round_id || "";
-          DATA.browser.takeover = { pending: true, url: data.url || "", reason: data.reason || "" };
+          DATA.browser.takeover = {
+            pending: true,
+            url: data.url || "",
+            reason: data.reason || "",
+            questionId: data.question_id || data.questionId || "",
+          };
+          updateBrowserForChat(chatId, function (state) {
+            state.active = true;
+            state.url = data.url || state.url || "";
+            state.roundId = data.round_id || "";
+            state.takeover = {
+              pending: true,
+              url: data.url || "",
+              reason: data.reason || "",
+              questionId: data.question_id || data.questionId || "",
+            };
+          });
           bumpData();
         }
         // Takeover ended/cancelled (user finished, or closed the window) — drop
         // the placeholder so the panel returns to the live view.
         if (data.type === "browser_takeover_cancelled" && DATA.browser) {
+          const chatId = browserEventChatId(data);
           DATA.browser.takeover = { pending: false };
+          DATA.browser.userWindow = false;
+          updateBrowserForChat(chatId, function (state) {
+            state.takeover = { pending: false };
+            state.userWindow = false;
+          });
           bumpData();
         }
       } catch (e) { /* swallow */ }
@@ -366,4 +449,4 @@ function connectEvents() {
 }
 
 bootstrapData().then(() => connectEvents());
-setInterval(() => { refreshSessions(); refreshStatus(); }, 15000);
+setInterval(() => { refreshSessions(); refreshStatus(); refreshDashboard(); }, 15000);
