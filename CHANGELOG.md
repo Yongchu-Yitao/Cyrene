@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.6.0] - 2026-06-29
+
+首个正式版本。0.6.0 将 `feat/workbench` 分支的全部工作合并进 `main`，并把版本号从 beta 序列正式定为 `0.6.0`。
+
+### 亮点
+
+- **Workbench 工作台 UI** — 以项目为中心的桌面界面：看板、日程、知识、记忆、对话，任务按步骤诚实执行、可跟随可干预。
+- **浏览器实时直播与接管** — 驱动真实持久化的 Playwright 浏览器（登录态跨运行保留），通过 WebSocket 实时投屏；支持在面板内直接接管操作，或切换有头窗口完成登录墙 / 验证码 / 2FA，再回到同一已登录会话继续。
+- **三层记忆 + 短期记忆退场** — 上下文 → 短期跨会话摘要 → 长期 `SOUL.md`；过期短期记忆可退场，不再注入与召回（保留留档）。
+- **并行子 agent 与运行打断** — 子 agent 全工具并行协作；打断当前运行时连同在跑的子 agent 一起取消。
+- **知识库、实体、MCP、调度器、技能安装、Claude Code 桥接** 等能力随本版本一同稳定。
+
+### 自 0.6.0b16 以来的变更
+
+#### Added
+
+- **浏览器面板内实时控制** — 用户可在直播面板内直接通过 CDP 注入鼠标 / 键盘 / IME 操作 headless 页面；用户接管期间 agent 的浏览器动作自动让位。新增 `/api/browser/takeover`、`/api/browser/release`，以及对反 headless 站点的逃生原生窗口（关闭后自动回退 headless）。
+- **短期记忆退场工具** — 新增 `retire_short_term_memory`；`RecallMemory` 现在为每条短期记忆返回稳定 `memory_id`，退场条目保留在本地留档但不再进入记忆上下文与召回结果。
+
+#### Changed
+
+- **运行打断更彻底** — `SessionContext` 跟踪当前运行任务，打断时取消该任务及该 session / round 下仍在运行的子 agent。
+- **Workbench 过程文件不再污染知识库** — Workbench 任务 / 初始化会话中途 `send_file` 的文件不再自动入库，仅审核 / 完成后的最终产物才归档到项目知识。
+- **更新器** — 按平台 / 架构匹配安装包、读取 GitHub release asset 的 sha256 校验、后台检查并在工作台提示新版本与体积。
+- **版本元数据统一** — Python 包、Electron 应用与 lockfile、README badge、WeChat client 标识、`uv.lock` 与 WebUI 静态资源 cache-busting 统一为 `0.6.0`；README 功能总览由表格改写为分类详述。
+
+#### Tests
+
+- 新增 / 更新 `test_browser_session`、`test_updater_platform`、`test_workbench_knowledge_archive`、`test_workbench_knowledge_resolve`、`test_workbench_init_plan`、`test_workbench_memory_language`、`test_issue_fixes`、`test_runtime_fixes`，覆盖浏览器接管与实时控制、更新器平台匹配、知识归档 / 解析、记忆退场等。前端 cache-bust 断言同步到 `0.6.0`。
+
 ## [0.6.0b16] - 2026-06-29
 
 ### Added
