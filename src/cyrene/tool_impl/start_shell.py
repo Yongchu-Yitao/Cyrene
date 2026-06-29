@@ -6,11 +6,13 @@ from typing import Any
 
 from cyrene import tool_legacy as _legacy
 from cyrene.tool_legacy import (
+    _classify_destructive_shell_command,
     _command_is_file_deletion,
     _guard_shell_command_workspace_write,
     _is_dangerous_subshell,
     _json_result,
     _request_delete_confirmation,
+    _request_destructive_confirmation,
     _request_scope_elevation,
     _request_write_elevation,
     _resolve_workspace_path,
@@ -48,7 +50,17 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
             elev = await _request_write_elevation(tool_name="StartShell", path_hint=cwd, reason=command[:240])
             if elev is not None:
                 return elev
-        if _command_is_file_deletion(command) and not _temporary_full_access.get():
+        destructive = _classify_destructive_shell_command(command)
+        if destructive is not None:
+            delete_result = await _request_destructive_confirmation(
+                tool_name="StartShell",
+                operation=destructive["operation"],
+                detail=destructive["detail"],
+                destructive_kind=destructive["kind"],
+            )
+            if delete_result is not None:
+                return delete_result
+        elif _command_is_file_deletion(command):
             delete_result = await _request_delete_confirmation(tool_name="StartShell", command=command)
             if delete_result is not None:
                 return delete_result

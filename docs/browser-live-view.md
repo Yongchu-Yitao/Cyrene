@@ -28,10 +28,10 @@ hint and `browser_navigate` degrades to a text-only fetch; `browser_click` /
   cookies / logins **survive across runs** — once you log into a site, the agent
   stays logged in next time.
 - After each action (`navigate` / `click` / `type`) the backend publishes a
-  `browser_frame` SSE event (a JPEG snapshot + the action + a target box) so the
-  panel can show the latest state and an action ribbon.
+  lightweight `browser_frame` SSE event with metadata only (URL, title, action,
+  target, and target box). Pixel data does not ride the shared SSE bus.
 - A continuous **CDP screencast** streams live JPEG frames over the
-  `GET /ws/browser` WebSocket to a `<canvas>` in the panel.
+  `GET /ws/browser` WebSocket as binary frames to the panel.
 - The panel auto-reveals in the chat's right sidebar the moment the agent starts
   browsing, and a **Browser** tab lets you reopen it.
 

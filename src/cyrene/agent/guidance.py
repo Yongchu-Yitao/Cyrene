@@ -1064,6 +1064,7 @@ def _permission_answer_granted(text: str) -> bool:
     return normalized in {
         "仅这次允许", "allow once", "仅此次", "这次", "once",
         "始终允许", "always allow", "always", "永久允许", "allow",
+        "本次会话内总是允许", "本轮总是允许", "always allow this session",
         "允许这次", "允许这次读取", "允许执行", "允许删除", "仅此任务允许 full_access",
         "同意", "确认", "好", "好的", "可以", "行", "yes", "y", "ok", "okay",
         "allow_once",
@@ -1080,7 +1081,11 @@ async def _handle_permission_elevation_answer(
 ) -> str:
     from cyrene.agent.coordinator import _run_chat_agent
     from cyrene.settings_store import set_write_permission_mode
-    from cyrene.agent.state import _temporary_full_access
+    from cyrene.agent.state import (
+        _destructive_confirmation_allow_all,
+        _destructive_confirmation_fingerprints,
+        _temporary_full_access,
+    )
 
     normalized = str(answer_text or "").strip().lower()
     meta = pending.get("meta") if isinstance(pending.get("meta"), dict) else {}
@@ -1123,6 +1128,36 @@ async def _handle_permission_elevation_answer(
             system = (
                 "The user denied read access outside the workspace. "
                 "Do not retry; stay within the workspace and choose a safe alternative."
+            )
+    elif permission_kind == "destructive_confirmation":
+        fingerprint = str(meta.get("fingerprint", "") or "").strip()
+        from cyrene.agent.state import _publish_runtime_event
+        await _publish_runtime_event({
+            "type": "destructive_confirmation",
+            "decision": "approved" if granted else "denied",
+            "tool_name": tool_name,
+            "operation": operation,
+            "destructive_kind": str(meta.get("destructive_kind", "") or "").strip(),
+            "risk_level": str(meta.get("risk_level", "") or "").strip(),
+            "path_hint": path_hint,
+            "fingerprint": fingerprint,
+        })
+        if granted:
+            if normalized in {"本次会话内总是允许", "本轮总是允许", "always allow this session"}:
+                _destructive_confirmation_allow_all.set(True)
+            else:
+                if fingerprint:
+                    existing = set(_destructive_confirmation_fingerprints.get())
+                    existing.add(fingerprint)
+                    _destructive_confirmation_fingerprints.set(frozenset(existing))
+            system = (
+                "The user confirmed the destructive/irreversible operation. "
+                "Retry the blocked action if it is still required."
+            )
+        else:
+            system = (
+                "The user denied the destructive/irreversible operation. "
+                "Treat the operation as refused, do not retry it, and choose a safer alternative."
             )
     elif granted:
         _temporary_full_access.set(True)

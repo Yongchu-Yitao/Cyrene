@@ -4,8 +4,8 @@ Uses ``httpx`` for basic HTTP fetching (always available, used as a fallback whe
 Playwright is missing). When Playwright is installed, a single **persistent browser
 context** (with an on-disk profile, so logins survive across runs) is launched lazily
 and reused across navigate / click / type. After every action a JPEG screenshot is
-published as a ``browser_frame`` SSE event so the WebUI can show, in real time, what
-the agent sees and does.
+rendered by the WebSocket screencast; the ``browser_frame`` SSE event only carries
+lightweight action metadata.
 
 Tools exposed to the agent (see ``tools.py``):
   - ``browser_navigate`` — open a page in the shared session, return readable text
@@ -14,8 +14,8 @@ Tools exposed to the agent (see ``tools.py``):
   - ``browser_type`` — type text into an input (Playwright required)
 
 Live-view / takeover design lives in ``~/.claude/plans/browser-live-view-takeover.md``.
-This module currently implements M1 (persistent session + frame events); screencast
-WebSocket (M2) and native-window login takeover (M3) slot in on top of ``_BrowserSession``.
+This module implements the persistent session, WebSocket screencast, and
+native-window login takeover on top of ``_BrowserSession``.
 
 Playwright is supplied by the Cyrene runtime/environment. If it cannot be loaded,
 browser automation degrades to text-only HTTP fetching where possible.
@@ -38,6 +38,8 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
+
+from cyrene.app_paths import TEMP_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +128,7 @@ async def _ssrf_redirect_hook(response: httpx.Response) -> None:
 
 _PLAYWRIGHT_AVAILABLE: bool | None = None
 
-# Screenshot/frame tuning — keep base64 frames small enough to ride the SSE bus.
+# Screencast tuning.
 # Defaults below; each is overridable through the config store (env keys).
 _DEFAULT_FRAME_QUALITY = 60
 _DEFAULT_WIDTH = 1280
@@ -358,6 +360,8 @@ class _BrowserSession:
         )
 
     async def page(self) -> Any:
+        if self._page is not None:
+            return self._page
         await self._ensure_started()
         return self._page
 
@@ -511,7 +515,8 @@ class _BrowserSession:
 
     async def screenshot_path(self, *, full_page: bool = True) -> str:
         page = await self.page()
-        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", dir=TEMP_DIR, delete=False)
         tmp.close()  # Playwright writes via path; release fd immediately
         try:
             await page.screenshot(path=tmp.name, full_page=full_page)
@@ -524,9 +529,11 @@ class _BrowserSession:
         return tmp.name
 
     async def _emit_frame(self, action: str, *, target: str | None = None, box: Any = None, url: str = "", title: str = "") -> None:
-        """Publish a ``browser_frame`` SSE event with a JPEG snapshot of the page.
+        """Publish a lightweight ``browser_frame`` SSE event with action metadata.
 
-        Best-effort: a failed frame must never break the underlying browser action.
+        Pixel frames stream over ``/ws/browser``. This SSE event intentionally
+        avoids screenshots/base64 payloads so browser activity cannot clog the
+        shared notification/chat SSE bus.
         """
         try:
             from cyrene import debug
@@ -535,8 +542,6 @@ class _BrowserSession:
             page = self._page
             if page is None:
                 return
-            raw = await page.screenshot(type="jpeg", quality=_frame_quality())
-            image = "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
             norm_box = None
             if isinstance(box, dict) and box:
                 norm_box = {
@@ -553,7 +558,6 @@ class _BrowserSession:
                 "action": action,
                 "target": target,
                 "box": norm_box,
-                "image": image,
                 "ts": time.time(),
             })
         except Exception:
@@ -615,9 +619,14 @@ class _BrowserSession:
         session_id = params.get("sessionId")
         if self._cdp is not None and session_id is not None:
             asyncio.create_task(self._safe_ack(session_id))
+        try:
+            data = base64.b64decode(str(params.get("data") or ""), validate=False)
+        except Exception:
+            return
         frame = {
-            "data": params.get("data", ""),
+            "data": data,
             "url": self._page.url if self._page is not None else "",
+            "content_type": "image/jpeg",
         }
         for queue in list(self._frame_subs):
             try:

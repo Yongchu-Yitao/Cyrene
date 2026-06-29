@@ -186,6 +186,18 @@ _active_main_round_started_at = 0.0
 # 使用 ContextVar 确保 asyncio 任务间隔离
 _temporary_full_access: ContextVar[bool] = ContextVar("_temporary_full_access", default=False)
 
+# 破坏性/不可逆操作的二次确认与 full_access 解耦。单次确认使用
+# fingerprint 避免同一工具重试时反复弹窗；"本次会话内总是允许" 使用
+# allow_all，均随当前 async round 上下文结束而清理。
+_destructive_confirmation_fingerprints: ContextVar[frozenset[str]] = ContextVar(
+    "_destructive_confirmation_fingerprints",
+    default=frozenset(),
+)
+_destructive_confirmation_allow_all: ContextVar[bool] = ContextVar(
+    "_destructive_confirmation_allow_all",
+    default=False,
+)
+
 # 本轮权限模式 —— 由 /api/chat 的 mode 字段决定，round 起始设置、结束重置。
 #   "default"     —— 碰到权限边界时提问让用户授权（现状）
 #   "full_access" —— 默认放行所有操作（round 起始时同时置 _temporary_full_access）

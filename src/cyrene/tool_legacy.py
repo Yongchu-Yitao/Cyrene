@@ -121,6 +121,7 @@ async def _request_scope_elevation(
     permission_kind: str = "scope_elevation",
     options: list[str] | None = None,
     scope_hint: str = "workspace 之外的 ",
+    meta_extra: dict[str, Any] | None = None,
 ) -> str | None:
     """Resolve a permission boundary according to the active permission mode.
 
@@ -167,11 +168,13 @@ async def _request_scope_elevation(
         )
 
     mode = _state._permission_mode.get()
+    # 破坏性/不可逆操作必须由真人确认，不能被 full_access 或 auto mode 短路。
+    requires_human_confirmation = permission_kind == "destructive_confirmation"
     # 完全访问模式：工具层通常已用 _temporary_full_access 短路，这里保险直接放行。
-    if mode == "full_access":
+    if mode == "full_access" and not requires_human_confirmation:
         return None
     # 自动模式：审核 agent 自主裁决，从不打扰用户。
-    if mode == "auto":
+    if mode == "auto" and not requires_human_confirmation:
         from cyrene.agent.auto_review import review_elevation
         approved, rationale = await review_elevation(
             tool_name=tool_name,
@@ -202,6 +205,16 @@ async def _request_scope_elevation(
     detail = f"\n📂 目标路径：{path_hint}" if path_hint else ""
     why = f"\n💡 原因：{reason}" if reason else ""
     effective_options = options or ["允许这次", "拒绝"]
+    meta = {
+        "kind": permission_kind,
+        "tool_name": tool_name,
+        "path_hint": path_hint,
+        "reason": reason,
+        "operation": operation,
+        "command": _current_command.get() or "",
+    }
+    if meta_extra:
+        meta.update(meta_extra)
     question = await _upsert_pending_question({
         "text": (
             f"⚠️ Agent 尝试执行 {scope_hint}{operation}\n\n"
@@ -213,14 +226,7 @@ async def _request_scope_elevation(
         "client_request_id": str(_current_client_request_id.get() or "").strip(),
         "options": effective_options,
         "allow_custom": True,
-        "meta": {
-            "kind": permission_kind,
-            "tool_name": tool_name,
-            "path_hint": path_hint,
-            "reason": reason,
-            "operation": operation,
-            "command": _current_command.get() or "",
-        },
+        "meta": meta,
     })
     return _json_result({
         "status": "awaiting_user",
@@ -288,14 +294,104 @@ async def _request_delete_confirmation(
 ) -> str | None:
     """Request user confirmation before a destructive file operation in the workspace."""
     cmd_preview = command[:240]
+    return await _request_destructive_confirmation(
+        tool_name=tool_name,
+        operation="文件删除操作",
+        detail=f"Agent 尝试删除文件。\n命令：{cmd_preview}",
+        destructive_kind="file_delete",
+    )
+
+
+def _destructive_operation_fingerprint(
+    *,
+    tool_name: str,
+    operation: str,
+    detail: str = "",
+    path_hint: str = "",
+    destructive_kind: str = "",
+) -> str:
+    payload = {
+        "tool": str(tool_name or "").strip(),
+        "operation": str(operation or "").strip(),
+        "detail": str(detail or "").strip()[:500],
+        "path": str(path_hint or "").strip(),
+        "kind": str(destructive_kind or "").strip(),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+async def _request_destructive_confirmation(
+    *,
+    tool_name: str,
+    operation: str,
+    detail: str = "",
+    path_hint: str = "",
+    destructive_kind: str = "destructive_operation",
+    risk_level: str = "high",
+) -> str | None:
+    """Require human confirmation before irreversible/destructive side effects."""
+    from cyrene.agent import state as _state
+
+    fingerprint = _destructive_operation_fingerprint(
+        tool_name=tool_name,
+        operation=operation,
+        detail=detail,
+        path_hint=path_hint,
+        destructive_kind=destructive_kind,
+    )
+    if _state._destructive_confirmation_allow_all.get():
+        return None
+    if fingerprint in _state._destructive_confirmation_fingerprints.get():
+        return None
+
+    await _state._publish_runtime_event({
+        "type": "destructive_confirmation",
+        "decision": "requested",
+        "tool_name": tool_name,
+        "operation": operation,
+        "destructive_kind": destructive_kind,
+        "risk_level": risk_level,
+        "path_hint": path_hint,
+        "fingerprint": fingerprint,
+    })
     return await _request_scope_elevation(
         tool_name=tool_name,
-        path_hint="",
-        operation="文件删除操作",
-        reason=f"Agent 尝试删除 workspace 中的文件。\n命令：{cmd_preview}",
-        permission_kind="delete_confirmation",
-        options=["允许删除", "拒绝"],
+        path_hint=path_hint,
+        operation=operation,
+        reason=detail,
+        permission_kind="destructive_confirmation",
+        options=["允许这次", "本次会话内总是允许", "拒绝"],
+        scope_hint="破坏性/不可逆的 ",
+        meta_extra={
+            "fingerprint": fingerprint,
+            "destructive_kind": destructive_kind,
+            "risk_level": risk_level,
+        },
     )
+
+
+def _classify_destructive_shell_command(command: str) -> dict[str, str] | None:
+    """Best-effort shell destructive-operation classifier."""
+    raw = str(command or "").strip()
+    if not raw:
+        return None
+    lowered = raw.lower()
+    first = _extract_first_command(raw)
+    if first in {"rm", "rmdir", "unlink"} or re.search(r'(?:^|[;&|]\s*)(?:sudo\s+)?(?:\\|/[\w./-]+/)?(?:rm|rmdir|unlink)\b', lowered):
+        return {"operation": "文件删除操作", "kind": "file_delete", "detail": f"命令：{raw[:240]}"}
+    if re.search(r'\bgit\s+reset\b[^\n;&|]*\s--hard\b', lowered):
+        return {"operation": "Git 硬重置", "kind": "git_reset_hard", "detail": f"命令：{raw[:240]}"}
+    if re.search(r'\bgit\s+clean\b[^\n;&|]*\s-[^\s;&|]*f', lowered):
+        return {"operation": "Git 清理未跟踪文件", "kind": "git_clean_force", "detail": f"命令：{raw[:240]}"}
+    if first in {"mkfs", "shred"} or re.search(r'(?:^|[;&|]\s*)(?:sudo\s+)?(?:mkfs(?:\.[\w-]+)?|shred)\b', lowered):
+        return {"operation": "磁盘/文件破坏性操作", "kind": "destructive_system_command", "detail": f"命令：{raw[:240]}"}
+    if first == "dd" or re.search(r'(?:^|[;&|]\s*)(?:sudo\s+)?dd\b', lowered):
+        return {"operation": "低级别写入操作", "kind": "dd_write", "detail": f"命令：{raw[:240]}"}
+    if first == "truncate" or re.search(r'(?:^|[;&|]\s*)(?:sudo\s+)?truncate\b', lowered):
+        return {"operation": "截断文件操作", "kind": "file_truncate", "detail": f"命令：{raw[:240]}"}
+    if re.search(r'(?:^|[;&|]\s*)(?:sudo\s+)?(?:mv|cp|install)\b[^\n;&|]*(?:\s-f\b|\s--force\b)', lowered):
+        return {"operation": "覆盖文件操作", "kind": "file_overwrite", "detail": f"命令：{raw[:240]}"}
+    return None
 
 
 def _extract_first_command(raw: str) -> str:
@@ -1651,14 +1747,8 @@ async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_
     current_url = await session.current_url()
 
     # Ask in the app FIRST (the standard question popup), then open the real
-    # browser window. The confirmation lives in the app's question UI — the
-    # browser panel only shows a passive "waiting for login" placeholder.
-    await debug.publish_event({
-        "type": "browser_takeover_request",
-        "round_id": round_id,
-        "url": current_url,
-        "reason": reason,
-    })
+    # browser window. The browser side panel also receives the question id so it
+    # can offer the same "finished login" confirmation in place.
     labels = get_session_labels(round_id)
     question = await _upsert_pending_question({
         "text": reason,
@@ -1668,6 +1758,13 @@ async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_
         "options": ["我已完成登录"],
         "allow_custom": False,
         "meta": {"kind": "browser_takeover", "url": current_url},
+    })
+    await debug.publish_event({
+        "type": "browser_takeover_request",
+        "round_id": round_id,
+        "url": current_url,
+        "reason": reason,
+        "question_id": question.get("id", ""),
     })
     try:
         await session.switch_to_headed(current_url)

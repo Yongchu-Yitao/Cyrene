@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 from zipfile import ZipFile, ZIP_DEFLATED
 
-from cyrene.config import BASE_DIR, DATA_DIR, DB_PATH, STORE_DIR, WORKSPACE_DIR
+from cyrene.config import BASE_DIR, DATA_DIR, DB_PATH, STORE_DIR, TEMP_DIR, WORKSPACE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +118,8 @@ async def export_backup(
         # Take a consistent SQLite snapshot before opening the zip so we never
         # stream a partially-written database into the archive.
         if include_db and DB_PATH.exists():
-            tmp_fd, tmp_name = tempfile.mkstemp(suffix=".db")
+            TEMP_DIR.mkdir(parents=True, exist_ok=True)
+            tmp_fd, tmp_name = tempfile.mkstemp(suffix=".db", dir=TEMP_DIR)
             tmp_db_path = Path(tmp_name)
             os.close(tmp_fd)
             src = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
@@ -281,7 +282,8 @@ def _restore_staged(zf: ZipFile, payload: list[str], version: str) -> dict[str, 
     restored: list[str] = []
     errors: list[str] = []
 
-    with tempfile.TemporaryDirectory(prefix="cyrene_restore_") as stage_dir:
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="cyrene_restore_", dir=TEMP_DIR) as stage_dir:
         stage = Path(stage_dir)
 
         # --- Extract to staging area with path-traversal check (#37) ---

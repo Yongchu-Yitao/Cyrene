@@ -1739,6 +1739,7 @@ async def test_send_message_tool_persists_intermediate_reply(monkeypatch, tmp_pa
     request_token = agent._current_client_request_id.set("req_1")
     pending_token = agent._pending_intermediate_user_replies.set([])
     sender_token = agent._current_agent_id.set("main")
+    destructive_token = _agent_state._destructive_confirmation_allow_all.set(True)
     streamed = []
 
     async def collect_stream_event(event):
@@ -1755,6 +1756,7 @@ async def test_send_message_tool_persists_intermediate_reply(monkeypatch, tmp_pa
         )
     finally:
         agent._reply_stream_writer.reset(stream_token)
+        _agent_state._destructive_confirmation_allow_all.reset(destructive_token)
         agent._current_agent_id.reset(sender_token)
         agent._pending_intermediate_user_replies.reset(pending_token)
         agent._current_client_request_id.reset(request_token)
@@ -2276,6 +2278,149 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
     assert seen["persist_insert_at"] == 2
     assert seen["client_request_id"] == "req_answer_perm_1"
     assert seen["persist_user_message"] is False
+
+
+async def test_bash_destructive_command_requires_confirmation_in_full_access(monkeypatch, tmp_path):
+    from cyrene import agent
+    from cyrene.agent import state as agent_state
+    from cyrene.tool_impl import bash as bash_tool
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "victim").mkdir()
+    agent.STATE_FILE.write_text(json.dumps({
+        "messages": [{"role": "user", "content": "清理目录", "round_id": "round_1"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    round_token = agent_state._current_round_id.set("round_1")
+    workspace_token = agent_state._active_workspace_dir.set(str(workspace))
+    full_token = agent_state._temporary_full_access.set(True)
+    mode_token = agent_state._permission_mode.set("full_access")
+    try:
+        result = await bash_tool._tool_bash(
+            {"command": "rm -rf victim", "timeout_ms": 1000},
+            None,
+            0,
+            "",
+            {},
+        )
+    finally:
+        agent_state._permission_mode.reset(mode_token)
+        agent_state._temporary_full_access.reset(full_token)
+        agent_state._active_workspace_dir.reset(workspace_token)
+        agent_state._current_round_id.reset(round_token)
+
+    payload = json.loads(result)
+    saved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
+
+    assert payload["status"] == "awaiting_user"
+    assert payload["permission"] == "destructive_confirmation"
+    assert saved["pending_question"]["hidden_from_chat"] is True
+    assert saved["pending_question"]["meta"]["kind"] == "destructive_confirmation"
+    assert saved["pending_question"]["meta"]["destructive_kind"] == "file_delete"
+    assert (workspace / "victim").exists()
+
+
+async def test_destructive_confirmation_answer_remembers_single_operation(monkeypatch, tmp_path):
+    from cyrene import agent
+    from cyrene.agent import coordinator as _agent_coordinator
+    from cyrene.agent import state as agent_state
+    from cyrene.tool_legacy import _destructive_operation_fingerprint
+
+    seen = {}
+    fingerprint = _destructive_operation_fingerprint(
+        tool_name="Bash",
+        operation="文件删除操作",
+        detail="命令：rm -rf victim",
+        destructive_kind="file_delete",
+    )
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    agent.STATE_FILE.write_text(json.dumps({
+        "messages": [{"role": "user", "content": "清理目录", "round_id": "round_1"}],
+        "pending_question": {
+            "id": "question_destructive_1",
+            "text": "确认删除",
+            "round_id": "round_1",
+            "client_request_id": "req_destructive_1",
+            "options": [{"id": "option_1", "label": "允许这次"}, {"id": "option_2", "label": "拒绝"}],
+            "asked_at": "2026-06-29T00:00:00+00:00",
+            "hidden_from_chat": True,
+            "hide_answer_in_chat": True,
+            "meta": {
+                "kind": "destructive_confirmation",
+                "tool_name": "Bash",
+                "operation": "文件删除操作",
+                "reason": "命令：rm -rf victim",
+                "fingerprint": fingerprint,
+            },
+        },
+    }, ensure_ascii=False), encoding="utf-8")
+
+    async def fake_run_chat_agent(*args, **kwargs):
+        seen["ephemeral_system"] = kwargs.get("ephemeral_system", "")
+        seen["fingerprints"] = agent_state._destructive_confirmation_fingerprints.get()
+        seen["full_access"] = agent_state._temporary_full_access.get()
+        return "继续执行"
+
+    monkeypatch.setattr(_agent_coordinator, "_run_chat_agent", fake_run_chat_agent)
+
+    original_fingerprints = agent_state._destructive_confirmation_fingerprints.set(frozenset())
+    original_allow_all = agent_state._destructive_confirmation_allow_all.set(False)
+    try:
+        result = await agent.answer_pending_question(
+            "question_destructive_1",
+            "允许这次",
+            None,
+            0,
+            "db.sqlite3",
+            client_request_id="req_answer_destructive_1",
+        )
+    finally:
+        agent_state._destructive_confirmation_allow_all.reset(original_allow_all)
+        agent_state._destructive_confirmation_fingerprints.reset(original_fingerprints)
+
+    assert result == "继续执行"
+    assert fingerprint in seen["fingerprints"]
+    assert seen["full_access"] is False
+    assert "confirmed the destructive" in seen["ephemeral_system"]
+
+
+async def test_send_message_requires_destructive_confirmation(monkeypatch, tmp_path):
+    from cyrene import agent
+    from cyrene.agent import state as agent_state
+    from cyrene.tool_impl import send_message as send_message_tool
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    agent.STATE_FILE.write_text(json.dumps({
+        "messages": [{"role": "user", "content": "发个进度", "round_id": "round_1"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    round_token = agent_state._current_round_id.set("round_1")
+    agent_token = agent_state._current_agent_id.set("main")
+    try:
+        result = await send_message_tool._tool_send_user_message(
+            {"text": "我正在处理"},
+            None,
+            0,
+            "",
+            {},
+        )
+    finally:
+        agent_state._current_agent_id.reset(agent_token)
+        agent_state._current_round_id.reset(round_token)
+
+    payload = json.loads(result)
+    saved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
+
+    assert payload["status"] == "awaiting_user"
+    assert payload["permission"] == "destructive_confirmation"
+    assert saved["pending_question"]["meta"]["tool_name"] == "send_message"
+    assert saved["pending_question"]["meta"]["destructive_kind"] == "external_message"
 
 
 def test_build_current_session_exposes_pending_question(monkeypatch, tmp_path):

@@ -21,7 +21,7 @@ from urllib.request import getproxies
 import httpx
 import yaml
 
-from cyrene.config import DATA_DIR, SEARCH_PROXY, SEARXNG_URL
+from cyrene.config import DATA_DIR, SEARCH_PROXY, SEARXNG_URL, TEMP_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,8 @@ class SearXNGManager:
             )
         self._url = f"http://{host}:{port}"
 
-        fd, log_path = tempfile.mkstemp(prefix="simplexng_", suffix=".log")
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        fd, log_path = tempfile.mkstemp(prefix="simplexng_", suffix=".log", dir=TEMP_DIR)
         os.close(fd)
         self._stderr_path = log_path
 

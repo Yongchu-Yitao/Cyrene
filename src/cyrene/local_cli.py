@@ -560,6 +560,11 @@ def _dump_error(message: str) -> None:
     """Write an error message to temp files so the user can inspect it."""
     import os as _os
     _paths = []
+    try:
+        from cyrene.app_paths import TEMP_DIR as _CYRENE_TEMP_DIR
+        _paths.append(str(_CYRENE_TEMP_DIR))
+    except Exception:
+        pass
     for _key in ("TMPDIR", "TEMP", "TMP"):
         if _os.environ.get(_key):
             _paths.append(_os.environ[_key])
@@ -570,6 +575,7 @@ def _dump_error(message: str) -> None:
         pass
     for _dir in _paths:
         try:
+            _os.makedirs(_dir, exist_ok=True)
             _log_path = _os.path.join(_dir, "cyrene_error.log")
             with open(_log_path, "a", encoding="utf-8") as _f:
                 _f.write(message + "\n")

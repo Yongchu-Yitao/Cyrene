@@ -4,9 +4,10 @@ import asyncio
 import logging
 
 from cyrene.config import (
-    DB_PATH, DATA_DIR, INBOX_DIR, STORE_DIR, WORKSPACE_DIR,
+    DB_PATH, DATA_DIR, INBOX_DIR, STORE_DIR, TEMP_DIR, WORKSPACE_DIR,
     SEARXNG_AUTO_START, SEARXNG_HOST, SEARXNG_PORT,
 )
+from cyrene.app_paths import cleanup_temporary_artifacts
 from cyrene.db import init_db
 from cyrene.inbox import ensure_inbox
 from cyrene.short_term import init_short_term
@@ -23,8 +24,9 @@ logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
-    for d in (WORKSPACE_DIR, STORE_DIR, DATA_DIR, INBOX_DIR):
+    for d in (WORKSPACE_DIR, STORE_DIR, DATA_DIR, INBOX_DIR, TEMP_DIR):
         d.mkdir(parents=True, exist_ok=True)
+    cleanup_temporary_artifacts(TEMP_DIR)
 
     await init_db(str(DB_PATH))
     ensure_soul()

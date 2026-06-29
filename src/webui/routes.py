@@ -91,6 +91,7 @@ from cyrene.config import (
     SEARXNG_PORT,
     SOUL_PATH,
     STATE_FILE,
+    TEMP_DIR,
     WORKSPACE_DIR,
 )
 from cyrene.conversations import CONVERSATIONS_DIR, archive_exchange, search_conversations, search_conversations_structured
@@ -7142,7 +7143,14 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             try:
                 while True:
                     frame = await queue.get()
-                    await websocket.send_json({"type": "frame", **frame})
+                    data = frame.get("data") or b""
+                    await websocket.send_json({
+                        "type": "frame",
+                        "url": frame.get("url") or "",
+                        "content_type": frame.get("content_type") or "image/jpeg",
+                    })
+                    if data:
+                        await websocket.send_bytes(data)
             except Exception:
                 return
 
@@ -7670,7 +7678,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             if len(content) > 8 * 1024 * 1024:  # 8 MB (matches _MAX_SKILL_ARCHIVE_BYTES)
                 return JSONResponse({"ok": False, "error": "File too large (max 8 MB)"}, status_code=400)
             suffix = Path(file.filename or "skill.tmp").suffix or ".tmp"
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            TEMP_DIR.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=TEMP_DIR) as tmp:
                 tmp.write(content)
                 tmp_path = tmp.name
             try:

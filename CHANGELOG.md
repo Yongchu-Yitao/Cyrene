@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.6.0b16] - 2026-06-29
+
+### Added
+
+- **应用路径集中管理** — 新增 `cyrene.app_paths`，统一解析安装资源目录、用户数据目录、缓存目录和应用临时目录。打包运行时写入 `Application Support` / `%APPDATA%` / XDG data，临时与缓存产物写入平台缓存目录，避免把运行时数据混入安装资源。
+- **破坏性操作二次确认** — Bash / SendShell / StartShell 现在会识别 `rm`、`git reset --hard`、`git clean -f`、`dd`、`truncate`、强制覆盖等高风险命令；即使处于 full access 或 auto 模式，也必须由用户确认。外发 WebUI / Telegram / WeChat 文件也纳入不可逆副作用确认。
+- **Workbench 浏览器侧栏** — Workbench Chat 会在浏览器自动化或登录接管时自动打开 Browser 侧栏，并允许直接在侧栏点击“我已完成登录”继续任务。
+
+### Fixed
+
+- **打包应用运行时目录污染** — 配置、数据库、workspace、备份暂存、代码格式化暂存、技能安装暂存、通知脚本、SearXNG 日志、浏览器截图和更新下载现在都使用统一的用户数据 / 临时目录，减少 macOS / Windows 打包后写入只读资源目录或系统临时目录残留的问题。
+- **浏览器直播不再堵塞 SSE** — `browser_frame` SSE 事件改为只发送 URL、title、action、target 等轻量元数据；实时画面通过 `/ws/browser` 发送二进制 JPEG 帧，前端用 object URL 渲染并及时释放，避免 base64 截图挤占共享事件流。
+- **更新重启启动保护** — 修复更新重启路径的 launch guard，避免重启后误判已有实例或丢失启动状态。
+
+### Changed
+
+- **静态资源缓存版本统一** — WebUI 所有 JS/CSS cache-busting 参数统一为 `beta16`。
+- **版本元数据统一** — Python 包、Electron 应用、Electron lockfile、README badge、WeChat client 标识与 `uv.lock` 统一到 beta16。
+
+### Tests
+
+- 新增/更新 `test_app_paths`、`test_browser_session`、`test_runtime_fixes`、`test_workbench_frontend_logic`，覆盖平台路径解析、临时产物清理、二进制浏览器帧传输、登录接管确认和破坏性操作确认。
+- 前端 cache-bust 断言同步到 beta16。
+
 ## [0.6.0b15] - 2026-06-28
 
 ### Added

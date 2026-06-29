@@ -13,10 +13,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 from pathlib import Path
 
 from cryptography.fernet import Fernet
+from cyrene import app_paths
 
 try:
     import keyring
@@ -36,46 +36,9 @@ _KEYRING_USERNAME = "config_key"
 # ---------------------------------------------------------------------------
 
 
-def _bundle_contents_dir() -> Path | None:
-    exe = Path(sys.executable).resolve()
-    parts = exe.parts
-    for idx, part in enumerate(parts):
-        if part.endswith(".app") and idx + 2 < len(parts) and parts[idx + 1] == "Contents":
-            return Path(*parts[: idx + 2])
-    return None
-
-
-def _is_bundled() -> bool:
-    return getattr(sys, "frozen", False) or _bundle_contents_dir() is not None
-
-
-def _get_user_data_dir() -> Path:
-    if sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    elif sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-    else:
-        xdg = os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
-        base = Path(xdg)
-    return base / "Cyrene"
-
-
-def _get_source_root() -> Path:
-    if _is_bundled() and hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS)
-    bundle_contents = _bundle_contents_dir()
-    if bundle_contents is not None:
-        for candidate in (bundle_contents / "Resources", bundle_contents / "Frameworks"):
-            if (candidate / "pyproject.toml").exists() or (candidate / ".env.example").exists():
-                return candidate
-    return Path(__file__).resolve().parent.parent.parent
-
-
-_SOURCE_ROOT = _get_source_root()
-if _is_bundled():
-    _BASE_DIR = _get_user_data_dir()
-else:
-    _BASE_DIR = _SOURCE_ROOT
+_PATHS = app_paths.resolve_app_paths()
+_SOURCE_ROOT = _PATHS.install_resources
+_BASE_DIR = _PATHS.runtime_base
 
 DATA_DIR = _BASE_DIR / "data"
 _ENCRYPTED_PATH = DATA_DIR / "config.enc"

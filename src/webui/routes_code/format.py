@@ -5,6 +5,7 @@ import os
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from cyrene.config import TEMP_DIR
 
 router = APIRouter()
 
@@ -28,7 +29,8 @@ async def format_code(body: FormatBody):
     if not _check_ruff():
         return {"formatted": body.code, "changed": False, "warning": "ruff not available"}
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=TEMP_DIR, delete=False) as f:
         f.write(body.code)
         temp_path = f.name
 

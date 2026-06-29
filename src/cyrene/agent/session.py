@@ -1055,6 +1055,7 @@ _PERMISSION_ELEVATION_KINDS: frozenset[str] = frozenset({
     "read_elevation",
     "subshell_elevation",
     "delete_confirmation",
+    "destructive_confirmation",
     "task_permission_request",
     "git_commit",
 })

@@ -349,7 +349,8 @@ function connectEvents() {
           __bump();
         }
 
-        // Live browser view — the agent's screencast actions (M2).
+        // Live browser view — lightweight action metadata. Pixel frames stream
+        // over /ws/browser, not the shared SSE bus.
         if (data.type === "browser_frame") {
           DATA.browser = DATA.browser || {};
           DATA.browser.active = true;
@@ -369,7 +370,12 @@ function connectEvents() {
           DATA.browser.active = true;
           DATA.browser.url = data.url || DATA.browser.url || "";
           DATA.browser.roundId = data.round_id || "";
-          DATA.browser.takeover = { pending: true, url: data.url || "", reason: data.reason || "" };
+          DATA.browser.takeover = {
+            pending: true,
+            url: data.url || "",
+            reason: data.reason || "",
+            questionId: data.question_id || data.questionId || "",
+          };
           bumpData();
         }
         // Takeover ended/cancelled (user finished, or closed the window) — drop

@@ -2483,6 +2483,17 @@ function ChatPage({ selectedSessionId, onSelectSession, rightSidebarCollapsed = 
         sidebarTabs={sidebarTabs}
         plan={runtimeState.plan}
         planStatus={runtimeState.planStatus}
+        onBrowserTakeoverComplete={function (payload) {
+          if (!pendingQuestion) return Promise.reject(new Error("登录确认已不在等待中。"));
+          var takeoverQuestionId = String(payload && payload.questionId || "");
+          if (takeoverQuestionId && String(pendingQuestion.id || "") !== takeoverQuestionId) {
+            return Promise.reject(new Error("登录确认已更新，请使用聊天输入区的最新确认。"));
+          }
+          return submitQuestionAnswer({
+            selectedOption: payload && payload.selectedOption || "我已完成登录",
+            text: payload && payload.text || "我已完成登录",
+          });
+        }}
       />
     </div>
   );
@@ -2543,7 +2554,7 @@ function isCodeMutationTool(tool) {
   return isLikelyCodePath(extractToolFilePath(tool && tool.rawArgs));
 }
 
-function ChatSide({ session, subagents, ccStatus, refreshCcStatus, onOpenCCModal, onOpenShellModal, view = "overview", onViewChange, roundId, onResize, activeHtmlContent, activePdfUrl, activePdfName, activePptUrl, activePptName, htmlViewTab, onHtmlViewTabChange, editorData, diffData, activeMarkdownContent, activeMarkdownName, sidebarTabs, plan, planStatus }) {
+function ChatSide({ session, subagents, ccStatus, refreshCcStatus, onOpenCCModal, onOpenShellModal, view = "overview", onViewChange, roundId, onResize, activeHtmlContent, activePdfUrl, activePdfName, activePptUrl, activePptName, htmlViewTab, onHtmlViewTabChange, editorData, diffData, activeMarkdownContent, activeMarkdownName, sidebarTabs, plan, planStatus, onBrowserTakeoverComplete }) {
   const { t } = useI18n();
   const sideRef = useRef(null);
   const tabs = sidebarTabs || new Set();
@@ -2667,6 +2678,7 @@ function ChatSide({ session, subagents, ccStatus, refreshCcStatus, onOpenCCModal
         {typeof window.BrowserViewportPanel !== "undefined" && React.createElement(window.BrowserViewportPanel, {
           roundId: roundId,
           onClose: function () { onViewChange("overview"); },
+          onTakeoverComplete: onBrowserTakeoverComplete,
         })}
       </div>;
     }

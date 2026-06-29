@@ -1,7 +1,7 @@
 import os
-import sys
 from pathlib import Path
 
+from cyrene import app_paths
 from cyrene import config_store as _store
 
 
@@ -12,57 +12,17 @@ def _strip_wrapping_quotes(value: str | None) -> str:
     return text
 
 
-def _bundle_contents_dir() -> Path | None:
-    """Return ``.../MyApp.app/Contents`` when running from a macOS app bundle."""
-    exe = Path(sys.executable).resolve()
-    parts = exe.parts
-    for idx, part in enumerate(parts):
-        if part.endswith(".app") and idx + 2 < len(parts) and parts[idx + 1] == "Contents":
-            return Path(*parts[: idx + 2])
-    return None
-
-
-def _is_bundled() -> bool:
-    """检测是否为 PyInstaller 打包后的运行环境。"""
-    return getattr(sys, "frozen", False) or _bundle_contents_dir() is not None
-
-
-def _get_user_data_dir() -> Path:
-    """返回平台特定的用户数据目录。"""
-    if sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    elif sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-    else:
-        xdg = os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
-        base = Path(xdg)
-    return base / "Cyrene"
-
-
-def _get_source_root() -> Path:
-    """返回源码根目录或打包资源根目录。"""
-    if _is_bundled() and hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS)
-    bundle_contents = _bundle_contents_dir()
-    if bundle_contents is not None:
-        for candidate in (bundle_contents / "Resources", bundle_contents / "Frameworks"):
-            if (candidate / "pyproject.toml").exists() or (candidate / ".env.example").exists():
-                return candidate
-    return Path(__file__).resolve().parent.parent.parent
-
-
-SOURCE_ROOT = _get_source_root()
-
-# 确定 BASE_DIR：打包模式用用户数据目录，源码模式用项目根目录
-if _is_bundled():
-    BASE_DIR = _get_user_data_dir()
-else:
-    BASE_DIR = SOURCE_ROOT
+SOURCE_ROOT = app_paths.INSTALL_RESOURCES_DIR
+INSTALL_RESOURCES_DIR = app_paths.INSTALL_RESOURCES_DIR
+USER_DATA_DIR = app_paths.USER_DATA_DIR
+BASE_DIR = app_paths.BASE_DIR
 
 # 路径
 WORKSPACE_DIR = BASE_DIR / "workspace"      # 工作区，存放 SOUL.md、CLAUDE.md 等运行时文件
 STORE_DIR = BASE_DIR / "store"              # 持久化存储，数据库文件
 DATA_DIR = BASE_DIR / "data"                # 运行时数据，状态文件、收件箱等
+CACHE_DIR = app_paths.CACHE_DIR             # 平台特定缓存目录
+TEMP_DIR = app_paths.TEMP_DIR               # 应用临时产物目录（启动时按 TTL 清理）
 DB_PATH = STORE_DIR / "cyrene.db"           # SQLite 数据库路径
 STATE_FILE = DATA_DIR / "state.json"        # 运行时状态持久化
 LOTTERY_FILE = DATA_DIR / "lottery_state.json"  # 抽奖状态持久化

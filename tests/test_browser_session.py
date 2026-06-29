@@ -2,7 +2,7 @@
 
 Covers the live-view foundation without launching a real browser:
   - navigate() drives the shared page and returns extracted text
-  - every action emits a structured ``browser_frame`` SSE event
+  - every action emits a structured metadata-only ``browser_frame`` SSE event
   - click/type refuse to run before navigate (regression: the old
     ``_current_page`` global was never assigned, so these were dead code)
   - navigate falls back to httpx when Playwright is unavailable
@@ -83,7 +83,7 @@ async def test_session_navigate_returns_text_and_emits_frame(monkeypatch):
     frames = [e for e in captured if e.get("type") == "browser_frame"]
     assert len(frames) == 1
     assert frames[0]["action"] == "navigate"
-    assert frames[0]["image"].startswith("data:image/jpeg;base64,")
+    assert "image" not in frames[0]
 
 
 async def test_emit_frame_normalizes_box_and_target(monkeypatch):
@@ -106,17 +106,17 @@ async def test_emit_frame_normalizes_box_and_target(monkeypatch):
 
 
 async def test_emit_frame_is_best_effort(monkeypatch):
-    """A screenshot failure must not raise out of _emit_frame."""
+    """A metadata publish failure must not raise out of _emit_frame."""
     from cyrene import browser
+    from cyrene import debug
 
-    _capture_publish(monkeypatch)
     session = browser._BrowserSession()
+    session._page = _FakePage()
 
-    class _BrokenPage(_FakePage):
-        async def screenshot(self, **_kw):
-            raise RuntimeError("boom")
+    async def broken_publish(_event):
+        raise RuntimeError("boom")
 
-    session._page = _BrokenPage()
+    monkeypatch.setattr(debug, "publish_event", broken_publish)
     # Should swallow the error rather than propagate.
     await session._emit_frame("navigate")
 
@@ -241,6 +241,22 @@ def test_browser_runtime_error_filters_install_commands():
     assert "pip install" not in message
 
 
+def test_browser_live_frames_do_not_ride_sse_as_base64():
+    root = Path(__file__).resolve().parent.parent
+    browser_source = (root / "src" / "cyrene" / "browser.py").read_text(encoding="utf-8")
+    routes_source = (root / "src" / "webui" / "routes.py").read_text(encoding="utf-8")
+    view_source = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
+
+    emit_frame_body = browser_source.split("async def _emit_frame", 1)[1].split("# -- Screencast", 1)[0]
+    assert "page.screenshot" not in emit_frame_body
+    assert "base64.b64encode" not in emit_frame_body
+    assert '"image"' not in emit_frame_body
+
+    assert "await websocket.send_bytes(data)" in routes_source
+    assert '"data:image/jpeg;base64,"' not in view_source
+    assert 'ws.binaryType = "arraybuffer"' in view_source
+
+
 async def test_launch_context_uses_desktop_ua_and_locale(monkeypatch):
     from cyrene import browser
 
@@ -316,6 +332,7 @@ async def test_click_delegates_to_session(monkeypatch):
     frames = [e for e in captured if e.get("type") == "browser_frame"]
     assert frames and frames[-1]["action"] == "click"
     assert frames[-1]["box"] == {"x": 1, "y": 2, "w": 3, "h": 4}
+    assert "image" not in frames[-1]
 
 
 # --- M2: screencast fan-out -------------------------------------------------
@@ -390,12 +407,14 @@ async def test_screencast_frame_fans_out_and_acks():
     q1, q2 = asyncio.Queue(), asyncio.Queue()
     session._frame_subs = {q1, q2}
 
-    session._on_screencast_frame({"data": "BASE64", "sessionId": "s1"})
+    encoded = "anBlZw=="
+    session._on_screencast_frame({"data": encoded, "sessionId": "s1"})
     await asyncio.sleep(0)  # let the ack task run
 
     f1, f2 = q1.get_nowait(), q2.get_nowait()
-    assert f1["data"] == "BASE64" and f1["url"] == "https://x/"
-    assert f2["data"] == "BASE64"
+    assert f1["data"] == b"jpeg" and f1["url"] == "https://x/"
+    assert f1["content_type"] == "image/jpeg"
+    assert f2["data"] == b"jpeg"
     assert ("Page.screencastFrameAck", {"sessionId": "s1"}) in cdp.sent
 
 
@@ -471,7 +490,9 @@ async def test_browser_request_takeover_pauses_with_takeover_meta(monkeypatch):
         assert switched == ["https://example.com/login"]
         # The pending question is tagged so the resume hook can restore headless.
         assert captured["meta"] == {"kind": "browser_takeover", "url": "https://example.com/login"}
-        assert any(e.get("type") == "browser_takeover_request" for e in events)
+        takeover_events = [e for e in events if e.get("type") == "browser_takeover_request"]
+        assert takeover_events
+        assert takeover_events[-1]["question_id"] == "q_123"
     finally:
         _state._current_agent_id.reset(agent_token)
         _state._current_round_id.reset(round_token)

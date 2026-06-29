@@ -26,6 +26,8 @@ from typing import Any
 
 import httpx
 
+from cyrene.app_paths import TEMP_DIR
+
 logger = logging.getLogger(__name__)
 
 _WEBHOOK_URL = os.getenv("NOTIFICATION_WEBHOOK_URL", "").strip()
@@ -223,7 +225,8 @@ def _notify_windows(title: str, body: str) -> dict[str, Any]:
     vbs = f'CreateObject("Wscript.Shell").Popup "{safe_body}", 5, "{safe_title}", 64'
     tmp = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=".vbs", mode="w", delete=False) as f:
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(suffix=".vbs", mode="w", dir=TEMP_DIR, delete=False) as f:
             f.write(vbs)
             tmp = f.name
         subprocess.run(["cscript", "//NoLogo", tmp], capture_output=True, timeout=10)

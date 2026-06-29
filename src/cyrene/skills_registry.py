@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from cyrene.config import DATA_DIR
+from cyrene.config import DATA_DIR, TEMP_DIR
 from cyrene.settings_store import get as get_setting, set_ as set_setting
 
 _SKILLS_DIR = DATA_DIR / "installed_skills"
@@ -312,7 +312,8 @@ def install_skill_from_path(source_path: Path) -> dict[str, Any]:
     elif source_kind == "directory":
         shutil.copytree(source_path, dest)
     else:
-        with tempfile.TemporaryDirectory(prefix="cyrene-skill-") as tmp_dir:
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="cyrene-skill-", dir=TEMP_DIR) as tmp_dir:
             tmp_root = Path(tmp_dir)
             with zipfile.ZipFile(source_path) as zf:
                 zf.extractall(tmp_root)

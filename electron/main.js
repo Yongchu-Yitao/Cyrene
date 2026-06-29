@@ -16,17 +16,39 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 
-// Log file for Python backend output — written to os.tmpdir() so it survives
-// app crashes and is easy to find even without a terminal window.
-// On Windows with console=False the process has no console; writing from the
-// Node side ensures the log is populated on every platform.
-const ERROR_LOG_PATH = path.join(os.tmpdir(), 'cyrene_error.log');
+const APP_NAME = 'Cyrene';
+const TEMP_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
 let _errorLogStream = null;
+
+function getCyreneUserDataDir() {
+  if (process.env.CYRENE_USER_DATA_DIR) return process.env.CYRENE_USER_DATA_DIR;
+  if (isMac) return path.join(os.homedir(), 'Library', 'Application Support', APP_NAME);
+  if (isWindows) return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), APP_NAME);
+  return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), APP_NAME);
+}
+
+function getCyreneCacheDir() {
+  if (process.env.CYRENE_CACHE_DIR) return process.env.CYRENE_CACHE_DIR;
+  if (isMac) return path.join(os.homedir(), 'Library', 'Caches', APP_NAME);
+  if (isWindows) {
+    return path.join(process.env.LOCALAPPDATA || process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Local'), APP_NAME, 'Cache');
+  }
+  return path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), APP_NAME);
+}
+
+function getCyreneTempDir() {
+  return process.env.CYRENE_TEMP_DIR || path.join(getCyreneCacheDir(), 'tmp');
+}
+
+function getErrorLogPath() {
+  return path.join(getCyreneTempDir(), 'cyrene_error.log');
+}
 
 function getErrorLogStream() {
   if (!_errorLogStream) {
     try {
-      _errorLogStream = fs.createWriteStream(ERROR_LOG_PATH, { flags: 'a' });
+      fs.mkdirSync(getCyreneTempDir(), { recursive: true });
+      _errorLogStream = fs.createWriteStream(getErrorLogPath(), { flags: 'a' });
     } catch (_) {}
   }
   return _errorLogStream;
@@ -35,6 +57,22 @@ function getErrorLogStream() {
 function appendErrorLog(text) {
   const s = getErrorLogStream();
   if (s) s.write(text);
+}
+
+function cleanupTemporaryArtifacts(ttlMs = TEMP_ARTIFACT_TTL_MS) {
+  const tempDir = getCyreneTempDir();
+  const cutoff = Date.now() - Math.max(0, Number(ttlMs) || 0);
+  try {
+    fs.mkdirSync(tempDir, { recursive: true });
+    for (const name of fs.readdirSync(tempDir)) {
+      const target = path.join(tempDir, name);
+      try {
+        const stat = fs.lstatSync(target);
+        if (stat.mtimeMs > cutoff) continue;
+        fs.rmSync(target, { recursive: true, force: true });
+      } catch (_) {}
+    }
+  } catch (_) {}
 }
 
 // Desktop-local auth token. Generated once at module load and shared with the
@@ -310,6 +348,11 @@ function spawnPython() {
     CYRENE_APP_EXECUTABLE: app.getPath('exe'),
     CYRENE_AUTH_TOKEN: AUTH_TOKEN,
   };
+  if (!isDev) {
+    childEnv.CYRENE_USER_DATA_DIR = getCyreneUserDataDir();
+    childEnv.CYRENE_CACHE_DIR = getCyreneCacheDir();
+    childEnv.CYRENE_TEMP_DIR = getCyreneTempDir();
+  }
 
   if (binaryPath) {
     pythonProcess = spawn(binaryPath, args, {
@@ -397,7 +440,7 @@ function spawnPython() {
         'Cyrene - Backend Error',
         `The Python backend stopped unexpectedly (exit code ${code}).\n`
         + 'The application will now close.\n\n'
-        + `If this keeps happening, check cyrene_error.log in ${os.tmpdir()}`
+        + `If this keeps happening, check cyrene_error.log in ${getCyreneTempDir()}`
       );
       app.quit();
     }
@@ -726,7 +769,7 @@ async function createMainWindow(shellOverride) {
     dialog.showErrorBox(
       'Cyrene - Startup Timeout',
       'The Python backend did not start within 30 seconds.\n\n'
-      + 'Check cyrene_error.log in your temp directory for details.'
+      + `Check cyrene_error.log in ${getCyreneTempDir()} for details.`
     );
     killPython();
     app.quit();
@@ -860,6 +903,7 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
+    cleanupTemporaryArtifacts();
     installAuthHeaderInjector();
     const desktopSettings = readDesktopSettings();
     applyLaunchAtLogin(desktopSettings.launchAtLogin);

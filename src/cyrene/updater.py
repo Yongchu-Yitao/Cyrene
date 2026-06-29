@@ -7,7 +7,6 @@ import os
 import platform
 import shlex
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -15,6 +14,7 @@ from typing import Callable
 import httpx
 from packaging.version import Version
 
+from cyrene.app_paths import TEMP_DIR
 from cyrene.config import BASE_DIR
 from cyrene.version import get_version
 
@@ -210,7 +210,7 @@ async def download_update(
     if not url:
         return None
 
-    dest = Path(tempfile.gettempdir()) / "Cyrene_update" / Path(url).name
+    dest = TEMP_DIR / "updates" / Path(url).name
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     hasher = hashlib.sha256()

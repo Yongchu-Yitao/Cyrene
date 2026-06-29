@@ -761,6 +761,7 @@ window.WorkbenchChatRuntimes = WorkbenchChatRuntimes;
 
 function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveChatIdChange }) {
   window.useWorkbenchI18n();
+  if (typeof window.useDataVersion === "function") window.useDataVersion();
   var model = window.WorkbenchChatModel;
   var projectId = project ? project.id : "";
   var [chats, setChats] = useWbcState([]);
@@ -1071,6 +1072,13 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
             }
           });
         }, 120);
+      }
+      if (
+        (event.type === "browser_frame" || event.type === "browser_takeover_request")
+        && activeChatIdRef.current
+        && runtimeEngine.isRunning(activeChatIdRef.current)
+      ) {
+        setSideTab("browser");
       }
       // Live tool/phase/subagent progress is folded into the runtime by the
       // module-level engine (WorkbenchChatRuntimes) so it keeps accumulating even
@@ -1443,6 +1451,16 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         toTaskBusy={toTaskBusy}
         onCompact={handleCompact}
         compactBusy={compactBusy}
+        onBrowserTakeoverComplete={function (payload) {
+          var pending = activeChat && activeChat.pendingQuestion;
+          if (!pending || !pending.id) return Promise.reject(new Error("登录确认已不在等待中。"));
+          var takeoverQuestionId = String(payload && payload.questionId || "");
+          if (takeoverQuestionId && String(pending.id || "") !== takeoverQuestionId) {
+            return Promise.reject(new Error("登录确认已更新，请使用对话中的最新确认。"));
+          }
+          handleAnswer(pending.id, (payload && payload.text) || "我已完成登录");
+          return Promise.resolve();
+        }}
       />
     </div>
   );
@@ -2862,8 +2880,12 @@ function WbcSide({
   toTaskBusy,
   onCompact,
   compactBusy,
+  onBrowserTakeoverComplete,
 }) {
+  if (typeof window.useDataVersion === "function") window.useDataVersion();
+  var browserState = (window.DATA && window.DATA.browser) || {};
   var hasMap = wbcChatUsedMap(chat, runtime);
+  var hasBrowser = !!(browserState && browserState.active);
   var hasBranches = useWbcMemo(function () {
     return !!wbcBranchLineage(chats, activeChatId);
   }, [chats, activeChatId]);
@@ -2885,8 +2907,9 @@ function WbcSide({
   if (hasBranches) tabs.push({ id: "branches", label: wbcT("chat.side.branches", "Branches") });
   if (viewerFile) tabs.push({ id: "viewer", label: wbcT("workbenchChat.viewer", "Viewer") });
   if (hasMap) tabs.push({ id: "map", label: wbcT("chat.side.map", "Map") });
+  if (hasBrowser) tabs.push({ id: "browser", label: wbcT("chat.side.browser", "Browser") });
   var activeTab = tabs.some(function (item) { return item.id === tab; }) ? tab : "overview";
-  var flush = activeTab === "viewer" || activeTab === "map";
+  var flush = activeTab === "viewer" || activeTab === "map" || activeTab === "browser";
   return (
     <aside className="wbc-side">
       {window.WbColResizer ? React.createElement(window.WbColResizer) : null}
@@ -2914,6 +2937,15 @@ function WbcSide({
         {activeTab === "branches" && <WbcBranchTab chats={chats} activeChatId={activeChatId} onSelectChat={onSelectChat} />}
         {activeTab === "viewer" && <WbcViewerTab file={viewerFile} />}
         {activeTab === "map" && <WbcMapTab chatId={chat ? chat.id : ""} active={true} />}
+        {activeTab === "browser" && (
+          typeof window.BrowserViewportPanel !== "undefined"
+            ? React.createElement(window.BrowserViewportPanel, {
+                roundId: browserState.roundId || "",
+                onClose: function () { onTabChange("overview"); },
+                onTakeoverComplete: onBrowserTakeoverComplete,
+              })
+            : <p className="workbench-muted">{wbcT("chat.side.browserUnavailable", "Browser view is unavailable.")}</p>
+        )}
       </div>
     </aside>
   );
