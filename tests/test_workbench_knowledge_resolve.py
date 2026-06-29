@@ -116,6 +116,26 @@ def test_session_knowledge_key_falls_back_to_default_when_unattached(monkeypatch
     assert wc.resolve_project_knowledge_key_for_session("ghost-session") == "default"
 
 
+def test_workbench_session_kind_distinguishes_chat_from_task(monkeypatch, tmp_path):
+    from cyrene import workbench_context as wc
+
+    _point_stores(
+        monkeypatch,
+        tmp_path,
+        projects=[{
+            "id": "project_abc123",
+            "dataKey": "default",
+            "sessions": [{"id": "task-1", "kind": "task"}, {"id": "init-1", "kind": "init"}],
+        }],
+        chats=[{"id": "chat-1", "projectId": "project_abc123"}],
+    )
+
+    assert wc.resolve_workbench_session_kind("chat-1") == "chat"
+    assert wc.resolve_workbench_session_kind("task-1") == "task"
+    assert wc.resolve_workbench_session_kind("init-1") == "init"
+    assert wc.resolve_workbench_session_kind("missing") is None
+
+
 # ── migration: lift only the default project's own docs ─────────────────────
 
 @pytest.mark.asyncio

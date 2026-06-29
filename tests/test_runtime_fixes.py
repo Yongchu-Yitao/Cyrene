@@ -374,8 +374,62 @@ async def test_recall_memory_tool_returns_recent_short_term_entries(tmp_path):
         "user prefers concise replies",
         "user prefers detailed reports",
     ]
+    assert all(item["memory_id"].startswith("stm_") for item in payload["memories"])
     assert "matches" not in payload
     assert "soul_memory" not in payload
+
+
+async def test_retire_short_term_memory_tool_marks_entry_stale(tmp_path):
+    from cyrene import short_term
+    from cyrene import tools
+
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([
+        {
+            "content": "user incorrectly prefers verbose replies",
+            "type": "preference",
+            "first_seen": "2026-05-18",
+            "last_mentioned": "2026-05-20",
+            "mention_count": 1,
+            "emotional_valence": 0,
+        },
+        {
+            "content": "user uses macOS",
+            "type": "fact",
+            "first_seen": "2026-05-16",
+            "last_mentioned": "2026-05-21",
+            "mention_count": 1,
+            "emotional_valence": 0,
+        },
+    ])
+    memory_id = short_term.entry_id(short_term.load_entries()[0])
+
+    result = await tools._tool_retire_short_term_memory(
+        {"memory_id": memory_id, "reason": "user corrected this"},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    payload = json.loads(result)
+
+    assert payload["status"] == "success"
+    assert payload["changed"] is True
+    entries = short_term.load_entries()
+    assert entries[0]["id"] == memory_id
+    assert entries[0]["stale"] is True
+    assert entries[0]["retire_reason"] == "user corrected this"
+    assert "user incorrectly prefers verbose replies" not in short_term.get_context()
+
+    recall_result = await tools._tool_recall_memory(
+        {"query": "verbose", "limit": 10},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    recall_payload = json.loads(recall_result)
+    assert recall_payload["available_matches"] == 0
 
 
 async def test_recall_memory_tool_uses_or_for_multiple_terms(tmp_path):
@@ -2389,7 +2443,7 @@ async def test_destructive_confirmation_answer_remembers_single_operation(monkey
     assert "confirmed the destructive" in seen["ephemeral_system"]
 
 
-async def test_send_message_requires_destructive_confirmation(monkeypatch, tmp_path):
+async def test_send_message_posts_intermediate_reply_without_permission(monkeypatch, tmp_path):
     from cyrene import agent
     from cyrene.agent import state as agent_state
     from cyrene.tool_impl import send_message as send_message_tool
@@ -2402,6 +2456,7 @@ async def test_send_message_requires_destructive_confirmation(monkeypatch, tmp_p
 
     round_token = agent_state._current_round_id.set("round_1")
     agent_token = agent_state._current_agent_id.set("main")
+    request_token = agent_state._current_client_request_id.set("req_1")
     try:
         result = await send_message_tool._tool_send_user_message(
             {"text": "我正在处理"},
@@ -2411,16 +2466,18 @@ async def test_send_message_requires_destructive_confirmation(monkeypatch, tmp_p
             {},
         )
     finally:
+        agent_state._current_client_request_id.reset(request_token)
         agent_state._current_agent_id.reset(agent_token)
         agent_state._current_round_id.reset(round_token)
 
-    payload = json.loads(result)
     saved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
 
-    assert payload["status"] == "awaiting_user"
-    assert payload["permission"] == "destructive_confirmation"
-    assert saved["pending_question"]["meta"]["tool_name"] == "send_message"
-    assert saved["pending_question"]["meta"]["destructive_kind"] == "external_message"
+    assert result == "Mid-run message sent to the user."
+    assert "pending_question" not in saved
+    assert saved["messages"][-1]["role"] == "assistant"
+    assert saved["messages"][-1]["content"] == "我正在处理"
+    assert saved["messages"][-1]["intermediate_reply"] is True
+    assert saved["messages"][-1]["client_request_id"] == "req_1"
 
 
 def test_build_current_session_exposes_pending_question(monkeypatch, tmp_path):
@@ -4640,6 +4697,45 @@ async def test_interrupt_active_run_clears_after_locked_run_finishes():
     await asyncio.sleep(0.1)
 
     assert agent._interrupt_event.is_set() is False
+
+
+async def test_interrupt_active_run_cancels_active_session_task(monkeypatch):
+    from cyrene import agent
+    from cyrene.agent import coordinator as _agent_coordinator
+    from cyrene.agent import state as _agent_state
+
+    session_id = "interrupt_active_task_test"
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def fake_run_chat_agent(*args, **kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(_agent_coordinator, "_run_chat_agent", fake_run_chat_agent)
+
+    task = asyncio.create_task(agent.run_agent("hi", None, 0, "db.sqlite3", session_id=session_id))
+    await started.wait()
+
+    assert agent.is_session_running(session_id) is True
+    assert agent.interrupt_active_run(session_id=session_id) is True
+
+    await asyncio.wait_for(cancelled.wait(), timeout=1)
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("run_agent task should have been cancelled")
+
+    await asyncio.sleep(0.1)
+    ctx = _agent_state._ensure_session(session_id)
+    assert ctx.active_task is None
+    assert agent.is_session_running(session_id) is False
 
 
 async def test_run_agent_clears_stale_interrupt_before_starting(monkeypatch):

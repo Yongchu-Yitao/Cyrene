@@ -1778,6 +1778,33 @@ def test_workbench_promote_file_artifacts_relabels_moved_diff_headers(tmp_path):
     assert "+++ b/report.md" not in artifact["diff"]
 
 
+def test_workbench_final_artifact_file_changes_use_declared_artifacts_only():
+    from webui.routes import _workbench_final_artifact_file_changes
+
+    session = {
+        "runs": [{"fileChanges": [
+            {"path": "analysis.py", "status": "created", "source": "Write"},
+            {"path": "report.tex", "status": "created", "source": "Write"},
+        ]}],
+        "artifacts": [{
+            "id": "artifact_pdf",
+            "type": "file_change",
+            "name": "report.pdf",
+            "path": "deliverables/report.pdf",
+            "status": "ready",
+            "source": "send_file",
+        }],
+    }
+
+    changes = _workbench_final_artifact_file_changes(session)
+
+    assert changes == [{
+        "path": "deliverables/report.pdf",
+        "status": "produced",
+        "source": "send_file",
+    }]
+
+
 def test_workbench_backfill_file_artifacts_from_runs_and_steps():
     from webui.routes import _workbench_backfill_file_artifacts
 

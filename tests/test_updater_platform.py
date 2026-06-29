@@ -31,13 +31,14 @@ VERSION = "0.6.0b2"
 # Ordered exactly as GitHub returns them: the macOS .dmg sorts first, which is
 # precisely the asset a broken platform match falls back to via assets[0].
 RELEASE_ASSETS = [
-    {"name": f"Cyrene-{VERSION}-mac.dmg", "browser_download_url": "https://dl/mac.dmg", "size": 11},
-    {"name": f"Cyrene-{VERSION}-win-arm64.exe", "browser_download_url": "https://dl/win-arm64.exe", "size": 22},
-    {"name": f"Cyrene-{VERSION}-win-x64.exe", "browser_download_url": "https://dl/win-x64.exe", "size": 33},
-    {"name": f"Cyrene-{VERSION}-x64.AppImage", "browser_download_url": "https://dl/x64.AppImage", "size": 44},
+    {"name": f"Cyrene-{VERSION}-mac.dmg", "browser_download_url": "https://dl/mac.dmg", "size": 11, "digest": "sha256:" + "a" * 64},
+    {"name": f"Cyrene-{VERSION}-win-arm64.exe", "browser_download_url": "https://dl/win-arm64.exe", "size": 22, "digest": "sha256:" + "b" * 64},
+    {"name": f"Cyrene-{VERSION}-win-x64.exe", "browser_download_url": "https://dl/win-x64.exe", "size": 33, "digest": "sha256:" + "c" * 64},
+    {"name": f"Cyrene-{VERSION}-x64.AppImage", "browser_download_url": "https://dl/x64.AppImage", "size": 44, "digest": "sha256:" + "d" * 64},
 ]
 URL_BY_NAME = {a["name"]: a["browser_download_url"] for a in RELEASE_ASSETS}
 SIZE_BY_NAME = {a["name"]: a["size"] for a in RELEASE_ASSETS}
+SHA_BY_NAME = {a["name"]: str(a["digest"]).split(":", 1)[1] for a in RELEASE_ASSETS}
 
 
 def _set_platform(monkeypatch, platform_name: str, machine: str) -> None:
@@ -54,7 +55,12 @@ def fake_release(monkeypatch):
     True and we reach the asset-selection branch.
     """
     async def _fake_fetch(client, include_prerelease):
-        return {"tag_name": "v99.0.0", "assets": RELEASE_ASSETS, "body": "release notes"}
+        return {
+            "tag_name": "v99.0.0",
+            "assets": RELEASE_ASSETS,
+            "body": "release notes",
+            "published_at": "2026-06-01T12:00:00Z",
+        }
 
     monkeypatch.setattr(updater, "_fetch_target_release", _fake_fetch)
 
@@ -82,6 +88,8 @@ async def test_check_for_update_selects_platform_asset(
     assert info.asset_name == expected
     assert info.download_url == URL_BY_NAME[expected]
     assert info.asset_size == SIZE_BY_NAME[expected]
+    assert info.asset_sha256 == SHA_BY_NAME[expected]
+    assert info.published_at == "2026-06-01T12:00:00Z"
 
 
 def test_windows_never_falls_back_to_dmg(monkeypatch, fake_release):
@@ -160,3 +168,35 @@ def test_no_compatible_asset_does_not_fall_back(monkeypatch):
     assert info.asset_name == ""           # no asset was selected
     assert info.error                       # and a clear unsupported-platform error
     assert "win32" in info.error            # naming the platform that has no package
+
+
+def test_update_available_appends_workbench_notification_once(tmp_path, monkeypatch):
+    from webui import workbench_notifications as notifications
+
+    store = tmp_path / "workbench_notifications.json"
+    monkeypatch.setattr(notifications, "_NOTIFICATIONS_STORE", store)
+    monkeypatch.setattr(notifications, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(notifications, "_STORE_DB_PATH", "")
+    updater._notified_update_keys.clear()
+
+    info = updater.UpdateInfo(
+        available=True,
+        current_version="1.0.0",
+        latest_version="2.0.0",
+        published_at="2026-06-01T12:00:00Z",
+        asset_name="Cyrene-2.0.0-mac.dmg",
+        asset_size=1024 * 1024,
+        asset_sha256="a" * 64,
+    )
+
+    updater._append_update_notification(info)
+    updater._append_update_notification(info)
+
+    payload = notifications.list_notifications()
+    assert len(payload["items"]) == 1
+    item = payload["items"][0]
+    assert item["tab"] == "system"
+    assert item["title"] == "Cyrene v2.0.0 可用"
+    assert "Cyrene-2.0.0-mac.dmg" in item["body"]
+    assert item["meta"]["category"] == "app_update"
+    assert item["meta"]["checksumAvailable"] is True

@@ -43,13 +43,20 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
     registered = register_generated_attachment(str(path), display_name=str(args.get("name", "") or "").strip() or None)
     attachment = build_public_attachment_payload(registered)
 
-    # Register in knowledge base
+    # Register in knowledge base for legacy/non-Workbench sessions. Workbench
+    # tasks archive only final deliverables after review/completion, so sending
+    # a file mid-run must not immediately pollute project knowledge.
     try:
         from cyrene.knowledge import store, ingest
-        from cyrene.workbench_context import ensure_knowledge_db_for_session
+        from cyrene.workbench_context import (
+            ensure_knowledge_db_for_session,
+            resolve_workbench_session_kind,
+        )
         import mimetypes
         doc_path = registered.get("path", "")
-        if doc_path:
+        current_session_id = str(_current_session_id.get() or "")
+        session_kind = resolve_workbench_session_kind(current_session_id)
+        if doc_path and session_kind not in {"task", "init"}:
             from pathlib import Path
             import mimetypes
             doc_file = Path(doc_path)

@@ -456,8 +456,82 @@ def test_update_restart_incomplete_package_skips_spawn(tmp_path):
 
     assert ok is False
     assert status == 409
-    assert code == "update_package_incomplete"
-    assert "incomplete" in message.lower()
+    assert code == "update_package_size_mismatch"
+    assert "size mismatch" in message.lower()
+    popen.assert_not_called()
+
+
+def test_update_restart_missing_checksum_skips_spawn(tmp_path):
+    from webui import routes
+
+    package = tmp_path / "Cyrene-update.dmg"
+    package.write_bytes(b"fake update")
+    popen = MagicMock()
+
+    ok, message, code, status = routes._launch_update_restart(
+        {"done": True, "path": str(package), "total": package.stat().st_size, "verified": False},
+        get_restart_script_fn=lambda _path: "echo ok\n",
+        popen_fn=popen,
+    )
+
+    assert ok is False
+    assert status == 409
+    assert code == "update_checksum_missing"
+    assert "sha256" in message.lower()
+    popen.assert_not_called()
+
+
+def test_update_restart_checksum_mismatch_skips_spawn(tmp_path):
+    from webui import routes
+
+    package = tmp_path / "Cyrene-update.dmg"
+    package.write_bytes(b"fake update")
+    popen = MagicMock()
+
+    ok, message, code, status = routes._launch_update_restart(
+        {
+            "done": True,
+            "path": str(package),
+            "total": package.stat().st_size,
+            "expected_sha256": "0" * 64,
+            "actual_sha256": "1" * 64,
+            "verified": False,
+        },
+        get_restart_script_fn=lambda _path: "echo ok\n",
+        popen_fn=popen,
+    )
+
+    assert ok is False
+    assert status == 409
+    assert code == "update_checksum_mismatch"
+    popen.assert_not_called()
+
+
+def test_update_restart_unverified_package_skips_spawn(tmp_path):
+    from webui import routes
+
+    package = tmp_path / "Cyrene-update.dmg"
+    package.write_bytes(b"fake update")
+    popen = MagicMock()
+
+    ok, message, code, status = routes._launch_update_restart(
+        {
+            "done": True,
+            "path": str(package),
+            "total": package.stat().st_size,
+            "expected_sha256": "0" * 64,
+            "actual_sha256": "0" * 64,
+            "verified": False,
+            "verification_error": "verification did not pass",
+        },
+        get_restart_script_fn=lambda _path: "echo ok\n",
+        popen_fn=popen,
+    )
+
+    assert ok is False
+    assert status == 409
+    assert code == "update_package_unverified"
+    assert "verification did not pass" in message
     popen.assert_not_called()
 
 
@@ -469,7 +543,14 @@ def test_update_restart_spawn_failure_reports_error(tmp_path):
     popen = MagicMock(side_effect=OSError("spawn denied"))
 
     ok, message, code, status = routes._launch_update_restart(
-        {"done": True, "path": str(package)},
+        {
+            "done": True,
+            "path": str(package),
+            "total": package.stat().st_size,
+            "expected_sha256": "0" * 64,
+            "actual_sha256": "0" * 64,
+            "verified": True,
+        },
         get_restart_script_fn=lambda _path: "echo ok\n",
         popen_fn=popen,
     )
@@ -489,7 +570,14 @@ def test_update_restart_success_spawns_detached_script(tmp_path):
     popen = MagicMock()
 
     ok, message, code, status = routes._launch_update_restart(
-        {"done": True, "path": str(package)},
+        {
+            "done": True,
+            "path": str(package),
+            "total": package.stat().st_size,
+            "expected_sha256": "0" * 64,
+            "actual_sha256": "0" * 64,
+            "verified": True,
+        },
         get_restart_script_fn=lambda _path: "echo ok\n",
         popen_fn=popen,
     )
@@ -549,6 +637,9 @@ def test_update_restart_api_spawn_failure_keeps_process_running(monkeypatch, tmp
     monkeypatch.setitem(updater._download_progress, "total", package.stat().st_size)
     monkeypatch.setitem(updater._download_progress, "done", True)
     monkeypatch.setitem(updater._download_progress, "path", str(package))
+    monkeypatch.setitem(updater._download_progress, "expected_sha256", "0" * 64)
+    monkeypatch.setitem(updater._download_progress, "actual_sha256", "0" * 64)
+    monkeypatch.setitem(updater._download_progress, "verified", True)
     monkeypatch.setattr(updater, "get_restart_script", lambda _path: "echo ok\n")
     monkeypatch.setattr(routes.subprocess, "Popen", MagicMock(side_effect=OSError("spawn denied")))
     exit_mock = MagicMock()
@@ -569,6 +660,9 @@ def test_update_restart_api_success_exits_with_restart_code(monkeypatch, tmp_pat
     monkeypatch.setitem(updater._download_progress, "total", 1)
     monkeypatch.setitem(updater._download_progress, "done", True)
     monkeypatch.setitem(updater._download_progress, "path", str(tmp_path / "Cyrene-update.dmg"))
+    monkeypatch.setitem(updater._download_progress, "expected_sha256", "0" * 64)
+    monkeypatch.setitem(updater._download_progress, "actual_sha256", "0" * 64)
+    monkeypatch.setitem(updater._download_progress, "verified", True)
     launch = MagicMock(return_value=(True, "", "", 200))
     monkeypatch.setattr(routes, "_launch_update_restart", launch)
     exit_mock = MagicMock()

@@ -43,7 +43,6 @@ logger = logging.getLogger(__name__)
 _kb_initialized: set[str] = set()
 _kb_init_lock = asyncio.Lock()
 
-
 def _safe_workspace_id(workspace_id: str | None) -> str:
     """Sanitize a workspace id into a filesystem-safe key (defaults to 'default')."""
     raw = str(workspace_id or "").strip()
@@ -320,10 +319,21 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
         try:
             db_path = await _ensure_kb_db(workspace)
             documents = await store.list_documents(
-                db_path, q=q, kind=kind, status=status, tag=tag, source=source, limit=limit
+                db_path,
+                q=q,
+                kind=kind,
+                status=status,
+                tag=tag,
+                source=source,
+                limit=limit,
             )
             total = await store.count_documents(
-                db_path, q=q, kind=kind, status=status, tag=tag, source=source
+                db_path,
+                q=q,
+                kind=kind,
+                status=status,
+                tag=tag,
+                source=source,
             )
             return {
                 "documents": documents,
@@ -554,13 +564,21 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
             return error_response("Raw access failed", 500, "knowledge_raw_failed")
 
     @router.get("/api/workbench/knowledge/search")
-    async def wb_search_knowledge(workspace: str = "", q: str = "", k: int = 8):
+    async def wb_search_knowledge(
+        workspace: str = "",
+        q: str = "",
+        k: int = 8,
+    ):
         """Full-text / hybrid search within a workspace's knowledge base."""
         try:
             if not q.strip():
                 return {"results": []}
             db_path = await _ensure_kb_db(workspace)
-            results = await retrieve.search_knowledge(db_path, q, k=k)
+            results = await retrieve.search_knowledge(
+                db_path,
+                q,
+                k=k,
+            )
             return {"results": results}
         except Exception:
             logger.exception("Failed knowledge search for %s", workspace)

@@ -51,6 +51,7 @@ class SessionContext:
     pending_interrupt_clearers: set[asyncio.Task] = field(default_factory=set)
     pending_distill_task: asyncio.Task | None = None
     main_inbox_worker: asyncio.Task | None = None
+    active_task: asyncio.Task | None = None
 
 # Per‑session identifier carried by ContextVar — set at entry to run_agent()
 _current_session_id: ContextVar[str] = ContextVar("_current_session_id", default="")

@@ -1108,6 +1108,21 @@ class GoalLoopManager:
                 )
                 if completed:
                     await self._sync_projection(completed, message="自动验收通过，持续执行已停止，等待你的最终确认。")
+                    try:
+                        _, final_project, final_session = _read_session(str(run["session_id"]))
+                        await R._workbench_archive_run_knowledge(
+                            final_project,
+                            final_session,
+                            {
+                                "id": run_id,
+                                "userInput": str(final_session.get("goal") or ""),
+                                "agentResponse": str(final_session.get("agentReply") or ""),
+                            },
+                            R._workbench_workspace_root(final_project),
+                            _utc_iso(),
+                        )
+                    except Exception:
+                        logger.exception("Goal-loop final artifact archive failed")
                     append_notification(
                         title="持续执行验收通过",
                         body=f"任务「{session.get('title') or '未命名任务'}」已通过自动验收。",

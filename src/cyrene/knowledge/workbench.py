@@ -60,45 +60,48 @@ async def archive_workbench_run(
     agent_response: str,
     file_changes: list[dict[str, Any]] | None = None,
     workspace_root: str | Path | None = None,
+    include_summary: bool = True,
 ) -> list[dict[str, Any]]:
-    """Persist a completed run summary and its readable files in project knowledge."""
+    """Persist a completed run summary and/or its readable files in project knowledge."""
     response = str(agent_response or "").strip()
-    if not response:
+    changes = file_changes if isinstance(file_changes, list) else []
+    if not response and not changes:
         return []
 
     db_path = str(get_knowledge_db_path(data_key or "default"))
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     await init_knowledge_db(db_path)
-    changes = file_changes if isinstance(file_changes, list) else []
 
-    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    run_key = _safe_id(run_id, "run")
-    summary_path = EXPORTS_DIR / f"workbench_task_{run_key}.md"
-    summary_text = _render_run_markdown(
-        title=str(title or "").strip(),
-        goal=str(goal or "").strip(),
-        user_input=str(user_input or "").strip(),
-        agent_response=response,
-        file_changes=changes,
-    )
-    summary_path.write_text(summary_text, encoding="utf-8")
-    summary_doc = await store.upsert_document_by_path(
-        db_path,
-        path=str(summary_path.resolve()),
-        source="workbench_task",
-        name=f"{str(title or 'Workbench task').strip()}.md",
-        title=str(title or "Workbench task result").strip(),
-        content_type="text/markdown",
-        kind="code",
-        size=summary_path.stat().st_size,
-        tags=["workbench", "task-result"],
-        metadata={"session_id": session_id, "run_id": run_id},
-        content_hash=store.content_hash_file(summary_path),
-    )
-    if summary_doc.get("status") in {"pending", "error"}:
-        await ingest.index_document(db_path, summary_doc["id"])
+    documents: list[dict[str, Any]] = []
+    if include_summary and response:
+        EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        run_key = _safe_id(run_id, "run")
+        summary_path = EXPORTS_DIR / f"workbench_task_{run_key}.md"
+        summary_text = _render_run_markdown(
+            title=str(title or "").strip(),
+            goal=str(goal or "").strip(),
+            user_input=str(user_input or "").strip(),
+            agent_response=response,
+            file_changes=changes,
+        )
+        summary_path.write_text(summary_text, encoding="utf-8")
+        summary_doc = await store.upsert_document_by_path(
+            db_path,
+            path=str(summary_path.resolve()),
+            source="workbench_task",
+            name=f"{str(title or 'Workbench task').strip()}.md",
+            title=str(title or "Workbench task result").strip(),
+            content_type="text/markdown",
+            kind="code",
+            size=summary_path.stat().st_size,
+            tags=["workbench", "task-result"],
+            metadata={"session_id": session_id, "run_id": run_id},
+            content_hash=store.content_hash_file(summary_path),
+        )
+        if summary_doc.get("status") in {"pending", "error"}:
+            await ingest.index_document(db_path, summary_doc["id"])
+        documents.append(summary_doc)
 
-    documents = [summary_doc]
     root = Path(workspace_root).resolve() if workspace_root else None
     seen_paths: set[str] = set()
     for item in changes:

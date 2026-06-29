@@ -804,13 +804,20 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
     registered = register_generated_attachment(str(path), display_name=str(args.get("name", "") or "").strip() or None)
     attachment = build_public_attachment_payload(registered)
 
-    # Register in knowledge base
+    # Register in knowledge base for legacy/non-Workbench sessions. Workbench
+    # tasks archive only final deliverables after review/completion, so sending
+    # a file mid-run must not immediately pollute project knowledge.
     try:
         from cyrene.knowledge import store, ingest
-        from cyrene.workbench_context import ensure_knowledge_db_for_session
+        from cyrene.workbench_context import (
+            ensure_knowledge_db_for_session,
+            resolve_workbench_session_kind,
+        )
         import mimetypes
         doc_path = registered.get("path", "")
-        if doc_path:
+        current_session_id = str(_current_session_id.get() or "")
+        session_kind = resolve_workbench_session_kind(current_session_id)
+        if doc_path and session_kind not in {"task", "init"}:
             from pathlib import Path
             import mimetypes
             doc_file = Path(doc_path)
@@ -1729,7 +1736,7 @@ async def _tool_browser_type(args: dict[str, Any], _bot: Any, _chat_id: int, _db
 async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
     from cyrene import debug
     from cyrene.browser import get_session
-    from cyrene.agent.state import _current_agent_id, _current_client_request_id, _current_round_id
+    from cyrene.agent.state import _current_agent_id, _current_client_request_id, _current_round_id, _current_session_id
     from cyrene.agent.session import _clear_pending_question, _upsert_pending_question, get_session_labels
 
     if _current_agent_id.get() != "main":
@@ -1761,6 +1768,7 @@ async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_
     })
     await debug.publish_event({
         "type": "browser_takeover_request",
+        "session_id": str(_current_session_id.get() or ""),
         "round_id": round_id,
         "url": current_url,
         "reason": reason,
@@ -1774,7 +1782,11 @@ async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_
             await _clear_pending_question(str(question.get("id", "")))
         except Exception:
             pass
-        await debug.publish_event({"type": "browser_takeover_cancelled", "round_id": round_id})
+        await debug.publish_event({
+            "type": "browser_takeover_cancelled",
+            "session_id": str(_current_session_id.get() or ""),
+            "round_id": round_id,
+        })
         return f"Failed to open the browser window for takeover: {exc}"
     return _json_result({
         "status": "awaiting_user",
@@ -2304,6 +2316,34 @@ TOOL_DEFS = [
                     "limit": {"type": "integer", "description": "Maximum number of archived conversation matches to return (1-10)."},
                 },
                 "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retire_short_term_memory",
+            "description": (
+                "Mark one recent cross-session short-term memory as retired. "
+                "Use the exact memory_id returned by RecallMemory. Retired short-term "
+                "memories remain in the local store for auditability, but are excluded "
+                "from future memory context and RecallMemory results. Use this when "
+                "the user says a recalled short-term memory is wrong, stale, or should "
+                "no longer be used. This does not permanently delete data."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "Exact short-term memory id returned by RecallMemory, such as stm_ab12cd34ef56ab78.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional concise reason the memory is wrong, stale, or superseded.",
+                    },
+                },
+                "required": ["memory_id"],
             },
         },
     },

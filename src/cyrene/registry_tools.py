@@ -32,6 +32,7 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.bash",  # Bash
     "cyrene.tool_impl.recall_memory",  # RecallMemory
     "cyrene.tool_impl.recall_conversation",  # RecallConversation
+    "cyrene.tool_impl.retire_short_term_memory",  # retire_short_term_memory
     "cyrene.tool_impl.search_project_memory",  # search_project_memory
     "cyrene.tool_impl.save_project_memory",  # save_project_memory
     "cyrene.tool_impl.retire_project_memory",  # retire_project_memory
@@ -79,6 +80,7 @@ _MAIN_ONLY_TOOLS = {
     "enter_plan_mode",
     "update_plan_progress",
     "DeepReflect",
+    "retire_short_term_memory",
     "save_project_memory",
     "retire_project_memory",
     "set_task_goal",

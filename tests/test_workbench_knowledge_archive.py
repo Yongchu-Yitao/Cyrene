@@ -243,6 +243,124 @@ async def test_workbench_knowledge_list_returns_total(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_workbench_knowledge_shows_final_archives_by_default(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from cyrene import db
+    from cyrene.knowledge import store
+    from webui import routes_workbench_knowledge
+
+    db_path = str(tmp_path / "knowledge.db")
+    await db.init_knowledge_db(db_path)
+    source_file = tmp_path / "source.md"
+    summary_file = tmp_path / "summary.md"
+    artifact_file = tmp_path / "Info.plist"
+    source_file.write_text("durable source", encoding="utf-8")
+    summary_file.write_text("task summary", encoding="utf-8")
+    artifact_file.write_text("generated artifact", encoding="utf-8")
+
+    source_doc = await store.upsert_document_by_path(
+        db_path,
+        path=str(source_file),
+        source="kb_upload",
+        name="source.md",
+        content_hash=store.content_hash_file(source_file),
+    )
+    summary_doc = await store.upsert_document_by_path(
+        db_path,
+        path=str(summary_file),
+        source="workbench_task",
+        name="summary.md",
+        content_hash=store.content_hash_file(summary_file),
+    )
+    artifact_doc = await store.upsert_document_by_path(
+        db_path,
+        path=str(artifact_file),
+        source="workbench_artifact",
+        name="Info.plist",
+        content_hash=store.content_hash_file(artifact_file),
+    )
+
+    async def _ensure_kb(_workspace):
+        return db_path
+
+    monkeypatch.setattr(routes_workbench_knowledge, "_ensure_kb_db", _ensure_kb)
+    monkeypatch.setattr(
+        routes_workbench_knowledge,
+        "_resolve_workspace_id",
+        lambda workspace: str(workspace),
+    )
+
+    app = FastAPI()
+    routes_workbench_knowledge.register_workbench_knowledge_routes(app.router)
+    client = TestClient(app)
+
+    default_payload = client.get("/api/workbench/knowledge/documents?workspace=test").json()
+    artifact_source_payload = client.get(
+        "/api/workbench/knowledge/documents?workspace=test&source=workbench_artifact"
+    ).json()
+
+    assert default_payload["total"] == 3
+    assert {doc["id"] for doc in default_payload["documents"]} == {
+        source_doc["id"],
+        summary_doc["id"],
+        artifact_doc["id"],
+    }
+    assert [doc["id"] for doc in artifact_source_payload["documents"]] == [artifact_doc["id"]]
+
+
+@pytest.mark.asyncio
+async def test_workbench_knowledge_search_includes_final_archives_by_default(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from cyrene import db
+    from cyrene.knowledge import store
+    from webui import routes_workbench_knowledge
+
+    db_path = str(tmp_path / "knowledge.db")
+    await db.init_knowledge_db(db_path)
+    source = await store.create_document(
+        db_path,
+        name="source.md",
+        path=str(tmp_path / "source.md"),
+        source="kb_upload",
+    )
+    artifact = await store.create_document(
+        db_path,
+        name="artifact.md",
+        path=str(tmp_path / "artifact.md"),
+        source="workbench_artifact",
+    )
+    await store.replace_chunks(
+        db_path,
+        source["id"],
+        [{"ordinal": 0, "content": "shared needle from durable knowledge"}],
+    )
+    await store.replace_chunks(
+        db_path,
+        artifact["id"],
+        [{"ordinal": 0, "content": "shared needle from generated build artifact"}],
+    )
+
+    async def _ensure_kb(_workspace):
+        return db_path
+
+    monkeypatch.setattr(routes_workbench_knowledge, "_ensure_kb_db", _ensure_kb)
+
+    app = FastAPI()
+    routes_workbench_knowledge.register_workbench_knowledge_routes(app.router)
+    client = TestClient(app)
+
+    default_results = client.get(
+        "/api/workbench/knowledge/search",
+        params={"workspace": "test", "q": "shared needle", "k": 10},
+    ).json()["results"]
+    assert {item["document_id"] for item in default_results} == {source["id"], artifact["id"]}
+
+
+@pytest.mark.asyncio
 async def test_workbench_knowledge_related_returns_tasks_chats_and_reverse_relations(
     tmp_path, monkeypatch
 ):

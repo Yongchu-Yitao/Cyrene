@@ -71,6 +71,7 @@ async def _tool_recall_memory(args: dict[str, Any], _bot: Any, _chat_id: int, _d
             content = content[:_MAX_RESULT_CONTENT_CHARS] + "…"
             was_truncated = True
         memory = {
+            "memory_id": short_term.entry_id(item),
             "content": content,
             "type": item.get("type", ""),
             "first_seen": item.get("first_seen", ""),

@@ -4,9 +4,11 @@ Stores compressed conversation summaries that persist across sessions.
 Entry lifecycle: conversation -> compressed -> short_term -> (via Steward) -> long_term
 """
 
+import hashlib
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from cyrene.config import DB_PATH
 from cyrene.io_utils import atomic_write_json, read_json_safe
@@ -45,6 +47,46 @@ def save_entries(entries: list[dict]) -> None:
         atomic_write_json(_SHORT_TERM_FILE, entries)
     except Exception:
         logger.exception("Failed to save short-term memory")
+
+
+def entry_id(entry: dict[str, Any]) -> str:
+    """Return a stable id for one short-term memory entry."""
+    existing = str(entry.get("id") or entry.get("memory_id") or "").strip()
+    if existing:
+        return existing
+    basis = "\n".join([
+        str(entry.get("type") or ""),
+        str(entry.get("first_seen") or ""),
+        str(entry.get("content") or ""),
+    ])
+    digest = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
+    return f"stm_{digest}"
+
+
+def retire_entry(memory_id: str, reason: str = "") -> tuple[dict[str, Any] | None, bool]:
+    """Mark a short-term memory stale by id without deleting the stored record."""
+    target_id = str(memory_id or "").strip()
+    if not target_id:
+        return None, False
+
+    entries = load_entries()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if entry_id(entry) != target_id:
+            continue
+        changed = not bool(entry.get("stale"))
+        if "id" not in entry:
+            entry["id"] = target_id
+        entry["stale"] = True
+        entry["retired_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        clean_reason = str(reason or "").strip()
+        if clean_reason:
+            entry["retire_reason"] = clean_reason
+        save_entries(entries)
+        return entry, changed
+
+    return None, False
 
 
 def touch_entry(content_keyword: str, metadata: dict | None = None) -> None:

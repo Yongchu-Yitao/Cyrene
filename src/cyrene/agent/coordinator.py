@@ -232,15 +232,21 @@ async def run_agent(
             interrupt_active_run(session_id=session_id)
         async with ctx.lock:
             ctx.interrupt_event.clear()
-            return await _run_chat_agent(
-                user_message, bot, chat_id, db_path,
-                client_request_id=client_request_id, lang=lang, command=command,
-                public_user_message=public_user_message, public_attachments=public_attachments,
-                permission_mode=permission_mode, ephemeral_system=ephemeral_system,
-                fixed_ephemeral_system=fixed_ephemeral_system,
-                volatile_ephemeral_system=volatile_ephemeral_system,
-                static_system_extra=static_system_extra,
-            )
+            current_task = asyncio.current_task()
+            ctx.active_task = current_task
+            try:
+                return await _run_chat_agent(
+                    user_message, bot, chat_id, db_path,
+                    client_request_id=client_request_id, lang=lang, command=command,
+                    public_user_message=public_user_message, public_attachments=public_attachments,
+                    permission_mode=permission_mode, ephemeral_system=ephemeral_system,
+                    fixed_ephemeral_system=fixed_ephemeral_system,
+                    volatile_ephemeral_system=volatile_ephemeral_system,
+                    static_system_extra=static_system_extra,
+                )
+            finally:
+                if ctx.active_task is current_task:
+                    ctx.active_task = None
     finally:
         _current_session_id.reset(session_token)
         _active_workspace_dir.reset(workspace_token)
@@ -266,6 +272,23 @@ def interrupt_active_run(session_id: str = "") -> bool:
         ctx.interrupt_event.clear()
         return False
     ctx.interrupt_event.set()
+    task = ctx.active_task
+    if task is not None and not task.done() and task is not asyncio.current_task():
+        task.cancel()
+    round_id = str(ctx.active_main_round_id or "").strip()
+    if round_id or session_id:
+        async def _cancel_subagents() -> None:
+            try:
+                from cyrene.subagent import cancel_subagent_tasks
+
+                await cancel_subagent_tasks(round_id=round_id, session_id=session_id)
+            except Exception:
+                logger.exception("Failed to cancel subagents for interrupted session %s", session_id)
+
+        try:
+            asyncio.create_task(_cancel_subagents())
+        except RuntimeError:
+            pass
     task = asyncio.create_task(_clear_interrupt_when_idle(session_id=session_id))
     ctx.pending_interrupt_clearers.add(task)
     task.add_done_callback(ctx.pending_interrupt_clearers.discard)

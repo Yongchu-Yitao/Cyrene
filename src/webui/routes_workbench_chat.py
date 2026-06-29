@@ -1673,6 +1673,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         payload["chats"] = next_chats
         _write_chats_store(payload)
         try:
+            _CHAT_RUN_MANAGER.interrupt(chat_id)
             interrupt_active_run(session_id=chat_id)
             await clear_session_id(session_id=chat_id)
         except Exception:

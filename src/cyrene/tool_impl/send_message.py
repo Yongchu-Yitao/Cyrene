@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene import tool_legacy as _legacy
-from cyrene.tool_legacy import _request_destructive_confirmation
 
 TOOL_NAME = 'send_message'
 TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL_NAME)
@@ -22,16 +21,6 @@ async def _tool_send_user_message(args: dict[str, Any], _bot: Any, _chat_id: int
     sender = str(_current_agent_id.get() or "").strip()
     if sender not in {"main", "scheduler"}:
         return "Only the main agent can send a user-visible WebUI message. Subagents must report via quit or send_agent_message."
-
-    if sender == "main":
-        confirm = await _request_destructive_confirmation(
-            tool_name="send_message",
-            operation="外发用户可见消息",
-            detail=f"消息内容：{text[:240]}",
-            destructive_kind="external_message",
-        )
-        if confirm is not None:
-            return confirm
 
     if sender == "scheduler":
         await append_system_message(

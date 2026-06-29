@@ -142,6 +142,37 @@ def resolve_workbench_project_id_for_session(session_id: str | None) -> str | No
     return None
 
 
+def resolve_workbench_session_kind(session_id: str | None) -> str | None:
+    """Return ``chat`` or a project-session kind for a Workbench session."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+
+    if (
+        _WORKBENCH_DB_PATH
+        and _CONFIGURED_CHATS_STORE == Path(_WORKBENCH_CHATS_STORE)
+    ):
+        chats_payload = read_document(
+            _WORKBENCH_DB_PATH,
+            "chats",
+            lambda: {"chats": []},
+            legacy_path=_WORKBENCH_CHATS_STORE,
+        )
+    else:
+        chats_payload = read_json_safe(_WORKBENCH_CHATS_STORE)
+    chats = chats_payload.get("chats") if isinstance(chats_payload, dict) else None
+    if isinstance(chats, list):
+        for chat in chats:
+            if str(chat.get("id") or "") == sid:
+                return "chat"
+
+    for project in _read_projects():
+        for session in project.get("sessions") or []:
+            if str(session.get("id") or "") == sid:
+                return str(session.get("kind") or "task").strip() or "task"
+    return None
+
+
 def resolve_project_data_key_for_session(session_id: str | None) -> str:
     """Compatibility resolver that falls back to the legacy ``default`` key."""
     return resolve_workbench_project_data_key_for_session(session_id) or _LEGACY_DATA_KEY
@@ -184,4 +215,5 @@ __all__ = [
     "resolve_project_knowledge_key_for_session",
     "resolve_workbench_project_data_key_for_session",
     "resolve_workbench_project_id_for_session",
+    "resolve_workbench_session_kind",
 ]

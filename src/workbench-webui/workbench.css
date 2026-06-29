@@ -6119,8 +6119,14 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 .wb-about-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(280px, 1.35fr);
   gap: 10px;
+}
+
+@media (max-width: 980px) {
+  .wb-about-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .wb-about-card {
@@ -6170,6 +6176,63 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 .wb-update-section .wb-btn {
   align-self: flex-start;
+}
+
+.wb-update-details {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.wb-update-details > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.wb-update-details span {
+  color: var(--wb-muted);
+  white-space: nowrap;
+}
+
+.wb-update-details strong {
+  min-width: 0;
+  text-align: right;
+  font-size: 12px;
+  color: var(--wb-text);
+  overflow-wrap: anywhere;
+}
+
+.wb-update-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.wb-update-notes > span {
+  font-size: 12px;
+  color: var(--wb-muted);
+}
+
+.wb-update-notes pre {
+  max-height: 112px;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--wb-line);
+  border-radius: 6px;
+  background: var(--wb-input-bg);
+  color: var(--wb-text);
+  font-family: var(--wb-font);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* Toggle + button form one action group anchored to the card bottom; any

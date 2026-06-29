@@ -50,6 +50,12 @@ async def main() -> None:
     logger.info("Scheduler started")
 
     try:
+        from cyrene.updater import background_check
+        update_check_task = asyncio.create_task(background_check())
+    except Exception:
+        update_check_task = None
+
+    try:
         await run_web(bot, str(DB_PATH))
     except KeyboardInterrupt:
         logger.info("Shutting down...")

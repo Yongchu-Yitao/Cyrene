@@ -175,6 +175,7 @@
 
   var SOURCE_LABELS = {
     kb_upload: "知识库上传", chat_upload: "对话上传", import: "导入", export: "导出文件", sync: "同步",
+    workbench_task: "任务摘要", workbench_artifact: "任务产物",
   };
   function sourceLabel(source) {
     return SOURCE_LABELS[String(source || "")] || (source ? String(source) : "其他");

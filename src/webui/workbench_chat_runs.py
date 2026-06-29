@@ -137,6 +137,26 @@ class ChatRunManager:
             return None
         return run
 
+    def interrupt(self, chat_id: str) -> bool:
+        """Cancel a live run and wake attached streams immediately."""
+        run = self.get(chat_id)
+        if run is None:
+            return False
+        run.status = "cancelled"
+        run.outcome = {"kind": "interrupted"}
+        if run.task is not None and not run.task.done():
+            run.task.cancel()
+        try:
+            asyncio.create_task(run.publish({"type": "interrupted", "chatId": run.chat_id}))
+        except RuntimeError:
+            pass
+        for queue in list(run.subscribers):
+            try:
+                queue.put_nowait(None)
+            except Exception:
+                pass
+        return True
+
     def start_or_get(
         self,
         chat_id: str,

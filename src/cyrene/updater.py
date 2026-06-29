@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 _DEFAULT_REPO = "Yongchu-Yitao/Cyrene"
 _UPDATE_REPO = os.environ.get("UPDATE_REPO", _DEFAULT_REPO)
 _GITHUB_API = f"https://api.github.com/repos/{_UPDATE_REPO}/releases"
+_DEFAULT_UPDATE_CHECK_INTERVAL_SECONDS = 6 * 60 * 60
+_notified_update_keys: set[str] = set()
 
 
 def _current_version() -> str:
@@ -40,18 +42,37 @@ def _beta_updates_enabled() -> bool:
         return False
 
 
+def _update_check_interval_seconds() -> int:
+    raw = os.environ.get("CYRENE_UPDATE_CHECK_INTERVAL_SECONDS", "").strip()
+    if not raw:
+        return _DEFAULT_UPDATE_CHECK_INTERVAL_SECONDS
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return _DEFAULT_UPDATE_CHECK_INTERVAL_SECONDS
+
+
 @dataclass
 class UpdateInfo:
     available: bool
     current_version: str
     latest_version: str
+    published_at: str = ""
     download_url: str = ""
     release_notes: str = ""
     asset_name: str = ""
     asset_size: int = 0
+    asset_sha256: str = ""
     # 有新版本但找不到适配当前平台/架构的安装包时的明确错误。非空即表示
     # “有更新但无法自动安装”，调用方据此提示用户手动下载，而不是装错平台的包。
     error: str = ""
+
+
+@dataclass
+class DownloadResult:
+    path: Path
+    size: int
+    sha256: str
 
 
 def _platform_filter() -> str:
@@ -82,6 +103,17 @@ def _platform_filter() -> str:
     elif sys.platform.startswith("linux"):
         return "x64.appimage"
     return sys.platform.lower()
+
+
+def _sha256_from_asset(asset: dict) -> str:
+    """Return a bare sha256 hex digest from a GitHub release asset, if present."""
+    raw = str(asset.get("digest") or "").strip()
+    if raw.lower().startswith("sha256:"):
+        raw = raw.split(":", 1)[1].strip()
+    raw = raw.lower()
+    if len(raw) == 64 and all(ch in "0123456789abcdef" for ch in raw):
+        return raw
+    return ""
 
 
 async def _fetch_target_release(
@@ -152,6 +184,7 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
                     available=False,
                     current_version=current,
                     latest_version=latest,
+                    published_at=str(data.get("published_at") or ""),
                 )
 
             # 查找匹配当前平台的 asset。两侧统一小写做大小写无关的子串匹配，
@@ -160,6 +193,7 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
             asset_url = ""
             asset_name = ""
             asset_size = 0
+            asset_sha256 = ""
 
             for asset in data.get("assets", []):
                 name: str = asset.get("name", "")
@@ -167,6 +201,7 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
                     asset_url = asset.get("browser_download_url", "")
                     asset_name = name
                     asset_size = asset.get("size", 0)
+                    asset_sha256 = _sha256_from_asset(asset)
                     break
 
             # 找不到本平台/架构对应的包时，绝不回退到 assets[0]——那正是把
@@ -183,6 +218,7 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
                     available=True,
                     current_version=current,
                     latest_version=latest,
+                    published_at=str(data.get("published_at") or ""),
                     release_notes=data.get("body", ""),
                     error=msg,
                 )
@@ -191,10 +227,12 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
                 available=True,
                 current_version=current,
                 latest_version=latest,
+                published_at=str(data.get("published_at") or ""),
                 download_url=asset_url,
                 release_notes=data.get("body", ""),
                 asset_name=asset_name,
                 asset_size=asset_size,
+                asset_sha256=asset_sha256,
             )
 
     except Exception as exc:
@@ -205,7 +243,7 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
 async def download_update(
     url: str,
     progress_callback: Callable[[int, int], None] | None = None,
-) -> Path | None:
+) -> DownloadResult | None:
     """下载更新包到临时目录。"""
     if not url:
         return None
@@ -218,6 +256,7 @@ async def download_update(
 
     async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
         async with client.stream("GET", url) as resp:
+            resp.raise_for_status()
             total = int(resp.headers.get("content-length", 0))
             downloaded = 0
 
@@ -235,7 +274,7 @@ async def download_update(
         "Downloaded update: %s (%d bytes / %.1f MB), SHA256=%s",
         dest, downloaded, size_mb, checksum,
     )
-    return dest
+    return DownloadResult(path=dest, size=downloaded, sha256=checksum)
 
 
 def get_restart_script(update_file: Path) -> str:
@@ -392,7 +431,16 @@ fi
 # ---- 内存中的更新状态（供 Web UI 查询）----
 
 _latest_update_info: UpdateInfo | None = None
-_download_progress: dict = {"downloaded": 0, "total": 0, "done": False, "path": ""}
+_download_progress: dict = {
+    "downloaded": 0,
+    "total": 0,
+    "done": False,
+    "path": "",
+    "expected_sha256": "",
+    "actual_sha256": "",
+    "verified": False,
+    "verification_error": "",
+}
 
 
 def get_cached_update_info() -> UpdateInfo | None:
@@ -410,12 +458,88 @@ def get_download_progress() -> dict:
 
 # ---- 后台任务 ----
 
-async def background_check() -> None:
-    """启动时运行的后台更新检查。"""
+def _format_bytes(size: int) -> str:
+    n = int(size or 0)
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    return f"{n / (1024 * 1024 * 1024):.1f} GB"
+
+
+def _append_update_notification(info: UpdateInfo) -> None:
+    if not info.available or not info.latest_version:
+        return
+    key = f"{info.latest_version}:{info.asset_name or info.error}"
+    if key in _notified_update_keys:
+        return
+    _notified_update_keys.add(key)
+
+    version = f"v{info.latest_version}"
+    if info.asset_name:
+        body = f"发现新版本 {version}，安装包 {info.asset_name}"
+        if info.asset_size:
+            body += f"（{_format_bytes(info.asset_size)}）"
+        if not info.asset_sha256:
+            body += "。该版本缺少 sha256 校验值，无法自动安装。"
+    else:
+        body = f"发现新版本 {version}，但当前平台暂无可自动安装的更新包。"
+        if info.error:
+            body += f" {info.error}"
+
+    try:
+        from webui.workbench_notifications import append_notification
+
+        append_notification(
+            title=f"Cyrene {version} 可用",
+            body=body,
+            tab="system",
+            source="updater",
+            source_label="更新检查",
+            link_label="打开设置",
+            meta={
+                "category": "app_update",
+                "currentVersion": info.current_version,
+                "latestVersion": info.latest_version,
+                "publishedAt": info.published_at,
+                "assetName": info.asset_name,
+                "assetSize": info.asset_size,
+                "checksumAvailable": bool(info.asset_sha256),
+                "error": info.error,
+            },
+        )
+    except Exception:
+        logger.debug("Failed to append update notification", exc_info=True)
+
+
+async def _run_update_check_once() -> UpdateInfo:
     info = await check_for_update()
     set_cached_update_info(info)
     if info.available:
+        _append_update_notification(info)
         logger.info(
             "Update available: %s → %s (%s)",
             info.current_version, info.latest_version, info.asset_name,
         )
+    return info
+
+
+async def background_check(
+    *,
+    interval_seconds: int | None = None,
+    repeat: bool = True,
+) -> None:
+    """Run update checks in the background and notify Workbench when updates exist."""
+    interval = _update_check_interval_seconds() if interval_seconds is None else max(60, int(interval_seconds))
+    while True:
+        try:
+            await _run_update_check_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("Background update check failed", exc_info=True)
+        if not repeat:
+            return
+        await asyncio.sleep(interval)

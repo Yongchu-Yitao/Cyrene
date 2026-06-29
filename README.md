@@ -45,7 +45,7 @@ It runs as a local daemon with two web front-ends (and optional Telegram/WeChat 
 | **Behavior learning** — learn reusable action patterns from conversations | Beta |
 | **Claude Code bridge** — detect, launch, and chat with Claude Code tmux sessions | Beta |
 | **Code tools** — codebase indexing, symbol search, git helpers | Beta |
-| **Browser live view** — WebSocket screencasting + headed login takeover | Beta |
+| **Browser live view** — WebSocket screencasting, in-panel live control, and headed login takeover | Beta |
 | **Context debugger** — inspect exactly what context was sent to each LLM call | Stable |
 | **Workbench UI** — project-centric dashboard, schedule, knowledge, memory, chat | Stable |
 | **Legacy agent UI** — real-time chat, agent flow timeline, sessions, settings | Stable |

@@ -16,7 +16,7 @@ TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL
 async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
     from cyrene import debug
     from cyrene.browser import get_session
-    from cyrene.agent.state import _current_agent_id, _current_client_request_id, _current_round_id
+    from cyrene.agent.state import _current_agent_id, _current_client_request_id, _current_round_id, _current_session_id
     from cyrene.agent.session import _clear_pending_question, _upsert_pending_question, get_session_labels
 
     if _current_agent_id.get() != "main":
@@ -48,6 +48,7 @@ async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_
     })
     await debug.publish_event({
         "type": "browser_takeover_request",
+        "session_id": str(_current_session_id.get() or ""),
         "round_id": round_id,
         "url": current_url,
         "reason": reason,
@@ -61,7 +62,11 @@ async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_
             await _clear_pending_question(str(question.get("id", "")))
         except Exception:
             pass
-        await debug.publish_event({"type": "browser_takeover_cancelled", "round_id": round_id})
+        await debug.publish_event({
+            "type": "browser_takeover_cancelled",
+            "session_id": str(_current_session_id.get() or ""),
+            "round_id": round_id,
+        })
         return f"Failed to open the browser window for takeover: {exc}"
     return _json_result({
         "status": "awaiting_user",

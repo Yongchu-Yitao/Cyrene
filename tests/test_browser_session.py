@@ -811,3 +811,175 @@ async def test_screenshot_path_cleans_up_on_failure(monkeypatch):
 
     assert recorded, "no temp file was created"
     assert not os.path.exists(recorded[0]), "temp file leaked on failure"
+
+
+# --- S3: user live-control (CDP input) + native-window escape hatch ---------
+
+
+async def test_user_input_injection_gated_by_control():
+    """Mouse/key events are dropped unless the user has taken control, then they
+    reach CDP Input.* with the expected params."""
+    from cyrene import browser
+
+    session = browser._BrowserSession()
+    session._page = _FakePage()
+    cdp = _FakeCDP()
+    session._cdp = cdp  # reused by _ensure_input_cdp
+
+    # Control OFF → no-op.
+    await session.dispatch_mouse(type="mousePressed", x=10, y=20, button="left")
+    await session.dispatch_key(type="keyDown", key="a", text="a")
+    assert cdp.sent == []
+
+    # Control ON → forwarded.
+    session.set_user_control(True)
+    await session.dispatch_mouse(type="mousePressed", x=11, y=22, button="left", click_count=2)
+    await session.dispatch_mouse(type="mouseWheel", x=11, y=22, delta_x=0, delta_y=-120)
+    await session.dispatch_key(type="keyDown", key="a", code="KeyA", key_code=65, text="a")
+    await session.dispatch_key(type="keyDown", key="Enter", code="Enter", key_code=13)
+
+    methods = [m for m, _ in cdp.sent]
+    assert methods == [
+        "Input.dispatchMouseEvent",
+        "Input.dispatchMouseEvent",
+        "Input.dispatchKeyEvent",
+        "Input.dispatchKeyEvent",
+    ]
+    press = cdp.sent[0][1]
+    assert (press["x"], press["y"], press["button"], press["clickCount"]) == (11.0, 22.0, "left", 2)
+    wheel = cdp.sent[1][1]
+    assert wheel["deltaY"] == -120
+    char_key = cdp.sent[2][1]
+    assert char_key["text"] == "a" and char_key["windowsVirtualKeyCode"] == 65
+    enter_key = cdp.sent[3][1]
+    assert "text" not in enter_key and enter_key["key"] == "Enter"
+
+
+async def test_open_close_user_window_toggles_flag(monkeypatch):
+    """The user-initiated native window sets/clears _user_window_open and delegates
+    to the headless<->headed restart helpers (no pending question)."""
+    from cyrene import browser
+
+    session = browser._BrowserSession()
+    calls: list = []
+
+    async def fake_switch(url=""):
+        calls.append(("switch", url))
+
+    async def fake_end(url=""):
+        calls.append(("end", url))
+
+    monkeypatch.setattr(session, "switch_to_headed", fake_switch)
+    monkeypatch.setattr(session, "end_takeover", fake_end)
+
+    await session.open_user_window("https://x/")
+    assert session._user_window_open is True
+    assert ("switch", "https://x/") in calls
+
+    await session.close_user_window("https://x/")
+    assert session._user_window_open is False
+    assert ("end", "https://x/") in calls
+
+
+async def test_headed_close_routes_user_window_vs_agent_takeover(monkeypatch):
+    """Closing the window auto-returns to headless for a user-opened window, but
+    cancels the pending question for an agent-initiated takeover."""
+    from cyrene import browser
+
+    session = browser._BrowserSession()
+    hit: list = []
+
+    async def fake_auto():
+        hit.append("auto")
+
+    async def fake_cancel():
+        hit.append("cancel")
+
+    monkeypatch.setattr(session, "_auto_return_headless", fake_auto)
+    monkeypatch.setattr(session, "_publish_takeover_cancelled", fake_cancel)
+
+    # User-opened escape-hatch window → silent return to headless.
+    session._user_window_open = True
+    session._takeover_active = True
+    session._on_headed_close()
+    await asyncio.sleep(0)
+    assert hit == ["auto"]
+    assert session._user_window_open is False
+
+    # Agent-initiated takeover window → cancel path.
+    hit.clear()
+    session._user_window_open = False
+    session._takeover_active = True
+    session._on_headed_close()
+    await asyncio.sleep(0)
+    assert hit == ["cancel"]
+
+    # Our own deliberate relaunch must not trigger either path.
+    hit.clear()
+    session._closing_deliberately = True
+    session._user_window_open = True
+    session._on_headed_close()
+    await asyncio.sleep(0)
+    assert hit == []
+
+
+async def test_agent_actions_yield_while_user_controls(monkeypatch):
+    """While the user holds live control, agent navigate/click/type skip the page
+    and report the paused message instead of fighting for it."""
+    from cyrene import browser
+
+    session = browser._BrowserSession()
+    session.set_user_control(True)
+
+    async def fake_wait(timeout=600.0):  # don't actually block the test
+        return False
+
+    monkeypatch.setattr(session, "_wait_for_control", fake_wait)
+
+    nav = await session.navigate("https://example.com/")
+    assert nav["error"] == browser._USER_CONTROL_MSG and nav["status"] == 0
+
+    clicked = await session.click("#go")
+    assert clicked["ok"] is False and clicked["error"] == browser._USER_CONTROL_MSG
+
+    typed = await session.type_text("#q", "hi")
+    assert typed["ok"] is False and typed["error"] == browser._USER_CONTROL_MSG
+
+
+async def test_control_gate_blocks_then_releases():
+    """_wait_for_control blocks while controlled and returns True once released."""
+    from cyrene import browser
+
+    session = browser._BrowserSession()
+    assert await session._wait_for_control(timeout=0.01) is True  # not controlling
+
+    session.set_user_control(True)
+    assert await session._wait_for_control(timeout=0.02) is False  # still controlled
+
+    async def release_soon():
+        await asyncio.sleep(0.02)
+        session.set_user_control(False)
+
+    asyncio.ensure_future(release_soon())
+    assert await session._wait_for_control(timeout=1.0) is True  # released → resume
+
+
+async def test_insert_text_gated_and_inserts_via_cdp():
+    """IME/committed text reaches CDP Input.insertText only while user controls."""
+    from cyrene import browser
+
+    session = browser._BrowserSession()
+    session._page = _FakePage()
+    cdp = _FakeCDP()
+    session._cdp = cdp
+
+    await session.insert_text("你好")          # control OFF → dropped
+    assert cdp.sent == []
+
+    session.set_user_control(True)
+    await session.insert_text("你好")          # control ON → inserted
+    assert ("Input.insertText", {"text": "你好"}) in cdp.sent
+
+    cdp.sent.clear()
+    await session.insert_text("")              # empty → no-op
+    assert cdp.sent == []

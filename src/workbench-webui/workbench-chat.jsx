@@ -124,6 +124,7 @@ var WorkbenchChatModel = (function () {
       else if (type === "reply_done" && handlers.onReplyDone) handlers.onReplyDone(event.response || "");
       else if (type === "saved" && handlers.onSaved) handlers.onSaved(event);
       else if (type === "awaiting_user" && handlers.onAwaitingUser) handlers.onAwaitingUser(event);
+      else if (type === "interrupted" && handlers.onInterrupted) handlers.onInterrupted(event);
       else if (type === "error" && handlers.onError) handlers.onError(new Error(event.message || wbcT("settings.failed", "Failed")));
     }
 
@@ -663,6 +664,10 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
         update(chatId, null);
         fire("onSettled", chatId);
       },
+      onInterrupted: function () {
+        update(chatId, null);
+        fire("onResync", chatId);
+      },
       onError: function (err) {
         // Keep the runtime until the stream closes so `finally` performs the
         // same server re-sync used for interrupts and transport failures.
@@ -674,6 +679,10 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
   function ownStream(chatId, streamPromise, ac) {
     return streamPromise.catch(function (err) {
       if (err && err.name === "AbortError") return;
+      if (err && err.code === "chat_run_in_progress") {
+        fire("onResync", chatId);
+        return;
+      }
       if (!(err && err.code === "chat_run_not_found")) fire("onError", chatId, err);
     }).finally(function () {
       if (aborts[chatId] === ac) delete aborts[chatId];
@@ -928,7 +937,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     revealedPlanQidRef.current = "";
     revealedSubagentRoundRef.current = "";
     setSideTab(function (prev) {
-      return (prev === "viewer" || prev === "map" || prev === "plan" || prev === "subagents") ? "overview" : prev;
+      return (prev === "viewer" || prev === "map" || prev === "plan" || prev === "subagents" || prev === "browser") ? "overview" : prev;
     });
   }, [activeChatId]);
 
@@ -1076,6 +1085,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
       if (
         (event.type === "browser_frame" || event.type === "browser_takeover_request")
         && activeChatIdRef.current
+        && String(event.session_id || "") === String(activeChatIdRef.current)
         && runtimeEngine.isRunning(activeChatIdRef.current)
       ) {
         setSideTab("browser");
@@ -2811,6 +2821,16 @@ function wbcBranchKindLabel(kind) {
   return wbcT("workbenchChat.branchFork", "Branch");
 }
 
+function wbcBrowserStateForChat(chatId) {
+  var id = String(chatId || "").trim();
+  if (!id || !window.DATA) return {};
+  var byChat = window.DATA.browserByChat || {};
+  if (byChat[id]) return byChat[id];
+  var browser = window.DATA.browser || {};
+  var browserSessionId = String(browser.sessionId || browser.chatId || "").trim();
+  return browserSessionId && browserSessionId === id ? browser : {};
+}
+
 // Right-panel tab rendering the fork lineage as a node-and-line tree. Clicking
 // a node switches to that branch; the active chat's nodes stay highlighted.
 function WbcBranchTab({ chats, activeChatId, onSelectChat }) {
@@ -2883,7 +2903,7 @@ function WbcSide({
   onBrowserTakeoverComplete,
 }) {
   if (typeof window.useDataVersion === "function") window.useDataVersion();
-  var browserState = (window.DATA && window.DATA.browser) || {};
+  var browserState = wbcBrowserStateForChat(activeChatId);
   var hasMap = wbcChatUsedMap(chat, runtime);
   var hasBrowser = !!(browserState && browserState.active);
   var hasBranches = useWbcMemo(function () {
@@ -2940,6 +2960,8 @@ function WbcSide({
         {activeTab === "browser" && (
           typeof window.BrowserViewportPanel !== "undefined"
             ? React.createElement(window.BrowserViewportPanel, {
+                browserState: browserState,
+                browserSessionId: activeChatId || "",
                 roundId: browserState.roundId || "",
                 onClose: function () { onTabChange("overview"); },
                 onTakeoverComplete: onBrowserTakeoverComplete,

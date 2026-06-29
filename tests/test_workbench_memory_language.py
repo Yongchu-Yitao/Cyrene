@@ -466,12 +466,16 @@ def test_memory_tools_are_registered_with_distinct_contracts():
 
     assert "RecallMemory" in defs
     assert "RecallConversation" in defs
+    assert "retire_short_term_memory" in defs
     assert "search_project_memory" in defs
     assert "retire_project_memory" in defs
     assert "session_id" not in defs["RecallMemory"]["parameters"]["properties"]
     assert "session_id" in defs["RecallConversation"]["parameters"]["properties"]
+    assert defs["retire_short_term_memory"]["parameters"]["required"] == ["memory_id"]
     assert defs["search_project_memory"]["parameters"]["required"] == ["query"]
     assert defs["retire_project_memory"]["parameters"]["required"] == ["memory_id"]
+    assert tools.is_tool_allowed_for_actor("retire_short_term_memory", "main")
+    assert not tools.is_tool_allowed_for_actor("retire_short_term_memory", "subagent")
     assert tools.is_tool_allowed_for_actor("retire_project_memory", "main")
     assert not tools.is_tool_allowed_for_actor("retire_project_memory", "subagent")
 

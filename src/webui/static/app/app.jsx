@@ -625,7 +625,9 @@ const PROFILE_FEATURE_LABELS = {
   save_project_memory: { en: "Memory", zh: "记忆" },
   recall_memory: { en: "Recall", zh: "回忆" },
   recall_conversation: { en: "Recall chat", zh: "回忆对话" },
+  retire_short_term_memory: { en: "Retire memory", zh: "停用记忆" },
   search_project_memory: { en: "Search memory", zh: "搜索记忆" },
+  retire_project_memory: { en: "Retire project memory", zh: "停用项目记忆" },
   schedule_task: { en: "Schedule", zh: "计划任务" },
   send_message_to_user: { en: "Message", zh: "发消息" },
 };

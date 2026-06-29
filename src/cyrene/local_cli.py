@@ -445,12 +445,12 @@ def _run_electron_mode() -> None:
 
         try:
             from cyrene.updater import background_check
-            _ = asyncio.create_task(background_check())
+            update_check_task = asyncio.create_task(background_check())
         except Exception:
-            pass
+            update_check_task = None
 
         # Fire-and-forget: background services don't block server start
-        _ = asyncio.create_task(_start_background_services())
+        background_services_task = asyncio.create_task(_start_background_services())
 
         app = create_app(bot, str(DB_PATH), instance_id=instance_id, ui_mode=ui_mode)
         import uvicorn
@@ -536,9 +536,9 @@ def _run_web_mode(ui_mode: str = "workbench") -> None:
         # 后台检查更新（不阻塞启动）
         try:
             from cyrene.updater import background_check
-            _ = asyncio.create_task(background_check())
+            update_check_task = asyncio.create_task(background_check())
         except Exception:
-            pass
+            update_check_task = None
 
         try:
             await run_web(bot, str(DB_PATH), port=selected_port, ui_mode=ui_mode)
@@ -668,14 +668,14 @@ def _run_web_gui() -> None:
 
         try:
             from cyrene.updater import background_check
-            _ = asyncio.create_task(background_check())
+            update_check_task = asyncio.create_task(background_check())
         except Exception:
-            pass
+            update_check_task = None
 
         # Fire-and-forget: SearXNG + MCP start in the background so the
         # web server is available immediately (SearXNG health-check can
         # take up to 30 s, which would otherwise cause "Server not responding").
-        _ = asyncio.create_task(_start_background_services())
+        background_services_task = asyncio.create_task(_start_background_services())
 
         app = create_app(bot, str(DB_PATH), instance_id=instance_id, ui_mode=ui_mode)
         import uvicorn

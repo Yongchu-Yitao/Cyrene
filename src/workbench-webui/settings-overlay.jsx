@@ -1202,7 +1202,7 @@ function UpdateSection({ t, config }) {
 
   function checkUpdate() {
     setChecking(true); setError("");
-    fetch("/api/update/check").then(function (r) { return r.json(); }).then(function (d) { setInfo(d); }).catch(function () { setError(t("settings.updateCheckFailed")); }).finally(function () { setChecking(false); });
+    fetch("/api/update/check").then(function (r) { return r.json(); }).then(function (d) { setInfo(d); setDownloaded(false); setProgress({ downloaded: 0, total: d.asset_size || 0, done: false, verified: false, verification_error: "" }); }).catch(function () { setError(t("settings.updateCheckFailed")); }).finally(function () { setChecking(false); });
   }
 
   function toggleBeta() {
@@ -1216,7 +1216,63 @@ function UpdateSection({ t, config }) {
 
   function startDownload() {
     setDownloading(true); setError("");
-    fetch("/api/update/download", { method: "POST" }).then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setDownloaded(true); else setError(d.error || t("settings.updateDownloadFailed")); }).catch(function () { setError(t("settings.updateDownloadFailed")); }).finally(function () { setDownloading(false); });
+    fetch("/api/update/download", { method: "POST" }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.ok && d.verified) {
+        setDownloaded(true);
+        setProgress(function (p) { return Object.assign({}, p, { done: true, verified: true, actual_sha256: d.sha256 || p.actual_sha256 || "" }); });
+      } else {
+        setDownloaded(false);
+        setProgress(function (p) { return Object.assign({}, p, { done: !!d.done, verified: false, verification_error: d.error || "" }); });
+        setError(d.error || t("settings.updateDownloadFailed"));
+      }
+    }).catch(function () { setError(t("settings.updateDownloadFailed")); }).finally(function () { setDownloading(false); });
+  }
+
+  function fmtBytes(n) {
+    n = Number(n || 0);
+    if (n < 1024) return n + " B";
+    if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
+    return (n / 1073741824).toFixed(1) + " GB";
+  }
+
+  function fmtDate(value) {
+    if (!value) return "—";
+    var d = new Date(value);
+    if (isNaN(d.getTime())) return value;
+    try { return d.toLocaleString(); } catch (e) { return value; }
+  }
+
+  function notesText() {
+    return String((info && info.release_notes) || "").trim() || t("settings.updateNoReleaseNotes", null, "No release notes provided.");
+  }
+
+  function downloadStatus() {
+    if (!info) return "—";
+    if (downloading) return t("settings.updateDownloading", null, "Downloading...") + " " + fmtBytes(progress.downloaded) + " / " + fmtBytes(progress.total || info.asset_size);
+    if (downloaded && progress.verified) return t("settings.updateVerified", null, "Downloaded and verified");
+    if (progress && progress.verification_error) return t("settings.updateVerificationFailed", null, "Verification failed") + ": " + progress.verification_error;
+    if (info.update_available && !info.checksum_available) return t("settings.updateCannotVerify", null, "Cannot verify: release has no sha256 checksum.");
+    if (info.update_available) return t("settings.updateReadyToDownload", null, "Ready to download");
+    return t("settings.upToDate");
+  }
+
+  function confirmInstall() {
+    var version = info && info.latest_version ? "v" + info.latest_version : "—";
+    var message = [
+      t("settings.updateConfirmTitle", { version: version }, "Install update to {version}?"),
+      "",
+      t("settings.updateConfirmRestart", null, "Cyrene will close and restart during installation."),
+      "",
+      t("settings.updateConfirmNotes", null, "Release notes:"),
+      notesText()
+    ].join("\n");
+    if (!window.confirm(message)) return;
+    fetch("/api/update/restart", { method: "POST" }).then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { throw new Error(d.message || d.error || t("settings.updateRestartFailed", null, "Restart failed")); });
+    }).catch(function (err) {
+      if (err && err.message) setError(err.message);
+    });
   }
 
   useEffectSt(function () {
@@ -1236,6 +1292,17 @@ function UpdateSection({ t, config }) {
 
   return React.createElement("div", { className: "wb-update-section" },
     React.createElement("strong", { className: "wb-update-status" }, statusText),
+    React.createElement("div", { className: "wb-update-details" },
+      React.createElement("div", null, React.createElement("span", null, t("settings.updateCurrentVersion", null, "Current version")), React.createElement("strong", null, info && info.current_version ? "v" + info.current_version : (DATA.appVersion || "—"))),
+      React.createElement("div", null, React.createElement("span", null, t("settings.updateLatestVersion", null, "Latest version")), React.createElement("strong", null, lv || "—")),
+      React.createElement("div", null, React.createElement("span", null, t("settings.updatePublishedAt", null, "Published")), React.createElement("strong", null, fmtDate(info && info.published_at))),
+      React.createElement("div", null, React.createElement("span", null, t("settings.updatePackageSize", null, "Package size")), React.createElement("strong", null, info && info.asset_size ? fmtBytes(info.asset_size) : "—")),
+      React.createElement("div", null, React.createElement("span", null, t("settings.updateDownloadStatus", null, "Download status")), React.createElement("strong", null, downloadStatus()))
+    ),
+    info && info.update_available && React.createElement("div", { className: "wb-update-notes" },
+      React.createElement("span", null, t("settings.updateReleaseNotes", null, "Release notes")),
+      React.createElement("pre", null, notesText())
+    ),
     React.createElement("label", { className: "wb-update-beta" },
       React.createElement("span", null, t("settings.betaUpdates")),
       Toggle(beta, toggleBeta),
@@ -1243,8 +1310,8 @@ function UpdateSection({ t, config }) {
     error && React.createElement("p", { className: "wb-hint", style: { color: "var(--wb-red)" } }, error),
     React.createElement("button", {
       className: "wb-btn" + (downloaded ? " primary" : ""),
-      disabled: checking || downloading,
-      onClick: downloaded ? function () { fetch("/api/update/restart", { method: "POST" }).catch(function () {}); } : (info && info.update_available ? startDownload : checkUpdate),
+      disabled: checking || downloading || !!(info && info.update_available && !downloaded && !info.checksum_available),
+      onClick: downloaded ? confirmInstall : (info && info.update_available ? startDownload : checkUpdate),
     }, downloaded ? t("settings.updateRestartNow") : (checking ? t("settings.updateChecking") : (info && info.update_available ? t("settings.updateToVersion", { version: lv }) : t("settings.checkForUpdates")))),
     downloading && React.createElement("div", { className: "wb-progress-bar", style: { width: "100%" } },
       React.createElement("div", { style: { width: progress.total > 0 ? Math.round((progress.downloaded / progress.total) * 100) + "%" : "0%", height: 4, background: "var(--wb-blue)", borderRadius: 2, transition: "width 0.3s" } }),

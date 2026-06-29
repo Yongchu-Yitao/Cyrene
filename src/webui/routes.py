@@ -2342,11 +2342,34 @@ def _launch_update_restart(
         expected_size = int(download_progress.get("total") or 0)
     except (TypeError, ValueError):
         expected_size = 0
-    if expected_size > 0 and file_size < expected_size:
+    if expected_size > 0 and file_size != expected_size:
         return (
             False,
-            f"Downloaded update package is incomplete: {file_size} of {expected_size} bytes.",
-            "update_package_incomplete",
+            f"Downloaded update package size mismatch: {file_size} of {expected_size} bytes.",
+            "update_package_size_mismatch",
+            409,
+        )
+    expected_sha256 = str(download_progress.get("expected_sha256") or "").strip().lower()
+    actual_sha256 = str(download_progress.get("actual_sha256") or "").strip().lower()
+    if not expected_sha256:
+        return (
+            False,
+            "Downloaded update package cannot be verified because the release has no sha256 checksum.",
+            "update_checksum_missing",
+            409,
+        )
+    if not actual_sha256 or actual_sha256 != expected_sha256:
+        return (
+            False,
+            "Downloaded update package checksum mismatch.",
+            "update_checksum_mismatch",
+            409,
+        )
+    if not bool(download_progress.get("verified")):
+        return (
+            False,
+            str(download_progress.get("verification_error") or "Downloaded update package has not passed verification."),
+            "update_package_unverified",
             409,
         )
 
@@ -4148,6 +4171,37 @@ def _workbench_backfill_referenced_file_artifacts(
     )
 
 
+_WORKBENCH_FINAL_KNOWLEDGE_STATUSES = {"review", "completed", "done"}
+
+
+def _workbench_final_artifact_file_changes(session: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return final deliverables that should be promoted into knowledge.
+
+    ``fileChanges`` is a process log and may contain intermediate build files.
+    ``session.artifacts`` is the curated deliverable surface shown to the user,
+    so final knowledge ingestion must read from it instead.
+    """
+    artifacts = session.get("artifacts") if isinstance(session.get("artifacts"), list) else []
+    changes: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("type") != "file_change":
+            continue
+        path = str(artifact.get("path") or artifact.get("name") or "").strip()
+        if not path or path in seen_paths:
+            continue
+        status = str(artifact.get("status") or "").strip().lower()
+        if status in {"deleted", "removed", "missing"}:
+            continue
+        seen_paths.add(path)
+        changes.append({
+            "path": path,
+            "status": "produced",
+            "source": artifact.get("source") or "final_artifact",
+        })
+    return changes
+
+
 def _workbench_prune_invalid_file_records(
     project: dict[str, Any],
     session: dict[str, Any],
@@ -4258,7 +4312,12 @@ async def _workbench_archive_run_knowledge(
     workspace_root: Path | None,
     now: str,
 ) -> list[dict[str, Any]]:
-    """Best-effort durable archive of a completed Workbench run."""
+    """Best-effort durable archive of a task's final deliverables."""
+    if str(session.get("status") or "").strip() not in _WORKBENCH_FINAL_KNOWLEDGE_STATUSES:
+        return []
+    final_artifacts = _workbench_final_artifact_file_changes(session)
+    if not final_artifacts:
+        return []
     try:
         from cyrene.knowledge.workbench import archive_workbench_run
 
@@ -4274,8 +4333,9 @@ async def _workbench_archive_run_knowledge(
             goal=str(session.get("goal") or ""),
             user_input=str(run.get("userInput") or ""),
             agent_response=str(run.get("agentResponse") or ""),
-            file_changes=run.get("fileChanges") if isinstance(run.get("fileChanges"), list) else [],
+            file_changes=final_artifacts,
             workspace_root=archive_root,
+            include_summary=False,
         )
     except Exception:
         logger.exception(
@@ -4554,9 +4614,10 @@ _WORKBENCH_TASK_MODE_SYSTEM = (
     "\n\n"
     "## 把产物交付给用户\n"
     "任务的交付物（报告、数据、导出文件、生成的代码包等）要让用户能在「产物」面板下载：\n"
-    "- 用 Write 写入工作区的文件会自动登记为产物；用 Bash/脚本/命令行生成的文件不会——"
-    "必须在生成后调用 send_file 声明它，否则只算普通文件改动，用户无法下载。\n"
-    "- 只声明真正的交付物；不要声明依赖、缓存或构建中间产物（如 node_modules、dist、__pycache__）。\n"
+    "- 你需要判断哪些是真正面向用户的最终交付物，并用 send_file 声明；只写文件路径不算交付。\n"
+    "- 不要声明源代码、脚本、.tex、缓存、依赖、构建目录或中间数据，除非用户明确要求这些也是交付物。\n"
+    "- 例：代码生成数据分析报告时，默认只交付最终报告（如 PDF/HTML/Markdown），不交付分析脚本；"
+    "LaTeX 生成文档时，默认只交付编译后的 PDF，不交付 .tex/.aux/.log。\n"
     "- 交付物请写到 deliverables/ 子目录下；用 send_file 声明的文件会被自动归档到 deliverables/。\n"
     "- 不要只在回复里写出文件路径就当作已经交付。"
 )
@@ -4950,7 +5011,9 @@ def _workbench_finalize_directive(session: dict[str, Any]) -> str:
         "先用一两句话说明任务结论与完成情况，再分点给出关键产出——结论性的内容（数据、要点、说明）"
         "直接写进回复，交付文件则点出文件名/路径，方便用户查看。",
         "- 如果某个交付文件是用 Bash/脚本/命令行生成、还没登记为可下载产物，请用 send_file 声明它；"
-        "用 Write 写入工作区的文件已自动登记，无需重复声明。",
+        "只声明最终交付物，不要把中间代码、脚本、.tex、缓存、构建日志或临时数据声明为交付物。",
+        "- 如果任务产出是数据分析报告，最终报告进产物；分析代码默认不进。"
+        "如果任务产出是 LaTeX 文档，最终 PDF 进产物；.tex/.aux/.log 默认不进。",
         "- 只在为了汇总成果而确有必要时才读取文件；不要借收尾之机开展新工作。",
         "- 如果你核对后发现成果其实并不完整、或与目标不符，就如实说明还差什么、建议下一步，"
         "而不是假装已经完成。",
@@ -6778,7 +6841,15 @@ def register_routes(app, bot: Any, db_path: str) -> None:
 
     @router.post("/api/chat/interrupt")
     async def api_interrupt_chat(session_id: str = ""):
-        return {"ok": True, "interrupted": interrupt_active_run(session_id=session_id)}
+        interrupted = interrupt_active_run(session_id=session_id)
+        if session_id:
+            try:
+                from webui.routes_workbench_chat import _CHAT_RUN_MANAGER
+
+                interrupted = _CHAT_RUN_MANAGER.interrupt(session_id) or interrupted
+            except Exception:
+                logger.exception("Failed to interrupt workbench chat run for %s", session_id)
+        return {"ok": True, "interrupted": interrupted}
 
     @router.post("/api/chat/clear")
     async def api_clear_session():
@@ -7159,13 +7230,46 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             while True:
                 raw = await websocket.receive_text()
                 try:
-                    json.loads(raw)  # reserved control messages — parsed, no-op for now
+                    msg = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(msg, dict):
+                    continue
+                mtype = str(msg.get("type") or "")
+                try:
+                    if mtype == "control":
+                        # User took/released live control of the headless page.
+                        session.set_user_control(bool(msg.get("on")))
+                    elif mtype == "mouse":
+                        await session.dispatch_mouse(
+                            type=str(msg.get("event") or ""),
+                            x=float(msg.get("x") or 0),
+                            y=float(msg.get("y") or 0),
+                            button=str(msg.get("button") or "none"),
+                            click_count=int(msg.get("clickCount") or 0),
+                            delta_x=float(msg.get("deltaX") or 0),
+                            delta_y=float(msg.get("deltaY") or 0),
+                            modifiers=int(msg.get("modifiers") or 0),
+                        )
+                    elif mtype == "key":
+                        await session.dispatch_key(
+                            type=str(msg.get("event") or ""),
+                            key=str(msg.get("key") or ""),
+                            code=str(msg.get("code") or ""),
+                            text=str(msg.get("text") or ""),
+                            key_code=int(msg.get("keyCode") or 0),
+                            modifiers=int(msg.get("modifiers") or 0),
+                        )
+                    elif mtype == "text":
+                        # Committed string (IME composition result / paste).
+                        await session.insert_text(str(msg.get("text") or ""))
+                except Exception:
+                    logger.debug("browser input dispatch failed", exc_info=True)
         except WebSocketDisconnect:
             pass
         finally:
             pump_task.cancel()
+            session.set_user_control(False)
             await session.stop_screencast(queue)
 
     # ---- Sessions API ----
@@ -7850,6 +7954,37 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             return {"ok": False, "error": "url is required"}
         result = await navigate(url)
         return result
+
+    @router.post("/api/browser/takeover")
+    async def api_browser_takeover():
+        """User-initiated escape hatch: open the real (headed) browser window for
+        sites that block headless (e.g. CAPTCHA). The in-panel live view pauses
+        until the user returns via /api/browser/release (or closes the window)."""
+        from cyrene import browser as _browser
+        if _browser._ensure_playwright() is None:
+            return {"ok": False, "error": _browser.browser_runtime_unavailable_message()}
+        try:
+            session = await _browser.get_session()
+            url = await session.current_url()
+            await session.open_user_window(url)
+            return {"ok": True, "url": url, "mode": "headed"}
+        except Exception as exc:
+            logger.exception("user browser takeover failed")
+            return {"ok": False, "error": _browser.browser_runtime_unavailable_message(exc)}
+
+    @router.post("/api/browser/release")
+    async def api_browser_release():
+        """Return the user-opened native window to the in-panel headless view."""
+        from cyrene import browser as _browser
+        if _browser._ensure_playwright() is None:
+            return {"ok": False, "error": _browser.browser_runtime_unavailable_message()}
+        try:
+            session = await _browser.get_session()
+            await session.close_user_window(await session.current_url())
+            return {"ok": True, "mode": "headless"}
+        except Exception as exc:
+            logger.exception("user browser release failed")
+            return {"ok": False, "error": _browser.browser_runtime_unavailable_message(exc)}
 
     # ---- Memory API ----
 
@@ -10491,10 +10626,13 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             "update_available": info.available,
             "current_version": info.current_version,
             "latest_version": info.latest_version,
+            "published_at": info.published_at,
             "download_url": info.download_url,
             "release_notes": info.release_notes,
             "asset_name": info.asset_name,
             "asset_size": info.asset_size,
+            "asset_sha256": info.asset_sha256,
+            "checksum_available": bool(info.asset_sha256),
             # 有新版但无适配本平台的安装包时为非空，前端据此提示手动下载。
             "error": info.error,
         }
@@ -10512,6 +10650,16 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if not info or not info.download_url:
             # 区分“没有更新”与“有更新但无适配本平台的包”（info.error）。
             return {"ok": False, "error": (info.error if info and info.error else "No update available")}
+        if not info.asset_sha256:
+            _download_progress["downloaded"] = 0
+            _download_progress["total"] = info.asset_size
+            _download_progress["done"] = False
+            _download_progress["path"] = ""
+            _download_progress["expected_sha256"] = ""
+            _download_progress["actual_sha256"] = ""
+            _download_progress["verified"] = False
+            _download_progress["verification_error"] = "无法验证更新包：发布资产缺少 sha256 校验值。"
+            return {"ok": False, "error": _download_progress["verification_error"], "code": "update_checksum_missing"}
 
         def _progress(downloaded: int, total: int) -> None:
             _download_progress["downloaded"] = downloaded
@@ -10520,18 +10668,51 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         _download_progress["downloaded"] = 0
         _download_progress["total"] = info.asset_size
         _download_progress["done"] = False
+        _download_progress["path"] = ""
+        _download_progress["expected_sha256"] = info.asset_sha256
+        _download_progress["actual_sha256"] = ""
+        _download_progress["verified"] = False
+        _download_progress["verification_error"] = ""
 
-        dest = await download_update(info.download_url, _progress)
+        try:
+            result = await download_update(info.download_url, _progress)
+        except Exception as exc:
+            logger.warning("Update download failed", exc_info=True)
+            result = None
+            _download_progress["verification_error"] = f"下载更新失败：{exc}"
         _download_progress["done"] = True
-        _download_progress["path"] = str(dest) if dest else ""
+        _download_progress["path"] = str(result.path) if result else ""
+        _download_progress["actual_sha256"] = result.sha256 if result else ""
 
-        if dest:
+        verified = False
+        verification_error = ""
+        if not result:
+            verification_error = _download_progress["verification_error"] or "Download failed"
+        elif info.asset_size and result.size != info.asset_size:
+            verification_error = f"更新包大小不一致：实际 {result.size} 字节，期望 {info.asset_size} 字节。"
+        elif result.sha256.lower() != info.asset_sha256.lower():
+            verification_error = "更新包 sha256 校验失败。"
+        else:
+            verified = True
+        _download_progress["downloaded"] = result.size if result else _download_progress["downloaded"]
+        _download_progress["verified"] = verified
+        _download_progress["verification_error"] = verification_error
+
+        if result and verified:
             return {
                 "ok": True,
-                "path": str(dest),
+                "path": str(result.path),
                 "size": _download_progress["downloaded"],
+                "sha256": result.sha256,
+                "verified": True,
             }
-        return {"ok": False, "error": "Download failed"}
+        return {
+            "ok": False,
+            "error": verification_error or "Download failed",
+            "verified": False,
+            "actual_sha256": _download_progress["actual_sha256"],
+            "expected_sha256": _download_progress["expected_sha256"],
+        }
 
     @router.get("/api/update/progress")
     async def api_update_progress():
