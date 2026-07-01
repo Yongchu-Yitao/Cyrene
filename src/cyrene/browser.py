@@ -9,9 +9,11 @@ lightweight action metadata.
 
 Tools exposed to the agent (see ``tools.py``):
   - ``browser_navigate`` — open a page in the shared session, return readable text
-  - ``browser_screenshot`` — screenshot the current page (Playwright required)
-  - ``browser_click`` — click an element by CSS selector (Playwright required)
-  - ``browser_type`` — type text into an input (Playwright required)
+  - ``browser_snapshot`` — inspect visible elements with refs and boxes
+  - ``browser_screenshot`` — screenshot the current page or a provided URL
+  - ``browser_click`` / ``browser_click_ref`` / ``browser_click_text`` / ``browser_click_at``
+  - ``browser_type`` / ``browser_type_ref``
+  - ``browser_wait`` / ``browser_network_log``
 
 Live-view / takeover design lives in ``~/.claude/plans/browser-live-view-takeover.md``.
 This module implements the persistent session, WebSocket screencast, and
@@ -262,6 +264,136 @@ async def electron_current_url() -> str:
     if isinstance(active, dict):
         return str(active.get("url") or "")
     return ""
+
+
+_BROWSER_INSPECT_JS = r"""
+(function(maxArg, textArg) {
+  const maxElements = Math.max(1, Math.min(200, Number(maxArg) || 80));
+  const textLimit = Math.max(20, Math.min(500, Number(textArg) || 160));
+  const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
+  const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+  const candidates = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],[tabindex],summary,label,img,[contenteditable="true"],video,section,article,div,span'));
+  const seen = new Set();
+  const out = [];
+  const clean = (value, limit = textLimit) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+  const cssEscape = (value) => {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+  };
+  const roleOf = (el, tag) => {
+    const explicit = clean(el.getAttribute('role'), 60);
+    if (explicit) return explicit;
+    if (tag === 'a' && el.href) return 'link';
+    if (tag === 'button') return 'button';
+    if (tag === 'input') {
+      const type = String(el.getAttribute('type') || 'text').toLowerCase();
+      if (type === 'button' || type === 'submit' || type === 'reset') return 'button';
+      return 'textbox';
+    }
+    if (tag === 'textarea') return 'textbox';
+    if (tag === 'select') return 'combobox';
+    if (tag === 'img') return 'img';
+    if (el.isContentEditable) return 'textbox';
+    return '';
+  };
+  const selectorFor = (el, tag, index) => {
+    const id = clean(el.id, 120);
+    if (id) return '#' + cssEscape(id);
+    const testId = clean(el.getAttribute('data-testid') || el.getAttribute('data-test') || el.getAttribute('data-cy'), 120);
+    if (testId) return tag + '[data-testid="' + testId.replace(/"/g, '\\"') + '"]';
+    const href = clean(el.getAttribute('href'), 180);
+    if (tag === 'a' && href) return 'a[href="' + href.replace(/"/g, '\\"') + '"]';
+    return '[data-cyrene-ref="' + index + '"]';
+  };
+  for (const el of candidates) {
+    if (!(el instanceof Element) || seen.has(el)) continue;
+    seen.add(el);
+    const style = window.getComputedStyle(el);
+    if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+    const rect = el.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+    if (rect.bottom < 0 || rect.right < 0 || rect.top > viewportH || rect.left > viewportW) continue;
+    const tag = String(el.tagName || '').toLowerCase();
+    const role = roleOf(el, tag);
+    const text = clean(el.innerText || el.textContent || el.getAttribute('value') || el.getAttribute('title') || el.getAttribute('alt'));
+    const ariaLabel = clean(el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt'));
+    const placeholder = clean(el.getAttribute('placeholder'));
+    const href = el.href ? String(el.href) : clean(el.getAttribute('href'), 300);
+    const src = el.currentSrc || el.src || clean(el.getAttribute('src'), 300);
+    const interesting = role || href || placeholder || ariaLabel || tag === 'img' || tag === 'input' || tag === 'textarea' || tag === 'select' || text.length >= 2;
+    if (!interesting) continue;
+    const ref = 'e' + (out.length + 1);
+    el.setAttribute('data-cyrene-ref', String(out.length + 1));
+    out.push({
+      ref,
+      tag,
+      role,
+      text,
+      ariaLabel,
+      placeholder,
+      href,
+      src: tag === 'img' ? src : '',
+      alt: tag === 'img' ? clean(el.getAttribute('alt')) : '',
+      selector: selectorFor(el, tag, out.length + 1),
+      rect: { x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) },
+    });
+    if (out.length >= maxElements) break;
+  }
+  return {
+    ok: true,
+    url: location.href,
+    title: document.title || '',
+    text: clean(document.body ? document.body.innerText : '', 2000),
+    viewport: { width: viewportW, height: viewportH, scrollX: window.scrollX || 0, scrollY: window.scrollY || 0 },
+    elements: out,
+  };
+})
+"""
+
+
+_BROWSER_FIND_JS = r"""
+(function(modeArg, valueArg, exactArg, visibleOnlyArg) {
+  const mode = String(modeArg || 'selector');
+  const value = String(valueArg || '');
+  const exact = exactArg === true;
+  const visibleOnly = visibleOnlyArg !== false;
+  const norm = (v) => String(v || '').replace(/\s+/g, ' ').trim();
+  const isVisible = (el) => {
+    if (!(el instanceof Element)) return false;
+    const style = window.getComputedStyle(el);
+    if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return !!r && r.width > 0 && r.height > 0;
+  };
+  let el = null;
+  if (mode === 'ref') {
+    const n = value.replace(/^e/i, '');
+    el = document.querySelector('[data-cyrene-ref="' + n.replace(/"/g, '\\"') + '"]');
+  } else if (mode === 'text') {
+    const needle = norm(value).toLowerCase();
+    const nodes = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],[tabindex],label,summary,[contenteditable="true"],div,span,section,article'));
+    el = nodes.find((node) => {
+      if (visibleOnly && !isVisible(node)) return false;
+      const hay = norm(node.innerText || node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('placeholder') || node.getAttribute('value')).toLowerCase();
+      return exact ? hay === needle : hay.includes(needle);
+    }) || null;
+  } else {
+    el = document.querySelector(value);
+  }
+  if (!el) return { ok: false, error: 'nf' };
+  if (visibleOnly && !isVisible(el)) return { ok: false, error: 'not visible' };
+  el.scrollIntoView({ block: 'center', inline: 'center' });
+  const r = el.getBoundingClientRect();
+  if (!r || r.width <= 0 || r.height <= 0) return { ok: false, error: 'not visible' };
+  return {
+    ok: true,
+    x: Math.round(r.left + r.width / 2),
+    y: Math.round(r.top + r.height / 2),
+    box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+    tag: String(el.tagName || '').toLowerCase(),
+  };
+})
+"""
 
 
 async def _emit_electron_frame(action: str, result: dict[str, Any], *, target: str | None = None, box: Any = None) -> None:
@@ -618,6 +750,44 @@ class _BrowserSession:
             await self._emit_frame("navigate", url=page.url, title=title)
             return {"url": page.url, "status": status, "title": title, "text": text, "error": None}
 
+    async def inspect(self, *, max_elements: int = 80, text_limit: int = 160) -> dict[str, Any]:
+        if not await self._wait_for_control():
+            return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG, "elements": []}
+        async with self._action_lock:
+            page = await self.page()
+            result = await page.evaluate(
+                f"([maxArg, textArg]) => ({_BROWSER_INSPECT_JS})(maxArg, textArg)",
+                [max_elements, text_limit],
+            )
+            if isinstance(result, dict):
+                return result
+            return {"ok": False, "url": page.url, "title": await page.title(), "error": "Unable to inspect page.", "elements": []}
+
+    async def _find_target(self, mode: str, value: str, *, exact: bool = False) -> dict[str, Any]:
+        page = await self.page()
+        result = await page.evaluate(
+            f"([modeArg, valueArg, exactArg]) => ({_BROWSER_FIND_JS})(modeArg, valueArg, exactArg, true)",
+            [mode, value, exact],
+        )
+        return result if isinstance(result, dict) else {"ok": False, "error": "not found"}
+
+    async def _mouse_click_target(self, mode: str, value: str, *, exact: bool = False, target_label: str = "") -> dict[str, Any]:
+        if not await self._wait_for_control():
+            return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
+        async with self._action_lock:
+            page = await self.page()
+            info = await self._find_target(mode, value, exact=exact)
+            if not info.get("ok"):
+                return {"ok": False, "url": page.url, "title": await page.title(), "error": "Element " + str(info.get("error") or "not found")}
+            await page.mouse.click(float(info.get("x") or 0), float(info.get("y") or 0))
+            try:
+                await page.wait_for_load_state(timeout=5000)
+            except Exception:
+                pass
+            title = await page.title()
+            await self._emit_frame("click", target=target_label or value, box=info.get("box"), url=page.url, title=title)
+            return {"ok": True, "url": page.url, "title": title, "box": info.get("box")}
+
     async def click(self, selector: str) -> dict[str, Any]:
         if not await self._wait_for_control():
             return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
@@ -634,6 +804,27 @@ class _BrowserSession:
             await self._emit_frame("click", target=selector, box=box, url=page.url, title=title)
             return {"ok": True, "url": page.url, "title": title}
 
+    async def click_ref(self, ref: str) -> dict[str, Any]:
+        return await self._mouse_click_target("ref", ref, target_label=ref)
+
+    async def click_text(self, text: str, *, exact: bool = False) -> dict[str, Any]:
+        return await self._mouse_click_target("text", text, exact=exact, target_label=text)
+
+    async def click_at(self, x: int, y: int) -> dict[str, Any]:
+        if not await self._wait_for_control():
+            return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
+        async with self._action_lock:
+            page = await self.page()
+            await page.mouse.click(x, y)
+            try:
+                await page.wait_for_load_state(timeout=5000)
+            except Exception:
+                pass
+            title = await page.title()
+            box = {"x": x, "y": y, "w": 1, "h": 1}
+            await self._emit_frame("click", target=f"{x},{y}", box=box, url=page.url, title=title)
+            return {"ok": True, "url": page.url, "title": title, "box": box}
+
     async def type_text(self, selector: str, text: str, *, submit: bool = False) -> dict[str, Any]:
         if not await self._wait_for_control():
             return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
@@ -648,6 +839,75 @@ class _BrowserSession:
             title = await page.title()
             await self._emit_frame("type", target=selector, box=box, url=page.url, title=title)
             return {"ok": True, "url": page.url, "title": title}
+
+    async def type_ref(self, ref: str, text: str, *, submit: bool = False) -> dict[str, Any]:
+        if not await self._wait_for_control():
+            return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
+        async with self._action_lock:
+            page = await self.page()
+            await page.evaluate(
+                f"([maxArg, textArg]) => ({_BROWSER_INSPECT_JS})(maxArg, textArg)",
+                [120, 160],
+            )
+            selector = f'[data-cyrene-ref="{str(ref).removeprefix("e").removeprefix("E")}"]'
+            el = page.locator(selector)
+            box = await el.bounding_box()
+            await el.fill(text)
+            if submit:
+                await el.press("Enter")
+                try:
+                    await page.wait_for_load_state(timeout=5000)
+                except Exception:
+                    pass
+            title = await page.title()
+            await self._emit_frame("type", target=ref, box=box, url=page.url, title=title)
+            return {"ok": True, "url": page.url, "title": title}
+
+    async def wait_for(self, *, selector: str = "", text: str = "", url_contains: str = "", timeout_ms: int = 5000) -> dict[str, Any]:
+        if not await self._wait_for_control():
+            return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
+        async with self._action_lock:
+            page = await self.page()
+            deadline = time.monotonic() + max(0.1, min(30.0, float(timeout_ms or 5000) / 1000.0))
+            while time.monotonic() < deadline:
+                url_ok = not url_contains or url_contains in page.url
+                selector_ok = True
+                text_ok = True
+                if selector:
+                    try:
+                        selector_ok = await page.locator(selector).count() > 0
+                    except Exception:
+                        selector_ok = False
+                if text:
+                    try:
+                        body_text = await page.locator("body").inner_text(timeout=500)
+                    except Exception:
+                        body_text = ""
+                    text_ok = text in body_text
+                if url_ok and selector_ok and text_ok:
+                    return {"ok": True, "url": page.url, "title": await page.title()}
+                await asyncio.sleep(0.15)
+            return {"ok": False, "url": page.url, "title": await page.title(), "error": "Timed out waiting for page condition."}
+
+    async def network_log(self, *, max_entries: int = 40) -> dict[str, Any]:
+        if not await self._wait_for_control():
+            return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG, "entries": []}
+        async with self._action_lock:
+            page = await self.page()
+            result = await page.evaluate(
+                """(maxArg) => {
+                    const max = Math.max(1, Math.min(200, Number(maxArg) || 40));
+                    const entries = performance.getEntriesByType('resource').slice(-max).map((e) => ({
+                        name: String(e.name || ''),
+                        type: String(e.initiatorType || ''),
+                        durationMs: Math.round(Number(e.duration || 0)),
+                        transferSize: Number(e.transferSize || 0),
+                    }));
+                    return { ok: true, url: location.href, title: document.title || '', entries };
+                }""",
+                max_entries,
+            )
+            return result if isinstance(result, dict) else {"ok": False, "url": page.url, "title": await page.title(), "entries": []}
 
     async def screenshot_path(self, *, full_page: bool = True) -> str:
         page = await self.page()
@@ -1078,19 +1338,23 @@ async def _httpx_navigate(
     return result
 
 
-async def screenshot(url: str, *, full_page: bool = True) -> dict[str, Any]:
-    """Open *url* in the shared session and screenshot it to a temp PNG.
+async def screenshot(url: str = "", *, full_page: bool = True) -> dict[str, Any]:
+    """Screenshot *url* or the current shared browser page.
 
     Returns ``{"ok": True, "path": "/tmp/…png"}`` or ``{"ok": False, "error": "..."}``.
     """
-    url = _normalize_http_url(url)
-    try:
-        _check_url(url)
-    except SSRFBlockedError as exc:
-        return {"ok": False, "error": str(exc)}
+    url = str(url or "").strip()
+    if url:
+        url = _normalize_http_url(url)
+        try:
+            _check_url(url)
+        except SSRFBlockedError as exc:
+            return {"ok": False, "error": str(exc)}
     if electron_browser_available():
         try:
-            nav = await _electron_browser_rpc("navigate", {"url": url, "maxChars": 0})
+            nav = {"ok": True, "title": ""}
+            if url:
+                nav = await _electron_browser_rpc("navigate", {"url": url, "maxChars": 0})
             if nav.get("ok") is True:
                 result = await _electron_browser_rpc("screenshot", {})
                 if result.get("ok") is True:
@@ -1118,13 +1382,37 @@ async def screenshot(url: str, *, full_page: bool = True) -> dict[str, Any]:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     try:
         session = await get_session()
-        await session.navigate(url)
+        if url:
+            await session.navigate(url)
+        elif session._page is None:
+            return {"ok": False, "error": "No page open. Call browser_navigate first."}
         path = await session.screenshot_path(full_page=full_page)
         title = await (await session.page()).title()
         return {"ok": True, "path": path, "title": title}
     except Exception as exc:
         logger.exception("screenshot failed for %s", url)
         return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
+async def inspect_page(*, max_elements: int = 80, text_limit: int = 160) -> dict[str, Any]:
+    """Return a structured snapshot of visible, actionable elements on the current page."""
+    if electron_browser_available():
+        try:
+            result = await _electron_browser_rpc("inspect", {"maxElements": max_elements, "textLimit": text_limit})
+            if result.get("ok") is True:
+                await _emit_electron_frame("inspect", result)
+            return result
+        except Exception as exc:
+            logger.warning("Electron inspect failed (%s); falling back to Playwright", exc)
+    if _ensure_playwright() is None:
+        return {"ok": False, "error": browser_runtime_unavailable_message(), "elements": []}
+    session = _get_session()
+    if session._page is None:
+        return {"ok": False, "error": "No page open. Call browser_navigate first.", "elements": []}
+    try:
+        return await session.inspect(max_elements=max_elements, text_limit=text_limit)
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc), "elements": []}
 
 
 async def click(selector: str) -> dict[str, Any]:
@@ -1150,6 +1438,69 @@ async def click(selector: str) -> dict[str, Any]:
         return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
 
 
+async def click_ref(ref: str) -> dict[str, Any]:
+    """Click an element from browser_snapshot by its stable ref (e.g. e12)."""
+    if electron_browser_available():
+        try:
+            result = await _electron_browser_rpc("clickRef", {"ref": ref})
+            if result.get("ok") is True:
+                await _emit_electron_frame("click", result, target=ref, box=result.get("box"))
+            return result
+        except Exception as exc:
+            logger.warning("Electron click_ref failed (%s); falling back to Playwright", exc)
+    if _ensure_playwright() is None:
+        return {"ok": False, "error": browser_runtime_unavailable_message()}
+    session = _get_session()
+    if session._page is None:
+        return {"ok": False, "error": "No page open. Call browser_navigate first."}
+    try:
+        return await session.click_ref(ref)
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
+async def click_text(text: str, *, exact: bool = False) -> dict[str, Any]:
+    """Click a visible element whose accessible/text content matches *text*."""
+    if electron_browser_available():
+        try:
+            result = await _electron_browser_rpc("clickText", {"text": text, "exact": exact})
+            if result.get("ok") is True:
+                await _emit_electron_frame("click", result, target=text, box=result.get("box"))
+            return result
+        except Exception as exc:
+            logger.warning("Electron click_text failed (%s); falling back to Playwright", exc)
+    if _ensure_playwright() is None:
+        return {"ok": False, "error": browser_runtime_unavailable_message()}
+    session = _get_session()
+    if session._page is None:
+        return {"ok": False, "error": "No page open. Call browser_navigate first."}
+    try:
+        return await session.click_text(text, exact=exact)
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
+async def click_at(x: int, y: int) -> dict[str, Any]:
+    """Click the current page at viewport coordinates."""
+    if electron_browser_available():
+        try:
+            result = await _electron_browser_rpc("clickAt", {"x": x, "y": y})
+            if result.get("ok") is True:
+                await _emit_electron_frame("click", result, target=f"{x},{y}", box=result.get("box"))
+            return result
+        except Exception as exc:
+            logger.warning("Electron click_at failed (%s); falling back to Playwright", exc)
+    if _ensure_playwright() is None:
+        return {"ok": False, "error": browser_runtime_unavailable_message()}
+    session = _get_session()
+    if session._page is None:
+        return {"ok": False, "error": "No page open. Call browser_navigate first."}
+    try:
+        return await session.click_at(int(x), int(y))
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
 async def type_text(selector: str, text: str, *, submit: bool = False) -> dict[str, Any]:
     """Type *text* into an element and optionally submit."""
     if electron_browser_available():
@@ -1171,6 +1522,67 @@ async def type_text(selector: str, text: str, *, submit: bool = False) -> dict[s
         return await session.type_text(selector, text, submit=submit)
     except Exception as exc:
         return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
+async def type_ref(ref: str, text: str, *, submit: bool = False) -> dict[str, Any]:
+    """Type into an editable element from browser_snapshot by ref."""
+    if electron_browser_available():
+        try:
+            result = await _electron_browser_rpc("typeRef", {"ref": ref, "text": text, "submit": submit})
+            if result.get("ok") is True:
+                await _emit_electron_frame("type", result, target=ref, box=result.get("box"))
+            return result
+        except Exception as exc:
+            logger.warning("Electron type_ref failed (%s); falling back to Playwright", exc)
+    if _ensure_playwright() is None:
+        return {"ok": False, "error": browser_runtime_unavailable_message()}
+    session = _get_session()
+    if session._page is None:
+        return {"ok": False, "error": "No page open. Call browser_navigate first."}
+    try:
+        return await session.type_ref(ref, text, submit=submit)
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
+async def wait_for_page(*, selector: str = "", text: str = "", url_contains: str = "", timeout_ms: int = 5000) -> dict[str, Any]:
+    """Wait until a current-page condition is true."""
+    if electron_browser_available():
+        try:
+            return await _electron_browser_rpc(
+                "waitFor",
+                {"selector": selector, "text": text, "urlContains": url_contains, "timeoutMs": timeout_ms},
+                timeout=max(2.0, min(35.0, float(timeout_ms or 5000) / 1000.0 + 5.0)),
+            )
+        except Exception as exc:
+            logger.warning("Electron wait_for failed (%s); falling back to Playwright", exc)
+    if _ensure_playwright() is None:
+        return {"ok": False, "error": browser_runtime_unavailable_message()}
+    session = _get_session()
+    if session._page is None:
+        return {"ok": False, "error": "No page open. Call browser_navigate first."}
+    try:
+        return await session.wait_for(selector=selector, text=text, url_contains=url_contains, timeout_ms=timeout_ms)
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
+async def network_log(*, max_entries: int = 40) -> dict[str, Any]:
+    """Return recent resource/XHR/fetch URLs visible to the current page."""
+    if electron_browser_available():
+        try:
+            return await _electron_browser_rpc("networkLog", {"maxEntries": max_entries}, timeout=10.0)
+        except Exception as exc:
+            logger.warning("Electron network_log failed (%s); falling back to Playwright", exc)
+    if _ensure_playwright() is None:
+        return {"ok": False, "error": browser_runtime_unavailable_message(), "entries": []}
+    session = _get_session()
+    if session._page is None:
+        return {"ok": False, "error": "No page open. Call browser_navigate first.", "entries": []}
+    try:
+        return await session.network_log(max_entries=max_entries)
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc), "entries": []}
 
 
 async def scroll_page(*, delta_x: int = 0, delta_y: int = 500) -> dict[str, Any]:

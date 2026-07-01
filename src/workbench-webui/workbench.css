@@ -4495,11 +4495,55 @@ html[data-theme="dark"] .workbench-shell {
 }
 
 html[data-theme="light"] .settings-overlay-panel {
+  background: #ffffff;
+  border-color: #d8dde5;
   box-shadow: 0 12px 36px rgba(24, 37, 46, 0.10), 0 2px 8px rgba(24, 37, 46, 0.05);
 }
 
+html[data-theme="light"] .settings-overlay-header,
+html[data-theme="light"] .settings-overlay-body,
+html[data-theme="light"] .settings-overlay-content {
+  background: #ffffff;
+}
+
 html[data-theme="light"] .settings-overlay-nav {
-  background: var(--wb-panel);
+  background: #ffffff;
+  border-right-color: #e2e6ec;
+}
+
+html[data-theme="light"] .settings-overlay-nav-section {
+  border-top-color: #e8ebf0;
+}
+
+html[data-theme="light"] .settings-overlay-tab:hover {
+  background: #f7f8fa;
+}
+
+html[data-theme="light"] .settings-overlay-tab.active {
+  background: #ffffff;
+  border-color: #c9ced6;
+  box-shadow: 0 1px 2px rgba(24, 37, 46, 0.06);
+}
+
+html[data-theme="light"] .settings-overlay-close,
+html[data-theme="light"] .wb-input,
+html[data-theme="light"] .wb-select,
+html[data-theme="light"] .wb-btn {
+  background: #ffffff;
+}
+
+html[data-theme="light"] .settings-overlay-close:hover,
+html[data-theme="light"] .wb-btn:hover {
+  background: #f8f9fb;
+}
+
+html[data-theme="light"] .wb-seg {
+  background: #eef0f3;
+  border-color: #e1e4e8;
+}
+
+html[data-theme="light"] .wb-seg-btn.active {
+  background: #ffffff;
 }
 
 /* Toggle: neutral gray off-track in light mode. The on-state rules must be

@@ -2,27 +2,30 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-from cyrene import tool_legacy as _legacy
-
 TOOL_NAME = 'browser_screenshot'
-TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL_NAME)
+TOOL_DEF = {
+    "type": "function",
+    "function": {
+        "name": TOOL_NAME,
+        "description": "Take a screenshot of the current browser page, or navigate to a URL first if one is provided.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Optional URL to screenshot. Omit to screenshot the current page."},
+            },
+        },
+    },
+}
 
 
 async def _tool_browser_screenshot(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
     from cyrene.browser import screenshot
     url = str(args.get("url") or "").strip()
-    if not url:
-        return "No URL provided."
     result = await screenshot(url)
     if result.get("ok"):
-        try:
-            os.unlink(result["path"])
-        except OSError:
-            pass
-        return f"Screenshot taken.\nTitle: {result.get('title', '—')}"
+        return f"Screenshot taken.\nPath: {result.get('path', '—')}\nTitle: {result.get('title', '—')}"
     return f"Screenshot failed: {result.get('error', 'unknown error')}"
 
 

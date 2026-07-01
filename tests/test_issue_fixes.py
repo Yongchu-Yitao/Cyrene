@@ -681,9 +681,16 @@ def test_update_restart_api_success_exits_with_restart_code(monkeypatch, tmp_pat
 
 BROWSER_TOOLS = [
     "browser_navigate",
+    "browser_snapshot",
     "browser_screenshot",
     "browser_click",
+    "browser_click_ref",
+    "browser_click_text",
+    "browser_click_at",
     "browser_type",
+    "browser_type_ref",
+    "browser_wait",
+    "browser_network_log",
     "browser_request_takeover",
 ]
 

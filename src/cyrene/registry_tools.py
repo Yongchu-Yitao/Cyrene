@@ -58,9 +58,16 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.list_skills",  # ListSkills
     "cyrene.tool_impl.send_wechat_file",  # send_wechat_file
     "cyrene.tool_impl.browser_navigate",  # browser_navigate
+    "cyrene.tool_impl.browser_snapshot",  # browser_snapshot
     "cyrene.tool_impl.browser_screenshot",  # browser_screenshot
     "cyrene.tool_impl.browser_click",  # browser_click
+    "cyrene.tool_impl.browser_click_ref",  # browser_click_ref
+    "cyrene.tool_impl.browser_click_text",  # browser_click_text
+    "cyrene.tool_impl.browser_click_at",  # browser_click_at
     "cyrene.tool_impl.browser_type",  # browser_type
+    "cyrene.tool_impl.browser_type_ref",  # browser_type_ref
+    "cyrene.tool_impl.browser_wait",  # browser_wait
+    "cyrene.tool_impl.browser_network_log",  # browser_network_log
     "cyrene.tool_impl.browser_tab_list",  # browser_tab_list
     "cyrene.tool_impl.browser_tab_new",  # browser_tab_new
     "cyrene.tool_impl.browser_tab_select",  # browser_tab_select
@@ -94,9 +101,16 @@ _MAIN_ONLY_TOOLS = {
     "spawn_subagent",
     "query_round",
     "browser_navigate",
+    "browser_snapshot",
     "browser_screenshot",
     "browser_click",
+    "browser_click_ref",
+    "browser_click_text",
+    "browser_click_at",
     "browser_type",
+    "browser_type_ref",
+    "browser_wait",
+    "browser_network_log",
     "browser_tab_list",
     "browser_tab_new",
     "browser_tab_select",

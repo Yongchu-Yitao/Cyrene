@@ -10,9 +10,16 @@ from cyrene.secret_redaction import redact_text, redact_value
 
 _BROWSER_TOOL_NAMES = {
     "browser_navigate",
+    "browser_snapshot",
     "browser_screenshot",
     "browser_click",
+    "browser_click_ref",
+    "browser_click_text",
+    "browser_click_at",
     "browser_type",
+    "browser_type_ref",
+    "browser_wait",
+    "browser_network_log",
     "browser_request_takeover",
 }
 

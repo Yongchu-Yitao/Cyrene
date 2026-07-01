@@ -82,7 +82,14 @@ explicit, user-driven action (you perform the login in the native window).
 | Tool | Purpose |
 |------|---------|
 | `browser_navigate` | Open a URL in the shared session; return readable text. |
-| `browser_screenshot` | Screenshot the current page to a temp PNG. |
+| `browser_snapshot` | Inspect visible elements and return refs, text, hrefs, selectors, and boxes. |
+| `browser_screenshot` | Screenshot the current page or a provided URL to a temp PNG. |
 | `browser_click` | Click an element by CSS selector. |
+| `browser_click_ref` | Click an element ref returned by `browser_snapshot`. |
+| `browser_click_text` | Click a visible element by text or accessible label. |
+| `browser_click_at` | Click viewport coordinates. |
 | `browser_type` | Type into an input (optionally submit). |
+| `browser_type_ref` | Type into an editable element ref returned by `browser_snapshot`. |
+| `browser_wait` | Wait for SPA URL/text/selector conditions after async rendering. |
+| `browser_network_log` | Return recent resource/fetch/XHR URLs visible to the page. |
 | `browser_request_takeover` | Open a real window for the user to log in, pause, then resume authenticated. |

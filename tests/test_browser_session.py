@@ -750,8 +750,8 @@ async def test_screenshot_path_closes_file_handle(monkeypatch):
     os.unlink(path)
 
 
-async def test_tool_browser_screenshot_deletes_tmp_file(monkeypatch):
-    """The tool handler must delete the temp PNG after a successful screenshot (#87)."""
+async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
+    """The tool handler keeps the temp PNG path so agents can inspect current-page screenshots."""
     import os
     import tempfile
 
@@ -772,8 +772,10 @@ async def test_tool_browser_screenshot_deletes_tmp_file(monkeypatch):
     )
 
     assert "Screenshot taken" in result
+    assert tmp.name in result
     assert "Test Page" in result
-    assert not os.path.exists(tmp.name), "temp PNG was not deleted"
+    assert os.path.exists(tmp.name)
+    os.unlink(tmp.name)
 
 
 async def test_screenshot_path_cleans_up_on_failure(monkeypatch):
@@ -1038,6 +1040,70 @@ async def test_click_and_type_use_electron_rpc_when_available(monkeypatch):
     r2 = await browser.type_text("input.q", "hello")
     assert r2["ok"] is True
     assert any(c[0] == "type" for c in calls)
+
+
+async def test_new_browser_actions_use_electron_rpc(monkeypatch):
+    from cyrene import browser
+
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
+    monkeypatch.setattr(browser, "_PLAYWRIGHT_AVAILABLE", False)
+
+    calls = []
+
+    async def fake_rpc(method, args=None, **_kw):
+        calls.append((method, args or {}))
+        if method == "inspect":
+            return {"ok": True, "url": "https://example.com", "title": "Page", "elements": [{"ref": "e1", "text": "Go"}]}
+        if method == "networkLog":
+            return {"ok": True, "url": "https://example.com", "title": "Page", "entries": [{"name": "https://api.example.test/data", "type": "fetch"}]}
+        return {"ok": True, "url": "https://example.com", "title": "Page", "box": {"x": 1, "y": 2, "w": 3, "h": 4}}
+
+    monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
+
+    assert (await browser.inspect_page())["ok"] is True
+    assert (await browser.click_ref("e1"))["ok"] is True
+    assert (await browser.click_text("Go", exact=True))["ok"] is True
+    assert (await browser.click_at(10, 20))["ok"] is True
+    assert (await browser.type_ref("e2", "hello", submit=True))["ok"] is True
+    assert (await browser.wait_for_page(text="Ready"))["ok"] is True
+    assert (await browser.network_log())["ok"] is True
+
+    assert ("inspect", {"maxElements": 80, "textLimit": 160}) in calls
+    assert ("clickRef", {"ref": "e1"}) in calls
+    assert ("clickText", {"text": "Go", "exact": True}) in calls
+    assert ("clickAt", {"x": 10, "y": 20}) in calls
+    assert ("typeRef", {"ref": "e2", "text": "hello", "submit": True}) in calls
+    assert any(method == "waitFor" and args["text"] == "Ready" for method, args in calls)
+    assert ("networkLog", {"maxEntries": 40}) in calls
+
+
+async def test_current_page_screenshot_uses_electron_without_navigation(monkeypatch):
+    from cyrene import browser
+
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
+
+    calls = []
+
+    async def fake_rpc(method, args=None, **_kw):
+        calls.append((method, args or {}))
+        if method == "screenshot":
+            return {
+                "ok": True,
+                "pngBase64": "iVBORw0KGgo=",
+                "title": "Current Page",
+                "url": "https://example.com/current",
+            }
+        raise AssertionError(f"unexpected RPC method: {method}")
+
+    monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
+
+    result = await browser.screenshot("")
+
+    assert result["ok"] is True
+    assert result["title"] == "Current Page"
+    assert calls == [("screenshot", {})]
 
 
 async def test_click_and_type_fallback_on_electron_ok_false(monkeypatch):

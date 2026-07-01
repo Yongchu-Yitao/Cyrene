@@ -156,6 +156,134 @@ function trimBrowserText(text, maxChars = 8000) {
   return limit && value.length > limit ? value.slice(0, limit) : value;
 }
 
+const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
+(function(maxArg, textArg) {
+  const maxElements = Math.max(1, Math.min(200, Number(maxArg) || 80));
+  const textLimit = Math.max(20, Math.min(500, Number(textArg) || 160));
+  const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
+  const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+  const candidates = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],[tabindex],summary,label,img,[contenteditable="true"],video,section,article,div,span'));
+  const seen = new Set();
+  const out = [];
+  const cssEscape = (value) => {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\\\$&');
+  };
+  const clean = (value, limit = textLimit) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit);
+  const roleOf = (el, tag) => {
+    const explicit = clean(el.getAttribute('role'), 60);
+    if (explicit) return explicit;
+    if (tag === 'a' && el.href) return 'link';
+    if (tag === 'button') return 'button';
+    if (tag === 'input') {
+      const type = String(el.getAttribute('type') || 'text').toLowerCase();
+      if (type === 'button' || type === 'submit' || type === 'reset') return 'button';
+      return 'textbox';
+    }
+    if (tag === 'textarea') return 'textbox';
+    if (tag === 'select') return 'combobox';
+    if (tag === 'img') return 'img';
+    if (el.isContentEditable) return 'textbox';
+    return '';
+  };
+  const selectorFor = (el, tag, index) => {
+    const id = clean(el.id, 120);
+    if (id) return '#' + cssEscape(id);
+    const testId = clean(el.getAttribute('data-testid') || el.getAttribute('data-test') || el.getAttribute('data-cy'), 120);
+    if (testId) return tag + '[data-testid="' + testId.replace(/"/g, '\\\\"') + '"]';
+    const href = clean(el.getAttribute('href'), 180);
+    if (tag === 'a' && href) return 'a[href="' + href.replace(/"/g, '\\\\"') + '"]';
+    return '[data-cyrene-ref="' + index + '"]';
+  };
+  for (const el of candidates) {
+    if (!(el instanceof Element) || seen.has(el)) continue;
+    seen.add(el);
+    const style = window.getComputedStyle(el);
+    if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+    const rect = el.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+    if (rect.bottom < 0 || rect.right < 0 || rect.top > viewportH || rect.left > viewportW) continue;
+    const tag = String(el.tagName || '').toLowerCase();
+    const role = roleOf(el, tag);
+    const text = clean(el.innerText || el.textContent || el.getAttribute('value') || el.getAttribute('title') || el.getAttribute('alt'));
+    const ariaLabel = clean(el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt'));
+    const placeholder = clean(el.getAttribute('placeholder'));
+    const href = el.href ? String(el.href) : clean(el.getAttribute('href'), 300);
+    const src = el.currentSrc || el.src || clean(el.getAttribute('src'), 300);
+    const interesting = role || href || placeholder || ariaLabel || tag === 'img' || tag === 'input' || tag === 'textarea' || tag === 'select' || text.length >= 2;
+    if (!interesting) continue;
+    const ref = 'e' + (out.length + 1);
+    el.setAttribute('data-cyrene-ref', String(out.length + 1));
+    out.push({
+      ref,
+      tag,
+      role,
+      text,
+      ariaLabel,
+      placeholder,
+      href,
+      src: tag === 'img' ? src : '',
+      alt: tag === 'img' ? clean(el.getAttribute('alt')) : '',
+      selector: selectorFor(el, tag, out.length + 1),
+      rect: { x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) },
+    });
+    if (out.length >= maxElements) break;
+  }
+  return {
+    ok: true,
+    url: location.href,
+    title: document.title || '',
+    text: clean(document.body ? document.body.innerText : '', 2000),
+    viewport: { width: viewportW, height: viewportH, scrollX: window.scrollX || 0, scrollY: window.scrollY || 0 },
+    elements: out,
+  };
+})
+`;
+
+const BROWSER_FIND_TARGET_SCRIPT = `
+(function(modeArg, valueArg, exactArg, visibleOnlyArg) {
+  const mode = String(modeArg || 'selector');
+  const value = String(valueArg || '');
+  const exact = exactArg === true;
+  const visibleOnly = visibleOnlyArg !== false;
+  const norm = (v) => String(v || '').replace(/\\s+/g, ' ').trim();
+  const isVisible = (el) => {
+    if (!(el instanceof Element)) return false;
+    const style = window.getComputedStyle(el);
+    if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return !!r && r.width > 0 && r.height > 0;
+  };
+  let el = null;
+  if (mode === 'ref') {
+    const n = value.replace(/^e/i, '');
+    el = document.querySelector('[data-cyrene-ref="' + n.replace(/"/g, '\\\\"') + '"]');
+  } else if (mode === 'text') {
+    const needle = norm(value).toLowerCase();
+    const nodes = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],[tabindex],label,summary,[contenteditable="true"],div,span,section,article'));
+    el = nodes.find((node) => {
+      if (visibleOnly && !isVisible(node)) return false;
+      const hay = norm(node.innerText || node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('placeholder') || node.getAttribute('value')).toLowerCase();
+      return exact ? hay === needle : hay.includes(needle);
+    }) || null;
+  } else {
+    el = document.querySelector(value);
+  }
+  if (!el) return { ok: false, error: 'nf' };
+  if (visibleOnly && !isVisible(el)) return { ok: false, error: 'not visible' };
+  el.scrollIntoView({ block: 'center', inline: 'center' });
+  const r = el.getBoundingClientRect();
+  if (!r || r.width <= 0 || r.height <= 0) return { ok: false, error: 'not visible' };
+  return {
+    ok: true,
+    x: Math.round(r.left + r.width / 2),
+    y: Math.round(r.top + r.height / 2),
+    box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+    tag: String(el.tagName || '').toLowerCase(),
+  };
+})
+`;
+
 function installBrowserSessionGuards() {
   let browserSession = null;
   try {
@@ -408,6 +536,32 @@ class BrowserTabManager {
     };
   }
 
+  async inspect({ tabId = '', maxElements = 80, textLimit = 160 } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No browser tab is open.' };
+    const wc = tab.view.webContents;
+    try {
+      const result = await wc.executeJavaScript(
+        `${BROWSER_VISIBLE_ELEMENTS_SCRIPT}(${JSON.stringify(maxElements)}, ${JSON.stringify(textLimit)})`,
+        true
+      );
+      return { ...(result || {}), ok: true, tabId: tab.id };
+    } catch (err) {
+      return { ok: false, error: 'Inspect failed: ' + String((err && err.message) || err), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+    }
+  }
+
+  async _findTarget(wc, { mode = 'selector', value = '', exact = false, visibleOnly = true } = {}) {
+    try {
+      return await wc.executeJavaScript(
+        `${BROWSER_FIND_TARGET_SCRIPT}(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${exact ? 'true' : 'false'}, ${visibleOnly === false ? 'false' : 'true'})`,
+        true
+      );
+    } catch (err) {
+      return { ok: false, error: 'js execution failed: ' + String((err && err.message) || err) };
+    }
+  }
+
   // Wait for navigation after a click or form submit.  Listens for both
   // did-navigate (page load) and did-navigate-in-page (SPA route change).
   async _waitNav(wc) {
@@ -436,16 +590,10 @@ class BrowserTabManager {
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
     const wc = tab.view.webContents;
-    const selectorLiteral = JSON.stringify(String(selector || ''));
     // Find element via JS — coordinates are sent as real OS-level input events
     // to bypass isTrusted=false restrictions (SPAs like Vue/React reject JS clicks).
-    let info;
-    try {
-      info = await wc.executeJavaScript(`(function(s){var e=document.querySelector(s);if(!e)return{ok:false,error:"nf"};e.scrollIntoView({block:"center",inline:"center"});var r=e.getBoundingClientRect();if(!r)return{ok:false,error:"nr"};return{ok:true,x:r.left+r.width/2,y:r.top+r.height/2}})(${selectorLiteral})`, true);
-    } catch (e) {
-      info = { ok: false, error: 'js execution failed: ' + (e && e.message || e) };
-    }
-    if (!info || !info.ok) return { ok: false, error: 'Element ' + info.error, url: wc.getURL(), title: wc.getTitle() };
+    const info = await this._findTarget(wc, { mode: 'selector', value: String(selector || '') });
+    if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
     // sendInputEvent dispatches trusted OS-level events.  Chromium's input
     // pipeline generates the full click chain (pointerdown → mousedown →
     // pointerup → mouseup → click) with isTrusted=true.
@@ -456,51 +604,142 @@ class BrowserTabManager {
     return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id, box: info.box };
   }
 
-  async type({ selector, text = '', submit = false, tabId = '' } = {}) {
+  async clickRef({ ref, tabId = '' } = {}) {
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
     const wc = tab.view.webContents;
-    const selectorLiteral = JSON.stringify(String(selector || ''));
+    const info = await this._findTarget(wc, { mode: 'ref', value: String(ref || '') });
+    if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+    wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
+    wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
+    wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
+    await this._waitNav(wc);
+    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id, box: info.box };
+  }
+
+  async clickText({ text, exact = false, tabId = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
+    const wc = tab.view.webContents;
+    const info = await this._findTarget(wc, { mode: 'text', value: String(text || ''), exact: exact === true });
+    if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+    wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
+    wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
+    wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
+    await this._waitNav(wc);
+    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id, box: info.box };
+  }
+
+  async clickAt({ x, y, tabId = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
+    const wc = tab.view.webContents;
+    const px = Math.round(Number(x));
+    const py = Math.round(Number(y));
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return { ok: false, error: 'Invalid coordinates.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+    wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
+    wc.sendInputEvent({ type: 'mouseDown', x: px, y: py, button: 'left', clickCount: 1 });
+    wc.sendInputEvent({ type: 'mouseUp', x: px, y: py, button: 'left', clickCount: 1 });
+    await this._waitNav(wc);
+    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id, box: { x: px, y: py, w: 1, h: 1 } };
+  }
+
+  async _typeIntoTarget({ mode = 'selector', value = '', text = '', submit = false, tabId = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
+    const wc = tab.view.webContents;
     const script = `
-      (() => {
-        const selector = ${selectorLiteral};
-        const el = document.querySelector(selector);
-        if (!el) return { ok: false, error: "Element not found: " + selector };
-        el.scrollIntoView({ block: "center", inline: "center" });
-        el.focus();
-        const value = ${JSON.stringify(String(text || ''))};
-        const tag = String(el.tagName || "").toLowerCase();
-        if ("value" in el) {
-          el.value = value;
-          el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-        } else if (el.isContentEditable) {
-          el.textContent = value;
-          el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      (function(mode, value, textValue, submitValue) {
+        const find = ${BROWSER_FIND_TARGET_SCRIPT};
+        const info = find(mode, value, false, true);
+        if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found') };
+        let el = null;
+        if (mode === 'ref') {
+          el = document.querySelector('[data-cyrene-ref="' + String(value || '').replace(/^e/i, '').replace(/"/g, '\\\\"') + '"]');
         } else {
-          return { ok: false, error: "Element is not text-editable: " + selector };
+          el = document.querySelector(String(value || ''));
         }
-        if (${submit ? 'true' : 'false'}) {
-          const form = el.form || el.closest("form");
-          if (form && typeof form.requestSubmit === "function") {
-            try { form.requestSubmit(); } catch (_) {
-              el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
-              el.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", bubbles: true }));
-              el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
-            }
+        if (!el) return { ok: false, error: 'Element not found' };
+        el.focus();
+        const tag = String(el.tagName || '').toLowerCase();
+        if ('value' in el) {
+          el.value = String(textValue || '');
+          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(textValue || '') }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        } else if (el.isContentEditable) {
+          el.textContent = String(textValue || '');
+          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(textValue || '') }));
+        } else {
+          return { ok: false, error: 'Element is not text-editable' };
+        }
+        if (submitValue) {
+          const form = el.form || el.closest('form');
+          if (form && typeof form.requestSubmit === 'function') {
+            try { form.requestSubmit(); }
+            catch (_) { el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true })); }
           } else {
-            el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
           }
         }
-        return { ok: true, tag };
-      })()
+        return { ok: true, tag, box: info.box };
+      })(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${JSON.stringify(String(text || ''))}, ${submit ? 'true' : 'false'})
     `;
     const result = await wc.executeJavaScript(script, true);
-    if (!result || !result.ok) return { ok: false, error: (result && result.error) || 'Unable to type into element.' };
+    if (!result || !result.ok) return { ok: false, error: (result && result.error) || 'Unable to type into element.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
     if (submit) await this._waitNav(wc);
-    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id, box: result.box };
+  }
+
+  async type({ selector, text = '', submit = false, tabId = '' } = {}) {
+    return this._typeIntoTarget({ mode: 'selector', value: String(selector || ''), text, submit, tabId });
+  }
+
+  async typeRef({ ref, text = '', submit = false, tabId = '' } = {}) {
+    return this._typeIntoTarget({ mode: 'ref', value: String(ref || ''), text, submit, tabId });
+  }
+
+  async waitFor({ selector = '', text = '', urlContains = '', timeoutMs = 5000, tabId = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
+    const wc = tab.view.webContents;
+    const deadline = Date.now() + Math.max(100, Math.min(30000, Number(timeoutMs) || 5000));
+    while (Date.now() < deadline) {
+      const result = await wc.executeJavaScript(`
+        (() => {
+          const selector = ${JSON.stringify(String(selector || ''))};
+          const text = ${JSON.stringify(String(text || ''))};
+          const urlContains = ${JSON.stringify(String(urlContains || ''))};
+          const urlOk = !urlContains || location.href.includes(urlContains);
+          const elOk = !selector || !!document.querySelector(selector);
+          const textOk = !text || ((document.body && document.body.innerText) || '').includes(text);
+          return { ok: urlOk && elOk && textOk, url: location.href, title: document.title || '' };
+        })()
+      `, true).catch((err) => ({ ok: false, error: String((err && err.message) || err), url: wc.getURL(), title: wc.getTitle() }));
+      if (result && result.ok) return { ok: true, url: result.url || wc.getURL(), title: result.title || wc.getTitle(), tabId: tab.id };
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    return { ok: false, error: 'Timed out waiting for page condition.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+  }
+
+  async networkLog({ tabId = '', maxEntries = 40 } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No browser tab is open.' };
+    const wc = tab.view.webContents;
+    const result = await wc.executeJavaScript(`
+      (() => {
+        const max = Math.max(1, Math.min(200, Number(${JSON.stringify(maxEntries)}) || 40));
+        const entries = performance.getEntriesByType('resource').slice(-max).map((e) => ({
+          name: String(e.name || ''),
+          type: String(e.initiatorType || ''),
+          durationMs: Math.round(Number(e.duration || 0)),
+          transferSize: Number(e.transferSize || 0),
+        }));
+        return { ok: true, url: location.href, title: document.title || '', entries };
+      })()
+    `, true).catch((err) => ({ ok: false, error: String((err && err.message) || err), entries: [] }));
+    return { ...(result || {}), tabId: tab.id };
   }
 
   async screenshot({ tabId = '' } = {}) {
@@ -578,10 +817,24 @@ async function handleBrowserRpc(method, args) {
       return manager.navigate(args || {});
     case 'snapshot':
       return manager.pageSnapshot(args && args.tabId, args && args.maxChars);
+    case 'inspect':
+      return manager.inspect(args || {});
     case 'click':
       return manager.click(args || {});
+    case 'clickRef':
+      return manager.clickRef(args || {});
+    case 'clickText':
+      return manager.clickText(args || {});
+    case 'clickAt':
+      return manager.clickAt(args || {});
     case 'type':
       return manager.type(args || {});
+    case 'typeRef':
+      return manager.typeRef(args || {});
+    case 'waitFor':
+      return manager.waitFor(args || {});
+    case 'networkLog':
+      return manager.networkLog(args || {});
     case 'screenshot':
       return manager.screenshot(args || {});
     case 'goBack':

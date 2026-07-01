@@ -67,9 +67,16 @@ _MAIN_ONLY_TOOLS = {
     # would make concurrent agents fight over the same page. Reserving it for
     # the main agent sidesteps that without per-session isolation. See #52.
     "browser_navigate",
+    "browser_snapshot",
     "browser_screenshot",
     "browser_click",
+    "browser_click_ref",
+    "browser_click_text",
+    "browser_click_at",
     "browser_type",
+    "browser_type_ref",
+    "browser_wait",
+    "browser_network_log",
     "browser_request_takeover",
 }
 
@@ -1755,15 +1762,9 @@ async def _tool_browser_navigate(args: dict[str, Any], _bot: Any, _chat_id: int,
 async def _tool_browser_screenshot(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
     from cyrene.browser import screenshot
     url = str(args.get("url") or "").strip()
-    if not url:
-        return "No URL provided."
     result = await screenshot(url)
     if result.get("ok"):
-        try:
-            os.unlink(result["path"])
-        except OSError:
-            pass
-        return f"Screenshot taken.\nTitle: {result.get('title', '—')}"
+        return f"Screenshot taken.\nPath: {result.get('path', '—')}\nTitle: {result.get('title', '—')}"
     return f"Screenshot failed: {result.get('error', 'unknown error')}"
 
 
@@ -2716,13 +2717,12 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "browser_screenshot",
-            "description": "Take a screenshot of the current browser page. Desktop runs use the embedded Electron browser; non-desktop runs use Playwright.",
+            "description": "Take a screenshot of the current browser page, or navigate to a URL first if one is provided. Desktop runs use the embedded Electron browser; non-desktop runs use Playwright.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "The full URL to screenshot."},
+                    "url": {"type": "string", "description": "Optional URL to screenshot. Omit to screenshot the current page."},
                 },
-                "required": ["url"],
             },
         },
     },
