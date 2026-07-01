@@ -2,7 +2,13 @@
 
 import json
 
-from cyrene.tool_legacy import _guard_nonbash_shell_command, _nonbash_command_writes
+import pytest
+
+from cyrene.tool_legacy import (
+    _guard_nonbash_shell_command,
+    _guard_shell_command_workspace_write,
+    _nonbash_command_writes,
+)
 
 
 def test_detects_powershell_writes():
@@ -52,3 +58,17 @@ def test_guard_refuses_writes_with_dialect_message():
 def test_guard_passes_read_only():
     assert _guard_nonbash_shell_command("Get-ChildItem", "powershell") is None
     assert _guard_nonbash_shell_command("dir", "cmd") is None
+
+
+def test_posix_guard_allows_null_device_redirect(monkeypatch, tmp_path):
+    from cyrene.agent import state as agent_state
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    token = agent_state._active_workspace_dir.set(str(workspace))
+    try:
+        _guard_shell_command_workspace_write("ls -lt ~/Desktop/*.pdf 2>/dev/null | head -20")
+        with pytest.raises(ValueError):
+            _guard_shell_command_workspace_write("echo hi > /tmp/outside.txt")
+    finally:
+        agent_state._active_workspace_dir.reset(token)

@@ -8,7 +8,203 @@
 // The agent-initiated login takeover card (M3, browser_request_takeover) still
 // appears when the backend emits browser_takeover_request.
 
-function BrowserViewportPanel({ roundId, onClose, onTakeoverComplete, browserState, browserSessionId }) {
+function BrowserViewportPanel(props) {
+  if (window.cyrene && window.cyrene.browser) {
+    return React.createElement(ElectronBrowserViewportPanel, props);
+  }
+  return React.createElement(ScreencastBrowserViewportPanel, props);
+}
+
+function BrowserIcon({ name, size }) {
+  size = size || 16;
+  var common = {
+    viewBox: "0 0 24 24",
+    width: size,
+    height: size,
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    "aria-hidden": "true",
+  };
+  if (name === "back") return <svg {...common}><path d="m15 18-6-6 6-6" /></svg>;
+  if (name === "forward") return <svg {...common}><path d="m9 18 6-6-6-6" /></svg>;
+  if (name === "reload") return <svg {...common}><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v7h-7" /></svg>;
+  if (name === "go") return <svg {...common}><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></svg>;
+  if (name === "plus") return <svg {...common}><path d="M12 5v14" /><path d="M5 12h14" /></svg>;
+  if (name === "close") return <svg {...common}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>;
+  if (name === "volume") return <svg {...common}><path d="M11 5 6 9H3v6h3l5 4V5Z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /></svg>;
+  if (name === "muted") return <svg {...common}><path d="M11 5 6 9H3v6h3l5 4V5Z" /><path d="m16 9 5 5" /><path d="m21 9-5 5" /></svg>;
+  return null;
+}
+
+function ElectronBrowserViewportPanel({ onClose, browserState }) {
+  browserState = browserState || (window.DATA && window.DATA.browser);
+  const bridge = window.cyrene && window.cyrene.browser;
+  const hostRef = React.useRef(null);
+  const addressRef = React.useRef(null);
+  const boundsRafRef = React.useRef(0);
+  const [state, setState] = React.useState({ tabs: [], activeTabId: "", activeTab: null });
+  const [address, setAddress] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  const active = state.activeTab || null;
+  const tabs = Array.isArray(state.tabs) ? state.tabs : [];
+
+  function refreshState() {
+    if (!bridge || typeof bridge.getState !== "function") return;
+    bridge.getState().then(function (next) {
+      if (next && next.ok !== false) setState(next);
+    }).catch(function () {});
+  }
+
+  React.useEffect(function () {
+    refreshState();
+    if (!bridge || typeof bridge.onState !== "function") return undefined;
+    return bridge.onState(function (next) {
+      if (next && next.ok !== false) setState(next);
+    });
+  }, []);
+
+  React.useEffect(function () {
+    const nextUrl = (active && active.url) || (browserState && browserState.url) || "";
+    setAddress(nextUrl === "about:blank" ? "" : nextUrl);
+  }, [active && active.id, active && active.url, browserState && browserState.url]);
+
+  function sendBounds(visible) {
+    if (!bridge || typeof bridge.setBounds !== "function") return;
+    const node = hostRef.current;
+    if (!visible || !node) {
+      bridge.setBounds({ visible: false }).catch(function () {});
+      return;
+    }
+    const rect = node.getBoundingClientRect();
+    bridge.setBounds({
+      visible: true,
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
+    }).catch(function () {});
+  }
+
+  function scheduleBounds() {
+    if (boundsRafRef.current) cancelAnimationFrame(boundsRafRef.current);
+    boundsRafRef.current = requestAnimationFrame(function () {
+      boundsRafRef.current = 0;
+      sendBounds(true);
+    });
+  }
+
+  React.useEffect(function () {
+    scheduleBounds();
+    const node = hostRef.current;
+    const ro = typeof ResizeObserver !== "undefined" && node ? new ResizeObserver(scheduleBounds) : null;
+    if (ro && node) ro.observe(node);
+    window.addEventListener("resize", scheduleBounds);
+    return function () {
+      if (boundsRafRef.current) cancelAnimationFrame(boundsRafRef.current);
+      if (ro) ro.disconnect();
+      window.removeEventListener("resize", scheduleBounds);
+      sendBounds(false);
+    };
+  }, []);
+
+  React.useEffect(function () {
+    function onWorkbenchRightResize(ev) {
+      var phase = ev && ev.detail && ev.detail.phase;
+      if (phase === "start") sendBounds(false);
+      else scheduleBounds();
+    }
+    window.addEventListener("workbench:right-resize", onWorkbenchRightResize);
+    return function () {
+      window.removeEventListener("workbench:right-resize", onWorkbenchRightResize);
+    };
+  }, []);
+
+  React.useEffect(function () {
+    scheduleBounds();
+  }, [state.activeTabId, tabs.length]);
+
+  function run(action) {
+    setBusy(true);
+    setError("");
+    return Promise.resolve()
+      .then(action)
+      .then(function (next) { if (next && next.ok !== false) setState(next); else if (next && next.error) setError(next.error); })
+      .catch(function (e) { setError((e && e.message) || String(e || "browser action failed")); })
+      .finally(function () { setBusy(false); scheduleBounds(); });
+  }
+
+  function createTab(url) {
+    return run(function () { return bridge.createTab({ url: url || "about:blank", activate: true }); });
+  }
+
+  React.useEffect(function () {
+    if (!tabs.length && ((browserState && browserState.active) || (browserState && browserState.url))) {
+      createTab(browserState.url || "about:blank");
+    }
+  }, [browserState && browserState.active, browserState && browserState.url, tabs.length]);
+
+  function navigate() {
+    const url = (addressRef.current ? addressRef.current.value : address).trim();
+    if (!url) return createTab("about:blank");
+    run(function () { return bridge.navigate({ url: url }); });
+  }
+
+  function onAddressKeyDown(e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      navigate();
+    }
+  }
+
+  return (
+    <div className="browser-view native">
+      <div className="browser-tabs-strip">
+        {tabs.map(function (tab) {
+          return (
+            <button key={tab.id} type="button" className={"browser-tab" + (tab.id === state.activeTabId ? " active" : "")} onClick={function () { run(function () { return bridge.activateTab(tab.id); }); }} title={(tab.title || tab.url || "Browser") + (tab.audible ? " · audible" : "")}>
+              <span className="browser-tab-title">{tab.title || tab.url || "New tab"}</span>
+              {tab.audible && <span className="browser-tab-audio" aria-hidden="true"><BrowserIcon name="volume" size={13} /></span>}
+              <span
+                className="browser-tab-close"
+                role="button"
+                tabIndex={-1}
+                onClick={function (e) { e.stopPropagation(); run(function () { return bridge.closeTab(tab.id); }); }}
+                title="Close tab"
+              ><BrowserIcon name="close" size={12} /></span>
+            </button>
+          );
+        })}
+        <button type="button" className="browser-icon-btn" onClick={function () { createTab("about:blank"); }} title="New tab"><BrowserIcon name="plus" /></button>
+        {onClose && <button type="button" className="browser-icon-btn" onClick={onClose} title="Close panel"><BrowserIcon name="close" /></button>}
+      </div>
+      <div className="browser-nav-bar">
+        <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoBack || busy} onClick={function () { run(function () { return bridge.goBack(); }); }} title="Back"><BrowserIcon name="back" /></button>
+        <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoForward || busy} onClick={function () { run(function () { return bridge.goForward(); }); }} title="Forward"><BrowserIcon name="forward" /></button>
+        <button type="button" className="browser-icon-btn" disabled={!active || busy} onClick={function () { run(function () { return bridge.reload(); }); }} title="Reload"><BrowserIcon name="reload" /></button>
+        <input ref={addressRef} className="browser-address" value={address} onChange={function (e) { setAddress(e.target.value); }} onKeyDown={onAddressKeyDown} placeholder="https://example.com" />
+        <button type="button" className="browser-icon-btn browser-go-btn" disabled={busy} onClick={navigate} title="Go"><BrowserIcon name="go" /></button>
+        <button type="button" className={"browser-icon-btn" + (active && active.muted ? " muted" : "")} disabled={!active} onClick={function () { run(function () { return bridge.setMuted({ muted: !(active && active.muted) }); }); }} title={active && active.muted ? "Unmute" : "Mute"}>
+          <BrowserIcon name={active && active.muted ? "muted" : "volume"} />
+        </button>
+      </div>
+      {error && <div className="browser-error">{error}</div>}
+      <div ref={hostRef} className="browser-native-host">
+        {!tabs.length && (
+          <div className="browser-empty">
+            <button type="button" className="btn primary" onClick={function () { createTab("about:blank"); }}>打开浏览器</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, browserState, browserSessionId }) {
   if (typeof window.useDataVersion === "function") window.useDataVersion(); // re-render on DATA.browser updates
   const browser = browserState || ((window.DATA && window.DATA.browser) || {});
   const imgRef = React.useRef(null);
@@ -321,31 +517,27 @@ function BrowserViewportPanel({ roundId, onClose, onTakeoverComplete, browserSta
     action === "type" ? ("输入到 " + (target || "")) : action;
 
   const showControls = !error && !takeover.pending && !nativeWindow;
-  const barStyle = { display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderBottom: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-3)", flexShrink: 0 };
-  const stageStyle = { flex: 1, position: "relative", overflow: "auto", display: "flex", alignItems: "flex-start", justifyContent: "center", background: "var(--bg-1)", outline: "none", boxShadow: controlling ? "inset 0 0 0 2px var(--accent, #16a34a)" : "none", cursor: controlling ? "default" : "auto" };
-  const ctrlBtnStyle = { fontSize: 11, padding: "2px 8px", borderRadius: 5, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-2)", cursor: "pointer", whiteSpace: "nowrap" };
-
   return (
-    <div className="browser-view" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <div className="browser-view-bar" style={barStyle}>
-        <span className={"sa-dot " + (connected ? "running" : "queued")} style={{ width: 6, height: 6 }}></span>
-        <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={url}>
+    <div className="browser-view screencast">
+      <div className="browser-view-bar">
+        <span className={"browser-status-dot " + (connected ? "running" : "queued")}></span>
+        <span className="browser-view-title" title={url}>
           {title ? (title + " — ") : ""}{url || "浏览器"}
         </span>
         {showControls && (controlling ? (
           <React.Fragment>
-            <button type="button" style={{ ...ctrlBtnStyle, borderColor: "var(--accent, #16a34a)", color: "var(--accent, #16a34a)" }} onClick={stopControl} title="把控制权交还给 Agent">退出控制</button>
-            <button type="button" style={ctrlBtnStyle} onClick={openNativeWindow} disabled={nativeBusy} title="遇到验证码/反爬时，改用独立浏览器窗口">独立窗口</button>
+            <button type="button" className="browser-text-btn active" onClick={stopControl} title="把控制权交还给 Agent">退出控制</button>
+            <button type="button" className="browser-text-btn" onClick={openNativeWindow} disabled={nativeBusy} title="遇到验证码/反爬时，改用独立浏览器窗口">独立窗口</button>
           </React.Fragment>
         ) : (
-          <button type="button" style={{ ...ctrlBtnStyle, borderColor: "var(--accent, #16a34a)", color: "var(--accent, #16a34a)" }} onClick={startControl} disabled={!connected} title="在此面板内直接操作浏览器">接管</button>
+          <button type="button" className="browser-text-btn active" onClick={startControl} disabled={!connected} title="在此面板内直接操作浏览器">接管</button>
         ))}
-        {onClose && <span style={{ cursor: "pointer" }} onClick={onClose} title="关闭">✕</span>}
+        {onClose && <button type="button" className="browser-icon-btn compact" onClick={onClose} title="关闭"><BrowserIcon name="close" size={14} /></button>}
       </div>
 
       <div
         ref={stageRef}
-        style={stageStyle}
+        className={"browser-stage" + (controlling ? " controlling" : "")}
         onMouseDown={onMouseDown}
         onMouseUp={onMouseUp}
         onMouseMove={onMouseMove}
@@ -370,25 +562,25 @@ function BrowserViewportPanel({ roundId, onClose, onTakeoverComplete, browserSta
           />
         )}
         {error ? (
-          <div style={{ margin: "auto", maxWidth: 360, padding: 24, textAlign: "center", color: "var(--text-3)", fontSize: 12 }}>
+          <div className="browser-state-card">
             浏览器实时视图不可用：{error}
-            <div style={{ marginTop: 8, color: "var(--text-4)", fontSize: 11 }}>请查看后端日志或重启 Cyrene 后重试。</div>
+            <div className="browser-state-note">请查看后端日志或重启 Cyrene 后重试。</div>
           </div>
         ) : nativeWindow ? (
-          <div style={{ margin: "auto", maxWidth: 420, padding: 24, textAlign: "center", color: "var(--text-3)" }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--text-2)" }}>已在独立浏览器窗口打开</div>
-            <div style={{ fontSize: 12, marginBottom: 14 }}>请在弹出的浏览器窗口里完成登录 / 验证码，完成后点下面切回内嵌视图继续。</div>
+          <div className="browser-state-card wide">
+            <div className="browser-state-title">已在独立浏览器窗口打开</div>
+            <div className="browser-state-copy">请在弹出的浏览器窗口里完成登录 / 验证码，完成后点下面切回内嵌视图继续。</div>
             <button type="button" className="btn primary" onClick={closeNativeWindow} disabled={nativeBusy} style={{ minWidth: 132 }}>
               {nativeBusy ? "正在切回…" : "切回内嵌视图"}
             </button>
-            {takeoverError && <div style={{ marginTop: 10, fontSize: 11, color: "var(--danger)" }}>{takeoverError}</div>}
+            {takeoverError && <div className="browser-error-text">{takeoverError}</div>}
           </div>
         ) : takeover.pending ? (
-          <div className="browser-takeover" style={{ margin: "auto", maxWidth: 420, padding: 24, textAlign: "center", color: "var(--text-3)" }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "var(--text-2)" }}>等待你在浏览器窗口登录…</div>
-            {takeover.reason && <div style={{ fontSize: 12, marginBottom: 6 }}>{takeover.reason}</div>}
-            <div style={{ fontSize: 11, color: "var(--text-4)", marginBottom: 12, fontFamily: "var(--mono)", wordBreak: "break-all" }}>{takeover.url || url}</div>
-            <div style={{ fontSize: 12, marginBottom: 14 }}>请在弹出的浏览器窗口完成登录，然后回到这里继续。</div>
+          <div className="browser-state-card wide browser-takeover">
+            <div className="browser-state-title">等待你在浏览器窗口登录…</div>
+            {takeover.reason && <div className="browser-state-copy">{takeover.reason}</div>}
+            <div className="browser-state-url">{takeover.url || url}</div>
+            <div className="browser-state-copy">请在弹出的浏览器窗口完成登录，然后回到这里继续。</div>
             <button
               type="button"
               className="btn primary"
@@ -398,19 +590,19 @@ function BrowserViewportPanel({ roundId, onClose, onTakeoverComplete, browserSta
             >
               {takeoverSubmitting ? "正在继续…" : completeLabel}
             </button>
-            {takeoverError && <div style={{ marginTop: 10, fontSize: 11, color: "var(--danger)" }}>{takeoverError}</div>}
+            {takeoverError && <div className="browser-error-text">{takeoverError}</div>}
           </div>
         ) : (
-          <img ref={imgRef} alt="browser" draggable={false} style={{ width: "100%", height: "auto", display: "block", background: "#fff", userSelect: "none" }} />
+          <img ref={imgRef} alt="browser" draggable={false} className="browser-frame-img" />
         )}
       </div>
 
       {controlling && !error && !takeover.pending && !nativeWindow ? (
-        <div className="browser-view-action" style={{ padding: "5px 10px", borderTop: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--accent, #16a34a)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flexShrink: 0 }}>
+        <div className="browser-view-action active">
           ● 你正在直接控制浏览器（agent 浏览器操作已暂停）— 点击 / 滚动 / 输入（含中文）都会作用到页面
         </div>
       ) : actionLabel && !error && !takeover.pending && !nativeWindow && (
-        <div className="browser-view-action" style={{ padding: "5px 10px", borderTop: "1px solid var(--line)", fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flexShrink: 0 }}>
+        <div className="browser-view-action">
           ▸ {actionLabel}
         </div>
       )}

@@ -20,7 +20,8 @@ Pricing = dict[str, float | str]
 # Official API pricing pages verified on 2026-06-25. USD-only provider prices
 # are converted at this fixed rate so display and calculation stay in CNY.
 _PRICE_CATALOG_VERIFIED_ON = "2026-06-25"
-_CNY_PER_USD = 7.25
+CNY_PER_USD = 7.25
+_CNY_PER_USD = CNY_PER_USD
 
 # Keep only current model generations and place more specific aliases first.
 _BUILTIN: list[tuple[tuple[str, ...], Pricing]] = [

@@ -37,6 +37,7 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.save_project_memory",  # save_project_memory
     "cyrene.tool_impl.retire_project_memory",  # retire_project_memory
     "cyrene.tool_impl.set_task_goal",  # set_task_goal
+    "cyrene.tool_impl.update_task_plan",  # update_task_plan
     "cyrene.tool_impl.list_knowledge_documents",  # ListKnowledgeDocuments
     "cyrene.tool_impl.search_knowledge",  # SearchKnowledge
     "cyrene.tool_impl.start_shell",  # StartShell
@@ -60,6 +61,11 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.browser_screenshot",  # browser_screenshot
     "cyrene.tool_impl.browser_click",  # browser_click
     "cyrene.tool_impl.browser_type",  # browser_type
+    "cyrene.tool_impl.browser_tab_list",  # browser_tab_list
+    "cyrene.tool_impl.browser_tab_new",  # browser_tab_new
+    "cyrene.tool_impl.browser_tab_select",  # browser_tab_select
+    "cyrene.tool_impl.browser_tab_close",  # browser_tab_close
+    "cyrene.tool_impl.browser_scroll",  # browser_scroll
     "cyrene.tool_impl.browser_request_takeover",  # browser_request_takeover
     "cyrene.tool_impl.send_notification",  # send_notification
     "cyrene.tool_impl.track_entity",  # track_entity
@@ -84,12 +90,18 @@ _MAIN_ONLY_TOOLS = {
     "save_project_memory",
     "retire_project_memory",
     "set_task_goal",
+    "update_task_plan",
     "spawn_subagent",
     "query_round",
     "browser_navigate",
     "browser_screenshot",
     "browser_click",
     "browser_type",
+    "browser_tab_list",
+    "browser_tab_new",
+    "browser_tab_select",
+    "browser_tab_close",
+    "browser_scroll",
     "browser_request_takeover",
 }
 

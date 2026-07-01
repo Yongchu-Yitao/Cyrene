@@ -2377,6 +2377,249 @@ async def test_bash_destructive_command_requires_confirmation_in_full_access(mon
     assert (workspace / "victim").exists()
 
 
+async def test_send_wechat_file_does_not_prompt_in_full_access(monkeypatch, tmp_path):
+    from cyrene import agent
+    from cyrene.agent import state as agent_state
+    from cyrene.tool_impl import send_wechat_file as wechat_tool
+
+    class FakeWechatBot:
+        def __init__(self):
+            self.sent = []
+
+        async def send_file(self, chat_id, filepath, filename):
+            self.sent.append((chat_id, filepath, filename))
+            return True
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "Desktop"
+    outside.mkdir()
+    target = outside / "rfi.pdf"
+    target.write_bytes(b"%PDF-1.4\n")
+    agent.STATE_FILE.write_text(json.dumps({
+        "messages": [{"role": "user", "content": "把 rfi.pdf 发我", "round_id": "round_1"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    bot = FakeWechatBot()
+    round_token = agent_state._current_round_id.set("round_1")
+    workspace_token = agent_state._active_workspace_dir.set(str(workspace))
+    mode_token = agent_state._permission_mode.set("full_access")
+    full_token = agent_state._temporary_full_access.set(False)
+    try:
+        result = await wechat_tool._tool_send_wechat_file(
+            {"path": str(target), "name": "rfi.pdf", "text": "你桌面上的 rfi.pdf"},
+            bot,
+            123,
+            "",
+            {},
+        )
+    finally:
+        agent_state._temporary_full_access.reset(full_token)
+        agent_state._permission_mode.reset(mode_token)
+        agent_state._active_workspace_dir.reset(workspace_token)
+        agent_state._current_round_id.reset(round_token)
+
+    saved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
+    assert result == "File sent via WeChat: rfi.pdf"
+    assert bot.sent == [("123", str(target), "rfi.pdf")]
+    assert "pending_question" not in saved
+
+
+async def test_send_telegram_does_not_prompt_in_full_access(monkeypatch, tmp_path):
+    from cyrene import agent
+    from cyrene.agent import state as agent_state
+    from cyrene.tool_impl import send_telegram as telegram_tool
+
+    class FakeTelegramBot:
+        def __init__(self):
+            self.sent = []
+
+        async def send_message(self, chat_id, text):
+            self.sent.append((chat_id, text))
+
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    agent.STATE_FILE.write_text(json.dumps({
+        "messages": [{"role": "user", "content": "发 Telegram 通知", "round_id": "round_1"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    bot = FakeTelegramBot()
+    round_token = agent_state._current_round_id.set("round_1")
+    mode_token = agent_state._permission_mode.set("full_access")
+    full_token = agent_state._temporary_full_access.set(False)
+    try:
+        result = await telegram_tool._tool_send_message(
+            {"text": "任务完成"},
+            bot,
+            456,
+            "",
+            {},
+        )
+    finally:
+        agent_state._temporary_full_access.reset(full_token)
+        agent_state._permission_mode.reset(mode_token)
+        agent_state._current_round_id.reset(round_token)
+
+    saved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
+    assert result == "Message sent."
+    assert bot.sent == [(456, "任务完成")]
+    assert "pending_question" not in saved
+
+
+async def test_start_shell_allows_external_cwd_in_full_access(monkeypatch, tmp_path):
+    from cyrene.agent import state as agent_state
+    from cyrene.tool_impl import start_shell as start_shell_tool
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    seen = {}
+
+    async def fake_start_shell_session(command, cwd, title, round_id):
+        seen.update({
+            "command": command,
+            "cwd": cwd,
+            "title": title,
+            "round_id": round_id,
+        })
+        return {"id": "shell_1", "status": "running", "cwd": cwd, "title": title}
+
+    monkeypatch.setattr(start_shell_tool, "_start_shell_session", fake_start_shell_session)
+
+    round_token = agent_state._current_round_id.set("round_1")
+    mode_token = agent_state._permission_mode.set("full_access")
+    full_token = agent_state._temporary_full_access.set(True)
+    try:
+        result = await start_shell_tool._tool_start_shell(
+            {"cwd": str(outside), "command": "", "title": "external"},
+            None,
+            0,
+            "",
+            {},
+        )
+    finally:
+        agent_state._temporary_full_access.reset(full_token)
+        agent_state._permission_mode.reset(mode_token)
+        agent_state._current_round_id.reset(round_token)
+
+    payload = json.loads(result)
+    assert payload["status"] == "running"
+    assert payload["cwd"] == str(outside)
+    assert seen["cwd"] == str(outside)
+
+
+async def test_send_wechat_file_uses_auto_review_without_prompt(monkeypatch, tmp_path):
+    from cyrene import agent
+    from cyrene.agent import auto_review
+    from cyrene.agent import state as agent_state
+    from cyrene.tool_impl import send_wechat_file as wechat_tool
+
+    class FakeWechatBot:
+        async def send_file(self, chat_id, filepath, filename):
+            return True
+
+    seen = {}
+
+    async def fake_review_elevation(**kwargs):
+        seen.update(kwargs)
+        return True, "文件发送符合用户请求。"
+
+    monkeypatch.setattr(auto_review, "review_elevation", fake_review_elevation)
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "rfi.pdf"
+    target.write_bytes(b"%PDF-1.4\n")
+    agent.STATE_FILE.write_text(json.dumps({
+        "messages": [{"role": "user", "content": "把 rfi.pdf 发我", "round_id": "round_1"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    round_token = agent_state._current_round_id.set("round_1")
+    workspace_token = agent_state._active_workspace_dir.set(str(workspace))
+    mode_token = agent_state._permission_mode.set("auto")
+    full_token = agent_state._temporary_full_access.set(False)
+    try:
+        result = await wechat_tool._tool_send_wechat_file(
+            {"path": str(target), "name": "rfi.pdf", "text": "你桌面上的 rfi.pdf"},
+            FakeWechatBot(),
+            123,
+            "",
+            {},
+        )
+        full_access_after_review = agent_state._temporary_full_access.get()
+    finally:
+        agent_state._temporary_full_access.reset(full_token)
+        agent_state._permission_mode.reset(mode_token)
+        agent_state._active_workspace_dir.reset(workspace_token)
+        agent_state._current_round_id.reset(round_token)
+
+    saved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
+    assert result == "File sent via WeChat: rfi.pdf"
+    assert seen["tool_name"] == "send_wechat_file"
+    assert seen["operation"] == "外发 WeChat 文件"
+    assert full_access_after_review is True
+    assert "pending_question" not in saved
+
+
+async def test_analyze_attachment_retries_external_path_after_auto_approval(monkeypatch, tmp_path):
+    from cyrene import agent
+    from cyrene.agent import auto_review
+    from cyrene.agent import state as agent_state
+    from cyrene.tool_impl import analyze_attachment as analyze_tool
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("hello", encoding="utf-8")
+    seen = {}
+
+    async def fake_review_elevation(**kwargs):
+        seen["review"] = kwargs
+        return True, "读取符合用户请求。"
+
+    async def fake_analyze_attachment(path, prompt="", force_refresh=False):
+        seen["path"] = path
+        seen["prompt"] = prompt
+        seen["force_refresh"] = force_refresh
+        return {"ok": True, "text": "hello"}
+
+    monkeypatch.setattr(auto_review, "review_elevation", fake_review_elevation)
+    monkeypatch.setattr(analyze_tool, "analyze_attachment", fake_analyze_attachment)
+    _patch_state_file(monkeypatch, tmp_path / "state.json")
+    _patch_data_dir(monkeypatch, tmp_path)
+    agent.STATE_FILE.write_text(json.dumps({
+        "messages": [{"role": "user", "content": "分析外部文件", "round_id": "round_1"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    round_token = agent_state._current_round_id.set("round_1")
+    workspace_token = agent_state._active_workspace_dir.set(str(workspace))
+    mode_token = agent_state._permission_mode.set("auto")
+    full_token = agent_state._temporary_full_access.set(False)
+    try:
+        result = await analyze_tool._tool_analyze_attachment(
+            {"path": str(outside), "prompt": "summarize"},
+            None,
+            0,
+            "",
+            {},
+        )
+        full_access_after_review = agent_state._temporary_full_access.get()
+    finally:
+        agent_state._temporary_full_access.reset(full_token)
+        agent_state._permission_mode.reset(mode_token)
+        agent_state._active_workspace_dir.reset(workspace_token)
+        agent_state._current_round_id.reset(round_token)
+
+    payload = json.loads(result)
+    assert payload == {"ok": True, "text": "hello"}
+    assert seen["review"]["tool_name"] == "AnalyzeAttachment"
+    assert seen["path"] == str(outside)
+    assert seen["prompt"] == "summarize"
+    assert full_access_after_review is True
+
+
 async def test_destructive_confirmation_answer_remembers_single_operation(monkeypatch, tmp_path):
     from cyrene import agent
     from cyrene.agent import coordinator as _agent_coordinator

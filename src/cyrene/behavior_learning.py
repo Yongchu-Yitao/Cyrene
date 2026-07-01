@@ -393,6 +393,15 @@ _TRIVIAL_SKILL_TOOLS: frozenset[str] = frozenset({
     "query_round",
 })
 
+# These steps change the conversation state or pause for the user. They are
+# useful in the normal agent loop, but learned-skill replay should never run
+# them ahead of the router's ordinary clarification/permission flow.
+_AUTO_REPLAY_BLOCKED_TOOLS: frozenset[str] = frozenset({
+    "ask_user",
+    "send_message",
+    "send_message_to_user",
+})
+
 # Tools that carry meaningful side-effects and must never be replayed silently.
 # A learned skill whose steps include any of these requires fresh user approval;
 # the skill router falls back to the normal agent loop instead of auto-executing.
@@ -2027,6 +2036,38 @@ def _is_internal_tool_action(action: dict[str, Any]) -> bool:
     return str(action.get("raw_description") or "") in _INTERNAL_TOOLS
 
 
+def _is_trivial_skill_action(action: dict[str, Any]) -> bool:
+    """Return True for interaction-only actions that should not become skills."""
+    raw = str(action.get("raw_description") or "")
+    action_type = str(action.get("type") or "")
+    action_subtype = str(action.get("subtype") or "")
+    domain = str(action.get("domain") or "")
+    if raw in _TRIVIAL_SKILL_TOOLS or action_subtype in _TRIVIAL_SKILL_TOOLS:
+        return True
+    if domain == "user_interaction" and action_type in {"ask_clarification", "request_confirmation"}:
+        return True
+    return action_type in {"ask_clarification", "request_confirmation"}
+
+
+def _enabled_step_tool_names(steps: list[dict[str, Any]]) -> list[str]:
+    return [
+        str((step.get("implementation_reference") or {}).get("tool_name") or "")
+        for step in steps
+        if bool(step.get("enabled", True))
+    ]
+
+
+def _has_auto_replay_blocked_step(steps: list[dict[str, Any]]) -> bool:
+    return any(tool in _AUTO_REPLAY_BLOCKED_TOOLS for tool in _enabled_step_tool_names(steps))
+
+
+def _has_skillworthy_steps(steps: list[dict[str, Any]]) -> bool:
+    tool_names = [tool for tool in _enabled_step_tool_names(steps) if tool]
+    if not tool_names:
+        return False
+    return any(tool not in _TRIVIAL_SKILL_TOOLS for tool in tool_names)
+
+
 async def _llm_workflow_merge(
     turn_id: str,
     turn_fp: dict[str, Any],
@@ -2214,7 +2255,7 @@ def _pattern_skillability(stats: dict[str, Any], prototype: dict[str, Any]) -> d
     # (ask_user, send_message, etc.) are not worth learning as skills.
     proto_actions = prototype.get("action_sequence") or []
     has_real_tools = any(
-        a.get("raw_description", "") not in _TRIVIAL_SKILL_TOOLS
+        not _is_internal_tool_action(a) and not _is_trivial_skill_action(a)
         for a in proto_actions
     )
     skillable = has_actions and has_real_tools
@@ -2823,6 +2864,8 @@ async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
         if existing is not None:
             return str(existing["skill_id"])
         definition = await _skill_definition_from_pattern(pattern_id, "draft")
+        if not force and not _has_skillworthy_steps(definition.get("steps") or []):
+            return None
         definition["name"] = await _unique_skill_name(conn, str(definition.get("name") or "学习技能"))
         skill_id = _new_id("learned_skill")
         now = _now_iso()
@@ -2880,6 +2923,37 @@ async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
         await conn.commit()
     await _upsert_pattern(pattern_id)
     return skill_id
+
+
+async def learn_skill_from_pattern(pattern_id: str) -> dict[str, Any]:
+    pid = str(pattern_id or "").strip()
+    if not pid:
+        return {"ok": False, "code": "invalid_pattern", "error": "pattern_id is required"}
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            "SELECT pattern_id FROM behavior_patterns WHERE pattern_id = ?",
+            (pid,),
+        )
+        pattern_row = await cursor.fetchone()
+        if pattern_row is None:
+            return {"ok": False, "code": "pattern_not_found", "error": "Pattern not found"}
+        cursor = await conn.execute(
+            "SELECT skill_id FROM learned_skills WHERE pattern_id = ?",
+            (pid,),
+        )
+        existing_row = await cursor.fetchone()
+        existing_skill_id = str(existing_row["skill_id"]) if existing_row is not None else ""
+
+    skill_id = await _create_skill(pid, force=True)
+    if not skill_id:
+        return {"ok": False, "code": "skill_generation_failed", "error": "Unable to generate a skill from this pattern"}
+    return {
+        "ok": True,
+        "created": not existing_skill_id,
+        "skill": await get_learned_skill(skill_id),
+        "skill_id": skill_id,
+        "pattern_id": pid,
+    }
 
 
 def _target_skill_type(stats: dict[str, Any], prototype: dict[str, Any]) -> str:
@@ -3894,6 +3968,13 @@ async def match_active_skill(user_message: str, history: list[dict[str, Any]]) -
     best: dict[str, Any] | None = None
     for row in rows:
         skill = _skill_row_to_definition(row)
+        skill_steps = skill.get("steps", [])
+        if (
+            str(skill.get("risk_level") or "none") == "high"
+            or any(tool in _HIGH_RISK_TOOLS for tool in _enabled_step_tool_names(skill_steps))
+            or _has_auto_replay_blocked_step(skill_steps)
+        ):
+            continue
         trigger = skill["trigger"]
         base_fp = trigger.get("base_fingerprint") or {}
         similarity = compute_fingerprint_similarity(request_fp, base_fp)
@@ -3993,14 +4074,12 @@ async def try_route_and_execute_skill(
     # Returning None lets the normal agent loop handle execution with its own
     # workspace-scope guard and permission prompts.
     skill_risk = str(skill.get("risk_level") or "none")
-    has_risky_step = any(
-        str((step.get("implementation_reference") or {}).get("tool_name") or "") in _HIGH_RISK_TOOLS
-        for step in skill.get("steps", [])
-        if bool(step.get("enabled", True))
-    )
-    if skill_risk == "high" or has_risky_step:
+    skill_steps = skill.get("steps", [])
+    has_risky_step = any(tool in _HIGH_RISK_TOOLS for tool in _enabled_step_tool_names(skill_steps))
+    has_blocked_step = _has_auto_replay_blocked_step(skill_steps)
+    if skill_risk == "high" or has_risky_step or has_blocked_step:
         logger.info(
-            "Skill %s contains high-risk steps; falling back to agent for fresh approval.",
+            "Skill %s contains non-replayable steps; falling back to agent.",
             skill["skill_id"],
         )
         await _update_skill_run_stats(skill["skill_id"], execution_status="fallback")

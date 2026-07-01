@@ -99,10 +99,20 @@ def _workspace_permission_error() -> str:
     return "Write and delete permissions are limited to the current workspace."
 
 
-def _resolve_workspace_write_target(path_str: str) -> Path:
-    from cyrene.agent.state import _temporary_full_access, active_workspace_dir
+def _has_full_path_access() -> bool:
+    from cyrene.agent.state import _permission_mode, _temporary_full_access
     from cyrene.settings_store import get_write_permission_mode
-    if get_write_permission_mode() == "full_access" or _temporary_full_access.get():
+
+    return (
+        _permission_mode.get() == "full_access"
+        or _temporary_full_access.get()
+        or get_write_permission_mode() == "full_access"
+    )
+
+
+def _resolve_workspace_write_target(path_str: str) -> Path:
+    from cyrene.agent.state import active_workspace_dir
+    if _has_full_path_access():
         candidate = Path(path_str)
         path = candidate if candidate.is_absolute() else active_workspace_dir() / candidate
         return path.resolve()
@@ -370,6 +380,34 @@ async def _request_destructive_confirmation(
     )
 
 
+async def _request_external_delivery_confirmation(
+    *,
+    tool_name: str,
+    operation: str,
+    detail: str = "",
+    path_hint: str = "",
+) -> str | None:
+    """Ask before external delivery in default mode; auto/full-access may allow it.
+
+    Sending a file outside Cyrene is an irreversible side effect, but it is not
+    a destructive filesystem operation. Full-access mode promises not to
+    interrupt, and auto mode should let the review agent decide.
+    """
+    from cyrene.agent import state as _state
+
+    if _state._permission_mode.get() == "full_access" or _state._temporary_full_access.get():
+        return None
+    return await _request_scope_elevation(
+        tool_name=tool_name,
+        path_hint=path_hint,
+        operation=operation,
+        reason=detail,
+        permission_kind="external_delivery_request",
+        options=["允许这次", "本次会话内总是允许", "拒绝"],
+        scope_hint="外部通信/文件外发的 ",
+    )
+
+
 def _classify_destructive_shell_command(command: str) -> dict[str, str] | None:
     """Best-effort shell destructive-operation classifier."""
     raw = str(command or "").strip()
@@ -539,6 +577,17 @@ def _extract_stderr_redirect_targets(raw: str) -> list[str]:
     return targets
 
 
+def _is_null_device_redirect_target(token: str) -> bool:
+    """Return True for harmless redirects to the platform null device."""
+    raw = str(token or "").strip().strip("'\"")
+    if not raw:
+        return False
+    expanded = _expand_shell_path(raw).rstrip("/")
+    if expanded == os.devnull:
+        return True
+    return expanded.lower() in {"nul", "nul:"}
+
+
 def _guard_shell_command_workspace_write(command: str) -> None:
     raw = str(command or "").strip()
     if not raw or not _shell_command_requires_write_guard(raw):
@@ -630,6 +679,8 @@ def _guard_shell_command_workspace_write(command: str) -> None:
     for token in path_like_tokens:
         if token.startswith("-"):
             continue
+        if _is_null_device_redirect_target(token):
+            continue
         try:
             # Expand $VAR and ~ before checking workspace boundary
             expanded = _expand_shell_path(token)
@@ -658,15 +709,14 @@ def _resolve_tool_path(path_str: str) -> Path:
     if is_uploaded_attachment_path(path_str) or is_exported_attachment_path(path_str):
         return Path(path_str).resolve()
     # Auto-resolve filename to the correct upload path when the agent guesses wrong paths.
-    from cyrene.agent.state import _attachment_paths_by_name, _temporary_full_access, active_workspace_dir
-    from cyrene.settings_store import get_write_permission_mode
+    from cyrene.agent.state import _attachment_paths_by_name, active_workspace_dir
     att_map = _attachment_paths_by_name.get()
     if att_map:
         basename = Path(path_str).name
         if basename in att_map:
             return Path(att_map[basename]).resolve()
     # Honour temporary full-access grants (write-once, read-always) and permanent mode.
-    if _temporary_full_access.get() or get_write_permission_mode() == "full_access":
+    if _has_full_path_access():
         candidate = Path(path_str)
         path = candidate if candidate.is_absolute() else active_workspace_dir() / candidate
         return path.resolve()
@@ -684,6 +734,8 @@ def _resolve_exportable_path(path_str: str) -> Path:
     candidate = Path(path_str)
     path = candidate if candidate.is_absolute() else active_ws / candidate
     resolved = path.resolve()
+    if _has_full_path_access():
+        return resolved
     allowed_roots = (active_ws, WORKSPACE_DIR.resolve(), DATA_DIR.resolve())
     for root in allowed_roots:
         if resolved == root or root in resolved.parents:
@@ -1686,7 +1738,13 @@ async def _tool_browser_navigate(args: dict[str, Any], _bot: Any, _chat_id: int,
     if not url:
         return "No URL provided."
     result = await navigate(url, extract_text=True)
+    from cyrene.browser import electron_browser_available
     parts = [f"Title: {result.get('title', '—')}", f"URL: {result.get('url', url)}"]
+    tid = result.get("tabId")
+    if tid:
+        parts.append(f"Tab: {tid}")
+    if electron_browser_available():
+        parts.append("[Desktop app] The page is fully rendered in the embedded browser — the user sees images, video, and interactive content live. Use browser_click, browser_type, browser_screenshot and the tab tools to interact further.")
     if result.get("text"):
         parts.append(result["text"])
     if result.get("error"):
@@ -1716,7 +1774,14 @@ async def _tool_browser_click(args: dict[str, Any], _bot: Any, _chat_id: int, _d
         return "No CSS selector provided."
     result = await click(selector)
     if result.get("ok"):
-        return f"Clicked {selector}.\nURL: {result.get('url', '—')}\nTitle: {result.get('title', '—')}"
+        url = result.get("url", "")
+        title = result.get("title", "")
+        parts = [f"Clicked {selector}."]
+        if url:
+            parts.append(f"URL: {url}")
+        if title:
+            parts.append(f"Title: {title}")
+        return "\n".join(parts)
     return f"Click failed: {result.get('error', 'unknown error')}"
 
 
@@ -2637,7 +2702,7 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "browser_navigate",
-            "description": "Fetch a web page and return its readable text content. Use for browsing documentation, news, or any public web page. Returns title, URL, and extracted text.",
+            "description": "Navigate the current browser tab to a URL and return the page text. Always reuses the SAME tab — never opens a new one. Call this repeatedly as you try different URLs to find the right page. Do NOT use browser_tab_new unless the user explicitly says to keep a page open. In the desktop app (Electron) the page is fully rendered (images, video, interactive) and the user can see and operate the live browser in the side panel.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2651,7 +2716,7 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "browser_screenshot",
-            "description": "Take a screenshot of a web page. Requires Playwright to be installed.",
+            "description": "Take a screenshot of the current browser page. Desktop runs use the embedded Electron browser; non-desktop runs use Playwright.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2665,7 +2730,7 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "browser_click",
-            "description": "Click an element on the current page by CSS selector. Requires Playwright. Call browser_navigate first.",
+            "description": "Click an element on the current page. If the click navigates to a new page, the tool waits for it to load and returns the new URL and title. Works in the live embedded browser (Electron) — the user sees the click happen. Call browser_navigate first.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2679,7 +2744,7 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "browser_type",
-            "description": "Type text into an input element on the current page. Requires Playwright. Call browser_navigate first.",
+            "description": "Type text into an input element on the current browser page. Call browser_navigate first.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2695,7 +2760,7 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "browser_request_takeover",
-            "description": "Hand the browser to the user to log in. Call this AS SOON AS you hit a login wall, CAPTCHA, or 2FA — before doing any deeper work on the page. A real browser window opens for the user to authenticate; you pause until they confirm, then resume in the same (now logged-in) session. Requires Playwright.",
+            "description": "Hand the browser to the user to log in. Call this AS SOON AS you hit a login wall, CAPTCHA, or 2FA — before doing any deeper work on the page. In the desktop app, the user completes it in the embedded browser; fallback mode opens a real browser window. You pause until they confirm, then resume in the same session.",
             "parameters": {
                 "type": "object",
                 "properties": {

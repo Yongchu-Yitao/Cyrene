@@ -27,6 +27,26 @@
         "from": "../dist/Cyrene",
         "to": "python-bundle",
         "filter": ["**/*"]
+      },
+      {
+        "from": "../build/icon.png",
+        "to": "build/icon.png"
+      },
+      {
+        "from": "../build/icon.ico",
+        "to": "build/icon.ico"
+      },
+      {
+        "from": "../build/tray.png",
+        "to": "build/tray.png"
+      },
+      {
+        "from": "../build/tray-mac.png",
+        "to": "build/tray-mac.png"
+      },
+      {
+        "from": "../build/tray-mac@2x.png",
+        "to": "build/tray-mac@2x.png"
       }
     ],
     "mac": {

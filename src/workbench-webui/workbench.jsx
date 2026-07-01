@@ -512,6 +512,11 @@ function wbApplyStoredRightWidth(node) {
 // task context panel and the chat side panel (exposed on window for the
 // separately-bundled workbench-chat.js).
 function WbColResizer() {
+  function emitResizePhase(phase) {
+    try {
+      window.dispatchEvent(new CustomEvent("workbench:right-resize", { detail: { phase: phase } }));
+    } catch (err) {}
+  }
   function onPointerDown(e) {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -523,6 +528,7 @@ function WbColResizer() {
     var maxW = wbRightDynamicMax(panel);
     try { handle.setPointerCapture(e.pointerId); } catch (err) {}
     document.body.classList.add("wb-col-resizing");
+    emitResizePhase("start");
     function onMove(ev) {
       var w = Math.round(rightEdge - ev.clientX);
       if (w < WB_RIGHT_MIN) w = WB_RIGHT_MIN;
@@ -534,6 +540,7 @@ function WbColResizer() {
       handle.removeEventListener("pointerup", onUp);
       handle.removeEventListener("pointercancel", onUp);
       document.body.classList.remove("wb-col-resizing");
+      emitResizePhase("end");
       try {
         var cur = parseInt(grid.style.getPropertyValue("--wb-right-w"), 10);
         if (isFinite(cur)) localStorage.setItem(WB_RIGHT_STORE, String(cur));
@@ -680,6 +687,15 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     reloadWorkbench();
     reloadNotifications();
   }, []);
+
+  useWorkbenchEffect(function () {
+    var bridge = window.cyrene && window.cyrene.browser;
+    if (!bridge || typeof bridge.setObscured !== "function") return undefined;
+    bridge.setObscured(!!settingsOpen).catch(function () {});
+    return function () {
+      bridge.setObscured(false).catch(function () {});
+    };
+  }, [settingsOpen]);
 
   useWorkbenchEffect(function () {
     function handleEvent(data) {
@@ -2120,6 +2136,18 @@ function useTaskController(session, onRefresh, runtime) {
   var sid = session ? session.id : "";
 
   function apply(next) { if (onRefresh && next) onRefresh(next); return next; }
+  function sessionFromStore(next, fallback) {
+    if (!next || !sid) return fallback || session;
+    var projects = Array.isArray(next.projects) ? next.projects : [];
+    for (var i = 0; i < projects.length; i++) {
+      var sessions = Array.isArray(projects[i].sessions) ? projects[i].sessions : [];
+      for (var j = 0; j < sessions.length; j++) {
+        if (sessions[j] && sessions[j].id === sid) return sessions[j];
+      }
+    }
+    if (next.activeSession && next.activeSession.id === sid) return next.activeSession;
+    return fallback || session;
+  }
   function fail(err) { window.showToast((err && err.message) || String(err), "error"); }
   function rethrowPlanConflict(err) {
     if (err && err.code === "stale_plan_revision") throw err;
@@ -2161,7 +2189,7 @@ function useTaskController(session, onRefresh, runtime) {
     })
       .then(function (store) {
         apply(store);
-        return (store && store.activeSession) || current;
+        return sessionFromStore(store, current);
       });
   }
   function requirePlan(baseSession) {
@@ -2193,7 +2221,7 @@ function useTaskController(session, onRefresh, runtime) {
     return model.patchSession(sid, { status: "running", plan: startPlan, agentReply: "正在执行步骤：" + stepTitle, events: startEvents })
       .then(apply)
       .then(function (patched) {
-        var patchedSession = (patched && patched.activeSession) || baseSession;
+        var patchedSession = sessionFromStore(patched, baseSession);
         var uploadCtx = splitStepContextFiles(step).uploads;
         return model.createRun(sid, effectiveStepPrompt(patchedSession, step), {
           attachments: uploadCtx.concat((runtime && runtime.attachments) || []),
@@ -2207,7 +2235,7 @@ function useTaskController(session, onRefresh, runtime) {
         });
       })
       .then(function (next) {
-        var s2 = (next && next.activeSession) || baseSession;
+        var s2 = sessionFromStore(next, baseSession);
         if (String(s2.status || "") === "waiting_for_user") return next;
         var returnedPlan = Array.isArray(s2.plan) && s2.plan.length ? s2.plan : basePlan;
         // Real tool activity from this step's run → show it on the step.
@@ -2415,7 +2443,7 @@ function useTaskController(session, onRefresh, runtime) {
         approvedPlanDefinitionRevision: Number(session.planDefinitionRevision || 0),
         events: model.withEvent(session, "PlanApproved", "用户批准计划并连续执行全部步骤。"),
       }).then(apply).then(function (store) {
-        return ctrl.executeAll({ baseSession: (store && store.activeSession) || session });
+        return ctrl.executeAll({ baseSession: sessionFromStore(store, session) });
       });
     },
 
@@ -2493,7 +2521,7 @@ function useTaskController(session, onRefresh, runtime) {
       })
         .then(apply)
         .then(function (next) {
-          currentSession = (next && next.activeSession) || currentSession;
+          currentSession = sessionFromStore(next, currentSession);
           function loop() {
             if (interruptedRef.current) return null;
             var plan = Array.isArray(currentSession.plan) ? currentSession.plan : [];
@@ -2517,7 +2545,7 @@ function useTaskController(session, onRefresh, runtime) {
             return runStepCore(currentSession, nextStep.id, { continueAll: true })
               .then(function (nextStore) {
                 if (interruptedRef.current || !nextStore) return null;
-                currentSession = (nextStore && nextStore.activeSession) || currentSession;
+                currentSession = sessionFromStore(nextStore, currentSession);
                 if (String(currentSession.status || "") === "failed") return nextStore;
                 if (String(currentSession.status || "") === "review") return nextStore;
                 if (String(currentSession.status || "") === "waiting_for_user") return nextStore;
@@ -4684,7 +4712,7 @@ function ContextTab({ project, session, activeStep }) {
       </SideSection>
       <SideSection title={wbT("task.side.constraintsCount", "Constraints ({count})", { count: constraints.length })}>
         {constraints.length
-          ? constraints.map(function (item, i) { return <div className="workbench-check" key={i}><span className="workbench-status-dot amber"></span>{item}</div>; })
+          ? constraints.map(function (item, i) { return <div className="workbench-check wb-constraint-row" key={i}><span className="workbench-status-dot amber"></span><span className="wb-constraint-text">{item}</span></div>; })
           : <p className="workbench-muted">{wbT("task.noConstraints", "No constraints yet. Phrases like \"do not\" or \"only\" in the task are recognized as constraints automatically.")}</p>}
       </SideSection>
       {isInit && window.WorkbenchInitProgress ? (

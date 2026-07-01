@@ -63,3 +63,15 @@ src/webui/static/app/compiled/
 
 # Transient agent/test output written to the repo root
 /animations/
+
+# GAIA benchmark dataset + outputs
+gaia_data/
+gaia_benchmark.log
+gaia_full_results.json
+gaia_session_*.json
+gaia_session_*.jsonl
+gaia_*.log
+gaia_*.json
+
+# Scripts and tools
+scripts/

@@ -618,7 +618,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
         segments: segments.concat([{
           id: String(message.id),
           message: message,
-          progress: Array.isArray(cur.progress) ? cur.progress : [],
+          progress: Array.isArray(message.trace) ? message.trace : (Array.isArray(cur.progress) ? cur.progress : []),
         }]),
       };
     });
@@ -800,6 +800,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
   var [error, setError] = useWbcState("");
   var [errorKind, setErrorKind] = useWbcState("load");
   var [sideTab, setSideTab] = useWbcState("overview");
+  var [browserActiveByChat, setBrowserActiveByChat] = useWbcState({});
   var [viewerFile, setViewerFile] = useWbcState(null);
   var [subagentData, setSubagentData] = useWbcState({ rounds: [], activeRoundId: "", agents: [], messages: [] });
   var [subagentLoading, setSubagentLoading] = useWbcState(false);
@@ -1049,7 +1050,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
         }
         return;
       }
-      var chatId = String(event.session_id || "");
+      var chatId = String(event.session_id || event.chat_id || event.chatId || "");
       if (
         chatId
         && activeChatIdRef.current === chatId
@@ -1082,12 +1083,17 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
           });
         }, 120);
       }
+      var browserEventChatId = String(event.session_id || event.chat_id || event.chatId || "");
       if (
         (event.type === "browser_frame" || event.type === "browser_takeover_request")
         && activeChatIdRef.current
-        && String(event.session_id || "") === String(activeChatIdRef.current)
-        && runtimeEngine.isRunning(activeChatIdRef.current)
+        && (!browserEventChatId || browserEventChatId === String(activeChatIdRef.current))
       ) {
+        setBrowserActiveByChat(function (prev) {
+          var sid = String(browserEventChatId || activeChatIdRef.current || "");
+          if (!sid || prev[sid]) return prev;
+          return { ...prev, [sid]: true };
+        });
         setSideTab("browser");
       }
       // Live tool/phase/subagent progress is folded into the runtime by the
@@ -1471,6 +1477,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
           handleAnswer(pending.id, (payload && payload.text) || "我已完成登录");
           return Promise.resolve();
         }}
+        browserActiveByChat={browserActiveByChat}
       />
     </div>
   );
@@ -2901,11 +2908,16 @@ function WbcSide({
   onCompact,
   compactBusy,
   onBrowserTakeoverComplete,
+  browserActiveByChat,
 }) {
   if (typeof window.useDataVersion === "function") window.useDataVersion();
   var browserState = wbcBrowserStateForChat(activeChatId);
+  var browserMarkedActive = !!(browserActiveByChat && browserActiveByChat[activeChatId]);
+  var browserPanelState = (browserState && browserState.active)
+    ? browserState
+    : (browserMarkedActive && window.DATA && window.DATA.browser ? window.DATA.browser : browserState);
   var hasMap = wbcChatUsedMap(chat, runtime);
-  var hasBrowser = !!(browserState && browserState.active);
+  var hasBrowser = !!((browserState && browserState.active) || browserMarkedActive);
   var hasBranches = useWbcMemo(function () {
     return !!wbcBranchLineage(chats, activeChatId);
   }, [chats, activeChatId]);
@@ -2960,9 +2972,9 @@ function WbcSide({
         {activeTab === "browser" && (
           typeof window.BrowserViewportPanel !== "undefined"
             ? React.createElement(window.BrowserViewportPanel, {
-                browserState: browserState,
+                browserState: browserPanelState,
                 browserSessionId: activeChatId || "",
-                roundId: browserState.roundId || "",
+                roundId: (browserPanelState && browserPanelState.roundId) || "",
                 onClose: function () { onTabChange("overview"); },
                 onTakeoverComplete: onBrowserTakeoverComplete,
               })

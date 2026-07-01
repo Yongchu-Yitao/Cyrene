@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import ipaddress
+import json
 import logging
 import os
 import platform
@@ -225,6 +226,71 @@ def browser_runtime_unavailable_message(exc: Exception | str | None = None) -> s
     if len(detail) > 500:
         detail = detail[:500].rstrip() + "..."
     return f"{base} {detail}"
+
+
+def electron_browser_available() -> bool:
+    """Return True when the Electron host exposed its browser RPC server."""
+    return bool(os.environ.get("CYRENE_ELECTRON_RPC_PORT") and os.environ.get("CYRENE_ELECTRON_RPC_TOKEN"))
+
+
+async def _electron_browser_rpc(method: str, args: dict[str, Any] | None = None, *, timeout: float = 45.0) -> dict[str, Any]:
+    port = str(os.environ.get("CYRENE_ELECTRON_RPC_PORT") or "").strip()
+    token = str(os.environ.get("CYRENE_ELECTRON_RPC_TOKEN") or "").strip()
+    if not port or not token:
+        raise RuntimeError("Electron browser RPC is unavailable.")
+    url = f"http://127.0.0.1:{port}/browser/rpc"
+    payload = {"method": method, "args": args or {}}
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        response = await client.post(
+            url,
+            headers={"X-Cyrene-Token": token, "Content-Type": "application/json"},
+            content=json.dumps(payload),
+        )
+        response.raise_for_status()
+        data = response.json()
+    if not isinstance(data, dict):
+        raise RuntimeError("Electron browser RPC returned a non-object response.")
+    return data
+
+
+async def electron_current_url() -> str:
+    """Best-effort current URL for the Electron-hosted browser tab."""
+    if not electron_browser_available():
+        return ""
+    state = await _electron_browser_rpc("state", {}, timeout=10.0)
+    active = state.get("activeTab") if isinstance(state, dict) else None
+    if isinstance(active, dict):
+        return str(active.get("url") or "")
+    return ""
+
+
+async def _emit_electron_frame(action: str, result: dict[str, Any], *, target: str | None = None, box: Any = None) -> None:
+    """Publish the same lightweight browser_frame metadata for Electron tabs."""
+    try:
+        from cyrene import debug
+        from cyrene.agent.state import _current_round_id, _current_session_id
+
+        norm_box = None
+        if isinstance(box, dict) and box:
+            norm_box = {
+                "x": box.get("x", 0),
+                "y": box.get("y", 0),
+                "w": box.get("w", box.get("width", 0)),
+                "h": box.get("h", box.get("height", 0)),
+            }
+        await debug.publish_event({
+            "type": "browser_frame",
+            "session_id": _current_session_id.get(),
+            "round_id": _current_round_id.get(),
+            "url": str(result.get("url") or ""),
+            "title": str(result.get("title") or ""),
+            "action": action,
+            "target": target,
+            "box": norm_box,
+            "ts": time.time(),
+        })
+    except Exception:
+        logger.debug("electron browser_frame emit failed", exc_info=True)
 
 
 async def _detect_chromium_version(chromium: Any) -> str:
@@ -492,7 +558,11 @@ class _BrowserSession:
     async def end_takeover(self, url: str = "") -> None:
         """Return to headless after the user finished logging in, same profile."""
         async with self._mode_lock:
-            target = url or self._safe_url()
+            # During takeover the user may be redirected from the original login
+            # URL to a post-verification page. Preserve that current headed-page
+            # URL when returning to the embedded view; use the original URL only
+            # as a fallback if the headed page is already gone.
+            target = self._safe_url() or url
             await self._relaunch(headless=_headless_default(), url=target)
             self._takeover_active = False
             self._user_window_open = False
@@ -875,6 +945,18 @@ async def close_session() -> None:
 
 async def end_browser_takeover(url: str = "") -> None:
     """Return the shared session to headless after a login takeover (M3 resume hook)."""
+    if electron_browser_available():
+        try:
+            from cyrene import debug
+            from cyrene.agent.state import _current_session_id
+            event = {"type": "browser_takeover_cancelled"}
+            session_id = str(_current_session_id.get() or "").strip()
+            if session_id:
+                event["session_id"] = session_id
+            await debug.publish_event(event)
+        except Exception:
+            pass
+        return
     session = _get_session()
     if session._context is not None:
         await session.end_takeover(url)
@@ -916,13 +998,39 @@ async def navigate(
         _check_url(url)
     except SSRFBlockedError as exc:
         return {"url": url, "status": 0, "title": "", "text": "", "error": str(exc)}
+    if electron_browser_available():
+        try:
+            result = await _electron_browser_rpc(
+                "navigate",
+                {"url": url, "maxChars": max_chars, "extractText": extract_text},
+            )
+            if result.get("ok") is False:
+                logger.warning("Electron navigate failed (%s); falling back", result.get("error"))
+            else:
+                await _emit_electron_frame("navigate", result)
+                ret = {
+                    "url": str(result.get("url") or url),
+                    "status": int(result.get("status") or 0),
+                    "title": str(result.get("title") or ""),
+                    "text": str(result.get("text") or ""),
+                    "error": None,
+                }
+                tid = result.get("tabId")
+                if tid:
+                    ret["tabId"] = str(tid)
+                return ret
+        except Exception as exc:
+            logger.warning("Electron browser navigate failed (%s); falling back", exc)
     if _ensure_playwright() is not None:
         try:
             session = await get_session()
             return await session.navigate(url, max_chars=max_chars)
         except Exception as exc:
             logger.warning("Playwright navigate failed (%s); falling back to httpx", exc)
-    return await _httpx_navigate(url, extract_text=extract_text, max_chars=max_chars, headers=headers)
+    result = await _httpx_navigate(url, extract_text=extract_text, max_chars=max_chars, headers=headers)
+    if electron_browser_available():
+        await _emit_electron_frame("navigate", result)
+    return result
 
 
 async def _httpx_navigate(
@@ -935,7 +1043,7 @@ async def _httpx_navigate(
     result: dict[str, Any] = {"url": url, "status": 0, "title": "", "text": "", "error": None}
     try:
         req_headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "User-Agent": _browser_user_agent(),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
@@ -980,6 +1088,32 @@ async def screenshot(url: str, *, full_page: bool = True) -> dict[str, Any]:
         _check_url(url)
     except SSRFBlockedError as exc:
         return {"ok": False, "error": str(exc)}
+    if electron_browser_available():
+        try:
+            nav = await _electron_browser_rpc("navigate", {"url": url, "maxChars": 0})
+            if nav.get("ok") is True:
+                result = await _electron_browser_rpc("screenshot", {})
+                if result.get("ok") is True:
+                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+                    tmp = tempfile.NamedTemporaryFile(suffix=".png", dir=TEMP_DIR, delete=False)
+                    tmp.close()
+                    try:
+                        data = base64.b64decode(str(result.get("pngBase64") or ""), validate=False)
+                        with open(tmp.name, "wb") as fh:
+                            fh.write(data)
+                    except Exception:
+                        try:
+                            os.unlink(tmp.name)
+                        except OSError:
+                            pass
+                        raise
+                    await _emit_electron_frame("screenshot", result)
+                    return {"ok": True, "path": tmp.name, "title": str(result.get("title") or nav.get("title") or "")}
+                logger.warning("Electron screenshot RPC failed (%s); falling back", result.get("error"))
+            else:
+                logger.warning("Electron navigate for screenshot failed (%s); falling back", nav.get("error"))
+        except Exception as exc:
+            logger.warning("Electron screenshot failed (%s); falling back to Playwright", exc)
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     try:
@@ -995,6 +1129,16 @@ async def screenshot(url: str, *, full_page: bool = True) -> dict[str, Any]:
 
 async def click(selector: str) -> dict[str, Any]:
     """Click an element on the current page by CSS selector."""
+    if electron_browser_available():
+        try:
+            result = await _electron_browser_rpc("click", {"selector": selector})
+            if result.get("ok") is True:
+                await _emit_electron_frame("click", result, target=selector, box=result.get("box"))
+                return result
+            logger.warning("Electron click ok:false (%s)", result.get("error"))
+            return result
+        except Exception as exc:
+            logger.warning("Electron click failed (%s); falling back to Playwright", exc)
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     session = _get_session()
@@ -1008,6 +1152,16 @@ async def click(selector: str) -> dict[str, Any]:
 
 async def type_text(selector: str, text: str, *, submit: bool = False) -> dict[str, Any]:
     """Type *text* into an element and optionally submit."""
+    if electron_browser_available():
+        try:
+            result = await _electron_browser_rpc("type", {"selector": selector, "text": text, "submit": submit})
+            if result.get("ok") is True:
+                await _emit_electron_frame("type", result, target=selector)
+                return result
+            logger.warning("Electron type_text ok:false (%s)", result.get("error"))
+            return result
+        except Exception as exc:
+            logger.warning("Electron type_text failed (%s); falling back to Playwright", exc)
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     session = _get_session()
@@ -1015,6 +1169,103 @@ async def type_text(selector: str, text: str, *, submit: bool = False) -> dict[s
         return {"ok": False, "error": "No page open. Call browser_navigate first."}
     try:
         return await session.type_text(selector, text, submit=submit)
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
+async def scroll_page(*, delta_x: int = 0, delta_y: int = 500) -> dict[str, Any]:
+    """Scroll the current page by *delta_x* / *delta_y* pixels."""
+    if electron_browser_available():
+        try:
+            return await _electron_browser_rpc("scroll", {"deltaX": delta_x, "deltaY": delta_y})
+        except Exception as exc:
+            logger.warning("Electron scroll failed (%s); falling back to Playwright", exc)
+    if _ensure_playwright() is None:
+        return {"ok": False, "error": browser_runtime_unavailable_message()}
+    session = _get_session()
+    if not await session._wait_for_control():
+        return {"ok": False, "error": _USER_CONTROL_MSG}
+    if session._page is None:
+        return {"ok": False, "error": "No page open. Call browser_navigate first."}
+    try:
+        page = await session.page()
+        await page.evaluate(f"window.scrollBy({delta_x}, {delta_y})")
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
+async def list_tabs() -> dict[str, Any]:
+    """List Electron browser tabs. Playwright fallback exposes only one page."""
+    if electron_browser_available():
+        try:
+            return await _electron_browser_rpc("state", {}, timeout=10.0)
+        except Exception as exc:
+            return {"ok": False, "error": browser_runtime_unavailable_message(exc), "tabs": []}
+    session = _get_session()
+    if session._page is None:
+        return {"ok": True, "tabs": [], "activeTabId": "", "activeTab": None}
+    tab = {
+        "id": "playwright",
+        "title": "",
+        "url": session._safe_url(),
+        "active": True,
+        "loading": False,
+        "canGoBack": False,
+        "canGoForward": False,
+        "muted": False,
+        "audible": False,
+    }
+    return {"ok": True, "tabs": [tab], "activeTabId": "playwright", "activeTab": tab}
+
+
+async def new_tab(url: str = "about:blank") -> dict[str, Any]:
+    """Create and activate a new Electron browser tab."""
+    if not electron_browser_available():
+        return {"ok": False, "error": "Multiple browser tabs are only available in the Electron desktop browser."}
+    target = normalize_url_for_browser_tab(url)
+    if target != "about:blank":
+        try:
+            _check_url(target)
+        except SSRFBlockedError as exc:
+            return {"ok": False, "error": str(exc)}
+    try:
+        result = await _electron_browser_rpc("createTab", {"url": target, "activate": True})
+        active = result.get("activeTab") if isinstance(result, dict) else None
+        if isinstance(active, dict):
+            await _emit_electron_frame("new_tab", active)
+        return result
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
+def normalize_url_for_browser_tab(url: str) -> str:
+    value = str(url or "").strip() or "about:blank"
+    if value == "about:blank":
+        return value
+    return _normalize_http_url(value)
+
+
+async def select_tab(tab_id: str) -> dict[str, Any]:
+    """Activate an Electron browser tab by id."""
+    if not electron_browser_available():
+        return {"ok": False, "error": "Multiple browser tabs are only available in the Electron desktop browser."}
+    try:
+        result = await _electron_browser_rpc("activateTab", {"tabId": str(tab_id or "")})
+        active = result.get("activeTab") if isinstance(result, dict) else None
+        if isinstance(active, dict):
+            await _emit_electron_frame("select_tab", active)
+        return result
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
+async def close_tab(tab_id: str = "") -> dict[str, Any]:
+    """Close an Electron browser tab by id, or the active tab when omitted."""
+    if not electron_browser_available():
+        return {"ok": False, "error": "Multiple browser tabs are only available in the Electron desktop browser."}
+    try:
+        return await _electron_browser_rpc("closeTab", {"tabId": str(tab_id or "")})
     except Exception as exc:
         return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
 

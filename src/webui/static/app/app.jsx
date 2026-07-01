@@ -806,7 +806,7 @@ function ProfileContent({ onClose, onOpenSettings }) {
             <div className="profile-section">
               <div className="profile-section-title">{t("profile.usage")}</div>
               <div className="profile-bento">
-                {Cell({ hero: true, value: usage.spend || "—", label: t("profile.spend") })}
+                {Cell({ hero: true, value: formatLocalizedSpend(usage, lang), label: t("profile.spend") })}
                 {Cell({ value: usage.requests != null ? usage.requests : "—", label: t("profile.requests") })}
                 {Cell({ value: usage.total_tokens ? compactNumber(usage.total_tokens) : "—", label: t("profile.tokens"), title: usage.tokens || "" })}
               </div>

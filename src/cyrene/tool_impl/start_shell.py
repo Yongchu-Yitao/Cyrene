@@ -13,9 +13,10 @@ from cyrene.tool_legacy import (
     _json_result,
     _request_delete_confirmation,
     _request_destructive_confirmation,
+    _request_read_elevation,
     _request_scope_elevation,
     _request_write_elevation,
-    _resolve_workspace_path,
+    _resolve_tool_path,
     _start_shell_session,
     json,
 )
@@ -27,7 +28,19 @@ TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL
 async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
     from cyrene.agent.state import _current_round_id
 
-    cwd = str(_resolve_workspace_path(str(args.get("cwd", ".") or ".")))
+    cwd_arg = str(args.get("cwd", ".") or ".")
+    try:
+        cwd_path = _resolve_tool_path(cwd_arg)
+    except ValueError:
+        elev = await _request_read_elevation(
+            tool_name="StartShell",
+            path_hint=cwd_arg,
+            reason="Agent 想要在 workspace 之外的目录启动 shell。",
+        )
+        if elev is not None:
+            return elev
+        cwd_path = _resolve_tool_path(cwd_arg)
+    cwd = str(cwd_path)
     from cyrene.agent.state import _temporary_full_access
     command = str(args.get("command", "") or "")
     _full_access = _temporary_full_access.get()

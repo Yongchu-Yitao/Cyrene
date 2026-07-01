@@ -183,6 +183,57 @@ def test_preamble_prose_is_kept_as_its_own_reply_block():
     assert [t["tool"] for t in trailing] == ["Bash"]
 
 
+def test_live_extraction_surfaces_open_tool_preamble():
+    messages = [
+        {"role": "user", "message_id": "u1", "content": "打开 B 站看看"},
+        _asst_tool("a1", "browser_navigate", "c1", '{"url":"https://www.bilibili.com"}'),
+        _tool_result("c1", '{"ok":true}'),
+        _asst_tool(
+            "a2",
+            "browser_screenshot",
+            "c2",
+            '{"url":"https://www.bilibili.com"}',
+            content="B 站检测到浏览器版本过低，先截个图给你看。",
+        ),
+        _tool_result("c2", '{"ok":true}'),
+    ]
+
+    segments, trailing, _usage, _files = _extract_exchange_segments(messages, set())
+    assert segments == []
+    assert [t["tool"] for t in trailing] == ["browser_navigate", "browser_screenshot"]
+
+    live_segments, live_trailing, _usage, _files = _extract_exchange_segments(
+        messages,
+        set(),
+        include_open_tool_preamble=True,
+    )
+    assert [segment["content"] for segment in live_segments] == [
+        "B 站检测到浏览器版本过低，先截个图给你看。"
+    ]
+    assert [t["tool"] for t in live_segments[0]["trace"]] == ["browser_navigate"]
+    assert [t["tool"] for t in live_trailing] == ["browser_screenshot"]
+
+
+def test_live_extraction_does_not_surface_terminal_control_reply():
+    messages = [
+        {"role": "user", "message_id": "u1", "content": "算一下 2+2"},
+        {
+            "role": "assistant",
+            "message_id": "a1",
+            "content": "2 + 2 = 4。",
+            "tool_calls": [{"id": "q", "function": {"name": "quit", "arguments": "{}"}}],
+        },
+    ]
+
+    segments, trailing, _usage, _files = _extract_exchange_segments(
+        messages,
+        set(),
+        include_open_tool_preamble=True,
+    )
+    assert segments == []
+    assert trailing == []
+
+
 def test_final_text_only_reply_is_not_duplicated_into_a_segment():
     # A plain answer with no tools and no mid-run replies yields zero segments;
     # the caller persists the final reply itself.

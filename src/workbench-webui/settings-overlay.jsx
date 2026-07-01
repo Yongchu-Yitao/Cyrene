@@ -8,6 +8,7 @@ var {
 
 var REPO_URL = "https://github.com/ikerrrrrrrrrrr/Cyrene";
 var REPO_ISSUES_URL = REPO_URL + "/issues/new";
+var REPO_DOCS_URL = REPO_URL + "/tree/main/docs";
 var DEFAULT_MODEL_BASE_URL = "https://api.deepseek.com/v1";
 
 function readTweak(key, fallback) {
@@ -59,6 +60,27 @@ async function readSettingsResponse(response) {
   return payload;
 }
 
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function renderSettingsMarkdown(value) {
+  var source = String(value == null ? "" : value);
+  try {
+    var raw = window.marked ? window.marked.parse(source) : escapeHtml(source).replace(/\n/g, "<br>");
+    return window.DOMPurify
+      ? window.DOMPurify.sanitize(raw, { ADD_ATTR: ["data-line", "data-language"] })
+      : raw;
+  } catch (e) {
+    return escapeHtml(source).replace(/\n/g, "<br>");
+  }
+}
+
 // ── Tab definitions ──
 var TABS = [
   { id: "general", labelKey: "settings.general" },
@@ -72,6 +94,60 @@ var TABS = [
   { id: "data", labelKey: "settings.data" },
   { id: "about", labelKey: "settings.about" },
 ];
+
+var SETTINGS_TAB_GROUPS = [
+  ["general", "appearance", "shortcuts"],
+  ["models", "capabilities", "skills"],
+  ["channels", "agents"],
+  ["data"],
+  ["about"],
+];
+
+var TABS_BY_ID = TABS.reduce(function (acc, item) {
+  acc[item.id] = item;
+  return acc;
+}, {});
+
+function SettingsTabIcon(id) {
+  var common = { width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" };
+  var paths = {
+    general: [
+      React.createElement("path", { key: "p1", d: "M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Z" }),
+      React.createElement("path", { key: "p2", d: "M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .92V20a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-.92 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.92-1H3.5a2 2 0 1 1 0-4h.18a1.7 1.7 0 0 0 .92-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.92V3.5a2 2 0 1 1 4 0v.18a1.7 1.7 0 0 0 1 .92 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.34.16.66.47.92 1h.18a2 2 0 1 1 0 4h-.18c-.26.53-.58.84-.92 1Z" }),
+    ],
+    models: [React.createElement("path", { key: "p", d: "M12 3 4 7v10l8 4 8-4V7l-8-4Z" }), React.createElement("path", { key: "p2", d: "M4 7l8 4 8-4M12 11v10" })],
+    channels: [React.createElement("path", { key: "p", d: "M21 8a6 6 0 0 1-8.7 5.3L8 16l1.1-4.8A6 6 0 1 1 21 8Z" }), React.createElement("path", { key: "p2", d: "M7.5 12.5A5 5 0 0 0 3 17.5L2 22l4.5-1A5 5 0 0 0 14 17" })],
+    agents: [React.createElement("path", { key: "p", d: "M12 3v4M6 8h12a2 2 0 0 1 2 2v7a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-7a2 2 0 0 1 2-2Z" }), React.createElement("path", { key: "p2", d: "M9 14h.01M15 14h.01M8 20v2M16 20v2" })],
+    appearance: [React.createElement("path", { key: "p", d: "M12 3a9 9 0 1 0 9 9 4 4 0 0 1-4 4h-1.2a2 2 0 0 1-1.5-3.3l.7-.8A5 5 0 0 0 12 3Z" }), React.createElement("circle", { key: "c1", cx: "7.5", cy: "10.5", r: ".8" }), React.createElement("circle", { key: "c2", cx: "10", cy: "7.5", r: ".8" }), React.createElement("circle", { key: "c3", cx: "14", cy: "7.5", r: ".8" })],
+    capabilities: [React.createElement("path", { key: "p", d: "M7 7h10M7 17h10M9 7a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM19 17a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z" })],
+    skills: [React.createElement("path", { key: "p", d: "M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6l-8-4Z" }), React.createElement("path", { key: "p2", d: "m9 12 2 2 4-5" })],
+    shortcuts: [React.createElement("rect", { key: "r", x: "3", y: "5", width: "18", height: "14", rx: "2" }), React.createElement("path", { key: "p", d: "M7 9h.01M11 9h.01M15 9h.01M7 13h10" })],
+    data: [React.createElement("path", { key: "p", d: "M4 6c0-2 3.6-3 8-3s8 1 8 3-3.6 3-8 3-8-1-8-3Z" }), React.createElement("path", { key: "p2", d: "M4 6v6c0 2 3.6 3 8 3s8-1 8-3V6M4 12v6c0 2 3.6 3 8 3s8-1 8-3v-6" })],
+    about: [React.createElement("circle", { key: "c", cx: "12", cy: "12", r: "9" }), React.createElement("path", { key: "p", d: "M12 11v5M12 8h.01" })],
+  };
+  return React.createElement("svg", common, paths[id] || paths.general);
+}
+
+function ExternalChevron() {
+  return React.createElement("svg", { width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.4", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+    React.createElement("path", { d: "m9 18 6-6-6-6" })
+  );
+}
+
+function AboutRelatedIcon(name) {
+  if (name === "github") {
+    return React.createElement("svg", { width: "22", height: "22", viewBox: "0 0 16 16", fill: "currentColor", "aria-hidden": "true" },
+      React.createElement("path", { d: "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z" })
+    );
+  }
+  var path = name === "issue" ? "M12 8v4M12 16h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+    : name === "changelog" ? "M4 19V5M4 19h16M4 19l4-4M8 15V7M8 15h12M12 11V3M12 11h8"
+    : name === "website" ? "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM3.6 9h16.8M3.6 15h16.8M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"
+    : "M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15Z";
+  return React.createElement("svg", { width: "23", height: "23", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+    React.createElement("path", { d: path })
+  );
+}
 
 // ── Settings Overlay ──
 function SettingsOverlay({
@@ -109,6 +185,7 @@ function SettingsOverlay({
     workspace_dir: "—", soul_content: "", spawn_policy: "conservative",
     heartbeat_interval: 1800, max_tool_rounds: 15,
     search_port: "8888",
+    auto_update: true,
   });
   var [configLoading, setConfigLoading] = useStateSt(true);
   var [soulDraft, setSoulDraft] = useStateSt("");
@@ -217,7 +294,7 @@ function SettingsOverlay({
 
     fetch("/api/settings/tools").then(function (r) { return r.json(); }).then(function (p) {
       var tools = p.tools || [];
-      var browserToolNames = ["browser_navigate", "browser_screenshot", "browser_click", "browser_type", "browser_request_takeover"];
+      var browserToolNames = ["browser_navigate", "browser_screenshot", "browser_click", "browser_type", "browser_tab_list", "browser_tab_new", "browser_tab_select", "browser_tab_close", "browser_scroll", "browser_request_takeover"];
       setToolList(tools);
       if (tools.length) {
         var browserToolsList = tools.filter(function (tool) { return browserToolNames.indexOf(tool.name) >= 0; });
@@ -306,7 +383,7 @@ function SettingsOverlay({
   }
 
   function saveBrowserTools(nextEnabled) {
-    var browserToolNames = ["browser_navigate", "browser_screenshot", "browser_click", "browser_type", "browser_request_takeover"];
+    var browserToolNames = ["browser_navigate", "browser_screenshot", "browser_click", "browser_type", "browser_tab_list", "browser_tab_new", "browser_tab_select", "browser_tab_close", "browser_scroll", "browser_request_takeover"];
     var nextToolList = toolList.map(function (tool) {
       return browserToolNames.indexOf(tool.name) >= 0 ? { ...tool, enabled: nextEnabled } : tool;
     });
@@ -357,7 +434,7 @@ function SettingsOverlay({
     React.createElement("div", { className: "settings-overlay-panel", onClick: function (e) { e.stopPropagation(); } },
       // Header
       React.createElement("div", { className: "settings-overlay-header" },
-        React.createElement("span", { className: "settings-overlay-icon" }, "⚙"),
+        React.createElement("span", { className: "settings-overlay-icon" }, SettingsTabIcon("general")),
         React.createElement("strong", null, t("nav.settings")),
         React.createElement("button", { className: "settings-overlay-close", onClick: onClose }, "ESC"),
       ),
@@ -366,12 +443,21 @@ function SettingsOverlay({
       React.createElement("div", { className: "settings-overlay-body" },
         // Sidebar tabs
         React.createElement("div", { className: "settings-overlay-nav" },
-          TABS.map(function (item) {
-            return React.createElement("button", {
-              key: item.id,
-              className: "settings-overlay-tab" + (tab === item.id ? " active" : ""),
-              onClick: function () { setTab(item.id); },
-            }, t(item.labelKey));
+          SETTINGS_TAB_GROUPS.map(function (ids, groupIndex) {
+            return React.createElement("div", { key: ids.join("-"), className: "settings-overlay-nav-section" + (groupIndex === 0 ? " first" : "") },
+              ids.map(function (id) {
+                var item = TABS_BY_ID[id];
+                if (!item) return null;
+                return React.createElement("button", {
+                  key: item.id,
+                  className: "settings-overlay-tab" + (tab === item.id ? " active" : ""),
+                  onClick: function () { setTab(item.id); },
+                },
+                  React.createElement("span", { className: "settings-overlay-tab-icon" }, SettingsTabIcon(item.id)),
+                  React.createElement("span", null, t(item.labelKey)),
+                );
+              }),
+            );
           }),
         ),
 
@@ -416,6 +502,11 @@ function GeneralPanel(p) {
       if (cancelled || !s) return;
       setRunInBackground(s.runInBackground === true);
       setQuickChatEnabled(s.quickChatEnabled === true);
+      if ((s.language === "en" || s.language === "zh") && s.language !== lang) {
+        setLang(s.language);
+      } else if (!s.language) {
+        window.cyrene.updateDesktopSettings({ language: lang }).catch(function () {});
+      }
     }).catch(function () {});
     return function () { cancelled = true; };
   }, []);
@@ -1151,38 +1242,8 @@ function DataPanel(p) {
 function AboutPanel(p) {
   var { t, config } = p;
 
-  return React.createElement("div", { className: "settings-panel" },
-    SectionTitle(t("settings.about"), t("settings.aboutSubtitle")),
-
-    React.createElement("div", { className: "wb-about-hero" },
-      React.createElement("div", { className: "wb-about-logo", "aria-hidden": "true" },
-        React.createElement("div", { className: "brand-mark" }),
-      ),
-      React.createElement("h3", null, "Cyrene"),
-      React.createElement("p", null, t("settings.aboutHeroCopy")),
-    ),
-
-    React.createElement("div", { className: "wb-about-grid" },
-      React.createElement("div", { className: "wb-about-card" },
-        React.createElement("span", { className: "wb-about-label" }, t("settings.projectName")),
-        React.createElement("strong", null, "Cyrene"),
-        React.createElement("a", { className: "wb-btn", href: REPO_URL, target: "_blank", rel: "noopener noreferrer" },
-          React.createElement("svg", { width: "14", height: "14", viewBox: "0 0 16 16", fill: "currentColor", "aria-hidden": "true" },
-            React.createElement("path", { d: "M8 0C3.58 0 0 3.58 0 8C0 11.54 2.29 14.53 5.47 15.59C5.87 15.66 6.02 15.42 6.02 15.21C6.02 15.02 6.01 14.39 6.01 13.56C4 13.93 3.48 13.07 3.32 12.62C3.23 12.39 2.84 11.68 2.5 11.49C2.22 11.34 1.82 10.96 2.49 10.95C3.12 10.94 3.57 11.53 3.72 11.76C4.44 12.97 5.59 12.63 6.05 12.42C6.12 11.9 6.33 11.55 6.56 11.35C4.78 11.15 2.92 10.46 2.92 7.4C2.92 6.53 3.23 5.82 3.74 5.26C3.66 5.06 3.38 4.24 3.82 3.13C3.82 3.13 4.49 2.92 6.02 3.95C6.66 3.77 7.34 3.68 8.02 3.68C8.7 3.68 9.38 3.77 10.02 3.95C11.55 2.91 12.22 3.13 12.22 3.13C12.66 4.24 12.38 5.06 12.3 5.26C12.8 5.82 13.12 6.52 13.12 7.4C13.12 10.47 11.25 11.15 9.47 11.35C9.76 11.6 10.01 12.08 10.01 12.83C10.01 13.9 10 14.76 10 15.21C10 15.42 10.15 15.67 10.56 15.59C13.7277 14.5265 16.0087 11.5363 16 8C16 3.58 12.42 0 8 0Z" })
-          ),
-          "GitHub"
-        ),
-      ),
-      React.createElement("div", { className: "wb-about-card" },
-        React.createElement("span", { className: "wb-about-label" }, t("settings.version")),
-        React.createElement("strong", null, DATA.appVersion || "—"),
-        React.createElement("a", { className: "wb-btn primary", href: REPO_ISSUES_URL, target: "_blank", rel: "noopener noreferrer" }, t("settings.reportIssue")),
-      ),
-      React.createElement("div", { className: "wb-about-card" },
-        React.createElement("span", { className: "wb-about-label" }, t("settings.updates")),
-        React.createElement(UpdateSection, { t: t, config: config }),
-      ),
-    ),
+  return React.createElement("div", { className: "settings-panel settings-panel-wide" },
+    React.createElement(UpdateSection, { t: t, config: config }),
   );
 }
 
@@ -1195,14 +1256,41 @@ function UpdateSection({ t, config }) {
   var [downloaded, setDownloaded] = useStateSt(false);
   var [error, setError] = useStateSt("");
   var [beta, setBeta] = useStateSt(!!(config && config.beta_updates));
+  var [autoUpdate, setAutoUpdate] = useStateSt(!!(!config || config.auto_update !== false));
+  var [changelogOpen, setChangelogOpen] = useStateSt(false);
+  var [changelog, setChangelog] = useStateSt({ version: "", published_at: "", release_notes: "" });
 
   useEffectSt(function () { checkUpdate(); }, []);
   // Sync local toggle with config once it loads from the server.
   useEffectSt(function () { setBeta(!!(config && config.beta_updates)); }, [config && config.beta_updates]);
+  useEffectSt(function () { setAutoUpdate(!!(!config || config.auto_update !== false)); }, [config && config.auto_update]);
 
   function checkUpdate() {
     setChecking(true); setError("");
-    fetch("/api/update/check").then(function (r) { return r.json(); }).then(function (d) { setInfo(d); setDownloaded(false); setProgress({ downloaded: 0, total: d.asset_size || 0, done: false, verified: false, verification_error: "" }); }).catch(function () { setError(t("settings.updateCheckFailed")); }).finally(function () { setChecking(false); });
+    fetch("/api/update/check").then(function (r) { return r.json(); }).then(function (d) {
+      setInfo(d);
+      setChangelog({ version: d.latest_version || "", published_at: d.published_at || "", release_notes: d.release_notes || "" });
+      setDownloaded(false);
+      setProgress({ downloaded: 0, total: d.asset_size || 0, done: false, verified: false, verification_error: "" });
+    }).catch(function () { setError(t("settings.updateCheckFailed")); }).finally(function () { setChecking(false); });
+  }
+
+  function openChangelog() {
+    fetch("/api/update/changelog").then(function (r) { return r.json(); }).then(function (d) {
+      setChangelog({
+        version: d.version || (info && info.latest_version) || "",
+        published_at: d.published_at || (info && info.published_at) || "",
+        release_notes: d.release_notes || (info && info.release_notes) || "",
+      });
+      setChangelogOpen(true);
+    }).catch(function () {
+      setChangelog({
+        version: (info && info.latest_version) || "",
+        published_at: (info && info.published_at) || "",
+        release_notes: (info && info.release_notes) || "",
+      });
+      setChangelogOpen(true);
+    });
   }
 
   function toggleBeta() {
@@ -1212,6 +1300,14 @@ function UpdateSection({ t, config }) {
     fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ beta_updates: next }) })
       .then(function () { checkUpdate(); })
       .catch(function () { setBeta(!next); });
+  }
+
+  function toggleAutoUpdate() {
+    if (checking || downloading) return;
+    var next = !autoUpdate;
+    setAutoUpdate(next);
+    fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ auto_update: next }) })
+      .catch(function () { setAutoUpdate(!next); });
   }
 
   function startDownload() {
@@ -1240,7 +1336,7 @@ function UpdateSection({ t, config }) {
     if (!value) return "—";
     var d = new Date(value);
     if (isNaN(d.getTime())) return value;
-    try { return d.toLocaleString(); } catch (e) { return value; }
+    try { return d.toLocaleDateString(); } catch (e) { return value; }
   }
 
   function notesText() {
@@ -1255,6 +1351,14 @@ function UpdateSection({ t, config }) {
     if (info.update_available && !info.checksum_available) return t("settings.updateCannotVerify", null, "Cannot verify: release has no sha256 checksum.");
     if (info.update_available) return t("settings.updateReadyToDownload", null, "Ready to download");
     return t("settings.upToDate");
+  }
+
+  function statusDetailText() {
+    if (!info || checking) return "";
+    var detail = downloadStatus();
+    if (!detail || detail === "—" || detail === statusText) return "";
+    if (!info.update_available && detail === t("settings.upToDate")) return "";
+    return detail;
   }
 
   function confirmInstall() {
@@ -1289,32 +1393,109 @@ function UpdateSection({ t, config }) {
     : (info && info.update_available
       ? t("settings.updateAvailable")
       : (info ? t("settings.upToDate") : "—"));
+  var actionDisabled = checking || downloading || !!(info && info.update_available && !downloaded && !info.checksum_available);
+  var actionLabel = downloaded
+    ? t("settings.updateRestartNow")
+    : (checking
+      ? t("settings.updateChecking")
+      : (info && info.update_available ? t("settings.updateToVersion", { version: lv }) : t("settings.checkForUpdates")));
+  var actionHandler = downloaded ? confirmInstall : (info && info.update_available ? startDownload : checkUpdate);
+  var statusDetail = statusDetailText();
+  var relatedLinks = [
+    { icon: "docs", title: t("settings.relatedDocs", null, "Help docs"), action: t("settings.view", null, "View"), href: REPO_DOCS_URL },
+    { icon: "changelog", title: t("settings.relatedChangelog", null, "Changelog"), action: t("settings.view", null, "View"), onClick: openChangelog },
+    { icon: "website", title: t("settings.relatedWebsite", null, "Official website"), action: t("settings.view", null, "View"), href: REPO_URL },
+    { icon: "github", title: t("settings.relatedGithub", null, "GitHub repository"), action: t("settings.feedback", null, "Feedback"), href: REPO_URL },
+    { icon: "issue", title: t("settings.relatedIssue", null, "Submit Issue"), action: t("settings.feedback", null, "Feedback"), href: REPO_ISSUES_URL },
+  ];
 
-  return React.createElement("div", { className: "wb-update-section" },
-    React.createElement("strong", { className: "wb-update-status" }, statusText),
-    React.createElement("div", { className: "wb-update-details" },
-      React.createElement("div", null, React.createElement("span", null, t("settings.updateCurrentVersion", null, "Current version")), React.createElement("strong", null, info && info.current_version ? "v" + info.current_version : (DATA.appVersion || "—"))),
-      React.createElement("div", null, React.createElement("span", null, t("settings.updateLatestVersion", null, "Latest version")), React.createElement("strong", null, lv || "—")),
-      React.createElement("div", null, React.createElement("span", null, t("settings.updatePublishedAt", null, "Published")), React.createElement("strong", null, fmtDate(info && info.published_at))),
-      React.createElement("div", null, React.createElement("span", null, t("settings.updatePackageSize", null, "Package size")), React.createElement("strong", null, info && info.asset_size ? fmtBytes(info.asset_size) : "—")),
-      React.createElement("div", null, React.createElement("span", null, t("settings.updateDownloadStatus", null, "Download status")), React.createElement("strong", null, downloadStatus()))
+  return React.createElement("div", { className: "wb-about-stack" },
+    React.createElement("section", { className: "wb-about-product-card" },
+      React.createElement("div", { className: "wb-about-product-copy" },
+        React.createElement("div", { className: "wb-about-logo", "aria-hidden": "true" },
+          React.createElement("div", { className: "brand-mark" }),
+        ),
+        React.createElement("div", { className: "wb-about-product-text" },
+          React.createElement("div", { className: "wb-about-title-row" },
+            React.createElement("h3", null, "Cyrene"),
+            React.createElement("span", { className: "wb-about-version-chip" }, DATA.appVersion || "—"),
+          ),
+          React.createElement("p", null, t("settings.aboutHeroCopy")),
+        ),
+      ),
+      React.createElement("button", { className: "wb-btn wb-about-check-btn", disabled: actionDisabled, onClick: actionHandler }, actionLabel),
     ),
-    info && info.update_available && React.createElement("div", { className: "wb-update-notes" },
-      React.createElement("span", null, t("settings.updateReleaseNotes", null, "Release notes")),
-      React.createElement("pre", null, notesText())
+
+    React.createElement("section", { className: "wb-about-update-card" },
+      React.createElement("div", { className: "wb-about-card-head" },
+        React.createElement("h3", null, t("settings.updateSettings", null, "Update settings")),
+        (info || checking) && React.createElement("span", { className: "wb-about-status-pill" }, statusText),
+      ),
+      React.createElement("div", { className: "wb-about-toggle-list" },
+        React.createElement("label", { className: "wb-about-toggle-row" },
+          React.createElement("span", null,
+            React.createElement("strong", null, t("settings.autoUpdate", null, "Automatic updates")),
+            React.createElement("small", null, t("settings.autoUpdateHint", null, "Automatically download and install new versions")),
+          ),
+          Toggle(autoUpdate, toggleAutoUpdate),
+        ),
+        React.createElement("label", { className: "wb-about-toggle-row" },
+          React.createElement("span", null,
+            React.createElement("strong", null, t("settings.betaUpdates")),
+            React.createElement("small", null, t("settings.betaUpdatesHint", null, "Preview the latest features and improvements")),
+          ),
+          Toggle(beta, toggleBeta),
+        ),
+      ),
+      React.createElement("div", { className: "wb-about-version-grid" },
+        React.createElement("div", null, React.createElement("span", null, t("settings.updateCurrentVersion", null, "Current version")), React.createElement("strong", null, info && info.current_version ? "v" + info.current_version : (DATA.appVersion || "—"))),
+        React.createElement("div", null, React.createElement("span", null, t("settings.updateLatestVersion", null, "Latest version")), React.createElement("strong", null, lv || (DATA.appVersion || "—"))),
+        React.createElement("div", null, React.createElement("span", null, t("settings.updateReleaseBranch", null, "Release branch")), React.createElement("strong", null, "main")),
+        React.createElement("div", null, React.createElement("span", null, t("settings.updatePublishedAt", null, "Published")), React.createElement("strong", null, fmtDate(info && info.published_at))),
+      ),
+      statusDetail && React.createElement("p", { className: "wb-about-update-status" }, statusDetail),
+      info && info.update_available && React.createElement("div", { className: "wb-update-notes" },
+        React.createElement("span", null, t("settings.updateReleaseNotes", null, "Release notes")),
+        React.createElement("pre", null, notesText())
+      ),
+      error && React.createElement("p", { className: "wb-hint", style: { color: "var(--wb-red)" } }, error),
+      downloading && React.createElement("div", { className: "wb-progress-bar" },
+        React.createElement("div", { style: { width: progress.total > 0 ? Math.round((progress.downloaded / progress.total) * 100) + "%" : "0%", height: 4, background: "var(--wb-blue)", borderRadius: 2, transition: "width 0.3s" } }),
+      ),
     ),
-    React.createElement("label", { className: "wb-update-beta" },
-      React.createElement("span", null, t("settings.betaUpdates")),
-      Toggle(beta, toggleBeta),
+
+    React.createElement("section", { className: "wb-about-related-card" },
+      React.createElement("h3", null, t("settings.relatedLinks", null, "Related links")),
+      React.createElement("div", { className: "wb-about-related-list" },
+        relatedLinks.map(function (item) {
+          var props = item.onClick
+            ? { key: item.title, type: "button", className: "wb-about-related-row", onClick: item.onClick }
+            : { key: item.title, className: "wb-about-related-row", href: item.href, target: "_blank", rel: "noopener noreferrer" };
+          return React.createElement(item.onClick ? "button" : "a", props,
+            React.createElement("span", { className: "wb-about-related-icon" }, AboutRelatedIcon(item.icon)),
+            React.createElement("strong", null, item.title),
+            React.createElement("span", { className: "wb-about-related-action" }, item.action),
+          );
+        })
+      ),
     ),
-    error && React.createElement("p", { className: "wb-hint", style: { color: "var(--wb-red)" } }, error),
-    React.createElement("button", {
-      className: "wb-btn" + (downloaded ? " primary" : ""),
-      disabled: checking || downloading || !!(info && info.update_available && !downloaded && !info.checksum_available),
-      onClick: downloaded ? confirmInstall : (info && info.update_available ? startDownload : checkUpdate),
-    }, downloaded ? t("settings.updateRestartNow") : (checking ? t("settings.updateChecking") : (info && info.update_available ? t("settings.updateToVersion", { version: lv }) : t("settings.checkForUpdates")))),
-    downloading && React.createElement("div", { className: "wb-progress-bar", style: { width: "100%" } },
-      React.createElement("div", { style: { width: progress.total > 0 ? Math.round((progress.downloaded / progress.total) * 100) + "%" : "0%", height: 4, background: "var(--wb-blue)", borderRadius: 2, transition: "width 0.3s" } }),
+    changelogOpen && React.createElement("div", { className: "wb-changelog-modal-scrim", onMouseDown: function (e) { if (e.target === e.currentTarget) setChangelogOpen(false); } },
+      React.createElement("div", { className: "wb-changelog-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "wb-changelog-title" },
+        React.createElement("div", { className: "wb-changelog-head" },
+          React.createElement("div", null,
+            React.createElement("h3", { id: "wb-changelog-title" }, t("settings.relatedChangelog", null, "Changelog")),
+            React.createElement("p", null,
+              changelog.version ? "v" + changelog.version : (DATA.appVersion || "—"),
+              changelog.published_at ? " · " + fmtDate(changelog.published_at) : "",
+            ),
+          ),
+          React.createElement("button", { className: "wb-btn", onClick: function () { setChangelogOpen(false); } }, t("settings.close", null, "Close")),
+        ),
+        React.createElement("div", {
+          className: "wb-changelog-body markdown",
+          dangerouslySetInnerHTML: { __html: renderSettingsMarkdown(String(changelog.release_notes || "").trim() || t("settings.updateNoReleaseNotes", null, "No release notes provided.")) },
+        }),
+      )
     ),
   );
 }

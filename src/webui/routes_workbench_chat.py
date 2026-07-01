@@ -1093,7 +1093,10 @@ def _make_reply_segment(
 
 
 def _extract_exchange_segments(
-    state_messages: list[dict[str, Any]], state_ids_before: set[str]
+    state_messages: list[dict[str, Any]],
+    state_ids_before: set[str],
+    *,
+    include_open_tool_preamble: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
     """Split one agent exchange into ordered reply blocks + a trailing block.
 
@@ -1106,6 +1109,12 @@ def _extract_exchange_segments(
     Uses message IDs to identify which messages belong to this exchange, so
     it works correctly even when session compaction reduces the total message
     count during the agent run (*state_len_before* would overshoot).
+
+    ``include_open_tool_preamble`` is for the live stream only: while the agent
+    is still running, the latest assistant turn may be a real tool-call preamble
+    (content + non-control tools) even though no later assistant turn exists yet.
+    The finalized transcript keeps the conservative default so a terminal answer
+    is never duplicated.
     """
     state_messages = _reorder_tool_produced_replies(state_messages)
     result_map = _build_tool_result_map(state_messages)
@@ -1146,7 +1155,7 @@ def _extract_exchange_segments(
         # reply_text, and control-only batches (quit/use_tools) aren't preambles —
         # so the final answer is never duplicated.
         if (
-            idx != last_assistant_idx
+            (idx != last_assistant_idx or include_open_tool_preamble)
             and str(message.get("content") or "").strip()
             and _has_traceable_tools(message)
         ):
@@ -1161,6 +1170,74 @@ def _extract_exchange_segments(
     if not usage["total_tokens"]:
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
     return segments, trace[:40], usage, files[:20]
+
+
+def _published_intermediate_message_ids(run: ChatRun) -> set[str]:
+    ids: set[str] = set()
+    for event in getattr(run, "events", []) or []:
+        if str(event.get("type") or "") != "intermediate_message":
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        mid = str(message.get("id") or "").strip()
+        if mid:
+            ids.add(mid)
+    return ids
+
+
+async def _publish_live_exchange_segments_once(
+    run: ChatRun,
+    chat_id: str,
+    state_ids_before: set[str],
+    published_ids: set[str],
+) -> None:
+    """Publish newly persisted mid-run reply blocks to the active stream.
+
+    Tool-delivered replies already emit ``intermediate_message`` from the agent
+    core. This scanner covers the other class of mid-run prose: assistant turns
+    that say something while also requesting tools. It uses the same extraction
+    rules as finalization, plus the live-only open-preamble option above, so the
+    running transcript converges to the persisted transcript instead of dumping
+    all prose after completion.
+    """
+    published_ids.update(_published_intermediate_message_ids(run))
+    intermediate_entries, _trace, _usage, _files = _extract_exchange_segments(
+        _session_state_messages(chat_id),
+        state_ids_before,
+        include_open_tool_preamble=True,
+    )
+    for entry in intermediate_entries:
+        mid = str(entry.get("id") or "").strip()
+        if not mid or mid in published_ids:
+            continue
+        published_ids.add(mid)
+        await run.publish({
+            "type": "intermediate_message",
+            "message": _public_message(entry),
+        })
+
+
+async def _publish_live_exchange_segments_loop(
+    run: ChatRun,
+    chat_id: str,
+    state_ids_before: set[str],
+    stop_event: asyncio.Event,
+) -> None:
+    published_ids: set[str] = set()
+    while not stop_event.is_set():
+        try:
+            await _publish_live_exchange_segments_once(run, chat_id, state_ids_before, published_ids)
+        except Exception:
+            logger.debug("Failed to publish live workbench chat segments for %s", chat_id, exc_info=True)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=0.35)
+        except asyncio.TimeoutError:
+            pass
+    try:
+        await _publish_live_exchange_segments_once(run, chat_id, state_ids_before, published_ids)
+    except Exception:
+        logger.debug("Failed to publish final live workbench chat segments for %s", chat_id, exc_info=True)
 
 
 def _truncate_state_file_at_last_user(path) -> bool:
@@ -2021,6 +2098,10 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             ack["userMessage"] = _public_message(user_entry)
 
         async def run_streaming(run: ChatRun) -> None:
+            live_segments_stop = asyncio.Event()
+            live_segments_task = asyncio.create_task(
+                _publish_live_exchange_segments_loop(run, chat_id, state_ids_before, live_segments_stop)
+            )
             try:
                 try:
                     reply = await _run()
@@ -2038,6 +2119,8 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                         "message": _workbench_chat_run_error_message(exc, lang),
                     })
                     return
+                live_segments_stop.set()
+                await live_segments_task
                 if reply == R._AWAITING_USER_SENTINEL:
                     # Run paused for a permission / clarification answer — surface
                     # the question instead of streaming the sentinel as a reply.
@@ -2072,6 +2155,14 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 run.outcome = {"kind": "reply", "payload": saved_event}
                 await run.publish(saved_event)
             finally:
+                if not live_segments_stop.is_set():
+                    live_segments_stop.set()
+                    try:
+                        await live_segments_task
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.debug("Workbench chat live segment publisher failed for %s", chat_id, exc_info=True)
                 _settle_status()
 
         run, _is_new = _CHAT_RUN_MANAGER.start_or_get(

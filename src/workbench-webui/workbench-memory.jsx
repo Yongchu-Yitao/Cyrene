@@ -5,6 +5,8 @@
 // ONLY to the workspace-scoped `/api/workbench/memory/*` backend, passing the
 // active project id as the `workspace` so every project/workspace owns a
 // separate memory store. Cross-workspace memory is intentionally not surfaced.
+// The embedded skill-learning panel is also implemented here instead of reusing
+// the legacy Evolution UI; it calls the learning APIs directly.
 (function () {
   var useState = React.useState;
   var useEffect = React.useEffect;
@@ -44,6 +46,7 @@
   }
   var ICON = {
     all: function (s) { return svg({ width: s, height: s, fill: "currentColor", stroke: "none" }, h("path", { d: "M12 3.6 14 9.4 20 11l-6 1.6L12 18l-2-5.4L4 11l6-1.6Z" })); },
+    learning: function (s) { return svg({ width: s, height: s, fill: "currentColor", stroke: "none" }, h("path", { d: "M13.6 2.5 4.7 13.1h6.1l-1.4 8.4 9.9-12.1h-6.2Z" })); },
     preference: function (s) { return svg({ width: s, height: s, fill: "currentColor", stroke: "none" }, h("path", { d: "M12 20s-7-4.3-7-9.3A3.7 3.7 0 0 1 12 7a3.7 3.7 0 0 1 7 3.7C19 15.7 12 20 12 20Z" })); },
     project: function (s) { return svg({ width: s, height: s }, h("path", { d: "M4 7.5A1.5 1.5 0 0 1 5.5 6h4l2 2.2H19a1.5 1.5 0 0 1 1.5 1.5V17a1.5 1.5 0 0 1-1.5 1.5H5.5A1.5 1.5 0 0 1 4 17Z" })); },
     habit: function (s) { return svg({ width: s, height: s }, h("circle", { cx: 12, cy: 12, r: 8 }), h("path", { d: "M12 7.5V12l3 2" })); },
@@ -280,6 +283,206 @@
         h("button", { type: "button", className: "wb-btn danger", onClick: function () { props.onDelete(m); } }, "删除记忆")));
   }
 
+  function learningSnapshot(data) {
+    var skills = (data && data.learned_skills) || [];
+    var patterns = (data && data.patterns) || [];
+    return {
+      skills: skills,
+      patterns: patterns,
+      activeSkills: skills.filter(function (s) { return s.status === "active"; }).length,
+      shadowSkills: skills.filter(function (s) { return s.status === "shadow"; }).length,
+      candidatePatterns: patterns.filter(function (p) { return p.status === "skill_candidate"; }).length,
+      recentSkills: skills.slice(0, 6),
+      recentPatterns: patterns.slice(0, 5),
+    };
+  }
+  function skillStatusTone(status) {
+    return status === "active" ? "green" : status === "shadow" ? "blue" : "ghost";
+  }
+  function skillStatusText(status) {
+    if (status === "active") return "已激活";
+    if (status === "shadow") return "验证中";
+    if (status === "draft") return "草稿";
+    return status || "待学习";
+  }
+  function yesNo(value) { return value ? "是" : "否"; }
+  function shortDateTime(value) {
+    if (!value) return "—";
+    var d = parseDate(value);
+    if (!d) return String(value);
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+  }
+
+  function SkillLearningPanel(props) {
+    var learning = props.learning;
+    var loading = learning.loading;
+    var busy = learning.busy;
+    var skill = props.skill;
+    var pattern = props.pattern;
+    var selectedType = props.selectedType || (skill ? "skill" : pattern ? "pattern" : "skill");
+    var trigger = (skill && skill.trigger) || {};
+    var runStats = (skill && skill.run_statistics) || {};
+    var examples = (skill && skill.positive_examples) || [];
+    var steps = (skill && skill.steps) || [];
+    var patternStats = (pattern && (pattern.statistics || pattern)) || {};
+    var patternSkillability = (pattern && pattern.skillability) || {};
+    var patternActions = (pattern && pattern.action_sequence) || [];
+    var linkedSkills = (pattern && pattern.linked_skill_list) || [];
+    var patternSelected = selectedType === "pattern" && pattern;
+
+    return h("aside", { className: "wb-mem-detail wb-mem-skill-panel" },
+      h("div", { className: "wb-mem-detail-tabs" },
+        h("button", { type: "button", className: "wb-mem-detail-tab active" }, patternSelected ? "模式详情" : "技能详情")),
+      !skill && !patternSelected ? h("div", { className: "wb-mem-detail-scroll" },
+        h("div", { className: "wb-mem-empty-soft" }, loading ? "加载技能中…" : "选择一个技能或行为模式查看详情"),
+        learning.error && h("div", { className: "wb-mem-error inline" }, learning.error),
+        learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note))
+        : patternSelected ? h("div", { className: "wb-mem-detail-scroll" },
+        h("div", { className: "wb-mem-skill-hero" },
+          h("span", { className: "wb-mem-ico blue" }, ICON.learning(18)),
+          h("div", null,
+            h("div", { className: "wb-mem-skill-title-row" },
+              h("h3", null, pattern.description || pattern.id),
+              h("span", { className: "wb-mem-chip " + skillStatusTone(pattern.status) }, skillStatusText(pattern.status))),
+            h("p", null, "从 agent 操作记录中识别到的可复用行为模式。"))),
+        learning.error && h("div", { className: "wb-mem-error inline" }, learning.error),
+        learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note),
+        h("div", { className: "wb-mem-skill-actions single" },
+          h("button", { type: "button", className: "wb-btn primary", onClick: function () { learning.learnPatternAsSkill(pattern.id); }, disabled: loading || !!busy },
+            busy === "pattern:" + pattern.id ? "学习中…" : "立即学习")),
+        h("div", { className: "wb-mem-meta" },
+          h("div", { className: "wb-mem-meta-row" }, h("label", null, "ID"), h("div", { className: "wb-mem-meta-val code" }, pattern.id)),
+          h("div", { className: "wb-mem-meta-row" }, h("label", null, "出现次数"), h("div", { className: "wb-mem-meta-val" }, String(patternStats.frequency || 0))),
+          h("div", { className: "wb-mem-meta-row" }, h("label", null, "有效样本"), h("div", { className: "wb-mem-meta-val" }, String(patternStats.effective_count || 0))),
+          h("div", { className: "wb-mem-meta-row" }, h("label", null, "最后出现"), h("div", { className: "wb-mem-meta-val" }, shortDateTime(patternStats.last_seen_at))),
+          h("div", { className: "wb-mem-meta-row" }, h("label", null, "可生成技能"), h("div", { className: "wb-mem-meta-val" }, yesNo(patternSkillability.draft))),
+          h("div", { className: "wb-mem-meta-row" }, h("label", null, "关联技能"), h("div", { className: "wb-mem-meta-val code" }, linkedSkills.length ? linkedSkills.join(", ") : "—"))),
+        h("div", { className: "wb-mem-section" },
+          h("div", { className: "wb-mem-section-head" }, "模式质量"),
+          h("div", { className: "wb-mem-skill-detail-box" },
+            h("div", null, h("span", null, "成功率"), h("b", null, String(patternStats.success_rate || 0))),
+            h("div", null, h("span", null, "操作稳定性"), h("b", null, String(patternStats.action_stability || 0))),
+            h("div", null, h("span", null, "输入输出稳定性"), h("b", null, String(patternStats.io_stability || 0))),
+            h("div", null, h("span", null, "建议"), h("b", null, patternSkillability.reason || "—")))),
+        h("div", { className: "wb-mem-section" },
+          h("div", { className: "wb-mem-section-head" }, "观察到的操作"),
+          patternActions.length
+            ? h("div", { className: "wb-mem-skill-step-list" }, patternActions.slice(0, 8).map(function (action, i) {
+              return h("div", { key: i, className: "wb-mem-skill-step" },
+                h("span", null, String(i + 1)),
+                h("div", null,
+                  h("b", null, action.raw_description || action.subtype || action.type || "操作 " + (i + 1)),
+                  h("p", null, [action.domain, action.type, action.subtype].filter(Boolean).join(" / ") || "暂无分类")));
+            }))
+            : h("div", { className: "wb-mem-empty-soft compact" }, "暂无可展示操作")))
+        : h("div", { className: "wb-mem-detail-scroll" },
+        h("div", { className: "wb-mem-skill-hero" },
+          h("span", { className: "wb-mem-ico blue" }, ICON.learning(18)),
+          h("div", null,
+            h("div", { className: "wb-mem-skill-title-row" },
+              h("h3", null, skill.name || skill.id),
+              h("span", { className: "wb-mem-chip " + skillStatusTone(skill.status) }, skillStatusText(skill.status))),
+            h("p", null, skill.description || "暂无描述"))),
+        learning.error && h("div", { className: "wb-mem-error inline" }, learning.error),
+        learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note),
+        h("div", { className: "wb-mem-meta" },
+          h("div", { className: "wb-mem-meta-row" }, h("label", null, "ID"), h("div", { className: "wb-mem-meta-val code" }, skill.id)),
+          h("div", { className: "wb-mem-meta-row" }, h("label", null, "类型"), h("div", { className: "wb-mem-meta-val" }, skill.skill_type || "—")),
+          h("div", { className: "wb-mem-meta-row" }, h("label", null, "版本"), h("div", { className: "wb-mem-meta-val" }, String(skill.version || 0))),
+          h("div", { className: "wb-mem-meta-row" }, h("label", null, "需要 LLM"), h("div", { className: "wb-mem-meta-val" }, yesNo(skill.requires_llm))),
+          h("div", { className: "wb-mem-meta-row" }, h("label", null, "更新时间"), h("div", { className: "wb-mem-meta-val" }, shortDateTime(skill.updated_at))),
+          h("div", { className: "wb-mem-meta-row" }, h("label", null, "模式"), h("div", { className: "wb-mem-meta-val code" }, skill.pattern_id || "—"))),
+        h("div", { className: "wb-mem-section" },
+          h("div", { className: "wb-mem-section-head" }, "触发条件"),
+          h("div", { className: "wb-mem-skill-detail-box" },
+            h("div", null, h("span", null, "最低匹配分"), h("b", null, String(skill.min_match_score || trigger.min_match_score || "—"))),
+            h("div", null, h("span", null, "正例数量"), h("b", null, String(examples.length))))),
+        h("div", { className: "wb-mem-section" },
+          h("div", { className: "wb-mem-section-head" }, "执行步骤"),
+          steps.length
+            ? h("div", { className: "wb-mem-skill-step-list" }, steps.slice(0, 8).map(function (step, i) {
+              var ref = step.implementation_reference || {};
+              return h("div", { key: i, className: "wb-mem-skill-step" },
+                h("span", null, String(i + 1)),
+                h("div", null,
+                  h("b", null, step.title || step.name || ref.tool_name || "步骤 " + (i + 1)),
+                  h("p", null, step.description || ref.tool_name || "暂无说明")));
+            }))
+            : h("div", { className: "wb-mem-empty-soft compact" }, "暂无可展示步骤")),
+        h("div", { className: "wb-mem-section" },
+          h("div", { className: "wb-mem-section-head" }, "运行统计"),
+          h("div", { className: "wb-mem-skill-detail-box" },
+            h("div", null, h("span", null, "运行次数"), h("b", null, String(runStats.total_runs || runStats.run_count || 0))),
+            h("div", null, h("span", null, "成功次数"), h("b", null, String(runStats.success_count || 0))),
+            h("div", null, h("span", null, "回退次数"), h("b", null, String(runStats.fallback_count || 0))),
+            h("div", null, h("span", null, "最后运行"), h("b", null, shortDateTime(runStats.last_run_at))))),
+        pattern && h("div", { className: "wb-mem-section" },
+          h("div", { className: "wb-mem-section-head" }, "关联模式"),
+          h("p", { className: "wb-mem-content-full" }, pattern.description || pattern.id))));
+  }
+
+  function SkillLearningMain(props) {
+    var learning = props.learning;
+    var snap = learningSnapshot(learning.data);
+    var loading = learning.loading;
+    var busy = learning.busy;
+    var skills = snap.skills.slice(0, 24);
+    var patterns = snap.patterns.slice(0, 16);
+    var selectedType = props.selectedType || "skill";
+    var selectedSkillId = props.selectedSkillId;
+    var selectedPatternId = props.selectedPatternId;
+    var onSelectSkill = props.onSelectSkill;
+    var onSelectPattern = props.onSelectPattern;
+
+    return h("div", { className: "wb-mem-main wb-mem-learning-main" },
+      h("div", { className: "wb-mem-learning-head" },
+        h("div", { className: "wb-mem-learning-title" },
+          h("span", { className: "wb-mem-ico blue" }, ICON.learning(18)),
+          h("div", null,
+            h("h2", null, "技能学习"),
+            h("p", null, "把重复操作沉淀成可复用技能；进入自动执行前会先经过影子验证。"))),
+        h("div", { className: "wb-mem-skill-actions wide" },
+          h("button", { type: "button", className: "wb-btn primary", disabled: !!busy || loading, onClick: function () { learning.runAction("learn"); } }, busy === "learn" ? "学习中…" : "学习新行为"),
+          h("button", { type: "button", className: "wb-btn ghost", disabled: !!busy || loading, onClick: function () { learning.runAction("rebuild"); } }, busy === "rebuild" ? "生成中…" : "重新生成技能"))),
+      learning.error && h("div", { className: "wb-mem-error" }, learning.error),
+      learning.note && h("div", { className: "wb-mem-skill-note main" }, learning.note),
+      h("div", { className: "wb-mem-learning-scroll" },
+        h("section", { className: "wb-mem-learning-section" },
+          h("div", { className: "wb-mem-learning-section-head" },
+            h("div", null,
+              h("b", null, "自动技能"),
+              h("span", null, "共 " + snap.skills.length + " 个，已激活 " + snap.activeSkills + " 个")),
+            h("button", { type: "button", className: "wb-btn ghost", disabled: loading || !!busy, onClick: learning.load }, loading ? "刷新中…" : "刷新")),
+          loading && !learning.data
+            ? h("div", { className: "wb-mem-empty-soft" }, "加载技能中…")
+            : skills.length
+              ? h("div", { className: "wb-mem-learning-skill-grid" }, skills.map(function (skill) {
+                return h("button", { key: skill.id, type: "button", className: "wb-mem-learning-skill-card" + (selectedType === "skill" && selectedSkillId === skill.id ? " active" : ""), onClick: function () { onSelectSkill(skill.id); } },
+                  h("div", { className: "wb-mem-learning-card-top" },
+                    h("b", null, skill.name || skill.id),
+                    h("span", { className: "wb-mem-chip " + skillStatusTone(skill.status) }, skillStatusText(skill.status))),
+                  h("p", null, skill.description || skill.id),
+                  h("small", null, skill.id));
+              }))
+              : h("div", { className: "wb-mem-empty-soft" }, "暂无自动技能")),
+        h("section", { className: "wb-mem-learning-section" },
+          h("div", { className: "wb-mem-learning-section-head" },
+            h("div", null,
+              h("b", null, "行为模式"),
+              h("span", null, "候选模式 " + snap.candidatePatterns + " 个，验证中 " + snap.shadowSkills + " 个"))),
+          patterns.length
+            ? h("div", { className: "wb-mem-learning-pattern-list" }, patterns.map(function (pattern) {
+              var stats = pattern.statistics || pattern || {};
+              return h("button", { key: pattern.id, type: "button", className: "wb-mem-learning-pattern-row" + (selectedType === "pattern" && selectedPatternId === pattern.id ? " active" : ""), onClick: function () { onSelectPattern(pattern.id); } },
+                h("span", { className: "wb-mem-dot muted" }),
+                h("div", null,
+                  h("b", null, pattern.description || pattern.id),
+                  h("small", null, "出现 " + (stats.frequency || 0) + " 次 · " + (pattern.status || "candidate"))));
+            }))
+            : h("div", { className: "wb-mem-empty-soft" }, "暂无行为模式"))),
+      h("div", { className: "wb-mem-count" }, "共 " + snap.skills.length + " 个技能 · " + snap.patterns.length + " 个模式"));
+  }
+
   // ── main page ────────────────────────────────────────────────────────
   function WorkbenchMemoryPage(props) {
     var project = props && props.project;
@@ -293,9 +496,18 @@
     var srcState = useState(""); var sourceFilter = srcState[0]; var setSourceFilter = srcState[1];
     var sortState = useState("updated"); var sortKey = sortState[0]; var setSortKey = sortState[1];
     var selState = useState(""); var selectedId = selState[0]; var setSelectedId = selState[1];
+    var panelState = useState(""); var activePanel = panelState[0]; var setActivePanel = panelState[1];
     var menuState = useState(""); var menu = menuState[0]; var setMenu = menuState[1]; // "type" | "source" | "sort"
     var modalState = useState(null); var modal = modalState[0]; var setModal = modalState[1];
     var busyState = useState(false); var busy = busyState[0]; var setBusy = busyState[1];
+    var learningDataState = useState(null); var learningData = learningDataState[0]; var setLearningData = learningDataState[1];
+    var learningLoadState = useState(false); var learningLoading = learningLoadState[0]; var setLearningLoading = learningLoadState[1];
+    var learningBusyState = useState(""); var learningBusy = learningBusyState[0]; var setLearningBusy = learningBusyState[1];
+    var learningErrState = useState(""); var learningError = learningErrState[0]; var setLearningError = learningErrState[1];
+    var learningNoteState = useState(""); var learningNote = learningNoteState[0]; var setLearningNote = learningNoteState[1];
+    var learningKindState = useState("skill"); var selectedLearningKind = learningKindState[0]; var setSelectedLearningKind = learningKindState[1];
+    var learningSelState = useState(""); var selectedLearningSkillId = learningSelState[0]; var setSelectedLearningSkillId = learningSelState[1];
+    var learningPatternSelState = useState(""); var selectedLearningPatternId = learningPatternSelState[0]; var setSelectedLearningPatternId = learningPatternSelState[1];
 
     var client = useMemo(function () { return api(workspace); }, [workspace]);
 
@@ -306,8 +518,63 @@
         .catch(function (e) { setError(e.message || String(e)); setPayload({ memories: [], categories: [], sources: [], overview: {} }); })
         .finally(function () { setLoading(false); });
     }
+    function loadLearning() {
+      setLearningLoading(true); setLearningError("");
+      return fetch("/api/evolution").then(jsonOrThrow)
+        .then(function (p) { setLearningData(p || {}); return p; })
+        .catch(function (e) { setLearningError(e.message || String(e)); setLearningData({ learned_skills: [], patterns: [] }); })
+        .finally(function () { setLearningLoading(false); });
+    }
+    function runLearningAction(kind) {
+      var url = kind === "rebuild" ? "/api/patterns/rebuild" : "/api/patterns/learn";
+      setLearningBusy(kind); setLearningNote(""); setLearningError("");
+      return fetch(url, { method: "POST" }).then(jsonOrThrow)
+        .then(function (payload) {
+          var stats = payload.stats || payload.result || {};
+          setLearningData({
+            learned_skills: payload.learned_skills || [],
+            patterns: payload.patterns || [],
+            scripts: payload.scripts || [],
+          });
+          setLearningNote("已处理 " + (stats.processed_turns || 0) + " 个回合，新增技能 " + (stats.skills_created || 0) + " 个。");
+        })
+        .catch(function (e) { setLearningError(e.message || String(e)); })
+        .finally(function () { setLearningBusy(""); });
+    }
+    function learnPatternAsSkill(patternId) {
+      if (!patternId) return Promise.resolve();
+      var busyKey = "pattern:" + patternId;
+      setLearningBusy(busyKey); setLearningNote(""); setLearningError("");
+      return fetch("/api/patterns/" + encodeURIComponent(patternId) + "/learn-skill", { method: "POST" }).then(jsonOrThrow)
+        .then(function (payload) {
+          setLearningData({
+            learned_skills: payload.learned_skills || [],
+            patterns: payload.patterns || [],
+            scripts: payload.scripts || [],
+          });
+          if (payload.skill_id) {
+            setSelectedLearningKind("skill");
+            setSelectedLearningSkillId(payload.skill_id);
+          }
+          setLearningNote(payload.created ? "已从该行为模式生成技能。" : "该行为模式已有技能，已切换到对应技能。");
+        })
+        .catch(function (e) { setLearningError(e.message || String(e)); })
+        .finally(function () { setLearningBusy(""); });
+    }
+    function selectLearningSkill(id) {
+      setSelectedLearningKind("skill");
+      setSelectedLearningSkillId(id || "");
+    }
+    function selectLearningPattern(id) {
+      setSelectedLearningKind("pattern");
+      setSelectedLearningPatternId(id || "");
+    }
     useEffect(function () {
       setSelectedId("");
+      setActivePanel("");
+      setSelectedLearningKind("skill");
+      setSelectedLearningSkillId("");
+      setSelectedLearningPatternId("");
       setActiveCat("all");
       setSourceFilter("");
       load().then(function () {
@@ -315,6 +582,7 @@
         var pendingMemId = pending && pending.type === "memory" ? (pending.memId || pending.id) : "";
         if (pendingMemId) {
           setSelectedId(pendingMemId);
+          setActivePanel("");
           window.__workbenchPendingSelection = null;
         }
       });
@@ -326,16 +594,50 @@
         var detail = event && event.detail;
         if (!detail || detail.type !== "memory") return;
         var id = detail.memId || detail.id;
-        if (id) setSelectedId(id);
+        if (id) { setSelectedId(id); setActivePanel(""); }
       }
       window.addEventListener("cyrene:workbench-navigate", onNavigate);
       return function () { window.removeEventListener("cyrene:workbench-navigate", onNavigate); };
     }, []);
+    useEffect(function () {
+      if (activePanel === "learning" && !learningData && !learningLoading) loadLearning();
+    }, [activePanel]);
 
     var memories = (payload && payload.memories) || [];
     var categories = (payload && payload.categories) || [];
     var sources = (payload && payload.sources) || [];
     var overview = (payload && payload.overview) || {};
+    var learningSnap = learningSnapshot(learningData);
+    var selectedLearningSkill = selectedLearningKind === "skill"
+      ? learningSnap.skills.find(function (s) { return s.id === selectedLearningSkillId; }) || learningSnap.skills[0] || null
+      : null;
+    var selectedLearningPattern = selectedLearningKind === "pattern"
+      ? learningSnap.patterns.find(function (p) { return p.id === selectedLearningPatternId; }) || learningSnap.patterns[0] || null
+      : selectedLearningSkill
+        ? learningSnap.patterns.find(function (p) { return p.id === selectedLearningSkill.pattern_id; }) || null
+        : null;
+    useEffect(function () {
+      if (!learningData) return;
+      var skills = (learningData.learned_skills || []);
+      var patterns = (learningData.patterns || []);
+      if (!skills.length) {
+        if (selectedLearningSkillId) setSelectedLearningSkillId("");
+        if (patterns.length) {
+          if (selectedLearningKind !== "pattern") setSelectedLearningKind("pattern");
+          if (!selectedLearningPatternId || !patterns.some(function (p) { return p.id === selectedLearningPatternId; })) {
+            setSelectedLearningPatternId(patterns[0].id);
+          }
+        }
+        return;
+      }
+      if (selectedLearningKind !== "pattern" && (!selectedLearningSkillId || !skills.some(function (s) { return s.id === selectedLearningSkillId; }))) {
+        setSelectedLearningSkillId(skills[0].id);
+      }
+      if (selectedLearningKind === "pattern" && selectedLearningPatternId && !patterns.some(function (p) { return p.id === selectedLearningPatternId; })) {
+        setSelectedLearningKind("skill");
+        setSelectedLearningSkillId(skills[0].id);
+      }
+    }, [learningData, selectedLearningKind, selectedLearningSkillId, selectedLearningPatternId]);
 
     var visible = useMemo(function () {
       var q = query.trim().toLowerCase();
@@ -394,7 +696,7 @@
     function handleCreate(body) {
       setBusy(true);
       client.create(body)
-        .then(function (p) { applyPayload(p); setModal(null); if (p && p.id) setSelectedId(p.id); })
+        .then(function (p) { applyPayload(p); setModal(null); setActivePanel(""); if (p && p.id) setSelectedId(p.id); })
         .catch(function (e) { setError(e.message || String(e)); })
         .finally(function () { setBusy(false); });
     }
@@ -449,13 +751,18 @@
         h("b", null, "记忆"),
         h("button", { type: "button", className: "wb-mem-new-btn", onClick: function () { setModal({ mode: "create", draft: {} }); } },
           svg({ width: 13, height: 13, strokeWidth: 2.4 }, h("path", { d: "M12 5v14M5 12h14" })), h("span", null, "新建记忆"))),
-      h("div", { className: "wb-mem-cats" }, categories.map(function (c) {
-        var meta = c.id === "all" ? { tone: "accent" } : catMeta(c.id);
-        return h("button", { key: c.id, type: "button", className: "wb-mem-cat" + (activeCat === c.id ? " active" : ""), onClick: function () { setActiveCat(c.id); } },
-          h("span", { className: "wb-mem-cat-ico " + meta.tone }, c.id === "all" ? ICON.all(15) : catIcon(c.id, 15)),
-          h("span", { className: "wb-mem-cat-label" }, c.label),
-          h("span", { className: "wb-mem-cat-count" }, c.count));
-      })),
+      h("div", { className: "wb-mem-cats" },
+        categories.map(function (c) {
+          var meta = c.id === "all" ? { tone: "accent" } : catMeta(c.id);
+          return h("button", { key: c.id, type: "button", className: "wb-mem-cat" + (!activePanel && activeCat === c.id ? " active" : ""), onClick: function () { setActivePanel(""); setActiveCat(c.id); } },
+            h("span", { className: "wb-mem-cat-ico " + meta.tone }, c.id === "all" ? ICON.all(15) : catIcon(c.id, 15)),
+            h("span", { className: "wb-mem-cat-label" }, c.label),
+            h("span", { className: "wb-mem-cat-count" }, c.count));
+        }),
+        h("button", { type: "button", className: "wb-mem-cat" + (activePanel === "learning" ? " active" : ""), onClick: function () { setActivePanel("learning"); setSelectedId(""); } },
+          h("span", { className: "wb-mem-cat-ico blue" }, ICON.learning(15)),
+          h("span", { className: "wb-mem-cat-label" }, "技能学习"),
+          h("span", { className: "wb-mem-cat-count" }, "›"))),
       h("div", { className: "wb-mem-card" },
         h("div", { className: "wb-mem-card-head" }, "记忆概览"),
         h("div", { className: "wb-mem-ov-row" }, h("span", null, "总记忆数"), h("b", null, overview.total || 0)),
@@ -476,7 +783,7 @@
     // ── memory card list ──
     function card(m) {
       var meta = catMeta(m.category);
-      return h("button", { key: m.id, type: "button", className: "wb-mem-item" + (selectedId === m.id ? " active" : "") + (m.stale ? " stale" : ""), onClick: function () { setSelectedId(m.id); } },
+      return h("button", { key: m.id, type: "button", className: "wb-mem-item" + (!activePanel && selectedId === m.id ? " active" : "") + (m.stale ? " stale" : ""), onClick: function () { setActivePanel(""); setSelectedId(m.id); } },
         h("span", { className: "wb-mem-ico " + meta.tone }, catIcon(m.category, 17)),
         h("div", { className: "wb-mem-item-body" },
           h("div", { className: "wb-mem-item-top" },
@@ -488,13 +795,31 @@
             h(Chip, { tone: "ghost" }, m.source_label))));
     }
 
-    var main = h("div", { className: "wb-mem-main" },
+    var learning = {
+      data: learningData,
+      loading: learningLoading,
+      busy: learningBusy,
+      error: learningError,
+      note: learningNote,
+      load: loadLearning,
+      runAction: runLearningAction,
+      learnPatternAsSkill: learnPatternAsSkill,
+    };
+
+    var main = activePanel === "learning" ? h(SkillLearningMain, {
+      learning: learning,
+      selectedType: selectedLearningKind,
+      selectedSkillId: selectedLearningSkill && selectedLearningSkill.id,
+      selectedPatternId: selectedLearningPattern && selectedLearningPattern.id,
+      onSelectSkill: selectLearningSkill,
+      onSelectPattern: selectLearningPattern,
+    }) : h("div", { className: "wb-mem-main" },
       h("div", { className: "wb-mem-toolbar" },
         h("div", { className: "wb-mem-searchbox" },
           svg({ width: 15, height: 15, strokeWidth: 1.9 }, h("circle", { cx: 11, cy: 11, r: 7 }), h("path", { d: "m20 20-3.2-3.2" })),
           h("input", { type: "text", placeholder: "搜索记忆…", value: query, onChange: function (e) { setQuery(e.target.value); } })),
         h("div", { className: "wb-mem-tools" },
-          dropdown("type", curLabel(typeOptions, activeCat), typeOptions, activeCat, setActiveCat),
+          dropdown("type", curLabel(typeOptions, activeCat), typeOptions, activeCat, function (value) { setActivePanel(""); setActiveCat(value); }),
           dropdown("source", curLabel(sourceOptions, sourceFilter), sourceOptions, sourceFilter, setSourceFilter),
           dropdown("sort", curLabel(sortOptions, sortKey), sortOptions, sortKey, setSortKey))),
       error && h("div", { className: "wb-mem-error" }, error),
@@ -513,7 +838,7 @@
     return h("section", { className: "wb-mem-page" },
       rail,
       main,
-      h(DetailPanel, {
+      activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, selectedType: selectedLearningKind, skill: selectedLearningSkill, pattern: selectedLearningPattern }) : h(DetailPanel, {
         memory: selected, related: related, busy: busy,
         onSelect: setSelectedId,
         onEdit: function (m) { setModal({ mode: "edit", id: m.id, draft: { content: m.content, category: m.category, source: m.source, confidence: m.confidence, tags: m.tags } }); },

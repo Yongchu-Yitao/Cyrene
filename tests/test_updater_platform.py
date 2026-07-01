@@ -103,6 +103,27 @@ def test_windows_never_falls_back_to_dmg(monkeypatch, fake_release):
         assert not info.asset_name.endswith(".dmg")
 
 
+def test_current_version_keeps_release_notes(monkeypatch):
+    import asyncio
+
+    async def _fetch(client, include_prerelease):
+        return {
+            "tag_name": "v1.0.0",
+            "assets": [],
+            "body": "current release notes",
+            "published_at": "2026-06-29T11:30:28Z",
+        }
+
+    monkeypatch.setattr(updater, "_fetch_target_release", _fetch)
+    monkeypatch.setattr(updater, "_current_version", lambda: "1.0.0")
+
+    info = asyncio.run(updater.check_for_update(include_prerelease=False))
+
+    assert info.available is False
+    assert info.latest_version == "1.0.0"
+    assert info.release_notes == "current release notes"
+
+
 # --- the filter token itself, in isolation ------------------------------------
 
 @pytest.mark.parametrize(

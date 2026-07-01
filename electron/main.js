@@ -1,16 +1,21 @@
 const {
   app,
   BrowserWindow,
+  WebContentsView,
   desktopCapturer,
   dialog,
   globalShortcut,
   ipcMain,
+  Menu,
+  nativeImage,
   Notification,
   screen,
   session,
   shell,
   systemPreferences,
+  Tray,
 } = require('electron');
+const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -101,15 +106,545 @@ let backendUiMode = null;
 let isShuttingDown = false;
 let isQuitting = false;
 let launchHidden = process.argv.includes('--hidden');
+let tray = null;
+let browserTabManager = null;
+let electronRpcServer = null;
+let electronRpcPort = null;
 
 const DEFAULT_DESKTOP_SETTINGS = Object.freeze({
   launchAtLogin: false,
   runInBackground: false,
+  language: '',
   // Quick chat (global-shortcut assistant) is opt-in and requires background
   // residency — the global shortcut is only registered when it's enabled.
   quickChatEnabled: false,
   quickChatShortcut: 'CommandOrControl+Shift+Space',
 });
+
+const DESKTOP_TRANSLATIONS = Object.freeze({
+  en: {
+    open: 'Open Cyrene',
+    quit: 'Quit Cyrene',
+  },
+  zh: {
+    open: '打开 Cyrene',
+    quit: '退出 Cyrene',
+  },
+});
+
+const BROWSER_PARTITION = 'persist:cyrene-browser';
+const DEFAULT_BROWSER_VERSION = '147.0.0.0';
+
+function browserUserAgent() {
+  const override = String(process.env.CYRENE_BROWSER_USER_AGENT || '').trim();
+  if (override) return override;
+  const version = String(process.env.CYRENE_BROWSER_VERSION || DEFAULT_BROWSER_VERSION).trim() || DEFAULT_BROWSER_VERSION;
+  return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version} Safari/537.36`;
+}
+
+function normalizeBrowserUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 'about:blank';
+  if (/^(https?:|about:)/i.test(raw)) return raw;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+  return `https://${raw}`;
+}
+
+function trimBrowserText(text, maxChars = 8000) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  const limit = Math.max(0, Number(maxChars) || 0);
+  return limit && value.length > limit ? value.slice(0, limit) : value;
+}
+
+function installBrowserSessionGuards() {
+  let browserSession = null;
+  try {
+    browserSession = session.fromPartition(BROWSER_PARTITION);
+  } catch (_) {
+    return;
+  }
+  browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
+  browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    details.requestHeaders = {
+      ...details.requestHeaders,
+      'User-Agent': browserUserAgent(),
+      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    };
+    callback({ requestHeaders: details.requestHeaders });
+  });
+}
+
+class BrowserTabManager {
+  constructor() {
+    this.tabs = new Map();
+    this.activeTabId = '';
+    this.nextTabId = 1;
+    this.bounds = { x: 0, y: 0, width: 0, height: 0 };
+    this.visible = false;
+    this.obscured = false;
+    this.attachedTabId = '';
+    this._syncTimer = null;
+  }
+
+  ownerWindow() {
+    return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  }
+
+  createView() {
+    const view = new WebContentsView({
+      webPreferences: {
+        partition: BROWSER_PARTITION,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        backgroundThrottling: false,
+      },
+    });
+    const wc = view.webContents;
+    wc.setUserAgent(browserUserAgent());
+    // enableDeviceEmulation is intentionally omitted — it triggers SIGSEGV on
+    // Electron 35 + macOS 26 when combined with WebContentsView viewport changes.
+    // The UA override alone serves mobile content to most sites.
+    wc.setWindowOpenHandler(({ url }) => {
+      this.createTab({ url, activate: true }).catch((err) => {
+        console.error('[electron] Failed to open browser popup tab:', err);
+      });
+      return { action: 'deny' };
+    });
+    const update = () => this.emitState();
+    wc.on('did-start-loading', update);
+    wc.on('did-stop-loading', update);
+    wc.on('did-navigate', update);
+    wc.on('did-navigate-in-page', update);
+    wc.on('page-title-updated', update);
+    wc.on('media-started-playing', update);
+    wc.on('media-paused', update);
+    wc.on('did-fail-load', (_event, code, desc, url) => {
+      if (code === -3) return; // aborted by a new navigation
+      console.warn(`[electron] Browser tab load failed (${code}) ${url}: ${desc}`);
+      update();
+    });
+    wc.on('destroyed', () => {
+      for (const [id, tab] of this.tabs.entries()) {
+        if (tab.view === view) this.tabs.delete(id);
+      }
+      if (this.activeTabId && !this.tabs.has(this.activeTabId)) {
+        this.activeTabId = this.tabs.keys().next().value || '';
+      }
+      this.attachedTabId = this.attachedTabId === this.activeTabId ? this.attachedTabId : '';
+      this.emitState();
+    });
+    return view;
+  }
+
+  tabState(tab) {
+    if (!tab || !tab.view || tab.view.webContents.isDestroyed()) return null;
+    const wc = tab.view.webContents;
+    return {
+      id: tab.id,
+      title: wc.getTitle() || tab.title || '',
+      url: wc.getURL() || tab.url || 'about:blank',
+      active: tab.id === this.activeTabId,
+      loading: wc.isLoading(),
+      canGoBack: wc.canGoBack(),
+      canGoForward: wc.canGoForward(),
+      muted: typeof wc.isAudioMuted === 'function' ? wc.isAudioMuted() : !!wc.audioMuted,
+      audible: typeof wc.isCurrentlyAudible === 'function' ? wc.isCurrentlyAudible() : false,
+    };
+  }
+
+  state() {
+    const tabs = Array.from(this.tabs.values()).map((tab) => this.tabState(tab)).filter(Boolean);
+    return {
+      ok: true,
+      available: !!WebContentsView,
+      activeTabId: this.activeTabId,
+      visible: this.visible,
+      tabs,
+      activeTab: tabs.find((tab) => tab.id === this.activeTabId) || null,
+      obscured: this.obscured,
+    };
+  }
+
+  emitState() {
+    const win = this.ownerWindow();
+    if (win) {
+      try { win.webContents.send('browser:state', this.state()); } catch (_) {}
+    }
+  }
+
+  async ensureTab(url = 'about:blank') {
+    if (this.activeTabId && this.tabs.has(this.activeTabId)) return this.tabs.get(this.activeTabId);
+    return this.createTab({ url, activate: true });
+  }
+
+  async createTab({ url = 'about:blank', activate = true } = {}) {
+    if (!WebContentsView) throw new Error('Electron WebContentsView is unavailable.');
+    const id = `tab_${this.nextTabId++}`;
+    const view = this.createView();
+    const tab = { id, view, url: normalizeBrowserUrl(url), title: '' };
+    this.tabs.set(id, tab);
+    if (activate || !this.activeTabId) this.activeTabId = id;
+    if (tab.url && tab.url !== 'about:blank') {
+      await view.webContents.loadURL(tab.url);
+    } else {
+      view.webContents.loadURL('about:blank').catch(() => {});
+    }
+    this.syncAttachedView();
+    this.emitState();
+    return tab;
+  }
+
+  activateTab(tabId) {
+    const id = String(tabId || '').trim();
+    if (!this.tabs.has(id)) throw new Error('Browser tab not found.');
+    this.activeTabId = id;
+    this.syncAttachedView();
+    this.emitState();
+    return this.state();
+  }
+
+  closeTab(tabId) {
+    const id = String(tabId || this.activeTabId || '').trim();
+    const tab = this.tabs.get(id);
+    if (!tab) return this.state();
+    this.detachView(tab);
+    this.tabs.delete(id);
+    try { tab.view.webContents.close(); } catch (_) {}
+    if (this.activeTabId === id) {
+      this.activeTabId = this.tabs.keys().next().value || '';
+    }
+    this.syncAttachedView();
+    this.emitState();
+    return this.state();
+  }
+
+  detachView(tab) {
+    const win = this.ownerWindow();
+    if (!win || !tab) return;
+    try { win.contentView.removeChildView(tab.view); } catch (_) {}
+    if (this.attachedTabId === tab.id) this.attachedTabId = '';
+  }
+
+  syncAttachedView() {
+    const win = this.ownerWindow();
+    if (!win) return;
+    const active = this.tabs.get(this.activeTabId);
+    for (const tab of this.tabs.values()) {
+      if (!active || tab.id !== active.id || !this.visible || this.obscured) this.detachView(tab);
+    }
+    if (!active || !this.visible || this.obscured) return;
+    if (this.attachedTabId !== active.id) {
+      try { win.contentView.addChildView(active.view); } catch (_) {}
+      this.attachedTabId = active.id;
+    }
+    try { active.view.setBounds(this.bounds); } catch (_) {}
+  }
+
+  setBounds(info = {}) {
+    const width = Math.max(0, Math.round(Number(info.width) || 0));
+    const height = Math.max(0, Math.round(Number(info.height) || 0));
+    this.bounds = {
+      x: Math.round(Number(info.x) || 0),
+      y: Math.round(Number(info.y) || 0),
+      width,
+      height,
+    };
+    this.visible = info.visible === true && width > 8 && height > 8;
+    // Debounce sync when visible — rapid bounds changes (e.g. resize, requestAnimationFrame)
+    // can trigger concurrent WebContentsView setBounds calls that SIGSEGV on Electron 35.
+    if (!this.visible) {
+      if (this._syncTimer) { clearTimeout(this._syncTimer); this._syncTimer = null; }
+      this.syncAttachedView();
+    } else if (!this._syncTimer) {
+      this._syncTimer = setTimeout(() => { this._syncTimer = null; this.syncAttachedView(); }, 50);
+    }
+    return this.state();
+  }
+
+  setObscured(obscured = false) {
+    this.obscured = obscured === true;
+    this.syncAttachedView();
+    this.emitState();
+    return this.state();
+  }
+
+  async navigate({ url, tabId = '', maxChars = 8000 } = {}) {
+    const targetUrl = normalizeBrowserUrl(url);
+    let tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) tab = await this.createTab({ url: 'about:blank', activate: true });
+    this.activeTabId = tab.id;
+    this.syncAttachedView();
+    try {
+      await tab.view.webContents.loadURL(targetUrl);
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err), url: targetUrl };
+    }
+    return this.pageSnapshot(tab.id, maxChars);
+  }
+
+  async pageSnapshot(tabId = '', maxChars = 8000) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No browser tab is open.' };
+    const wc = tab.view.webContents;
+    let text = '';
+    try {
+      text = await wc.executeJavaScript(
+        '(() => document.body ? document.body.innerText : "")()',
+        true
+      );
+    } catch (_) {
+      text = '';
+    }
+    return {
+      ok: true,
+      url: wc.getURL(),
+      title: wc.getTitle(),
+      status: 0,
+      text: trimBrowserText(text, maxChars),
+      tabId: tab.id,
+    };
+  }
+
+  // Wait for navigation after a click or form submit.  Listens for both
+  // did-navigate (page load) and did-navigate-in-page (SPA route change).
+  async _waitNav(wc) {
+    const beforeUrl = wc.getURL();
+    let navigated = false;
+    const onNav = () => { navigated = true; };
+    const onSpaNav = (_e, url) => { if (url !== beforeUrl) navigated = true; };
+    wc.on('did-navigate', onNav);
+    wc.on('did-navigate-in-page', onSpaNav);
+    await new Promise((r) => {
+      const i = setInterval(() => {
+        try {
+          if (wc.isDestroyed()) { clearInterval(i); r(); return; }
+          if (wc.getURL() !== beforeUrl) navigated = true;
+          if (navigated || !wc.isLoading()) { clearInterval(i); r(); }
+        } catch (_) { clearInterval(i); r(); }
+      }, 100);
+      setTimeout(() => { clearInterval(i); wc.removeListener('did-navigate', onNav); wc.removeListener('did-navigate-in-page', onSpaNav); r(); }, 3000);
+    });
+    wc.removeListener('did-navigate', onNav);
+    wc.removeListener('did-navigate-in-page', onSpaNav);
+    return navigated;
+  }
+
+  async click({ selector, tabId = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
+    const wc = tab.view.webContents;
+    // Find element, get its position — do NOT click via JS (isTrusted=false).
+    const selectorLiteral = JSON.stringify(String(selector || ''));
+    const info = await wc.executeJavaScript(`
+      (function(s){try{var e=document.querySelector(s);if(!e)return{ok:false,error:\"not found\"};e.scrollIntoView({block:\"center\",inline:\"center\"});var r=e.getBoundingClientRect();if(!r||r.width<=0||r.height<=0)return{ok:false,error:\"not visible\"};return{ok:true,x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2),box:{x:r.left,y:r.top,w:r.width,h:r.height}}}catch(e){return{ok:false,error:e.message}})(${selectorLiteral})
+    `, true).catch(() => ({ ok: false, error: 'js execution failed' }));
+    if (!info || !info.ok) return { ok: false, error: 'Element ' + info.error, url: wc.getURL(), title: wc.getTitle() };
+    // sendInputEvent dispatches trusted OS-level events.  Chromium's input
+    // pipeline generates the full click chain (pointerdown → mousedown →
+    // pointerup → mouseup → click) with isTrusted=true.
+    wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
+    wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
+    wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
+    await this._waitNav(wc);
+    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id, box: info.box };
+  }
+
+  async type({ selector, text = '', submit = false, tabId = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
+    const wc = tab.view.webContents;
+    const selectorLiteral = JSON.stringify(String(selector || ''));
+    const script = `
+      (() => {
+        const selector = ${selectorLiteral};
+        const el = document.querySelector(selector);
+        if (!el) return { ok: false, error: "Element not found: " + selector };
+        el.scrollIntoView({ block: "center", inline: "center" });
+        el.focus();
+        const value = ${JSON.stringify(String(text || ''))};
+        const tag = String(el.tagName || "").toLowerCase();
+        if ("value" in el) {
+          el.value = value;
+          el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        } else if (el.isContentEditable) {
+          el.textContent = value;
+          el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+        } else {
+          return { ok: false, error: "Element is not text-editable: " + selector };
+        }
+        if (${submit ? 'true' : 'false'}) {
+          const form = el.form || el.closest("form");
+          if (form && typeof form.requestSubmit === "function") {
+            try { form.requestSubmit(); } catch (_) {
+              el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+              el.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", bubbles: true }));
+              el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
+            }
+          } else {
+            el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
+          }
+        }
+        return { ok: true, tag };
+      })()
+    `;
+    const result = await wc.executeJavaScript(script, true);
+    if (!result || !result.ok) return { ok: false, error: (result && result.error) || 'Unable to type into element.' };
+    if (submit) await this._waitNav(wc);
+    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+  }
+
+  async screenshot({ tabId = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No browser tab is open.' };
+    const image = await tab.view.webContents.capturePage();
+    return {
+      ok: true,
+      pngBase64: image.toPNG().toString('base64'),
+      title: tab.view.webContents.getTitle(),
+      url: tab.view.webContents.getURL(),
+      tabId: tab.id,
+    };
+  }
+
+  goBack() {
+    const tab = this.tabs.get(this.activeTabId);
+    if (tab && tab.view.webContents.canGoBack()) tab.view.webContents.goBack();
+    this.emitState();
+    return this.state();
+  }
+
+  goForward() {
+    const tab = this.tabs.get(this.activeTabId);
+    if (tab && tab.view.webContents.canGoForward()) tab.view.webContents.goForward();
+    this.emitState();
+    return this.state();
+  }
+
+  reload() {
+    const tab = this.tabs.get(this.activeTabId);
+    if (tab) tab.view.webContents.reload();
+    this.emitState();
+    return this.state();
+  }
+
+  setMuted({ tabId = '', muted = false } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return this.state();
+    tab.view.webContents.setAudioMuted(!!muted);
+    this.emitState();
+    return this.state();
+  }
+
+  async scroll({ deltaX = 0, deltaY = 0, tabId = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No browser tab is open.' };
+    await tab.view.webContents.executeJavaScript(`window.scrollBy(${JSON.stringify(deltaX)},${JSON.stringify(deltaY)})`, true).catch(() => {});
+    return { ok: true };
+  }
+}
+
+function getBrowserTabManager() {
+  if (!browserTabManager) browserTabManager = new BrowserTabManager();
+  return browserTabManager;
+}
+
+async function handleBrowserRpc(method, args) {
+  const manager = getBrowserTabManager();
+  switch (method) {
+    case 'state':
+      return manager.state();
+    case 'setBounds':
+      return manager.setBounds(args || {});
+    case 'setObscured':
+      return manager.setObscured(args && args.obscured);
+    case 'createTab':
+      await manager.createTab(args || {});
+      return manager.state();
+    case 'activateTab':
+      return manager.activateTab(args && args.tabId);
+    case 'closeTab':
+      return manager.closeTab(args && args.tabId);
+    case 'navigate':
+      return manager.navigate(args || {});
+    case 'snapshot':
+      return manager.pageSnapshot(args && args.tabId, args && args.maxChars);
+    case 'click':
+      return manager.click(args || {});
+    case 'type':
+      return manager.type(args || {});
+    case 'screenshot':
+      return manager.screenshot(args || {});
+    case 'goBack':
+      return manager.goBack();
+    case 'goForward':
+      return manager.goForward();
+    case 'reload':
+      return manager.reload();
+    case 'setMuted':
+      return manager.setMuted(args || {});
+    case 'scroll':
+      return manager.scroll(args || {});
+    default:
+      return { ok: false, error: `Unknown browser RPC method: ${method}` };
+  }
+}
+
+function startElectronRpcServer() {
+  if (electronRpcServer && electronRpcPort) return Promise.resolve(electronRpcPort);
+  const MAX_RETRIES = 3;
+  function attempt(retriesLeft) {
+    return new Promise((resolve, reject) => {
+      const server = http.createServer((req, res) => {
+        if (req.method !== 'POST' || req.url !== '/browser/rpc') {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'not_found' }));
+          return;
+        }
+        if (req.headers['x-cyrene-token'] !== AUTH_TOKEN) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'forbidden' }));
+          return;
+        }
+        let body = '';
+        req.on('data', (chunk) => {
+          body += chunk;
+          if (body.length > 1024 * 1024) req.destroy();
+        });
+        req.on('end', async () => {
+          try {
+            const payload = JSON.parse(body || '{}');
+            const result = await handleBrowserRpc(String(payload.method || ''), payload.args || {});
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result || { ok: true }));
+          } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: String((err && err.message) || err) }));
+          }
+        });
+      });
+      server.on('error', (err) => {
+        if (retriesLeft > 0) {
+          console.warn(`[electron] RPC server failed to start (${err.message}), retrying (${retriesLeft} left)...`);
+          setTimeout(() => attempt(retriesLeft - 1).then(resolve, reject), 500);
+        } else {
+          reject(err);
+        }
+      });
+      server.listen(0, '127.0.0.1', () => {
+        electronRpcServer = server;
+        electronRpcPort = server.address().port;
+        resolve(electronRpcPort);
+      });
+    });
+  }
+  return attempt(MAX_RETRIES);
+}
 
 function getNotificationIconPath() {
   const candidates = [
@@ -126,6 +661,88 @@ function getNotificationIconPath() {
   });
 }
 
+function getTrayIconImage() {
+  if (isMac) {
+    const mac1x = findExistingPath([
+      path.join(__dirname, '..', 'build', 'tray-mac.png'),
+      path.join(process.resourcesPath || '', 'build', 'tray-mac.png'),
+    ]);
+    const mac2x = findExistingPath([
+      path.join(__dirname, '..', 'build', 'tray-mac@2x.png'),
+      path.join(process.resourcesPath || '', 'build', 'tray-mac@2x.png'),
+    ]);
+    if (mac1x) {
+      try {
+        const image = nativeImage.createEmpty();
+        image.addRepresentation({
+          scaleFactor: 1,
+          dataURL: `data:image/png;base64,${fs.readFileSync(mac1x).toString('base64')}`,
+        });
+        if (mac2x) {
+          image.addRepresentation({
+            scaleFactor: 2,
+            dataURL: `data:image/png;base64,${fs.readFileSync(mac2x).toString('base64')}`,
+          });
+        }
+        if (!image.isEmpty()) return image;
+      } catch (_) {}
+    }
+  }
+
+  const candidates = [
+    path.join(__dirname, '..', 'build', 'tray.png'),
+    isWindows ? path.join(__dirname, '..', 'build', 'icon.ico') : '',
+    path.join(__dirname, '..', 'build', 'icon.png'),
+    path.join(process.resourcesPath || '', 'build', 'tray.png'),
+    isWindows ? path.join(process.resourcesPath || '', 'build', 'icon.ico') : '',
+    path.join(process.resourcesPath || '', 'build', 'icon.png'),
+  ];
+  const iconPath = findExistingPath(candidates);
+  if (!iconPath) return null;
+  try {
+    const image = nativeImage.createFromPath(iconPath);
+    if (image.isEmpty()) return null;
+    return image.resize({ width: isMac ? 18 : 32, height: isMac ? 18 : 32 });
+  } catch (_) {
+    return null;
+  }
+}
+
+function findExistingPath(candidates) {
+  return candidates.find((candidate) => {
+    try {
+      return candidate && fs.existsSync(candidate);
+    } catch (_) {
+      return false;
+    }
+  });
+}
+
+function normalizeDesktopLanguage(value) {
+  const lang = String(value || '').trim().toLowerCase();
+  if (lang === 'en' || lang.startsWith('en-')) return 'en';
+  if (lang === 'zh' || lang.startsWith('zh-')) return 'zh';
+  return '';
+}
+
+function getFallbackDesktopLanguage() {
+  try {
+    return normalizeDesktopLanguage(app.getLocale()) || 'en';
+  } catch (_) {
+    return 'en';
+  }
+}
+
+function getDesktopLanguage(settings) {
+  return normalizeDesktopLanguage(settings && settings.language) || getFallbackDesktopLanguage();
+}
+
+function desktopT(key, settings) {
+  const lang = getDesktopLanguage(settings);
+  const dict = DESKTOP_TRANSLATIONS[lang] || DESKTOP_TRANSLATIONS.en;
+  return dict[key] || DESKTOP_TRANSLATIONS.en[key] || key;
+}
+
 function getDesktopSettingsPath() {
   return path.join(app.getPath('userData'), 'desktop_settings.json');
 }
@@ -138,6 +755,7 @@ function readDesktopSettings() {
     return {
       launchAtLogin: parsed.launchAtLogin === true,
       runInBackground,
+      language: normalizeDesktopLanguage(parsed.language),
       // Quick chat can't be on without background residency.
       quickChatEnabled: runInBackground && parsed.quickChatEnabled === true,
       quickChatShortcut: normalizeQuickChatShortcut(parsed.quickChatShortcut),
@@ -152,6 +770,7 @@ function writeDesktopSettings(settings) {
   const payload = {
     launchAtLogin: settings.launchAtLogin === true,
     runInBackground,
+    language: normalizeDesktopLanguage(settings.language),
     quickChatEnabled: runInBackground && settings.quickChatEnabled === true,
     quickChatShortcut: normalizeQuickChatShortcut(settings.quickChatShortcut),
   };
@@ -180,6 +799,7 @@ function getDesktopSettings() {
       && globalShortcut.isRegistered(stored.quickChatShortcut)
     ),
     quickChatShortcutError,
+    language: normalizeDesktopLanguage(stored.language),
   };
 }
 
@@ -205,6 +825,7 @@ function saveDesktopSettings(updates) {
     ...updates,
   };
   next.quickChatShortcut = normalizeQuickChatShortcut(next.quickChatShortcut);
+  next.language = normalizeDesktopLanguage(next.language);
   // Quick chat depends on background residency — turning residency off also
   // disables it (the UI gates the toggle, but enforce it here too).
   next.quickChatEnabled = next.runInBackground === true && next.quickChatEnabled === true;
@@ -234,6 +855,7 @@ function saveDesktopSettings(updates) {
 
   writeDesktopSettings(next);
   applyLaunchAtLogin(next.launchAtLogin);
+  syncTrayWithSettings(next);
   return {
     ...getDesktopSettings(),
     shortcutUpdateOk,
@@ -347,6 +969,8 @@ function spawnPython() {
     ...process.env,
     CYRENE_APP_EXECUTABLE: app.getPath('exe'),
     CYRENE_AUTH_TOKEN: AUTH_TOKEN,
+    CYRENE_ELECTRON_RPC_PORT: electronRpcPort ? String(electronRpcPort) : '',
+    CYRENE_ELECTRON_RPC_TOKEN: AUTH_TOKEN,
   };
   if (!isDev) {
     childEnv.CYRENE_USER_DATA_DIR = getCyreneUserDataDir();
@@ -512,6 +1136,7 @@ function installAuthHeaderInjector() {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
     callback(false);
   });
+  installBrowserSessionGuards();
 }
 
 // ---------------------------------------------------------------------------
@@ -758,6 +1383,7 @@ async function openQuickChat() {
 async function createMainWindow(shellOverride) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
+    if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
     return;
   }
@@ -834,6 +1460,7 @@ async function createMainWindow(shellOverride) {
   });
 
   mainWindow.on('closed', () => {
+    if (browserTabManager) browserTabManager.setBounds({ visible: false });
     mainWindow = null;
   });
 
@@ -848,6 +1475,90 @@ async function createMainWindow(shellOverride) {
   mainWindow.loadURL(url);
 
   installLocalNavigationGuards(mainWindow, port, { allowLocalPopups: true });
+}
+
+async function revealMainWindow() {
+  launchHidden = false;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (!mainWindow.isVisible()) mainWindow.show();
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    return;
+  }
+  if (!electronRpcPort) {
+    try { await startElectronRpcServer(); } catch (err) {
+      console.error('[electron] Failed to start RPC server on reveal:', err);
+    }
+  }
+  spawnPython();
+  await createMainWindow();
+}
+
+function buildTrayMenu() {
+  const settings = readDesktopSettings();
+  return Menu.buildFromTemplate([
+    {
+      label: desktopT('open', settings),
+      click: () => {
+        revealMainWindow().catch((err) => {
+          console.error('[electron] Failed to open Cyrene from tray:', err);
+          appendErrorLog(`[electron] Failed to open Cyrene from tray: ${err && err.stack ? err.stack : err}\n`);
+        });
+      },
+    },
+    { type: 'separator' },
+    {
+      label: desktopT('quit', settings),
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  ]);
+}
+
+function ensureTray() {
+  if (tray) return;
+  const image = getTrayIconImage();
+  if (!image) {
+    console.warn('[electron] Tray icon unavailable; background mode will still keep running.');
+    return;
+  }
+  tray = new Tray(image);
+  tray.setToolTip(APP_NAME);
+  tray.setContextMenu(buildTrayMenu());
+  tray.on('click', () => {
+    revealMainWindow().catch((err) => {
+      console.error('[electron] Failed to open Cyrene from tray:', err);
+      appendErrorLog(`[electron] Failed to open Cyrene from tray: ${err && err.stack ? err.stack : err}\n`);
+    });
+  });
+  tray.on('double-click', () => {
+    revealMainWindow().catch(() => {});
+  });
+  tray.on('right-click', () => {
+    if (tray) tray.popUpContextMenu(buildTrayMenu());
+  });
+}
+
+function destroyTray() {
+  if (!tray) return;
+  try {
+    tray.destroy();
+  } catch (_) {}
+  tray = null;
+}
+
+function syncTrayWithSettings(settings) {
+  const shouldShowTray = !!(
+    settings
+    && (settings.runInBackground === true || settings.quickChatEnabled === true)
+  );
+  if (shouldShowTray) {
+    ensureTray();
+    if (tray) tray.setContextMenu(buildTrayMenu());
+  }
+  else destroyTray();
 }
 
 // Swap the window to a different UI shell at runtime (e.g. the workbench's
@@ -891,26 +1602,28 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    launchHidden = false;
-    if (mainWindow) {
-      if (!mainWindow.isVisible()) mainWindow.show();
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    } else {
-      spawnPython();
-      createMainWindow();
-    }
+    revealMainWindow().catch((err) => {
+      console.error('[electron] Failed to handle second instance:', err);
+      appendErrorLog(`[electron] Failed to handle second instance: ${err && err.stack ? err.stack : err}\n`);
+    });
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     cleanupTemporaryArtifacts();
     installAuthHeaderInjector();
+    try {
+      await startElectronRpcServer();
+    } catch (err) {
+      console.error('[electron] Failed to start Electron RPC server:', err);
+      appendErrorLog(`[electron] Failed to start Electron RPC server: ${err && err.stack ? err.stack : err}\n`);
+    }
     const desktopSettings = readDesktopSettings();
     applyLaunchAtLogin(desktopSettings.launchAtLogin);
     // Only claim the global shortcut when the user has enabled quick chat.
     if (desktopSettings.quickChatEnabled) {
       registerQuickChatShortcut(desktopSettings.quickChatShortcut);
     }
+    syncTrayWithSettings(desktopSettings);
     ipcMain.handle('desktop-settings:get', () => getDesktopSettings());
     ipcMain.handle('desktop-settings:update', (_event, updates) => saveDesktopSettings(updates || {}));
     ipcMain.handle('quick-chat:get-launch-context', () => getQuickChatLaunchContext());
@@ -986,6 +1699,17 @@ if (!gotSingleInstanceLock) {
       const target = (mode === 'legacy' || mode === 'agent') ? 'legacy' : 'workbench';
       return reopenWindowForShell(target);
     });
+    ipcMain.handle('browser:get-state', () => getBrowserTabManager().state());
+    ipcMain.handle('browser:set-bounds', (_event, info) => handleBrowserRpc('setBounds', info || {}));
+    ipcMain.handle('browser:set-obscured', (_event, obscured) => handleBrowserRpc('setObscured', { obscured: obscured === true }));
+    ipcMain.handle('browser:create-tab', (_event, info) => handleBrowserRpc('createTab', info || {}));
+    ipcMain.handle('browser:activate-tab', (_event, tabId) => handleBrowserRpc('activateTab', { tabId }));
+    ipcMain.handle('browser:close-tab', (_event, tabId) => handleBrowserRpc('closeTab', { tabId }));
+    ipcMain.handle('browser:navigate', (_event, info) => handleBrowserRpc('navigate', info || {}));
+    ipcMain.handle('browser:go-back', () => handleBrowserRpc('goBack', {}));
+    ipcMain.handle('browser:go-forward', () => handleBrowserRpc('goForward', {}));
+    ipcMain.handle('browser:reload', () => handleBrowserRpc('reload', {}));
+    ipcMain.handle('browser:set-muted', (_event, info) => handleBrowserRpc('setMuted', info || {}));
     spawnPython();
     if (!launchHidden) {
       createMainWindow();
@@ -1004,19 +1728,16 @@ if (!gotSingleInstanceLock) {
 
   app.on('before-quit', () => {
     isQuitting = true;
+    destroyTray();
     globalShortcut.unregisterAll();
     killPython();
   });
 
   app.on('activate', () => {
     // macOS: re-create window when dock icon is clicked and no windows exist
-    launchHidden = false;
-    if (mainWindow === null) {
-      spawnPython();
-      createMainWindow();
-    } else {
-      mainWindow.show();
-      mainWindow.focus();
-    }
+    revealMainWindow().catch((err) => {
+      console.error('[electron] Failed to activate Cyrene:', err);
+      appendErrorLog(`[electron] Failed to activate Cyrene: ${err && err.stack ? err.stack : err}\n`);
+    });
   });
 }

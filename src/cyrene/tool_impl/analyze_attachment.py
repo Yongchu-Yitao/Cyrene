@@ -20,11 +20,14 @@ async def _tool_analyze_attachment(args: dict[str, Any], _bot: Any, _chat_id: in
     try:
         path = _resolve_tool_path(str(args["path"]))
     except ValueError:
-        return await _request_read_elevation(
+        elev = await _request_read_elevation(
             tool_name="AnalyzeAttachment",
             path_hint=str(args.get("path", "")),
             reason="Agent 想要分析此文件内容。",
         )
+        if elev is not None:
+            return elev
+        path = _resolve_tool_path(str(args["path"]))
     prompt = str(args.get("prompt", "") or "")
     force_refresh = bool(args.get("force_refresh", False))
     try:

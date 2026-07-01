@@ -1182,7 +1182,7 @@ const TRANSLATIONS = {
     "settings.backup": "Backup & Restore",
     "settings.backupSubtitle": "Export or restore all agent data — conversations, memory, settings, and task schedules.",
     "settings.browserTools": "Browser automation tools",
-    "settings.browserToolsHint": "Enable browser_navigate, screenshot, click, and type agent tools. Requires httpx (built-in) for fetch, Playwright for interactive features.",
+    "settings.browserToolsHint": "Enable browser_navigate, screenshot, click, and type agent tools. The desktop app uses the embedded Electron browser; non-desktop runs fall back to Playwright/httpx.",
     "settings.backupExportBtn": "Create backup",
     "settings.backupRestoreBtn": "Restore latest backup",
     "settings.backupExporting": "Creating backup…",
@@ -1266,9 +1266,9 @@ const TRANSLATIONS = {
     "tool.desc.CheckClaudeCode": "Check if Claude Code is currently running in a tmux session.",
     "tool.desc.StartClaudeCode": "Start Claude Code in a new tmux session.",
     "tool.desc.browser_navigate": "Navigate to a URL and return the page content as readable text.",
-    "tool.desc.browser_screenshot": "Take a screenshot of a webpage (requires Playwright).",
-    "tool.desc.browser_click": "Click an element on the current page by CSS selector (requires Playwright).",
-    "tool.desc.browser_type": "Type text into an input on the current page (requires Playwright).",
+    "tool.desc.browser_screenshot": "Take a screenshot of the current browser page.",
+    "tool.desc.browser_click": "Click an element on the current page by CSS selector.",
+    "tool.desc.browser_type": "Type text into an input on the current page.",
     "tool.desc.send_notification": "Send a desktop notification or webhook alert to the user.",
 
     // ── Search ────────────────────────────────────────────────────────────
@@ -2484,7 +2484,7 @@ const TRANSLATIONS = {
     "settings.backup": "备份与恢复",
     "settings.backupSubtitle": "导出或恢复所有 agent 数据——对话、记忆、设置、任务计划。",
     "settings.browserTools": "浏览器自动化工具",
-    "settings.browserToolsHint": "启用 browser_navigate、screenshot、click、type 等代理工具。httpx 内置可用，交互功能需要 Playwright。",
+    "settings.browserToolsHint": "启用 browser_navigate、screenshot、click、type 等代理工具。桌面版使用内嵌 Electron 浏览器；非桌面环境回退到 Playwright/httpx。",
     "settings.backupExportBtn": "创建备份",
     "settings.backupRestoreBtn": "恢复最新备份",
     "settings.backupExporting": "正在创建备份…",
@@ -2565,9 +2565,9 @@ const TRANSLATIONS = {
     "tool.desc.CheckClaudeCode": "检查 Claude Code 是否正在 tmux 会话中运行。",
     "tool.desc.StartClaudeCode": "在新的 tmux 会话中启动 Claude Code。",
     "tool.desc.browser_navigate": "导航到 URL 并以可读文本格式返回页面内容。",
-    "tool.desc.browser_screenshot": "截取网页截图（需要 Playwright）。",
-    "tool.desc.browser_click": "通过 CSS 选择器点击页面元素（需要 Playwright）。",
-    "tool.desc.browser_type": "在页面的输入框中输入文字（需要 Playwright）。",
+    "tool.desc.browser_screenshot": "截取当前浏览器页面截图。",
+    "tool.desc.browser_click": "通过 CSS 选择器点击当前页面元素。",
+    "tool.desc.browser_type": "在当前页面的输入框中输入文字。",
     "tool.desc.send_notification": "向用户发送桌面通知或 webhook 告警。",
 
     // ── 搜索 ──────────────────────────────────────────────────────────────
@@ -2677,6 +2677,51 @@ function useI18n() {
   };
 }
 
+// ── Localized money display ───────────────────────────────────────────
+const CNY_PER_USD = 7.25;
+
+function parseMoneyValue(value) {
+  var text = String(value || "").trim();
+  if (!text || text === "—") return null;
+  var isLessThan = text.charAt(0) === "<";
+  var currency = text.indexOf("¥") >= 0 ? "CNY" : (text.indexOf("$") >= 0 ? "USD" : "");
+  var match = text.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  var amount = Number(match[0]);
+  if (!Number.isFinite(amount)) return null;
+  return { amount: amount, currency: currency, isLessThan: isLessThan };
+}
+
+function formatMoneyAmount(amount, symbol, lessThan) {
+  var value = Number(amount || 0);
+  if (!Number.isFinite(value)) return "—";
+  if (lessThan || (value > 0 && value < 0.01)) {
+    return "<" + symbol + "0.01";
+  }
+  return symbol + value.toFixed(2);
+}
+
+function formatLocalizedSpend(usage, lang) {
+  usage = usage || {};
+  lang = lang || window.__i18nLang || "en";
+  var targetCurrency = lang === "zh" ? "CNY" : "USD";
+  var rawAmount = targetCurrency === "CNY" ? usage.spend_cny : usage.spend_usd;
+  var amount = Number(rawAmount);
+  if (Number.isFinite(amount)) {
+    return formatMoneyAmount(amount, targetCurrency === "CNY" ? "¥" : "$", false);
+  }
+
+  var parsed = parseMoneyValue(usage.spend);
+  if (!parsed) return usage.spend || "—";
+  amount = parsed.amount;
+  if (targetCurrency === "CNY" && parsed.currency === "USD") {
+    amount = amount * CNY_PER_USD;
+  } else if (targetCurrency === "USD" && parsed.currency === "CNY") {
+    amount = amount / CNY_PER_USD;
+  }
+  return formatMoneyAmount(amount, targetCurrency === "CNY" ? "¥" : "$", parsed.isLessThan);
+}
+
 // ── Auto-detect language ──────────────────────────────────────────────
 (function initLang() {
   var stored;
@@ -2695,4 +2740,5 @@ function useI18n() {
 window.t = t;
 window.setLang = setLang;
 window.useI18n = useI18n;
+window.formatLocalizedSpend = formatLocalizedSpend;
 window.TRANSLATIONS = TRANSLATIONS;

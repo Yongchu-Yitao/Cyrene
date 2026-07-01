@@ -114,6 +114,32 @@ async def test_behavior_learning_manual_edit_and_rollback(tmp_path, monkeypatch)
     assert restored["description"] != "manual edit description"
 
 
+async def test_manual_pattern_learning_creates_skill(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+
+    await _record_code_fix_turn(
+        bl,
+        session_id="session-manual-pattern",
+        round_id="round-manual-pattern-1",
+        user_message="请检查 src/app.py 并修复导出逻辑，然后给我总结",
+    )
+
+    await bl.process_unprocessed_turns(force=True)
+    patterns = await bl.list_patterns()
+    assert patterns
+
+    result = await bl.learn_skill_from_pattern(patterns[0]["id"])
+    assert result["ok"] is True
+    assert result["created"] is True
+    assert result["skill"] is not None
+    assert result["skill"]["pattern_id"] == patterns[0]["id"]
+
+    second = await bl.learn_skill_from_pattern(patterns[0]["id"])
+    assert second["ok"] is True
+    assert second["created"] is False
+    assert second["skill_id"] == result["skill_id"]
+
+
 async def test_behavior_learning_patch_application_and_vocabulary_snapshot(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
 
@@ -232,6 +258,51 @@ async def test_high_risk_skill_blocked_from_replay(tmp_path, monkeypatch):
     bl.clear_turn_context(context)
 
 
+async def test_interactive_skill_blocked_from_replay(tmp_path, monkeypatch):
+    """Skills that would pause for user input must fall back to the normal agent loop."""
+    bl = await _init_behavior(tmp_path, monkeypatch)
+
+    interactive_skill = _make_skill_with_steps([_make_step("ask_user")], risk_level="none")
+    monkeypatch.setattr(
+        bl,
+        "match_active_skill",
+        AsyncMock(return_value={
+            "skill": interactive_skill,
+            "similarity": {"total": 0.92, "hard_fail": False},
+        }),
+    )
+    monkeypatch.setattr(
+        bl,
+        "extract_skill_parameters",
+        AsyncMock(return_value={"complete": True, "params": {}, "confidence": 0.92, "missing_required": []}),
+    )
+
+    context = await bl.begin_turn(
+        session_id="session-interactive",
+        round_id="round-interactive-1",
+        user_message="ask me a few setup questions",
+        history=[],
+    )
+
+    result = await bl.try_route_and_execute_skill(
+        user_message="ask me a few setup questions",
+        visible_user_entry={"role": "user", "content": "ask me a few setup questions"},
+        llm_user_entry={"role": "user", "content": "ask me a few setup questions"},
+        history=[],
+        bot=MagicMock(),
+        chat_id=1,
+        db_path=str(tmp_path / "test.db"),
+        effective_system="",
+        client_request_id="req-interactive",
+        round_id="round-interactive-1",
+        lang="en",
+    )
+
+    assert result is None, "Interactive skills should not auto-execute ask_user"
+
+    bl.clear_turn_context(context)
+
+
 async def test_safe_skill_still_executes(tmp_path, monkeypatch):
     """Skills with only safe (read-only) steps should still auto-execute."""
     bl = await _init_behavior(tmp_path, monkeypatch)
@@ -308,3 +379,6 @@ async def test_skill_risk_level_inferred_on_creation(tmp_path, monkeypatch):
     # Disabled risky step should not count
     disabled_bash = {**_make_step("Bash"), "enabled": False}
     assert bl._infer_skill_risk_level([disabled_bash]) == "none"
+    assert bl._has_skillworthy_steps([_make_step("read_file")]) is True
+    assert bl._has_skillworthy_steps([_make_step("ask_user")]) is False
+    assert bl._has_auto_replay_blocked_step([_make_step("ask_user")]) is True

@@ -1,5 +1,8 @@
+import json
 import subprocess
 from pathlib import Path
+
+from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -146,6 +149,69 @@ def test_quick_chat_keeps_backend_alive_for_the_global_shortcut():
     assert "MAX_SCREENSHOT_BYTES" in main
 
 
+def test_background_residency_exposes_a_tray_entrypoint():
+    main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+    package_json = json.loads((ROOT / "electron" / "package.json").read_text(encoding="utf-8"))
+
+    assert "Tray," in main
+    assert "Menu," in main
+    assert "nativeImage," in main
+    assert "DESKTOP_TRANSLATIONS" in main
+    assert "language: ''" in main
+    assert "normalizeDesktopLanguage" in main
+    assert "app.getLocale()" in main
+    assert "tray.png" in main
+    assert "tray-mac.png" in main
+    assert "tray-mac@2x.png" in main
+    assert "image.addRepresentation" in main
+    assert "scaleFactor: 2" in main
+    assert "width: isMac ? 18 : 32" in main
+    assert "setTemplateImage(true)" not in main
+    assert "function ensureTray()" in main
+    assert "function syncTrayWithSettings(settings)" in main
+    assert "tray.on('click'" in main
+    assert "tray.setContextMenu(buildTrayMenu())" in main
+    assert "revealMainWindow()" in main
+    assert "syncTrayWithSettings(next)" in main
+    assert "syncTrayWithSettings(desktopSettings)" in main
+    assert "destroyTray()" in main
+    assert "打开 Cyrene" in main
+    assert "退出 Cyrene" in main
+
+    extra_resources = package_json["build"]["extraResources"]
+    assert {"from": "../build/icon.png", "to": "build/icon.png"} in extra_resources
+    assert {"from": "../build/icon.ico", "to": "build/icon.ico"} in extra_resources
+    assert {"from": "../build/tray.png", "to": "build/tray.png"} in extra_resources
+    assert {"from": "../build/tray-mac.png", "to": "build/tray-mac.png"} in extra_resources
+    assert {"from": "../build/tray-mac@2x.png", "to": "build/tray-mac@2x.png"} in extra_resources
+
+
+def test_tray_icon_is_a_small_transparent_colored_asset():
+    mac1x = Image.open(ROOT / "build" / "tray-mac.png").convert("RGBA")
+    mac2x = Image.open(ROOT / "build" / "tray-mac@2x.png").convert("RGBA")
+    colored = Image.open(ROOT / "build" / "tray.png").convert("RGBA")
+
+    assert mac1x.size == (18, 18)
+    assert mac2x.size == (36, 36)
+    assert colored.size == (32, 32)
+    assert mac1x.getchannel("A").getextrema() == (0, 255)
+    assert mac2x.getchannel("A").getextrema() == (0, 255)
+    assert colored.getchannel("A").getextrema() == (0, 255)
+
+    for image in (mac1x, mac2x, colored):
+        assert image.getchannel("A").getbbox() is not None
+
+    # The tray icon should remain the full-color app mark, not a template mask.
+    for image in (mac1x, mac2x, colored):
+        opaque_pixels = [
+            image.getpixel((x, y))
+            for y in range(image.height)
+            for x in range(image.width)
+            if image.getpixel((x, y))[3] > 0
+        ]
+        assert len({pixel[:3] for pixel in opaque_pixels}) > 16
+
+
 def test_quick_chat_is_opt_in_behind_general_settings_toggles():
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
     general = (
@@ -162,6 +228,7 @@ def test_quick_chat_is_opt_in_behind_general_settings_toggles():
     # until background residency is on.
     assert 'settings.runInBackground' in general
     assert 'settings.quickChatAssistant' in general
+    assert "updateDesktopSettings({ language:" in general
     assert "applyDesktop({ runInBackground:" in general
     assert "applyDesktop({ quickChatEnabled:" in general
     assert "desktopBusy || !runInBackground" in general

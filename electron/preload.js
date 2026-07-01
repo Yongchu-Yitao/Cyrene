@@ -15,6 +15,25 @@ contextBridge.exposeInMainWorld('cyrene', {
     return ipcRenderer.invoke('dialog:pick-directory');
   },
   switchUiShell: (mode) => ipcRenderer.invoke('window:switch-shell', mode),
+  browser: {
+    getState: () => ipcRenderer.invoke('browser:get-state'),
+    setBounds: (info) => ipcRenderer.invoke('browser:set-bounds', info || {}),
+    setObscured: (obscured) => ipcRenderer.invoke('browser:set-obscured', obscured === true),
+    createTab: (info) => ipcRenderer.invoke('browser:create-tab', info || {}),
+    activateTab: (tabId) => ipcRenderer.invoke('browser:activate-tab', tabId),
+    closeTab: (tabId) => ipcRenderer.invoke('browser:close-tab', tabId),
+    navigate: (info) => ipcRenderer.invoke('browser:navigate', info || {}),
+    goBack: () => ipcRenderer.invoke('browser:go-back'),
+    goForward: () => ipcRenderer.invoke('browser:go-forward'),
+    reload: () => ipcRenderer.invoke('browser:reload'),
+    setMuted: (info) => ipcRenderer.invoke('browser:set-muted', info || {}),
+    onState: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on('browser:state', listener);
+      return () => ipcRenderer.removeListener('browser:state', listener);
+    },
+  },
   quickChat: {
     getLaunchContext: () => ipcRenderer.invoke('quick-chat:get-launch-context'),
     getScreenshot: () => ipcRenderer.invoke('quick-chat:get-screenshot'),

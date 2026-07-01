@@ -185,6 +185,7 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
                     current_version=current,
                     latest_version=latest,
                     published_at=str(data.get("published_at") or ""),
+                    release_notes=data.get("body", ""),
                 )
 
             # 查找匹配当前平台的 asset。两侧统一小写做大小写无关的子串匹配，

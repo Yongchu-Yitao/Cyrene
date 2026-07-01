@@ -130,6 +130,10 @@ async def rebuild_learning_state(*, reprocess_all_turns: bool = True) -> dict[st
     return await _behavior.rebuild_learning_state(reprocess_all_turns=reprocess_all_turns)
 
 
+async def learn_skill_from_pattern(pattern_id: str) -> dict[str, Any]:
+    return await _behavior.learn_skill_from_pattern(pattern_id)
+
+
 async def tick(bot: Any, db_path: str) -> None:
     await _behavior.tick(bot, db_path)
 

@@ -14,6 +14,7 @@ TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL
 
 
 async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+    from cyrene import browser as _browser
     from cyrene import debug
     from cyrene.browser import get_session
     from cyrene.agent.state import _current_agent_id, _current_client_request_id, _current_round_id, _current_session_id
@@ -27,11 +28,18 @@ async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_
 
     reason = str(args.get("reason") or "").strip() or "请在浏览器窗口完成登录，然后点「我已完成登录」。"
 
-    try:
-        session = await get_session()
-    except Exception as exc:
-        return f"Browser takeover unavailable (Playwright/Chromium not ready): {exc}"
-    current_url = await session.current_url()
+    session = None
+    if _browser.electron_browser_available():
+        try:
+            current_url = await _browser.electron_current_url()
+        except Exception:
+            current_url = ""
+    else:
+        try:
+            session = await get_session()
+        except Exception as exc:
+            return f"Browser takeover unavailable (Playwright/Chromium not ready): {exc}"
+        current_url = await session.current_url()
 
     # Ask in the app FIRST (the standard question popup), then open the real
     # browser window. The browser side panel also receives the question id so it
@@ -54,24 +62,26 @@ async def _tool_browser_request_takeover(args: dict[str, Any], _bot: Any, _chat_
         "reason": reason,
         "question_id": question.get("id", ""),
     })
-    try:
-        await session.switch_to_headed(current_url)
-    except Exception as exc:
-        # Couldn't open the window — undo the pending question and clear the panel.
+    if not _browser.electron_browser_available():
         try:
-            await _clear_pending_question(str(question.get("id", "")))
-        except Exception:
-            pass
-        await debug.publish_event({
-            "type": "browser_takeover_cancelled",
-            "session_id": str(_current_session_id.get() or ""),
-            "round_id": round_id,
-        })
-        return f"Failed to open the browser window for takeover: {exc}"
+            await session.switch_to_headed(current_url)
+        except Exception as exc:
+            # Couldn't open the window — undo the pending question and clear the panel.
+            try:
+                await _clear_pending_question(str(question.get("id", "")))
+            except Exception:
+                pass
+            await debug.publish_event({
+                "type": "browser_takeover_cancelled",
+                "session_id": str(_current_session_id.get() or ""),
+                "round_id": round_id,
+            })
+            return f"Failed to open the browser window for takeover: {exc}"
     return _json_result({
         "status": "awaiting_user",
         "question_id": question.get("id", ""),
         "takeover": True,
+        "embedded": _browser.electron_browser_available(),
     })
 
 

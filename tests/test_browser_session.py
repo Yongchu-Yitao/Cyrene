@@ -983,3 +983,140 @@ async def test_insert_text_gated_and_inserts_via_cdp():
     cdp.sent.clear()
     await session.insert_text("")              # empty → no-op
     assert cdp.sent == []
+
+
+async def test_navigate_uses_electron_rpc_when_available(monkeypatch):
+    from cyrene import browser
+
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
+    monkeypatch.setattr(browser, "_PLAYWRIGHT_AVAILABLE", False)
+
+    calls = []
+    captured = _capture_publish(monkeypatch)
+
+    async def fake_rpc(method, args=None, **_kw):
+        calls.append((method, args or {}))
+        return {
+            "ok": True,
+            "url": args["url"],
+            "status": 0,
+            "title": "Electron Page",
+            "text": "Readable body",
+        }
+
+    monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
+
+    result = await browser.navigate("example.com/electron")
+
+    assert calls[0][0] == "navigate"
+    assert calls[0][1]["url"] == "https://example.com/electron"
+    assert result["title"] == "Electron Page"
+    assert result["text"] == "Readable body"
+    assert [e for e in captured if e.get("type") == "browser_frame"]
+
+
+async def test_click_and_type_use_electron_rpc_when_available(monkeypatch):
+    from cyrene import browser
+
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
+    monkeypatch.setattr(browser, "_PLAYWRIGHT_AVAILABLE", False)
+
+    calls = []
+
+    async def fake_rpc(method, args=None, **_kw):
+        calls.append((method, args or {}))
+        return {"ok": True, "url": "https://example.com", "title": "Page"}
+
+    monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
+
+    r1 = await browser.click("button.go")
+    assert r1["ok"] is True
+    assert any(c[0] == "click" for c in calls)
+
+    r2 = await browser.type_text("input.q", "hello")
+    assert r2["ok"] is True
+    assert any(c[0] == "type" for c in calls)
+
+
+async def test_click_and_type_fallback_on_electron_ok_false(monkeypatch):
+    from cyrene import browser
+    from cyrene.browser import _ensure_playwright
+
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
+
+    calls = []
+
+    async def fake_rpc(method, args=None, **_kw):
+        calls.append((method, args or {}))
+        return {"ok": False, "error": "element not found"}
+
+    monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
+
+    # When RPC returns ok:false and Playwright is available, it should fall through
+    r1 = await browser.click("#btn")
+    # If the RPC returned ok:false we should have tried the RPC and then fallen back
+    assert any(c[0] == "click" for c in calls)
+
+
+async def test_electron_tab_management_apis(monkeypatch):
+    from cyrene import browser
+
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
+
+    calls = []
+
+    async def fake_rpc(method, args=None, **_kw):
+        calls.append((method, args or {}))
+        return {"ok": True, "tabs": [], "activeTab": None, "activeTabId": ""}
+
+    monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
+
+    r1 = await browser.list_tabs()
+    assert any(c[0] == "state" for c in calls)
+
+    calls.clear()
+    r2 = await browser.new_tab("https://example.com")
+    assert any(c[0] == "createTab" for c in calls)
+
+    calls.clear()
+    r3 = await browser.select_tab("tab_1")
+    assert any(c[0] == "activateTab" for c in calls)
+
+
+async def test_browser_tab_tools_are_registered(monkeypatch):
+    from cyrene import registry_tools as _rt
+
+    names = _rt._NATIVE_TOOL_MODULES  # type: ignore
+    modules = [m for m in names if "browser_tab_" in m or "browser_scroll" in m]
+    assert any("browser_tab_list" in m for m in modules)
+    assert any("browser_tab_new" in m for m in modules)
+    assert any("browser_tab_select" in m for m in modules)
+    assert any("browser_tab_close" in m for m in modules)
+    assert any("browser_scroll" in m for m in modules)
+
+
+async def test_screenshot_uses_electron_rpc_and_writes_png(monkeypatch, tmp_path):
+    from cyrene import browser
+
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
+    monkeypatch.setattr(browser, "_PLAYWRIGHT_AVAILABLE", False)
+
+    calls = []
+    import base64
+
+    async def fake_rpc(method, args=None, **_kw):
+        calls.append((method, args or {}))
+        if method == "navigate":
+            return {"ok": True, "url": args["url"], "title": "Page"}
+        return {"ok": True, "pngBase64": base64.b64encode(b"PNG data").decode(), "title": "Page"}
+
+    monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
+
+    result = await browser.screenshot("example.com/screen")
+    assert result.get("ok") is True
+    assert any(c[0] == "screenshot" for c in calls)

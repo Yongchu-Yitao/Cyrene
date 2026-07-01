@@ -63,6 +63,10 @@
     if (tool.indexOf("browser") === 0) return lang === "zh" ? "浏览器" : "Browser";
     return tool.replace(/[_-]+/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
   }
+  function wbpSpend(usage, lang) {
+    if (typeof window.formatLocalizedSpend === "function") return window.formatLocalizedSpend(usage, lang);
+    return (usage && usage.spend) || "—";
+  }
 
   // Avatar: uploaded image > emoji > initials on an optional colour.
   function WorkbenchAvatar(props) {
@@ -229,7 +233,7 @@
           {!editing && (
             <>
               <div className="wbp-kpis">
-                <Kpi value={usage.spend || "—"} label={t("profile.spend")} />
+                <Kpi value={wbpSpend(usage, lang)} label={t("profile.spend")} />
                 <Kpi value={usage.requests != null ? usage.requests : "—"} label={t("profile.requests")} />
                 <Kpi value={usage.total_tokens ? wbpCompact(usage.total_tokens) : "—"} label={t("profile.tokens")} title={usage.tokens || ""} />
                 <Kpi value={(usage.current_streak || 0) + (lang === "zh" ? " 天" : "d")} label={t("profile.streak")} />

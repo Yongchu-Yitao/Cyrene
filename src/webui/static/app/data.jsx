@@ -13,7 +13,7 @@ const DATA = {
     soul: { path: "", updated_at: "", recent_items: [], section_count: 0 },
     topic_cloud: [],
     emotion: [],
-    usage: { requests: 0, tokens: "—", spend: "—", prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cache_hit_tokens: 0, cache_miss_tokens: 0, timeline: [] },
+    usage: { requests: 0, tokens: "—", spend: "—", spend_cny: 0, spend_usd: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cache_hit_tokens: 0, cache_miss_tokens: 0, timeline: [] },
     reminders: [],
     recent_memories: [],
     recent_archive: [],

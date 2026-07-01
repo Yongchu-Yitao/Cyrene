@@ -102,6 +102,32 @@ def test_workbench_plan_ui_uses_step_ids_and_operation_endpoint():
     assert "firstUnresolvedStepIndex" not in source
 
 
+def test_workbench_task_controller_uses_current_session_from_returned_store():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    controller = source.split("function useTaskController", 1)[1].split("function TaskPlanList", 1)[0]
+
+    assert "function sessionFromStore" in controller
+    assert "sessions[j] && sessions[j].id === sid" in controller
+    assert "return ctrl.executeAll({ baseSession: sessionFromStore(store, session) })" in controller
+    assert "(store && store.activeSession) || current" not in controller
+    assert "(patched && patched.activeSession) || baseSession" not in controller
+    assert "(next && next.activeSession) || baseSession" not in controller
+    assert "(nextStore && nextStore.activeSession) || currentSession" not in controller
+
+
+def test_workbench_memory_skill_learning_selects_patterns():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
+
+    assert "selectedLearningKind" in source
+    assert "selectedLearningPatternId" in source
+    assert "onSelectPattern(pattern.id)" in source
+    assert "selectedType === \"pattern\"" in source
+    assert "立即学习" in source
+    assert "/learn-skill" in source
+
+
 def test_workbench_chat_overview_i18n_has_zh_labels():
     result = _run_workbench_i18n_js(
         """
@@ -149,6 +175,17 @@ def test_workbench_chat_supports_parallel_conversation_runtimes():
     assert "otherRunning" not in source
     assert "workbenchChat.lockedByOther" not in source
     assert "workbenchChat.lockedByOther" not in i18n
+
+
+def test_workbench_chat_reveals_browser_tab_from_live_browser_events():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+
+    assert "browserActiveByChat" in source
+    assert 'event.type === "browser_frame" || event.type === "browser_takeover_request"' in source
+    assert "(!browserEventChatId || browserEventChatId === String(activeChatIdRef.current))" in source
+    assert "setBrowserActiveByChat(function (prev)" in source
+    assert "(browserState && browserState.active) || browserMarkedActive" in source
 
 
 def test_workbench_chat_allows_drafting_but_not_sending_while_running():
@@ -224,7 +261,7 @@ def test_workbench_chat_splits_live_tools_around_intermediate_messages():
     assert 'type === "intermediate_message"' in source
     assert "function appendIntermediate(chatId, message)" in source
     assert "segments: segments.concat" in source
-    assert "progress: []" in source
+    assert "progress: Array.isArray(message.trace) ? message.trace" in source
     assert "completedSegments.map" in source
     assert "<WbcAssistantMessage" in source
     assert "event.assistantMessages" in source
@@ -537,6 +574,27 @@ def test_linux_desktop_uses_native_frame_and_directory_picker():
     assert "await window.cyrene.pickDirectory()" in chat
 
 
+def test_electron_browser_panel_uses_native_browser_bridge():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
+    view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
+
+    assert "WebContentsView" in main
+    assert "class BrowserTabManager" in main
+    assert "CYRENE_ELECTRON_RPC_PORT" in main
+    assert "ipcMain.handle('browser:set-bounds'" in main
+    assert "setAudioMuted" in main
+    assert "isCurrentlyAudible" in main
+    assert "browser_tab_new" in (root / "src" / "cyrene" / "registry_tools.py").read_text(encoding="utf-8")
+    assert "browser: {" in preload
+    assert "ipcRenderer.invoke('browser:navigate'" in preload
+    assert "window.cyrene && window.cyrene.browser" in view
+    assert "ElectronBrowserViewportPanel" in view
+    assert "bridge.setBounds" in view
+    assert "bridge.setMuted" in view
+
+
 def test_workbench_chat_directory_picker_falls_back_on_macos_and_lists_default_workspace():
     root = Path(__file__).resolve().parent.parent
     chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
@@ -750,6 +808,8 @@ def test_workbench_chat_exposes_browser_live_view_and_takeover():
 
     assert 'event.type === "browser_frame" || event.type === "browser_takeover_request"' in source
     assert 'setSideTab("browser")' in source
+    browser_switch_block = source.split('event.type === "browser_frame" || event.type === "browser_takeover_request"', 1)[1].split('setSideTab("browser")', 1)[0]
+    assert "runtimeEngine.isRunning" not in browser_switch_block
     assert 'id: "browser", label: wbcT("chat.side.browser", "Browser")' in source
     assert "window.BrowserViewportPanel" in source
     assert "onTakeoverComplete: onBrowserTakeoverComplete" in source

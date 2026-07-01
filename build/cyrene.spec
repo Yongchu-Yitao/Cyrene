@@ -169,6 +169,9 @@ for _package in (
 ):
     _collect_package(_package)
 
+if _IS_WIN:
+    _collect_package("winloop")
+
 _datas = list(dict.fromkeys(_datas))
 _binaries = list(dict.fromkeys(_binaries))
 _hidden = list(dict.fromkeys(_hidden))

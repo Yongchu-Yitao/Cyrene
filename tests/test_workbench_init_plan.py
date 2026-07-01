@@ -685,6 +685,98 @@ async def test_workbench_explore_agent_repairs_malformed_json_once(monkeypatch):
     assert responses == []
 
 
+async def test_workbench_empty_workspace_init_form_uses_project_description(monkeypatch, tmp_path):
+    from webui import routes
+
+    captured = {}
+
+    async def fake_llm(messages, tools=None, **kwargs):
+        captured["prompt"] = messages[-1]["content"]
+        captured["tools"] = tools
+        captured["response_format"] = kwargs.get("response_format")
+        return {
+            "content": json.dumps({
+                "greeting": "我们先把 AI 学习路线项目拆清楚。",
+                "sections": [{
+                    "id": "audience",
+                    "title": "学习对象",
+                    "questions": [{
+                        "id": "student_level",
+                        "type": "textarea",
+                        "label": "高中生目前的编程和数学基础分别是什么？",
+                        "placeholder": "例如：会 Python 基础，线性代数刚入门",
+                    }],
+                }],
+            }, ensure_ascii=False),
+            "tool_calls": [],
+        }
+
+    monkeypatch.setattr(routes, "_call_llm", fake_llm)
+
+    result = await routes._workbench_generate_init_form(
+        {
+            "id": "project_1",
+            "name": "AI 学习路线",
+            "description": "给高中生设计一套 AI 学习路线，并输出阶段计划。",
+            "template": "ai",
+            "workspacePath": str(tmp_path),
+        },
+        lang="zh",
+    )
+
+    assert result is not None
+    assert result["generated"] is True
+    assert result["sections"][0]["questions"][0]["label"] == "高中生目前的编程和数学基础分别是什么？"
+    assert captured["tools"] is None
+    assert captured["response_format"] == routes._WORKBENCH_JSON_RESPONSE_FORMAT
+    assert "项目描述：给高中生设计一套 AI 学习路线" in captured["prompt"]
+    assert "不能探索文件" in captured["prompt"]
+    assert "不要只套用通用模板" in captured["prompt"]
+
+
+async def test_workbench_non_empty_workspace_init_form_prioritizes_description(monkeypatch, tmp_path):
+    from webui import routes
+
+    (tmp_path / "README.md").write_text("# Existing App\n", encoding="utf-8")
+    captured = {}
+
+    async def fake_agent(workspace_root, prompt, **kwargs):
+        captured["workspace_root"] = workspace_root
+        captured["prompt"] = prompt
+        return {
+            "greeting": "我会结合描述和现有文件来初始化项目。",
+            "sections": [{
+                "id": "scope",
+                "title": "范围澄清",
+                "questions": [{
+                    "id": "priority",
+                    "type": "textarea",
+                    "label": "健康数据仪表盘首版最需要服务哪类用户？",
+                }],
+            }],
+        }
+
+    monkeypatch.setattr(routes, "_workbench_run_explore_agent", fake_agent)
+
+    result = await routes._workbench_generate_init_form(
+        {
+            "id": "project_1",
+            "name": "健康数据仪表盘",
+            "description": "面向医生的健康数据可视化仪表盘，重点展示慢病趋势。",
+            "template": "product",
+            "workspacePath": str(tmp_path),
+        },
+        lang="zh",
+    )
+
+    assert result is not None
+    assert result["sections"][0]["questions"][0]["label"] == "健康数据仪表盘首版最需要服务哪类用户？"
+    assert captured["workspace_root"] == tmp_path.resolve()
+    assert "项目描述：面向医生的健康数据可视化仪表盘" in captured["prompt"]
+    assert "最高优先级需求信号" in captured["prompt"]
+    assert "不要只围绕代码结构提问" in captured["prompt"]
+
+
 async def test_workbench_plan_revision_reuses_thread_without_tools(monkeypatch, tmp_path):
     from webui import routes
 
@@ -1903,3 +1995,96 @@ def test_workbench_prunes_parent_repo_git_files_and_artifacts(tmp_path):
     assert session["runs"][0]["events"][0]["fileChanges"] == []
     assert session["events"][0]["fileChanges"] == []
     assert session["artifacts"] == []
+
+
+def test_workbench_task_plan_tool_helper_scopes_mutation_to_current_session(monkeypatch, tmp_path):
+    from webui import routes
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "workbench_projects.json"
+    store_path.write_text(json.dumps({
+        "projects": [{
+            "id": "project_1",
+            "name": "Cyrene",
+            "sessions": [
+                {
+                    "id": "session_a",
+                    "projectId": "project_1",
+                    "kind": "task",
+                    "title": "任务 A",
+                    "goal": "只更新 A",
+                    "status": "running",
+                    "planRevision": 1,
+                    "planDefinitionRevision": 1,
+                    "approvedPlanDefinitionRevision": 1,
+                    "plan": [
+                        {"id": "step_a1", "title": "A1", "status": "pending", "order": 1, "dependsOn": []},
+                    ],
+                    "events": [],
+                    "runs": [],
+                    "artifacts": [],
+                    "acceptanceCriteria": [],
+                    "createdAt": "2026-06-19T00:00:00+00:00",
+                    "updatedAt": "2026-06-19T00:00:00+00:00",
+                },
+                {
+                    "id": "session_b",
+                    "projectId": "project_1",
+                    "kind": "task",
+                    "title": "任务 B",
+                    "goal": "不应被更新",
+                    "status": "planning",
+                    "planRevision": 7,
+                    "planDefinitionRevision": 7,
+                    "approvedPlanDefinitionRevision": 7,
+                    "plan": [
+                        {"id": "step_b1", "title": "B1", "status": "pending", "order": 1, "dependsOn": []},
+                    ],
+                    "events": [],
+                    "runs": [],
+                    "artifacts": [],
+                    "acceptanceCriteria": [],
+                    "createdAt": "2026-06-19T00:00:00+00:00",
+                    "updatedAt": "2026-06-19T00:00:00+00:00",
+                },
+            ],
+            "createdAt": "2026-06-19T00:00:00+00:00",
+            "updatedAt": "2026-06-19T00:00:00+00:00",
+        }],
+        "activeProjectId": "project_1",
+        "activeSessionId": "session_b",
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "_db_path", "")
+    monkeypatch.setattr(routes, "_CONFIGURED_WORKBENCH_STORE", None)
+
+    result = routes.update_task_plan_for_session(
+        "session_a",
+        "add",
+        step={"title": "A2", "description": "追加到 A 的计划"},
+        reason="用户补充了 A 的范围",
+    )
+
+    assert result["ok"] is True
+    stored = routes._read_workbench_store()
+    project = stored["projects"][0]
+    session_a = next(session for session in project["sessions"] if session["id"] == "session_a")
+    session_b = next(session for session in project["sessions"] if session["id"] == "session_b")
+    assert [step["title"] for step in session_a["plan"]] == ["A1", "A2"]
+    assert session_a["planDefinitionRevision"] == 2
+    assert [step["title"] for step in session_b["plan"]] == ["B1"]
+    assert session_b["planDefinitionRevision"] == 7
+    assert stored["activeSessionId"] == "session_a"
+
+
+def test_update_task_plan_is_registered_main_only():
+    from cyrene import registry_tools
+
+    registry_tools._initialize_registry()
+
+    assert "update_task_plan" in registry_tools.get_tool_names()
+    assert registry_tools.is_tool_allowed_for_actor("update_task_plan", "main") is True
+    assert registry_tools.is_tool_allowed_for_actor("update_task_plan", "subagent") is False

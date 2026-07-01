@@ -271,7 +271,7 @@ function DashboardHeatmap({ data }) {
 
 function DashboardPage() {
   useDataVersion();
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const dash = DATA.dashboard || {};
   const today = dash.today || {};
   const soul = dash.soul || {};
@@ -371,7 +371,7 @@ function DashboardPage() {
           <DashboardTokenChart timeline={timeline} />
           <div className="dashboard-token-footer">
             <div className="dashboard-stat-pair"><span>{t("dashboard.requests")}</span><strong>{usage.requests ?? "—"}</strong></div>
-            <div className="dashboard-stat-pair"><span>{t("dashboard.spend")}</span><strong>{usage.spend || "—"}</strong></div>
+            <div className="dashboard-stat-pair"><span>{t("dashboard.spend")}</span><strong>{formatLocalizedSpend(usage, lang)}</strong></div>
             <div className="dashboard-stat-pair"><span>{t("dashboard.input")}</span><strong>{compactNumber(usage.prompt_tokens || 0)}</strong></div>
             <div className="dashboard-stat-pair"><span>{t("dashboard.output")}</span><strong>{compactNumber(usage.completion_tokens || 0)}</strong></div>
           </div>

@@ -1102,6 +1102,49 @@ def _workbench_explore_parse_failure(
     return _WorkbenchGenerationError("response_format", detail)
 
 
+async def _workbench_run_json_generation(
+    prompt: str,
+    *,
+    max_tokens: int,
+    timeout: float,
+    secondary: bool = False,
+) -> dict[str, Any] | None:
+    """Run a no-tool JSON generation call and parse/repair the final object."""
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        response = await asyncio.wait_for(
+            _call_llm(
+                messages,
+                tools=None,
+                max_tokens=max_tokens,
+                secondary=secondary,
+                thinking="disabled",
+                response_format=_WORKBENCH_JSON_RESPONSE_FORMAT,
+            ),
+            timeout=timeout,
+        )
+    except Exception:
+        logger.exception("Workbench JSON generation failed")
+        return None
+    if not isinstance(response, dict):
+        return None
+    content = response.get("content") or ""
+    parsed = _workbench_parse_json_object(content)
+    if parsed is not None:
+        return parsed
+    try:
+        return await _workbench_repair_json_response(
+            messages,
+            content,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            secondary=secondary,
+        )
+    except Exception:
+        logger.exception("Workbench JSON generation repair failed")
+        return None
+
+
 def _workbench_stable_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -1732,8 +1775,10 @@ async def _workbench_generate_init_form(
     """Ask an agent (with file-exploration tools) to produce onboarding
     questions tailored to this project.
 
-    If the workspace is empty (no real source files), returns a lightweight
-    deterministic form directly — no point asking the LLM to explore nothing.
+    If the workspace is empty (no real source files), use the user's project
+    description to generate tailored questions without workspace tools. If
+    there is no description or generation fails, fall back to the deterministic
+    template form.
 
     ``lang`` is the user's UI language code (e.g. ``"zh"``, ``"en"``) —
     defaults to ``"zh"`` when empty so the prompt instructs the LLM in the
@@ -1762,12 +1807,50 @@ async def _workbench_generate_init_form(
     workspace_path = str(project.get("workspacePath") or "").strip()
     workspace_root = Path(workspace_path).expanduser().resolve() if workspace_path else None
 
-    # ── Empty / no real files → skip the LLM entirely ──────────────────
+    init_form_schema = (
+        "最后只返回一个 JSON 对象，不要包含任何额外说明或 Markdown 代码块标记。"
+        "JSON 结构如下：\n"
+        "{\n"
+        '  "greeting": "一句友好的开场白，说明你将协助完成项目初始化",\n'
+        '  "sections": [\n'
+        "    {\n"
+        '      "id": "英文小写下划线短标识",\n'
+        f'      "title": "分组标题（{language}，简洁）",\n'
+        '      "questions": [\n'
+        '        {"id": "英文标识", "type": "text|textarea|single|multi", '
+        f'"label": "问题（{language}）", "placeholder": "示例答案（text/textarea 适用）", '
+        '"options": ["选项1", "选项2"]}\n'
+        "      ]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+    )
+
+    # ── Empty / no real files → generate from metadata when possible ───
     if _is_workspace_empty(workspace_root):
         logger.info(
-            "Workspace %s is empty — using fixed init form for project %s",
+            "Workspace %s is empty — generating metadata-based init form for project %s",
             workspace_path or "(none)", project.get("id"),
         )
+        if description:
+            prompt = (
+                "你是一个项目初始化助理。用户刚刚创建了一个全新项目，工作区目前还没有代码或资料文件。"
+                "你不能探索文件；请只根据用户提供的项目名称、项目类型和项目描述，"
+                "设计一组贴合该项目目标的引导式问题，帮助用户把需求、范围、约束和第一批任务澄清清楚。\n\n"
+                f"项目信息：\n{details_block}\n\n"
+                + init_form_schema +
+                "要求：\n"
+                "- 必须围绕项目描述中的具体目标、场景、对象或产出提问，不要只套用通用模板；\n"
+                "- 不要重复询问描述中已经明确的项目目标，而要追问边界、优先级、用户/受众、关键约束、验收标准或第一阶段计划；\n"
+                "- 根据描述自主决定 3-5 个分组，每个分组 2-4 个问题；\n"
+                "- 多数问题用 text 或 textarea；涉及阶段/选择类的用 single 或 multi 并给出 options；\n"
+                f"- 全部使用{language}，语气友好专业。最后只返回 JSON。"
+            )
+            parsed = await _workbench_run_json_generation(prompt, max_tokens=5000, timeout=90)
+            generated_form = _workbench_coerce_init_form(parsed, base_form) if parsed else None
+            if generated_form:
+                return generated_form
+
         # Return a computed form so the caller doesn't fall back to the
         # full default form which suggests the LLM *might* generate.
         empty_form = _workbench_default_init_form(project)
@@ -1790,7 +1873,7 @@ async def _workbench_generate_init_form(
     prompt = (
         "你是一个项目初始化助理。用户刚刚创建了一个新项目，工作区已有文件。"
         "你需要深度探索工作区，了解项目的内容、结构和现状，"
-        "然后设计一组贴合实际的引导式问题，帮助用户完成项目初始化。\n\n"
+        "然后同时结合用户的项目描述和已有文件，设计一组贴合实际的引导式问题，帮助用户完成项目初始化。\n\n"
         f"项目信息：\n{details_block}\n\n"
         "你可以使用 list_directory、read_file 和 glob 工具深度探索工作区。\n\n"
         "请多花几轮仔细探索，推荐的探索步骤：\n"
@@ -1799,24 +1882,11 @@ async def _workbench_generate_init_form(
         "3. 读 README、配置文件或关键入口文件了解项目概况\n"
         "4. 如果文件较多，深入看几个关键目录的内容\n\n"
         "充分了解后再生成 JSON，不要过早下结论。\n\n"
-        "最后只返回一个 JSON 对象，不要包含任何额外说明或 Markdown 代码块标记。"
-        "JSON 结构如下：\n"
-        "{\n"
-        '  "greeting": "一句友好的开场白，说明你将协助完成项目初始化",\n'
-        '  "sections": [\n'
-        "    {\n"
-        '      "id": "英文小写下划线短标识",\n'
-        f'      "title": "分组标题（{language}，简洁）",\n'
-        '      "questions": [\n'
-        '        {"id": "英文标识", "type": "text|textarea|single|multi", '
-        f'"label": "问题（{language}）", "placeholder": "示例答案（text/textarea 适用）", '
-        '"options": ["选项1", "选项2"]}\n'
-        "      ]\n"
-        "    }\n"
-        "  ]\n"
-        "}\n\n"
+        + init_form_schema +
         "要求：\n"
         "- 根据工作区的实际情况，自主决定需要几个分组以及覆盖哪些方向；\n"
+        "- 用户提供的项目描述是最高优先级需求信号；问题必须同时回应项目描述和文件现状，不要只围绕代码结构提问；\n"
+        "- 如果项目描述与工作区内容存在缺口或不一致，要设计问题澄清差异和下一步取舍；\n"
         "- 每个分组 2-4 个问题，问题要贴合项目实际情况，避免空泛；\n"
         "- 优先围绕项目已有的内容提问（如需要完善的地方、可以补充的方向、后续步骤等）；\n"
         "- 多数问题用 text 或 textarea；涉及阶段/选择类的用 single 或 multi 并给出 options；\n"
@@ -2284,6 +2354,173 @@ def _workbench_find_session(payload: dict[str, Any], session_id: str) -> tuple[d
             if str(session.get("id") or "") == session_id:
                 return project, session
     return None, None
+
+
+def update_task_plan_for_session(
+    session_id: str,
+    operation: str,
+    *,
+    step_id: str = "",
+    step: dict[str, Any] | None = None,
+    fields: dict[str, Any] | None = None,
+    ordered_step_ids: list[Any] | None = None,
+    depends_on: list[Any] | None = None,
+    reason: str = "",
+) -> dict[str, Any]:
+    """Mutate the current Workbench task plan for the main-agent tool.
+
+    The user-facing HTTP mutation endpoint blocks while an agent is running.
+    This helper is intentionally separate so the running main task agent can
+    update its own pending plan steps when new input changes the plan.
+    """
+    sid = str(session_id or "").strip()
+    op = str(operation or "").strip().lower()
+    if not sid:
+        return {"ok": False, "error": "no active task session", "code": "no_session"}
+
+    with _WORKBENCH_STORE_LOCK:
+        payload = _read_workbench_store()
+        project, session = _workbench_find_session(payload, sid)
+        if not session or not project:
+            return {"ok": False, "error": "session not found", "code": "session_not_found"}
+        if str(session.get("kind") or "task") != "task":
+            return {"ok": False, "error": "only Workbench task sessions support task plans", "code": "not_task_session"}
+
+        current_revision = int(session.get("planDefinitionRevision") or 0)
+        plan = _workbench_normalize_plan(session.get("plan"), task_id=sid)
+        by_id = {
+            str(item.get("id") or ""): item
+            for item in plan
+            if isinstance(item, dict)
+        }
+        field_values = fields if isinstance(fields, dict) else {}
+        structure_operation = op in ("add", "delete", "reorder", "set_dependencies")
+        if op == "update" and any(
+            field in field_values for field in ("title", "description", "dependsOn")
+        ):
+            structure_operation = True
+        if structure_operation and _workbench_plan_has_started(plan):
+            return {
+                "ok": False,
+                "error": "计划已经开始执行，只能编辑尚未运行步骤的命令和上下文。",
+                "code": "plan_started",
+            }
+
+        if op == "add":
+            step_input = step if isinstance(step, dict) else {}
+            title = str(step_input.get("title") or "").strip()
+            if not title:
+                return {"ok": False, "error": "步骤标题不能为空。", "code": "empty_step_title"}
+            if len(plan) >= 12:
+                return {"ok": False, "error": "执行计划最多包含 12 个步骤。", "code": "plan_too_large"}
+            new_step = _workbench_new_plan_step(
+                title[:160],
+                str(step_input.get("description") or "").strip()[:4000],
+                len(plan) + 1,
+                sid,
+            )
+            new_step["dependsOn"] = _workbench_dependency_ids(step_input.get("dependsOn"))
+            plan.append(new_step)
+        elif op == "update":
+            target_id = str(step_id or "").strip()
+            target = by_id.get(target_id)
+            if not target:
+                return {"ok": False, "error": "步骤不存在。", "code": "step_not_found"}
+            allowed_fields = {"title", "description", "dependsOn", "promptOverride", "contextFiles"}
+            if any(field not in allowed_fields for field in field_values):
+                return {"ok": False, "error": "包含不允许修改的步骤字段。", "code": "invalid_step_fields"}
+            if str(target.get("status") or "pending") != "pending":
+                return {"ok": False, "error": "只能编辑尚未运行的步骤。", "code": "step_started"}
+            if "title" in field_values:
+                title = str(field_values.get("title") or "").strip()
+                if not title:
+                    return {"ok": False, "error": "步骤标题不能为空。", "code": "empty_step_title"}
+                target["title"] = title[:160]
+            if "description" in field_values:
+                target["description"] = str(field_values.get("description") or "").strip()[:4000]
+            if "dependsOn" in field_values:
+                target["dependsOn"] = _workbench_dependency_ids(field_values.get("dependsOn"))
+            if "promptOverride" in field_values:
+                target["promptOverride"] = str(field_values.get("promptOverride") or "")[:12000]
+            if "contextFiles" in field_values:
+                context_files = field_values.get("contextFiles")
+                if not isinstance(context_files, list):
+                    return {"ok": False, "error": "contextFiles must be a list", "code": "invalid_context_files"}
+                target["contextFiles"] = context_files[:30]
+        elif op == "set_dependencies":
+            target_id = str(step_id or "").strip()
+            target = by_id.get(target_id)
+            if not target:
+                return {"ok": False, "error": "步骤不存在。", "code": "step_not_found"}
+            target["dependsOn"] = _workbench_dependency_ids(depends_on)
+        elif op == "delete":
+            target_id = str(step_id or "").strip()
+            if target_id not in by_id:
+                return {"ok": False, "error": "步骤不存在。", "code": "step_not_found"}
+            dependent_titles = [
+                str(item.get("title") or "")
+                for item in plan
+                if target_id in _workbench_dependency_ids(item.get("dependsOn"))
+            ]
+            if dependent_titles:
+                return {
+                    "ok": False,
+                    "error": "该步骤仍被以下步骤依赖：" + "、".join(dependent_titles),
+                    "code": "step_has_dependents",
+                }
+            plan = [item for item in plan if str(item.get("id") or "") != target_id]
+        elif op == "reorder":
+            ordered_ids = _workbench_dependency_ids(ordered_step_ids)
+            current_ids = [str(item.get("id") or "") for item in plan]
+            if len(ordered_ids) != len(current_ids) or set(ordered_ids) != set(current_ids):
+                return {"ok": False, "error": "步骤顺序与当前计划不一致。", "code": "invalid_reorder"}
+            plan = [by_id[item_id] for item_id in ordered_ids]
+        else:
+            return {"ok": False, "error": "unsupported plan operation", "code": "unsupported_operation"}
+
+        plan = _workbench_normalize_plan(plan, task_id=sid)
+        valid, error_message, error_code = _workbench_validate_plan_graph(plan)
+        if not valid:
+            return {"ok": False, "error": error_message, "code": error_code}
+
+        now = _utc_now_iso()
+        session["plan"] = plan
+        session["planRevision"] = int(session.get("planRevision") or 0) + 1
+        session["planDefinitionRevision"] = current_revision + 1
+        session["approvedPlanDefinitionRevision"] = None
+        if str(session.get("status") or "") == "waiting_for_approval":
+            session["status"] = "planning"
+            session["agentReply"] = "计划已修改，请重新确认后执行。"
+        event_body = {
+            "add": "Agent 根据当前输入新增执行步骤。",
+            "update": "Agent 根据当前输入更新执行步骤。",
+            "set_dependencies": "Agent 根据当前输入更新步骤依赖。",
+            "delete": "Agent 根据当前输入删除执行步骤。",
+            "reorder": "Agent 根据当前输入调整执行步骤顺序。",
+        }.get(op, "Agent 根据当前输入更新执行计划。")
+        reason_text = str(reason or "").strip()
+        if reason_text:
+            event_body += " 原因：" + reason_text[:500]
+        session["events"] = list(session.get("events") or []) + [{
+            "id": _short_id("event"),
+            "type": "PlanUpdatedEvent",
+            "createdAt": now,
+            "body": event_body,
+        }]
+        session["updatedAt"] = now
+        project["updatedAt"] = now
+        payload["activeProjectId"] = project.get("id")
+        payload["activeSessionId"] = sid
+        _write_workbench_store(payload)
+        return {
+            "ok": True,
+            "project": project,
+            "session": session,
+            "plan": plan,
+            "planRevision": session.get("planRevision"),
+            "planDefinitionRevision": session.get("planDefinitionRevision"),
+            **payload,
+        }
 
 
 def _launch_update_restart(
@@ -4607,7 +4844,7 @@ _WORKBENCH_TASK_MODE_SYSTEM = (
     "## 任务执行模式\n"
     "你正在一个带有可编辑「执行计划」的任务里工作，本工作台鼓励先规划再执行。\n"
     "- 需要动手完成多步工作时，优先制定或更新执行计划，再按计划逐步推进，不要脱离计划临时发挥。\n"
-    "- 已有计划时以它为准，按步骤推进；发现计划需要调整就更新对应步骤，而不是另起一套做法。\n"
+    "- 已有计划时以它为准，按步骤推进；发现计划需要调整就调用 update_task_plan 更新当前任务的执行计划，而不是只在回复里描述新计划。\n"
     "- 仅当用户只是提问、或一句话就能完成的小事时，才直接回答或执行、无需计划。\n"
     "- 如果这个任务还没有明确目标，或现有目标/标题与你实际要做的事不符（例如用户开场只是提了个"
     "问题），就调用 set_task_goal 设定一个简洁的目标和短标题。"
@@ -7670,6 +7907,20 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             "scripts": await _pattern.list_scripts("all"),
         }
 
+    @router.post("/api/patterns/{pattern_id}/learn-skill")
+    async def api_pattern_learn_skill(pattern_id: str):
+        from cyrene import pattern as _pattern
+
+        result = await _pattern.learn_skill_from_pattern(pattern_id)
+        if not result.get("ok"):
+            return JSONResponse(result, status_code=400)
+        return {
+            **result,
+            "patterns": await _pattern.list_patterns("all"),
+            "learned_skills": await _pattern.list_learned_skills(),
+            "scripts": await _pattern.list_scripts("all"),
+        }
+
     @router.post("/api/patterns/rebuild")
     async def api_patterns_rebuild():
         from cyrene import pattern as _pattern
@@ -8517,6 +8768,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if "beta_updates" in body:
             set_setting("beta_updates", bool(body["beta_updates"]))
             changed.append("beta_updates")
+        if "auto_update" in body:
+            set_setting("auto_update", bool(body["auto_update"]))
+            changed.append("auto_update")
         return {"ok": True, "changed": changed}
 
     @router.put("/api/profile")
@@ -10614,13 +10868,34 @@ def register_routes(app, bot: Any, db_path: str) -> None:
 
     # ---- Update checker ----
 
+    def _local_changelog_text() -> str:
+        candidates = [
+            Path(__file__).resolve().parents[2] / "CHANGELOG.md",
+            BASE_DIR / "CHANGELOG.md",
+        ]
+        for path in candidates:
+            try:
+                if path.exists():
+                    return path.read_text(encoding="utf-8").strip()
+            except Exception:
+                continue
+        return ""
+
     @router.get("/api/update/check")
     async def api_update_check():
         """Check for updates via GitHub Releases."""
         from cyrene.updater import check_for_update, set_cached_update_info
+        from cyrene.settings_store import set_ as set_setting
 
         info = await check_for_update()
         set_cached_update_info(info)
+        release_notes = info.release_notes or _local_changelog_text()
+        if release_notes or info.latest_version:
+            set_setting("update_changelog", {
+                "version": info.latest_version,
+                "published_at": info.published_at,
+                "release_notes": release_notes,
+            })
 
         return {
             "update_available": info.available,
@@ -10628,13 +10903,38 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             "latest_version": info.latest_version,
             "published_at": info.published_at,
             "download_url": info.download_url,
-            "release_notes": info.release_notes,
+            "release_notes": release_notes,
             "asset_name": info.asset_name,
             "asset_size": info.asset_size,
             "asset_sha256": info.asset_sha256,
             "checksum_available": bool(info.asset_sha256),
             # 有新版但无适配本平台的安装包时为非空，前端据此提示手动下载。
             "error": info.error,
+        }
+
+    @router.get("/api/update/changelog")
+    async def api_update_changelog():
+        """Return the latest locally saved release notes."""
+        from cyrene.updater import check_for_update
+        from cyrene.settings_store import get as get_setting, set_ as set_setting
+
+        changelog = get_setting("update_changelog", {}) or {}
+        if not isinstance(changelog, dict):
+            changelog = {}
+        if not str(changelog.get("release_notes") or "").strip():
+            info = await check_for_update()
+            release_notes = info.release_notes or _local_changelog_text()
+            if release_notes or info.latest_version:
+                changelog = {
+                    "version": info.latest_version,
+                    "published_at": info.published_at,
+                    "release_notes": release_notes,
+                }
+                set_setting("update_changelog", changelog)
+        return {
+            "version": str(changelog.get("version") or ""),
+            "published_at": str(changelog.get("published_at") or ""),
+            "release_notes": str(changelog.get("release_notes") or ""),
         }
 
     @router.post("/api/update/download")
@@ -12493,27 +12793,25 @@ async def _build_dashboard(ui_tz=None) -> dict:
     historical_cache_miss = sum((r.get("cache_miss_tokens") or 0) for r in stats_by_day.values())
     historical_requests = sum((r.get("llm_requests") or 0) for r in stats_by_day.values())
 
-    # 按模型计算总花费（不同模型定价不同）
-    total_spend = 0.0
+    # 按模型计算总花费（不同模型定价不同）。默认价格以人民币计算；
+    # 显式 $ 配价会先按美元估算，再折算成人民币供 UI 统一切换显示。
+    from cyrene.model_prices import CNY_PER_USD, effective_price, estimate_cost
+
+    total_spend_cny = 0.0
+    total_spend_usd = 0.0
     for row in model_stats_rows:
         mdl = str(row.get("model") or "").strip().lower()
         pt = int(row.get("prompt_tokens") or 0)
         ct = int(row.get("completion_tokens") or 0)
-        if "opus-4" in mdl:
-            total_spend += (pt / 1_000_000) * 15.0 + (ct / 1_000_000) * 75.0
-        elif "sonnet-4" in mdl:
-            total_spend += (pt / 1_000_000) * 3.0 + (ct / 1_000_000) * 15.0
-        elif "haiku-4" in mdl:
-            total_spend += (pt / 1_000_000) * 0.25 + (ct / 1_000_000) * 1.25
-        elif "deepseek-v4-flash" in mdl:
-            total_spend += (pt / 1_000_000) * 0.14 + (ct / 1_000_000) * 0.28
-        elif "deepseek-reasoner" in mdl:
-            total_spend += (pt / 1_000_000) * 0.55 + (ct / 1_000_000) * 2.19
-        elif "deepseek" in mdl or "deepseek-chat" in mdl:
-            total_spend += (pt / 1_000_000) * 0.14 + (ct / 1_000_000) * 0.28
+        pricing = effective_price(mdl) or {"input": 7.25, "output": 14.5, "currency": "CNY"}
+        cost = estimate_cost(pricing, pt, ct)
+        if str(pricing.get("currency") or "CNY").upper() == "USD":
+            total_spend_usd += cost
+            total_spend_cny += cost * CNY_PER_USD
         else:
-            total_spend += (pt / 1_000_000) * 1.0 + (ct / 1_000_000) * 2.0
-    spend_str = "<$0.01" if total_spend < 0.01 else f"${total_spend:.2f}"
+            total_spend_cny += cost
+            total_spend_usd += cost / CNY_PER_USD
+    spend_str = "<¥0.01" if 0 < total_spend_cny < 0.01 else f"¥{total_spend_cny:.2f}"
 
     # 情感数据从 short_term 条目按 last_mentioned 日期聚合，不依赖数据库
     emotion_by_day: dict[str, list[float]] = {}
@@ -12603,6 +12901,8 @@ async def _build_dashboard(ui_tz=None) -> dict:
                 "total_tokens": historical_total,
             }),
             "spend": spend_str,
+            "spend_cny": round(total_spend_cny, 6),
+            "spend_usd": round(total_spend_usd, 6),
             "prompt_tokens": historical_prompt,
             "completion_tokens": historical_completion,
             "total_tokens": historical_total,
@@ -12747,6 +13047,7 @@ def _build_config() -> dict:
         "notify_wechat": settings.get("notify_wechat", True),
         "redact_secrets": settings.get("redact_secrets", True),
         "beta_updates": settings.get("beta_updates", False),
+        "auto_update": settings.get("auto_update", True),
         "search_port": str(SEARXNG_PORT),
         "search_host": SEARXNG_HOST,
     }
