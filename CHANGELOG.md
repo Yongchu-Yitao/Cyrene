@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.6.1] - 2026-07-01
+
+0.6.1 是 `0.6.0` 之后的正式维护版本，重点补齐浏览器自动化能力、桌面 Quick Chat 常驻体验、文档站与若干运行时稳定性修复。本版本为稳定 release，不是 beta / prerelease。
+
+### Added
+
+- **浏览器自动化工具扩展** — 新增按坐标点击、按元素引用点击、按文本点击、按元素引用输入、等待、网络日志、结构化快照与多标签页管理等工具；Workbench / Legacy UI 中的浏览器实况说明与工具注册同步更新。
+- **桌面 Quick Chat 常驻入口** — 增强 Electron 后台驻留、托盘入口、窗口复用和主进程消息契约；补充托盘图标资源与背景运行测试。
+- **文档站资源** — 新增 `docs/web` 静态文档站、Logo、交互脚本和样式，方便发布包外独立浏览项目说明。
+
+### Changed
+
+- **元素交互更稳** — Electron / BrowserTabManager 的元素操作改为更可靠的页面级交互路径，减少受页面自定义 JS click 限制影响的失败。
+- **Chat-only 流式回复路径简化** — 流式请求不再额外发起一次 final reply LLM 调用，直接复用 phase-1 回复并保留用量统计，降低延迟与 token 消耗。
+- **行为学习遥测后台化** — 工具执行后的 `record_action` 记录改为后台任务，不再阻塞工具结果返回；失败只记录 debug 日志。
+- **发布版本元数据统一** — Python 包、Electron 应用、lockfile、README、文档站、WeChat client 标识、WebUI cache-busting 参数与前端断言统一到 `0.6.1`。
+
+### Fixed
+
+- **命令行生成的交付物提示** — Workbench 任务提示词明确要求 Bash / shell 生成最终文件后也必须调用 `send_file`，避免文件已生成但不进入「产物」面板。
+- **地图 pin 视觉** — Leaflet pin 改为自定义可主题适配的地图标记，修复默认 marker 资源在部分打包场景下不稳定的问题。
+- **设置页侧栏交互** — 调整设置浮层 tab 的 hover、active 与 focus-visible 样式，降低视觉抖动并改善键盘焦点反馈。
+- **测试环境依赖 mock** — Quick Chat 和 runtime tests 对 PIL / pypdf 的处理更稳，避免真实依赖存在时被 MagicMock 污染。
+
+### Tests
+
+- 新增 / 更新浏览器会话、Quick Chat、托盘图标、后台驻留、行为学习、更新器平台匹配、Workbench 初始化计划、运行时修复与前端 cache-busting 等测试。
+
 ## [0.6.0] - 2026-06-29
 
 首个正式版本，汇总自 **v0.5.1** 以来的累积更新。0.6.0 的主线是全新的 **Workbench 工作台**——以项目为中心的桌面工作环境，以及围绕它的可恢复任务执行、并发对话、记忆 / 知识体系，加上大量提示词缓存与稳定性优化。本版本把 `feat/workbench` 分支的全部工作合并进 `main`，并将版本号正式定为 `0.6.0`。
