@@ -1,0 +1,2251 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light" data-lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cyrene — AI Agent That Evolves</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <a href="#main-content" class="skip-link">跳到内容</a>
+
+  <!-- Top Bar -->
+  <header class="topbar" id="topbar">
+    <div class="topbar-inner">
+      <div class="topbar-left">
+        <a href="#" class="topbar-logo" onclick="navigateTo('overview')">
+          <img src="logo.png" alt="" width="24" height="24" style="border-radius:5px;">
+          <span class="topbar-title">Cyrene</span>
+        </a>
+      </div>
+      <div class="topbar-center">
+        <div class="topbar-search">
+          <svg class="topbar-search-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+          </svg>
+          <input class="topbar-search-input" type="text" id="searchInput" placeholder="搜索文档..." data-i18n="search.placeholder" autocomplete="off" spellcheck="false">
+          <kbd class="topbar-search-hint" id="searchHint">⌘K</kbd>
+          <div class="search-results" id="searchResults"></div>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <button id="langToggle" class="topbar-btn topbar-btn-lang" onclick="toggleLang()" aria-label="Switch language">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+          </svg>
+          <span class="topbar-lang-text"><span data-lang-code="zh">中</span><span class="lang-sep"> / </span><span data-lang-code="en">EN</span></span>
+        </button>
+        <button id="themeToggle" class="topbar-btn" onclick="toggleTheme()" aria-label="切换主题">
+          <svg class="sun-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="5"/>
+            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+          </svg>
+          <svg class="moon-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        </button>
+        <a href="https://github.com/Yongchu-Yitao/Cyrene" class="topbar-btn topbar-gh" target="_blank" rel="noopener" title="GitHub">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+          </svg>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar" role="navigation" aria-label="文档导航">
+    <div class="sidebar-header">
+      <nav class="sidebar-nav">
+      <ul class="nav-list">
+        <li class="nav-section-label" data-i18n="nav.getting-started">入门</li>
+        <li class="nav-item active" data-page="overview"><a href="#" onclick="navigateTo('overview')" data-i18n="nav.overview">概述</a></li>
+        <li class="nav-item" data-page="installation"><a href="#" onclick="navigateTo('installation')" data-i18n="nav.installation">安装</a></li>
+        <li class="nav-item" data-page="configuration"><a href="#" onclick="navigateTo('configuration')" data-i18n="nav.configuration">配置</a></li>
+
+        <li class="nav-section-label" data-i18n="nav.usage">使用</li>
+        <li class="nav-item" data-page="usage-workbench"><a href="#" onclick="navigateTo('usage-workbench')" data-i18n="nav.usage-workbench">Workbench UI</a></li>
+        <li class="nav-item" data-page="usage-legacy"><a href="#" onclick="navigateTo('usage-legacy')" data-i18n="nav.usage-legacy">Legacy UI</a></li>
+        <li class="nav-item" data-page="usage-cli"><a href="#" onclick="navigateTo('usage-cli')" data-i18n="nav.usage-cli">CLI</a></li>
+
+        <li class="nav-section-label" data-i18n="nav.core-concepts">核心概念</li>
+        <li class="nav-item" data-page="architecture"><a href="#" onclick="navigateTo('architecture')" data-i18n="nav.architecture">双阶段循环</a></li>
+        <li class="nav-item" data-page="memory"><a href="#" onclick="navigateTo('memory')" data-i18n="nav.memory">记忆系统</a></li>
+        <li class="nav-item" data-page="knowledge"><a href="#" onclick="navigateTo('knowledge')" data-i18n="nav.knowledge">知识库</a></li>
+        <li class="nav-item" data-page="subagents"><a href="#" onclick="navigateTo('subagents')" data-i18n="nav.subagents">子代理系统</a></li>
+
+        <li class="nav-section-label" data-i18n="nav.features">功能</li>
+        <li class="nav-item" data-page="quick-chat"><a href="#" onclick="navigateTo('quick-chat')" data-i18n="nav.quick-chat">快捷对话</a></li>
+        <li class="nav-item" data-page="browser"><a href="#" onclick="navigateTo('browser')" data-i18n="nav.browser">浏览器实况</a></li>
+        <li class="nav-item" data-page="mcp"><a href="#" onclick="navigateTo('mcp')" data-i18n="nav.mcp">MCP 协议</a></li>
+        <li class="nav-item" data-page="scheduler"><a href="#" onclick="navigateTo('scheduler')" data-i18n="nav.scheduler">任务调度</a></li>
+        <li class="nav-item" data-page="search"><a href="#" onclick="navigateTo('search')" data-i18n="nav.search">搜索</a></li>
+
+        <li class="nav-section-label" data-i18n="nav.development">开发</li>
+        <li class="nav-item" data-page="development"><a href="#" onclick="navigateTo('development')" data-i18n="nav.development">开发指南</a></li>
+        <li class="nav-item" data-page="cli-reference"><a href="#" onclick="navigateTo('cli-reference')" data-i18n="nav.cli-reference">命令参考</a></li>
+      </ul>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="sidebar-version">v0.6.0</div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="content" id="main-content" role="main">
+
+    <!-- ============== Overview ============== -->
+    <article class="page active" id="page-overview">
+<div lang="zh">
+<div class="page-header">
+        <img src="logo.png" alt="" width="64" height="64" style="border-radius:12px; margin-bottom:16px;">
+        <h1>Cyrene — AI Agent That Evolves</h1>
+        <p class="page-subtitle">一个开源 AI Agent 框架：自进化人格、并行子代理、工作台风格桌面 UI，零基础设施。无需 Docker，无需 Redis，只要 Python。</p>
+      </div>
+
+      <section>
+        <h2>Cyrene 是什么</h2>
+        <p>Cyrene 是一个<strong>持续运行</strong>的 AI 代理。它拥有可自我重写的人格文件（<code>SOUL.md</code>），能在不同会话之间保持记忆，可以生成并行子代理协同工作，还能通过定时任务主动发起行动。</p>
+
+        <p>一切都在单一的 Python 进程中运行：</p>
+        <ul>
+          <li><strong>一个进程</strong>托管代理循环、FastAPI Web 服务器、调度器和内置搜索引擎</li>
+          <li><strong>两个 UI</strong>：以项目为中心的 <strong>Workbench</strong>（默认）和经典 <strong>Legacy Agent UI</strong></li>
+          <li><strong>任意 OpenAI 兼容 API</strong>（默认 DeepSeek；Claude、GPT、Qwen、本地模型都可以）</li>
+          <li><strong>零外部依赖</strong>：没有 Docker、没有 Redis、没有向量数据库服务</li>
+        </ul>
+
+        <p>你也可以通过 <strong>Telegram Bot</strong> 或 <strong>WeChat Bot</strong> 与 Cyrene 交互。</p>
+      </section>
+
+      <section>
+        <h2>核心特性</h2>
+
+        <h3>Agent Core</h3>
+        <p>推理循环和让 Cyrene 不像无状态聊天机器人的核心机制。</p>
+
+        <ul>
+          <li><strong>双阶段代理循环</strong>——每次交互先判断是纯聊天（一次 LLM 调用，无工具开销）还是需要行动。简单对话保持快速，真正的工作使用完整工具集。详见<a href="#" onclick="navigateTo('architecture')">架构</a>。</li>
+          <li><strong>SOUL.md 人格系统</strong>——Cyrene 维护一个可以自行重写的人格文档。它学习你的偏好、语气和项目，随着时间推移自行编辑 SOUL.md，人格不会在每次会话时重置。</li>
+          <li><strong>深度研究（Deep Research）</strong>——多轮研究管道：规划子问题 → 搜索和阅读 → 导出结构化 PDF 报告。</li>
+          <li><strong>深度反思（Deep Reflection）</strong>——面对复杂或模糊请求时，在内部多轮重构问题后再回答，以少量延迟换取更精准的回复。</li>
+          <li><strong>行为学习（Behavior Learning）</strong>——从过去的对话中提取可复用的行动模式，让重复工作流越来越高效。</li>
+        </ul>
+
+        <h3>记忆与知识</h3>
+        <ul>
+          <li><strong>三层记忆</strong>——上下文窗口 → 短期跨会话摘要 → 长期 SOUL.md。短期记忆带情感权重和提及次数追踪，高频条目自动保留。过时条目可"退休"而不被删除。详见<a href="#" onclick="navigateTo('memory')">记忆系统</a>。</li>
+          <li><strong>知识库</strong>——上传文档、PDF 和图片；Cyrene 自动分块、嵌入和索引（包括图片视觉索引），代理可在任务中搜索和引用。无嵌入端点时自动降级到全文搜索。</li>
+          <li><strong>实体系统</strong>——跟踪结构化的项目实体（人员、系统、事项），提供创建、查询、更新、删除操作，可限定到 Workbench 项目范围。</li>
+        </ul>
+
+        <h3>工具与自动化</h3>
+        <ul>
+          <li><strong>文件操作</strong>——Read / Write / Edit / Glob / Grep，配合工作区范围守卫确保安全。</li>
+          <li><strong>Shell 执行</strong>——执行 Bash 命令，支持持久 Shell 会话跨步骤复用。</li>
+          <li><strong>Web 搜索与获取</strong>——内置 SimpleXNG 搜索引擎（基于 SearXNG）搜索 Web，WebFetch 获取页面内容。无需 Docker 或外部搜索 API。</li>
+          <li><strong>知识库检索</strong>——SearchKnowledge 工具在工作区知识库中执行语义或关键词搜索。</li>
+          <li><strong>浏览器自动化</strong>——10 个浏览器工具（navigate / screenshot / click / type / scroll / 标签页管理 / 登录接管），持久 Playwright 会话，实时 CDP 画面推送。详见<a href="#" onclick="navigateTo('browser')">浏览器实况</a>。</li>
+          <li><strong>并行子代理</strong>——生成独立代理并行执行任务，通过文件收件箱协调，支持 running → waiting → resumed → done 生命周期。详见<a href="#" onclick="navigateTo('subagents')">子代理系统</a>。</li>
+          <li><strong>MCP 协议</strong>——连接 stdio 或 SSE 的 MCP 服务器扩展工具集，无需重启。详见<a href="#" onclick="navigateTo('mcp')">MCP 协议</a>。</li>
+          <li><strong>任务调度</strong>——Cron、间隔和一次性任务；抽奖系统让代理主动发起行动；管家代理维护 SOUL.md。详见<a href="#" onclick="navigateTo('scheduler')">任务调度</a>。</li>
+          <li><strong>代码工具</strong>——代码库索引、符号搜索、调用链分析、Git 操作（diff / blame / log / status）。</li>
+          <li><strong>技能系统</strong>——在运行时安装 <code>.md</code> / <code>.zip</code> 提示技能，管理启用和卸载，无需重新部署。</li>
+          <li><strong>Claude Code 桥接</strong>——检测现有 Claude Code tmux 会话，启动新会话，发送提示并读取输出。</li>
+        </ul>
+
+        <h3>界面与渠道</h3>
+        <ul>
+          <li><strong>Workbench UI</strong>（默认）——项目中心化桌面体验：项目隔离、意图分流、逐步执行。每个项目独立的工作区、知识库、记忆和聊天。</li>
+          <li><strong>Legacy Agent UI</strong>——经典界面：实时聊天、Agent Flow SVG 时间线、记忆面板、设置页、实体管理、地图视图。</li>
+          <li><strong>Context Debugger</strong>——每次 LLM 调用标记 <code>_ctx</code> 来源元数据，精确追溯上下文每个块的来源。</li>
+          <li><strong>Electron 桌面应用</strong>——CI 自动构建 macOS、Windows（x64 + ARM64）和 Linux 包。凭据存在 OS 钥匙串。</li>
+          <li><strong>引导向导</strong>——首次启动自动运行，引导配置 API 密钥、模型和人格，无需手动编辑文件。</li>
+          <li><strong>地图引擎</strong>——AMap / Leaflet 交互式地图，支持标注点和路线。</li>
+          <li><strong>Telegram / WeChat Bot</strong>——从聊天软件访问完整代理能力，支持双阶段循环和全部工具。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>快速开始</h2>
+        <div class="steps">
+          <div class="step">
+            <div class="step-number">1</div>
+            <div><h3>获取 Cyrene</h3><p>从 <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">Releases 页面</a> 下载预构建包，或源码安装：<code>pip install -e .</code></p></div>
+          </div>
+          <div class="step">
+            <div class="step-number">2</div>
+            <div><h3>启动</h3><p><code>python -m cyrene --workbench</code></p><p>首次启动运行引导向导，配置 API 密钥和人格。</p></div>
+          </div>
+          <div class="step">
+            <div class="step-number">3</div>
+            <div><h3>开始聊天</h3><p>打开 <a href="http://localhost:4242">http://localhost:4242</a>，开始你的第一次对话。</p></div>
+          </div>
+        </div>
+        <p>完整安装步骤见<a href="#" onclick="navigateTo('installation')">安装</a>。</p>
+      </section>
+
+      <section>
+        <h2>技术栈</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>层次</th><th>技术</th></tr></thead>
+            <tbody>
+              <tr><td>运行时</td><td>Python 3.12+, FastAPI, Uvicorn, SQLite</td></tr>
+              <tr><td>包管理器</td><td>uv（锁定文件已提交，pip 也支持）</td></tr>
+              <tr><td>LLM</td><td>OpenAI 兼容 API（默认 DeepSeek；支持 Claude/GPT/Qwen）</td></tr>
+              <tr><td>搜索</td><td>SimpleXNG（基于 SearXNG，内置）</td></tr>
+              <tr><td>浏览器</td><td>Playwright（有头/无头），CDP WebSocket 画面推送</td></tr>
+              <tr><td>桌面</td><td>Electron + electron-builder，OS 钥匙串存储凭据</td></tr>
+              <tr><td>渠道</td><td>python-telegram-bot, itchat</td></tr>
+              <tr><td>代码检查</td><td>Ruff（行长 180）</td></tr>
+              <tr><td>加密</td><td>Fernet（cryptography）配置仓库加密</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <img src="logo.png" alt="" width="64" height="64" style="border-radius:12px; margin-bottom:16px;">
+        <h1>Cyrene — AI Agent That Evolves</h1>
+        <p class="page-subtitle">An open-source AI agent framework with a self-evolving personality, parallel sub-agents, a workbench-style desktop UI, and zero infrastructure. No Docker, no Redis — just Python.</p>
+      </div>
+      <section>
+        <p>Cyrene is a <strong>continuously running</strong> AI agent with a self-rewriting personality file (<code>SOUL.md</code>), cross-session memory, parallel sub-agents, and proactive scheduled tasks.</p>
+        <p>Everything runs in a single Python process:</p>
+        <ul>
+          <li><strong>One process</strong> hosts the agent loop, FastAPI web server, scheduler, and bundled search engine</li>
+          <li><strong>Two UIs</strong>: project-centric <strong>Workbench</strong> (default) and classic <strong>Legacy Agent UI</strong></li>
+          <li><strong>Any OpenAI-compatible API</strong> (DeepSeek by default; Claude, GPT, Qwen, local models all work)</li>
+          <li><strong>Zero external dependencies</strong>: no Docker, no Redis, no vector database</li>
+        </ul>
+      </section>
+      <section>
+        <h2>Core Features</h2>
+        <h3>Agent Core</h3>
+        <ul>
+          <li><strong>Two-phase agent loop</strong> — determines whether to answer directly (one LLM call, no tool overhead) or escalate to the full toolset. Keeps simple chat fast. See <a href="#" onclick="navigateTo('architecture')">Architecture</a>.</li>
+          <li><strong>SOUL.md personality</strong> — a self-rewriting personality document maintained by a steward agent. Learns your preferences and evolves across sessions instead of resetting.</li>
+          <li><strong>Deep Research</strong> — multi-round pipeline: sub-question planning, parallel search, source reading, and structured PDF report export.</li>
+          <li><strong>Deep Reflection</strong> — reframes ambiguous or complex requests over several internal rounds before responding, trading latency for accuracy.</li>
+          <li><strong>Behavior Learning</strong> — distills reusable action patterns from past conversations, making recurring workflows faster over time.</li>
+        </ul>
+        <h3>Memory & Knowledge</h3>
+        <ul>
+          <li><strong>Three-layer memory</strong> — context window, short-term cross-session summaries (with valence tracking, mention counting), long-term SOUL.md. High-frequency entries auto-preserve; stale entries can be retired without deletion. See <a href="#" onclick="navigateTo('memory')">Memory</a>.</li>
+          <li><strong>Knowledge base</strong> — upload documents, PDFs, images; Cyrene chunks, embeds, and indexes them (including vision indexing for images). Falls back to full-text search without an embedding endpoint.</li>
+          <li><strong>Entity system</strong> — track structured project entities (people, systems, items) with create/query/update/delete operations.</li>
+        </ul>
+        <h3>Tools & Automation</h3>
+        <ul>
+          <li><strong>File operations</strong> — Read / Write / Edit / Glob / Grep, scoped by workspace guard.</li>
+          <li><strong>Shell execution</strong> — run Bash commands with persistent shell sessions across rounds.</li>
+          <li><strong>Web search & fetch</strong> — built-in SimpleXNG (SearXNG) for web search, WebFetch for URL content. No Docker or external API key.</li>
+          <li><strong>Knowledge search</strong> — SearchKnowledge tool for semantic/keyword search over the workspace knowledge base.</li>
+          <li><strong>Browser automation</strong> — 10 tools (navigate, screenshot, click, type, scroll, tab management, login takeover), persistent Playwright session, live CDP screencast over WebSocket. See <a href="#" onclick="navigateTo('browser')">Browser</a>.</li>
+          <li><strong>Parallel sub-agents</strong> — spawn independent agents with full tool access, coordinated via a file-based inbox. Lifecycle: running → waiting → resumed → done. See <a href="#" onclick="navigateTo('subagents')">Sub-agents</a>.</li>
+          <li><strong>MCP protocol</strong> — connect stdio or SSE MCP servers to extend the toolset without restarting. See <a href="#" onclick="navigateTo('mcp')">MCP</a>.</li>
+          <li><strong>Task scheduler</strong> — cron, interval, and one-shot tasks. Proactive lottery system for agent-initiated actions. Steward agent for SOUL.md maintenance. See <a href="#" onclick="navigateTo('scheduler')">Scheduler</a>.</li>
+          <li><strong>Code tools</strong> — codebase indexing, symbol search, call-chain analysis, git operations (diff, blame, log, status).</li>
+          <li><strong>Skill system</strong> — install <code>.md</code> / <code>.zip</code> prompt skills at runtime, enable/disable and uninstall — no redeploy needed.</li>
+          <li><strong>Claude Code bridge</strong> — detect existing Claude Code tmux sessions, start new ones, send prompts and read output.</li>
+        </ul>
+        <h3>Interfaces & Channels</h3>
+        <ul>
+          <li><strong>Workbench UI</strong> (default) — project-centric experience: project isolation, intent dispatch, step-by-step execution, independent workspace/knowledge/memory per project.</li>
+          <li><strong>Legacy Agent UI</strong> — classic interface with real-time chat, Agent Flow SVG timeline, memory panel, settings, entity management, and map view.</li>
+          <li><strong>Context Debugger</strong> — every LLM call is tagged with <code>_ctx</code> provenance metadata for precise context tracing.</li>
+          <li><strong>Electron desktop app</strong> — CI-built packages for macOS, Windows (x64+ARM64), Linux. OS keyring credential storage.</li>
+          <li><strong>Onboarding wizard</strong> — runs on first launch, guides API key, model, and personality setup — no manual file editing.</li>
+          <li><strong>Map engine</strong> — AMap / Leaflet interactive map with pins and routes.</li>
+          <li><strong>Telegram / WeChat Bot</strong> — full agent capability from messaging apps.</li>
+        </ul>
+      </section>
+      <section>
+        <h2>Quick Start</h2>
+        <div class="steps">
+          <div class="step"><div class="step-number">1</div><div><h3>Get Cyrene</h3><p>Download from <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">GitHub Releases</a> or <code>pip install -e .</code></p></div></div>
+          <div class="step"><div class="step-number">2</div><div><h3>Launch</h3><p><code>python -m cyrene --workbench</code>. First run starts the onboarding wizard.</p></div></div>
+          <div class="step"><div class="step-number">3</div><div><h3>Chat</h3><p>Open <a href="http://localhost:4242">http://localhost:4242</a> and start chatting.</p></div></div>
+        </div>
+      </section>
+      <section>
+        <h2>Tech Stack</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>Layer</th><th>Technology</th></tr></thead>
+            <tbody>
+              <tr><td>Runtime</td><td>Python 3.12+, FastAPI, Uvicorn, SQLite</td></tr>
+              <tr><td>Package manager</td><td>uv (lockfile committed; pip also supported)</td></tr>
+              <tr><td>LLM</td><td>OpenAI-compatible API (default DeepSeek)</td></tr>
+              <tr><td>Search</td><td>SimpleXNG (built-in SearXNG)</td></tr>
+              <tr><td>Browser</td><td>Playwright, CDP WebSocket screencast</td></tr>
+              <tr><td>Desktop</td><td>Electron + electron-builder, OS keyring</td></tr>
+              <tr><td>Channels</td><td>python-telegram-bot, itchat</td></tr>
+              <tr><td>Encryption</td><td>Fernet (cryptography) for config store</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+</div>
+</article>
+
+    <!-- ============== Installation ============== -->
+    <article class="page" id="page-installation">
+<div lang="zh">
+<div class="page-header">
+        <h1>安装</h1>
+        <p class="page-subtitle">在 Linux、macOS 或 Windows 上安装 Cyrene，约 5 分钟即可完成。</p>
+      </div>
+
+      <section>
+        <h2>前置要求</h2>
+        <ul>
+          <li><strong>Python 3.12+</strong>——使用 <code>python --version</code> 检查</li>
+          <li><strong>conda</strong>（推荐）或 venv</li>
+          <li><strong>Git</strong>——从源码安装时需要</li>
+          <li><strong>Node.js 20+</strong>（可选）——源码运行需要预编译 WebUI JSX</li>
+        </ul>
+        <div class="note">
+          <strong>提示：</strong>如果你不想安装 Node.js，可以从 <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">Releases</a> 下载预构建包——WebUI 已预先编译好。
+        </div>
+      </section>
+
+      <section>
+        <h2>选项 A：预构建包（推荐，开箱即用）</h2>
+        <p>从 <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">GitHub Releases</a> 下载适用于你平台的安装包，下载后直接打开即可使用。无需安装 Python、Node.js 或任何依赖。</p>
+        <ul>
+          <li><strong>macOS</strong>——.dmg 安装包（Apple Silicon / Intel）</li>
+          <li><strong>Windows</strong>——ARM64 和 x64 安装程序分别提供</li>
+          <li><strong>Linux</strong>——.AppImage</li>
+        </ul>
+        <p>首次启动会运行引导向导，配置 API 密钥和人格。之后就可以开始使用了。</p>
+      </section>
+
+      <section>
+        <h2>选项 B：从源码安装</h2>
+        <p>如果希望自行构建或修改源码，按以下步骤操作。</p>
+
+        <h3>Linux / macOS</h3>
+        <div class="code-block"><pre><code># 1. 创建虚拟环境
+conda create -n cyrene python=3.12 -y
+conda activate cyrene
+
+# 2. 安装 Cyrene（推荐使用 uv）
+uv sync
+# 或使用 pip：
+# pip install -e .
+
+# 3. 预编译 WebUI JSX（仅源码运行需要）
+cd src/webui && npm install && node build-jsx.mjs && cd ../..
+
+# 4. 启动
+python -m cyrene --workbench</code></pre></div>
+
+        <div class="note">
+          <strong>无需 .env 文件：</strong>Cyrene 使用加密配置仓库（<code>data/config.enc</code>）。首次运行的引导向导会引导你配置 API 密钥和人格。<code>.env.example</code> 仅为向后兼容保留。
+        </div>
+
+        <h3>Windows（从源码）</h3>
+        <p>Windows 需要额外步骤，因为 <code>uvloop</code>（内置 SimpleXNG 使用）是 Unix-only 的。</p>
+
+        <h4>步骤 1：创建环境</h4>
+        <div class="code-block"><pre><code>conda create -n cyrene python=3.12 -y
+conda activate cyrene</code></pre></div>
+
+        <h4>步骤 2：安装依赖</h4>
+        <div class="code-block"><pre><code>pip install aiosqlite apscheduler croniter fastapi httpx jinja2 python-dotenv python-telegram-bot requests sniffio uvicorn "mcp>=1.27.0"
+pip install winloop  # uvloop 的 Windows 替代
+pip install simplexng --no-deps
+pip install babel brotli clideps flask flask-babel httpx-socks isodate lxml markdown-it-py msgspec platformdirs pyyaml rich setproctitle typer-slim valkey whitenoise
+pip install -e . --no-build-isolation</code></pre></div>
+        <p class="step-hint">中国用户：<code>pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple</code></p>
+
+        <h4>步骤 3：Windows 兼容性补丁</h4>
+        <p>SimpleXNG 的 vendored 代码需要以下手工修补：</p>
+
+        <p><strong>补丁 1：uvloop → winloop</strong><br>编辑 <code>Lib/site-packages/simplexng/_vendor/searx/network/client.py</code>：</p>
+        <div class="code-block"><pre><code># 替换：
+import uvloop
+uvloop.install()
+# 为：
+import sys
+if sys.platform == 'win32':
+    import winloop as uvloop
+else:
+    import uvloop
+uvloop.install()</code></pre></div>
+
+        <p><strong>补丁 2：fork → spawn</strong><br>编辑 <code>Lib/site-packages/simplexng/_vendor/searx/plugins/calculator.py</code>：</p>
+        <div class="code-block"><pre><code># 替换：
+mp_fork = multiprocessing.get_context("fork")
+# 为：
+import sys
+mp_fork = multiprocessing.get_context("fork" if sys.platform != "win32" else "spawn")</code></pre></div>
+
+        <p><strong>补丁 3：创建 pwd 存根</strong><br>创建 <code>Lib/site-packages/pwd.py</code>：</p>
+        <div class="code-block"><pre><code>"""pwd stub for Windows — SearXNG compatibility."""
+import os
+def getpwuid(uid):
+    name = os.environ.get("USERNAME", "unknown")
+    return type("pw", (), {"pw_name": name, "pw_uid": uid})()</code></pre></div>
+
+        <p><strong>补丁 4：启用 JSON API</strong><br>编辑 <code>Lib/site-packages/simplexng/settings/settings_template.yml</code>，在 <code>search.formats</code> 中添加 <code>json</code>。</p>
+
+        <div class="note">
+          <strong>替代方案：</strong>如果不想打补丁，设置 <code>SEARXNG_URL</code> 指向外部 SearXNG 实例，并设置 <code>SEARXNG_AUTO_START=0</code> 禁用内置搜索启动。
+        </div>
+
+        <h4>步骤 4：启动</h4>
+        <div class="code-block"><pre><code>python -m cyrene --workbench</code></pre></div>
+      </section>
+
+      <section>
+        <h2>验证安装</h2>
+        <div class="code-block"><pre><code>conda activate cyrene
+cd /path/to/Cyrene
+python -m cyrene --workbench</code></pre></div>
+        <p>打开 <a href="http://localhost:4242">http://localhost:4242</a>。首次启动将显示引导向导，指导你：</p>
+        <ol>
+          <li>配置 API 密钥（DeepSeek/Claude/GPT 等）</li>
+          <li>设置代理名称和人格</li>
+          <li>选择默认模型</li>
+        </ol>
+        <p>不用 Web 服务器的测试方式：</p>
+        <div class="code-block"><pre><code>python -m cyrene.local_cli</code></pre></div>
+      </section>
+
+      <section>
+        <h2>可选扩展</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>扩展</th><th>安装命令</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td>浏览器实况</td><td><code>pip install -e ".[browser]"<br>playwright install chromium</code></td><td>Playwright 浏览器自动化、实时画面、登录接管</td></tr>
+              <tr><td>开发工具</td><td><code>pip install -e ".[dev]"</code></td><td>pytest 测试框架和其他开发依赖</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>故障排除</h2>
+        <div class="note">
+          <strong>启动问题？</strong>试试 <code>python -m cyrene.local_cli --verbose</code> 查看详细日志。详细模式下，调试日志写入 <code>data/debug_*.jsonl</code>。
+        </div>
+      </section>
+
+      <section>
+        <h2>相关文档</h2>
+        <ul>
+          <li><a href="#" onclick="navigateTo('usage-workbench')">Workbench UI 使用指南</a></li>
+          <li><a href="#" onclick="navigateTo('configuration')">配置参考——环境变量和设置</a></li>
+        </ul>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>Installation</h1>
+        <p class="page-subtitle">Install Cyrene on Linux, macOS or Windows — about 5 minutes.</p>
+      </div>
+      <section>
+        <h2>Prerequisites</h2>
+        <ul>
+          <li><strong>Python 3.12+</strong> — check with <code>python --version</code></li>
+          <li><strong>conda</strong> (recommended) or venv</li>
+          <li><strong>Git</strong> — for source installation</li>
+          <li><strong>Node.js 20+</strong> (optional) — for JSX precompilation from source</li>
+        </ul>
+        <div class="note"><strong>Tip:</strong> Pre-built releases include precompiled WebUI. No Node.js needed.</div>
+      </section>
+      <section>
+        <h2>Option A: Pre-built Package (Recommended)</h2>
+        <p>Download from <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">GitHub Releases</a> — open and use immediately. No Python, Node.js, or any dependencies required.</p>
+        <ul>
+          <li><strong>macOS</strong> — .dmg (Apple Silicon / Intel)</li>
+          <li><strong>Windows</strong> — ARM64 and x64 installers</li>
+          <li><strong>Linux</strong> — .AppImage</li>
+        </ul>
+        <p>First launch runs the onboarding wizard for API key and personality setup.</p>
+      </section>
+      <section>
+        <h2>Option B: From Source</h2>
+        <h3>Linux / macOS</h3>
+        <div class="code-block"><pre><code>conda create -n cyrene python=3.12 -y
+conda activate cyrene
+pip install -e .
+cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
+        <div class="note"><strong>Note:</strong> You do <strong>not</strong> need a <code>.env</code> file. Configuration is stored in an encrypted store.</div>
+      </section>
+      <section>
+        <h2>Verify Installation</h2>
+        <div class="code-block"><pre><code>python -m cyrene --workbench</code></pre></div>
+        <p>Open <a href="http://localhost:4242">http://localhost:4242</a>. The first launch will run the onboarding wizard.</p>
+        <p>To test without the web server:</p>
+        <div class="code-block"><pre><code>python -m cyrene.local_cli</code></pre></div>
+      </section>
+</div>
+</article>
+
+    <!-- ============== Configuration ============== -->
+    <article class="page" id="page-configuration">
+<div lang="zh">
+<div class="page-header">
+        <h1>配置</h1>
+        <p class="page-subtitle">加密配置仓库、环境变量、运行时设置。无需 .env 文件。</p>
+      </div>
+
+      <section>
+        <h2>配置架构</h2>
+        <p>Cyrene 使用 Fernet 加密的 JSON 配置存储（<code>data/config.enc</code>）。这意味着：</p>
+        <ul>
+          <li>API 密钥等敏感信息在磁盘上加密</li>
+          <li>你<strong>不需要</strong>创建或维护 <code>.env</code> 文件</li>
+          <li>首次运行的引导向导会写入所有必需值</li>
+          <li>Web UI 设置页面可以在运行时更新配置</li>
+        </ul>
+        <p><code>.env.example</code> 仅为向后兼容保留，新安装应使用加密仓库方式。</p>
+      </section>
+
+      <section>
+        <h2>环境变量</h2>
+        <p>以下变量在启动时读取。多数字段可通过 Web UI 在运行时编辑，无需重启。</p>
+
+        <h3>LLM</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>变量</th><th>说明</th><th>默认值</th></tr></thead>
+            <tbody>
+              <tr><td><code>OPENAI_API_KEY</code></td><td>API 密钥（OpenAI / DeepSeek / 兼容 API）</td><td>—</td></tr>
+              <tr><td><code>OPENAI_BASE_URL</code></td><td>API 端点 URL</td><td><code>https://api.deepseek.com/v1</code></td></tr>
+              <tr><td><code>OPENAI_MODEL</code></td><td>模型 ID</td><td><code>deepseek-v4-flash</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Agent 行为</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>变量</th><th>说明</th><th>默认值</th></tr></thead>
+            <tbody>
+              <tr><td><code>ASSISTANT_NAME</code></td><td>代理显示名称</td><td><code>Cyrene</code></td></tr>
+              <tr><td><code>MAX_TOOL_ROUNDS</code></td><td>每次用户消息的最大工具轮次</td><td><code>15</code></td></tr>
+              <tr><td><code>MAX_HISTORY_MESSAGES</code></td><td>上下文窗口保留的消息条数</td><td><code>40</code></td></tr>
+              <tr><td><code>MAX_TOOL_OUTPUT_CHARS</code></td><td>工具结果发送给 LLM 的字符上限</td><td><code>12000</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>调度与管家</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>变量</th><th>说明</th><th>默认值</th></tr></thead>
+            <tbody>
+              <tr><td><code>SCHEDULER_INTERVAL</code></td><td>遗留心跳间隔（秒）</td><td><code>60</code></td></tr>
+              <tr><td><code>HEARTBEAT_INTERVAL</code></td><td>心跳检查间隔（秒）</td><td><code>300</code></td></tr>
+              <tr><td><code>HEARTBEAT_LOTTERY_INTERVAL</code></td><td>主动消息抽奖间隔（秒）</td><td><code>1800</code></td></tr>
+              <tr><td><code>LOTTERY_DELTA</code></td><td>抽奖概率每次增量</td><td><code>0.15</code></td></tr>
+              <tr><td><code>LOTTERY_MAX</code></td><td>抽奖概率上限</td><td><code>0.85</code></td></tr>
+              <tr><td><code>DAYTIME_START</code></td><td>日间开始小时</td><td><code>6</code></td></tr>
+              <tr><td><code>DAYTIME_END</code></td><td>日间结束小时</td><td><code>22</code></td></tr>
+              <tr><td><code>STEWARD_INTERVAL</code></td><td>SOUL.md 管家代理运行间隔（秒）</td><td><code>1800</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>搜索</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>变量</th><th>说明</th><th>默认值</th></tr></thead>
+            <tbody>
+              <tr><td><code>SEARXNG_AUTO_START</code></td><td>自动启动 SimpleXNG 搜索</td><td><code>1</code>（启用）</td></tr>
+              <tr><td><code>SEARXNG_PORT</code></td><td>SimpleXNG 监听端口</td><td><code>8888</code></td></tr>
+              <tr><td><code>SEARXNG_HOST</code></td><td>SimpleXNG 绑定地址</td><td><code>127.0.0.1</code></td></tr>
+              <tr><td><code>SEARXNG_URL</code></td><td>外部 SearXNG URL（覆盖自动启动）</td><td>—</td></tr>
+              <tr><td><code>SEARCH_PROXY</code></td><td>搜索 HTTP 代理</td><td>—</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>知识库 / 嵌入（可选）</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>变量</th><th>说明</th><th>默认值</th></tr></thead>
+            <tbody>
+              <tr><td><code>EMBEDDING_BASE_URL</code></td><td>OpenAI 兼容的嵌入端点 URL</td><td>—</td></tr>
+              <tr><td><code>EMBEDDING_API_KEY</code></td><td>嵌入端点 API 密钥</td><td>—</td></tr>
+              <tr><td><code>EMBEDDING_MODEL</code></td><td>嵌入模型名称</td><td>—</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <strong>提示：</strong>如果未配置嵌入端点，知识库自动降级到全文搜索（FTS），仍然可用但语义搜索精度降低。
+        </div>
+
+        <h3>浏览器</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>变量</th><th>说明</th><th>默认值</th></tr></thead>
+            <tbody>
+              <tr><td><code>CYRENE_BROWSER_HEADLESS</code></td><td>无头模式（0=始终有头）</td><td><code>1</code></td></tr>
+              <tr><td><code>CYRENE_BROWSER_SCREENCAST_QUALITY</code></td><td>JPEG 画面质量（1-100）</td><td><code>60</code></td></tr>
+              <tr><td><code>CYRENE_BROWSER_WIDTH</code></td><td>视口/画面宽度（px）</td><td><code>1280</code></td></tr>
+              <tr><td><code>CYRENE_BROWSER_HEIGHT</code></td><td>视口/画面高度（px）</td><td><code>800</code></td></tr>
+              <tr><td><code>CYRENE_BROWSER_LOCALE</code></td><td>浏览器区域设置</td><td><code>zh-CN</code></td></tr>
+              <tr><td><code>CYRENE_BROWSER_ACCEPT_LANGUAGE</code></td><td>Accept-Language 头</td><td><code>zh-CN,zh;q=0.9,en;q=0.8</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>渠道（可选）</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>变量</th><th>说明</th><th>默认值</th></tr></thead>
+            <tbody>
+              <tr><td><code>TELEGRAM_BOT_TOKEN</code></td><td>Telegram Bot 令牌</td><td>—</td></tr>
+              <tr><td><code>OWNER_ID</code></td><td>你的 Telegram 用户 ID</td><td>—</td></tr>
+              <tr><td><code>WECHAT_BOT_TOKEN</code></td><td>WeChat Bot 令牌</td><td>—</td></tr>
+              <tr><td><code>WECHAT_OWNER_ID</code></td><td>WeChat 所有者 ID</td><td>—</td></tr>
+              <tr><td><code>AMAP_API_KEY</code></td><td>高德地图 API 密钥</td><td>—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>运行时设置</h2>
+        <p>通过 Web UI <strong>设置</strong>页面可以在不重启的情况下修改大部分设置：</p>
+
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>设置类别</th><th>可修改项</th></tr></thead>
+            <tbody>
+              <tr><td>API 密钥</td><td><code>OPENAI_API_KEY</code>、<code>OPENAI_BASE_URL</code>、<code>OPENAI_MODEL</code>、Telegram/WeChat 令牌、嵌入凭据</td></tr>
+              <tr><td>模型</td><td>添加/删除模型配置</td></tr>
+              <tr><td>工具</td><td>启用/禁用特定工具</td></tr>
+              <tr><td>MCP 服务器</td><td>添加、删除和重启 MCP 连接（<strong>无需重启进程</strong>）</td></tr>
+              <tr><td>SOUL.md</td><td>直接编辑人格文档</td></tr>
+              <tr><td>搜索</td><td>内置 SimpleXNG 配置</td></tr>
+              <tr><td>外观</td><td>主题、文字大小、密度</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>模型定价参考</h2>
+        <p>Cyrene 跟踪 token 用量并为已知模型估算成本。如果供应商价格变动，请在设置 UI 中更新。</p>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>模型</th><th>输入（每百万 token）</th><th>输出（每百万 token）</th></tr></thead>
+            <tbody>
+              <tr><td>DeepSeek Chat</td><td>$0.14</td><td>$0.28</td></tr>
+              <tr><td>Claude Haiku 4.5</td><td>$0.25</td><td>$1.25</td></tr>
+              <tr><td>Claude Sonnet 4.6</td><td>$3.00</td><td>$15.00</td></tr>
+              <tr><td>Claude Opus 4.7</td><td>$15.00</td><td>$75.00</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>Configuration</h1>
+        <p class="page-subtitle">Encrypted config store, environment variables, runtime settings. No .env file required.</p>
+      </div>
+      <section>
+        <h2>Config Architecture</h2>
+        <p>Cyrene uses a Fernet-encrypted JSON config store (<code>data/config.enc</code>). API keys are encrypted on disk. The first-run wizard writes required values, and the Web UI Settings page can update them at runtime.</p>
+      </section>
+      <section>
+        <h2>Environment Variables</h2>
+        <p>The following variables are read at startup. Most can be edited at runtime through the Web UI.</p>
+        <h3>LLM</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Variable</th><th>Description</th><th>Default</th></tr></thead>
+          <tbody>
+            <tr><td><code>OPENAI_API_KEY</code></td><td>API key</td><td>—</td></tr>
+            <tr><td><code>OPENAI_BASE_URL</code></td><td>API endpoint URL</td><td><code>https://api.deepseek.com/v1</code></td></tr>
+            <tr><td><code>OPENAI_MODEL</code></td><td>Model ID</td><td><code>deepseek-v4-flash</code></td></tr>
+          </tbody>
+        </table></div>
+        <h3>Agent Settings</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Variable</th><th>Description</th><th>Default</th></tr></thead>
+          <tbody>
+            <tr><td><code>ASSISTANT_NAME</code></td><td>Agent display name</td><td><code>Cyrene</code></td></tr>
+            <tr><td><code>MAX_TOOL_ROUNDS</code></td><td>Max tool rounds per message</td><td><code>15</code></td></tr>
+            <tr><td><code>MAX_HISTORY_MESSAGES</code></td><td>Context window size</td><td><code>40</code></td></tr>
+            <tr><td><code>MAX_TOOL_OUTPUT_CHARS</code></td><td>Tool output char limit</td><td><code>12000</code></td></tr>
+          </tbody>
+        </table></div>
+      </section>
+      <section>
+        <h2>Runtime Settings</h2>
+        <p>Most settings can be modified at runtime through the Web UI Settings page without restarting:</p>
+        <ul>
+          <li><strong>API Keys</strong> — update <code>OPENAI_API_KEY</code>, <code>OPENAI_BASE_URL</code>, etc.</li>
+          <li><strong>Models</strong> — add or remove model configurations</li>
+          <li><strong>Tools</strong> — enable or disable specific tools</li>
+          <li><strong>MCP Servers</strong> — add, remove, and restart MCP connections</li>
+          <li><strong>SOUL.md</strong> — edit the personality document directly</li>
+        </ul>
+      </section>
+</div>
+</article>
+
+    <!-- ============== Usage: Workbench ============== -->
+    <article class="page" id="page-usage-workbench">
+<div lang="zh">
+<div class="page-header">
+        <h1>Workbench UI</h1>
+        <p class="page-subtitle">默认 UI。以项目为中心的桌面风格工作台，提供项目隔离、意图分流和诚实逐步执行。</p>
+      </div>
+
+      <section>
+        <h2>启动</h2>
+
+        <h3>Release 桌面应用</h3>
+        <p>从 <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">Releases 页面</a> 下载安装包后，直接打开应用即可。首次启动会运行引导向导，配置 API 密钥和人格。Workbench UI 是默认界面，启动后自动加载。</p>
+        <div class="note">
+          <strong>macOS 注意：</strong>首次打开可能被 Gatekeeper 拦截，前往 <strong>系统设置 → 隐私与安全性</strong>，点击"仍要打开"。
+        </div>
+
+        <h3>源码运行</h3>
+        <div class="code-block"><pre><code>python -m cyrene --workbench</code></pre></div>
+        <p>打开 <a href="http://localhost:4242">http://localhost:4242</a>。首次运行也会启动引导向导。</p>
+        <p><code>--workbench</code> 标志可以省略——<code>python -m cyrene</code> 等价于 <code>python -m cyrene --workbench</code>。</p>
+      </section>
+
+      <section>
+        <h2>页面一览</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>页面</th><th>功能</th></tr></thead>
+            <tbody>
+              <tr><td><strong>欢迎 / 项目</strong></td><td>创建和切换项目。每个项目拥有独立的工作区、知识库、记忆和聊天历史。</td></tr>
+              <tr><td><strong>仪表盘</strong></td><td>系统概览：活动任务数、最近会话、知识库统计、LLM 状态。</td></tr>
+              <tr><td><strong>聊天</strong></td><td>项目范围的实时聊天。详见下文"意图分流"。</td></tr>
+              <tr><td><strong>调度</strong></td><td>查看和管理定时任务、cron 作业和截止日期。</td></tr>
+              <tr><td><strong>知识</strong></td><td>上传文档、浏览知识库、运行语义搜索。</td></tr>
+              <tr><td><strong>记忆</strong></td><td>查看和管理项目/代理记忆。按工作区隔离。</td></tr>
+              <tr><td><strong>模型</strong></td><td>选择 LLM 模型，管理 API 端点。</td></tr>
+              <tr><td><strong>帮助</strong></td><td>入门提示、快捷键参考和文档链接。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>意图分流（Intent Dispatch）</h2>
+        <p>聊天输入不是简单地全部交给 LLM。系统会自动分类意图：</p>
+        <ul>
+          <li><strong>回答模式</strong>——直接交给 LLM 回答，不会触发工具调用或不必要的规划</li>
+          <li><strong>指令模式</strong>——需要调用工具执行的命令（如搜索、文件操作），交给代理执行</li>
+          <li><strong>任务模式</strong>——需要多步操作的复杂请求，生成执行计划逐步执行</li>
+          <li><strong>收尾</strong>——你说"任务完成"或"可以验收"时，代理汇总成果，状态标记为 <code>review</code></li>
+        </ul>
+        <p>你始终可以自由对话，不会无条件生成计划。</p>
+      </section>
+
+      <section>
+        <h2>逐步执行</h2>
+        <p>当代理进入任务模式时：</p>
+        <ol>
+          <li>Agent 规划需要执行的步骤</li>
+          <li><strong>你</strong>决定步骤的执行顺序（不必按计划顺序）</li>
+          <li>每步执行时你可以在聊天中实时看到进度</li>
+          <li>你可以随时发送消息引导、调整或中止当前步</li>
+          <li>任务完成时，Agent 汇总成果，产物（文件、报告等）可在线查看或下载</li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>项目隔离</h2>
+        <p>Workbench 的核心设计理念是项目隔离。每个项目拥有：</p>
+        <ul>
+          <li>独立的 <code>workspacePath</code> 限定工作区</li>
+          <li>独立的知识库（文档和嵌入向量）</li>
+          <li>独立的记忆空间</li>
+          <li>独立的聊天历史和会话</li>
+        </ul>
+        <p>这意味着你可以在"工作"项目中讨论代码，在"个人"项目中讨论生活，两者互不干扰。</p>
+      </section>
+
+      <section>
+        <h2>相关文档</h2>
+        <ul>
+          <li><a href="#" onclick="navigateTo('usage-legacy')">Legacy Agent UI——经典聊天界面</a></li>
+          <li><a href="#" onclick="navigateTo('usage-cli')">CLI 使用——命令行和交互式终端</a></li>
+        </ul>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>Workbench UI</h1>
+        <p class="page-subtitle">The default UI. A project-centric desktop workbench with project isolation, intent dispatch, and step-by-step execution.</p>
+      </div>
+      <section>
+        <h2>Launching</h2>
+        <h3>Release Desktop App</h3>
+        <p>Download from <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">GitHub Releases</a> and open the app directly. First launch runs the onboarding wizard. Workbench UI is the default interface.</p>
+        <div class="note"><strong>macOS:</strong> If Gatekeeper blocks it, go to <strong>System Settings → Privacy & Security</strong> and click "Open Anyway".</div>
+        <h3>From Source</h3>
+        <div class="code-block"><pre><code>python -m cyrene --workbench</code></pre></div>
+        <p>Open <a href="http://localhost:4242">http://localhost:4242</a>. The <code>--workbench</code> flag can be omitted.</p>
+      </section>
+      <section>
+        <h2>Intent Dispatch</h2>
+        <p>Chat input is automatically classified into intents:</p>
+        <ul>
+          <li><strong>Answer mode</strong> — direct LLM reply, no tool calls</li>
+          <li><strong>Command mode</strong> — tool execution (search, file operations)</li>
+          <li><strong>Task mode</strong> — multi-step plan with step-by-step execution</li>
+          <li><strong>Finalize</strong> — when you say "done", agent summarizes results</li>
+        </ul>
+      </section>
+      <section>
+        <h2>Project Isolation</h2>
+        <p>Each project has its own workspace path, knowledge base, memory space, and chat history — completely isolated.</p>
+      </section>
+</div>
+</article>
+
+    <!-- ============== Usage: Legacy ============== -->
+    <article class="page" id="page-usage-legacy">
+<div lang="zh">
+<div class="page-header">
+        <h1>Legacy Agent UI</h1>
+        <p class="page-subtitle">经典单代理 Web 界面，提供完整的功能面板和调试工具。</p>
+      </div>
+
+      <section>
+        <h2>启动</h2>
+
+        <h3>Release 桌面应用</h3>
+        <p>从 <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">Releases 页面</a> 下载安装包后，直接打开应用。如果你偏好经典界面，需要在应用内设置中切换，或在启动时使用 <code>--agent</code> 模式启动。</p>
+
+        <h3>源码运行</h3>
+        <div class="code-block"><pre><code>python -m cyrene --agent</code></pre></div>
+        <p>打开 <a href="http://localhost:4242">http://localhost:4242</a>。</p>
+      </section>
+
+      <section>
+        <h2>页面功能详解</h2>
+
+        <h3>聊天</h3>
+        <ul>
+          <li><strong>主面板</strong>——Markdown 渲染的消息区域，发送消息，实时查看流式响应</li>
+          <li><strong>引导（Guidance）</strong>——当代理正在执行多轮操作时，你可以向它发送引导指令，影响当前轮次的行为</li>
+          <li><strong>浏览器面板</strong>——当代理使用浏览器时自动显示实时画面</li>
+        </ul>
+
+        <h3>Agent Flow</h3>
+        <p>SVG 画布可视化代理执行的每一个步骤：LLM 调用、工具执行、子代理通信、消息路由。每个节点可点击查看详情。</p>
+
+        <h3>会话管理</h3>
+        <ul>
+          <li><strong>列表</strong>——浏览、搜索历史会话，查看消息数和 token 用量</li>
+          <li><strong>详情</strong>——查看完整消息记录、每个子代理的运行轨迹</li>
+        </ul>
+
+        <h3>记忆面板</h3>
+        <ul>
+          <li><strong>SOUL.md</strong>——浏览和在线编辑人格文档</li>
+          <li><strong>短期记忆</strong>——查看压缩后的短期记忆条目，每条带情感权重标签（正面/负面/中性）</li>
+          <li><strong>上下文</strong>——监控上下文窗口使用量</li>
+        </ul>
+
+        <h3>状态与调试</h3>
+        <ul>
+          <li><strong>指标</strong>——子代理数、会话数、记忆条目数、任务数</li>
+          <li><strong>工作者</strong>——主代理和每个子代理的运行状态</li>
+          <li><strong>服务健康</strong>——LLM 端点可用性、SOUL.md 状态、MCP 服务器连接状态</li>
+          <li><strong>Context Debugger</strong>——检查最近 LLM 调用的完整上下文溯源元数据（<code>_ctx</code>）</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>与传统聊天的区别</h2>
+        <p>相比 Workbench UI，Legacy UI 更适合：</p>
+        <ul>
+          <li>需要全面监控代理内部运行状态的场景</li>
+          <li>深入调试工具调用和 LLM 行为</li>
+          <li>不需要项目隔离的简单使用场景</li>
+        </ul>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>Legacy Agent UI</h1>
+        <p class="page-subtitle">Classic single-agent web interface with comprehensive panels and debugging tools.</p>
+      </div>
+      <section>
+        <h2>Launching</h2>
+        <h3>Release Desktop App</h3>
+        <p>Download from <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">GitHub Releases</a>. To use Legacy UI, launch with <code>--agent</code> mode or switch in-app settings.</p>
+        <h3>From Source</h3>
+        <div class="code-block"><pre><code>python -m cyrene --agent</code></pre></div>
+        <p>Open <a href="http://localhost:4242">http://localhost:4242</a>.</p>
+      </section>
+      <section>
+        <h2>Interface</h2>
+        <ul>
+          <li><strong>Chat</strong> — Markdown-rendered messages, live streaming, browser panel</li>
+          <li><strong>Agent Flow</strong> — SVG canvas visualizing every step of execution</li>
+          <li><strong>Sessions</strong> — browse, search, and inspect session history</li>
+          <li><strong>Memory</strong> — SOUL.md, short-term memory with valence, context usage</li>
+          <li><strong>Context Debugger</strong> — inspect provenance metadata for LLM calls</li>
+        </ul>
+      </section>
+</div>
+</article>
+
+    <!-- ============== Usage: CLI ============== -->
+    <article class="page" id="page-usage-cli">
+<div lang="zh">
+<div class="page-header">
+        <h1>CLI 使用</h1>
+        <p class="page-subtitle">cyrene 命令行客户端和交互式本地 CLI。</p>
+      </div>
+
+      <section>
+        <h2>cyrene 命令（HTTP 客户端）</h2>
+        <p><code>cyrene</code> 命令是一个瘦 HTTP 客户端，与运行在 <code>http://localhost:4242</code> 的守护进程通信。使用 <code>--json</code> 获取机器可读输出。</p>
+
+        <div class="code-block"><pre><code># 后台启动守护进程
+cyrene start
+
+# 查看状态
+cyrene status
+
+# 发送消息
+cyrene do "搜索今天的科技新闻" --session run_live
+
+# 停止守护进程
+cyrene stop</code></pre></div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><code>cyrene start</code></td><td>后台启动守护进程</td></tr>
+              <tr><td><code>cyrene stop</code></td><td>停止守护进程</td></tr>
+              <tr><td><code>cyrene do &lt;text&gt; --session &lt;id&gt;</code></td><td>向代理会话发送消息</td></tr>
+              <tr><td><code>cyrene session list</code></td><td>列出所有会话（活动 + 存档）</td></tr>
+              <tr><td><code>cyrene session status --session &lt;id&gt;</code></td><td>显示会话详情</td></tr>
+              <tr><td><code>cyrene session delete --session &lt;id&gt;</code></td><td>删除会话</td></tr>
+              <tr><td><code>cyrene flow --session &lt;id&gt;</code></td><td>列出代理轮次</td></tr>
+              <tr><td><code>cyrene flow --session &lt;id&gt; --round &lt;r&gt;</code></td><td>显示轮次执行追踪</td></tr>
+              <tr><td><code>cyrene flow --session &lt;id&gt; --round &lt;r&gt; --id &lt;e&gt;</code></td><td>检查特定事件（LLM 调用或工具调用）</td></tr>
+              <tr><td><code>cyrene status</code></td><td>系统状态和指标</td></tr>
+              <tr><td><code>cyrene mcp list</code></td><td>列出 MCP 服务器及其工具</td></tr>
+              <tr><td><code>cyrene mcp add &lt;name&gt; stdio &lt;cmd&gt; [args...]</code></td><td>添加 stdio MCP 服务器</td></tr>
+              <tr><td><code>cyrene mcp add &lt;name&gt; sse &lt;url&gt;</code></td><td>添加 SSE MCP 服务器</td></tr>
+              <tr><td><code>cyrene mcp remove &lt;name&gt;</code></td><td>移除 MCP 服务器</td></tr>
+              <tr><td><code>cyrene mcp toggle &lt;name&gt;</code></td><td>启用/禁用 MCP 服务器</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>交互式本地 CLI</h2>
+        <p>不需要启动 Web 服务器，直接运行代理的交互模式。适合快速测试和无头环境：</p>
+        <div class="code-block"><pre><code>python -m cyrene.local_cli</code></pre></div>
+
+        <p>可用命令：</p>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>命令</th><th>功能</th></tr></thead>
+            <tbody>
+              <tr><td><code>/h</code></td><td>帮助菜单——清除上下文、重置人格、系统状态</td></tr>
+              <tr><td><code>/mcp</code></td><td>MCP 服务器管理（list/add/remove/toggle/test）</td></tr>
+              <tr><td><code>/mcp list</code></td><td>列出已配置的 MCP 服务器</td></tr>
+              <tr><td><code>/clear</code></td><td>重置当前会话上下文</td></tr>
+              <tr><td><code>/deep-reflect [focus]</code></td><td>对给定主题运行深度反思</td></tr>
+              <tr><td><code>quit</code></td><td>退出交互式 CLI</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>聊天的斜杠命令</h2>
+        <p>Workbench UI、Legacy UI 和交互式 CLI 都支持的斜杠命令：</p>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><code>/deep-reflect [focus]</code></td><td>触发多轮内部重构，适合模糊或复杂的请求。以少量延迟换取更精准的回答。</td></tr>
+              <tr><td><code>/clear</code></td><td>重置当前会话的上下文窗口。注意这会清除所有历史消息。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>完成的工作流示例</h2>
+        <div class="code-block"><pre><code># 1. 启动守护进程
+cyrene start
+
+# 2. 创建一个会话并发送消息
+cyrene do "分析当前目录的项目架构" --session analysis
+
+# 3. 查看代理的推理轮次
+cyrene flow --session analysis
+
+# 4. 查看特定轮次的详细信息
+cyrene flow --session analysis --round round_1
+
+# 5. 获取系统状态
+cyrene status
+
+# 6. 完成后停止守护进程
+cyrene stop</code></pre></div>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>CLI Usage</h1>
+        <p class="page-subtitle">Command-line client and interactive local CLI.</p>
+      </div>
+      <section>
+        <h2>cyrene Command (HTTP Client)</h2>
+        <p>The <code>cyrene</code> command communicates with the daemon at <code>http://localhost:4242</code>.</p>
+        <div class="code-block"><pre><code>cyrene start
+cyrene status
+cyrene do "search today news" --session daily
+cyrene stop</code></pre></div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>cyrene start</code></td><td>Start daemon in background</td></tr>
+            <tr><td><code>cyrene stop</code></td><td>Stop daemon</td></tr>
+            <tr><td><code>cyrene do &lt;text&gt; --session &lt;id&gt;</code></td><td>Send message to agent</td></tr>
+            <tr><td><code>cyrene status</code></td><td>System status and metrics</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+      <section>
+        <h2>Interactive Local CLI</h2>
+        <div class="code-block"><pre><code>python -m cyrene.local_cli</code></pre></div>
+        <p>Slash commands: <code>/h</code>, <code>/mcp</code>, <code>/clear</code>, <code>/deep-reflect [focus]</code>, <code>quit</code>.</p>
+      </section>
+</div>
+</article>
+
+    <!-- ============== Architecture ============== -->
+    <article class="page" id="page-architecture">
+<div lang="zh">
+<div class="page-header">
+        <h1>系统架构</h1>
+        <p class="page-subtitle">双阶段代理循环、项目结构、安全模型。理解 Cyrene 的核心设计。</p>
+      </div>
+
+      <section>
+        <h2>双阶段决策循环</h2>
+        <p>这是 Cyrene 最核心的设计决策。传统的 AI Agent 在每次交互中都加载完整工具集，这在简单对话时造成不必要的开销（更大的系统提示 = 更多 token）。</p>
+        <p>Cyrene 的做法是将交互分为两个阶段：</p>
+
+        <div class="flow-diagram">
+          <div class="flow-node flow-start">用户消息</div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-node flow-phase">阶段 1（轻量：use_tools / ask_user / quit）</div>
+          <div class="flow-branch">
+            <div class="flow-branch-item">
+              <div class="flow-node flow-end">纯聊天 → 直接回复</div>
+              <div class="flow-label">1 次 LLM 调用（quit / ask_user）</div>
+            </div>
+            <div class="flow-branch-item">
+              <div class="flow-node flow-phase">需要工具 → 阶段 2</div>
+            </div>
+          </div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-node flow-phase">阶段 2（完整工具集 + 多轮）</div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-node flow-end">回复用户</div>
+        </div>
+
+        <h3>阶段 1（快速通道）</h3>
+        <p>每次用户交互都从阶段 1 开始。此阶段 LLM 可以在 <code>use_tools</code>、<code>ask_user</code> 和 <code>quit</code> 三个工具中选择：</p>
+        <ul>
+          <li>如果用户只是在聊天或问简单问题，代理选择 <code>quit</code> 直接回复——<strong>仅一次 LLM 调用</strong></li>
+          <li>如果用户请求涉及工具操作，代理选择 <code>use_tools</code> 进入阶段 2</li>
+          <li>如果代理需要向用户提问（如确认意图），选择 <code>ask_user</code>——也是一种纯聊天交互</li>
+        </ul>
+        <p>这意味着简单的对话保持轻量和快速，而真正的工作仍然可以获得完整工具集的支持。出于提示缓存优化，完整的工具集定义实际上在阶段 1 就已经传递给 LLM，但只有上述三个工具可在阶段 1 调用。</p>
+
+        <h3>阶段 2（完整工具集）</h3>
+        <p>此阶段加载完整的工具集，包括：</p>
+        <div class="flow-tools" style="justify-content:flex-start; max-width:100%;">
+          <span class="tool-tag">文件读写</span>
+          <span class="tool-tag">Bash Shell</span>
+          <span class="tool-tag">Web 搜索</span>
+          <span class="tool-tag">知识库检索</span>
+          <span class="tool-tag">实体管理</span>
+          <span class="tool-tag">浏览器操作</span>
+          <span class="tool-tag">代码分析</span>
+          <span class="tool-tag">Git 操作</span>
+          <span class="tool-tag">子代理生成</span>
+          <span class="tool-tag">MCP 工具</span>
+          <span class="tool-tag">任务调度</span>
+          <span class="tool-tag">技能管理</span>
+          <span class="tool-tag">Claude Code</span>
+        </div>
+        <p>代理在多轮之间保持状态，直到调用 <code>quit</code> 结束交互。最大轮次由 <code>MAX_TOOL_ROUNDS</code> 控制（默认 15）。</p>
+      </section>
+
+      <section>
+        <h2>项目结构</h2>
+        <div class="code-block"><pre><code>src/
+├── cyrene/                           # 核心引擎
+│   ├── agent/                        # 双阶段循环、会话、轮次
+│   │   ├── agent.py                  # 主代理编排
+│   │   ├── coordinator.py            # 阶段路由、上下文组装
+│   │   ├── session.py                # 会话持久化
+│   │   ├── round.py                  # 工具轮次生命周期
+│   │   ├── prompts.py                # 系统提示和阶段提示
+│   │   └── deep_reflection.py        # 深度反思
+│   ├── tool_impl/                    # 每个原生工具一个文件
+│   ├── code_tools/                   # 代码索引、分析、Git
+│   ├── knowledge/                    # 文档摄取、嵌入、检索
+│   ├── channels/                     # Telegram、WeChat Bot
+│   ├── modules/                      # 深度研究等管道
+│   ├── registry_tools.py             # 中心工具注册表
+│   ├── mcp_manager.py                # MCP 服务器生命周期
+│   ├── search.py                     # 搜索管道
+│   ├── searxng_manager.py            # SimpleXNG 进程管理
+│   ├── scheduler.py                  # 心跳、cron、抽奖、管家
+│   ├── soul.py                       # SOUL.md 读写
+│   ├── short_term.py                 # 短期记忆压缩
+│   ├── memory.py                     # 记忆上下文组装
+│   ├── shells.py                     # 持久 Shell 会话
+│   ├── browser.py                    # 持久浏览器
+│   ├── cc_bridge.py / cc_terminal.py # Claude Code 集成
+│   ├── behavior_learning.py          # 行为模式学习
+│   ├── skills_registry.py            # 技能存储
+│   ├── context_trace.py              # 上下文溯源标记
+│   └── context_debug.py              # 调试日志查看器
+├── webui/                            # FastAPI 后端 + SPA
+│   ├── server.py                     # FastAPI 应用工厂
+│   ├── routes.py                     # REST API + SSE
+│   ├── routes_knowledge.py           # 知识库 API
+│   ├── routes_workbench.py           # Workbench API
+│   └── static/app/                   # JSX 前端组件
+├── workbench-webui/                  # Workbench 前端资源
+├── tests/                            # 测试套件
+├── data/                             # 运行时数据、调试日志
+├── workspace/                        # SOUL.md、模式、会话
+└── store/                            # SQLite 数据库</code></pre></div>
+      </section>
+
+      <section>
+        <h2>安全模型</h2>
+        <ul>
+          <li><strong>网络层</strong>——Web UI 只绑定 <code>127.0.0.1</code>，不暴露到网络。Electron 桌面构建在 OS 钥匙串中存储随机令牌，每次请求验证。</li>
+          <li><strong>工作区守卫</strong>——文件读写和 Shell 操作有工作区范围守卫。在 Workbench 中，代理工作区被限定到项目的 <code>workspacePath</code>。</li>
+          <li><strong>权限升降级</strong>——跨越工作区的读写操作需要权限提升请求。</li>
+        </ul>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>Architecture</h1>
+        <p class="page-subtitle">Two-phase agent loop, project structure, security model.</p>
+      </div>
+      <section>
+        <h2>Two-Phase Decision Loop</h2>
+        <p>Each interaction starts in Phase 1 with only <code>use_tools</code>, <code>ask_user</code>, and <code>quit</code> available. Pure chat costs one LLM call. Tool-requiring requests escalate to Phase 2 with the full toolset.</p>
+      </section>
+      <section>
+        <h2>Security</h2>
+        <ul>
+          <li><strong>Network</strong> — Web UI binds to 127.0.0.1 only. Electron adds keyring-based auth.</li>
+          <li><strong>Workspace guard</strong> — file/shell operations are scoped to the workspace.</li>
+          <li><strong>Permission elevation</strong> — cross-workspace ops require user approval.</li>
+        </ul>
+      </section>
+</div>
+</article>
+
+    <!-- ============== Memory ============== -->
+    <article class="page" id="page-memory">
+<div lang="zh">
+<div class="page-header">
+        <h1>记忆系统</h1>
+        <p class="page-subtitle">三层记忆架构：上下文窗口 → 短期摘要 → 长期人格文档，自动压缩和持久化。</p>
+      </div>
+
+      <section>
+        <h2>三层架构</h2>
+        <p>Cyrene 的记忆分为三个层级，随着时间从短期向长期流动：</p>
+
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>层级</th><th>存储位置</th><th>容量</th><th>维护机制</th></tr></thead>
+            <tbody>
+              <tr><td><strong>上下文窗口</strong></td><td><code>data/state.json</code></td><td><code>MAX_HISTORY_MESSAGES</code>（默认 40 条）</td><td>自动裁剪（FIFO）</td></tr>
+              <tr><td><strong>短期记忆</strong></td><td><code>data/short_term.json</code></td><td>压缩摘要（带情感权重和类型标签）</td><td>后台压缩器定期运行</td></tr>
+              <tr><td><strong>长期记忆</strong></td><td><code>workspace/SOUL.md</code></td><td>结构化的自由格式文档</td><td>管家代理按间隔审查和更新</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>记忆流动过程</h2>
+        <ol>
+          <li><strong>每轮对话</strong>保存在上下文窗口中。超过 <code>MAX_HISTORY_MESSAGES</code> 条时，最早的条目被裁剪——但不会丢失，因为后台压缩器会处理。</li>
+          <li><strong>后台压缩器</strong>定期将上下文窗口中的旧对话压缩为摘要，存入短期记忆。每条短期记忆包括：</li>
+          <ul>
+            <li><strong>情感权重（Valence）</strong>——正面/中性/负面评分</li>
+            <li><strong>提及次数</strong>——同一主题被提到的频率</li>
+            <li><strong>条目类型</strong>——事实 / 模式 / 偏好 / 情感</li>
+          </ul>
+          <li><strong>自动保留规则</strong>——高频条目（≥3 次提及）和极端情感条目自动保留，不会被压缩器淘汰</li>
+          <li><strong>管家代理</strong>按 <code>STEWARD_INTERVAL</code>（默认 30 分钟）运行，审查短期记忆和最近对话，通过 <code>APPEND</code>/<code>ERASE</code>/<code>MERGE</code> 命令更新 SOUL.md</li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>记忆退休（Memory Retirement）</h2>
+        <p>过时或被取代的短期记忆可以<strong>退休</strong>（retire）。退休意味着：</p>
+        <ul>
+          <li>该记忆停止被注入到上下文窗口中</li>
+          <li>它不再被回忆或引用</li>
+          <li>但文件本身不被破坏性删除</li>
+        </ul>
+        <p>这比直接删除更安全——如果后续发现需要这个信息，仍然可以恢复。退休机制也避免了"已删除的记忆被重新学习"的问题。</p>
+      </section>
+
+      <section>
+        <h2>SOUL.md 人格系统</h2>
+        <p><code>workspace/SOUL.md</code> 是 Cyrene 的长期记忆载体，也是一个可自进化的人格文档。其结构如下：</p>
+
+        <div class="code-block"><pre><code>## SELF:IDENTITY
+- I am Cyrene, a personal AI companion.
+- My purpose is to be a friend and companion.
+
+## SELF:BELIEFS
+<!-- 核心信念和价值观 -->
+
+## RELATIONSHIP:USER
+- Trust level: neutral
+- Communication style: casual, direct
+
+## MEMORY:HIGH_IMPACT
+<!-- 最重要的长期记忆 -->
+
+## PATTERN:USER
+<!-- 用户的行为模式 -->
+
+## TEMPORARY
+<!-- 24 小时后自动过期的条目 --></code></pre></div>
+
+        <p>管家代理的工作方式：</p>
+        <ul>
+          <li>运行时，AI 模型审查最近的对话记录</li>
+          <li>判断哪些信息值得写入 SOUL.md</li>
+          <li>使用结构化命令更新：<code>APPEND</code> 添加、<code>ERASE</code> 删除、<code>MERGE</code> 合并</li>
+          <li><code>TEMPORARY</code> 部分的条目 24 小时后自动过期</li>
+        </ul>
+        <p>SOUL.md 在每次交互时注入到系统提示中。由于启用了提示缓存，未变化的内容不会重新注入，缓存命中率高。</p>
+      </section>
+
+      <section>
+        <h2>Workbench 记忆集成</h2>
+        <p>Workbench UI 中的记忆页面按 <strong>workspace 隔离</strong>：</p>
+        <ul>
+          <li>文件名为 <code>wb_memory_&lt;workspace&gt;.json</code>，不同项目的记忆互不干扰</li>
+          <li>对话自动沉淀到记忆</li>
+          <li>Agent 可以通过 <code>save_project_memory</code> 工具主动写入记忆</li>
+          <li>反思（reflection）结果也落地到记忆库</li>
+        </ul>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>Memory System</h1>
+        <p class="page-subtitle">Three-layer memory: context window, short-term summaries, long-term SOUL.md.</p>
+      </div>
+      <section>
+        <h2>Three-Layer Architecture</h2>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Layer</th><th>Storage</th><th>Capacity</th><th>Maintained by</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Context Window</strong></td><td><code>data/state.json</code></td><td><code>MAX_HISTORY_MESSAGES</code> (40)</td><td>Auto-trimmed</td></tr>
+            <tr><td><strong>Short-Term</strong></td><td><code>data/short_term.json</code></td><td>Compressed summaries</td><td>Background compressor</td></tr>
+            <tr><td><strong>Long-Term</strong></td><td><code>workspace/SOUL.md</code></td><td>Structured document</td><td>Steward agent (every 30 min)</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+      <section>
+        <h2>Memory Flow</h2>
+        <ol>
+          <li>Conversations stay in context window, auto-trimmed at the limit</li>
+          <li>Background compressor creates summaries with valence, mention count, type</li>
+          <li>High-frequency (>=3 mentions) and extreme-valence entries auto-preserve</li>
+          <li>Steward agent reviews and updates SOUL.md via APPEND/ERASE/MERGE</li>
+        </ol>
+        <p>Outdated memories can be <strong>retired</strong> — stopped from injection without destructive deletion.</p>
+      </section>
+</div>
+</article>
+
+    <!-- ============== Subagents ============== -->
+    
+    <article class="page" id="page-knowledge">
+<div lang="zh">
+      <div class="page-header">
+        <h1>知识库与实体</h1>
+        <p class="page-subtitle">文档上传、自动嵌入索引、结构化实体管理。</p>
+      </div>
+      <section>
+        <h2>知识库</h2>
+        <p>文档（PDF、文本、图片、代码）放入工作区后，会被哈希、分块、嵌入，并存储在工作区特定的 SQLite 数据库（<code>store/kb_&lt;workspace&gt;.db</code>）中。代理可以通过 <code>SearchKnowledge</code> 工具搜索语料库。</p>
+        <h3>支持的类型</h3>
+        <ul>
+          <li>文本文件（<code>.md</code>、<code>.txt</code>、<code>.py</code> 等）</li>
+          <li>PDF 文档</li>
+          <li>图片（通过视觉模型描述）</li>
+        </ul>
+        <h3>摄取流程</h3>
+        <ol>
+          <li>提取文本——PDF 用 pypdf，图片用视觉模型，文本用 UTF-8</li>
+          <li>过滤——跳过二进制文件和大于 10 MB 的文件</li>
+          <li>分块和存储——存入 <code>store/kb_&lt;workspace&gt;.db</code></li>
+          <li>嵌入——如果配置了嵌入端点，生成向量嵌入</li>
+        </ol>
+      </section>
+      <section>
+        <h2>实体系统</h2>
+        <p>结构化项目实体可以通过工具跟踪和查询：</p>
+        <ul>
+          <li><code>track_entity</code>——创建实体</li>
+          <li><code>query_entities</code>——搜索实体</li>
+          <li><code>update_entity</code>——更新实体</li>
+          <li><code>delete_entity</code>——删除实体</li>
+        </ul>
+        <p>实体存储在主 SQLite 数据库中，可限定到 Workbench 项目范围。</p>
+      </section>
+</div>
+<div lang="en">
+      <div class="page-header">
+        <h1>Knowledge Base & Entities</h1>
+        <p class="page-subtitle">Document upload, auto-embedding, structured entity management.</p>
+      </div>
+      <section>
+        <h2>Knowledge Base</h2>
+        <p>Documents (PDF, text, images, code) in the workspace are hashed, chunked, embedded, and stored in a workspace-specific SQLite database (<code>store/kb_&lt;workspace&gt;.db</code>). The agent can search via <code>SearchKnowledge</code>.</p>
+        <h3>Supported Types</h3>
+        <ul>
+          <li>Text files (<code>.md</code>, <code>.txt</code>, <code>.py</code>, etc.)</li>
+          <li>PDF documents</li>
+          <li>Images (described via vision model)</li>
+        </ul>
+        <h3>Ingestion Pipeline</h3>
+        <ol>
+          <li>Extract text (pypdf for PDF, vision for images, UTF-8 for text)</li>
+          <li>Filter — skip binaries &gt;10 MB</li>
+          <li>Chunk and store in <code>store/kb_&lt;workspace&gt;.db</code></li>
+          <li>Embed — vector index if embedding endpoint is configured</li>
+        </ol>
+      </section>
+      <section>
+        <h2>Entity System</h2>
+        <p>Structured project entities can be tracked via tools:</p>
+        <ul>
+          <li><code>track_entity</code> — create an entity</li>
+          <li><code>query_entities</code> — search entities</li>
+          <li><code>update_entity</code> — update an entity</li>
+          <li><code>delete_entity</code> — delete an entity</li>
+        </ul>
+      </section>
+</div>
+    </article>
+
+<article class="page" id="page-subagents">
+<div lang="zh">
+<div class="page-header">
+        <h1>子代理系统</h1>
+        <p class="page-subtitle">并行执行、文件基中枢通信、独立生命周期。将复杂任务分解为并行子任务。</p>
+      </div>
+
+      <section>
+        <h2>概述</h2>
+        <p>子代理是主代理动态生成的独立代理实例。每个子代理：</p>
+        <ul>
+          <li>拥有<strong>完整的工具访问权限</strong>（除了一小部分主代理专属黑名单如调度器）</li>
+          <li>通过<strong>基于文件的收件箱（inbox）系统</strong>与兄弟代理通信</li>
+          <li>拥有独立的思考过程和工具调用链</li>
+          <li>超时后自动终止</li>
+        </ul>
+        <p>子代理特别适合：同时搜索多个来源、并行分析多个文件、执行可分解的子任务。</p>
+      </section>
+
+      <section>
+        <h2>生命周期</h2>
+        <div class="flow-diagram flow-diagram-horizontal">
+          <div class="flow-node flow-start" style="font-size:0.85rem;">running</div>
+          <div class="flow-arrow" style="min-width:20px;">→</div>
+          <div class="flow-node flow-phase" style="font-size:0.85rem;">waiting</div>
+          <div class="flow-arrow" style="min-width:20px;">→</div>
+          <div class="flow-node flow-phase" style="font-size:0.85rem;">resumed</div>
+          <div class="flow-arrow" style="min-width:20px;">→</div>
+          <div class="flow-node flow-end" style="font-size:0.85rem;">done / timeout</div>
+        </div>
+        <ol>
+          <li><strong>running</strong>——子代理启动，开始执行任务</li>
+          <li><strong>waiting</strong>——等待兄弟代理的结果或收件箱消息</li>
+          <li><strong>resumed</strong>——收到消息后继续执行</li>
+          <li><strong>done / timeout</strong>——正常完成或超时终止</li>
+        </ol>
+        <p>主代理收集所有子代理的结果，综合为最终回复。</p>
+      </section>
+
+      <section>
+        <h2>通信机制</h2>
+        <p>子代理之间的通信使用<strong>文件基收件箱（inbox）系统</strong>：</p>
+        <ul>
+          <li>每个子代理有一个专属收件箱目录</li>
+          <li>代理通过 <code>send_agent_message</code> 工具向兄弟的收件箱写入消息</li>
+          <li>收件箱中的消息在下一次思考循环中被读取和处理</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>典型使用场景</h2>
+        <ul>
+          <li><strong>并行研究</strong>——同时搜索多个来源，合并结果</li>
+          <li><strong>多文件分析</strong>——并行读取多个代码文件，分别分析后汇总</li>
+          <li><strong>分解任务</strong>——"搜索资料"和"分析数据"两个子代理并行执行</li>
+          <li><strong>竞争实验</strong>——多个子代理用不同方法解决问题，主代理取最优</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>注意事项</h2>
+        <div class="note">
+          <strong>提示：</strong>子代理的 token 消耗是独立的。大量使用子代理会增加整体 LLM 调用成本。建议只在确实需要并行处理时使用。
+        </div>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>Sub-agent System</h1>
+        <p class="page-subtitle">Parallel execution, file-based inbox coordination, independent lifecycle.</p>
+      </div>
+      <section>
+        <p>Sub-agents are independently spawned agents with full tool access (except a small main-agent blocklist). Communication uses a <strong>file-based inbox system</strong>.</p>
+        <h2>Lifecycle</h2>
+        <p>running → waiting → resumed → done / timeout</p>
+        <ol>
+          <li><strong>running</strong> — sub-agent starts executing</li>
+          <li><strong>waiting</strong> — waiting for sibling results or inbox messages</li>
+          <li><strong>resumed</strong> — continues after receiving a message</li>
+          <li><strong>done / timeout</strong> — completed or timed out</li>
+        </ol>
+      </section>
+</div>
+</article>
+
+    <!-- ============== Browser ============== -->
+    <article class="page" id="page-browser">
+<div lang="zh">
+<div class="page-header">
+        <h1>浏览器实况与登录接管</h1>
+        <p class="page-subtitle">持久的 Playwright 浏览器会话，实时画面推送，一键接管登录墙。</p>
+      </div>
+
+      <section>
+        <h2>特性</h2>
+        <p>当代理使用浏览器工具时，聊天 UI 实时显示页面的画面——你能看到代理看到了什么和正在做什么。遇到登录墙时，代理可以把浏览器的<strong>控制权交给你</strong>。</p>
+        <ul>
+          <li><strong>持续浏览器上下文</strong>——懒惰启动，跨所有浏览器操作重用。配置文件在磁盘上持久化（<code>&lt;DATA_DIR&gt;/browser_profile</code>），cookies/登录状态<strong>跨运行保留</strong>。</li>
+          <li><strong>实时画面</strong>——CDP screencast 通过 <code>/ws/browser</code> WebSocket 持续推送 JPEG 帧。</li>
+          <li><strong>登录接管</strong>——代理遇到登录墙时请求接管 → 真实浏览器窗口打开 → 你登录 → 代理在已验证会话中继续。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>设置</h2>
+        <p>浏览器工具无需额外依赖的基本功能：<code>browser_navigate</code> 在没有 Playwright 时会降级为纯文本 HTTP 获取。</p>
+
+        <p>完整功能（浏览器自动化、实时画面、登录接管）：</p>
+        <div class="code-block"><pre><code>pip install -e ".[browser]"
+playwright install chromium</code></pre></div>
+
+        <div class="note">
+          <strong>注意：</strong>如果 Playwright 或 Chromium 运行时缺失，实时画面面板会显示设置提示；<code>browser_click</code>/<code>browser_type</code>/<code>browser_request_takeover</code> 会报告 Playwright 未安装。
+        </div>
+      </section>
+
+      <section>
+        <h2>工作流程</h2>
+        <div class="steps">
+          <div class="step"><div class="step-number">1</div><div><strong>代理浏览</strong>——调用 <code>browser_navigate</code> 打开 URL。每次操作后后端发布 SSE 事件（URL、标题、操作类型）。实时画面持续推送。</div></div>
+          <div class="step"><div class="step-number">2</div><div><strong>遇到登录墙</strong>——代理检测到登录页面/CAPTCHA/2FA，调用 <code>browser_request_takeover</code>。画面暂停，面板显示"接管中"卡片。你的登录凭据<strong>不会被流式传输</strong>。</div></div>
+          <div class="step"><div class="step-number">3</div><div><strong>你进行登录</strong>——浏览器使用相同配置文件以<strong>有头窗口</strong>重启。你在真实浏览器窗口中完成登录。窗口关闭。</div></div>
+          <div class="step"><div class="step-number">4</div><div><strong>代理继续</strong>——浏览器以<strong>无头模式</strong>在同一配置（已认证）上重启。代理自动恢复轮次。</div></div>
+        </div>
+        <p>因为配置文件是持久化的，对于大多数网站，接管只需要在首次登录时出现一次。</p>
+      </section>
+
+      <section>
+        <h2>配置</h2>
+        <p>浏览器配置通过加密配置仓库设置（环境变量键名在括号中）：</p>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>配置项</th><th>默认值</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><code>CYRENE_BROWSER_HEADLESS</code></td><td><code>1</code></td><td>设为 0 则持久有头模式。接管流程忽略此设置强制有头。</td></tr>
+              <tr><td><code>CYRENE_BROWSER_SCREENCAST_QUALITY</code></td><td><code>60</code></td><td>JPEG 画质（1-100）。</td></tr>
+              <tr><td><code>CYRENE_BROWSER_WIDTH</code></td><td><code>1280</code></td><td>视口/画面宽度（px）。</td></tr>
+              <tr><td><code>CYRENE_BROWSER_HEIGHT</code></td><td><code>800</code></td><td>视口/画面高度（px）。</td></tr>
+              <tr><td><code>CYRENE_BROWSER_USER_AGENT</code></td><td>自动</td><td>默认自动去除 HeadlessChrome 标记，伪装为桌面 Chrome。</td></tr>
+              <tr><td><code>CYRENE_BROWSER_LOCALE</code></td><td><code>zh-CN</code></td><td>传递给 Playwright 的区域设置。</td></tr>
+              <tr><td><code>CYRENE_BROWSER_ACCEPT_LANGUAGE</code></td><td><code>zh-CN,zh;q=0.9,en;q=0.8</code></td><td>浏览器发送的 Accept-Language 头。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>工具列表</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>工具</th><th>用途</th></tr></thead>
+            <tbody>
+              <tr><td><code>browser_navigate</code></td><td>打开 URL，返回可读文本</td></tr>
+              <tr><td><code>browser_screenshot</code></td><td>截取当前页面为临时 PNG</td></tr>
+              <tr><td><code>browser_click</code></td><td>按 CSS 选择器点击元素</td></tr>
+              <tr><td><code>browser_type</code></td><td>在输入框中输入文本（可选按回车提交）</td></tr>
+              <tr><td><code>browser_scroll</code></td><td>滚动页面</td></tr>
+              <tr><td><code>browser_tab_list</code></td><td>列出所有打开的标签页</td></tr>
+              <tr><td><code>browser_tab_new</code></td><td>打开新标签页</td></tr>
+              <tr><td><code>browser_tab_select</code></td><td>切换到指定标签页</td></tr>
+              <tr><td><code>browser_tab_close</code></td><td>关闭指定标签页</td></tr>
+              <tr><td><code>browser_request_takeover</code></td><td>打开真实窗口，让用户手动登录</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>Browser Live View & Login Takeover</h1>
+        <p class="page-subtitle">Persistent Playwright browser session with live screencast and one-click login takeover.</p>
+      </div>
+      <section>
+        <ul>
+          <li><strong>Persistent context</strong> — browser profile on disk, cookies survive restarts</li>
+          <li><strong>Live screencast</strong> — CDP JPEG frames via WebSocket</li>
+          <li><strong>Login takeover</strong> — agent hits login wall → real window opens → you log in → agent resumes authenticated</li>
+        </ul>
+      </section>
+      <section>
+        <h2>Setup</h2>
+        <div class="code-block"><pre><code>pip install -e ".[browser]"
+playwright install chromium</code></pre></div>
+      </section>
+</div>
+</article>
+
+    <!-- ============== MCP ============== -->
+    <article class="page" id="page-mcp">
+<div lang="zh">
+<div class="page-header">
+        <h1>MCP 协议支持</h1>
+        <p class="page-subtitle">连接 Model Context Protocol 服务器，扩展 Cyrene 的工具集。</p>
+      </div>
+
+      <section>
+        <h2>概述</h2>
+        <p>MCP（Model Context Protocol）是一个开放协议，允许 AI 应用通过标准化接口连接外部工具和服务。Cyrene 支持两种 MCP 传输方式：</p>
+        <ul>
+          <li><strong>stdio</strong>——启动一个子进程，通过标准输入/输出通信。适用于本地工具和脚本。</li>
+          <li><strong>SSE（Server-Sent Events）</strong>——通过 HTTP 连接远程 MCP 服务器。适用于远程工具和 API。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>添加 MCP 服务器</h2>
+
+        <h3>Stdio 服务器</h3>
+        <div class="code-block"><pre><code># 文件系统工具（通过 npm）
+cyrene mcp add filesystem stdio npx -y @modelcontextprotocol/server-filesystem /path/to/workspace
+
+# 自定义 Python MCP 服务器
+cyrene mcp add marp-deck stdio python /path/to/mcp_server.py</code></pre></div>
+
+        <h3>SSE 服务器</h3>
+        <div class="code-block"><pre><code>cyrene mcp add my-api sse http://localhost:3000/mcp</code></pre></div>
+      </section>
+
+      <section>
+        <h2>管理命令</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><code>cyrene mcp list</code></td><td>列出所有 MCP 服务器及每个服务器的工具列表</td></tr>
+              <tr><td><code>cyrene mcp add &lt;name&gt; stdio &lt;cmd&gt; [args...]</code></td><td>添加 stdio 传输的 MCP 服务器</td></tr>
+              <tr><td><code>cyrene mcp add &lt;name&gt; sse &lt;url&gt;</code></td><td>添加 SSE 传输的 MCP 服务器</td></tr>
+              <tr><td><code>cyrene mcp remove &lt;name&gt;</code></td><td>移除 MCP 服务器</td></tr>
+              <tr><td><code>cyrene mcp toggle &lt;name&gt;</code></td><td>启用或禁用 MCP 服务器</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>示例输出</h2>
+        <div class="code-block"><pre><code>$ cyrene mcp list
+Name              Transport    Status         Tools    Endpoint
+filesystem        stdio        connected      3        npx -y @modelcontextprotocol/server-filesystem .
+marp-deck         stdio        connected      4        python mcp_server.py</code></pre></div>
+      </section>
+
+      <section>
+        <h2>运行时管理</h2>
+        <p>MCP 服务器也可以通过 Web UI（设置 → MCP 服务器）管理。添加、删除、启用/禁用 MCP 服务器<strong>无需重启 Cyrene 进程</strong>——MCP 工具会自动出现在内置工具旁边。</p>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>MCP Protocol</h1>
+        <p class="page-subtitle">Connect external tools via Model Context Protocol.</p>
+      </div>
+      <section>
+        <p>Supports stdio (subprocess) and SSE (HTTP) transports. Connected MCP servers expose tools alongside built-in ones.</p>
+        <div class="code-block"><pre><code>cyrene mcp add filesystem stdio npx -y @modelcontextprotocol/server-filesystem /path
+cyrene mcp add my-api sse http://localhost:3000/mcp</code></pre></div>
+      </section>
+</div>
+</article>
+
+    <!-- ============== Scheduler ============== -->
+    <article class="page" id="page-scheduler">
+<div lang="zh">
+<div class="page-header">
+        <h1>任务调度器</h1>
+        <p class="page-subtitle">Cron、间隔、一次性任务，以及让代理主动发起行动的"抽奖"系统。</p>
+      </div>
+
+      <section>
+        <h2>任务类型</h2>
+        <p>通过 <code>schedule_task</code> 工具创建三种类型的任务：</p>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>类型</th><th>说明</th><th>示例</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Cron</strong></td><td>按 cron 表达式定期执行</td><td>每天早上 8 点检查天气</td></tr>
+              <tr><td><strong>间隔</strong></td><td>按固定间隔重复</td><td>每 30 分钟检查一次邮箱</td></tr>
+              <tr><td><strong>一次性</strong></td><td>在指定时间执行一次</td><td>2 小时后提醒我</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>调度机制</h2>
+        <p>调度器的工作方式：</p>
+        <ul>
+          <li>通过 <code>schedule_task</code> 工具创建任务（也可以在 Web UI 调度页面管理）</li>
+          <li>心跳按 <code>HEARTBEAT_INTERVAL</code> 秒（默认 300 = 5 分钟）运行，检查到期任务</li>
+          <li>任务持久化在 SQLite 中，带有完整执行历史</li>
+          <li>可以使用 <code>list_tasks</code>、<code>pause_task</code>、<code>resume_task</code>、<code>cancel_task</code> 工具管理</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>抽奖系统（Proactive Lottery）</h2>
+        <p>抽奖系统是 Cyrene 的一个独特功能——它让代理可以在<strong>没有用户输入时主动发起行动</strong>：</p>
+        <ul>
+          <li>每个心跳周期，代理有一定概率"中奖"</li>
+          <li>未中奖时，<code>LOTTERY_DELTA</code>（默认 0.15）加到累积概率上</li>
+          <li>概率上限为 <code>LOTTERY_MAX</code>（默认 0.85）</li>
+          <li>中奖后概率重置</li>
+          <li>只在 <code>DAYTIME_START</code> 到 <code>DAYTIME_END</code> 之间触发（避免半夜打扰）</li>
+        </ul>
+        <p>这个机制让 Cyrene 能够"主动"关心你，而不是只能被动响应你的提问。</p>
+      </section>
+
+      <section>
+        <h2>管家代理（Steward）</h2>
+        <p>管家代理不是用户可调度的任务，而是一个特殊的内置代理，按 <code>STEWARD_INTERVAL</code>（默认 30 分钟）运行：</p>
+        <ul>
+          <li>回顾最近的对话历史</li>
+          <li>判断需要更新 SOUL.md 的哪些内容</li>
+          <li>使用 <code>APPEND</code>/<code>ERASE</code>/<code>MERGE</code> 命令修改 SOUL.md</li>
+          <li>清理过期的 <code>TEMPORARY</code> 条目（24 小时过期）</li>
+        </ul>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>Task Scheduler</h1>
+        <p class="page-subtitle">Cron, interval, one-shot tasks, and the proactive lottery system.</p>
+      </div>
+      <section>
+        <ul>
+          <li><strong>Cron</strong> — schedule by cron expression</li>
+          <li><strong>Interval</strong> — repeat at fixed intervals</li>
+          <li><strong>One-shot</strong> — execute once at a specified time</li>
+        </ul>
+        <h2>Lottery System</h2>
+        <p>Each heartbeat cycle, the agent has a chance to "win" and send proactive messages. Probability accumulates until it hits the cap or wins, then resets.</p>
+      </section>
+</div>
+</article>
+
+    <!-- ============== Search ============== -->
+    <article class="page" id="page-search">
+<div lang="zh">
+<div class="page-header">
+        <h1>搜索</h1>
+        <p class="page-subtitle">内置 Web 搜索和深度研究管道。无需 Docker，无需外部搜索 API 密钥。</p>
+      </div>
+
+      <section>
+        <h2>SimpleXNG 内置搜索</h2>
+        <p>Cyrene 使用 <strong>SimpleXNG</strong>——一个基于 SearXNG 的零配置封装。它不需要 Docker，不需要外部搜索 API 密钥，开箱即用。</p>
+        <ul>
+          <li><strong>自动配置</strong>——管理器自动生成 <code>data/simplexng_settings.yml</code></li>
+          <li><strong>自动启动</strong>——端口 8888 上的搜索实例在 Cyrene 启动时自动运行</li>
+          <li><strong>代理发现</strong>——自动处理 proxy 配置</li>
+        </ul>
+        <div class="note">
+          <strong>注意：</strong>Cyrene 目前<strong>仅使用 SimpleXNG</strong> 进行 Web 搜索。旧的 DuckDuckGo/Bing/Baidu 爬虫已移除。
+        </div>
+        <p>如果需要使用外部 SearXNG 实例：</p>
+        <div class="code-block"><pre><code># 在设置或 .env 中
+SEARXNG_URL=https://your-searxng-instance.com
+SEARXNG_AUTO_START=0</code></pre></div>
+      </section>
+
+      <section>
+        <h2>深度研究（Deep Research）</h2>
+        <p>深度研究是一个多轮管道，适合需要深入调研的复杂问题：</p>
+        <ol>
+          <li><strong>规划</strong>——将主问题分解为子问题</li>
+          <li><strong>搜索</strong>——并行搜索多个来源，获取结果</li>
+          <li><strong>阅读</strong>——获取和分析搜索到的源内容</li>
+          <li><strong>迭代</strong>——多轮循环，深入挖掘</li>
+          <li><strong>综合</strong>——将所有发现综合为一张"白板"</li>
+          <li><strong>导出</strong>——输出结构化 PDF 报告</li>
+        </ol>
+        <p>状态：<strong>稳定</strong>。适合市场调研、技术调研、论文阅读等场景。</p>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>Search</h1>
+        <p class="page-subtitle">Built-in web search and deep research pipeline. No Docker or external API key needed.</p>
+      </div>
+      <section>
+        <p>Cyrene uses <strong>SimpleXNG</strong> (based on SearXNG) — zero-config, auto-starts on port 8888. No Docker required.</p>
+      </section>
+</div>
+
+    </article>
+
+    <!-- ============== Quick Chat ============== -->
+    <article class="page" id="page-quick-chat">
+<div lang="zh">
+      <div class="page-header">
+        <h1>Quick Chat 快捷对话</h1>
+        <p class="page-subtitle">全局快捷键唤起的浮动聊天窗口，支持截图粘贴和系统托盘常驻。</p>
+      </div>
+      <section>
+        <h2>概述</h2>
+        <p>Quick Chat 是 Cyrene 的全局快捷对话功能。无论你在做什么，按下 <kbd>Ctrl/Cmd+Shift+Space</kbd> 即可呼出一个浮动聊天窗口，与 Cyrene 对话。</p>
+      </section>
+      <section>
+        <h2>功能</h2>
+        <ul>
+          <li><strong>全局快捷键</strong>——<kbd>Ctrl/Cmd+Shift+Space</kbd> 从任意界面呼出浮动窗口</li>
+          <li><strong>截图粘贴</strong>——呼出时自动截取当前活跃窗口，作为图片发送给代理</li>
+          <li><strong>独立窗口复用</strong>——关闭后固定到系统托盘，下次唤醒复用同一窗口</li>
+          <li><strong>完整对话体验</strong>——与主聊天页共享运行管理器：工具调用轨迹、生成附件、实时思考卡片</li>
+          <li><strong>后台继续</strong>——关窗后 Agent 仍在后台运行，结果持久化到服务端</li>
+          <li><strong>系统托盘常驻</strong>——应用关闭到托盘，后台持续运行，随时唤醒</li>
+        </ul>
+      </section>
+      <section>
+        <h2>使用方式</h2>
+        <p>启动 Cyrene 后：</p>
+        <ol>
+          <li>按下 <kbd>Ctrl/Cmd+Shift+Space</kbd> 呼出浮动窗口</li>
+          <li>输入问题或指令，或直接粘贴截图</li>
+          <li>随时按快捷键再次呼出继续对话</li>
+          <li>关闭窗口时自动回到系统托盘，不会中断正在进行的任务</li>
+        </ol>
+      </section>
+</div>
+<div lang="en">
+      <div class="page-header">
+        <h1>Quick Chat</h1>
+        <p class="page-subtitle">Global shortcut floating chat window with screenshot support and system tray.</p>
+      </div>
+      <section>
+        <h2>Overview</h2>
+        <p>Quick Chat is Cyrene's global shortcut chat feature. Press <kbd>Ctrl/Cmd+Shift+Space</kbd> from anywhere to open a floating chat window and talk to Cyrene.</p>
+      </section>
+      <section>
+        <h2>Features</h2>
+        <ul>
+          <li><strong>Global shortcut</strong> — <kbd>Ctrl/Cmd+Shift+Space</kbd> from any application</li>
+          <li><strong>Screenshot paste</strong> — captures the active window on invocation</li>
+          <li><strong>Independent window</strong> — closes to system tray, reuses the same window next time</li>
+          <li><strong>Full chat experience</strong> — shared run manager with tool call traces, artifacts, real-time thinking cards</li>
+          <li><strong>Background execution</strong> — agent continues after closing the window</li>
+          <li><strong>System tray</strong> — app lives in the tray, always ready</li>
+        </ul>
+      </section>
+      <section>
+        <h2>Usage</h2>
+        <ol>
+          <li>Press <kbd>Ctrl/Cmd+Shift+Space</kbd> to open the floating window</li>
+          <li>Type your question or paste a screenshot</li>
+          <li>Press the shortcut again to resume anytime</li>
+          <li>Close to system tray — running tasks are not interrupted</li>
+        </ol>
+      </section>
+</div>
+    </article>
+
+    <!-- ============== Development ============== -->
+    <article class="page" id="page-development">
+<div lang="zh">
+<div class="page-header">
+        <h1>开发指南</h1>
+        <p class="page-subtitle">调试、测试、编码规范、CI/发布流程。</p>
+      </div>
+
+      <section>
+        <h2>调试</h2>
+
+        <h3>详细模式</h3>
+        <p>记录每个 LLM 调用的完整上下文（提示词、工具定义、响应、耗时）和上下文溯源：</p>
+        <div class="code-block"><pre><code>python -m cyrene.local_cli --verbose
+python -m cyrene --workbench --verbose</code></pre></div>
+
+        <h3>调试日志</h3>
+        <p>详细模式下，事件写入带时间戳的 JSONL 文件：</p>
+        <div class="code-block"><pre><code>data/debug_20260617_133426.jsonl</code></pre></div>
+        <p>每行是一个 JSON 对象，包含：</p>
+        <div class="code-block"><pre><code>{"type": "llm_call", "caller": "main_agent", "phase": "phase1",
+ "messages": [...], "response": {...}, "duration_ms": 423.0}
+
+{"type": "tool_call", "caller": "subagent_poet", "tool": "send_agent_message",
+ "args": {...}, "result": "Message sent.", "duration_ms": 150.2}</code></pre></div>
+
+        <h3>Context Debugger</h3>
+        <p>每条 LLM 调用都带有 <code>_ctx</code> 元数据，标记每个上下文块的来源（系统提示、SOUL.md、短期记忆、历史消息、工具结果等）。调试方式：</p>
+        <div class="code-block"><pre><code># 通过 API
+curl http://localhost:4242/api/context-debug/events?limit=10
+curl http://localhost:4242/api/context-debug/events/evt_3b22f9a5c0cb
+
+# 通过 CLI
+cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb</code></pre></div>
+
+        <h3>Web UI 调试</h3>
+        <ul>
+          <li><strong>状态页面</strong>——显示实时调试日志、系统指标、工作线程状态、服务健康</li>
+          <li><strong>Agent Flow 页面</strong>——SVG 流程图可视化每一次 LLM 调用和工具执行</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>测试</h2>
+        <div class="code-block"><pre><code># 安装开发测试依赖
+uv pip install -e ".[dev]"
+
+# 运行所有测试
+uv run pytest -q
+
+# 运行特定测试文件
+python -m pytest tests/test_context_trace.py -v
+
+# 带日志输出
+uv run pytest -v --tb=long</code></pre></div>
+
+        <div class="note">
+          <strong>注意：</strong>部分测试需要 LLM 端点。运行前设置 <code>OPENAI_API_KEY</code> 和 <code>OPENAI_BASE_URL</code>。测试使用 pytest + async 支持，60 秒线程超时防止死锁。
+        </div>
+      </section>
+
+      <section>
+        <h2>项目约定</h2>
+        <ul>
+          <li><strong>Python 3.12+</strong>——类型提示、模式匹配等最新特性</li>
+          <li><strong>Ruff</strong>——代码检查（行长 180）</li>
+          <li><strong>类型提示</strong>——所有函数签名必须标注类型</li>
+          <li><strong>Async/await</strong>——全程异步（asyncio）</li>
+          <li><strong>模块模式</strong>——每个模块单一职责：
+            <ul>
+              <li>函数调用用于直接导入</li>
+              <li>事件总线（<code>debug.publish_event</code>）用于实时 UI 更新</li>
+              <li>文件收件箱（<code>inbox.py</code>）用于子代理通信</li>
+              <li>SQLite 用于结构化持久化</li>
+            </ul>
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>添加新工具</h2>
+        <p>如果你想为 Cyrene 添加新的原生工具：</p>
+        <ol>
+          <li>在 <code>cyrene/tool_impl/</code> 下创建新模块（如 <code>my_tool.py</code>）</li>
+          <li>模块导出 <code>TOOL_DEF</code>（工具定义字典）和 <code>handler</code>（async 处理函数）</li>
+          <li>在 <code>cyrene/registry_tools.py</code> 的 <code>_NATIVE_TOOL_MODULES</code> 中注册模块</li>
+          <li>可选：在 <code>src/webui/static/app/settings.jsx</code> 中添加 UI 入口</li>
+        </ol>
+        <p>MCP 协议工具不需要修改 Cyrene 代码——通过 <code>cyrene mcp add</code> 或 Web UI 直接连接即可。</p>
+      </section>
+
+      <section>
+        <h2>CI / 发布</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>项目</th><th>详情</th></tr></thead>
+            <tbody>
+              <tr><td>CI 工作流</td><td><code>.github/workflows/release.yml</code></td></tr>
+              <tr><td>触发方式</td><td>推送 <code>v*</code> 标签，或手动触发（选择默认 UI：workbench/agent）</td></tr>
+              <tr><td>构建产物</td><td>PyInstaller + Electron，打包 macOS、Windows（x64/ARM64）、Linux</td></tr>
+              <tr><td>冒烟测试</td><td>打包应用运行 <code>--smoke-test</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="step-hint">目前没有 CI 持续集成测试任务。标记发布前请在本地运行 <code>uv run pytest -q</code>。</p>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>Development Guide</h1>
+        <p class="page-subtitle">Debugging, testing, code conventions, CI/release.</p>
+      </div>
+      <section>
+        <h2>Debugging</h2>
+
+        <h3>Verbose Mode</h3>
+        <p>Logs every LLM call (full prompt, tools, response, duration) and context trace to <code>data/debug_*.jsonl</code>:</p>
+        <div class="code-block"><pre><code>python -m cyrene.local_cli --verbose
+python -m cyrene --workbench --verbose</code></pre></div>
+
+        <h3>Debug Logs</h3>
+        <p>In verbose mode, events are written to timestamped JSONL files. Each line is a JSON object:</p>
+        <div class="code-block"><pre><code>{"type": "llm_call", "caller": "main_agent", "phase": "phase1",
+ "messages": [...], "response": {...}, "duration_ms": 423.0}
+
+{"type": "tool_call", "caller": "subagent_poet", "tool": "send_agent_message",
+ "args": {...}, "result": "Message sent.", "duration_ms": 150.2}</code></pre></div>
+
+        <h3>Context Debugger</h3>
+        <p>Every LLM call is tagged with <code>_ctx</code> provenance metadata showing where each context block came from (system prompt, SOUL.md, short-term memory, history, tool results). View via the Web UI Context Debugger page or API:</p>
+        <div class="code-block"><pre><code>curl http://localhost:4242/api/context-debug/events?limit=10
+curl http://localhost:4242/api/context-debug/events/evt_3b22f9a5c0cb</code></pre></div>
+        <p>Via CLI:</p>
+        <div class="code-block"><pre><code>cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb</code></pre></div>
+      </section>
+      <section>
+        <h2>Testing</h2>
+        <div class="code-block"><pre><code>uv pip install -e ".[dev]"
+uv run pytest -q
+python -m pytest tests/test_context_trace.py -v</code></pre></div>
+        <div class="note"><strong>Note:</strong> Some tests require an LLM endpoint. Set <code>OPENAI_API_KEY</code> and <code>OPENAI_BASE_URL</code> first.</div>
+      </section>
+      <section>
+        <h2>Project Conventions</h2>
+        <ul>
+          <li><strong>Python 3.12+</strong> with type hints on all function signatures</li>
+          <li><strong>Ruff</strong> for linting (line length: 180)</li>
+          <li><strong>Async/await</strong> throughout (asyncio)</li>
+          <li><strong>Single responsibility</strong> per module. Cross-module communication via function calls, event bus, file-based inbox, and SQLite.</li>
+        </ul>
+      </section>
+      <section>
+        <h2>Adding New Tools</h2>
+        <ol>
+          <li>Create a module under <code>cyrene/tool_impl/</code> (e.g., <code>my_tool.py</code>)</li>
+          <li>Export <code>TOOL_DEF</code> (dict) and <code>handler</code> (async callable)</li>
+          <li>Register in <code>cyrene/registry_tools.py::_NATIVE_TOOL_MODULES</code></li>
+          <li>Optionally add a UI entry in <code>src/webui/static/app/settings.jsx</code></li>
+        </ol>
+        <p>For MCP servers, use <code>cyrene mcp add</code> or the Web UI — no code changes needed.</p>
+      </section>
+      <section>
+        <h2>CI / Release</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>Item</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td>Workflow</td><td><code>.github/workflows/release.yml</code></td></tr>
+              <tr><td>Trigger</td><td><code>v*</code> tag or manual dispatch</td></tr>
+              <tr><td>Build output</td><td>PyInstaller + Electron for macOS, Windows (x64/ARM64), Linux</td></tr>
+              <tr><td>Smoke test</td><td>Packaged app runs <code>--smoke-test</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="step-hint">No CI test runner currently. Run <code>uv run pytest -q</code> locally before tagging a release.</p>
+      </section>
+</div>
+</article>
+
+    <!-- ============== CLI Reference ============== -->
+    <article class="page" id="page-cli-reference">
+<div lang="zh">
+<div class="page-header">
+        <h1>命令参考</h1>
+        <p class="page-subtitle">cyrene CLI 完整命令列表、MCP 管理、Telegram/WeChat 配置。</p>
+      </div>
+
+      <section>
+        <h2>cyrene 命令参考</h2>
+        <p><code>cyrene</code> 命令是一个 HTTP 客户端，与 <code>http://localhost:4242</code> 的守护进程通信。使用 <code>--json</code> 获取机器可读输出。</p>
+
+        <h3>进程管理</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><code>cyrene start</code></td><td>后台启动守护进程</td></tr>
+              <tr><td><code>cyrene stop</code></td><td>停止守护进程</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>会话管理</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><code>cyrene do &lt;text&gt; --session &lt;id&gt;</code></td><td>向代理会话发送消息</td></tr>
+              <tr><td><code>cyrene session list</code></td><td>列出所有会话（活动 + 存档）</td></tr>
+              <tr><td><code>cyrene session status --session &lt;id&gt;</code></td><td>显示会话详情</td></tr>
+              <tr><td><code>cyrene session delete --session &lt;id&gt;</code></td><td>删除会话</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>代理轮次检查</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><code>cyrene flow --session &lt;id&gt;</code></td><td>列出代理轮次</td></tr>
+              <tr><td><code>cyrene flow --session &lt;id&gt; --round &lt;r&gt;</code></td><td>显示轮次执行追踪</td></tr>
+              <tr><td><code>cyrene flow --session &lt;id&gt; --round &lt;r&gt; --id &lt;e&gt;</code></td><td>检查特定事件详情</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>记忆</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><code>cyrene memory soul</code></td><td>打印当前 SOUL.md 内容</td></tr>
+              <tr><td><code>cyrene memory soul --edit &lt;path&gt;</code></td><td>从文件替换 SOUL.md</td></tr>
+              <tr><td><code>cyrene memory short-term</code></td><td>打印短期记忆条目</td></tr>
+              <tr><td><code>cyrene memory context</code></td><td>打印上下文窗口状态</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>MCP 管理</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><code>cyrene mcp list</code></td><td>列出 MCP 服务器及其工具</td></tr>
+              <tr><td><code>cyrene mcp add &lt;name&gt; stdio &lt;cmd&gt; [args...]</code></td><td>添加 stdio MCP 服务器</td></tr>
+              <tr><td><code>cyrene mcp add &lt;name&gt; sse &lt;url&gt;</code></td><td>添加 SSE MCP 服务器</td></tr>
+              <tr><td><code>cyrene mcp remove &lt;name&gt;</code></td><td>移除 MCP 服务器</td></tr>
+              <tr><td><code>cyrene mcp toggle &lt;name&gt;</code></td><td>启用/禁用 MCP 服务器</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>系统</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><code>cyrene status</code></td><td>系统状态和指标</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>Telegram Bot</h2>
+        <p>在 Web UI 设置或加密配置中配置以下值：</p>
+        <div class="code-block"><pre><code>TELEGRAM_BOT_TOKEN=你的_bot_token
+OWNER_ID=你的_telegram_user_id</code></pre></div>
+        <p>然后运行：</p>
+        <div class="code-block"><pre><code>python -m cyrene</code></pre></div>
+        <p>Telegram Bot 支持与 Web UI 完全相同的双阶段循环、子代理和工具集。你可以从 Telegram 执行搜索、文件操作、生成子代理等所有操作。</p>
+      </section>
+
+      <section>
+        <h2>WeChat Bot</h2>
+        <p>在加密配置中设置 <code>WECHAT_BOT_TOKEN</code> 和 <code>WECHAT_OWNER_ID</code>。启动 Cyrene Web UI 后，WeChat 集成自动运行。状态显示在 Web UI 设置页面。</p>
+        <div class="note">
+          <strong>注意：</strong>WeChat 支持为 <strong>Alpha</strong> 状态。可能需要正常的代理设置才能使用。
+        </div>
+      </section>
+
+      <section>
+        <h2>完整工作流示例</h2>
+        <div class="code-block"><pre><code># 1. 后台启动守护进程
+cyrene start
+
+# 2. 检查系统状态
+cyrene status
+
+# 3. 发送消息到实时会话
+cyrene do "帮我搜索今天的 AI 新闻" --session daily
+
+# 4. 查看代理执行了哪些轮次
+cyrene flow --session daily
+
+# 5. 查看特定轮次的工具调用详情
+cyrene flow --session daily --round round_1
+
+# 6. 查看系统指标
+cyrene status
+
+# 7. 完成工作后停止守护进程
+cyrene stop</code></pre></div>
+      </section>
+</div>
+<div lang="en">
+<div class="page-header">
+        <h1>CLI Reference</h1>
+        <p class="page-subtitle">Complete command reference, MCP management, Telegram/WeChat setup.</p>
+      </div>
+      <section>
+        <h2>cyrene Commands</h2>
+        <p>The <code>cyrene</code> command communicates with the daemon at <code>http://localhost:4242</code>. Use <code>--json</code> for machine-readable output.</p>
+
+        <h3>Process Management</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>cyrene start</code></td><td>Start daemon in background</td></tr>
+            <tr><td><code>cyrene stop</code></td><td>Stop daemon</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Session Management</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>cyrene do &lt;text&gt; --session &lt;id&gt;</code></td><td>Send message to agent session</td></tr>
+            <tr><td><code>cyrene session list</code></td><td>List all sessions (live + archived)</td></tr>
+            <tr><td><code>cyrene session status --session &lt;id&gt;</code></td><td>Show session details</td></tr>
+            <tr><td><code>cyrene session delete --session &lt;id&gt;</code></td><td>Delete a session</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Agent Round Inspection</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>cyrene flow --session &lt;id&gt;</code></td><td>List agent rounds</td></tr>
+            <tr><td><code>cyrene flow --session &lt;id&gt; --round &lt;r&gt;</code></td><td>Show round execution trace</td></tr>
+            <tr><td><code>cyrene flow --session &lt;id&gt; --round &lt;r&gt; --id &lt;e&gt;</code></td><td>Inspect specific event (LLM call or tool call)</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Memory</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>cyrene memory soul</code></td><td>Print current SOUL.md</td></tr>
+            <tr><td><code>cyrene memory soul --edit &lt;path&gt;</code></td><td>Replace SOUL.md from file</td></tr>
+            <tr><td><code>cyrene memory short-term</code></td><td>Print short-term memory entries</td></tr>
+            <tr><td><code>cyrene memory context</code></td><td>Print context window status</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>MCP Management</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>cyrene mcp list</code></td><td>List MCP servers and their tools</td></tr>
+            <tr><td><code>cyrene mcp add &lt;name&gt; stdio &lt;cmd&gt; [args...]</code></td><td>Add a stdio MCP server</td></tr>
+            <tr><td><code>cyrene mcp add &lt;name&gt; sse &lt;url&gt;</code></td><td>Add an SSE MCP server</td></tr>
+            <tr><td><code>cyrene mcp remove &lt;name&gt;</code></td><td>Remove MCP server</td></tr>
+            <tr><td><code>cyrene mcp toggle &lt;name&gt;</code></td><td>Enable/disable MCP server</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>System</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>cyrene status</code></td><td>System status and metrics</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+      <section>
+        <h2>Telegram Bot</h2>
+        <p>Set <code>TELEGRAM_BOT_TOKEN</code> and <code>OWNER_ID</code> in the Web UI or encrypted config store, then run <code>python -m cyrene</code>. The Telegram bot supports the same two-phase loop, sub-agents, and tools as the Web UI.</p>
+      </section>
+      <section>
+        <h2>WeChat Bot</h2>
+        <p>Set <code>WECHAT_BOT_TOKEN</code> and <code>WECHAT_OWNER_ID</code> in the config store. Status is shown on the Web UI Settings page.</p>
+        <div class="note"><strong>Note:</strong> WeChat support is <strong>Alpha</strong>. A working proxy setup may be required.</div>
+      </section>
+      <section>
+        <h2>Full Workflow Example</h2>
+        <div class="code-block"><pre><code># 1. Start daemon in background
+cyrene start
+
+# 2. Check system status
+cyrene status
+
+# 3. Send message to a live session
+cyrene do "search today's AI news" --session daily
+
+# 4. View agent execution rounds
+cyrene flow --session daily
+
+# 5. Inspect a specific round's tool calls
+cyrene flow --session daily --round round_1
+
+# 6. View system metrics
+cyrene status
+
+# 7. Stop daemon when done
+cyrene stop</code></pre></div>
+      </section>
+</div>
+</article>
+
+  </main>
+
+  <button id="mobileMenuToggle" class="mobile-menu-btn" onclick="toggleMobileMenu()" aria-label="切换菜单">
+    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+      <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+    </svg>
+  </button>
+  <div id="sidebarBackdrop" class="sidebar-backdrop" onclick="toggleMobileMenu()"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
