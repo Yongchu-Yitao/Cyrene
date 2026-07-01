@@ -1,4 +1,5 @@
 import asyncio
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -10,9 +11,19 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 # Patch missing deps before any cyrene import
-sys.modules.setdefault("PIL", MagicMock())
-sys.modules["PIL"].Image = MagicMock()
-sys.modules.setdefault("pypdf", MagicMock())
+try:
+    _pil_missing = importlib.util.find_spec("PIL") is None
+except ValueError:
+    _pil_missing = "PIL" not in sys.modules
+if _pil_missing:
+    sys.modules.setdefault("PIL", MagicMock())
+    sys.modules["PIL"].Image = MagicMock()
+try:
+    _pypdf_missing = importlib.util.find_spec("pypdf") is None
+except ValueError:
+    _pypdf_missing = "pypdf" not in sys.modules
+if _pypdf_missing:
+    sys.modules.setdefault("pypdf", MagicMock())
 
 
 def _patch_call_llm(monkeypatch, fake):
@@ -2800,12 +2811,7 @@ async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
     async def fake_call_llm(messages, tools=None, max_tokens=32000):
         return {"content": "internal draft"}
 
-    async def fake_call_llm_stream(messages, max_tokens=32000):
-        await agent._emit_reply_stream_event({"type": "reply_start"})
-        await agent._emit_reply_stream_event({"type": "reply_delta", "delta": "真实"})
-        await agent._emit_reply_stream_event({"type": "reply_delta", "delta": "流式"})
-        await agent._emit_reply_stream_event({"type": "reply_done", "response": "真实流式"})
-        return {"content": "真实流式"}
+    fake_call_llm_stream = AsyncMock()
 
     async def fake_save_session_messages(messages, **_kwargs):
         saved["messages"] = list(messages)
@@ -2836,9 +2842,14 @@ async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
         agent._current_round_id.reset(round_token)
         agent._reply_stream_writer.reset(token)
 
-    assert result == "真实流式"
-    assert [event["type"] for event in streamed] == ["reply_start", "reply_delta", "reply_delta", "reply_done"]
-    assert saved["messages"][-1]["content"] == "真实流式"
+    assert result == "internal draft"
+    assert streamed == [
+        {"type": "reply_start"},
+        {"type": "reply_delta", "delta": "internal draft"},
+        {"type": "reply_done", "response": "internal draft"},
+    ]
+    fake_call_llm_stream.assert_not_awaited()
+    assert saved["messages"][-1]["content"] == "internal draft"
     assert saved["messages"][-1]["client_request_id"] == "req_stream"
 
 
@@ -5472,8 +5483,7 @@ def test_resolve_vision_candidates_cross_provider_no_key_not_inherited(monkeypat
 
 
 async def test_streamed_chat_only_final_reply_persists_usage(monkeypatch, tmp_path):
-    """Streaming finals return plain text; the saved assistant entry must still
-    carry the reply call's token usage (regression: workbench chat usage was 0)."""
+    """Chat-only streaming should persist the usage from the single phase-1 call."""
     from cyrene import agent, behavior_learning
     from cyrene.agent import state as _agent_state
     from cyrene.agent import agent as _agent_core
@@ -5485,8 +5495,7 @@ async def test_streamed_chat_only_final_reply_persists_usage(monkeypatch, tmp_pa
     async def fake_phase1(messages, tools=None, max_tokens=32000, **kwargs):
         return {"content": "plain phase1 text", "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}}
 
-    async def fake_stream(messages, max_tokens=None, **kwargs):
-        return {"content": "streamed final answer", "usage": {"prompt_tokens": 30, "completion_tokens": 7, "total_tokens": 37}}
+    fake_stream = AsyncMock()
 
     saved: dict[str, Any] = {}
 
@@ -5507,10 +5516,11 @@ async def test_streamed_chat_only_final_reply_persists_usage(monkeypatch, tmp_pa
     finally:
         _agent_state._reply_stream_writer.reset(token)
 
-    assert result == "streamed final answer"
+    assert result == "plain phase1 text"
+    fake_stream.assert_not_awaited()
     final_entries = [
         message for message in saved["messages"]
-        if message.get("role") == "assistant" and message.get("content") == "streamed final answer"
+        if message.get("role") == "assistant" and message.get("content") == "plain phase1 text"
     ]
     assert final_entries, "streamed final reply should be persisted"
-    assert final_entries[-1].get("usage", {}).get("total_tokens") == 37
+    assert final_entries[-1].get("usage", {}).get("total_tokens") == 12

@@ -2,11 +2,41 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from typing import Any
 
 from cyrene.registry_tools import TOOL_HANDLERS
 from cyrene.secret_redaction import redact_text, redact_value
+
+logger = logging.getLogger(__name__)
+
+_pending_action_record_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _record_action_background(*args: Any, **kwargs: Any) -> None:
+    """Record behavior-learning telemetry without delaying tool results."""
+    try:
+        from cyrene.pattern import record_action
+
+        task = asyncio.create_task(record_action(*args, **kwargs))
+    except Exception:
+        logger.debug("failed to schedule behavior action telemetry", exc_info=True)
+        return
+
+    _pending_action_record_tasks.add(task)
+
+    def _done(completed: asyncio.Task[Any]) -> None:
+        _pending_action_record_tasks.discard(completed)
+        try:
+            completed.exception()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.debug("behavior action telemetry task failed", exc_info=True)
+
+    task.add_done_callback(_done)
 
 _BROWSER_TOOL_NAMES = {
     "browser_navigate",
@@ -59,16 +89,21 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
                 "result": redact_text(str(result)),
                 "round_id": _current_round_id.get(),
             }, session_id=_current_session_id.get())
-            from cyrene.pattern import record_action
-            await record_action(name, redact_value(arguments), _caller_type.get(), _current_round_id.get(),
-                          (time.monotonic() - _t0) * 1000,
-                          result=redact_text(result), success=True, error="")
+            _record_action_background(
+                name,
+                redact_value(arguments),
+                _caller_type.get(),
+                _current_round_id.get(),
+                (time.monotonic() - _t0) * 1000,
+                result=redact_text(result),
+                success=True,
+                error="",
+            )
             return result
         except ValueError:
             raise ValueError(f"Unknown tool: {name}")
         except Exception as e:
-            from cyrene.pattern import record_action
-            await record_action(
+            _record_action_background(
                 name,
                 redact_value(arguments),
                 _caller_type.get(),
@@ -91,8 +126,7 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
             "result": redact_text(f"Tool failed: {e}"),
             "round_id": _current_round_id.get(),
         }, session_id=_current_session_id.get())
-        from cyrene.pattern import record_action
-        await record_action(
+        _record_action_background(
             name,
             redact_value(arguments),
             _caller_type.get(),
@@ -113,9 +147,8 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
         "result": redact_text(str(result)),
         "round_id": _current_round_id.get(),
     }, session_id=_current_session_id.get())
-    from cyrene.pattern import record_action
     tool_success = not str(result).lower().startswith("tool failed:")
-    await record_action(
+    _record_action_background(
         name,
         redact_value(arguments),
         _caller_type.get(),

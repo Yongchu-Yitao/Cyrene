@@ -43,6 +43,16 @@ function getTileAttribution(provider) {
     : '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>, &copy; <a href="https://carto.com/">CARTO</a>';
 }
 
+function createPinIcon(L) {
+  return L.divIcon({
+    className: "map-pin-icon",
+    iconSize: [28, 34],
+    iconAnchor: [14, 34],
+    popupAnchor: [0, -30],
+    html: '<span class="map-pin-drop" aria-hidden="true"><span class="map-pin-dot"></span></span>',
+  });
+}
+
 // Route cache for AMap direction responses.
 var _routeCache = {};
 
@@ -142,7 +152,7 @@ function MapView() {
       }
       if (!popupHtml) popupHtml = pin.lat.toFixed(4) + ", " + pin.lng.toFixed(4);
 
-      var marker = L.marker(ll, { title: pin.name || "" });
+      var marker = L.marker(ll, { title: pin.name || "", icon: createPinIcon(L) });
       marker.bindPopup(popupHtml, { maxWidth: 300 });
       layer.addLayer(marker);
     });

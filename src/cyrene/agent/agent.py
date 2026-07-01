@@ -926,22 +926,10 @@ async def _run_main_agent(
         event["detail_key"] = "phase.chatOnly"
     await _publish_runtime_event(event)
     if _streaming_reply_requested():
-        messages = [system_entry, *history, attach_context(user_entry, context_block(
-            "user.current.visible",
-            "user",
-            source="run_agent(public_user_message)",
-            reason="visible user message for streamed final reply",
-            content=user_entry.get("content") or "",
-        ))]
-        final_text = await _final_reply_from_history(project_history_for_llm(messages), max_tokens=None)
-        final_entry = _attach_final_usage({"role": "assistant", "content": final_text})
         if client_request_id:
-            final_entry["client_request_id"] = client_request_id
-        if round_id:
-            final_entry["round_id"] = round_id
-        messages.append(_apply_assistant_meta(final_entry))
+            messages[-1]["client_request_id"] = client_request_id
         await _save(_session_messages_to_save(messages))
-        return final_text
+        return await _ensure_text_reply(response, messages)
     if client_request_id:
         messages[-1]["client_request_id"] = client_request_id
     await _save(_session_messages_to_save(messages))

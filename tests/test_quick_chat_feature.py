@@ -1,11 +1,20 @@
+import importlib
 import json
+import sys
 import subprocess
 from pathlib import Path
 
-from PIL import Image
-
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _pillow_image_module():
+    pil_module = sys.modules.get("PIL")
+    if pil_module is not None and getattr(pil_module, "__spec__", None) is None:
+        for module_name in list(sys.modules):
+            if module_name == "PIL" or module_name.startswith("PIL."):
+                sys.modules.pop(module_name, None)
+    return importlib.import_module("PIL.Image")
 
 
 def test_electron_quick_chat_main_process_contract():
@@ -187,6 +196,7 @@ def test_background_residency_exposes_a_tray_entrypoint():
 
 
 def test_tray_icon_is_a_small_transparent_colored_asset():
+    Image = _pillow_image_module()
     mac1x = Image.open(ROOT / "build" / "tray-mac.png").convert("RGBA")
     mac2x = Image.open(ROOT / "build" / "tray-mac@2x.png").convert("RGBA")
     colored = Image.open(ROOT / "build" / "tray.png").convert("RGBA")

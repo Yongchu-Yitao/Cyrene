@@ -4855,6 +4855,7 @@ _WORKBENCH_TASK_MODE_SYSTEM = (
     "- 不要声明源代码、脚本、.tex、缓存、依赖、构建目录或中间数据，除非用户明确要求这些也是交付物。\n"
     "- 例：代码生成数据分析报告时，默认只交付最终报告（如 PDF/HTML/Markdown），不交付分析脚本；"
     "LaTeX 生成文档时，默认只交付编译后的 PDF，不交付 .tex/.aux/.log。\n"
+    "- 如果最终交付文件是通过 Bash/shell/命令行生成的，也必须用 send_file 声明，否则不会出现在「产物」面板。\n"
     "- 交付物请写到 deliverables/ 子目录下；用 send_file 声明的文件会被自动归档到 deliverables/。\n"
     "- 不要只在回复里写出文件路径就当作已经交付。"
 )
