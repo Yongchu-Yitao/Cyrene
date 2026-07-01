@@ -436,11 +436,15 @@ class BrowserTabManager {
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
     const wc = tab.view.webContents;
-    // Find element, get its position — do NOT click via JS (isTrusted=false).
     const selectorLiteral = JSON.stringify(String(selector || ''));
-    const info = await wc.executeJavaScript(`
-      (function(s){try{var e=document.querySelector(s);if(!e)return{ok:false,error:\"not found\"};e.scrollIntoView({block:\"center\",inline:\"center\"});var r=e.getBoundingClientRect();if(!r||r.width<=0||r.height<=0)return{ok:false,error:\"not visible\"};return{ok:true,x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2),box:{x:r.left,y:r.top,w:r.width,h:r.height}}}catch(e){return{ok:false,error:e.message}})(${selectorLiteral})
-    `, true).catch(() => ({ ok: false, error: 'js execution failed' }));
+    // Find element via JS — coordinates are sent as real OS-level input events
+    // to bypass isTrusted=false restrictions (SPAs like Vue/React reject JS clicks).
+    let info;
+    try {
+      info = await wc.executeJavaScript(`(function(s){var e=document.querySelector(s);if(!e)return{ok:false,error:"nf"};e.scrollIntoView({block:"center",inline:"center"});var r=e.getBoundingClientRect();if(!r)return{ok:false,error:"nr"};return{ok:true,x:r.left+r.width/2,y:r.top+r.height/2}})(${selectorLiteral})`, true);
+    } catch (e) {
+      info = { ok: false, error: 'js execution failed: ' + (e && e.message || e) };
+    }
     if (!info || !info.ok) return { ok: false, error: 'Element ' + info.error, url: wc.getURL(), title: wc.getTitle() };
     // sendInputEvent dispatches trusted OS-level events.  Chromium's input
     // pipeline generates the full click chain (pointerdown → mousedown →
