@@ -49,6 +49,7 @@ var WorkbenchModel = (function () {
     projects.forEach(function (project) {
       if (!Array.isArray(project.sessions)) project.sessions = [];
       project.sessions.forEach(function (session) {
+        var isSummary = !!session.isSummary;
         if (!Array.isArray(session.constraints)) session.constraints = [];
         if (!Array.isArray(session.plan)) session.plan = [];
         if (!Number.isFinite(Number(session.planRevision))) session.planRevision = 0;
@@ -58,10 +59,10 @@ var WorkbenchModel = (function () {
           if (!Array.isArray(step.dependsOn)) step.dependsOn = [];
           step.order = index + 1;
         });
-        if (!Array.isArray(session.events)) session.events = [];
-        if (!Array.isArray(session.runs)) session.runs = [];
-        if (!Array.isArray(session.artifacts)) session.artifacts = [];
-        if (!Array.isArray(session.acceptanceCriteria)) session.acceptanceCriteria = [];
+        if (!isSummary && !Array.isArray(session.events)) session.events = [];
+        if (!isSummary && !Array.isArray(session.runs)) session.runs = [];
+        if (!isSummary && !Array.isArray(session.artifacts)) session.artifacts = [];
+        if (!isSummary && !Array.isArray(session.acceptanceCriteria)) session.acceptanceCriteria = [];
         if (session.goalLoop && typeof session.goalLoop !== "object") session.goalLoop = null;
       });
     });
@@ -81,7 +82,11 @@ var WorkbenchModel = (function () {
   }
 
   function fetchProjects() {
-    return apiJson("/api/projects").then(normalizeStore);
+    return apiJson("/api/projects?detail=summary").then(normalizeStore);
+  }
+
+  function fetchSession(sessionId) {
+    return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId));
   }
 
   function createProject(input) {
@@ -804,6 +809,7 @@ var WorkbenchModel = (function () {
 
   window.WorkbenchModel = {
     normalizeStore: normalizeStore,
+    fetchSession: fetchSession,
     fetchProjects: fetchProjects,
     createProject: createProject,
     updateProject: updateProject,

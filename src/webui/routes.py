@@ -2348,6 +2348,74 @@ def _workbench_find_project(payload: dict[str, Any], project_id: str) -> dict[st
     return None
 
 
+_WORKBENCH_SESSION_SUMMARY_FIELDS = (
+    "id",
+    "projectId",
+    "kind",
+    "title",
+    "goal",
+    "status",
+    "priority",
+    "createdAt",
+    "updatedAt",
+    "summary",
+    "titleLocked",
+)
+
+
+def _workbench_session_summary(session: dict[str, Any]) -> dict[str, Any]:
+    """Return the rail/list shape for a task session without history payloads."""
+    summary = {field: session.get(field) for field in _WORKBENCH_SESSION_SUMMARY_FIELDS if field in session}
+    summary["id"] = str(summary.get("id") or session.get("id") or "")
+    summary["projectId"] = str(summary.get("projectId") or session.get("projectId") or "")
+    summary["isSummary"] = True
+    summary["planStepCount"] = len(session.get("plan") or []) if isinstance(session.get("plan"), list) else 0
+    summary["eventCount"] = len(session.get("events") or []) if isinstance(session.get("events"), list) else 0
+    summary["runCount"] = len(session.get("runs") or []) if isinstance(session.get("runs"), list) else 0
+    summary["artifactCount"] = len(session.get("artifacts") or []) if isinstance(session.get("artifacts"), list) else 0
+    return summary
+
+
+def _workbench_lightweight_store(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return projects with session summaries, keeping only the active session full."""
+    active_project_id = str(payload.get("activeProjectId") or "")
+    active_session_id = str(payload.get("activeSessionId") or "")
+    projects: list[dict[str, Any]] = []
+    for project in payload.get("projects", []):
+        if not isinstance(project, dict):
+            continue
+        next_project = dict(project)
+        next_sessions: list[dict[str, Any]] = []
+        for session in project.get("sessions") or []:
+            if not isinstance(session, dict):
+                continue
+            if str(project.get("id") or "") == active_project_id and str(session.get("id") or "") == active_session_id:
+                full = dict(session)
+                full.pop("isSummary", None)
+                next_sessions.append(full)
+            else:
+                next_sessions.append(_workbench_session_summary(session))
+        next_project["sessions"] = next_sessions
+        projects.append(next_project)
+    return {
+        **{k: v for k, v in payload.items() if k != "projects"},
+        "projects": projects,
+    }
+
+
+def _workbench_project_shell(project: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return project metadata with session summaries only."""
+    if not isinstance(project, dict):
+        return None
+    shell = dict(project)
+    shell["sessions"] = [
+        _workbench_session_summary(session)
+        for session in (project.get("sessions") or [])
+        if isinstance(session, dict)
+    ]
+    return shell
+
+
 def _workbench_find_session(payload: dict[str, Any], session_id: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     for project in payload.get("projects", []):
         for session in project.get("sessions", []):
@@ -8844,8 +8912,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     # ---- Workbench projects / task sessions ----
 
     @router.get("/api/projects")
-    async def api_workbench_projects():
-        return _read_workbench_store()
+    async def api_workbench_projects(detail: str = "full"):
+        payload = _read_workbench_store()
+        if str(detail or "").strip().lower() in {"summary", "light", "list"}:
+            return _workbench_lightweight_store(payload)
+        return payload
 
     @router.get("/api/workbench/notifications")
     async def api_workbench_notifications(
@@ -9181,7 +9252,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         project, session = _workbench_find_session(payload, session_id)
         if not session:
             return JSONResponse({"error": "session not found"}, status_code=404)
-        return {"project": project, "session": session}
+        return {
+            "projectId": project.get("id") if project else "",
+            "project": _workbench_project_shell(project),
+            "session": session,
+        }
 
     @router.get("/api/task-sessions/{session_id}/files/diff")
     async def api_workbench_file_diff(session_id: str, path: str = ""):

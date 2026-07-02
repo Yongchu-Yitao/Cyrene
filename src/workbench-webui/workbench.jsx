@@ -610,6 +610,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var [settingsTab, setSettingsTab] = useWorkbenchState("");
   var [newProjectOpen, setNewProjectOpen] = useWorkbenchState(false);
   var [newTaskOpen, setNewTaskOpen] = useWorkbenchState(false);
+  var [mountedPages, setMountedPages] = useWorkbenchState({});
   var [editProject, setEditProject] = useWorkbenchState(null);
   var [chatCrumb, setChatCrumb] = useWorkbenchState("");
   var [notifications, setNotifications] = useWorkbenchState({ items: [], counts: { all: 0, mention: 0, comment: 0, system: 0 }, unreadByTab: { all: 0, mention: 0, comment: 0, system: 0 }, unreadCount: 0 });
@@ -617,6 +618,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   // Always-fresh snapshot of what the user is looking at, read inside async
   // notification callbacks (interval / SSE closures captured once on mount).
   var activeViewRef = useWorkbenchRef({ page: null, chatId: "", sessionId: "" });
+  var sessionLoadSeqRef = useWorkbenchRef(0);
 
   function reloadNotifications(tab, limit) {
     var activeView = activeViewRef.current;
@@ -661,6 +663,78 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       })
       .finally(function () {
         setLoading(false);
+      });
+  }
+
+  function mergeSessionPayload(prev, payload) {
+    if (!prev || !payload || !payload.session) return prev;
+    var fullSession = Object.assign({}, payload.session, { isSummary: false });
+    var projectPayload = payload.project && typeof payload.project === "object" ? payload.project : null;
+    var projectId = String(
+      (projectPayload && projectPayload.id)
+      || fullSession.projectId
+      || payload.projectId
+      || prev.activeProjectId
+      || ""
+    );
+    var foundProject = false;
+    var nextProjects = (prev.projects || []).map(function (project) {
+      if (!project || String(project.id || "") !== projectId) return project;
+      foundProject = true;
+      var projectPatch = {};
+      if (projectPayload) {
+        Object.keys(projectPayload).forEach(function (key) {
+          if (key !== "sessions") projectPatch[key] = projectPayload[key];
+        });
+      }
+      var foundSession = false;
+      var sessions = (project.sessions || []).map(function (session) {
+        if (session && String(session.id || "") === String(fullSession.id || "")) {
+          foundSession = true;
+          return fullSession;
+        }
+        return session;
+      });
+      if (!foundSession) sessions = sessions.concat([fullSession]);
+      return Object.assign({}, project, projectPatch, { sessions: sessions });
+    });
+    if (!foundProject && projectPayload) {
+      nextProjects = nextProjects.concat([Object.assign({}, projectPayload, { sessions: [fullSession] })]);
+    }
+    var activeProject = nextProjects.find(function (project) { return String(project.id || "") === projectId; }) || prev.activeProject;
+    var shouldActivate = String(prev.activeSessionId || "") === String(fullSession.id || "");
+    var activeSession = shouldActivate
+      ? fullSession
+      : (
+        activeProject && (activeProject.sessions || []).find(function (session) {
+          return session && String(session.id || "") === String(prev.activeSessionId || "");
+        })
+      ) || prev.activeSession;
+    return Object.assign({}, prev, {
+      projects: nextProjects,
+      activeProjectId: activeProject ? activeProject.id : prev.activeProjectId,
+      activeProject: activeProject,
+      activeSessionId: shouldActivate ? (fullSession.id || prev.activeSessionId) : prev.activeSessionId,
+      activeSession: activeSession,
+    });
+  }
+
+  function fetchAndMergeSession(sessionId) {
+    if (!sessionId) return Promise.resolve(null);
+    var seq = ++sessionLoadSeqRef.current;
+    setLoading(true);
+    return model.fetchSession(sessionId)
+      .then(function (payload) {
+        if (seq !== sessionLoadSeqRef.current) return null;
+        setStore(function (prev) { return mergeSessionPayload(prev, payload); });
+        return payload;
+      })
+      .catch(function (err) {
+        if (seq === sessionLoadSeqRef.current) setError(err.message || String(err));
+        return null;
+      })
+      .finally(function () {
+        if (seq === sessionLoadSeqRef.current) setLoading(false);
       });
   }
 
@@ -890,6 +964,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       return next;
     });
     setExpandedStepId("");
+    if (nextSession && nextSession.isSummary) fetchAndMergeSession(nextSessionId);
     window.WorkbenchModel.setActiveProject(project.id, nextSessionId).catch(function () {});
   }
 
@@ -902,6 +977,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       return { ...prev, activeSessionId: session.id, activeSession: session };
     });
     setExpandedStepId("");
+    if (session.isSummary) fetchAndMergeSession(session.id);
     window.WorkbenchModel.setActiveProject(project.id, sessionId).catch(function () {});
   }
 
@@ -1138,6 +1214,19 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var isProfile = fullPage === "profile";
   var isModulePage = isKnowledge || isSchedule || isMemory || isChat || isWelcome || isProfile;
   var fullPageConfig = fullPage && !isModulePage ? workbenchFullPageConfig(fullPage, setFullPage, store) : null;
+  useWorkbenchEffect(function () {
+    if (!isModulePage || !fullPage) return;
+    setMountedPages(function (prev) {
+      if (prev[fullPage]) return prev;
+      return Object.assign({}, prev, { [fullPage]: true });
+    });
+  }, [fullPage, isModulePage]);
+  var showChatPage = isChat || mountedPages.chat;
+  var showKnowledgePage = isKnowledge || mountedPages.knowledge;
+  var showSchedulePage = isSchedule || mountedPages.schedule;
+  var showMemoryPage = isMemory || mountedPages.memory;
+  var showWelcomePage = isWelcome || mountedPages.welcome;
+  var showProfilePage = isProfile || mountedPages.profile;
 
   // First-run onboarding (LLM + personality). Driven by the backend onboarding
   // state — the workbench's own setup flow, independent of the legacy wizard.
@@ -1213,39 +1302,60 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             onOpenPage={handleOpenPage}
             onSettings={function () { setSettingsTab(""); setSettingsOpen(true); }}
           />
-          {isChat ? (
-            React.createElement(window.WorkbenchChatPage || function () { return <div className="workbench-empty">{t("workbench.chatLoading")}</div>; }, {
-              project: store.activeProject,
-              onOpenTask: handleChatToTask,
-              onActiveChatChange: setChatCrumb,
-              onActiveChatIdChange: setActiveChatId,
-            })
-          ) : isKnowledge ? (
-            React.createElement(window.WorkbenchKnowledgePage || function () { return <div className="workbench-empty">{t("workbench.knowledgeLoading")}</div>; }, {
-              project: store.activeProject,
-              onBack: function () { setFullPage(null); },
-              onNavigate: navigateFromSearch,
-            })
-          ) : isSchedule ? (
-            React.createElement(window.WorkbenchSchedulePage || function () { return <div className="workbench-empty">{t("workbench.scheduleLoading")}</div>; }, { project: store.activeProject, onBack: function () { setFullPage(null); } })
-          ) : isMemory ? (
-            React.createElement(window.WorkbenchMemoryPage || function () { return <div className="workbench-empty">{t("workbench.memoryLoading")}</div>; }, { project: store.activeProject, onBack: function () { setFullPage(null); } })
-          ) : isWelcome ? (
-            React.createElement(window.WorkbenchWelcomePage || function () { return <div className="workbench-empty">{t("workbench.welcomeLoading")}</div>; }, {
-              project: store.activeProject,
-              hasProjects: Array.isArray(store.projects) && store.projects.length > 0,
-              onNewProject: createProject,
-              onOpenPage: handleOpenPage,
-              onSettings: function (tab) { setSettingsTab(typeof tab === "string" ? tab : ""); setSettingsOpen(true); },
-              theme: theme,
-              actualTheme: actualTheme,
-              onToggleTheme: onToggleTheme,
-            })
-          ) : isProfile ? (
-            window.WorkbenchProfilePage
-              ? React.createElement(window.WorkbenchProfilePage, {})
-              : <div className="workbench-empty">…</div>
-          ) : (
+          {showChatPage && (
+            <div style={{ display: isChat ? "contents" : "none" }}>
+              {React.createElement(window.WorkbenchChatPage || function () { return <div className="workbench-empty">{t("workbench.chatLoading")}</div>; }, {
+                active: isChat,
+                project: store.activeProject,
+                onOpenTask: handleChatToTask,
+                onActiveChatChange: setChatCrumb,
+                onActiveChatIdChange: setActiveChatId,
+              })}
+            </div>
+          )}
+          {showKnowledgePage && (
+            <div style={{ display: isKnowledge ? "contents" : "none" }}>
+              {React.createElement(window.WorkbenchKnowledgePage || function () { return <div className="workbench-empty">{t("workbench.knowledgeLoading")}</div>; }, {
+                active: isKnowledge,
+                project: store.activeProject,
+                onBack: function () { setFullPage(null); },
+                onNavigate: navigateFromSearch,
+              })}
+            </div>
+          )}
+          {showSchedulePage && (
+            <div style={{ display: isSchedule ? "contents" : "none" }}>
+              {React.createElement(window.WorkbenchSchedulePage || function () { return <div className="workbench-empty">{t("workbench.scheduleLoading")}</div>; }, { active: isSchedule, project: store.activeProject, onBack: function () { setFullPage(null); } })}
+            </div>
+          )}
+          {showMemoryPage && (
+            <div style={{ display: isMemory ? "contents" : "none" }}>
+              {React.createElement(window.WorkbenchMemoryPage || function () { return <div className="workbench-empty">{t("workbench.memoryLoading")}</div>; }, { active: isMemory, project: store.activeProject, onBack: function () { setFullPage(null); } })}
+            </div>
+          )}
+          {showWelcomePage && (
+            <div style={{ display: isWelcome ? "contents" : "none" }}>
+              {React.createElement(window.WorkbenchWelcomePage || function () { return <div className="workbench-empty">{t("workbench.welcomeLoading")}</div>; }, {
+                active: isWelcome,
+                project: store.activeProject,
+                hasProjects: Array.isArray(store.projects) && store.projects.length > 0,
+                onNewProject: createProject,
+                onOpenPage: handleOpenPage,
+                onSettings: function (tab) { setSettingsTab(typeof tab === "string" ? tab : ""); setSettingsOpen(true); },
+                theme: theme,
+                actualTheme: actualTheme,
+                onToggleTheme: onToggleTheme,
+              })}
+            </div>
+          )}
+          {showProfilePage && (
+            <div style={{ display: isProfile ? "contents" : "none" }}>
+              {window.WorkbenchProfilePage
+                ? React.createElement(window.WorkbenchProfilePage, { active: isProfile })
+                : <div className="workbench-empty">…</div>}
+            </div>
+          )}
+          <div style={{ display: isModulePage ? "none" : "contents" }}>
           <>
           <TaskRail
             project={store.activeProject}
@@ -1297,6 +1407,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             }}
             error={error}
             loading={loading}
+            active={!isModulePage}
           />
           <RightContextPanel
             project={store.activeProject}
@@ -1315,7 +1426,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             }}
           />
           </>
-          )}
+          </div>
         </div>
       )}
       {searchOpen && React.createElement(
@@ -2958,6 +3069,7 @@ function GoalLoopLimitsDialog({ session, onClose, onSaved }) {
 function TaskWorkArea(props) {
   var project = props.project;
   var session = props.session;
+  var active = props.active !== false;
   var [attachments, setAttachments] = useWorkbenchState([]);
   var [mode, setMode] = useWorkbenchState("auto");
   var [goalLoopOpen, setGoalLoopOpen] = useWorkbenchState(false);
@@ -2973,7 +3085,7 @@ function TaskWorkArea(props) {
     onOpenGoalLoop: function () { setGoalLoopOpen(true); },
     onOpenGoalLoopLimits: function () { setGoalLoopLimitsOpen(true); },
   });
-  var taskDropEnabled = !!(project && session && session.kind !== "init");
+  var taskDropEnabled = !!(active && project && session && session.kind !== "init");
   var taskFileDropActive = useWorkbenchFileDrop(function (files) {
     try {
       window.dispatchEvent(new CustomEvent("cyrene:add-task-attachments", { detail: { files: files } }));

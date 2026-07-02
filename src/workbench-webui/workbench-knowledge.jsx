@@ -606,6 +606,7 @@
 
   function WorkbenchKnowledgePage(props) {
     var project = props && props.project;
+    var active = !props || props.active !== false;
     var workspace = (project && (project.dataKey || project.id)) || "default";
 
     var docsState = useState([]); var documents = docsState[0]; var setDocuments = docsState[1];
@@ -631,7 +632,7 @@
     var fileRef = useRef(null);
     var knowledgeFileDropActive = useWorkbenchFileDrop(function (files) {
       if (!busy) handleFiles(files);
-    }, !!project);
+    }, !!(active && project));
 
     var client = useMemo(function () { return api(workspace); }, [workspace]);
 

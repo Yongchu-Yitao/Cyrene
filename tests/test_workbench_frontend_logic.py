@@ -102,6 +102,39 @@ def test_workbench_plan_ui_uses_step_ids_and_operation_endpoint():
     assert "firstUnresolvedStepIndex" not in source
 
 
+def test_workbench_uses_light_project_payload_and_lazy_session_detail():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
+
+    assert 'apiJson("/api/projects?detail=summary")' in model
+    assert "function fetchSession(sessionId)" in model
+    assert '"/api/task-sessions/" + encodeURIComponent(sessionId)' in model
+    assert "mergeSessionPayload(prev, payload)" in source
+    assert "if (session.isSummary) fetchAndMergeSession(session.id)" in source
+    assert "if (nextSession && nextSession.isSummary) fetchAndMergeSession(nextSessionId)" in source
+    assert "seq !== sessionLoadSeqRef.current" in source
+
+
+def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
+    root = Path(__file__).resolve().parent.parent
+    shell = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    knowledge = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+
+    assert "mountedPages" in shell
+    assert 'style={{ display: isChat ? "contents" : "none" }}' in shell
+    assert 'style={{ display: isKnowledge ? "contents" : "none" }}' in shell
+    assert 'style={{ display: isSchedule ? "contents" : "none" }}' in shell
+    assert 'style={{ display: isMemory ? "contents" : "none" }}' in shell
+    assert "active={!isModulePage}" in shell
+    assert "var taskDropEnabled = !!(active && project && session && session.kind !== \"init\")" in shell
+    assert "function WorkbenchChatPage({ active, project" in chat
+    assert "!!(isActive && project)" in chat
+    assert "var active = !props || props.active !== false" in knowledge
+    assert "!!(active && project)" in knowledge
+
+
 def test_workbench_task_controller_uses_current_session_from_returned_store():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")

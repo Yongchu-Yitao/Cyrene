@@ -768,9 +768,10 @@ window.WorkbenchChatRuntimes = WorkbenchChatRuntimes;
 // Page
 // ---------------------------------------------------------------------------
 
-function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveChatIdChange }) {
+function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, onActiveChatIdChange }) {
   window.useWorkbenchI18n();
   if (typeof window.useDataVersion === "function") window.useDataVersion();
+  var isActive = active !== false;
   var model = window.WorkbenchChatModel;
   var projectId = project ? project.id : "";
   var [chats, setChats] = useWbcState([]);
@@ -827,7 +828,7 @@ function WorkbenchChatPage({ project, onOpenTask, onActiveChatChange, onActiveCh
     try {
       window.dispatchEvent(new CustomEvent("cyrene:add-chat-attachments", { detail: { files: files } }));
     } catch (e) {}
-  }, !!project);
+  }, !!(isActive && project));
 
   function openViewer(file) {
     if (!file) return;

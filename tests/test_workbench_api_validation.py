@@ -82,6 +82,123 @@ def test_session_patch_accepts_existing_statuses(monkeypatch, tmp_path):
     assert response.json()["session"]["status"] == "waiting_for_approval"
 
 
+def test_projects_summary_keeps_active_session_full_and_compacts_inactive(monkeypatch, tmp_path):
+    from webui import routes
+
+    client = _client(monkeypatch, tmp_path)
+    store_path = routes._WORKBENCH_STORE
+    store_path.write_text(
+        json.dumps(
+            {
+                "projects": [
+                    {
+                        "id": "project_1",
+                        "name": "Validation",
+                        "workspacePath": str(tmp_path / "workspace"),
+                        "sessions": [
+                            {
+                                "id": "session_active",
+                                "projectId": "project_1",
+                                "kind": "task",
+                                "title": "Active",
+                                "status": "completed",
+                                "plan": [{"id": "step_1", "title": "Step"}],
+                                "events": [{"id": "event_1", "body": "large event body"}],
+                                "runs": [{"id": "run_1", "response": "large run body"}],
+                                "artifacts": [{"id": "artifact_1"}],
+                            },
+                            {
+                                "id": "session_inactive",
+                                "projectId": "project_1",
+                                "kind": "task",
+                                "title": "Inactive",
+                                "status": "completed",
+                                "plan": [{"id": "step_2", "title": "Step"}],
+                                "events": [{"id": "event_2", "body": "large event body"}],
+                                "runs": [{"id": "run_2", "response": "large run body"}],
+                                "artifacts": [{"id": "artifact_2"}],
+                            },
+                        ],
+                    }
+                ],
+                "activeProjectId": "project_1",
+                "activeSessionId": "session_active",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get("/api/projects?detail=summary")
+
+    assert response.status_code == 200
+    sessions = response.json()["projects"][0]["sessions"]
+    active = next(item for item in sessions if item["id"] == "session_active")
+    inactive = next(item for item in sessions if item["id"] == "session_inactive")
+    assert active["events"][0]["id"] == "event_1"
+    assert active["runs"][0]["id"] == "run_1"
+    assert inactive["isSummary"] is True
+    assert inactive["eventCount"] == 1
+    assert inactive["runCount"] == 1
+    assert "events" not in inactive
+    assert "runs" not in inactive
+
+
+def test_session_detail_returns_project_shell_without_full_sibling_history(monkeypatch, tmp_path):
+    from webui import routes
+
+    client = _client(monkeypatch, tmp_path)
+    store_path = routes._WORKBENCH_STORE
+    store_path.write_text(
+        json.dumps(
+            {
+                "projects": [
+                    {
+                        "id": "project_1",
+                        "name": "Validation",
+                        "workspacePath": str(tmp_path / "workspace"),
+                        "sessions": [
+                            {
+                                "id": "session_1",
+                                "projectId": "project_1",
+                                "kind": "task",
+                                "title": "Target",
+                                "status": "completed",
+                                "events": [{"id": "event_target"}],
+                                "runs": [{"id": "run_target"}],
+                                "plan": [],
+                            },
+                            {
+                                "id": "session_sibling",
+                                "projectId": "project_1",
+                                "kind": "task",
+                                "title": "Sibling",
+                                "status": "completed",
+                                "events": [{"id": "event_sibling"}],
+                                "runs": [{"id": "run_sibling"}],
+                                "plan": [],
+                            },
+                        ],
+                    }
+                ],
+                "activeProjectId": "project_1",
+                "activeSessionId": "session_1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get("/api/task-sessions/session_1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session"]["events"][0]["id"] == "event_target"
+    sibling = next(item for item in payload["project"]["sessions"] if item["id"] == "session_sibling")
+    assert sibling["isSummary"] is True
+    assert sibling["eventCount"] == 1
+    assert "events" not in sibling
+    assert "runs" not in sibling
+
+
 def test_malformed_json_uses_standard_400_response(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
 
