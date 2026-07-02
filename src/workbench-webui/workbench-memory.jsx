@@ -14,6 +14,15 @@
   var useRef = React.useRef;
   var h = React.createElement;
 
+  function useMemoryT() {
+    var i18n = window.useWorkbenchI18n
+      ? window.useWorkbenchI18n()
+      : { t: function (key, params, fallback) { return fallback || key; } };
+    return function (key, fallback, params) {
+      return i18n.t(key, params || null, fallback);
+    };
+  }
+
   // ── date helpers ─────────────────────────────────────────────────────
   function parseDate(s) {
     if (!s) return null;
@@ -314,6 +323,7 @@
   }
 
   function SkillLearningPanel(props) {
+    var t = useMemoryT();
     var learning = props.learning;
     var loading = learning.loading;
     var busy = learning.busy;
@@ -332,7 +342,7 @@
 
     return h("aside", { className: "wb-mem-detail wb-mem-skill-panel" },
       h("div", { className: "wb-mem-detail-tabs" },
-        h("button", { type: "button", className: "wb-mem-detail-tab active" }, patternSelected ? "模式详情" : "技能详情")),
+        h("button", { type: "button", className: "wb-mem-detail-tab active" }, patternSelected ? t("memory.learning.patternDetails", "Pattern details") : t("memory.learning.skillDetails", "Skill details"))),
       !skill && !patternSelected ? h("div", { className: "wb-mem-detail-scroll" },
         h("div", { className: "wb-mem-empty-soft" }, loading ? "加载技能中…" : "选择一个技能或行为模式查看详情"),
         learning.error && h("div", { className: "wb-mem-error inline" }, learning.error),
@@ -349,7 +359,7 @@
         learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note),
         h("div", { className: "wb-mem-skill-actions single" },
           h("button", { type: "button", className: "wb-btn primary", onClick: function () { learning.learnPatternAsSkill(pattern.id); }, disabled: loading || !!busy },
-            busy === "pattern:" + pattern.id ? "学习中…" : "立即学习")),
+            busy === "pattern:" + pattern.id ? t("memory.learning.learning", "Learning...") : t("memory.learning.learnNow", "Learn now"))),
         h("div", { className: "wb-mem-meta" },
           h("div", { className: "wb-mem-meta-row" }, h("label", null, "ID"), h("div", { className: "wb-mem-meta-val code" }, pattern.id)),
           h("div", { className: "wb-mem-meta-row" }, h("label", null, "出现次数"), h("div", { className: "wb-mem-meta-val" }, String(patternStats.frequency || 0))),
@@ -385,6 +395,16 @@
             h("p", null, skill.description || "暂无描述"))),
         learning.error && h("div", { className: "wb-mem-error inline" }, learning.error),
         learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note),
+        h("div", { className: "wb-mem-skill-actions single" },
+          h("button", {
+            type: "button",
+            className: "wb-btn primary",
+            onClick: function () { learning.learnPatternAsSkill(skill.pattern_id); },
+            disabled: loading || !!busy || !skill.pattern_id,
+            title: skill.pattern_id
+              ? t("memory.learning.learnCurrentSkillTitle", "Learn this skill now")
+              : t("memory.learning.noLinkedPatternTitle", "This skill has no linked behavior pattern"),
+          }, busy === "pattern:" + skill.pattern_id ? t("memory.learning.learning", "Learning...") : t("memory.learning.learnNow", "Learn now"))),
         h("div", { className: "wb-mem-meta" },
           h("div", { className: "wb-mem-meta-row" }, h("label", null, "ID"), h("div", { className: "wb-mem-meta-val code" }, skill.id)),
           h("div", { className: "wb-mem-meta-row" }, h("label", null, "类型"), h("div", { className: "wb-mem-meta-val" }, skill.skill_type || "—")),
@@ -422,6 +442,7 @@
   }
 
   function SkillLearningMain(props) {
+    var t = useMemoryT();
     var learning = props.learning;
     var snap = learningSnapshot(learning.data);
     var loading = learning.loading;
@@ -439,11 +460,8 @@
         h("div", { className: "wb-mem-learning-title" },
           h("span", { className: "wb-mem-ico blue" }, ICON.learning(18)),
           h("div", null,
-            h("h2", null, "技能学习"),
-            h("p", null, "把重复操作沉淀成可复用技能；进入自动执行前会先经过影子验证。"))),
-        h("div", { className: "wb-mem-skill-actions wide" },
-          h("button", { type: "button", className: "wb-btn primary", disabled: !!busy || loading, onClick: function () { learning.runAction("learn"); } }, busy === "learn" ? "学习中…" : "学习新行为"),
-          h("button", { type: "button", className: "wb-btn ghost", disabled: !!busy || loading, onClick: function () { learning.runAction("rebuild"); } }, busy === "rebuild" ? "生成中…" : "重新生成技能"))),
+            h("h2", null, t("memory.learning.title", "Skill learning")),
+            h("p", null, t("memory.learning.intro", "Turn repeated operations into reusable skills; they go through shadow validation before automatic execution."))))),
       learning.error && h("div", { className: "wb-mem-error" }, learning.error),
       learning.note && h("div", { className: "wb-mem-skill-note main" }, learning.note),
       h("div", { className: "wb-mem-learning-scroll" },
@@ -451,8 +469,7 @@
           h("div", { className: "wb-mem-learning-section-head" },
             h("div", null,
               h("b", null, "自动技能"),
-              h("span", null, "共 " + snap.skills.length + " 个，已激活 " + snap.activeSkills + " 个")),
-            h("button", { type: "button", className: "wb-btn ghost", disabled: loading || !!busy, onClick: learning.load }, loading ? "刷新中…" : "刷新")),
+              h("span", null, "共 " + snap.skills.length + " 个，已激活 " + snap.activeSkills + " 个"))),
           loading && !learning.data
             ? h("div", { className: "wb-mem-empty-soft" }, "加载技能中…")
             : skills.length

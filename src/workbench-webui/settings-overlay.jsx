@@ -1363,19 +1363,22 @@ function UpdateSection({ t, config }) {
 
   function confirmInstall() {
     var version = info && info.latest_version ? "v" + info.latest_version : "—";
-    var message = [
-      t("settings.updateConfirmTitle", { version: version }, "Install update to {version}?"),
-      "",
-      t("settings.updateConfirmRestart", null, "Cyrene will close and restart during installation."),
-      "",
-      t("settings.updateConfirmNotes", null, "Release notes:"),
-      notesText()
-    ].join("\n");
-    if (!window.confirm(message)) return;
-    fetch("/api/update/restart", { method: "POST" }).then(function (r) {
-      if (!r.ok) return r.json().then(function (d) { throw new Error(d.message || d.error || t("settings.updateRestartFailed", null, "Restart failed")); });
-    }).catch(function (err) {
-      if (err && err.message) setError(err.message);
+    var confirmTitle = t("settings.updateConfirmTitle", { version: version }, "Install update to {version}?");
+    var confirmBody = t("settings.updateConfirmRestart", null, "Cyrene will close and restart during installation.");
+    var confirmed = window.confirmModal
+      ? window.confirmModal({
+        title: confirmTitle,
+        body: confirmBody,
+        confirmLabel: t("common.confirm", null, "Confirm"),
+      })
+      : Promise.resolve(window.confirm([confirmTitle, "", confirmBody].join("\n")));
+    confirmed.then(function (ok) {
+      if (!ok) return;
+      fetch("/api/update/restart", { method: "POST" }).then(function (r) {
+        if (!r.ok) return r.json().then(function (d) { throw new Error(d.message || d.error || t("settings.updateRestartFailed", null, "Restart failed")); });
+      }).catch(function (err) {
+        if (err && err.message) setError(err.message);
+      });
     });
   }
 

@@ -17,6 +17,7 @@ compaction; the agent's own raw context lives in
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -1051,11 +1052,13 @@ def _make_reply_segment(
     trace: list[dict[str, Any]],
     usage: dict[str, int],
     files: list[dict[str, Any]],
+    *,
+    fallback_id: str = "",
 ) -> dict[str, Any]:
     """Build one rendered reply block carrying the tool card (trace), token
     usage and attachments that accumulated up to it."""
     entry: dict[str, Any] = {
-        "id": str(message.get("message_id") or message.get("id") or _short_id("msg")),
+        "id": str(message.get("message_id") or message.get("id") or fallback_id or _short_id("msg")),
         "role": "assistant",
         "content": str(message.get("content") or ""),
         "createdAt": str(message.get("created_at") or message.get("createdAt") or _utc_now_iso()),
@@ -1090,6 +1093,26 @@ def _make_reply_segment(
     if attachments:
         entry["attachments"] = attachments
     return entry
+
+
+def _segment_fallback_id(message: dict[str, Any], index: int) -> str:
+    """Stable UI id for live-scanned assistant segments without message_id.
+
+    During a tool round, the live scanner can observe an assistant preamble
+    before the agent persistence path has assigned ``message_id``. A random id
+    here makes every scanner tick look like a new segment, so use a deterministic
+    fingerprint until the durable id appears.
+    """
+    payload = {
+        "index": index,
+        "role": message.get("role"),
+        "content": message.get("content"),
+        "tool_calls": message.get("tool_calls"),
+        "attachments": message.get("attachments"),
+        "intermediate_reply": bool(message.get("intermediate_reply")),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return "msg_live_" + hashlib.sha1(encoded.encode("utf-8")).hexdigest()[:16]
 
 
 def _extract_exchange_segments(
@@ -1144,7 +1167,13 @@ def _extract_exchange_segments(
             continue
 
         if bool(message.get("intermediate_reply")):
-            segments.append(_make_reply_segment(message, trace, usage, files))
+            segments.append(_make_reply_segment(
+                message,
+                trace,
+                usage,
+                files,
+                fallback_id=_segment_fallback_id(message, idx),
+            ))
             trace, usage, files, seen_file_urls = [], _exchange_usage(), [], set()
             continue
 
@@ -1160,7 +1189,13 @@ def _extract_exchange_segments(
             and _has_traceable_tools(message)
         ):
             _accumulate_usage(message, usage)
-            segments.append(_make_reply_segment(message, trace, usage, files))
+            segments.append(_make_reply_segment(
+                message,
+                trace,
+                usage,
+                files,
+                fallback_id=_segment_fallback_id(message, idx),
+            ))
             trace, usage, files, seen_file_urls = [], _exchange_usage(), [], set()
             _accumulate_tools(message, trace, result_map)
             continue

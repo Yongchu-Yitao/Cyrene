@@ -543,6 +543,71 @@ def _tool_result_fallback_text(messages: list[dict]) -> str:
     return ""
 
 
+def _looks_chinese(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in str(text or ""))
+
+
+def _delivery_fallback_text(messages: list[dict]) -> str:
+    """Build a minimal user-facing reply from successful delivery tool results."""
+    names: list[str] = []
+    delivery_call_ids: set[str] = set()
+    saw_delivery = False
+    chinese = False
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "") == "user" and _looks_chinese(str(message.get("content") or "")):
+            chinese = True
+        if str(message.get("role") or "") == "assistant":
+            for tool_call in message.get("tool_calls") or []:
+                if not isinstance(tool_call, dict):
+                    continue
+                tool_name = str(tool_call.get("function", {}).get("name") or "").strip()
+                if tool_name in {"send_file", "send_wechat_file"}:
+                    call_id = str(tool_call.get("id") or "").strip()
+                    if call_id:
+                        delivery_call_ids.add(call_id)
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "") != "tool":
+            continue
+        if str(message.get("tool_call_id") or "").strip() not in delivery_call_ids:
+            continue
+        raw = str(message.get("content") or "").strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = None
+        if isinstance(payload, dict) and str(payload.get("status") or "") == "sent":
+            attachment = payload.get("attachment")
+            name = ""
+            if isinstance(attachment, dict):
+                name = str(attachment.get("name") or attachment.get("filename") or "").strip()
+            if name and name not in names:
+                names.append(name)
+            saw_delivery = True
+            continue
+        match = re.search(r"File sent via WeChat:\s*(.+)$", raw)
+        if match:
+            name = match.group(1).strip()
+            if name and name not in names:
+                names.append(name)
+            saw_delivery = True
+    if not saw_delivery:
+        return ""
+    if chinese:
+        if names:
+            return "文件已发给你：" + "、".join(names) + "。"
+        return "文件已发给你。"
+    if names:
+        joined = ", ".join(names)
+        return f"I sent the file{'s' if len(names) != 1 else ''}: {joined}."
+    return "I sent the file."
+
+
 async def _final_reply_from_history(messages: list[dict], max_tokens: int | None = None) -> str:
     return (await _validated_final_no_tool_reply(messages, max_tokens=max_tokens)) or "Done."
 
@@ -556,7 +621,20 @@ async def _final_reply_with_tools(messages: list[dict], tools: list, max_tokens:
     tool loop instead of leaking it as textual markup. Returns the full assistant
     message (content + any tool calls); the streamed text is already filtered of
     DSML markup by the stream handler."""
-    response = await _call_llm_stream(messages, max_tokens=max_tokens, tools=tools)
+    prompt_messages = [
+        *messages,
+        {
+            "role": "user",
+            "content": (
+                "Write the final user-facing reply now, in the user's language. "
+                "Do not reply with only 'Done', 'OK', or another placeholder. "
+                "If files were delivered with send_file or send_wechat_file, briefly confirm the delivery "
+                "and mention the file name or what was sent. "
+                "Call another tool only if it is genuinely needed to satisfy the user's request."
+            ),
+        },
+    ]
+    response = await _call_llm_stream(prompt_messages, max_tokens=max_tokens, tools=tools)
     _record_final_reply_usage(response)
     return response
 

@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from cyrene.agent.guidance import (
+    _delivery_fallback_text,
     _final_reply_from_history,
     _final_reply_with_tools,
     _final_plain_reply_from_history,
@@ -111,6 +112,13 @@ def _materialize_quit_reply_for_history(response_obj: dict[str, Any], assistant_
     reply = _quit_reply_from_response(response_obj)
     if reply:
         assistant_entry["content"] = reply
+
+
+def _wrap_final_text_from_response(wrap: dict[str, Any], messages: list[dict[str, Any]]) -> str:
+    final_text = _strip_visible_dsml_tool_blocks(wrap.get("content") or "") or _quit_reply_from_response(wrap)
+    if _is_placeholder_reply(final_text):
+        final_text = _delivery_fallback_text(messages)
+    return final_text or "Done."
 
 
 def _annotate_history_context(history: list) -> list[dict[str, Any]]:
@@ -577,7 +585,7 @@ async def _run_main_agent(
                         # DSML from the live deltas; strip any residue (markup for
                         # an unknown tool that normalization left in place) so the
                         # persisted reply matches what the user saw.
-                        final_text = _strip_visible_dsml_tool_blocks(wrap.get("content") or "") or "Done."
+                        final_text = _wrap_final_text_from_response(wrap, messages)
                         final_entry: dict[str, Any] = _attach_final_usage({"role": "assistant", "content": final_text})
                         if client_request_id:
                             final_entry["client_request_id"] = client_request_id

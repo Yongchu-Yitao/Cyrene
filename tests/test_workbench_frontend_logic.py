@@ -119,12 +119,16 @@ def test_workbench_task_controller_uses_current_session_from_returned_store():
 def test_workbench_memory_skill_learning_selects_patterns():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
     assert "selectedLearningKind" in source
     assert "selectedLearningPatternId" in source
     assert "onSelectPattern(pattern.id)" in source
     assert "selectedType === \"pattern\"" in source
-    assert "立即学习" in source
+    assert "memory.learning.learnNow" in source
+    assert "memory.learning.learnCurrentSkillTitle" in source
+    assert '"memory.learning.learnNow": "Learn now"' in i18n
+    assert '"memory.learning.learnNow": "立即学习"' in i18n
     assert "/learn-skill" in source
 
 

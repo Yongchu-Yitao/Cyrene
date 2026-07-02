@@ -70,6 +70,83 @@ def test_assistant_text_empty_for_quit_so_reply_is_used():
     assert _assistant_text(_quit_call(json.dumps({"reply": "x"}))) == ""
 
 
+def test_delivery_fallback_replaces_bare_done_after_send_file():
+    """If the streaming wrap-up still returns a placeholder, use the delivery
+    tool result to avoid persisting a bare ``Done.`` after a file card."""
+    from cyrene.agent.guidance import _delivery_fallback_text
+
+    messages = [
+        {"role": "user", "content": "发我"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "sf1", "function": {"name": "send_file", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "sf1",
+            "content": json.dumps({
+                "status": "sent",
+                "attachment": {"name": "RF_Temperature_RFFP_2026.pdf"},
+            }),
+        },
+    ]
+
+    assert _delivery_fallback_text(messages) == "文件已发给你：RF_Temperature_RFFP_2026.pdf。"
+
+
+def test_delivery_fallback_ignores_non_delivery_sent_results():
+    from cyrene.agent.guidance import _delivery_fallback_text
+
+    messages = [
+        {"role": "user", "content": "告诉我一声"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "m1", "function": {"name": "send_message", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "m1", "content": json.dumps({"status": "sent"})},
+    ]
+
+    assert _delivery_fallback_text(messages) == ""
+
+
+def test_streaming_wrapup_uses_quit_reply_before_done_fallback():
+    from cyrene.agent.agent import _wrap_final_text_from_response
+
+    wrap = _quit_call(json.dumps({"reply": "文件已经发给你了。"}))
+
+    assert _wrap_final_text_from_response(wrap, []) == "文件已经发给你了。"
+
+
+async def test_streaming_wrapup_prompt_rejects_placeholder_after_delivery(monkeypatch):
+    """The WebUI streaming quit path re-synthesizes the final answer; that call
+    must carry the same no-placeholder rule as the normal final-answer path."""
+    from cyrene.agent import guidance
+
+    seen = {}
+
+    async def fake_call_llm_stream(messages, max_tokens=32000, tools=None, **kwargs):
+        seen["messages"] = messages
+        seen["tools"] = tools
+        return {"content": "Done."}
+
+    monkeypatch.setattr(guidance, "_call_llm_stream", fake_call_llm_stream)
+
+    tools = [{"type": "function", "function": {"name": "quit", "parameters": {"type": "object", "properties": {}}}}]
+    response = await guidance._final_reply_with_tools(
+        [
+            {"role": "user", "content": "发我"},
+            {"role": "tool", "tool_call_id": "sf1", "content": json.dumps({"status": "sent"})},
+        ],
+        tools,
+    )
+
+    assert response["content"] == "Done."
+    assert seen["tools"] is tools
+    final_instruction = seen["messages"][-1]["content"]
+    assert "Do not reply with only 'Done'" in final_instruction
+    assert "send_file" in final_instruction
+
+
 async def test_quit_reply_is_persisted_as_assistant_content(monkeypatch):
     """A direct quit(reply=...) answer must be visible in the next LLM history."""
     from cyrene.agent import agent as agent_core

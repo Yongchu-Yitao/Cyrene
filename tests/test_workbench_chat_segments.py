@@ -13,8 +13,12 @@ Covers the fixes for the "send me the file" exchange:
 * the final text-only reply is left to the caller (never duplicated).
 """
 
+import pytest
+
+from webui.workbench_chat_runs import ChatRun
 from webui.routes_workbench_chat import (
     _extract_exchange_segments,
+    _publish_live_exchange_segments_once,
     _tool_result_is_error,
 )
 
@@ -178,9 +182,40 @@ def test_preamble_prose_is_kept_as_its_own_reply_block():
     assert len(segments) == 1
     assert segments[0]["content"] == "我先看看桌面。"
     assert segments[0].get("trace") in (None, [])
-
     # …and the tool it requested becomes the card shown with the final reply.
     assert [t["tool"] for t in trailing] == ["Bash"]
+
+
+@pytest.mark.asyncio
+async def test_live_preamble_without_message_id_is_published_once(monkeypatch):
+    """The live segment scanner can see a tool preamble before message_id lands.
+
+    Its fallback id must be stable across scans; otherwise the Workbench shows
+    the same assistant block repeatedly while the agent is still running.
+    """
+    from webui import routes_workbench_chat as chat_mod
+
+    live_messages = [
+        {"role": "user", "message_id": "u1", "content": "search"},
+        {
+            "role": "assistant",
+            "content": "我先打开页面看看。",
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "browser_navigate", "arguments": '{"url":"https://example.com"}'}}
+            ],
+        },
+    ]
+    monkeypatch.setattr(chat_mod, "_session_state_messages", lambda _chat_id: live_messages)
+    run = ChatRun("chat_live", {"type": "ack", "chatId": "chat_live"})
+    published_ids: set[str] = set()
+
+    await _publish_live_exchange_segments_once(run, "chat_live", {"u1"}, published_ids)
+    await _publish_live_exchange_segments_once(run, "chat_live", {"u1"}, published_ids)
+
+    events = [event for event in run.events if event.get("type") == "intermediate_message"]
+    assert len(events) == 1
+    assert events[0]["message"]["content"] == "我先打开页面看看。"
+    assert events[0]["message"]["id"].startswith("msg_live_")
 
 
 def test_live_extraction_surfaces_open_tool_preamble():
