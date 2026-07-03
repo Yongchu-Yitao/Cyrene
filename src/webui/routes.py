@@ -9,6 +9,7 @@ import json
 import logging
 import mimetypes
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -4971,13 +4972,27 @@ def _workbench_compose_memory_ephemeral(
     else:
         base_ids = [str(item) for item in raw_base_ids if str(item).strip()]
 
+    # Build injection list: top 20 by mention_count + 5 random from the rest.
+    # Snapshot at session start — once stored in session, same set is reused
+    # for every request in this session, so prompt cache stays stable.
+    stored_inject = session.get("_promptMemoryInjectIds")
+    if stored_key != memory_key or not stored_inject:
+        inject_ids = base_ids[:20]
+        if len(base_ids) > 20:
+            n_extra = min(5, len(base_ids) - 20)
+            inject_ids += random.sample(base_ids[20:], n_extra)
+        session["_promptMemoryInjectIds"] = inject_ids
+    else:
+        inject_ids = stored_inject
+
     base_set = set(base_ids)
     new_ids = [mem_id for mem_id in current_ids if mem_id not in base_set]
     try:
         fixed = render_memory_for_injection(
             memory_key,
-            include_ids=base_ids,
+            include_ids=inject_ids,
             preserve_id_order=True,
+            limit=25,
         )
         volatile = render_memory_for_injection(
             memory_key,
