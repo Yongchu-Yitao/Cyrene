@@ -3488,7 +3488,7 @@ function WbcViewerTab({ file }) {
     ) : <p className="workbench-muted wbc-viewer-pad">{wbcT("settings.pathLoading", "Loading...")}</p>;
   } else if (kind === "html") {
     body = htmlMode === "rendered"
-      ? <iframe className="wbc-viewer-iframe" sandbox="allow-scripts" srcDoc={htmlPreview} title={file.name || "HTML"} />
+      ? <iframe key={url + "::" + (text ? "1" : "0")} className="wbc-viewer-iframe" sandbox="allow-scripts" srcDoc={htmlPreview} title={file.name || "HTML"} />
       : <pre className="wbc-viewer-pre">{text}</pre>;
   } else if (kind === "markdown") {
     body = <div className="wbc-viewer-md wbc-msg-body markdown" dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(text) }} />;
