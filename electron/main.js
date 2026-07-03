@@ -132,6 +132,87 @@ const DESKTOP_TRANSLATIONS = Object.freeze({
   },
 });
 
+const MENU_TRANSLATIONS = Object.freeze({
+  en: {
+    about: 'About Cyrene',
+    settings: 'Settings…',
+    services: 'Services',
+    hide: 'Hide Cyrene',
+    hideOthers: 'Hide Others',
+    showAll: 'Show All',
+    quit: 'Quit Cyrene',
+    file: 'File',
+    newChat: 'New Chat',
+    newProject: 'New Project',
+    newTask: 'New Task',
+    closeWindow: 'Close Window',
+    edit: 'Edit',
+    undo: 'Undo',
+    redo: 'Redo',
+    cut: 'Cut',
+    copy: 'Copy',
+    paste: 'Paste',
+    selectAll: 'Select All',
+    view: 'View',
+    reload: 'Reload',
+    forceReload: 'Force Reload',
+    toggleDevTools: 'Toggle Developer Tools',
+    zoomIn: 'Zoom In',
+    zoomOut: 'Zoom Out',
+    resetZoom: 'Actual Size',
+    toggleTheme: 'Toggle Theme',
+    toggleSidebar: 'Toggle Sidebar',
+    toggleFullScreen: 'Toggle Full Screen',
+    windowMenu: 'Window',
+    minimize: 'Minimize',
+    zoom: 'Zoom',
+    bringAllToFront: 'Bring All to Front',
+    help: 'Help',
+    documentation: 'Documentation',
+    feedback: 'Submit Feedback…',
+    workspaceAbout: 'About This Workspace',
+  },
+  zh: {
+    about: '关于 Cyrene',
+    settings: '设置…',
+    services: '服务',
+    hide: '隐藏 Cyrene',
+    hideOthers: '隐藏其他',
+    showAll: '显示全部',
+    quit: '退出 Cyrene',
+    file: '文件',
+    newChat: '新建对话',
+    newProject: '新建项目',
+    newTask: '新建任务',
+    closeWindow: '关闭窗口',
+    edit: '编辑',
+    undo: '撤销',
+    redo: '重做',
+    cut: '剪切',
+    copy: '复制',
+    paste: '粘贴',
+    selectAll: '全选',
+    view: '视图',
+    reload: '重新加载',
+    forceReload: '强制重新加载',
+    toggleDevTools: '开发者工具',
+    zoomIn: '放大',
+    zoomOut: '缩小',
+    resetZoom: '实际大小',
+    toggleTheme: '切换主题',
+    toggleSidebar: '切换侧栏',
+    toggleFullScreen: '切换全屏',
+    windowMenu: '窗口',
+    minimize: '最小化',
+    zoom: '缩放',
+    bringAllToFront: '全部置于顶层',
+    help: '帮助',
+    documentation: '使用文档',
+    feedback: '提交反馈…',
+    workspaceAbout: '关于此工作区',
+  },
+});
+
 const BROWSER_PARTITION = 'persist:cyrene-browser';
 const DEFAULT_BROWSER_VERSION = '147.0.0.0';
 
@@ -1000,6 +1081,111 @@ function desktopT(key, settings) {
   return dict[key] || DESKTOP_TRANSLATIONS.en[key] || key;
 }
 
+// ---------------------------------------------------------------------------
+// macOS 应用菜单（i18n 原生菜单栏）
+// ---------------------------------------------------------------------------
+
+function sendToMainWindow(channel, ...args) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(channel, ...args);
+    }
+  } catch (err) {
+    console.warn('[electron] sendToMainWindow failed:', err);
+  }
+}
+
+function rebuildApplicationMenu(maybeSettings) {
+  // macOS 才需要自定义菜单；Win/Linux 已设为 null
+  if (!isMac) return;
+  const settings = maybeSettings || readDesktopSettings();
+  const lang = getDesktopLanguage(settings);
+  const t = (key) => {
+    const dict = MENU_TRANSLATIONS[lang] || MENU_TRANSLATIONS.en;
+    return dict[key] || MENU_TRANSLATIONS.en[key] || key;
+  };
+
+  const template = [
+    {
+      label: APP_NAME,
+      submenu: [
+        { role: 'about', label: t('about') },
+        { type: 'separator' },
+        { label: t('settings'), accelerator: 'Cmd+,', click: () => sendToMainWindow('menu:action', 'open-settings') },
+        { type: 'separator' },
+        { role: 'services', label: t('services') },
+        { type: 'separator' },
+        { role: 'hide', label: t('hide') },
+        { role: 'hideOthers', label: t('hideOthers') },
+        { role: 'unhide', label: t('showAll') },
+        { type: 'separator' },
+        { role: 'quit', label: t('quit') },
+      ],
+    },
+    {
+      label: t('file'),
+      submenu: [
+        { label: t('newChat'), accelerator: 'CmdOrCtrl+N', click: () => sendToMainWindow('menu:action', 'new-chat') },
+        { label: t('newProject'), accelerator: 'CmdOrCtrl+Shift+N', click: () => sendToMainWindow('menu:action', 'new-project') },
+        { label: t('newTask'), accelerator: 'CmdOrCtrl+Alt+N', click: () => sendToMainWindow('menu:action', 'new-task') },
+        { type: 'separator' },
+        { role: 'close', label: t('closeWindow') },
+      ],
+    },
+    {
+      label: t('edit'),
+      submenu: [
+        { role: 'undo', label: t('undo') },
+        { role: 'redo', label: t('redo') },
+        { type: 'separator' },
+        { role: 'cut', label: t('cut') },
+        { role: 'copy', label: t('copy') },
+        { role: 'paste', label: t('paste') },
+        { role: 'selectAll', label: t('selectAll') },
+      ],
+    },
+    {
+      label: t('view'),
+      submenu: [
+        { role: 'reload', label: t('reload') },
+        ...(isDev ? [
+          { role: 'forceReload', label: t('forceReload') },
+          { role: 'toggleDevTools', label: t('toggleDevTools') },
+          { type: 'separator' },
+        ] : []),
+        { role: 'zoomIn', label: t('zoomIn') },
+        { role: 'zoomOut', label: t('zoomOut') },
+        { role: 'resetZoom', label: t('resetZoom') },
+        { type: 'separator' },
+        { label: t('toggleTheme'), accelerator: 'CmdOrCtrl+Shift+T', click: () => sendToMainWindow('menu:action', 'toggle-theme') },
+        { label: t('toggleSidebar'), accelerator: 'CmdOrCtrl+B', click: () => sendToMainWindow('menu:action', 'toggle-sidebar') },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: t('toggleFullScreen') },
+      ],
+    },
+    {
+      label: t('windowMenu'),
+      submenu: [
+        { role: 'minimize', label: t('minimize') },
+        { role: 'zoom', label: t('zoom') },
+        { type: 'separator' },
+        { role: 'front', label: t('bringAllToFront') },
+      ],
+    },
+    {
+      label: t('help'),
+      submenu: [
+        { label: t('workspaceAbout'), click: () => sendToMainWindow('menu:action', 'open-about') },
+        { type: 'separator' },
+        { label: t('documentation'), click: () => shell.openExternal('https://github.com/ikerrrrrrrrrrr/Cyrene#readme').catch(function () {}) },
+        { label: t('feedback'), click: () => shell.openExternal('https://github.com/ikerrrrrrrrrrr/Cyrene/issues/new').catch(function () {}) },
+      ],
+    },
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function getDesktopSettingsPath() {
   return path.join(app.getPath('userData'), 'desktop_settings.json');
 }
@@ -1087,6 +1273,15 @@ function saveDesktopSettings(updates) {
   // disables it (the UI gates the toggle, but enforce it here too).
   next.quickChatEnabled = next.runInBackground === true && next.quickChatEnabled === true;
 
+  // Persist settings before attempting the shortcut side-effect, so a
+  // registration failure doesn't discard a language or other setting change.
+  writeDesktopSettings(next);
+  applyLaunchAtLogin(next.launchAtLogin);
+  syncTrayWithSettings(next);
+  if (getDesktopLanguage(current) !== getDesktopLanguage(next)) {
+    rebuildApplicationMenu(next);
+  }
+
   let shortcutUpdateOk = true;
   if (next.quickChatEnabled) {
     // Register (or re-register) the global shortcut. Only attempt it when the
@@ -1096,12 +1291,6 @@ function saveDesktopSettings(updates) {
       || !globalShortcut.isRegistered(next.quickChatShortcut)
     ) {
       shortcutUpdateOk = registerQuickChatShortcut(next.quickChatShortcut);
-      if (!shortcutUpdateOk) {
-        return {
-          ...getDesktopSettings(),
-          shortcutUpdateOk: false,
-        };
-      }
     }
   } else {
     // Disabled (or residency off) — release the shortcut and tear down the
@@ -1110,9 +1299,6 @@ function saveDesktopSettings(updates) {
     destroyQuickChatWindow();
   }
 
-  writeDesktopSettings(next);
-  applyLaunchAtLogin(next.launchAtLogin);
-  syncTrayWithSettings(next);
   return {
     ...getDesktopSettings(),
     shortcutUpdateOk,
@@ -1881,6 +2067,11 @@ if (!gotSingleInstanceLock) {
       registerQuickChatShortcut(desktopSettings.quickChatShortcut);
     }
     syncTrayWithSettings(desktopSettings);
+    rebuildApplicationMenu(desktopSettings);
+    // Windows/Linux：移除默认菜单（File/Edit/View），macOS 用上面的自定义 i18n 菜单
+    if (!isMac) {
+      Menu.setApplicationMenu(null);
+    }
     ipcMain.handle('desktop-settings:get', () => getDesktopSettings());
     ipcMain.handle('desktop-settings:update', (_event, updates) => saveDesktopSettings(updates || {}));
     ipcMain.handle('quick-chat:get-launch-context', () => getQuickChatLaunchContext());

@@ -3,6 +3,12 @@ const { clipboard, contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('cyrene', {
   platform: process.platform,
   version: process.env.npm_package_version || '0.0.0',
+  onMenuAction: function (callback) {
+    if (typeof callback !== 'function') return function () {};
+    var listener = function (_event, action) { callback(action); };
+    ipcRenderer.on('menu:action', listener);
+    return function () { ipcRenderer.removeListener('menu:action', listener); };
+  },
   getDesktopSettings: () => ipcRenderer.invoke('desktop-settings:get'),
   updateDesktopSettings: (updates) => ipcRenderer.invoke('desktop-settings:update', updates),
   showNotification: ({ title, body }) => ipcRenderer.invoke('notification:show', { title, body }),

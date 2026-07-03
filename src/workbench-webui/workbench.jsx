@@ -619,6 +619,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   // notification callbacks (interval / SSE closures captured once on mount).
   var activeViewRef = useWorkbenchRef({ page: null, chatId: "", sessionId: "" });
   var sessionLoadSeqRef = useWorkbenchRef(0);
+  var menuActionsRef = useWorkbenchRef({ createProject: function () {}, createSession: function () {}, onToggleTheme: function () {} });
 
   function reloadNotifications(tab, limit) {
     var activeView = activeViewRef.current;
@@ -770,6 +771,30 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       bridge.setObscured(false).catch(function () {});
     };
   }, [settingsOpen]);
+
+  // 原生菜单操作（macOS 菜单栏 → menu:action IPC）
+  // 每次渲染更新 ref，避免菜单回调中捕获到 stale closure
+  useWorkbenchEffect(function () {
+    menuActionsRef.current = { createProject: createProject, createSession: createSession, onToggleTheme: onToggleTheme };
+  });
+  useWorkbenchEffect(function () {
+    var bridge = window.cyrene;
+    if (!bridge || typeof bridge.onMenuAction !== "function") return undefined;
+    return bridge.onMenuAction(function (action) {
+      var acts = menuActionsRef.current;
+      var map = {
+        "open-settings":  function () { setSettingsTab(""); setSettingsOpen(true); },
+        "open-about":     function () { setSettingsTab("about"); setSettingsOpen(true); },
+        "new-project":    function () { acts.createProject(); },
+        "new-chat":       function () { acts.createSession(); },
+        "new-task":       function () { acts.createSession(); },
+        "toggle-theme":   function () { acts.onToggleTheme(); },
+        "toggle-sidebar": function () { setRailCollapsed(function (v) { var n = !v; try { localStorage.setItem("wb-rail-collapsed", n ? "1" : "0"); } catch (e) {} return n; }); },
+      };
+      var fn = map[action];
+      if (fn) fn();
+    });
+  }, []);
 
   useWorkbenchEffect(function () {
     function handleEvent(data) {
