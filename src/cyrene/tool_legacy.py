@@ -572,14 +572,14 @@ def _extract_stderr_redirect_targets(raw: str) -> list[str]:
     """Detect stderr redirects like 2>/path, 2>>/path, &>/path."""
     targets: list[str] = []
     # 2>/path or 2>>/path
-    for m in re.finditer(r'(?:^|\s)(\d*)>>?\s*(\S+)', raw):
+    for m in re.finditer(r'(?:^|\s)(\d*)>>?\s*([^\s;&|]+)', raw):
         prefix = m.group(1)  # empty or digit
         target = m.group(2)
         # If prefix is empty or a digit like 2, and target doesn't start with & (like &1)
         if (not prefix or prefix.isdigit()) and not target.startswith("&"):
             targets.append(target)
     # &>/path (redirect both stdout and stderr)
-    for m in re.finditer(r'(?:^|\s)&\s*>\s*(\S+)', raw):
+    for m in re.finditer(r'(?:^|\s)&\s*>\s*([^\s;&|]+)', raw):
         targets.append(m.group(1))
     return targets
 

@@ -11946,14 +11946,18 @@ html[data-theme="dark"] .wbc-trace {
   color: var(--wb-text);
 }
 
-.wbc-viewer-open {
+.wbc-viewer-open,
+.wbc-viewer-download {
   flex: 0 0 auto;
   color: var(--wb-muted);
   text-decoration: none;
   font-size: 13px;
 }
 
-.wbc-viewer-open:hover { color: var(--wb-accent); }
+.wbc-viewer-open:hover,
+.wbc-viewer-download:hover { color: var(--wb-accent); }
+
+.wbc-viewer-download { margin-left: 6px; }
 
 .wbc-viewer-scroll {
   flex: 1;
@@ -11988,7 +11992,7 @@ html[data-theme="dark"] .wbc-trace {
   min-height: 0;
   width: 100%;
   border: 0;
-  background: #fff;
+  background: var(--wb-bg);
 }
 
 .wbc-viewer-pre {
@@ -12434,15 +12438,19 @@ html[data-theme="dark"] .wbc-trace {
 .wbc-file-row.clickable { cursor: pointer; border-radius: 8px; }
 .wbc-file-row.clickable:hover { background: var(--wb-row-hover-bg); }
 
-.wbc-file-open {
+.wbc-file-open,
+.wbc-file-download {
   flex: 0 0 auto;
-  margin-left: auto;
   color: var(--wb-faint);
   text-decoration: none;
   padding: 2px 6px;
 }
 
-.wbc-file-open:hover { color: var(--wb-accent); }
+.wbc-file-open:hover,
+.wbc-file-download:hover { color: var(--wb-accent); }
+
+.wbc-file-open { margin-left: auto; }
+.wbc-file-download { margin-left: 4px; }
 
 /* map: theme-matched canvas while tiles load + dark popups */
 .wbc-map-holder {

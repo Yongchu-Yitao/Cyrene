@@ -384,6 +384,7 @@ var WBC_ICONS = {
   folder: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>,
   fork: <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M6 8.2v7.6M8.2 6h7.6M8.2 18H15a3 3 0 0 0 3-3V8.2"/></svg>,
   chevronsRight: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m13 7 5 5-5 5M6 7l5 5-5 5"/></svg>,
+  download: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>,
   sidebar: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m9 10-2 2 2 2"/></svg>,
 };
 
@@ -440,6 +441,25 @@ function wbcCanOpenExternally(file) {
   return !!(file && file.url && wbcFileViewKind(file) !== "html");
 }
 
+function wbcDownloadLink(file, overrides) {
+  var url = file && file.url;
+  if (!url) return null;
+  var baseClass = "wb-btn ghost";
+  var extraClass = overrides && overrides.className;
+  var attrs = {
+    className: extraClass ? baseClass + " " + extraClass : baseClass,
+    href: url,
+    download: (file.name && file.name.trim()) ? file.name : true,
+    title: wbcT("workbenchChat.download", "Download"),
+  };
+  if (overrides) {
+    for (var k in overrides) {
+      if (overrides.hasOwnProperty(k) && k !== "className") attrs[k] = overrides[k];
+    }
+  }
+  return <a {...attrs}>{WBC_ICONS.download}</a>;
+}
+
 function wbcHtmlPreviewDocument(source, sourceUrl) {
   var html = String(source || "");
   if (!sourceUrl) return html;
@@ -450,14 +470,21 @@ function wbcHtmlPreviewDocument(source, sourceUrl) {
     return html;
   }
   var escapedUrl = absoluteUrl.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
-  var baseTag = '<base href="' + escapedUrl + '">';
+  var headContent = '<base href="' + escapedUrl + '">';
+  // Only inject viewport meta if the source HTML doesn't already have one
+  if (!/<meta\s+name=["']viewport["']/i.test(html)) {
+    headContent += '<meta name="viewport" content="width=device-width, initial-scale=1">';
+  }
   if (/<head(?:\s[^>]*)?>/i.test(html)) {
-    return html.replace(/<head(\s[^>]*)?>/i, function (match) { return match + baseTag; });
+    return html.replace(/<head(\s[^>]*)?>/i, function (match) { return match + headContent; });
   }
   if (/<html(?:\s[^>]*)?>/i.test(html)) {
-    return html.replace(/<html(\s[^>]*)?>/i, function (match) { return match + "<head>" + baseTag + "</head>"; });
+    return html.replace(/<html(\s[^>]*)?>/i, function (match) { return match + "<head>" + headContent + "</head>"; });
   }
-  return "<head>" + baseTag + "</head>" + html;
+  // Fragment: wrap in a minimal document. Browsers in iframes gracefully handle
+  // stray closing tags ( </body> and </html> are ignored by the parser), so
+  // no tag stripping is needed — it would only risk mangling code-block content.
+  return "<!DOCTYPE html>\n<html><head>" + headContent + "</head><body>" + html + "</body></html>";
 }
 
 // Map tools mark the conversation as having a 地图 tab (same tool set as the
@@ -2029,6 +2056,7 @@ function WbcAgentFiles({ files, onOpenFile }) {
             <span className="wbc-agent-file-actions">
               <button type="button" className="wb-btn ghost" onClick={function () { onOpenFile && onOpenFile(file); }}>{wbcT("workbenchChat.viewer", "Viewer")}</button>
               {wbcCanOpenExternally(file) ? <a className="wb-btn ghost" href={file.url} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
+              {wbcDownloadLink(file)}
             </span>
           </div>
         );
@@ -3378,7 +3406,9 @@ function WbcViewerTab({ file }) {
   var [failed, setFailed] = useWbcState(false);
   var codeRef = useWbcRef(null);
   var url = file && file.url;
-  var htmlPreview = kind === "html" ? wbcHtmlPreviewDocument(text, url) : "";
+  var htmlPreview = useWbcMemo(function () {
+    return kind === "html" ? wbcHtmlPreviewDocument(text, url) : "";
+  }, [text, url, kind]);
   var pdfSrc = blobUrl ? blobUrl + "#zoom=" + Math.round(zoom * 100) : "";
 
   // text-ish contents are fetched; pdf goes through a blob URL (same as the
@@ -3441,6 +3471,7 @@ function WbcViewerTab({ file }) {
         </span>
       )}
       {wbcCanOpenExternally(file) ? <a className="wbc-viewer-open" href={url} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
+      {wbcDownloadLink(file, { className: "wbc-viewer-download" })}
     </div>
   );
 
@@ -4072,6 +4103,10 @@ function WbcArtifactsTab({ chat, onOpenFile }) {
                   onClick={function (e) { e.stopPropagation(); }}
                 >↗</a>
               ) : null}
+              {wbcDownloadLink(file, {
+                className: "wbc-file-download",
+                onClick: function (e) { e.stopPropagation(); },
+              })}
             </div>
           );
         })}
