@@ -914,29 +914,34 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   min-width: 0;
 }
 
-/* Collapse / expand toggle button in the rail head. */
-.workbench-rail-collapse-btn {
+/* Shared bordered icon-square button for the rail collapse and side-panel
+   hide buttons. Higher specificity (.workbench-rail-head + class) to beat
+   the generic .workbench-rail-head button rule. */
+.workbench-rail-head .workbench-rail-collapse-btn,
+.wbc-side .wbc-side-hide-btn {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
+  width: 32px;
+  height: 33px;
+  min-height: 33px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 0;
+  border: 1px solid var(--wb-line);
   border-radius: 7px;
-  background: transparent;
-  color: var(--wb-muted);
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
   cursor: pointer;
 }
 
-.workbench-rail-collapse-btn:hover {
+.workbench-rail-head .workbench-rail-collapse-btn:hover,
+.wbc-side .wbc-side-hide-btn:hover {
+  border-color: var(--wb-accent);
   background: var(--wb-control-hover-bg);
-  color: var(--wb-text);
 }
 
-.workbench-rail-collapse-btn svg {
+.workbench-rail-head .workbench-rail-collapse-btn svg,
+.wbc-side .wbc-side-hide-btn svg {
   display: block;
 }
 
@@ -4531,10 +4536,16 @@ html[data-theme="light"] .wb-select,
 html[data-theme="light"] .wb-btn {
   background: #ffffff;
 }
+html[data-theme="light"] .wb-btn.primary {
+  background: var(--wb-accent);
+}
 
 html[data-theme="light"] .settings-overlay-close:hover,
 html[data-theme="light"] .wb-btn:hover {
   background: #f8f9fb;
+}
+html[data-theme="light"] .wb-btn.primary:hover {
+  background: var(--wb-accent);
 }
 
 html[data-theme="light"] .wb-seg {
@@ -9359,6 +9370,14 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   overflow: hidden;
 }
 
+/* Collapse the right panel when hidden via the × / show button toggle. */
+.wbc-page.wbc-side-hidden {
+  grid-template-columns: 270px minmax(0, 1fr);
+}
+.wbc-page.wbc-side-hidden .wbc-side {
+  display: none;
+}
+
 /* ---- conversation rail ---- */
 
 .wbc-rail {
@@ -10735,6 +10754,13 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   padding: 14px;
 }
 
+/* Only positioning override; visual appearance shared with
+   .workbench-rail-collapse-btn above. */
+.wbc-side .wbc-side-hide-btn {
+  margin-left: auto;
+  margin-bottom: 5px;
+}
+
 /* Workbench-only subagent page. Kept under .wbc-* so the legacy Chat UI
    remains visually and structurally independent. */
 .wbc-subagent-page {
@@ -11812,12 +11838,18 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   .wbc-page {
     grid-template-columns: 230px minmax(300px, 1fr) var(--wb-right-w, 310px);
   }
+  .wbc-page.wbc-side-hidden {
+    grid-template-columns: 230px minmax(0, 1fr);
+  }
 }
 
 /* responsive: collapse the right panel only when it can no longer remain
    usable; normal 1280px desktop windows keep the Workbench context tabs. */
 @media (max-width: 980px) {
   .wbc-page {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .wbc-page.wbc-side-hidden {
     grid-template-columns: 220px minmax(0, 1fr);
   }
   .wbc-side {

@@ -383,6 +383,8 @@ var WBC_ICONS = {
   spark: <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M12 2.5 13.7 9 20 10.7 13.7 12.4 12 19l-1.7-6.6L4 10.7 10.3 9Z"/></svg>,
   folder: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>,
   fork: <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M6 8.2v7.6M8.2 6h7.6M8.2 18H15a3 3 0 0 0 3-3V8.2"/></svg>,
+  chevronsRight: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m13 7 5 5-5 5M6 7l5 5-5 5"/></svg>,
+  sidebar: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m9 10-2 2 2 2"/></svg>,
 };
 
 // Slash commands + permission modes (mirrors the legacy agent capabilities;
@@ -801,6 +803,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   var [error, setError] = useWbcState("");
   var [errorKind, setErrorKind] = useWbcState("load");
   var [sideTab, setSideTab] = useWbcState("overview");
+  var [sideVisible, setSideVisible] = useWbcState(true);
   var [browserActiveByChat, setBrowserActiveByChat] = useWbcState({});
   var [viewerFile, setViewerFile] = useWbcState(null);
   var [subagentData, setSubagentData] = useWbcState({ rounds: [], activeRoundId: "", agents: [], messages: [] });
@@ -834,6 +837,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     if (!file) return;
     setViewerFile(file);
     setSideTab("viewer");
+    setSideVisible(true);
   }
 
   function loadSubagents(chatId, roundId) {
@@ -1412,13 +1416,15 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     });
   }
 
+  function onToggleSide() { setSideVisible(function (v) { return !v; }); }
+
   // The open conversation only renders and controls its own runtime. Other
   // conversations continue streaming in the background.
   var activeRuntime = runtimes[activeChatId] || null;
   var activeRunning = !!activeRuntime;
 
   return (
-    <div className="wbc-page">
+    <div className={"wbc-page" + (sideVisible ? "" : " wbc-side-hidden")}>
       {chatFileDropActive && <WorkbenchFileDropOverlay label={wbcT("workbenchChat.dropToAttach", "Release to add files to the message input")} />}
       <WbcRail
         chats={chats}
@@ -1447,6 +1453,8 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
         onToTask={handleToTask}
         toTaskBusy={toTaskBusy}
         onOpenFile={openViewer}
+        sideVisible={sideVisible}
+        onToggleSide={onToggleSide}
       />
       <WbcSide
         project={project}
@@ -1468,6 +1476,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
         toTaskBusy={toTaskBusy}
         onCompact={handleCompact}
         compactBusy={compactBusy}
+        onToggleSide={onToggleSide}
         onBrowserTakeoverComplete={function (payload) {
           var pending = activeChat && activeChat.pendingQuestion;
           if (!pending || !pending.id) return Promise.reject(new Error("登录确认已不在等待中。"));
@@ -1589,7 +1598,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, onSend, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile }) {
+function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, onSend, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, sideVisible, onToggleSide }) {
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
@@ -1638,12 +1647,21 @@ function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, o
           onDelete={onDelete}
           onToTask={onToTask}
           toTaskBusy={toTaskBusy}
+          sideVisible={sideVisible}
+          onToggleSide={onToggleSide}
         />
       ) : (
         <div className="wbc-header">
           <div className="wbc-header-info">
             <h1>{wbcT("workbenchChat.newChat", "New chat")}</h1>
             <div className="wbc-header-meta"><span>{project.name}</span></div>
+          </div>
+          <div className="wbc-header-actions">
+            {!sideVisible && (
+              <button type="button" className="wbc-icon-btn" onClick={onToggleSide} title={wbcT("workbenchChat.showSidebar", "Show side panel")}>
+                {WBC_ICONS.sidebar}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1767,7 +1785,7 @@ function WbcErrorNotice({ message, kind, onRetry }) {
   );
 }
 
-function WbcHeader({ project, chat, running, onRename, onDelete, onToTask, toTaskBusy }) {
+function WbcHeader({ project, chat, running, onRename, onDelete, onToTask, toTaskBusy, sideVisible, onToggleSide }) {
   var [editing, setEditing] = useWbcState(false);
   var [draft, setDraft] = useWbcState(chat.title || "");
   var [menuOpen, setMenuOpen] = useWbcState(false);
@@ -1831,6 +1849,11 @@ function WbcHeader({ project, chat, running, onRename, onDelete, onToTask, toTas
         </div>
       </div>
       <div className="wbc-header-actions">
+        {!sideVisible && (
+          <button type="button" className="wbc-icon-btn" onClick={onToggleSide} title={wbcT("workbenchChat.showSidebar", "Show side panel")}>
+            {WBC_ICONS.sidebar}
+          </button>
+        )}
         {!isLegacy && (
           <button type="button" className={"wb-btn primary wbc-totask" + (toTaskBusy ? " is-busy" : "")} disabled={running || toTaskBusy} onClick={onToTask} title={wbcT("workbenchChat.toTaskTitle", "Create a task from this chat")}>
             {toTaskBusy
@@ -2910,6 +2933,7 @@ function WbcSide({
   compactBusy,
   onBrowserTakeoverComplete,
   browserActiveByChat,
+  onToggleSide,
 }) {
   if (typeof window.useDataVersion === "function") window.useDataVersion();
   var browserState = wbcBrowserStateForChat(activeChatId);
@@ -2954,6 +2978,9 @@ function WbcSide({
             </button>
           );
         })}
+        <button type="button" className="wbc-side-hide-btn" onClick={onToggleSide} title={wbcT("workbenchChat.hideSidebar", "Hide side panel")}>
+          {WBC_ICONS.chevronsRight}
+        </button>
       </div>
       <div className={"wbc-side-body" + (flush ? " flush" : "")}>
         {activeTab === "overview" && <WbcOverviewTab chat={chat} runtime={runtime} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} onCompact={onCompact} compactBusy={compactBusy} />}
