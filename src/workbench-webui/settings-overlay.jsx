@@ -92,6 +92,7 @@ var TABS = [
   { id: "skills", labelKey: "settings.skills" },
   { id: "shortcuts", labelKey: "settings.shortcuts" },
   { id: "data", labelKey: "settings.data" },
+  { id: "budget", labelKey: "settings.budget" },
   { id: "about", labelKey: "settings.about" },
 ];
 
@@ -99,7 +100,7 @@ var SETTINGS_TAB_GROUPS = [
   ["general", "appearance", "shortcuts"],
   ["models", "capabilities", "skills"],
   ["channels", "agents"],
-  ["data"],
+  ["data", "budget"],
   ["about"],
 ];
 
@@ -123,6 +124,11 @@ function SettingsTabIcon(id) {
     skills: [React.createElement("path", { key: "p", d: "M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6l-8-4Z" }), React.createElement("path", { key: "p2", d: "m9 12 2 2 4-5" })],
     shortcuts: [React.createElement("rect", { key: "r", x: "3", y: "5", width: "18", height: "14", rx: "2" }), React.createElement("path", { key: "p", d: "M7 9h.01M11 9h.01M15 9h.01M7 13h10" })],
     data: [React.createElement("path", { key: "p", d: "M4 6c0-2 3.6-3 8-3s8 1 8 3-3.6 3-8 3-8-1-8-3Z" }), React.createElement("path", { key: "p2", d: "M4 6v6c0 2 3.6 3 8 3s8-1 8-3V6M4 12v6c0 2 3.6 3 8 3s8-1 8-3v-6" })],
+    budget: [
+      React.createElement("rect", { key: "r", x: "2", y: "5", width: "20", height: "14", rx: "2", fill: "none", stroke: "currentColor", strokeWidth: "2" }),
+      React.createElement("line", { key: "l1", x1: "2", y1: "10", x2: "22", y2: "10", stroke: "currentColor", strokeWidth: "2" }),
+      React.createElement("path", { key: "l2", d: "M7 15h6", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round" }),
+    ],
     about: [React.createElement("circle", { key: "c", cx: "12", cy: "12", r: "9" }), React.createElement("path", { key: "p", d: "M12 11v5M12 8h.01" })],
   };
   return React.createElement("svg", common, paths[id] || paths.general);
@@ -472,6 +478,7 @@ function SettingsOverlay({
           tab === "skills" && React.createElement(SkillsPanel, { t }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
           tab === "data" && DataPanel({ t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSid, setExportSid, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
+          tab === "budget" && React.createElement(BudgetPanel, { t, config }),
           tab === "about" && AboutPanel({ t, config }),
         ),
       ),
@@ -2088,6 +2095,254 @@ function ShortcutsPanel(p) {
   );
 }
 
+// ── Budget Panel ──
+function BudgetPanel(p) {
+  var { t, config } = p;
+
+  // ── Init from config (unified config API) ──
+  var [budgetEnabled, setBudgetEnabled] = useStateSt(!!config.budget_enabled);
+  var [budgetMonthly, setBudgetMonthly] = useStateSt(String(config.budget_monthly != null ? config.budget_monthly : 50));
+  var [budgetCurrency, setBudgetCurrency] = useStateSt(config.budget_currency || "CNY");
+  var [budgetAction, setBudgetAction] = useStateSt(config.budget_action || "warn");
+  var [budgetMode, setBudgetMode] = useStateSt(config.budget_mode || "normal");
+  var [budgetStartDay, setBudgetStartDay] = useStateSt(String(config.budget_start_day != null ? config.budget_start_day : 1));
+  var [budgetSaved, setBudgetSaved] = useStateSt("");
+
+  var BUDGET_KEY = "cyrene-budget";
+
+  // Sync to localStorage (cache for ProjectRail / backward compat)
+  var budgetSaveTimer = useRefSt(null);
+
+  function syncLocalStorage(values) {
+    try {
+      localStorage.setItem(BUDGET_KEY, JSON.stringify(values || {
+        enabled: budgetEnabled,
+        monthly: budgetMonthly,
+        currency: budgetCurrency,
+        action: budgetAction,
+        mode: budgetMode,
+        startDay: budgetStartDay,
+      }));
+    } catch (e) {}
+  }
+
+  function scheduleClearSaved() {
+    if (budgetSaveTimer.current) clearTimeout(budgetSaveTimer.current);
+    budgetSaveTimer.current = setTimeout(function () { setBudgetSaved(""); }, 1200);
+  }
+
+  function saveBudgetConfig(body) {
+    fetch("/api/settings/config", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(function (r) {
+      if (r.ok) {
+        setBudgetSaved(t("settings.saved"));
+        syncLocalStorage(body);
+        try { window.dispatchEvent(new CustomEvent("budget-saved")); } catch (e) {}
+      } else {
+        setBudgetSaved(t("settings.error"));
+      }
+      scheduleClearSaved();
+    }).catch(function () {
+      setBudgetSaved(t("settings.error"));
+      scheduleClearSaved();
+    });
+  }
+
+  function toggleEnabled() {
+    var next = !budgetEnabled;
+    setBudgetEnabled(next);
+    saveBudgetConfig({ budget_enabled: next });
+  }
+
+  function saveBudget() {
+    saveBudgetConfig({
+      budget_monthly: Number(budgetMonthly) || 0,
+      budget_currency: budgetCurrency,
+      budget_action: budgetAction,
+      budget_mode: budgetMode,
+      budget_start_day: Number(budgetStartDay) || 1,
+    });
+    fetchStats();
+  }
+
+  // ── Stats from API ──
+  var [budgetModels, setBudgetModels] = useStateSt([]);
+  var [totalCost, setTotalCost] = useStateSt(0);
+  var [totalRequests, setTotalRequests] = useStateSt(0);
+  var [budgetLoading, setBudgetLoading] = useStateSt(true);
+
+  function fetchStats() {
+    fetch("/api/settings/budget/stats")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        setBudgetModels(d.models || []);
+        setTotalCost(d.total_cost || 0);
+        setTotalRequests(d.total_requests || 0);
+        setBudgetLoading(false);
+      })
+      .catch(function () { setBudgetLoading(false); });
+  }
+
+  useEffectSt(function () {
+    fetchStats();
+    return function () {
+      if (budgetSaveTimer.current) clearTimeout(budgetSaveTimer.current);
+    };
+  }, []);
+
+  var budgetNum = Number(budgetMonthly) || 0;
+  var budgetRatio = budgetNum > 0 ? Math.min(totalCost / budgetNum, 1) : 0;
+  var currencySymbol = budgetCurrency === "CNY" ? "¥" : "$";
+
+  function formatCost(val) {
+    return currencySymbol + val.toFixed(2);
+  }
+
+  function formatTokens(n) {
+    n = Number(n) || 0;
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+    return String(n);
+  }
+
+  return React.createElement("div", { className: "settings-panel" },
+    SectionTitle(t("settings.budget"), t("settings.budgetSubtitle")),
+
+    // ── Overview section ──
+    SectionBlock(t("settings.budgetOverview"), null,
+      React.createElement("div", { className: "wb-budget-summary" },
+        React.createElement("div", { className: "wb-budget-summary-row" },
+          React.createElement("div", { className: "wb-budget-stat" },
+            React.createElement("span", { className: "wb-budget-stat-value" }, formatCost(totalCost)),
+            React.createElement("span", { className: "wb-budget-stat-label" }, t("settings.budgetSpend")),
+          ),
+          React.createElement("div", { className: "wb-budget-stat" },
+            React.createElement("span", { className: "wb-budget-stat-value" }, totalRequests),
+            React.createElement("span", { className: "wb-budget-stat-label" }, t("settings.budgetRequests")),
+          ),
+          React.createElement("div", { className: "wb-budget-stat" },
+            React.createElement("span", { className: "wb-budget-stat-value" }, budgetEnabled ? formatCost(budgetNum) : "—"),
+            React.createElement("span", { className: "wb-budget-stat-label" }, t("settings.budgetLimit")),
+          ),
+        ),
+        React.createElement("div", { className: "wb-budget-progress-wrap" },
+          React.createElement("div", { className: "wb-budget-progress-bar" },
+            React.createElement("div", {
+              className: "wb-budget-progress-fill" + (budgetRatio >= 1 ? " over" : budgetRatio >= 0.8 ? " high" : ""),
+              style: { width: Math.round(budgetRatio * 100) + "%" },
+            }),
+          ),
+          React.createElement("span", { className: "wb-budget-progress-label" },
+            t("settings.budgetUsed", { pct: Math.round(budgetRatio * 100) })
+          ),
+        ),
+        !budgetEnabled && React.createElement("p", { className: "wb-hint", style: { textAlign: "center", marginTop: 8 } },
+          t("settings.budgetDisabledHint")
+        ),
+      ),
+    ),
+
+    // ── Budget configuration ──
+    SectionBlock(t("settings.budgetConfig"), null,
+      FieldRow(t("settings.budgetEnable"), t("settings.budgetEnableHint"),
+        Toggle(budgetEnabled, toggleEnabled),
+      ),
+      // Budget mode — always visible, independent of the budget toggle
+      FieldRow(t("settings.budgetMode"), t("settings.budgetModeHint"),
+        React.createElement("select", {
+          className: "wb-select",
+          value: budgetMode,
+          onChange: function (e) { setBudgetMode(e.target.value); },
+          style: { maxWidth: 160 },
+        },
+          React.createElement("option", { value: "economy" }, t("settings.budgetModeEconomy")),
+          React.createElement("option", { value: "normal" }, t("settings.budgetModeNormal")),
+        ),
+      ),
+      budgetEnabled && React.createElement(React.Fragment, null,
+        FieldRow(t("settings.budgetMonthly"), t("settings.budgetMonthlyHint"),
+          React.createElement("div", { className: "wb-inline-row" },
+            React.createElement("input", {
+              className: "wb-input mono",
+              type: "text", inputMode: "decimal",
+              value: budgetMonthly,
+              onChange: function (e) { setBudgetMonthly(e.target.value); },
+              placeholder: "0",
+              style: { maxWidth: 120 },
+              key: "budget-input",
+            }),
+            React.createElement("select", {
+              className: "wb-select",
+              value: budgetCurrency,
+              onChange: function (e) { setBudgetCurrency(e.target.value); },
+              style: { maxWidth: 90 },
+            },
+              React.createElement("option", { value: "CNY" }, "CNY (¥)"),
+              React.createElement("option", { value: "USD" }, "USD ($)"),
+            ),
+          ),
+        ),
+
+        // Billing cycle start day
+        FieldRow(t("settings.budgetStartDay"), t("settings.budgetStartDayHint"),
+          React.createElement("input", {
+            className: "wb-input mono",
+            type: "text", inputMode: "numeric",
+            value: budgetStartDay,
+            onChange: function (e) { setBudgetStartDay(e.target.value); },
+            placeholder: "1",
+            style: { maxWidth: 80 },
+          }),
+        ),
+
+        FieldRow(t("settings.budgetAction"), t("settings.budgetActionHint"),
+          React.createElement("select", {
+            className: "wb-select",
+            value: budgetAction,
+            onChange: function (e) { setBudgetAction(e.target.value); },
+            style: { maxWidth: 240 },
+          },
+            React.createElement("option", { value: "warn" }, t("settings.budgetActionWarn")),
+            React.createElement("option", { value: "block" }, t("settings.budgetActionBlock")),
+          ),
+        ),
+        React.createElement("div", { className: "wb-save-actions" },
+          React.createElement("button", { className: "wb-btn primary", onClick: saveBudget },
+            t("settings.saveApply")
+          ),
+          budgetSaved && React.createElement("span", { className: "wb-hint saved" }, budgetSaved),
+        ),
+      ),
+    ),
+
+    // ── Cost by model ──
+    SectionBlock(t("settings.budgetByModel"), t("settings.budgetByModelHint"),
+      React.createElement("div", { className: "wb-budget-model-table" },
+        React.createElement("div", { className: "wb-budget-model-head" },
+          React.createElement("span", null, t("settings.budgetModel")),
+          React.createElement("span", null, t("settings.budgetRequests")),
+          React.createElement("span", null, t("settings.budgetTokens")),
+          React.createElement("span", null, t("settings.budgetCost")),
+        ),
+        budgetModels.map(function (item) {
+          var modelPct = totalCost > 0 ? (item.cost / totalCost * 100) : 0;
+          return React.createElement("div", { className: "wb-budget-model-row", key: item.model },
+            React.createElement("span", { className: "wb-budget-model-name mono" }, item.model),
+            React.createElement("span", null, item.requests),
+            React.createElement("span", null, formatTokens(item.prompt_tokens + item.completion_tokens)),
+            React.createElement("span", { className: "wb-budget-model-cost" }, formatCost(item.cost)),
+            modelPct > 0 && React.createElement("div", { className: "wb-budget-model-bar-wrap" },
+              React.createElement("div", { className: "wb-budget-model-bar", style: { width: modelPct + "%" } }),
+            ),
+          );
+        }),
+      ),
+    ),
+  );
+}
+
 // ── Shared UI helpers ──
 
 function SectionTitle(title, subtitle) {
@@ -2097,13 +2352,13 @@ function SectionTitle(title, subtitle) {
   );
 }
 
-function SectionBlock(title, extra, children) {
+function SectionBlock(title, extra, ...children) {
   return React.createElement("div", { className: "wb-section-block" },
     React.createElement("div", { className: "wb-section-block-head" },
       React.createElement("b", null, title),
       typeof extra === "string" ? React.createElement("small", null, extra) : (extra || null),
     ),
-    children,
+    ...children,
   );
 }
 

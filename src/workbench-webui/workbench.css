@@ -1560,6 +1560,99 @@ body.wb-col-resizing {
   height: 36px;
 }
 
+/* ── Account outer wrapper (menu positioning anchor) ─────────────────────── */
+.workbench-account-outer {
+  position: relative;
+}
+
+/* ── Account avatar click target ─────────────────────────────────────────── */
+.workbench-account-avatar {
+  display: block;
+  cursor: pointer;
+  outline: none;
+}
+.workbench-account-avatar:focus-visible {
+  outline: 2px solid var(--wb-accent);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
+/* ── Account dropdown menu ───────────────────────────────────────────────── */
+.workbench-account-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 8px;
+  right: 8px;
+  z-index: 70;
+  min-width: 180px;
+  padding: 6px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-card-bg);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16);
+}
+.workbench-account-menu button {
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  padding: 0 9px;
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.workbench-account-menu button:hover {
+  background: var(--wb-control-hover-bg);
+}
+.workbench-account-menu button.danger {
+  color: var(--wb-red);
+}
+.workbench-account-menu button svg {
+  flex: 0 0 auto;
+}
+
+/* Usage section in menu */
+.wb-account-menu-usage {
+  padding: 8px 9px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wb-account-menu-usage-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+.wb-account-menu-usage-row span:first-child {
+  color: var(--wb-muted);
+}
+.wb-account-menu-usage-val {
+  color: var(--wb-text);
+  font-weight: 660;
+}
+.wb-account-menu-usage-val.over {
+  color: var(--wb-red);
+}
+.wb-account-menu-usage-blocked {
+  font-size: 11px;
+  color: var(--wb-red);
+  text-align: center;
+  padding: 2px 0 0;
+}
+
+/* Menu divider */
+.wb-account-menu-divider {
+  height: 1px;
+  background: var(--wb-line);
+  margin: 4px 0;
+}
+
 .workbench-task-rail {
   background: var(--wb-task-rail-bg);
 }
@@ -13623,4 +13716,138 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   .wbq-toolbar { align-items: stretch; flex-direction: column; }
   .wbq-screenshot-status,
   .wbq-screenshot-btn { max-width: none; justify-content: center; }
+}
+
+/* ── Budget panel styles ── */
+.wb-budget-summary {
+  background: var(--wb-card-bg);
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 8px;
+}
+
+.wb-budget-summary-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.wb-budget-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+}
+
+.wb-budget-stat-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--wb-text);
+}
+
+.wb-budget-stat-label {
+  font-size: 11px;
+  color: var(--wb-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wb-budget-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wb-budget-progress-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--wb-line);
+  overflow: hidden;
+}
+
+.wb-budget-progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--wb-accent);
+  transition: width 0.4s ease;
+  min-width: 0;
+}
+
+.wb-budget-progress-fill.high {
+  background: var(--wb-red);
+  opacity: 0.8;
+}
+
+.wb-budget-progress-fill.over {
+  background: var(--wb-red);
+}
+
+.wb-budget-progress-label {
+  font-size: 11px;
+  color: var(--wb-text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.wb-budget-model-table {
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.wb-budget-model-head,
+.wb-budget-model-row {
+  display: grid;
+  grid-template-columns: 1fr 70px 80px 80px;
+  align-items: center;
+  padding: 8px 12px;
+  gap: 8px;
+}
+
+.wb-budget-model-head {
+  background: var(--wb-surface);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--wb-text-secondary);
+  border-bottom: 1px solid var(--wb-line);
+}
+
+.wb-budget-model-row {
+  font-size: 13px;
+  border-bottom: 1px solid var(--wb-line);
+  position: relative;
+}
+
+.wb-budget-model-row:last-child {
+  border-bottom: none;
+}
+
+.wb-budget-model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.wb-budget-model-cost {
+  font-weight: 600;
+  text-align: right;
+}
+
+.wb-budget-model-bar-wrap {
+  grid-column: 1 / -1;
+  height: 3px;
+  margin-top: -2px;
+}
+
+.wb-budget-model-bar {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--wb-accent);
+  opacity: 0.5;
 }

@@ -1898,6 +1898,58 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
   var { t } = window.useWorkbenchI18n();
   window.useDataVersion();  // re-render chip when DATA.user changes (profile save); data.js loads before this bundle
   var [menuProjectId, setMenuProjectId] = useWorkbenchState("");
+  var [accountMenuOpen, setAccountMenuOpen] = useWorkbenchState(false);
+  var [budgetState, setBudgetState] = useWorkbenchState(null);
+
+  // Fetch budget status from API (also pinged when the account menu opens)
+  function fetchBudget() {
+    fetch("/api/budget/status")
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setBudgetState(d); })
+      .catch(function () {});
+  }
+  useWorkbenchEffect(function () { fetchBudget(); function onFocus() { fetchBudget(); } try { window.addEventListener("wb-focus-composer", onFocus); } catch (e) {} return function () { try { window.removeEventListener("wb-focus-composer", onFocus); } catch (e) {} }; }, []);
+
+  function formatTimeDiff(isoStr) {
+    if (!isoStr) return "";
+    var dt = new Date(isoStr);
+    var now = new Date();
+    var diff = dt - now;
+    if (diff <= 0) return "";
+    // Same day → show time only
+    if (dt.toDateString() === now.toDateString()) {
+      var hh = String(dt.getHours()).padStart(2, "0");
+      var mm = String(dt.getMinutes()).padStart(2, "0");
+      return hh + ":" + mm;
+    }
+    // Tomorrow → "明天 HH:MM"
+    var tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    if (dt.toDateString() === tomorrow.toDateString()) {
+      var hh2 = String(dt.getHours()).padStart(2, "0");
+      var mm2 = String(dt.getMinutes()).padStart(2, "0");
+      return t("general.tomorrow", null, "Tomorrow") + " " + hh2 + ":" + mm2;
+    }
+    // Further → "M/D HH:MM"
+    return (dt.getMonth() + 1) + "/" + dt.getDate() + " " + String(dt.getHours()).padStart(2, "0") + ":" + String(dt.getMinutes()).padStart(2, "0");
+  }
+
+  function formatRefreshTime(isoStr, tFn) {
+    var time = formatTimeDiff(isoStr);
+    return time ? tFn("rail.refreshAt", { time: time }) : tFn("rail.budgetExhausted");
+  }
+  function cs(curr) { return curr === "CNY" ? "¥" : curr === "USD" ? "$" : curr === "EUR" ? "€" : curr === "GBP" ? "£" : curr || ""; }
+  function formatBudgetAmount(v, curr) { return cs(curr) + v.toFixed(2); }
+  // Re-fetch whenever the menu opens so the user sees fresh data
+  useWorkbenchEffect(function () {
+    if (accountMenuOpen) fetchBudget();
+  }, [accountMenuOpen]);
+  // Re-fetch when budget settings are saved in the settings panel
+  useWorkbenchEffect(function () {
+    function onSaved() { fetchBudget(); }
+    try { window.addEventListener("budget-saved", onSaved); } catch (e) {}
+    return function () { try { window.removeEventListener("budget-saved", onSaved); } catch (e) {} };
+  }, []);
 
   useWorkbenchEffect(function () {
     if (!menuProjectId) return undefined;
@@ -1913,6 +1965,21 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
       document.removeEventListener("keydown", closeMenu);
     };
   }, [menuProjectId]);
+
+  useWorkbenchEffect(function () {
+    if (!accountMenuOpen) return undefined;
+    function closeMenu(event) {
+      if (event.key && event.key !== "Escape") return;
+      if (!event.key && event.target && event.target.closest && event.target.closest(".workbench-account-outer")) return;
+      setAccountMenuOpen(false);
+    }
+    document.addEventListener("mousedown", closeMenu);
+    document.addEventListener("keydown", closeMenu);
+    return function () {
+      document.removeEventListener("mousedown", closeMenu);
+      document.removeEventListener("keydown", closeMenu);
+    };
+  }, [accountMenuOpen]);
 
   var navItems = [
     { id: "task", label: t("workbench.page.task"), icon: (
@@ -1932,7 +1999,7 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
     ), action: function () { onOpenPage("memory"); } },
   ];
   return (
-    <aside className="workbench-project-rail">
+    <aside className="workbench-project-rail" onMouseLeave={function () { if (collapsed) setAccountMenuOpen(false); }}>
       <div className="workbench-rail-head">
         <span className="wb-rail-title">{t("rail.projects")}</span>
         <div className="workbench-rail-head-actions">
@@ -1947,7 +2014,7 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
             className="workbench-rail-collapse-btn"
             title={collapsed ? t("rail.expand", null, "Expand sidebar") : t("rail.collapse", null, "Collapse sidebar")}
             aria-label={collapsed ? t("rail.expand", null, "Expand sidebar") : t("rail.collapse", null, "Collapse sidebar")}
-            onClick={onToggleCollapse}
+            onClick={function () { setAccountMenuOpen(false); onToggleCollapse(); }}
           >
             {collapsed ? (
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m13 7 5 5-5 5M6 7l5 5-5 5"/></svg>
@@ -2011,25 +2078,78 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
           );
         })}
       </div>
-      <div
-        className={"workbench-account" + (activePage === "profile" ? " active" : "")}
-        role="button"
-        tabIndex={0}
-        title={t("rail.profile")}
-        style={{ cursor: "pointer" }}
-        onClick={function () { onOpenPage && onOpenPage("profile"); }}
-        onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenPage && onOpenPage("profile"); } }}
-      >
-        {window.WorkbenchAvatar
-          ? React.createElement(window.WorkbenchAvatar, { user: DATA.user, size: 34 })
-          : <div className="workbench-avatar photo">{WorkbenchModel.initials(DATA.user && DATA.user.name)}</div>}
-        <div className="workbench-account-meta">
-          <div className="workbench-account-name">
-            <b>{DATA.user && DATA.user.name || "User"}</b>
-            <span className="workbench-pro-badge">Pro</span>
+      <div className="workbench-account-outer">
+        <div
+          className={"workbench-account" + (activePage === "profile" ? " active" : "")}
+          onClick={function () { setAccountMenuOpen(function (v) { return !v; }); }}
+        >
+          <span
+            className="workbench-account-avatar"
+            title={t("rail.profile")}
+            onClick={function (e) { e.stopPropagation(); setAccountMenuOpen(false); onOpenPage && onOpenPage("profile"); }}
+            onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setAccountMenuOpen(false); onOpenPage && onOpenPage("profile"); } }}
+            tabIndex={0}
+            role="button"
+          >
+            {window.WorkbenchAvatar
+              ? React.createElement(window.WorkbenchAvatar, { user: DATA.user, size: 34 })
+              : <div className="workbench-avatar photo">{WorkbenchModel.initials(DATA.user && DATA.user.name)}</div>}
+          </span>
+          <div className="workbench-account-meta">
+            <div className="workbench-account-name">
+              <b>{DATA.user && DATA.user.name || "User"}</b>
+              <span className="workbench-pro-badge">Pro</span>
+            </div>
+            <small>{(DATA.sessions && DATA.sessions[0] && DATA.sessions[0].model) || DATA.appVersion || "model"}</small>
           </div>
-          <small>{(DATA.sessions && DATA.sessions[0] && DATA.sessions[0].model) || DATA.appVersion || "model"}</small>
         </div>
+        {accountMenuOpen && (
+          <div className="workbench-account-menu" onClick={function (e) { e.stopPropagation(); }}>
+            {budgetState && budgetState.monthly_budget > 0 && (
+              <>
+                <div className="wb-account-menu-usage">
+                  <div className="wb-account-menu-usage-row">
+                    <span>{t("rail.budgetFiveHour")}</span>
+                    <span className={"wb-account-menu-usage-val" + (budgetState.five_hour_remaining <= 0 ? " over" : "")}>
+                      {budgetState.five_hour_remaining > 0
+                        ? (budgetState.five_hour_remaining / budgetState.five_hour_budget * 100).toFixed(0) + "% · " + formatBudgetAmount(budgetState.five_hour_remaining, budgetState.currency) + " / " + formatBudgetAmount(budgetState.five_hour_budget, budgetState.currency)
+                        : formatRefreshTime(budgetState.five_hour_next_refresh_at, t)}
+                    </span>
+                  </div>
+                  <div className="wb-account-menu-usage-row">
+                    <span>{t("rail.budgetWeekly")}</span>
+                    <span className={"wb-account-menu-usage-val" + (budgetState.weekly_remaining <= 0 ? " over" : "")}>
+                      {budgetState.weekly_remaining > 0
+                        ? (budgetState.weekly_remaining / budgetState.weekly_budget * 100).toFixed(0) + "% · " + formatBudgetAmount(budgetState.weekly_remaining, budgetState.currency) + " / " + formatBudgetAmount(budgetState.weekly_budget, budgetState.currency)
+                        : formatRefreshTime(budgetState.weekly_next_refresh_at, t)}
+                    </span>
+                  </div>
+                </div>
+                {budgetState.weekly_remaining <= 0 || budgetState.five_hour_remaining <= 0 || budgetState.monthly_remaining <= 0 ? (
+                  <div className="wb-account-menu-usage-blocked">{t("rail.budgetBlocked")}</div>
+                ) : null}
+                <div className="wb-account-menu-divider"></div>
+              </>
+            )}
+            <button type="button" onClick={function () { setAccountMenuOpen(false); onSettings && onSettings(); }}>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+              {t("rail.settings")}
+            </button>
+            <button type="button" onClick={function () { setAccountMenuOpen(false); window.open("https://docs.cyrene.77497856.xyz/#overview", "_blank"); }}>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h0"/></svg>
+              {t("rail.learnMore")}
+            </button>
+            <button type="button" onClick={function () { setAccountMenuOpen(false); onOpenPage && onOpenPage("profile"); }}>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              {t("rail.profile")}
+            </button>
+            <div className="wb-account-menu-divider"></div>
+            <button type="button" className="danger" onClick={function () { setAccountMenuOpen(false); }}>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              {t("rail.logout")}
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

@@ -7,6 +7,7 @@ import getpass
 import hashlib
 import json
 import logging
+import math
 import mimetypes
 import os
 import random
@@ -5848,6 +5849,29 @@ def _workbench_resolve_workspace_dir(project: dict[str, Any] | None) -> str:
         return ""
 
 
+async def _check_budget_gate(session_id: str) -> str | None:
+    """Shared budget gate.  Returns ``None`` if OK, or an error message (caller
+    should stop the request and surface this to the user)."""
+    from cyrene.settings_store import get_all as _get_all_settings
+    from cyrene.budget import check_budget_and_block as _check_budget
+    from cyrene.budget import _start_budget_windows
+
+    settings = _get_all_settings()
+    monthly = float(settings.get("budget_monthly") or 0)
+    blocked = await _check_budget(
+        _db_path or str(DB_PATH),
+        monthly=monthly,
+        enabled=bool(settings.get("budget_enabled", False)),
+    )
+    if blocked:
+        logger.warning("Budget block for %s: %s", session_id, blocked)
+    elif monthly > 0:
+        # Start hard-reset windows for any request that passes the gate,
+        # regardless of budget action (warn/block) or enabled state.
+        _start_budget_windows()
+    return blocked
+
+
 async def _workbench_agent_reply(
     user_input: str,
     session: dict[str, Any],
@@ -5886,6 +5910,12 @@ async def _workbench_agent_reply(
     mode = str(permission_mode or "auto").strip().lower()
     if mode not in PERMISSION_MODES:
         mode = "auto"
+
+    # ── Budget gate (checked early, before attachment I/O) ──
+    _bgt = await _check_budget_gate(session_id)
+    if _bgt:
+        return _bgt
+
     normalized = _workbench_normalize_attachments(attachments)
     public_attachments = [build_public_attachment_payload(item) for item in normalized] or None
     message = str(user_input or "")
@@ -5903,6 +5933,7 @@ async def _workbench_agent_reply(
             if len(parts) == 2:
                 att_map[parts[1]] = full_path
         _attachment_paths_by_name.set(att_map)
+
     try:
         return await run_agent(
             user_message=message,
@@ -7080,6 +7111,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             return JSONResponse({"error": "missing question_id"}, status_code=400)
         if not answer_text:
             return JSONResponse({"error": "empty answer"}, status_code=400)
+
+        # ── Budget gate ──
+        _bgt = await _check_budget_gate(question_id)
+        if _bgt:
+            return JSONResponse({"error": _bgt}, status_code=403)
 
         try:
             if wants_stream:
@@ -8855,6 +8891,39 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if "auto_update" in body:
             set_setting("auto_update", bool(body["auto_update"]))
             changed.append("auto_update")
+        if "budget_enabled" in body:
+            set_setting("budget_enabled", bool(body["budget_enabled"]))
+            changed.append("budget_enabled")
+        if "budget_monthly" in body:
+            value = float(body.get("budget_monthly") or 0)
+            if not math.isfinite(value) or value < 0:
+                return JSONResponse({"error": "budget_monthly must be a non-negative number"}, status_code=400)
+            set_setting("budget_monthly", value)
+            changed.append("budget_monthly")
+        if "budget_currency" in body:
+            value = str(body.get("budget_currency") or "").strip().upper()
+            if value not in {"CNY", "USD"}:
+                return JSONResponse({"error": "invalid budget_currency"}, status_code=400)
+            set_setting("budget_currency", value)
+            changed.append("budget_currency")
+        if "budget_action" in body:
+            value = str(body.get("budget_action") or "").strip().lower()
+            if value not in {"warn", "block"}:
+                return JSONResponse({"error": "invalid budget_action"}, status_code=400)
+            set_setting("budget_action", value)
+            changed.append("budget_action")
+        if "budget_mode" in body:
+            value = str(body.get("budget_mode") or "").strip().lower()
+            if value not in {"economy", "normal"}:
+                return JSONResponse({"error": "invalid budget_mode"}, status_code=400)
+            set_setting("budget_mode", value)
+            changed.append("budget_mode")
+        if "budget_start_day" in body:
+            value = int(body.get("budget_start_day") or 1)
+            if value < 1 or value > 28:
+                return JSONResponse({"error": "budget_start_day must be between 1 and 28"}, status_code=400)
+            set_setting("budget_start_day", value)
+            changed.append("budget_start_day")
         return {"ok": True, "changed": changed}
 
     @router.put("/api/profile")
@@ -8903,6 +8972,75 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         set_setting("search_mode", "builtin")
         set_setting("search_external_url", "")
         return {"ok": True, "changed": ["search_mode", "search_external_url"]}
+
+    # ---- Budget Stats API ----
+
+    @router.get("/api/settings/budget/stats")
+    async def api_budget_stats():
+        import calendar
+        from datetime import datetime, timezone
+        from cyrene.db import get_token_usage_stats as _usage_stats
+        from cyrene.model_prices import CNY_PER_USD as _CNY2USD
+        from cyrene.settings_store import get_all as _gsett
+
+        currency = str(_gsett().get("budget_currency") or "CNY").upper()
+        start_day = int(_gsett().get("budget_start_day") or 1)
+        now = datetime.now(timezone.utc)
+        _, days_in_month = calendar.monthrange(now.year, now.month)
+        period_start_day = min(start_day, days_in_month)
+        period_start = datetime(now.year, now.month, period_start_day, tzinfo=timezone.utc)
+        if now < period_start:
+            pm = now.month - 1 if now.month > 1 else 12
+            py = now.year if now.month > 1 else now.year - 1
+            _, days_in_prev = calendar.monthrange(py, pm)
+            period_start = datetime(py, pm, min(start_day, days_in_prev), tzinfo=timezone.utc)
+        days_since_period_start = max(int((now - period_start).total_seconds() / 86400) + 1, 1)
+
+        try:
+            stats = await _usage_stats(str(_db_path or DB_PATH), days=days_since_period_start)
+            by_model = stats.get("by_model", [])
+            total = stats.get("total", {})
+        except Exception:
+            by_model = []
+            total = {}
+        by_model = stats.get("by_model", [])
+        total = stats.get("total", {})
+        total_requests = int(total.get("requests", 0))
+
+        rows = []
+        for m in by_model:
+            cost = round(float(m.get("cost", 0)), 4)
+            # get_token_usage_stats returns cost in USD; convert to CNY for CNY users
+            if currency == "CNY":
+                cost = round(cost * _CNY2USD, 4)
+            rows.append({
+                "model": m.get("model", ""),
+                "requests": int(m.get("requests", 0)),
+                "prompt_tokens": int(m.get("prompt_tokens", 0)),
+                "completion_tokens": int(m.get("completion_tokens", 0)),
+                "cost": cost,
+            })
+        rows.sort(key=lambda r: r["cost"], reverse=True)
+
+        return {
+            "models": rows,
+            "total_cost": round(sum(r["cost"] for r in rows), 4),
+            "total_requests": total_requests,
+        }
+
+    @router.get("/api/budget/status")
+    async def api_budget_status():
+        """Return current budget state (weekly + 5-hour block)."""
+        from cyrene.settings_store import get_all as _get_sett
+        from cyrene.budget import get_budget_state as _budget_state
+
+        sett = _get_sett()
+        state = await _budget_state(
+            str(_db_path or DB_PATH),
+            monthly=float(sett.get("budget_monthly") or 0),
+            enabled=bool(sett.get("budget_enabled", False)),
+        )
+        return state
 
     # ---- MCP Servers API ----
 
@@ -10204,6 +10342,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
+
+        # ── Budget gate at dispatch entry (before any LLM call) ──
+        _bgt = await _check_budget_gate(session_id)
+        if _bgt:
+            return JSONResponse({"error": _bgt}, status_code=403)
 
         # Snapshot task-meta before any mutation so we can later detect what the
         # agent changed mid-run via set_task_goal and avoid clobbering it.
@@ -13139,6 +13282,12 @@ def _build_config() -> dict:
         "redact_secrets": settings.get("redact_secrets", True),
         "beta_updates": settings.get("beta_updates", False),
         "auto_update": settings.get("auto_update", True),
+        "budget_enabled": settings.get("budget_enabled", False),
+        "budget_monthly": settings.get("budget_monthly", 50),
+        "budget_currency": settings.get("budget_currency", "CNY"),
+        "budget_action": settings.get("budget_action", "warn"),
+        "budget_mode": settings.get("budget_mode", "normal"),
+        "budget_start_day": settings.get("budget_start_day", 1),
         "search_port": str(SEARXNG_PORT),
         "search_host": SEARXNG_HOST,
     }
