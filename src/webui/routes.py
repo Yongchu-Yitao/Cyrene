@@ -5863,6 +5863,7 @@ async def _check_budget_gate(session_id: str) -> dict | None:
         monthly=monthly,
         enabled=bool(settings.get("budget_enabled", False)),
     )
+    blocked = None
     if result:
         blocked = {"error": result["message"], "code": result["code"]}
         logger.warning("Budget block for %s: %s", session_id, result["code"])
@@ -5870,9 +5871,6 @@ async def _check_budget_gate(session_id: str) -> dict | None:
         # Start hard-reset windows for any request that passes the gate,
         # regardless of budget action (warn/block) or enabled state.
         _start_budget_windows()
-        return None
-    else:
-        return None
     return blocked
 
 

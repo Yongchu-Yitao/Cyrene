@@ -350,6 +350,15 @@ function wbcRandomThinkingPhrase() {
   return phrases[Math.floor(Math.random() * phrases.length)] || wbcT("workbenchChat.stillWorking", "Still working…");
 }
 
+// Shared budget error code → i18n key suffix mapping.  Defined here and
+// re-used in workbench.jsx (task controller) via window.WORKBENCH_BUDGET_CODES
+// so adding a new budget code only needs one update.
+window.WORKBENCH_BUDGET_CODES = {
+  budget_monthly_exhausted: "monthly",
+  budget_weekly_exhausted: "weekly",
+  budget_5h_exhausted: "5h",
+};
+
 function wbcErrorText(err) {
   var raw = String((err && err.message) || err || "").trim();
   if (!raw || raw === "Load failed" || raw === "Failed to fetch" || raw === "NetworkError when attempting to fetch resource.") {
@@ -358,7 +367,7 @@ function wbcErrorText(err) {
   // Budget errors: translate via i18n key from the code field
   var code = (err && err.code) || "";
   if (code.startsWith("budget_")) {
-    var i18nKey = "budget.error." + ({ budget_monthly_exhausted: "monthly", budget_weekly_exhausted: "weekly", budget_5h_exhausted: "5h" }[code] || "5h");
+    var i18nKey = "budget.error." + (window.WORKBENCH_BUDGET_CODES[code] || "5h");
     return wbcT(i18nKey, raw);
   }
   return raw;
@@ -2400,7 +2409,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespa
     var wasRunning = prevRunningRef.current;
     prevRunningRef.current = running;
     if (wasRunning && !running && lastSentRef.current && shouldClearOnSend) {
-      var isSendError = error && (errorKind === "message" || (errorKind === "load" && error));
+      var isSendError = error && (errorKind === "message" || errorKind === "load");
       if (isSendError) {
         var saved = lastSentRef.current;
         setDraft(saved.message || "");

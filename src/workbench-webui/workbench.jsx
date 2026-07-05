@@ -2391,7 +2391,7 @@ function useTaskController(session, onRefresh, runtime) {
   var interruptedRef = useWorkbenchRef(false);
   var sid = session ? session.id : "";
 
-  function apply(next) { if (onRefresh && next) onRefresh(next); return next; }
+  function apply(next) { if (onRefresh && next && !next.__budgetBlock) onRefresh(next); return next; }
   function sessionFromStore(next, fallback) {
     if (!next || !sid) return fallback || session;
     var projects = Array.isArray(next.projects) ? next.projects : [];
@@ -2560,7 +2560,8 @@ function useTaskController(session, onRefresh, runtime) {
         // keeps the user's input in the draft instead of clearing it.
         var code = err.code || (err.payload && err.payload.code) || "";
         if (code.startsWith("budget_")) {
-          var i18nKey = "budget.error." + ({ budget_monthly_exhausted: "monthly", budget_weekly_exhausted: "weekly", budget_5h_exhausted: "5h" }[code] || "5h");
+          var codes = window.WORKBENCH_BUDGET_CODES || {};
+          var i18nKey = "budget.error." + (codes[code] || "5h");
           window.showToast(wbT(i18nKey, err.message || ""), "error");
           return { __budgetBlock: true };
         }
