@@ -94,7 +94,7 @@ def test_db_estimate_cost_uses_saved_custom_price(monkeypatch):
         "cyrene.model_prices.configured_user_price",
         lambda model: {"input": 7.25, "output": 14.5, "currency": "CNY"},
     )
-    assert db._estimate_cost("custom-model", 1_000_000, 1_000_000) == pytest.approx(3.0)
+    assert db._estimate_cost("custom-model", 1_000_000, 1_000_000) == pytest.approx(21.75)
 
 
 def test_to_usd_preserves_usd_and_converts_cny():

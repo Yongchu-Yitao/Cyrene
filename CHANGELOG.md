@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.6.2] - 2026-07-05
+
+0.6.2 是一个功能型更新，重点引入自适应预算控制系统与经济模式以优化 token 花费，同时补齐 macOS 原生菜单栏、Workbench UI 体验改进与多项运行时修复。
+
+### Added
+
+- **自适应预算控制系统** — 全新 `AdaptiveBudgetController` 规则引擎（纯规则驱动，无 ML 依赖）。按月 / 周 / 5 小时三层窗口动态分配预算，根据剩余预算、近期消费速率和历史活跃密度自适应调整每层额度。新增 `/api/budget/status` 与 `/api/budget/models` 端点提供实时状态与按模型分拆的花费明细。超支策略可配置：仅告警、自动切换到更便宜的模型、阻止新请求。所有计算以用户配置币种（CNY / USD）为准。
+- **经济模式 (Economy Mode)** — `budget_mode` 设置控制开启后，自动清除已完成轮次的 tool 结果，只保留 user ↔ assistant 对话主干，显著降低 context 膨胀与 token 消耗。
+- **预算面板 UI** — 设置页新增「预算」页签（`BudgetPanel` 组件），提供月度限额、币种、超支动作、经济 / 标准模式、结算日配置，以及按模型分拆的当前月花费明细。侧栏项目列表同步显示 5 小时 / 周预算窗口实时状态。
+- **macOS 原生菜单栏** — 中英文双语完整应用菜单（文件 / 编辑 / 视图 / 窗口 / 帮助），含新建对话 / 项目 / 任务、切换主题 / 侧栏、全屏、缩放等操作，通过 `menu:action` IPC 桥接到 Workbench 前端。
+- **账户菜单** — 侧栏底部新增用户头像入口与下拉菜单，提供设置、登出等快捷操作。
+
+### Changed
+
+- **文件交付反馈增强** — `send_file` / `send_wechat_file` 工具调用成功后，自动从工具返回值构建用户可见确认文本（例如「文件已发给你：report.pdf」），替换空泛的 `"Done."` 占位回复；最终回复提示词同步优化以避免无信息量的占位语。
+- **记忆注入策略改进** — 注入列表改为 top 20（按 `mention_count`）+ 随机 5 条混合，兼顾高频与多样性；注入 ID 快照到 session 级别，单次会话内复用同一集合，保持 prompt cache 稳定。
+- **工作台数据按需加载** — `GET /api/projects` 新增 `?detail=summary` 参数，返回项目壳体 + 会话摘要（不含完整历史 payload）；非活跃 session 仅传摘要，切换时才拉取完整数据，大幅减少首屏传输量。`/api/task-sessions/{id}` 返回的 project 同步压缩为 shell。
+- **Workbench UI 优化** — 模块页面延迟挂载（`mountedPages`），减少首屏渲染量；侧栏折叠与侧面板隐藏按钮统一样式；HTML 预览 iframe 自动注入 `viewport` meta；对话页新增文件下载按钮。
+- **更新确认改用非阻塞模态框** — 升级确认从原生 `window.confirm` 切换为 `window.confirmModal`，不再阻塞 UI。
+- **成本统计切换到 CNY** — DB `token_usage` 表的 `estimated_cost` 默认币种从 USD 改为 CNY，与内置模型定价保持一致，减少不必要的汇率转换。
+
+### Fixed
+
+- **Shell stderr 重定向解析** — `2>/path` 和 `&>/path` 的正则不再错误匹配 `;` `&` `|` 等 shell 元字符，避免误判文件写入目标。
+- **直播段 ID 稳定性** — 工具轮次中 assistant 中间回复在持久化分配 `message_id` 之前，使用 SHA1 内容指纹生成稳定 UI ID，避免每次扫描产生重复条目。
+
+### Tests
+
+- 新增 `tests/test_adaptive_budget.py`（630 行），覆盖自适应预算控制器的全部核心逻辑：新用户零历史、各窗口预算计算、压力系数、变化限幅、活跃密度估计等。
+- 新增 `tests/test_quit_reply.py`、`tests/test_workbench_api_validation.py`。
+- 更新 `tests/test_workbench_chat_segments.py`、`tests/test_workbench_frontend_logic.py` 与版本号一致。
+
 ## [0.6.1] - 2026-07-01
 
 0.6.1 是 `0.6.0` 之后的正式维护版本，重点补齐浏览器自动化能力、桌面 Quick Chat 常驻体验、文档站与若干运行时稳定性修复。本版本为稳定 release，不是 beta / prerelease。
