@@ -355,6 +355,12 @@ function wbcErrorText(err) {
   if (!raw || raw === "Load failed" || raw === "Failed to fetch" || raw === "NetworkError when attempting to fetch resource.") {
     return wbcT("workbenchChat.error.loadFailed", "Load failed");
   }
+  // Budget errors: translate via i18n key from the code field
+  var code = (err && err.code) || "";
+  if (code.startsWith("budget_")) {
+    var i18nKey = "budget.error." + ({ budget_monthly_exhausted: "monthly", budget_weekly_exhausted: "weekly", budget_5h_exhausted: "5h" }[code] || "5h");
+    return wbcT(i18nKey, raw);
+  }
   return raw;
 }
 
@@ -1718,6 +1724,8 @@ function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, o
         chat={chat}
         project={project}
         running={running}
+        error={error}
+        errorKind={errorKind}
         onSend={onSend}
         onInterrupt={onInterrupt}
       />
@@ -2294,7 +2302,7 @@ function wbcSaveWorkspaceOverride(key, path, ns) {
   } catch (e) {}
 }
 
-function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespace, autoFocus, clearOnSend }) {
+function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind }) {
   var model = window.WorkbenchChatModel;
   var chatId = chat ? chat.id : "";
   var projectId = (project && project.id) || "";
@@ -2326,6 +2334,9 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespa
   var prevChatIdRef = useWbcRef(chatId);
   var workspaceOverrideRef = useWbcRef(workspaceOverride);
   var prevWorkspaceContextKeyRef = useWbcRef(workspaceContextKey);
+  // Last payload snapshot for optimistic clear with restore on error
+  var lastSentRef = useWbcRef(null);
+  var prevRunningRef = useWbcRef(running);
 
   useWbcEffect(function () { draftRef.current = draft; });
   useWbcEffect(function () { attachRef.current = attachments; });
@@ -2382,6 +2393,24 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespa
     prevWorkspaceContextKeyRef.current = workspaceContextKey;
   }, [workspaceContextKey]);
 
+  // Track running→false transitions where an error occurred to restore the draft
+  // that was optimistically cleared in submit() — only for the main chat surface
+  // (shouldClearOnSend is true) and only for message-kind errors.
+  useWbcEffect(function () {
+    var wasRunning = prevRunningRef.current;
+    prevRunningRef.current = running;
+    if (wasRunning && !running && lastSentRef.current && shouldClearOnSend) {
+      var isSendError = error && (errorKind === "message" || (errorKind === "load" && error));
+      if (isSendError) {
+        var saved = lastSentRef.current;
+        setDraft(saved.message || "");
+        setAttachments(saved.attachments || []);
+        if (saved.command) setCommand(saved.command);
+      }
+      lastSentRef.current = null;
+    }
+  }, [running, error, errorKind]);
+
   useWbcEffect(function () {
     function onChatCreated(event) {
       var detail = (event && event.detail) || {};
@@ -2417,12 +2446,12 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespa
     var text = draft.trim();
     if (!text && attachments.length === 0) return;
     var payload = { message: text, attachments: attachments, mode: mode, command: command };
-    // The quick-chat surface keeps the draft until the send is acknowledged (it
-    // closes its window on success), so a failed send leaves the text + the
-    // attachments intact for a retry. The main chat clears optimistically.
+    // Optimistically clear on send; restored in the running-transition effect
+    // if the send fails (error). The quick-chat surface passes clearOnSend=false
+    // and manages its own draft lifecycle.
     if (shouldClearOnSend) {
+      lastSentRef.current = payload;
       setDraft("");
-      if (taRef.current) taRef.current.style.height = "";
       setAttachments([]);
       setCommand("");
     }

@@ -5849,26 +5849,30 @@ def _workbench_resolve_workspace_dir(project: dict[str, Any] | None) -> str:
         return ""
 
 
-async def _check_budget_gate(session_id: str) -> str | None:
-    """Shared budget gate.  Returns ``None`` if OK, or an error message (caller
-    should stop the request and surface this to the user)."""
+async def _check_budget_gate(session_id: str) -> dict | None:
+    """Shared budget gate.  Returns ``None`` if OK, or a dict
+    ``{"error": str, "code": str}`` describing why the request is blocked."""
     from cyrene.settings_store import get_all as _get_all_settings
     from cyrene.budget import check_budget_and_block as _check_budget
     from cyrene.budget import _start_budget_windows
 
     settings = _get_all_settings()
     monthly = float(settings.get("budget_monthly") or 0)
-    blocked = await _check_budget(
+    result = await _check_budget(
         _db_path or str(DB_PATH),
         monthly=monthly,
         enabled=bool(settings.get("budget_enabled", False)),
     )
-    if blocked:
-        logger.warning("Budget block for %s: %s", session_id, blocked)
+    if result:
+        blocked = {"error": result["message"], "code": result["code"]}
+        logger.warning("Budget block for %s: %s", session_id, result["code"])
     elif monthly > 0:
         # Start hard-reset windows for any request that passes the gate,
         # regardless of budget action (warn/block) or enabled state.
         _start_budget_windows()
+        return None
+    else:
+        return None
     return blocked
 
 
@@ -7115,7 +7119,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         # ── Budget gate ──
         _bgt = await _check_budget_gate(question_id)
         if _bgt:
-            return JSONResponse({"error": _bgt}, status_code=403)
+            return JSONResponse(_bgt, status_code=403)
 
         try:
             if wants_stream:
@@ -10058,6 +10062,12 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         command = str(body.get("command") or "")
         if not user_input and not attachments:
             return JSONResponse({"error": "input is required"}, status_code=400)
+
+        # ── Budget gate ──
+        _bgt = await _check_budget_gate(session_id)
+        if _bgt:
+            return JSONResponse(_bgt, status_code=403)
+
         payload = _read_workbench_store()
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
@@ -10256,6 +10266,12 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         command = str(body.get("command") or "")
         if not message and not attachments:
             return JSONResponse({"error": "message is required"}, status_code=400)
+
+        # ── Budget gate ──
+        _bgt = await _check_budget_gate(session_id)
+        if _bgt:
+            return JSONResponse(_bgt, status_code=403)
+
         payload = _read_workbench_store()
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
@@ -10346,7 +10362,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         # ── Budget gate at dispatch entry (before any LLM call) ──
         _bgt = await _check_budget_gate(session_id)
         if _bgt:
-            return JSONResponse({"error": _bgt}, status_code=403)
+            return JSONResponse(_bgt, status_code=403)
 
         # Snapshot task-meta before any mutation so we can later detect what the
         # agent changed mid-run via set_task_goal and avoid clobbering it.

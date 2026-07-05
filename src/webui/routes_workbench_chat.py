@@ -1826,6 +1826,12 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         if not retry and not message and not normalized:
             return JSONResponse({"error": "message is required"}, status_code=400)
 
+        # ── Budget gate ──
+        from webui.routes import _check_budget_gate as _chat_budget_gate
+        _bgt = await _chat_budget_gate(chat_id)
+        if _bgt:
+            return JSONResponse(_bgt, status_code=403)
+
         payload = _read_chats_store()
         chat = _find_chat(payload, chat_id)
         if not chat:

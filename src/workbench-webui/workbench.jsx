@@ -2556,6 +2556,14 @@ function useTaskController(session, onRefresh, runtime) {
         return store;
       }).catch(function (err) {
         rethrowPlanConflict(err);
+        // Budget errors: show toast and return sentinel so the composer
+        // keeps the user's input in the draft instead of clearing it.
+        var code = err.code || (err.payload && err.payload.code) || "";
+        if (code.startsWith("budget_")) {
+          var i18nKey = "budget.error." + ({ budget_monthly_exhausted: "monthly", budget_weekly_exhausted: "weekly", budget_5h_exhausted: "5h" }[code] || "5h");
+          window.showToast(wbT(i18nKey, err.message || ""), "error");
+          return { __budgetBlock: true };
+        }
         var goal = (session.goal || input).trim();
         return patch({
           status: "planning",
@@ -4674,13 +4682,11 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
   }
 
   function dispatch(text) {
-    resetDraft();
-    // The composer is always a free conversation: every message goes through the
-    // intent-aware dispatch so the agent decides — answer / act / create-or-revise
-    // the plan — regardless of whether a plan already exists. (A live run is
-    // intercepted earlier in submit() where the send button becomes the stop
-    // control; explicit plan ops still live on the plan chips/buttons.)
-    if (!running) controller.send(text);
+    // Don't clear draft yet — wait for the send promise so the user's
+    // input stays in the composer if the request is blocked (budget etc.).
+    if (!running) controller.send(text).then(function (r) {
+      if (!r || !r.__budgetBlock) resetDraft();
+    });
   }
 
   function submit() {

@@ -233,6 +233,24 @@ def _window_refresh_at(ws: datetime | None, window_hours: int) -> str:
     return (ws + timedelta(hours=window_hours)).isoformat()
 
 
+def _smooth_window_budget(
+    prev_budget: float,
+    target_raw: float,
+    remaining: float,
+) -> float:
+    """Smooth the budget at a hard-reset window boundary.
+
+    Blends the previous window's budget with the new raw target (50:50) so
+    high pressure from the prior period doesn't cause an abrupt drop when
+    the window resets.  The blended value is then capped at *remaining*.
+    """
+    if prev_budget > 0:
+        blended = prev_budget * 0.5 + target_raw * 0.5
+    else:
+        blended = target_raw
+    return min(blended, remaining)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -295,12 +313,14 @@ async def get_budget_state(
         # remaining_hours decays), confusing the user.
         remaining = monthly - conv(monthly_spent, currency)
         if not weekly_ws and remaining > 0 and prev.weekly_target_raw > 0:
-            prev.weekly_budget = min(prev.weekly_target_raw, remaining)
+            prev.weekly_budget = _smooth_window_budget(
+                prev.weekly_budget, prev.weekly_target_raw, remaining,
+            )
         if not five_hour_ws and remaining > 0 and prev.five_hour_target_raw > 0:
             prev.five_hour_budget = min(
                 prev.five_hour_target_raw,
-                remaining * 0.15,
-                max(prev.weekly_budget - prev.weekly_spent, 0.0) * 0.35,
+                remaining * 0.30,
+                max(prev.weekly_budget - prev.weekly_spent, 0.0) * 0.55,
             )
         return _build_response(prev)
 
@@ -346,12 +366,16 @@ async def get_budget_state(
         # Recalculate budgets for INACTIVE windows (next window's budget).
         remaining = monthly - monthly_spent
         if not weekly_ws and state.weekly_target_raw > 0:
-            state.weekly_budget = min(state.weekly_target_raw, remaining)
+            state.weekly_budget = _smooth_window_budget(
+                prev.weekly_budget if prev else 0.0,
+                state.weekly_target_raw,
+                remaining,
+            )
         if not five_hour_ws and state.five_hour_target_raw > 0:
             state.five_hour_budget = min(
                 state.five_hour_target_raw,
-                remaining * 0.15,
-                max(state.weekly_budget - weekly_spent, 0.0) * 0.35,
+                remaining * 0.30,
+                max(state.weekly_budget - weekly_spent, 0.0) * 0.55,
             )
     except Exception:
         if prev is not None:
@@ -384,8 +408,9 @@ async def get_budget_state(
     return _build_response(state)
 
 
-async def check_budget_and_block(db_path: str, monthly: float, enabled: bool) -> str | None:
-    """Check budget.  Return ``None`` if OK, or an error message string if blocked.
+async def check_budget_and_block(db_path: str, monthly: float, enabled: bool) -> dict | None:
+    """Check budget.  Return ``None`` if OK, or a dict ``{"code": str, "message": str}``
+    describing what was exhausted.
 
     Consults ``budget_action`` setting: ``"warn"`` always returns ``None``
     (monitoring-only), ``"block"`` (default) returns an error when a window is
@@ -407,15 +432,15 @@ async def check_budget_and_block(db_path: str, monthly: float, enabled: bool) ->
     five_hour_remaining = max(state.get("five_hour_remaining", 0), 0)
     monthly_remaining = max(state.get("monthly_remaining", 0), 0)
     if monthly_remaining <= 0:
-        return "Monthly budget exhausted — reduce spending or increase your monthly limit."
+        return {"code": "budget_monthly_exhausted", "message": "Monthly budget exhausted — reduce spending or increase your monthly limit."}
     if weekly_remaining > 0 and five_hour_remaining > 0:
         # Passed — start hard-reset windows if this is the first request
         # after a window reset/expiry.
         _start_budget_windows()
         return None
     if weekly_remaining <= 0:
-        return "Weekly budget exhausted — reduce spending or increase your monthly limit."
-    return "5-hour budget exhausted — usage is too concentrated, please wait before sending more requests."
+        return {"code": "budget_weekly_exhausted", "message": "Weekly budget exhausted — reduce spending or increase your monthly limit."}
+    return {"code": "budget_5h_exhausted", "message": "5-hour budget exhausted — usage is too concentrated, please wait before sending more requests."}
 
 
 # ---------------------------------------------------------------------------

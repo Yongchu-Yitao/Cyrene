@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 EPSILON = 1e-8
-RESERVE_FACTOR = 0.90
+RESERVE_FACTOR = 0.95
 DEFAULT_ACTIVITY_DENSITY = 0.15
 MIN_RECALCULATION_INTERVAL_SECONDS = 60.0
 
@@ -336,7 +336,7 @@ class AdaptiveBudgetController:
         # ── Weekly target ──
         weekly_base = base_rate * 168.0
         # Negative exponent: heavy usage → tighter weekly cap (conservative at week level)
-        weekly_adjust = clamp(max(pressure, EPSILON) ** -0.35, 0.65, 1.40)
+        weekly_adjust = clamp(max(pressure, EPSILON) ** -0.25, 0.85, 2.00)
         weekly_target = weekly_base * weekly_adjust
         weekly_target = min(weekly_target, remaining_budget)  # hard cap
 
@@ -346,21 +346,21 @@ class AdaptiveBudgetController:
         nominal_5h = weekly_target * 5.0 / 168.0
         density_adjust = clamp(
             (DEFAULT_ACTIVITY_DENSITY / max(activity_density, EPSILON)) ** 0.5,
-            0.70,
-            2.00,
+            0.85,
+            1.80,
         )
         five_hour_base = nominal_5h * density_adjust
         five_hour_base = clamp(
             five_hour_base,
-            weekly_target * 0.03,
-            weekly_target * 0.20,
+            weekly_target * 0.15,
+            weekly_target * 0.25,
         )
         # Historical burst profile (75th‑percentile 5h‑block spend) replaces
         # ``recent_rate * 5`` so that hitting the limit doesn't become
         # evidence for raising the limit.
         burst_reference = _calculate_burst_reference(usage_records, now)
         burst_pressure = burst_reference / max(five_hour_base, EPSILON)
-        burst_adjust = clamp(max(burst_pressure, EPSILON) ** 0.35, 0.75, 1.50)
+        burst_adjust = clamp(max(burst_pressure, EPSILON) ** 0.20, 0.85, 1.40)
         five_hour_target = five_hour_base * burst_adjust
 
         # weekly_spent is cost in last 7 days — use it for remaining cap
@@ -369,8 +369,8 @@ class AdaptiveBudgetController:
 
         five_hour_target = min(
             five_hour_target,
-            max(weekly_remaining, 0.0) * 0.35,
-            remaining_budget * 0.15,
+            max(weekly_remaining, 0.0) * 0.55,
+            remaining_budget * 0.30,
         )
 
         # ── Exhausted budget guard ──
@@ -401,8 +401,8 @@ class AdaptiveBudgetController:
         weekly_budget = min(weekly_budget, remaining_budget)
         five_hour_budget = min(
             five_hour_budget,
-            max(weekly_budget - weekly_spent, 0.0) * 0.35,
-            remaining_budget * 0.15,
+            max(weekly_budget - weekly_spent, 0.0) * 0.55,
+            remaining_budget * 0.30,
         )
 
         # ── Active‑limit floor (must be AFTER hard caps) ──
@@ -413,6 +413,14 @@ class AdaptiveBudgetController:
         if remaining_budget > 0:
             weekly_budget = max(weekly_budget, weekly_spent)
             five_hour_budget = max(five_hour_budget, five_hour_spent)
+
+        # ── Minimum floor: guarantee at least 25% of the original monthly
+        # budget per week (but no more than what's left).  This prevents the
+        # pressure-adjuster from grinding the weekly budget below a useful
+        # minimum — the user can always spend at least a quarter of their
+        # monthly allowance in any given week, giving them real flexibility
+        # even under sustained heavy usage.
+        weekly_budget = max(weekly_budget, min(monthly_budget * 0.25, remaining_budget))
 
         # ── Build state ──
 
