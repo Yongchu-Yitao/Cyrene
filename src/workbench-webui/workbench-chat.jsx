@@ -2219,11 +2219,27 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
     <React.Fragment>
       {completedSegments.map(function (segment) {
         var segmentTrace = Array.isArray(segment.progress) ? segment.progress : [];
+        var segmentMsg = segment.message || {};
+        var segmentFiles = Array.isArray(segmentMsg.attachments) ? segmentMsg.attachments : [];
+        // Tool-delivered replies (send_file etc.) carry unique content +
+        // attachments; render them as full assistant messages so the reply
+        // text and files stay visible during streaming.  State-checkpoint
+        // segments carry the same content as the ongoing streaming reply;
+        // render only the tool trace to avoid text duplication.
+        if (!segmentTrace.length && !segmentFiles.length) return null;
+        if (segmentFiles.length > 0) {
+          return (
+            <WbcAssistantMessage
+              key={segment.id}
+              msg={{ ...segmentMsg, trace: segmentTrace }}
+              onOpenFile={onOpenFile}
+            />
+          );
+        }
         return (
-          <WbcAssistantMessage
+          <WbcTraceCard
             key={segment.id}
-            msg={{ ...segment.message, trace: segmentTrace }}
-            onOpenFile={onOpenFile}
+            trace={segmentTrace}
           />
         );
       })}

@@ -150,6 +150,7 @@ _ui_round_hide_initial_detail: ContextVar[bool] = ContextVar("_ui_round_hide_ini
 _ui_round_assistant_meta: ContextVar[dict[str, Any] | None] = ContextVar("_ui_round_assistant_meta", default=None)
 _deep_research_mode: ContextVar[bool] = ContextVar("_deep_research_mode", default=False)
 _deep_research_first_round: ContextVar[bool] = ContextVar("_deep_research_first_round", default=False)
+_economy_mode: ContextVar[bool] = ContextVar("_economy_mode", default=False)
 _current_command: ContextVar[str] = ContextVar("_current_command", default="")
 _conversation_source: ContextVar[str] = ContextVar("_conversation_source", default="")
 # Map from filename (and original name without uuid prefix) → full absolute path

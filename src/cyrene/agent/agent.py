@@ -45,6 +45,7 @@ from cyrene.agent.state import (
     _DEEP_RESEARCH_LIGHT_TOOL_DEFS,
     _deep_research_first_round,
     _deep_research_mode,
+    _economy_mode,
     _emit_reply_stream_event,
     _ensure_session,
     _last_final_reply_usage,
@@ -119,6 +120,35 @@ def _wrap_final_text_from_response(wrap: dict[str, Any], messages: list[dict[str
     if _is_placeholder_reply(final_text):
         final_text = _delivery_fallback_text(messages)
     return final_text or "Done."
+
+
+def _economy_compact_messages(messages: list[dict], current_round_id: str) -> list[dict]:
+    """经济模式：清除已完成轮次的工具结果，只保留对话流。
+
+    - 保留当前轮（tool loop 进行中）的全部消息（LLM 协议需要 role:tool 配对）
+    - 清除前一轮及更早的 role:tool 消息，以及 asst 消息中的 tool_calls
+    - 只保存对话主干：user ↔ asst(纯文本回复)
+    """
+    if not messages:
+        return messages
+    result: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        msg_round = str(m.get("round_id") or "").strip()
+        # 当前轮的消息：全部保留（包括 tool 结果，LLM 协议要求）
+        if msg_round == current_round_id:
+            result.append(m)
+            continue
+        # 旧的 tool 结果：丢弃
+        if role == "tool":
+            continue
+        # 旧的 assistant 消息：去掉 tool_calls，只留文本回复
+        if role == "assistant" and m.get("tool_calls"):
+            m = {k: v for k, v in m.items() if k != "tool_calls"}
+            if not str(m.get("content") or "").strip():
+                continue  # 去掉 tool_calls 后无内容则跳过
+        result.append(m)
+    return result
 
 
 def _annotate_history_context(history: list) -> list[dict[str, Any]]:
@@ -418,6 +448,8 @@ async def _run_main_agent(
                 saved.append(dict(user_entry))
                 continue
             saved.append(message)
+        if _economy_mode.get():
+            saved = _economy_compact_messages(saved, round_id)
         return saved
 
     if has_deep_reflection_record(history):

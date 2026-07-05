@@ -70,6 +70,7 @@ from cyrene.agent.state import (
     _current_session_id,
     _deep_research_first_round,
     _deep_research_mode,
+    _economy_mode,
     _ensure_session,
     _interrupt_event,
     _LIGHT_TOOL_DEFS,
@@ -93,7 +94,7 @@ from cyrene.llm import _assistant_text, _truncate
 from cyrene.memory import get_memory_context
 from cyrene.short_term import get_context
 from cyrene.skills_registry import build_skill_prompt_block
-from cyrene.settings_store import get_spawn_policy
+from cyrene.settings_store import get as _get_setting, get_spawn_policy
 from cyrene.tools import TOOL_HANDLERS, _execute_tool, get_active_tool_defs
 
 logger = logging.getLogger(__name__)
@@ -380,6 +381,7 @@ async def _run_chat_agent(
     dr_token = None
     dr_first_token = None
     cmd_token = None
+    economy_token = None
     final_output = ""
     try:
         # 全局 short_term 只属于默认会话（旧 UI 单线程对话的跨重启恢复）。
@@ -529,6 +531,9 @@ async def _run_chat_agent(
         dr_token = _deep_research_mode.set(is_deep_research)
         dr_first_token = _deep_research_first_round.set(is_deep_research and not bool(forced_round_id))
         cmd_token = _current_command.set(command)
+        economy_token = _economy_mode.set(
+            str(_get_setting("budget_mode", "normal") or "normal").strip().lower() == "economy"
+        )
 
         if command == DEEP_REFLECT_COMMAND_ID:
             visible_command_text = str(public_user_message if public_user_message is not None else original_user_message or "/deep-reflect").strip() or "/deep-reflect"
@@ -853,6 +858,8 @@ async def _run_chat_agent(
             _deep_research_mode.reset(dr_token)
         if dr_first_token is not None:
             _deep_research_first_round.reset(dr_first_token)
+        if economy_token is not None:
+            _economy_mode.reset(economy_token)
         _ui_round_assistant_meta.reset(assistant_meta_token)
         _ui_round_hide_initial_detail.reset(hide_initial_detail_token)
         _pending_intermediate_user_replies.reset(intermediate_reply_token)
