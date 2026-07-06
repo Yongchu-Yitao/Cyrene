@@ -57,21 +57,29 @@ _MAX_PATTERN_EXAMPLES = 8
 _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS behavior_sessions (
     session_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL DEFAULT '',
+    project_key TEXT NOT NULL DEFAULT '',
+    session_kind TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     session_summary TEXT NOT NULL DEFAULT '',
     metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_behavior_sessions_updated_at ON behavior_sessions(updated_at);
+CREATE INDEX IF NOT EXISTS idx_behavior_sessions_project ON behavior_sessions(project_id, updated_at);
 
 CREATE TABLE IF NOT EXISTS behavior_turns (
     turn_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
+    project_id TEXT NOT NULL DEFAULT '',
+    project_key TEXT NOT NULL DEFAULT '',
+    session_kind TEXT NOT NULL DEFAULT '',
     round_id TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     user_message TEXT NOT NULL,
     context_summary TEXT NOT NULL DEFAULT '',
+    agent_response TEXT NOT NULL DEFAULT '',
     outcome_status TEXT NOT NULL DEFAULT 'success',
     user_feedback TEXT NOT NULL DEFAULT '',
     processed_status INTEGER NOT NULL DEFAULT 0,
@@ -80,6 +88,7 @@ CREATE TABLE IF NOT EXISTS behavior_turns (
     FOREIGN KEY (session_id) REFERENCES behavior_sessions(session_id)
 );
 CREATE INDEX IF NOT EXISTS idx_behavior_turns_session_id ON behavior_turns(session_id);
+CREATE INDEX IF NOT EXISTS idx_behavior_turns_project ON behavior_turns(project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_behavior_turns_processed_status ON behavior_turns(processed_status, created_at);
 CREATE INDEX IF NOT EXISTS idx_behavior_turns_round_id ON behavior_turns(round_id);
 
@@ -116,6 +125,8 @@ CREATE TABLE IF NOT EXISTS behavior_fingerprints (
 
 CREATE TABLE IF NOT EXISTS behavior_patterns (
     pattern_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL DEFAULT '',
+    project_key TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     prototype_fingerprint TEXT NOT NULL DEFAULT '{}',
     statistics_json TEXT NOT NULL DEFAULT '{}',
@@ -126,6 +137,7 @@ CREATE TABLE IF NOT EXISTS behavior_patterns (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_behavior_patterns_status ON behavior_patterns(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_behavior_patterns_project ON behavior_patterns(project_id, updated_at);
 
 CREATE TABLE IF NOT EXISTS behavior_pattern_turns (
     pattern_id TEXT NOT NULL,
@@ -182,6 +194,8 @@ CREATE INDEX IF NOT EXISTS idx_behavior_unknown_labels_status
 
 CREATE TABLE IF NOT EXISTS learned_skills (
     skill_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL DEFAULT '',
+    project_key TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     current_version INTEGER NOT NULL DEFAULT 1,
@@ -205,6 +219,7 @@ CREATE TABLE IF NOT EXISTS learned_skills (
 );
 CREATE INDEX IF NOT EXISTS idx_learned_skills_status ON learned_skills(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_learned_skills_pattern_id ON learned_skills(pattern_id);
+CREATE INDEX IF NOT EXISTS idx_learned_skills_project ON learned_skills(project_id, updated_at);
 
 CREATE TABLE IF NOT EXISTS learned_skill_versions (
     skill_id TEXT NOT NULL,
@@ -270,6 +285,63 @@ CREATE TABLE IF NOT EXISTS behavior_replay_tests (
 );
 CREATE INDEX IF NOT EXISTS idx_behavior_replay_tests_skill_id
     ON behavior_replay_tests(skill_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS behavior_turn_tool_chains (
+    chain_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL DEFAULT '',
+    project_key TEXT NOT NULL DEFAULT '',
+    session_id TEXT NOT NULL,
+    session_kind TEXT NOT NULL DEFAULT '',
+    turn_id TEXT NOT NULL UNIQUE,
+    round_id TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'agent',
+    chain_json TEXT NOT NULL DEFAULT '[]',
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (turn_id) REFERENCES behavior_turns(turn_id)
+);
+CREATE INDEX IF NOT EXISTS idx_behavior_turn_tool_chains_project
+    ON behavior_turn_tool_chains(project_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS behavior_browser_user_events (
+    event_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL DEFAULT '',
+    project_key TEXT NOT NULL DEFAULT '',
+    session_id TEXT NOT NULL DEFAULT '',
+    session_kind TEXT NOT NULL DEFAULT '',
+    turn_id TEXT NOT NULL DEFAULT '',
+    round_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    event_index INTEGER NOT NULL DEFAULT 0,
+    event_kind TEXT NOT NULL DEFAULT '',
+    browser_url TEXT NOT NULL DEFAULT '',
+    browser_title TEXT NOT NULL DEFAULT '',
+    target_json TEXT NOT NULL DEFAULT '{}',
+    payload_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_behavior_browser_user_events_turn
+    ON behavior_browser_user_events(turn_id, event_index);
+CREATE INDEX IF NOT EXISTS idx_behavior_browser_user_events_project
+    ON behavior_browser_user_events(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS behavior_learning_agent_reviews (
+    review_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL DEFAULT '',
+    project_key TEXT NOT NULL DEFAULT '',
+    turn_id TEXT NOT NULL,
+    chain_id TEXT NOT NULL DEFAULT '',
+    decision TEXT NOT NULL DEFAULT '',
+    confidence REAL NOT NULL DEFAULT 0,
+    rationale TEXT NOT NULL DEFAULT '',
+    proposed_skill_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_behavior_learning_agent_reviews_turn
+    ON behavior_learning_agent_reviews(turn_id);
+CREATE INDEX IF NOT EXISTS idx_behavior_learning_agent_reviews_project
+    ON behavior_learning_agent_reviews(project_id, updated_at DESC);
 """
 
 _CORE_DOMAINS = {
@@ -360,6 +432,9 @@ _TOOL_ACTION_MAP: dict[str, tuple[str, str, str, int]] = {
     "pause_task": ("schedule_management", "manage_schedule", "pause_task", 0),
     "resume_task": ("schedule_management", "manage_schedule", "resume_task", 0),
     "cancel_task": ("schedule_management", "manage_schedule", "cancel_task", 0),
+    "StartShell": ("system_operation", "run_command", "start_shell", 0),
+    "SendShell": ("system_operation", "run_command", "send_shell", 0),
+    "CloseShell": ("system_operation", "manage_state", "close_shell", 0),
     "start_shell": ("system_operation", "run_command", "start_shell", 0),
     "send_shell": ("system_operation", "run_command", "send_shell", 0),
     "close_shell": ("system_operation", "manage_state", "close_shell", 0),
@@ -400,6 +475,12 @@ _AUTO_REPLAY_BLOCKED_TOOLS: frozenset[str] = frozenset({
     "ask_user",
     "send_message",
     "send_message_to_user",
+    "browser.user.control_start",
+    "browser.user.control_stop",
+    "browser.user.click",
+    "browser.user.scroll",
+    "browser.user.key",
+    "browser.user.text",
 })
 
 # Tools that carry meaningful side-effects and must never be replayed silently.
@@ -407,7 +488,7 @@ _AUTO_REPLAY_BLOCKED_TOOLS: frozenset[str] = frozenset({
 # the skill router falls back to the normal agent loop instead of auto-executing.
 _HIGH_RISK_TOOLS: frozenset[str] = frozenset({
     # Arbitrary shell / command execution
-    "Bash", "run_shell", "run_command", "start_shell", "send_shell",
+    "Bash", "run_shell", "run_command", "StartShell", "SendShell", "start_shell", "send_shell",
     # File write operations (outside-workspace risk)
     "Write", "write_file", "Edit", "edit_file",
     # Persistent scheduled task creation
@@ -897,6 +978,33 @@ async def _ensure_tables() -> None:
             await conn.commit()
         except Exception:
             pass
+        for table, columns in {
+            "behavior_sessions": [
+                ("project_id", "TEXT NOT NULL DEFAULT ''"),
+                ("project_key", "TEXT NOT NULL DEFAULT ''"),
+                ("session_kind", "TEXT NOT NULL DEFAULT ''"),
+            ],
+            "behavior_turns": [
+                ("project_id", "TEXT NOT NULL DEFAULT ''"),
+                ("project_key", "TEXT NOT NULL DEFAULT ''"),
+                ("session_kind", "TEXT NOT NULL DEFAULT ''"),
+                ("agent_response", "TEXT NOT NULL DEFAULT ''"),
+            ],
+            "behavior_patterns": [
+                ("project_id", "TEXT NOT NULL DEFAULT ''"),
+                ("project_key", "TEXT NOT NULL DEFAULT ''"),
+            ],
+            "learned_skills": [
+                ("project_id", "TEXT NOT NULL DEFAULT ''"),
+                ("project_key", "TEXT NOT NULL DEFAULT ''"),
+            ],
+        }.items():
+            for column, decl in columns:
+                try:
+                    await conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+                    await conn.commit()
+                except Exception:
+                    pass
 
 
 async def _seed_core_vocabulary() -> None:
@@ -952,6 +1060,96 @@ def _pattern_dir() -> Path:
     return path
 
 
+def _project_scope_for_session(session_id: str | None) -> dict[str, str]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"project_id": "global", "project_key": "global", "session_kind": "global"}
+    try:
+        from cyrene.workbench_context import (
+            resolve_project_data_key_for_session,
+            resolve_workbench_project_id_for_session,
+            resolve_workbench_session_kind,
+        )
+
+        project_id = str(resolve_workbench_project_id_for_session(sid) or "").strip()
+        project_key = str(resolve_project_data_key_for_session(sid) or "").strip()
+        session_kind = str(resolve_workbench_session_kind(sid) or "").strip()
+    except Exception:
+        project_id = ""
+        project_key = ""
+        session_kind = ""
+    project_id = project_id or project_key or "global"
+    project_key = project_key or project_id
+    # When falling back to dataKey, resolve to project UUID so stored
+    # project_id is consistent with _learning_project_id in routes.py
+    # (which resolves dataKey -> UUID). Without this, a project whose
+    # dataKey == "default" but UUID != "default" would never see chains
+    # from non-project-scoped sessions.
+    if project_id == project_key and project_key:
+        try:
+            from cyrene.workbench_context import _read_projects as _resolve_projects
+            for _p in _resolve_projects():
+                if str(_p.get("dataKey") or "") == project_key:
+                    _resolved = str(_p.get("id") or "").strip()
+                    if _resolved:
+                        project_id = _resolved
+                        break
+        except Exception:
+            pass
+    return {
+        "project_id": project_id,
+        "project_key": project_key,
+        "session_kind": session_kind or "global",
+    }
+
+
+async def _project_scope_for_turn(turn_id: str) -> dict[str, str]:
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            "SELECT session_id, project_id, project_key, session_kind FROM behavior_turns WHERE turn_id = ?",
+            (str(turn_id or ""),),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return {"project_id": "global", "project_key": "global", "session_kind": "global"}
+    project_id = str(row["project_id"] or "").strip()
+    project_key = str(row["project_key"] or "").strip()
+    session_kind = str(row["session_kind"] or "").strip()
+    if project_id and project_key:
+        return {"project_id": project_id, "project_key": project_key, "session_kind": session_kind or "global"}
+    return _project_scope_for_session(str(row["session_id"] or ""))
+
+
+async def _latest_turn_for_session_round(session_id: str, round_id: str = "") -> str:
+    sid = str(session_id or "").strip()
+    rid = str(round_id or "").strip()
+    if not sid:
+        return ""
+    async with _conn() as conn:
+        if rid:
+            cursor = await conn.execute(
+                """
+                SELECT turn_id FROM behavior_turns
+                WHERE session_id = ? AND round_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (sid, rid),
+            )
+        else:
+            cursor = await conn.execute(
+                """
+                SELECT turn_id FROM behavior_turns
+                WHERE session_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (sid,),
+            )
+        row = await cursor.fetchone()
+    return str(row["turn_id"] or "") if row is not None else ""
+
+
 async def begin_turn(
     *,
     session_id: str,
@@ -965,6 +1163,7 @@ async def begin_turn(
     now = _now_iso()
     normalized_session_id = str(session_id or "").strip() or _new_id("session")
     normalized_round_id = str(round_id or "").strip() or _new_id("round")
+    scope = _project_scope_for_session(normalized_session_id)
     turn_id = _new_id("turn")
     feedback = _turn_feedback_from_message(user_message)
     context_summary = _history_summary(history)
@@ -984,25 +1183,36 @@ async def begin_turn(
             await conn.execute(
                 """
                 INSERT INTO behavior_sessions
-                (session_id, created_at, updated_at, session_summary, metadata_json)
-                VALUES (?, ?, ?, ?, ?)
+                (session_id, project_id, project_key, session_kind, created_at, updated_at, session_summary, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     normalized_session_id,
+                    scope["project_id"],
+                    scope["project_key"],
+                    scope["session_kind"],
                     now,
                     now,
                     _truncate_text(session_title or user_message, 240),
-                    _json_dumps({"source": "live_session"}),
+                    _json_dumps({"source": "live_session", **scope}),
                 ),
             )
         else:
             await conn.execute(
                 """
                 UPDATE behavior_sessions
-                SET updated_at = ?, session_summary = COALESCE(NULLIF(?, ''), session_summary)
+                SET project_id = ?, project_key = ?, session_kind = ?,
+                    updated_at = ?, session_summary = COALESCE(NULLIF(?, ''), session_summary)
                 WHERE session_id = ?
                 """,
-                (now, _truncate_text(session_title, 240), normalized_session_id),
+                (
+                    scope["project_id"],
+                    scope["project_key"],
+                    scope["session_kind"],
+                    now,
+                    _truncate_text(session_title, 240),
+                    normalized_session_id,
+                ),
             )
         if feedback:
             cursor = await conn.execute(
@@ -1030,19 +1240,22 @@ async def begin_turn(
         await conn.execute(
             """
             INSERT INTO behavior_turns
-            (turn_id, session_id, round_id, created_at, updated_at, user_message, context_summary,
-             outcome_status, user_feedback, processed_status, linked_skill_id, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'success', '', 0, '', ?)
+            (turn_id, session_id, project_id, project_key, session_kind, round_id, created_at, updated_at, user_message, context_summary,
+             agent_response, outcome_status, user_feedback, processed_status, linked_skill_id, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'success', '', 0, '', ?)
             """,
             (
                 turn_id,
                 normalized_session_id,
+                scope["project_id"],
+                scope["project_key"],
+                scope["session_kind"],
                 normalized_round_id,
                 now,
                 now,
                 str(user_message or ""),
                 context_summary,
-                _json_dumps(metadata),
+                _json_dumps({**metadata, **scope}),
             ),
         )
         await conn.commit()
@@ -1070,6 +1283,138 @@ def clear_turn_context(context: dict[str, Any]) -> None:
 
 def current_turn_id() -> str:
     return _current_turn_id.get()
+
+
+def _chain_item_from_action(row: dict[str, Any]) -> dict[str, Any]:
+    meta = row.get("metadata_json") or {}
+    return {
+        "id": str(row.get("action_id") or ""),
+        "source": "agent",
+        "index": int(row.get("action_index") or 0),
+        "tool": str(row.get("tool_name") or ""),
+        "type": str(row.get("action_type") or ""),
+        "subtype": str(row.get("action_subtype") or ""),
+        "domain": str(meta.get("action_domain") or ""),
+        "args": meta.get("raw_args") or {},
+        "input_summary": str(row.get("input_summary") or ""),
+        "output_summary": str(row.get("output_summary") or ""),
+        "success": bool(row.get("success")),
+        "duration_ms": float(meta.get("duration_ms") or 0),
+        "created_at": str(row.get("created_at") or ""),
+    }
+
+
+def _chain_item_from_browser_event(row: dict[str, Any]) -> dict[str, Any]:
+    payload = _json_loads(row.get("payload_json"), {})
+    target = _json_loads(row.get("target_json"), {})
+    return {
+        "id": str(row.get("event_id") or ""),
+        "source": "user_browser",
+        "index": int(row.get("event_index") or 0),
+        "tool": "browser.user." + str(row.get("event_kind") or "event"),
+        "type": "browser_user_operation",
+        "subtype": str(row.get("event_kind") or "event"),
+        "domain": "browser_operation",
+        "args": payload,
+        "target": target,
+        "url": str(row.get("browser_url") or ""),
+        "title": str(row.get("browser_title") or ""),
+        "success": True,
+        "created_at": str(row.get("created_at") or ""),
+    }
+
+
+async def _rebuild_tool_chain_for_turn(turn_id: str) -> dict[str, Any] | None:
+    tid = str(turn_id or "").strip()
+    if not tid:
+        return None
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            """
+            SELECT turn_id, session_id, project_id, project_key, session_kind, round_id, created_at
+            FROM behavior_turns
+            WHERE turn_id = ?
+            """,
+            (tid,),
+        )
+        turn_row = await cursor.fetchone()
+        if turn_row is None:
+            return None
+        cursor = await conn.execute(
+            """
+            SELECT *
+            FROM behavior_actions
+            WHERE turn_id = ?
+            ORDER BY action_index ASC
+            """,
+            (tid,),
+        )
+        action_rows = [dict(row) for row in await cursor.fetchall()]
+        cursor = await conn.execute(
+            """
+            SELECT *
+            FROM behavior_browser_user_events
+            WHERE turn_id = ?
+            ORDER BY event_index ASC, created_at ASC
+            """,
+            (tid,),
+        )
+        browser_rows = [dict(row) for row in await cursor.fetchall()]
+        now = _now_iso()
+        actions = []
+        for row in action_rows:
+            row["metadata_json"] = _json_loads(row.get("metadata_json"), {})
+            actions.append(_chain_item_from_action(row))
+        browser_events = [_chain_item_from_browser_event(row) for row in browser_rows]
+        chain = sorted(
+            [*actions, *browser_events],
+            key=lambda item: (str(item.get("created_at") or ""), str(item.get("source") or ""), int(item.get("index") or 0)),
+        )
+        sources = sorted({str(item.get("source") or "") for item in chain if item.get("source")})
+        summary = {
+            "total_steps": len(chain),
+            "agent_steps": len(actions),
+            "browser_user_steps": len(browser_events),
+            "sources": sources,
+            "success_steps": sum(1 for item in chain if item.get("success")),
+            "failed_steps": sum(1 for item in chain if not item.get("success")),
+            "tool_names": [str(item.get("tool") or "") for item in chain],
+        }
+        source = "mixed" if len(sources) > 1 else (sources[0] if sources else "agent")
+        await conn.execute(
+            """
+            INSERT INTO behavior_turn_tool_chains
+            (chain_id, project_id, project_key, session_id, session_kind, turn_id, round_id, source,
+             chain_json, summary_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(turn_id) DO UPDATE SET
+                project_id = excluded.project_id,
+                project_key = excluded.project_key,
+                session_id = excluded.session_id,
+                session_kind = excluded.session_kind,
+                round_id = excluded.round_id,
+                source = excluded.source,
+                chain_json = excluded.chain_json,
+                summary_json = excluded.summary_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                "chain:" + tid,
+                str(turn_row["project_id"] or ""),
+                str(turn_row["project_key"] or ""),
+                str(turn_row["session_id"] or ""),
+                str(turn_row["session_kind"] or ""),
+                tid,
+                str(turn_row["round_id"] or ""),
+                source,
+                _json_dumps(chain),
+                _json_dumps(summary),
+                str(turn_row["created_at"] or now),
+                now,
+            ),
+        )
+        await conn.commit()
+    return {"chain": chain, "summary": summary}
 
 
 def _map_tool_to_action(tool_name: str) -> tuple[str, str, str, int]:
@@ -1110,7 +1455,8 @@ async def record_action(
                 (turn_id,),
             )
             row = await cursor.fetchone()
-            next_index = int(row["max_idx"] or -1) + 1
+            max_idx = row["max_idx"] if row is not None else None
+            next_index = (int(max_idx) + 1) if max_idx is not None else 0
             await conn.execute(
                 """
                 INSERT INTO behavior_actions
@@ -1145,11 +1491,82 @@ async def record_action(
                 (now, session_id),
             )
             await conn.commit()
+        await _rebuild_tool_chain_for_turn(turn_id)
     except Exception:
         # Behaviour-learning is fire-and-forget telemetry: a write failure here
         # (e.g. a transient "database is locked") must never propagate and turn
         # a successful tool call into a failure. Log and drop.
         logger.debug("record_action telemetry write failed (ignored)", exc_info=True)
+
+
+async def record_browser_user_event(
+    *,
+    session_id: str = "",
+    round_id: str = "",
+    event_kind: str,
+    payload: dict[str, Any] | None = None,
+    browser_url: str = "",
+    browser_title: str = "",
+    target: dict[str, Any] | None = None,
+) -> None:
+    sid = str(session_id or _current_session_id.get() or "").strip()
+    rid = str(round_id or _current_round_id.get() or "").strip()
+    if not sid:
+        sid = _new_id("browser_session")
+    turn_id = await _latest_turn_for_session_round(sid, rid)
+    if not turn_id:
+        ctx = await begin_turn(
+            session_id=sid,
+            round_id=rid or _new_id("browser_round"),
+            user_message="用户接管内置浏览器并执行操作。",
+            history=[],
+            session_title="Browser user operation",
+        )
+        turn_id = str(ctx["turn_id"])
+        clear_turn_context(ctx)
+    scope = await _project_scope_for_turn(turn_id)
+    now = _now_iso()
+    try:
+        async with _conn() as conn:
+            cursor = await conn.execute(
+                "SELECT COALESCE(MAX(event_index), -1) AS max_idx FROM behavior_browser_user_events WHERE turn_id = ?",
+                (turn_id,),
+            )
+            row = await cursor.fetchone()
+            max_idx = row["max_idx"] if row is not None else None
+            next_index = (int(max_idx) + 1) if max_idx is not None else 0
+            await conn.execute(
+                """
+                INSERT INTO behavior_browser_user_events
+                (event_id, project_id, project_key, session_id, session_kind, turn_id, round_id, created_at,
+                 event_index, event_kind, browser_url, browser_title, target_json, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    _new_id("browser_event"),
+                    scope["project_id"],
+                    scope["project_key"],
+                    sid,
+                    scope["session_kind"],
+                    turn_id,
+                    rid,
+                    now,
+                    next_index,
+                    str(event_kind or "event"),
+                    _truncate_text(browser_url, 500),
+                    _truncate_text(browser_title, 240),
+                    _json_dumps(target or {}),
+                    _json_dumps(payload or {}),
+                ),
+            )
+            await conn.execute(
+                "UPDATE behavior_turns SET updated_at = ?, processed_status = 0 WHERE turn_id = ?",
+                (now, turn_id),
+            )
+            await conn.commit()
+        await _rebuild_tool_chain_for_turn(turn_id)
+    except Exception:
+        logger.debug("browser user event learning write failed (ignored)", exc_info=True)
 
 
 async def mark_turn_skill_routed(skill_id: str) -> None:
@@ -1208,10 +1625,10 @@ async def complete_turn(
         await conn.execute(
             """
             UPDATE behavior_turns
-            SET updated_at = ?, outcome_status = ?, metadata_json = ?
+            SET updated_at = ?, outcome_status = ?, agent_response = ?, metadata_json = ?
             WHERE turn_id = ?
             """,
-            (now, outcome, _json_dumps(metadata), turn_id),
+            (now, outcome, str(assistant_response or ""), _json_dumps(metadata), turn_id),
         )
         if session_title:
             await conn.execute(
@@ -1694,6 +2111,11 @@ async def build_turn_fingerprint(turn_id: str) -> dict[str, Any]:
     if turn_row is None:
         return {}
     action_rows = await _action_rows_for_turn(turn_id)
+    chain_snapshot = await _load_tool_chain_for_turn(turn_id)
+    browser_chain_items = [
+        item for item in (chain_snapshot.get("chain") or [])
+        if str((item or {}).get("source") or "") == "user_browser"
+    ]
     action_summary = []
     deterministic_actions = []
     deterministic_entities: list[str] = []
@@ -1718,6 +2140,27 @@ async def build_turn_fingerprint(turn_id: str) -> dict[str, Any]:
                 "type": str(row["action_type"]),
                 "subtype": str(row["action_subtype"]),
                 "raw_description": str(row["tool_name"]),
+            }
+        )
+    for item in browser_chain_items:
+        payload = item.get("args") or {}
+        deterministic_entities.extend(_normalize_entities(list(payload.values())))
+        action_summary.append(
+            {
+                "tool_name": item.get("tool"),
+                "action_type": item.get("type"),
+                "action_subtype": item.get("subtype"),
+                "input_summary": _truncate_text(_json_dumps(payload), 500),
+                "output_summary": item.get("url") or "",
+                "success": True,
+            }
+        )
+        deterministic_actions.append(
+            {
+                "domain": "browser_operation",
+                "type": "browser_user_operation",
+                "subtype": str(item.get("subtype") or "event"),
+                "raw_description": str(item.get("tool") or "browser.user.event"),
             }
         )
     prompt = f"""You are building a structured behavior fingerprint for an autonomous coding agent turn.
@@ -1755,6 +2198,11 @@ JSON only.
     )
     if not payload:
         payload = heuristic_fp
+        payload["action_sequence"] = deterministic_actions or payload.get("action_sequence") or []
+        if deterministic_actions:
+            payload["input_type"] = heuristic_fp.get("input_type")
+            payload["output_type"] = heuristic_fp.get("output_type")
+        payload["entities"] = _normalize_entities(list(payload.get("entities") or []) + deterministic_entities)
     else:
         if not isinstance(payload.get("intent"), dict):
             payload["intent"] = {}
@@ -1781,6 +2229,8 @@ JSON only.
         merged_entities.extend(deterministic_entities)
         payload["entities"] = _normalize_entities(merged_entities)
     fingerprint = await normalize_fingerprint(payload, turn_id=turn_id)
+    if deterministic_actions:
+        fingerprint["action_sequence"] = _compress_action_sequence(deterministic_actions)
     now = _now_iso()
     async with _conn() as conn:
         await conn.execute(
@@ -2315,14 +2765,16 @@ async def _upsert_pattern(pattern_id: str) -> None:
 
 
 async def _merge_turn_into_pattern(turn_id: str, fingerprint: dict[str, Any]) -> tuple[str, bool]:
+    scope = await _project_scope_for_turn(turn_id)
     async with _conn() as conn:
         cursor = await conn.execute(
             """
             SELECT pattern_id, prototype_fingerprint
             FROM behavior_patterns
-            WHERE status != 'deprecated'
+            WHERE status != 'deprecated' AND project_id = ?
             ORDER BY updated_at DESC
-            """
+            """,
+            (scope["project_id"],),
         )
         rows = await cursor.fetchall()
     best_pattern_id = ""
@@ -2364,11 +2816,13 @@ async def _merge_turn_into_pattern(turn_id: str, fingerprint: dict[str, Any]) ->
             await conn.execute(
                 """
                 INSERT INTO behavior_patterns
-                (pattern_id, description, prototype_fingerprint, statistics_json, skillability_json, status, linked_skill_list, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'candidate', '[]', ?, ?)
+                (pattern_id, project_id, project_key, description, prototype_fingerprint, statistics_json, skillability_json, status, linked_skill_list, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'candidate', '[]', ?, ?)
                 """,
                 (
                     pattern_id,
+                    scope["project_id"],
+                    scope["project_key"],
                     _pattern_description(fingerprint),
                     _json_dumps(fingerprint),
                     _json_dumps(_default_pattern_stats()),
@@ -2416,6 +2870,19 @@ async def _derive_parameter_templates(turn_ids: list[str]) -> tuple[list[dict[st
                     "action_type": action["action_type"],
                     "action_subtype": action["action_subtype"],
                     "args": metadata.get("raw_args") or {},
+                }
+            )
+        chain = await _load_tool_chain_for_turn(turn_id)
+        for item in chain.get("chain") or []:
+            if str((item or {}).get("source") or "") != "user_browser":
+                continue
+            tool_name = str(item.get("tool") or "browser.user.event")
+            group.append(
+                {
+                    "tool_name": tool_name,
+                    "action_type": "browser_user_operation",
+                    "action_subtype": str(item.get("subtype") or "event"),
+                    "args": item.get("args") or {},
                 }
             )
         if group:
@@ -2761,6 +3228,8 @@ def _skill_row_to_definition(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any
     data = dict(row)
     return {
         "skill_id": data["skill_id"],
+        "project_id": data.get("project_id", ""),
+        "project_key": data.get("project_key", ""),
         "name": data["name"],
         "description": data["description"],
         "version": int(data["current_version"]),
@@ -2843,7 +3312,7 @@ async def _insert_replay_tests(conn: aiosqlite.Connection, skill_id: str, turn_i
 async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
     async with _conn() as conn:
         cursor = await conn.execute(
-            "SELECT statistics_json, skillability_json FROM behavior_patterns WHERE pattern_id = ?",
+            "SELECT statistics_json, skillability_json, project_id, project_key FROM behavior_patterns WHERE pattern_id = ?",
             (pattern_id,),
         )
         pattern_row = await cursor.fetchone()
@@ -2874,13 +3343,15 @@ async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
         await conn.execute(
             """
             INSERT INTO learned_skills
-            (skill_id, name, description, current_version, status, skill_type, risk_level, requires_llm,
+            (skill_id, project_id, project_key, name, description, current_version, status, skill_type, risk_level, requires_llm,
              trigger_json, input_schema_json, parameter_extractor_json, steps_json, guards_json, fallback_policy_json,
              tests_json, editable_fields_json, created_from_json, run_statistics_json, pattern_id, created_at, updated_at)
-            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 skill_id,
+                str(pattern_row["project_id"] or ""),
+                str(pattern_row["project_key"] or ""),
                 definition["name"],
                 definition["description"],
                 definition["status"],
@@ -2904,6 +3375,8 @@ async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
         )
         persisted = {
             "skill_id": skill_id,
+            "project_id": str(pattern_row["project_id"] or ""),
+            "project_key": str(pattern_row["project_key"] or ""),
             **definition,
             "version": 1,
             "run_statistics": _default_skill_stats(),
@@ -2925,15 +3398,22 @@ async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
     return skill_id
 
 
-async def learn_skill_from_pattern(pattern_id: str) -> dict[str, Any]:
+async def learn_skill_from_pattern(pattern_id: str, project_id: str = "") -> dict[str, Any]:
     pid = str(pattern_id or "").strip()
+    scoped_project_id = str(project_id or "").strip()
     if not pid:
         return {"ok": False, "code": "invalid_pattern", "error": "pattern_id is required"}
     async with _conn() as conn:
-        cursor = await conn.execute(
-            "SELECT pattern_id FROM behavior_patterns WHERE pattern_id = ?",
-            (pid,),
-        )
+        if scoped_project_id:
+            cursor = await conn.execute(
+                "SELECT pattern_id FROM behavior_patterns WHERE pattern_id = ? AND project_id = ?",
+                (pid, scoped_project_id),
+            )
+        else:
+            cursor = await conn.execute(
+                "SELECT pattern_id FROM behavior_patterns WHERE pattern_id = ?",
+                (pid,),
+            )
         pattern_row = await cursor.fetchone()
         if pattern_row is None:
             return {"ok": False, "code": "pattern_not_found", "error": "Pattern not found"}
@@ -3201,11 +3681,18 @@ async def _maybe_propose_patch(skill_id: str, version: int, failure_reason: str)
     )
 
 
-async def _read_patterns() -> list[dict[str, Any]]:
+async def _read_patterns(project_id: str = "") -> list[dict[str, Any]]:
     async with _conn() as conn:
-        cursor = await conn.execute(
-            "SELECT * FROM behavior_patterns ORDER BY updated_at DESC"
-        )
+        pid = str(project_id or "").strip()
+        if pid:
+            cursor = await conn.execute(
+                "SELECT * FROM behavior_patterns WHERE project_id = ? ORDER BY updated_at DESC",
+                (pid,),
+            )
+        else:
+            cursor = await conn.execute(
+                "SELECT * FROM behavior_patterns ORDER BY updated_at DESC"
+            )
         rows = await cursor.fetchall()
     patterns: list[dict[str, Any]] = []
     for row in rows:
@@ -3218,8 +3705,8 @@ async def _read_patterns() -> list[dict[str, Any]]:
     return patterns
 
 
-async def list_patterns(status: str = "all") -> list[dict[str, Any]]:
-    patterns = await _read_patterns()
+async def list_patterns(status: str = "all", project_id: str = "") -> list[dict[str, Any]]:
+    patterns = await _read_patterns(project_id)
     if status != "all":
         patterns = [item for item in patterns if item.get("status") == status]
     result: list[dict[str, Any]] = []
@@ -3229,6 +3716,8 @@ async def list_patterns(status: str = "all") -> list[dict[str, Any]]:
         result.append(
             {
                 "id": item["pattern_id"],
+                "project_id": item.get("project_id", ""),
+                "project_key": item.get("project_key", ""),
                 "description": item.get("description", ""),
                 "status": item.get("status", ""),
                 "frequency": int(stats.get("frequency") or 0),
@@ -3246,11 +3735,18 @@ async def list_patterns(status: str = "all") -> list[dict[str, Any]]:
     return result
 
 
-async def list_learned_skills() -> list[dict[str, Any]]:
+async def list_learned_skills(project_id: str = "") -> list[dict[str, Any]]:
     async with _conn() as conn:
-        cursor = await conn.execute(
-            "SELECT * FROM learned_skills ORDER BY updated_at DESC"
-        )
+        pid = str(project_id or "").strip()
+        if pid:
+            cursor = await conn.execute(
+                "SELECT * FROM learned_skills WHERE project_id = ? ORDER BY updated_at DESC",
+                (pid,),
+            )
+        else:
+            cursor = await conn.execute(
+                "SELECT * FROM learned_skills ORDER BY updated_at DESC"
+            )
         rows = await cursor.fetchall()
     skills: list[dict[str, Any]] = []
     for row in rows:
@@ -3260,6 +3756,8 @@ async def list_learned_skills() -> list[dict[str, Any]]:
         skills.append(
             {
                 "id": definition["skill_id"],
+                "project_id": definition.get("project_id", ""),
+                "project_key": definition.get("project_key", ""),
                 "name": definition["name"],
                 "description": definition["description"],
                 "status": definition["status"],
@@ -3278,6 +3776,100 @@ async def list_learned_skills() -> list[dict[str, Any]]:
             }
         )
     return skills
+
+
+async def list_tool_chains(project_id: str | list[str] = "", limit: int = 80) -> list[dict[str, Any]]:
+    if isinstance(project_id, list):
+        pids = [str(p).strip() for p in project_id if str(p).strip()]
+    else:
+        pids = [str(project_id).strip()] if str(project_id or "").strip() else []
+    capped_limit = max(1, min(int(limit or 80), 200))
+    async with _conn() as conn:
+        if pids:
+            placeholders = ",".join("?" for _ in pids)
+            cursor = await conn.execute(
+                f"""
+                SELECT
+                    c.*,
+                    t.user_message,
+                    t.context_summary,
+                    t.agent_response,
+                    t.metadata_json AS turn_metadata_json,
+                    r.review_id,
+                    r.decision,
+                    r.confidence,
+                    r.rationale,
+                    r.proposed_skill_json,
+                    r.updated_at AS review_updated_at
+                FROM behavior_turn_tool_chains c
+                LEFT JOIN behavior_turns t ON t.turn_id = c.turn_id
+                LEFT JOIN behavior_learning_agent_reviews r ON r.turn_id = c.turn_id
+                WHERE c.project_id IN ({placeholders})
+                ORDER BY c.updated_at DESC
+                LIMIT ?
+                """,
+                (*pids, capped_limit),
+            )
+        else:
+            cursor = await conn.execute(
+                """
+                SELECT
+                    c.*,
+                    t.user_message,
+                    t.context_summary,
+                    t.agent_response,
+                    t.metadata_json AS turn_metadata_json,
+                    r.review_id,
+                    r.decision,
+                    r.confidence,
+                    r.rationale,
+                    r.proposed_skill_json,
+                    r.updated_at AS review_updated_at
+                FROM behavior_turn_tool_chains c
+                LEFT JOIN behavior_turns t ON t.turn_id = c.turn_id
+                LEFT JOIN behavior_learning_agent_reviews r ON r.turn_id = c.turn_id
+                ORDER BY c.updated_at DESC
+                LIMIT ?
+                """,
+                (capped_limit,),
+            )
+        rows = await cursor.fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        metadata = _json_loads(item.get("turn_metadata_json"), {})
+        review = {
+            "id": str(item.get("review_id") or ""),
+            "decision": str(item.get("decision") or ""),
+            "confidence": float(item.get("confidence") or 0),
+            "rationale": str(item.get("rationale") or ""),
+            "proposed_skill": _json_loads(item.get("proposed_skill_json"), {}),
+            "updated_at": str(item.get("review_updated_at") or ""),
+        }
+        result.append(
+            {
+                "id": str(item.get("chain_id") or ""),
+                "chain_id": str(item.get("chain_id") or ""),
+                "project_id": str(item.get("project_id") or ""),
+                "project_key": str(item.get("project_key") or ""),
+                "session_id": str(item.get("session_id") or ""),
+                "session_kind": str(item.get("session_kind") or ""),
+                "turn_id": str(item.get("turn_id") or ""),
+                "round_id": str(item.get("round_id") or ""),
+                "source": str(item.get("source") or ""),
+                "user_message": str(item.get("user_message") or ""),
+                "context_summary": str(item.get("context_summary") or ""),
+                "agent_response": str(item.get("agent_response") or metadata.get("assistant_preview") or ""),
+                "session_title": str(metadata.get("session_title") or ""),
+                "round_title": str(metadata.get("round_title") or ""),
+                "chain": _json_loads(item.get("chain_json"), []),
+                "summary": _json_loads(item.get("summary_json"), {}),
+                "review": review,
+                "created_at": str(item.get("created_at") or ""),
+                "updated_at": str(item.get("updated_at") or ""),
+            }
+        )
+    return result
 
 
 async def get_learned_skill(skill_id: str) -> dict[str, Any] | None:
@@ -3957,9 +4549,16 @@ Similarity:
 
 
 async def match_active_skill(user_message: str, history: list[dict[str, Any]]) -> dict[str, Any] | None:
+    scope = _project_scope_for_session(_current_session_id.get())
     async with _conn() as conn:
         cursor = await conn.execute(
-            "SELECT * FROM learned_skills WHERE status = 'active' ORDER BY updated_at DESC"
+            """
+            SELECT *
+            FROM learned_skills
+            WHERE status = 'active' AND project_id = ?
+            ORDER BY updated_at DESC
+            """,
+            (scope["project_id"],),
         )
         rows = await cursor.fetchall()
     if not rows:
@@ -4292,9 +4891,11 @@ async def _validate_shadow_skill_for_turn(skill: dict[str, Any], turn_row: dict[
 
 
 async def _validate_shadow_skills_for_turn(turn_id: str, fingerprint: dict[str, Any]) -> None:
+    scope = await _project_scope_for_turn(turn_id)
     async with _conn() as conn:
         cursor = await conn.execute(
-            "SELECT * FROM learned_skills WHERE status = 'shadow' ORDER BY updated_at DESC"
+            "SELECT * FROM learned_skills WHERE status = 'shadow' AND project_id = ? ORDER BY updated_at DESC",
+            (scope["project_id"],),
         )
         rows = await cursor.fetchall()
         cursor = await conn.execute(
@@ -4678,17 +5279,174 @@ async def _promote_unknown_pool() -> None:
         await conn.commit()
 
 
-async def process_unprocessed_turns(force: bool = False) -> dict[str, Any]:
+async def _load_tool_chain_for_turn(turn_id: str) -> dict[str, Any]:
+    rebuilt = await _rebuild_tool_chain_for_turn(turn_id)
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            "SELECT * FROM behavior_turn_tool_chains WHERE turn_id = ?",
+            (str(turn_id or ""),),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return {
+            "chain_id": "",
+            "turn_id": str(turn_id or ""),
+            "chain": (rebuilt or {}).get("chain") or [],
+            "summary": (rebuilt or {}).get("summary") or {},
+        }
+    item = dict(row)
+    return {
+        "chain_id": str(item.get("chain_id") or ""),
+        "project_id": str(item.get("project_id") or ""),
+        "project_key": str(item.get("project_key") or ""),
+        "session_id": str(item.get("session_id") or ""),
+        "session_kind": str(item.get("session_kind") or ""),
+        "turn_id": str(item.get("turn_id") or ""),
+        "round_id": str(item.get("round_id") or ""),
+        "source": str(item.get("source") or ""),
+        "chain": _json_loads(item.get("chain_json"), []),
+        "summary": _json_loads(item.get("summary_json"), {}),
+        "updated_at": str(item.get("updated_at") or ""),
+    }
+
+
+async def _learning_agent_review_turn(turn_id: str, fingerprint: dict[str, Any]) -> dict[str, Any]:
+    scope = await _project_scope_for_turn(turn_id)
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            "SELECT * FROM behavior_learning_agent_reviews WHERE turn_id = ?",
+            (turn_id,),
+        )
+        existing = await cursor.fetchone()
+        if existing is not None:
+            row = dict(existing)
+            return {
+                "decision": str(row.get("decision") or ""),
+                "confidence": float(row.get("confidence") or 0),
+                "rationale": str(row.get("rationale") or ""),
+                "proposed_skill": _json_loads(row.get("proposed_skill_json"), {}),
+            }
+        cursor = await conn.execute(
+            "SELECT user_message, context_summary FROM behavior_turns WHERE turn_id = ?",
+            (turn_id,),
+        )
+        turn_row = await cursor.fetchone()
+    chain = await _load_tool_chain_for_turn(turn_id)
+    summary = chain.get("summary") or {}
+    prompt = f"""You are the project-local skill learning agent for project {scope["project_id"]}.
+
+Review one completed conversation round and its exact tool/user-browser operation chain.
+Decide whether it should become a reusable skill or parameterized method for THIS project only.
+
+Return JSON:
+{{
+  "decision": "learn" | "parameterize" | "skip",
+  "confidence": 0-1,
+  "rationale": "short reason",
+  "proposed_skill": {{
+    "name": "short Chinese user-facing name",
+    "description": "one sentence",
+    "skill_type": "draft" | "workflow" | "parameterized" | "deterministic"
+  }}
+}}
+
+Learn only recurring, operational chains with concrete steps. Skip one-off answers, pure chat, or unsafe side effects that need fresh permission.
+
+User message:
+{turn_row["user_message"] if turn_row else ""}
+
+Context:
+{turn_row["context_summary"] if turn_row else ""}
+
+Fingerprint:
+{json.dumps(fingerprint, ensure_ascii=False, indent=2)}
+
+Tool chain summary:
+{json.dumps(summary, ensure_ascii=False, indent=2)}
+
+Tool chain:
+{json.dumps(chain.get("chain") or [], ensure_ascii=False, indent=2)[:12000]}
+"""
+    result = await _call_llm_json(prompt, caller="project_skill_learning_agent")
+    decision = str(result.get("decision") or "").strip().lower()
+    if decision not in {"learn", "parameterize", "skip"}:
+        chain_items = chain.get("chain") or []
+        has_skillworthy = _has_skillworthy_steps([
+            {"enabled": True, "implementation_reference": {"tool_name": str(item.get("tool") or "")}}
+            for item in chain_items
+        ])
+        decision = "learn" if has_skillworthy and int(summary.get("total_steps") or 0) >= 2 else "skip"
+        result = {
+            "decision": decision,
+            "confidence": 0.55 if decision != "skip" else 0.4,
+            "rationale": "Heuristic fallback because the learning agent did not return a valid decision.",
+            "proposed_skill": {},
+        }
+    proposed = result.get("proposed_skill") if isinstance(result.get("proposed_skill"), dict) else {}
+    now = _now_iso()
+    async with _conn() as conn:
+        await conn.execute(
+            """
+            INSERT INTO behavior_learning_agent_reviews
+            (review_id, project_id, project_key, turn_id, chain_id, decision, confidence, rationale,
+             proposed_skill_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(turn_id) DO UPDATE SET
+                project_id = excluded.project_id,
+                project_key = excluded.project_key,
+                chain_id = excluded.chain_id,
+                decision = excluded.decision,
+                confidence = excluded.confidence,
+                rationale = excluded.rationale,
+                proposed_skill_json = excluded.proposed_skill_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                _new_id("learning_review"),
+                scope["project_id"],
+                scope["project_key"],
+                turn_id,
+                str(chain.get("chain_id") or ""),
+                decision,
+                float(result.get("confidence") or 0),
+                _truncate_text(result.get("rationale") or "", 500),
+                _json_dumps(proposed),
+                now,
+                now,
+            ),
+        )
+        await conn.commit()
+    return {
+        "decision": decision,
+        "confidence": float(result.get("confidence") or 0),
+        "rationale": str(result.get("rationale") or ""),
+        "proposed_skill": proposed,
+    }
+
+
+async def process_unprocessed_turns(force: bool = False, project_id: str = "") -> dict[str, Any]:
     async with _get_process_lock():
         async with _conn() as conn:
-            cursor = await conn.execute(
-                """
-                SELECT turn_id
-                FROM behavior_turns
-                WHERE processed_status = 0
-                ORDER BY created_at ASC
-                """
-            )
+            pid = str(project_id or "").strip()
+            if pid:
+                cursor = await conn.execute(
+                    """
+                    SELECT turn_id
+                    FROM behavior_turns
+                    WHERE processed_status = 0 AND project_id = ?
+                    ORDER BY created_at ASC
+                    """,
+                    (pid,),
+                )
+            else:
+                cursor = await conn.execute(
+                    """
+                    SELECT turn_id
+                    FROM behavior_turns
+                    WHERE processed_status = 0
+                    ORDER BY created_at ASC
+                    """
+                )
             turn_rows = await cursor.fetchall()
         stats = {
             "processed_turns": 0,
@@ -4697,16 +5455,43 @@ async def process_unprocessed_turns(force: bool = False) -> dict[str, Any]:
             "skills_created": 0,
             "skills_updated": 0,
             "shadow_checks": 0,
+            "learning_reviews": 0,
+            "learning_skipped": 0,
+            "agent_created_skills": 0,
         }
         for row in turn_rows:
             turn_id = str(row["turn_id"])
             fingerprint = await build_turn_fingerprint(turn_id)
             if not fingerprint:
                 continue
-            before_skills = {item["id"]: item for item in await list_learned_skills()}
+            scope = await _project_scope_for_turn(turn_id)
+            review = await _learning_agent_review_turn(turn_id, fingerprint)
+            stats["learning_reviews"] += 1
+            if str(review.get("decision") or "") == "skip":
+                stats["learning_skipped"] += 1
+                async with _conn() as conn:
+                    await conn.execute(
+                        "UPDATE behavior_turns SET processed_status = 1, updated_at = ? WHERE turn_id = ?",
+                        (_now_iso(), turn_id),
+                    )
+                    await conn.commit()
+                stats["processed_turns"] += 1
+                continue
+            before_skills = {item["id"]: item for item in await list_learned_skills(scope["project_id"])}
             pattern_id, merged = await _merge_turn_into_pattern(turn_id, fingerprint)
-            await _maybe_create_or_update_skill(pattern_id)
-            after_skills = {item["id"]: item for item in await list_learned_skills()}
+            review_decision = str(review.get("decision") or "")
+            if review_decision in {"learn", "parameterize"}:
+                skill_id = await _create_skill(pattern_id, force=True)
+                if skill_id:
+                    stats["agent_created_skills"] += 1 if skill_id not in before_skills else 0
+                    proposed = review.get("proposed_skill") if isinstance(review.get("proposed_skill"), dict) else {}
+                    target_type = str(proposed.get("skill_type") or ("parameterized" if review_decision == "parameterize" else "draft"))
+                    if target_type in _SKILL_TYPE_ORDER and target_type != "draft":
+                        await _update_skill_to_type(skill_id, target_type, "Project skill learning agent selected this reusable workflow.")
+                await _maybe_create_or_update_skill(pattern_id)
+            else:
+                await _maybe_create_or_update_skill(pattern_id)
+            after_skills = {item["id"]: item for item in await list_learned_skills(scope["project_id"])}
             if merged:
                 stats["merged_patterns"] += 1
             else:
@@ -4749,28 +5534,50 @@ async def scan_for_session_start() -> dict[str, Any]:
     return await process_unprocessed_turns()
 
 
-async def scan_for_manual_learn() -> dict[str, Any]:
-    return await process_unprocessed_turns(force=True)
+async def scan_for_manual_learn(project_id: str = "") -> dict[str, Any]:
+    return await process_unprocessed_turns(force=True, project_id=project_id)
 
 
-async def rebuild_learning_state(*, reprocess_all_turns: bool = True) -> dict[str, Any]:
+async def rebuild_learning_state(*, reprocess_all_turns: bool = True, project_id: str = "") -> dict[str, Any]:
+    pid = str(project_id or "").strip()
     async with _conn() as conn:
-        await conn.execute("DELETE FROM behavior_pattern_turns")
-        await conn.execute("DELETE FROM behavior_patterns")
-        await conn.execute("DELETE FROM behavior_fingerprints")
-        await conn.execute("DELETE FROM behavior_replay_tests")
-        await conn.execute("DELETE FROM learned_skill_patches")
-        await conn.execute("DELETE FROM learned_skill_runs")
-        await conn.execute("DELETE FROM learned_skill_versions")
-        await conn.execute("DELETE FROM learned_skills")
+        if pid:
+            cursor = await conn.execute("SELECT skill_id FROM learned_skills WHERE project_id = ?", (pid,))
+            skill_ids = [str(row["skill_id"]) for row in await cursor.fetchall()]
+            cursor = await conn.execute("SELECT pattern_id FROM behavior_patterns WHERE project_id = ?", (pid,))
+            pattern_ids = [str(row["pattern_id"]) for row in await cursor.fetchall()]
+            for skill_id in skill_ids:
+                await conn.execute("DELETE FROM behavior_replay_tests WHERE skill_id = ?", (skill_id,))
+                await conn.execute("DELETE FROM learned_skill_patches WHERE skill_id = ?", (skill_id,))
+                await conn.execute("DELETE FROM learned_skill_runs WHERE skill_id = ?", (skill_id,))
+                await conn.execute("DELETE FROM learned_skill_versions WHERE skill_id = ?", (skill_id,))
+            for pattern_id in pattern_ids:
+                await conn.execute("DELETE FROM behavior_pattern_turns WHERE pattern_id = ?", (pattern_id,))
+            await conn.execute("DELETE FROM learned_skills WHERE project_id = ?", (pid,))
+            await conn.execute("DELETE FROM behavior_patterns WHERE project_id = ?", (pid,))
+            await conn.execute("DELETE FROM behavior_learning_agent_reviews WHERE project_id = ?", (pid,))
+            if reprocess_all_turns:
+                await conn.execute("UPDATE behavior_turns SET processed_status = 0, linked_skill_id = '' WHERE project_id = ?", (pid,))
+        else:
+            await conn.execute("DELETE FROM behavior_pattern_turns")
+            await conn.execute("DELETE FROM behavior_patterns")
+            await conn.execute("DELETE FROM behavior_fingerprints")
+            await conn.execute("DELETE FROM behavior_replay_tests")
+            await conn.execute("DELETE FROM learned_skill_patches")
+            await conn.execute("DELETE FROM learned_skill_runs")
+            await conn.execute("DELETE FROM learned_skill_versions")
+            await conn.execute("DELETE FROM learned_skills")
+            await conn.execute("DELETE FROM behavior_learning_agent_reviews")
+            if reprocess_all_turns:
+                await conn.execute("UPDATE behavior_turns SET processed_status = 0, linked_skill_id = '', updated_at = updated_at")
         if reprocess_all_turns:
-            await conn.execute("UPDATE behavior_turns SET processed_status = 0, linked_skill_id = '', updated_at = updated_at")
+            pass
         await conn.commit()
-    stats = await process_unprocessed_turns(force=True)
-    learned = await list_learned_skills()
+    stats = await process_unprocessed_turns(force=True, project_id=pid)
+    learned = await list_learned_skills(pid)
     return {
         **stats,
-        "patterns": await list_patterns("all"),
+        "patterns": await list_patterns("all", pid),
         "learned_skills": learned,
     }
 
@@ -4826,8 +5633,8 @@ async def run_learned_skill(skill_id: str, param_overrides: dict[str, Any] | Non
     return "\n".join(results) if results else f"Skill '{skill_id}' has no executable steps."
 
 
-async def list_compat_scripts(status: str = "all") -> list[dict[str, Any]]:
-    learned = await list_learned_skills()
+async def list_compat_scripts(status: str = "all", project_id: str = "") -> list[dict[str, Any]]:
+    learned = await list_learned_skills(project_id)
     if status != "all":
         learned = [item for item in learned if item.get("status") == status]
     return [

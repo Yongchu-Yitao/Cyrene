@@ -221,6 +221,7 @@ async def list_documents(
     tag: str | None = None,
     source: str | None = None,
     limit: int = 200,
+    offset: int = 0,
 ) -> list[dict]:
     """List documents with optional filtering.
 
@@ -256,6 +257,9 @@ async def list_documents(
     if limit and limit > 0:
         query += " LIMIT ?"
         params.append(limit)
+        if offset > 0:
+            query += " OFFSET ?"
+            params.append(offset)
 
     async with aiosqlite.connect(db_path, timeout=30) as db:
         db.row_factory = aiosqlite.Row

@@ -439,6 +439,11 @@ def _run_electron_mode() -> None:
             except Exception as exc:
                 logger.warning("MCP manager start failed: %s", exc)
 
+        # 初始化 Pattern 模块（动作追踪 + 脚本学习）
+        from cyrene.pattern import init as _pattern_init
+        await _pattern_init(DATA_DIR, WORKSPACE_DIR)
+        logger.info("Pattern module initialized")
+
         bot = WebBot()
         scheduler = setup_scheduler(bot, str(DB_PATH))
         scheduler.start()
@@ -508,6 +513,12 @@ def _run_web_mode(ui_mode: str = "workbench") -> None:
         ensure_soul()
         ensure_inbox("cyrene")
         init_short_term(DATA_DIR)
+
+        # 初始化 Pattern 模块（动作追踪 + 脚本学习）
+        from cyrene.pattern import init as _pattern_init
+        await _pattern_init(DATA_DIR, WORKSPACE_DIR)
+        logger.info("Pattern module initialized")
+
         enable_event_bus()
 
         if SEARXNG_AUTO_START:

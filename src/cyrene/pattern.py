@@ -34,12 +34,16 @@ async def record_action(
     )
 
 
-async def list_patterns(status: str = "all") -> list[dict[str, Any]]:
-    return await _behavior.list_patterns(status)
+async def list_patterns(status: str = "all", project_id: str = "") -> list[dict[str, Any]]:
+    return await _behavior.list_patterns(status, project_id)
 
 
-async def list_learned_skills() -> list[dict[str, Any]]:
-    return await _behavior.list_learned_skills()
+async def list_learned_skills(project_id: str = "") -> list[dict[str, Any]]:
+    return await _behavior.list_learned_skills(project_id)
+
+
+async def list_tool_chains(project_id: str | list[str] = "", limit: int = 80) -> list[dict[str, Any]]:
+    return await _behavior.list_tool_chains(project_id, limit)
 
 
 async def get_learned_skill(skill_id: str) -> dict[str, Any] | None:
@@ -82,8 +86,8 @@ async def dismiss_unknown_label(unknown_id: str) -> bool:
     return await _behavior.dismiss_unknown_label(unknown_id)
 
 
-async def list_scripts(status: str = "all") -> list[dict[str, Any]]:
-    return await _behavior.list_compat_scripts(status)
+async def list_scripts(status: str = "all", project_id: str = "") -> list[dict[str, Any]]:
+    return await _behavior.list_compat_scripts(status, project_id)
 
 
 async def approve_script(script_id: str) -> bool:
@@ -122,16 +126,16 @@ async def scan_for_session_start() -> dict[str, Any]:
     return await _behavior.scan_for_session_start()
 
 
-async def scan_for_manual_learn() -> dict[str, Any]:
-    return await _behavior.scan_for_manual_learn()
+async def scan_for_manual_learn(project_id: str = "") -> dict[str, Any]:
+    return await _behavior.scan_for_manual_learn(project_id)
 
 
-async def rebuild_learning_state(*, reprocess_all_turns: bool = True) -> dict[str, Any]:
-    return await _behavior.rebuild_learning_state(reprocess_all_turns=reprocess_all_turns)
+async def rebuild_learning_state(*, reprocess_all_turns: bool = True, project_id: str = "") -> dict[str, Any]:
+    return await _behavior.rebuild_learning_state(reprocess_all_turns=reprocess_all_turns, project_id=project_id)
 
 
-async def learn_skill_from_pattern(pattern_id: str) -> dict[str, Any]:
-    return await _behavior.learn_skill_from_pattern(pattern_id)
+async def learn_skill_from_pattern(pattern_id: str, project_id: str = "") -> dict[str, Any]:
+    return await _behavior.learn_skill_from_pattern(pattern_id, project_id)
 
 
 async def tick(bot: Any, db_path: str) -> None:

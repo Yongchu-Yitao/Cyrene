@@ -235,6 +235,7 @@ CREATE TABLE IF NOT EXISTS kb_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_kb_documents_status ON kb_documents(status);
 CREATE INDEX IF NOT EXISTS idx_kb_documents_kind   ON kb_documents(kind);
+CREATE INDEX IF NOT EXISTS idx_kb_documents_updated_at ON kb_documents(updated_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_documents_path ON kb_documents(path);
 
 CREATE TABLE IF NOT EXISTS kb_chunks (
@@ -354,6 +355,7 @@ CREATE TABLE IF NOT EXISTS kb_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_kb_documents_status ON kb_documents(status);
 CREATE INDEX IF NOT EXISTS idx_kb_documents_kind   ON kb_documents(kind);
+CREATE INDEX IF NOT EXISTS idx_kb_documents_updated_at ON kb_documents(updated_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_documents_path ON kb_documents(path);
 
 CREATE TABLE IF NOT EXISTS kb_chunks (
@@ -413,6 +415,10 @@ async def init_knowledge_db(db_path: str) -> None:
             )
         except Exception:
             pass
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_kb_documents_updated_at "
+            "ON kb_documents(updated_at DESC)"
+        )
         await db.commit()
 
 

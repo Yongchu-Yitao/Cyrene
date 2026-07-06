@@ -7302,6 +7302,11 @@ html[data-theme="light"] .wb-tool-list .mono {
   overflow-y: auto;
   padding: 4px 24px 12px;
 }
+.wb-kb-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 14px 0 6px;
+}
 .wb-kb-count {
   flex: 0 0 auto;
   text-align: center;
@@ -8697,6 +8702,449 @@ html[data-theme="light"] .wb-tool-list .mono {
   margin-top: 4px;
   color: var(--wb-faint);
   font-size: 11.5px;
+}
+
+.wb-learning-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 300px minmax(420px, 1fr);
+  background: var(--wb-surface);
+}
+.wb-learning-session-list {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px 18px;
+  border-right: 1px solid var(--wb-line);
+  background: color-mix(in srgb, var(--wb-card-bg) 72%, var(--wb-surface));
+}
+.wb-learning-list-head {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.wb-learning-list-head b {
+  color: var(--wb-text);
+  font-size: 14px;
+  font-weight: 760;
+}
+.wb-learning-list-head select,
+.wb-replay-speed select {
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-control-bg);
+  color: var(--wb-text);
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12.5px;
+}
+.wb-learning-chain-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.wb-learning-chain-card {
+  width: 100%;
+  min-width: 0;
+  min-height: 82px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-card-bg);
+  color: inherit;
+  padding: 13px 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 130ms ease, background 130ms ease, box-shadow 130ms ease;
+}
+.wb-learning-chain-card:hover {
+  background: var(--wb-row-hover-bg);
+  border-color: color-mix(in srgb, var(--wb-accent) 28%, var(--wb-line));
+}
+.wb-learning-chain-card.active {
+  background: color-mix(in srgb, #f23491 8%, var(--wb-card-bg));
+  border-color: color-mix(in srgb, #f23491 45%, var(--wb-line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, #f23491 25%, transparent);
+}
+.wb-learning-chain-card > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.wb-learning-chain-card b,
+.wb-learning-chain-card small {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-learning-chain-card b {
+  color: var(--wb-text);
+  font-size: 13px;
+  font-weight: 720;
+}
+.wb-learning-chain-card small {
+  margin-top: 8px;
+  color: var(--wb-faint);
+  font-size: 12px;
+}
+.wb-learning-chain-card > span {
+  flex: 0 0 auto;
+  color: #2f80ed;
+  font-size: 18px;
+  line-height: 1;
+  padding-top: 2px;
+}
+.wb-learning-detail {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.wb-learning-hero {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 26px 30px 18px;
+  border-bottom: 1px solid var(--wb-line);
+}
+.wb-learning-hero h2 {
+  margin: 0;
+  color: var(--wb-text);
+  font-size: 18px;
+  font-weight: 780;
+}
+.wb-learning-hero p {
+  margin: 7px 0 0;
+  color: var(--wb-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.wb-learning-theme {
+  color: var(--wb-text) !important;
+  font-weight: 600;
+}
+.wb-learning-primary {
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f23491, #e52878);
+  color: white;
+  box-shadow: 0 8px 18px color-mix(in srgb, #f23491 24%, transparent);
+  font-weight: 760;
+  cursor: pointer;
+}
+.wb-learning-primary {
+  height: 42px;
+  padding: 0 24px;
+  font-size: 14px;
+}
+.wb-learning-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.wb-learning-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 30px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.wb-learning-review-pill {
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-card-bg);
+  padding: 13px 15px;
+}
+.wb-learning-review-pill b {
+  display: inline-block;
+  margin-right: 10px;
+  color: var(--wb-text);
+  font-size: 13px;
+}
+.wb-learning-review-pill span {
+  color: #f23491;
+  font-size: 12px;
+  font-weight: 760;
+}
+.wb-learning-review-pill.skip span { color: var(--wb-faint); }
+.wb-learning-review-pill p {
+  margin: 8px 0 0;
+  color: var(--wb-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.wb-learning-section h3,
+.wb-replay-section h3 {
+  margin: 0 0 12px;
+  color: var(--wb-text);
+  font-size: 14px;
+  font-weight: 760;
+}
+.wb-learning-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wb-learning-step {
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 34px 42px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-card-bg);
+  padding: 9px 12px;
+}
+.wb-learning-step.user {
+  background: color-mix(in srgb, #2f80ed 6%, var(--wb-card-bg));
+}
+.wb-learning-step-no {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-muted) 10%, transparent);
+  color: var(--wb-muted);
+  font-size: 12px;
+  font-weight: 720;
+}
+.wb-learning-step-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, #6a5cff 14%, transparent);
+  color: #6a5cff;
+}
+.wb-learning-step b,
+.wb-learning-step p {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-learning-step b {
+  color: var(--wb-text);
+  font-size: 13px;
+  font-weight: 720;
+}
+.wb-learning-step p {
+  margin-top: 3px;
+  color: var(--wb-faint);
+  font-size: 12px;
+}
+.wb-learning-step code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-muted);
+  font-size: 12px;
+  background: transparent;
+}
+.wb-learning-step i {
+  font-style: normal;
+  font-weight: 800;
+  text-align: center;
+}
+.wb-learning-step i.ok { color: #20b15a; }
+.wb-learning-step i.fail { color: #d94949; }
+.wb-learning-answer {
+  min-height: 96px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-card-bg);
+  color: var(--wb-text);
+  padding: 14px 15px;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.wb-learning-answer.markdown {
+  white-space: normal;
+}
+.wb-learning-answer.markdown > :first-child { margin-top: 0; }
+.wb-learning-answer.markdown > :last-child { margin-bottom: 0; }
+.wb-learning-answer.markdown p,
+.wb-learning-answer.markdown ul,
+.wb-learning-answer.markdown ol,
+.wb-learning-answer.markdown pre {
+  margin: 0 0 10px;
+}
+.wb-learning-answer.markdown code {
+  font-size: 12px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--wb-muted) 12%, transparent);
+  padding: 1px 4px;
+}
+.wb-learning-answer.markdown pre {
+  overflow-x: auto;
+  padding: 10px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--wb-muted) 10%, transparent);
+}
+.wb-learning-answer.markdown pre code {
+  background: transparent;
+  padding: 0;
+}
+.wb-learning-foot {
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--wb-line);
+  color: var(--wb-faint);
+  font-size: 12px;
+}
+.wb-mem-replay-panel {
+  flex-basis: 390px;
+  width: 390px;
+}
+.wb-detail-shot {
+  margin: 0;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--wb-card-bg);
+}
+.wb-detail-shot img {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  background: color-mix(in srgb, var(--wb-muted) 8%, transparent);
+}
+.wb-detail-shot figcaption {
+  border-top: 1px solid var(--wb-line);
+  padding: 9px 11px;
+  color: var(--wb-faint);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-detail-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wb-detail-files h3 {
+  margin: 0 0 4px;
+  color: var(--wb-text);
+  font-size: 14px;
+  font-weight: 760;
+}
+.wb-detail-file-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-card-bg);
+  padding: 10px 11px;
+}
+.wb-detail-file-row > span {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, #6a5cff 14%, transparent);
+  color: #6a5cff;
+}
+.wb-detail-file-row > div {
+  min-width: 0;
+}
+.wb-detail-file-row b,
+.wb-detail-file-row small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-detail-file-row b {
+  color: var(--wb-text);
+  font-size: 12.5px;
+}
+.wb-detail-file-row small {
+  margin-top: 3px;
+  color: var(--wb-faint);
+  font-size: 11.5px;
+}
+.wb-detail-empty-media {
+  border: 1px dashed var(--wb-line);
+  border-radius: 8px;
+  color: var(--wb-faint);
+  padding: 18px 14px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.wb-replay-section {
+  border-top: 1px solid var(--wb-line);
+  padding-top: 16px;
+}
+.wb-replay-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.wb-replay-metrics > div {
+  min-width: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-muted) 7%, transparent);
+  padding: 10px 8px;
+}
+.wb-replay-metrics span,
+.wb-replay-metrics b {
+  display: block;
+  text-align: center;
+}
+.wb-replay-metrics span {
+  color: var(--wb-faint);
+  font-size: 11px;
+}
+.wb-replay-metrics b {
+  margin-top: 6px;
+  color: var(--wb-text);
+  font-size: 15px;
+}
+.wb-replay-duplicates {
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-muted) 7%, transparent);
+  padding: 13px 14px;
+}
+.wb-replay-duplicates b {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--wb-text);
+  font-size: 12.5px;
+}
+.wb-replay-duplicates p,
+.wb-replay-section p {
+  margin: 0;
+  color: var(--wb-muted);
+  font-size: 12.5px;
+  line-height: 1.55;
 }
 
 .wb-mem-item {

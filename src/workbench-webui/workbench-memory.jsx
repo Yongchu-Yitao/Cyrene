@@ -295,150 +295,183 @@
   function learningSnapshot(data) {
     var skills = (data && data.learned_skills) || [];
     var patterns = (data && data.patterns) || [];
+    var chains = ((data && data.tool_chains) || []).filter(function (chain) {
+      var summary = (chain && chain.summary) || {};
+      return (summary.total_steps || ((chain && chain.chain) || []).length || 0) > 0;
+    });
     return {
       skills: skills,
       patterns: patterns,
+      chains: chains,
       activeSkills: skills.filter(function (s) { return s.status === "active"; }).length,
       shadowSkills: skills.filter(function (s) { return s.status === "shadow"; }).length,
       candidatePatterns: patterns.filter(function (p) { return p.status === "skill_candidate"; }).length,
+      reviewedChains: chains.filter(function (c) { return c.review && c.review.decision; }).length,
       recentSkills: skills.slice(0, 6),
       recentPatterns: patterns.slice(0, 5),
     };
   }
-  function skillStatusTone(status) {
-    return status === "active" ? "green" : status === "shadow" ? "blue" : "ghost";
-  }
-  function skillStatusText(status) {
-    if (status === "active") return "已激活";
-    if (status === "shadow") return "验证中";
-    if (status === "draft") return "草稿";
-    return status || "待学习";
-  }
-  function yesNo(value) { return value ? "是" : "否"; }
   function shortDateTime(value) {
     if (!value) return "—";
     var d = parseDate(value);
     if (!d) return String(value);
     return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
   }
+  function memRenderMarkdown(text) {
+    var source = String(text == null ? "" : text);
+    try {
+      var raw = window.marked ? window.marked.parse(source) : source;
+      return window.DOMPurify ? window.DOMPurify.sanitize(raw, { ADD_ATTR: ["data-line", "data-language"] }) : raw;
+    } catch (e) {
+      return source;
+    }
+  }
+
+  function chainTitle(chain, t) {
+    if (!chain) return t ? t("memory.learning.noRoundSelected", "No round selected") : "No round selected";
+    return chain.round_title || chain.session_title || (chain.user_message ? String(chain.user_message).slice(0, 32) : "") || (t ? t("memory.learning.toolChain", "Tool chain") : "Tool chain");
+  }
+  function chainSubtitle(chain, t) {
+    if (!chain) return "—";
+    var summary = chain.summary || {};
+    return t
+      ? t("memory.learning.chainSubtitle", "{steps} steps · {browserSteps} browser user ops · {time}", { steps: summary.total_steps || 0, browserSteps: summary.browser_user_steps || 0, time: shortDateTime(chain.updated_at || chain.created_at) })
+      : (summary.total_steps || 0) + " steps · " + (summary.browser_user_steps || 0) + " browser user ops · " + shortDateTime(chain.updated_at || chain.created_at);
+  }
+  function reviewText(review, t) {
+    var decision = review && review.decision;
+    if (decision === "learn") return t ? t("memory.learning.review.learn", "Learn") : "Learn";
+    if (decision === "parameterize") return t ? t("memory.learning.review.parameterize", "Parameterize") : "Parameterize";
+    if (decision === "skip") return t ? t("memory.learning.review.skip", "Skip") : "Skip";
+    return t ? t("memory.learning.pending", "Pending") : "Pending";
+  }
+  function learningSessions(chains) {
+    var byId = {};
+    (chains || []).forEach(function (chain) {
+      var id = chain.session_id || "unknown";
+      if (!byId[id]) {
+        byId[id] = {
+          id: id,
+          title: chain.session_title || chain.user_message || id,
+          updated_at: chain.updated_at || chain.created_at || "",
+          chains: [],
+        };
+      }
+      byId[id].chains.push(chain);
+      if (String(chain.updated_at || "").localeCompare(String(byId[id].updated_at || "")) > 0) {
+        byId[id].updated_at = chain.updated_at;
+      }
+    });
+    return Object.keys(byId).map(function (id) { return byId[id]; }).sort(function (a, b) {
+      return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+    });
+  }
+  function sessionLabel(session, t) {
+    if (!session) return t("memory.learning.noSession", "No session");
+    var title = String(session.title || session.id || "").trim();
+    var clipped = title.length > 24 ? title.slice(0, 24) + "…" : title;
+    return clipped + " · " + shortDateTime(session.updated_at);
+  }
+  function toolDisplayName(step) {
+    return String((step && step.tool) || (step && step.subtype) || (step && step.type) || "tool");
+  }
+  function toolParamsText(step) {
+    if (!step) return "";
+    var args = step.args || {};
+    var hasArgs = args && typeof args === "object" && Object.keys(args).length;
+    if (hasArgs) {
+      try { return JSON.stringify(args); } catch (e) {}
+    }
+    return step.input_summary || "";
+  }
+  function stepDescription(step) {
+    if (!step) return "";
+    return step.output_summary || step.input_summary || [step.domain, step.type, step.subtype].filter(Boolean).join(" / ") || step.tool || "";
+  }
+  function latestBrowserStep(chain) {
+    var steps = (chain && chain.chain) || [];
+    for (var i = steps.length - 1; i >= 0; i--) {
+      if (steps[i].source === "user_browser" || String(steps[i].tool || "").indexOf("browser.") === 0) return steps[i];
+    }
+    return steps[0] || null;
+  }
+  function hashToolName(tool) {
+    var text = String(tool || "");
+    var hash = 0;
+    for (var i = 0; i < text.length; i++) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+    return Math.abs(hash);
+  }
+  function toolIcon(step) {
+    var tool = toolDisplayName(step);
+    var common = { width: 18, height: 18, strokeWidth: 2 };
+    if (tool.indexOf("screenshot") >= 0 || tool.indexOf("snapshot") >= 0) return svg(common, h("rect", { x: 4, y: 6, width: 16, height: 12, rx: 2 }), h("circle", { cx: 12, cy: 12, r: 3 }), h("path", { d: "M9 6l1-2h4l1 2" }));
+    if (tool.indexOf("browser") >= 0) return svg(common, h("rect", { x: 3, y: 5, width: 18, height: 14, rx: 2 }), h("path", { d: "M3 9h18M7 7h.01M10 7h.01" }));
+    if (tool.indexOf("read") >= 0 || tool.indexOf("file") >= 0) return svg(common, h("path", { d: "M6 3h8l4 4v14H6z" }), h("path", { d: "M14 3v5h5M8 13h8M8 17h6" }));
+    if (tool.indexOf("edit") >= 0 || tool.indexOf("write") >= 0) return svg(common, h("path", { d: "M4 20h4L19 9l-4-4L4 16z" }), h("path", { d: "M13 7l4 4" }));
+    if (tool.indexOf("shell") >= 0 || tool.indexOf("command") >= 0 || tool.indexOf("bash") >= 0) return svg(common, h("path", { d: "M4 7l5 5-5 5M11 17h9" }));
+    if (tool.indexOf("search") >= 0 || tool.indexOf("find") >= 0) return svg(common, h("circle", { cx: 11, cy: 11, r: 6 }), h("path", { d: "m16 16 4 4" }));
+    if (tool.indexOf("wait") >= 0) return svg(common, h("circle", { cx: 12, cy: 12, r: 8 }), h("path", { d: "M12 7v5l3 2" }));
+    var hval = hashToolName(tool);
+    var variant = hval % 4;
+    if (variant === 0) return svg(common, h("path", { d: "M12 3 4 8l8 5 8-5z" }), h("path", { d: "m4 14 8 5 8-5" }));
+    if (variant === 1) return svg(common, h("path", { d: "M5 12h14M12 5v14" }), h("circle", { cx: 12, cy: 12, r: 8 }));
+    if (variant === 2) return svg(common, h("rect", { x: 5, y: 5, width: 14, height: 14, rx: 3 }), h("path", { d: "M9 9h6v6H9z" }));
+    return svg(common, h("path", { d: "M12 4 20 12 12 20 4 12z" }), h("circle", { cx: 12, cy: 12, r: 2 }));
+  }
+  function detailScreenshot(chain) {
+    var shots = (chain && chain.screenshots) || [];
+    return shots.length ? shots[0] : null;
+  }
+  function detailFiles(chain) {
+    return ((chain && chain.files) || []).slice(0, 12);
+  }
 
   function SkillLearningPanel(props) {
     var t = useMemoryT();
     var learning = props.learning;
     var loading = learning.loading;
-    var busy = learning.busy;
-    var skill = props.skill;
-    var pattern = props.pattern;
-    var selectedType = props.selectedType || (skill ? "skill" : pattern ? "pattern" : "skill");
-    var trigger = (skill && skill.trigger) || {};
-    var runStats = (skill && skill.run_statistics) || {};
-    var examples = (skill && skill.positive_examples) || [];
-    var steps = (skill && skill.steps) || [];
-    var patternStats = (pattern && (pattern.statistics || pattern)) || {};
-    var patternSkillability = (pattern && pattern.skillability) || {};
-    var patternActions = (pattern && pattern.action_sequence) || [];
-    var linkedSkills = (pattern && pattern.linked_skill_list) || [];
-    var patternSelected = selectedType === "pattern" && pattern;
+    var chain = props.chain;
+    var summary = (chain && chain.summary) || {};
+    var review = (chain && chain.review) || {};
+    var screenshot = detailScreenshot(chain);
+    var files = detailFiles(chain);
+    var similarity = summary.total_steps ? Math.round(((summary.success_steps || 0) / summary.total_steps) * 100) : 0;
 
-    return h("aside", { className: "wb-mem-detail wb-mem-skill-panel" },
+    return h("aside", { className: "wb-mem-detail wb-mem-skill-panel wb-mem-replay-panel" },
       h("div", { className: "wb-mem-detail-tabs" },
-        h("button", { type: "button", className: "wb-mem-detail-tab active" }, patternSelected ? t("memory.learning.patternDetails", "Pattern details") : t("memory.learning.skillDetails", "Skill details"))),
-      !skill && !patternSelected ? h("div", { className: "wb-mem-detail-scroll" },
-        h("div", { className: "wb-mem-empty-soft" }, loading ? "加载技能中…" : "选择一个技能或行为模式查看详情"),
-        learning.error && h("div", { className: "wb-mem-error inline" }, learning.error),
-        learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note))
-        : patternSelected ? h("div", { className: "wb-mem-detail-scroll" },
-        h("div", { className: "wb-mem-skill-hero" },
-          h("span", { className: "wb-mem-ico blue" }, ICON.learning(18)),
-          h("div", null,
-            h("div", { className: "wb-mem-skill-title-row" },
-              h("h3", null, pattern.description || pattern.id),
-              h("span", { className: "wb-mem-chip " + skillStatusTone(pattern.status) }, skillStatusText(pattern.status))),
-            h("p", null, "从 agent 操作记录中识别到的可复用行为模式。"))),
-        learning.error && h("div", { className: "wb-mem-error inline" }, learning.error),
-        learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note),
-        h("div", { className: "wb-mem-skill-actions single" },
-          h("button", { type: "button", className: "wb-btn primary", onClick: function () { learning.learnPatternAsSkill(pattern.id); }, disabled: loading || !!busy },
-            busy === "pattern:" + pattern.id ? t("memory.learning.learning", "Learning...") : t("memory.learning.learnNow", "Learn now"))),
-        h("div", { className: "wb-mem-meta" },
-          h("div", { className: "wb-mem-meta-row" }, h("label", null, "ID"), h("div", { className: "wb-mem-meta-val code" }, pattern.id)),
-          h("div", { className: "wb-mem-meta-row" }, h("label", null, "出现次数"), h("div", { className: "wb-mem-meta-val" }, String(patternStats.frequency || 0))),
-          h("div", { className: "wb-mem-meta-row" }, h("label", null, "有效样本"), h("div", { className: "wb-mem-meta-val" }, String(patternStats.effective_count || 0))),
-          h("div", { className: "wb-mem-meta-row" }, h("label", null, "最后出现"), h("div", { className: "wb-mem-meta-val" }, shortDateTime(patternStats.last_seen_at))),
-          h("div", { className: "wb-mem-meta-row" }, h("label", null, "可生成技能"), h("div", { className: "wb-mem-meta-val" }, yesNo(patternSkillability.draft))),
-          h("div", { className: "wb-mem-meta-row" }, h("label", null, "关联技能"), h("div", { className: "wb-mem-meta-val code" }, linkedSkills.length ? linkedSkills.join(", ") : "—"))),
-        h("div", { className: "wb-mem-section" },
-          h("div", { className: "wb-mem-section-head" }, "模式质量"),
-          h("div", { className: "wb-mem-skill-detail-box" },
-            h("div", null, h("span", null, "成功率"), h("b", null, String(patternStats.success_rate || 0))),
-            h("div", null, h("span", null, "操作稳定性"), h("b", null, String(patternStats.action_stability || 0))),
-            h("div", null, h("span", null, "输入输出稳定性"), h("b", null, String(patternStats.io_stability || 0))),
-            h("div", null, h("span", null, "建议"), h("b", null, patternSkillability.reason || "—")))),
-        h("div", { className: "wb-mem-section" },
-          h("div", { className: "wb-mem-section-head" }, "观察到的操作"),
-          patternActions.length
-            ? h("div", { className: "wb-mem-skill-step-list" }, patternActions.slice(0, 8).map(function (action, i) {
-              return h("div", { key: i, className: "wb-mem-skill-step" },
-                h("span", null, String(i + 1)),
-                h("div", null,
-                  h("b", null, action.raw_description || action.subtype || action.type || "操作 " + (i + 1)),
-                  h("p", null, [action.domain, action.type, action.subtype].filter(Boolean).join(" / ") || "暂无分类")));
-            }))
-            : h("div", { className: "wb-mem-empty-soft compact" }, "暂无可展示操作")))
+        h("button", { type: "button", className: "wb-mem-detail-tab active" }, t("memory.learning.detailsTitle", "Details"))),
+      !chain ? h("div", { className: "wb-mem-detail-scroll" },
+        h("div", { className: "wb-mem-empty-soft" }, loading ? t("memory.learning.loadingChains", "Loading tool chains...") : t("memory.learning.selectRound", "Select a round to inspect.")),
+        learning.error && h("div", { className: "wb-mem-error inline" }, learning.error))
         : h("div", { className: "wb-mem-detail-scroll" },
-        h("div", { className: "wb-mem-skill-hero" },
-          h("span", { className: "wb-mem-ico blue" }, ICON.learning(18)),
-          h("div", null,
-            h("div", { className: "wb-mem-skill-title-row" },
-              h("h3", null, skill.name || skill.id),
-              h("span", { className: "wb-mem-chip " + skillStatusTone(skill.status) }, skillStatusText(skill.status))),
-            h("p", null, skill.description || "暂无描述"))),
-        learning.error && h("div", { className: "wb-mem-error inline" }, learning.error),
-        learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note),
-        h("div", { className: "wb-mem-skill-actions single" },
-          h("button", {
-            type: "button",
-            className: "wb-btn primary",
-            onClick: function () { learning.learnPatternAsSkill(skill.pattern_id); },
-            disabled: loading || !!busy || !skill.pattern_id,
-            title: skill.pattern_id
-              ? t("memory.learning.learnCurrentSkillTitle", "Learn this skill now")
-              : t("memory.learning.noLinkedPatternTitle", "This skill has no linked behavior pattern"),
-          }, busy === "pattern:" + skill.pattern_id ? t("memory.learning.learning", "Learning...") : t("memory.learning.learnNow", "Learn now"))),
-        h("div", { className: "wb-mem-meta" },
-          h("div", { className: "wb-mem-meta-row" }, h("label", null, "ID"), h("div", { className: "wb-mem-meta-val code" }, skill.id)),
-          h("div", { className: "wb-mem-meta-row" }, h("label", null, "类型"), h("div", { className: "wb-mem-meta-val" }, skill.skill_type || "—")),
-          h("div", { className: "wb-mem-meta-row" }, h("label", null, "版本"), h("div", { className: "wb-mem-meta-val" }, String(skill.version || 0))),
-          h("div", { className: "wb-mem-meta-row" }, h("label", null, "需要 LLM"), h("div", { className: "wb-mem-meta-val" }, yesNo(skill.requires_llm))),
-          h("div", { className: "wb-mem-meta-row" }, h("label", null, "更新时间"), h("div", { className: "wb-mem-meta-val" }, shortDateTime(skill.updated_at))),
-          h("div", { className: "wb-mem-meta-row" }, h("label", null, "模式"), h("div", { className: "wb-mem-meta-val code" }, skill.pattern_id || "—"))),
-        h("div", { className: "wb-mem-section" },
-          h("div", { className: "wb-mem-section-head" }, "触发条件"),
-          h("div", { className: "wb-mem-skill-detail-box" },
-            h("div", null, h("span", null, "最低匹配分"), h("b", null, String(skill.min_match_score || trigger.min_match_score || "—"))),
-            h("div", null, h("span", null, "正例数量"), h("b", null, String(examples.length))))),
-        h("div", { className: "wb-mem-section" },
-          h("div", { className: "wb-mem-section-head" }, "执行步骤"),
-          steps.length
-            ? h("div", { className: "wb-mem-skill-step-list" }, steps.slice(0, 8).map(function (step, i) {
-              var ref = step.implementation_reference || {};
-              return h("div", { key: i, className: "wb-mem-skill-step" },
-                h("span", null, String(i + 1)),
+        screenshot ? h("figure", { className: "wb-detail-shot" },
+          h("img", { src: screenshot.url, alt: screenshot.name || t("memory.learning.screenshotAlt", "Browser screenshot") }),
+          h("figcaption", null, screenshot.name || screenshot.path))
+          : files.length ? h("div", { className: "wb-detail-files" },
+            h("h3", null, t("memory.learning.relatedFiles", "Related files")),
+            files.map(function (file, index) {
+              return h("div", { key: file.path || index, className: "wb-detail-file-row" },
+                h("span", null, toolIcon({ tool: file.tool || "file" })),
                 h("div", null,
-                  h("b", null, step.title || step.name || ref.tool_name || "步骤 " + (i + 1)),
-                  h("p", null, step.description || ref.tool_name || "暂无说明")));
+                  h("b", null, file.name || file.path),
+                  h("small", null, file.path || "—")));
             }))
-            : h("div", { className: "wb-mem-empty-soft compact" }, "暂无可展示步骤")),
-        h("div", { className: "wb-mem-section" },
-          h("div", { className: "wb-mem-section-head" }, "运行统计"),
-          h("div", { className: "wb-mem-skill-detail-box" },
-            h("div", null, h("span", null, "运行次数"), h("b", null, String(runStats.total_runs || runStats.run_count || 0))),
-            h("div", null, h("span", null, "成功次数"), h("b", null, String(runStats.success_count || 0))),
-            h("div", null, h("span", null, "回退次数"), h("b", null, String(runStats.fallback_count || 0))),
-            h("div", null, h("span", null, "最后运行"), h("b", null, shortDateTime(runStats.last_run_at))))),
-        pattern && h("div", { className: "wb-mem-section" },
-          h("div", { className: "wb-mem-section-head" }, "关联模式"),
-          h("p", { className: "wb-mem-content-full" }, pattern.description || pattern.id))));
+            : h("div", { className: "wb-detail-empty-media" }, t("memory.learning.noMedia", "No screenshot or file artifacts were captured for this round.")),
+        h("div", { className: "wb-replay-section" },
+          h("h3", null, t("memory.learning.behaviorAnalysis", "Behavior analysis")),
+          h("div", { className: "wb-replay-metrics" },
+            h("div", null, h("span", null, t("memory.learning.totalSteps", "Steps")), h("b", null, String(summary.total_steps || 0))),
+            h("div", null, h("span", null, t("memory.learning.userOps", "User ops")), h("b", null, String(summary.browser_user_steps || 0))),
+            h("div", null, h("span", null, t("memory.learning.successRate", "Success")), h("b", null, similarity + "%")),
+            h("div", null, h("span", null, t("memory.learning.confidence", "Confidence")), h("b", null, String(Math.round((review.confidence || 0) * 100) / 100))))),
+        h("div", { className: "wb-replay-duplicates" },
+          h("b", null, t("memory.learning.duplicateCheck", "Repeat behavior check")),
+          h("p", null, review.decision ? reviewText(review, t) + " · " + (review.rationale || t("memory.learning.reviewed", "The project-local learning agent reviewed this chain.")) : t("memory.learning.pendingReview", "Waiting for the project-local learning agent."))),
+        h("div", { className: "wb-replay-section" },
+          h("h3", null, t("memory.learning.learningSuggestion", "Learning suggestion")),
+          h("p", null, review.rationale || t("memory.learning.suggestionFallback", "The project-local learning agent decides whether this chain should become a reusable skill."))),
+        learning.error && h("div", { className: "wb-mem-error inline" }, learning.error),
+        learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note)));
   }
 
   function SkillLearningMain(props) {
@@ -447,63 +480,79 @@
     var snap = learningSnapshot(learning.data);
     var loading = learning.loading;
     var busy = learning.busy;
-    var skills = snap.skills.slice(0, 24);
-    var patterns = snap.patterns.slice(0, 16);
-    var selectedType = props.selectedType || "skill";
-    var selectedSkillId = props.selectedSkillId;
-    var selectedPatternId = props.selectedPatternId;
-    var onSelectSkill = props.onSelectSkill;
-    var onSelectPattern = props.onSelectPattern;
+    var sessions = learningSessions(snap.chains);
+    var activeSessionId = props.sessionId || (sessions[0] && sessions[0].id) || "";
+    var activeSession = sessions.find(function (session) { return session.id === activeSessionId; }) || sessions[0] || null;
+    var chains = activeSession ? activeSession.chains.slice(0, 40) : [];
+    var activeChain = props.chain && chains.some(function (chain) { return chain.id === props.chain.id; }) ? props.chain : chains[0] || null;
+    var activeSteps = (activeChain && activeChain.chain) || [];
+    var activeSummary = (activeChain && activeChain.summary) || {};
+    var activeReview = (activeChain && activeChain.review) || {};
+    var onSelectChain = props.onSelectChain;
+    var onSelectSession = props.onSelectSession;
 
     return h("div", { className: "wb-mem-main wb-mem-learning-main" },
-      h("div", { className: "wb-mem-learning-head" },
-        h("div", { className: "wb-mem-learning-title" },
-          h("span", { className: "wb-mem-ico blue" }, ICON.learning(18)),
-          h("div", null,
-            h("h2", null, t("memory.learning.title", "Skill learning")),
-            h("p", null, t("memory.learning.intro", "Turn repeated operations into reusable skills; they go through shadow validation before automatic execution."))))),
-      learning.error && h("div", { className: "wb-mem-error" }, learning.error),
-      learning.note && h("div", { className: "wb-mem-skill-note main" }, learning.note),
-      h("div", { className: "wb-mem-learning-scroll" },
-        h("section", { className: "wb-mem-learning-section" },
-          h("div", { className: "wb-mem-learning-section-head" },
+      h("div", { className: "wb-learning-layout" },
+        h("aside", { className: "wb-learning-session-list" },
+          h("div", { className: "wb-learning-list-head" },
+            h("b", null, t("memory.learning.sessionSelect", "Conversation session")),
+            h("select", {
+              value: activeSession ? activeSession.id : "",
+              onChange: function (e) { onSelectSession(e.target.value); },
+              disabled: !sessions.length,
+            }, sessions.length ? sessions.map(function (session) {
+              return h("option", { key: session.id, value: session.id }, sessionLabel(session, t));
+            }) : h("option", { value: "" }, t("memory.learning.noSession", "No session")))),
+          h("div", { className: "wb-learning-chain-list" },
+            loading && !learning.data
+              ? h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.loadingChains", "Loading tool chains..."))
+              : chains.length ? chains.map(function (chain, index) {
+                var summary = chain.summary || {};
+                return h("button", { key: chain.id, type: "button", className: "wb-learning-chain-card" + (activeChain && activeChain.id === chain.id ? " active" : ""), onClick: function () { onSelectChain(chain.id); } },
+                  h("div", null,
+                    h("b", null, shortDateTime(chain.updated_at || chain.created_at) + "  " + chainTitle(chain, t)),
+                    h("small", null, t("memory.learning.roundMeta", "{steps} steps · {review}", { steps: summary.total_steps || 0, review: chain.review ? reviewText(chain.review, t) : t("memory.learning.pending", "Pending") }))),
+                  h("span", null, String(index + 1)));
+              }) : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noToolChains", "No tool-call rounds in this session.")))),
+        h("section", { className: "wb-learning-detail" },
+          h("div", { className: "wb-learning-hero" },
             h("div", null,
-              h("b", null, "自动技能"),
-              h("span", null, "共 " + snap.skills.length + " 个，已激活 " + snap.activeSkills + " 个"))),
-          loading && !learning.data
-            ? h("div", { className: "wb-mem-empty-soft" }, "加载技能中…")
-            : skills.length
-              ? h("div", { className: "wb-mem-learning-skill-grid" }, skills.map(function (skill) {
-                return h("button", { key: skill.id, type: "button", className: "wb-mem-learning-skill-card" + (selectedType === "skill" && selectedSkillId === skill.id ? " active" : ""), onClick: function () { onSelectSkill(skill.id); } },
-                  h("div", { className: "wb-mem-learning-card-top" },
-                    h("b", null, skill.name || skill.id),
-                    h("span", { className: "wb-mem-chip " + skillStatusTone(skill.status) }, skillStatusText(skill.status))),
-                  h("p", null, skill.description || skill.id),
-                  h("small", null, skill.id));
-              }))
-              : h("div", { className: "wb-mem-empty-soft" }, "暂无自动技能")),
-        h("section", { className: "wb-mem-learning-section" },
-          h("div", { className: "wb-mem-learning-section-head" },
-            h("div", null,
-              h("b", null, "行为模式"),
-              h("span", null, "候选模式 " + snap.candidatePatterns + " 个，验证中 " + snap.shadowSkills + " 个"))),
-          patterns.length
-            ? h("div", { className: "wb-mem-learning-pattern-list" }, patterns.map(function (pattern) {
-              var stats = pattern.statistics || pattern || {};
-              return h("button", { key: pattern.id, type: "button", className: "wb-mem-learning-pattern-row" + (selectedType === "pattern" && selectedPatternId === pattern.id ? " active" : ""), onClick: function () { onSelectPattern(pattern.id); } },
-                h("span", { className: "wb-mem-dot muted" }),
-                h("div", null,
-                  h("b", null, pattern.description || pattern.id),
-                  h("small", null, "出现 " + (stats.frequency || 0) + " 次 · " + (pattern.status || "candidate"))));
-            }))
-            : h("div", { className: "wb-mem-empty-soft" }, "暂无行为模式"))),
-      h("div", { className: "wb-mem-count" }, "共 " + snap.skills.length + " 个技能 · " + snap.patterns.length + " 个模式"));
+              h("h2", null, activeChain ? shortDateTime(activeChain.updated_at || activeChain.created_at) + "  " + chainTitle(activeChain, t) : t("memory.learning.title", "Skill learning")),
+              h("p", null, activeChain ? chainSubtitle(activeChain, t) : t("memory.learning.emptyIntro", "Tool-call rounds are recorded separately for each project.")),
+              activeChain && h("p", { className: "wb-learning-theme" }, t("memory.learning.topic", "Topic: {topic}", { topic: activeChain.user_message || activeChain.context_summary || t("memory.learning.autoTopic", "Reusable tool chain") }))),
+            h("button", { type: "button", className: "wb-learning-primary", disabled: loading || !!busy, onClick: function () { learning.runAction("learn"); } },
+              busy ? t("memory.learning.learning", "Learning...") : t("memory.learning.learnAsSkill", "Learn as Skill ✨"))),
+          learning.error && h("div", { className: "wb-mem-error" }, learning.error),
+          learning.note && h("div", { className: "wb-mem-skill-note main" }, learning.note),
+          activeChain ? h("div", { className: "wb-learning-content" },
+            h("div", { className: "wb-learning-review-pill " + ((activeReview && activeReview.decision) || "pending") },
+              h("b", null, t("memory.learning.agentDecision", "Learning agent decision")),
+              h("span", null, reviewText(activeReview, t)),
+              h("p", null, (activeReview && activeReview.rationale) || t("memory.learning.decisionFallback", "The project-local learning agent will review the full chain and decide."))),
+            h("section", { className: "wb-learning-section" },
+              h("h3", null, t("memory.learning.stepTitle", "Tool-chain execution steps ({count} steps)", { count: activeSummary.total_steps || activeSteps.length || 0 })),
+              activeSteps.length ? h("div", { className: "wb-learning-step-list" }, activeSteps.map(function (step, index) {
+                return h("div", { key: step.id || index, className: "wb-learning-step" + (step.source === "user_browser" ? " user" : "") },
+                  h("span", { className: "wb-learning-step-no" }, String(index + 1)),
+                  h("span", { className: "wb-learning-step-icon" }, toolIcon(step)),
+                  h("div", null,
+                    h("b", null, toolDisplayName(step)),
+                    h("p", null, toolParamsText(step) || stepDescription(step))),
+                  h("i", { className: step.success ? "ok" : "fail" }, step.success ? "✓" : "!"));
+              })) : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noSteps", "No steps"))),
+            h("section", { className: "wb-learning-section" },
+              h("h3", null, t("memory.learning.agentAnswer", "Agent answer")),
+              h("div", { className: "wb-learning-answer markdown", dangerouslySetInnerHTML: { __html: memRenderMarkdown(activeChain.agent_response || activeChain.context_summary || t("memory.learning.noAgentAnswer", "This round has no agent answer yet.")) } })))
+            : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noLearnableRounds", "No learnable rounds yet.")),
+          h("div", { className: "wb-learning-foot" },
+            t("memory.learning.footer", "{chains} chains · {reviews} reviewed · {skills} skills", { chains: snap.chains.length, reviews: snap.reviewedChains, skills: snap.skills.length })))));
   }
 
   // ── main page ────────────────────────────────────────────────────────
   function WorkbenchMemoryPage(props) {
     var project = props && props.project;
     var workspace = (project && (project.dataKey || project.id)) || "default";
+    var t = useMemoryT();
 
     var payloadState = useState(null); var payload = payloadState[0]; var setPayload = payloadState[1];
     var loadState = useState(true); var loading = loadState[0]; var setLoading = loadState[1];
@@ -525,6 +574,8 @@
     var learningKindState = useState("skill"); var selectedLearningKind = learningKindState[0]; var setSelectedLearningKind = learningKindState[1];
     var learningSelState = useState(""); var selectedLearningSkillId = learningSelState[0]; var setSelectedLearningSkillId = learningSelState[1];
     var learningPatternSelState = useState(""); var selectedLearningPatternId = learningPatternSelState[0]; var setSelectedLearningPatternId = learningPatternSelState[1];
+    var learningChainSelState = useState(""); var selectedLearningChainId = learningChainSelState[0]; var setSelectedLearningChainId = learningChainSelState[1];
+    var learningSessionSelState = useState(""); var selectedLearningSessionId = learningSessionSelState[0]; var setSelectedLearningSessionId = learningSessionSelState[1];
 
     var client = useMemo(function () { return api(workspace); }, [workspace]);
 
@@ -537,13 +588,13 @@
     }
     function loadLearning() {
       setLearningLoading(true); setLearningError("");
-      return fetch("/api/evolution").then(jsonOrThrow)
+      return fetch("/api/evolution?project=" + encodeURIComponent(workspace)).then(jsonOrThrow)
         .then(function (p) { setLearningData(p || {}); return p; })
-        .catch(function (e) { setLearningError(e.message || String(e)); setLearningData({ learned_skills: [], patterns: [] }); })
+        .catch(function (e) { setLearningError(e.message || String(e)); setLearningData({ learned_skills: [], patterns: [], tool_chains: [] }); })
         .finally(function () { setLearningLoading(false); });
     }
     function runLearningAction(kind) {
-      var url = kind === "rebuild" ? "/api/patterns/rebuild" : "/api/patterns/learn";
+      var url = (kind === "rebuild" ? "/api/patterns/rebuild" : "/api/patterns/learn") + "?project=" + encodeURIComponent(workspace);
       setLearningBusy(kind); setLearningNote(""); setLearningError("");
       return fetch(url, { method: "POST" }).then(jsonOrThrow)
         .then(function (payload) {
@@ -551,9 +602,14 @@
           setLearningData({
             learned_skills: payload.learned_skills || [],
             patterns: payload.patterns || [],
+            tool_chains: payload.tool_chains || [],
             scripts: payload.scripts || [],
           });
-          setLearningNote("已处理 " + (stats.processed_turns || 0) + " 个回合，新增技能 " + (stats.skills_created || 0) + " 个。");
+          setLearningNote(t("memory.learning.processedNote", "Processed {turns} rounds, reviewed {reviews} chains, created {skills} skills.", {
+            turns: stats.processed_turns || 0,
+            reviews: stats.learning_reviews || 0,
+            skills: stats.skills_created || 0,
+          }));
         })
         .catch(function (e) { setLearningError(e.message || String(e)); })
         .finally(function () { setLearningBusy(""); });
@@ -562,18 +618,21 @@
       if (!patternId) return Promise.resolve();
       var busyKey = "pattern:" + patternId;
       setLearningBusy(busyKey); setLearningNote(""); setLearningError("");
-      return fetch("/api/patterns/" + encodeURIComponent(patternId) + "/learn-skill", { method: "POST" }).then(jsonOrThrow)
+      return fetch("/api/patterns/" + encodeURIComponent(patternId) + "/learn-skill?project=" + encodeURIComponent(workspace), { method: "POST" }).then(jsonOrThrow)
         .then(function (payload) {
           setLearningData({
             learned_skills: payload.learned_skills || [],
             patterns: payload.patterns || [],
+            tool_chains: payload.tool_chains || [],
             scripts: payload.scripts || [],
           });
           if (payload.skill_id) {
             setSelectedLearningKind("skill");
             setSelectedLearningSkillId(payload.skill_id);
           }
-          setLearningNote(payload.created ? "已从该行为模式生成技能。" : "该行为模式已有技能，已切换到对应技能。");
+          setLearningNote(payload.created
+            ? t("memory.learning.patternCreatedNote", "Created a skill from this behavior pattern.")
+            : t("memory.learning.patternExistingNote", "This behavior pattern already has a skill; switched to that skill."));
         })
         .catch(function (e) { setLearningError(e.message || String(e)); })
         .finally(function () { setLearningBusy(""); });
@@ -592,6 +651,8 @@
       setSelectedLearningKind("skill");
       setSelectedLearningSkillId("");
       setSelectedLearningPatternId("");
+      setSelectedLearningChainId("");
+      setSelectedLearningSessionId("");
       setActiveCat("all");
       setSourceFilter("");
       load().then(function () {
@@ -625,6 +686,13 @@
     var sources = (payload && payload.sources) || [];
     var overview = (payload && payload.overview) || {};
     var learningSnap = learningSnapshot(learningData);
+    var selectedLearningSession = selectedLearningSessionId
+      ? learningSessions(learningSnap.chains).find(function (s) { return s.id === selectedLearningSessionId; }) || learningSessions(learningSnap.chains)[0] || null
+      : learningSessions(learningSnap.chains)[0] || null;
+    var sessionChains = selectedLearningSession ? selectedLearningSession.chains : learningSnap.chains;
+    var selectedLearningChain = selectedLearningChainId
+      ? sessionChains.find(function (c) { return c.id === selectedLearningChainId; }) || sessionChains[0] || null
+      : sessionChains[0] || null;
     var selectedLearningSkill = selectedLearningKind === "skill"
       ? learningSnap.skills.find(function (s) { return s.id === selectedLearningSkillId; }) || learningSnap.skills[0] || null
       : null;
@@ -637,6 +705,21 @@
       if (!learningData) return;
       var skills = (learningData.learned_skills || []);
       var patterns = (learningData.patterns || []);
+      var chains = (learningData.tool_chains || []);
+      var sessions = learningSessions(chains.filter(function (chain) {
+        var summary = (chain && chain.summary) || {};
+        return (summary.total_steps || ((chain && chain.chain) || []).length || 0) > 0;
+      }));
+      if (sessions.length && (!selectedLearningSessionId || !sessions.some(function (s) { return s.id === selectedLearningSessionId; }))) {
+        setSelectedLearningSessionId(sessions[0].id);
+      }
+      var activeSession = sessions.find(function (s) { return s.id === (selectedLearningSessionId || (sessions[0] && sessions[0].id)); });
+      var activeChains = activeSession ? activeSession.chains : [];
+      if (activeChains.length && (!selectedLearningChainId || !activeChains.some(function (c) { return c.id === selectedLearningChainId; }))) {
+        setSelectedLearningChainId(activeChains[0].id);
+      }
+      if (!chains.length && selectedLearningChainId) setSelectedLearningChainId("");
+      if (!sessions.length && selectedLearningSessionId) setSelectedLearningSessionId("");
       if (!skills.length) {
         if (selectedLearningSkillId) setSelectedLearningSkillId("");
         if (patterns.length) {
@@ -654,7 +737,7 @@
         setSelectedLearningKind("skill");
         setSelectedLearningSkillId(skills[0].id);
       }
-    }, [learningData, selectedLearningKind, selectedLearningSkillId, selectedLearningPatternId]);
+    }, [learningData, selectedLearningKind, selectedLearningSkillId, selectedLearningPatternId, selectedLearningChainId, selectedLearningSessionId]);
 
     var visible = useMemo(function () {
       var q = query.trim().toLowerCase();
@@ -825,11 +908,15 @@
 
     var main = activePanel === "learning" ? h(SkillLearningMain, {
       learning: learning,
-      selectedType: selectedLearningKind,
-      selectedSkillId: selectedLearningSkill && selectedLearningSkill.id,
-      selectedPatternId: selectedLearningPattern && selectedLearningPattern.id,
-      onSelectSkill: selectLearningSkill,
-      onSelectPattern: selectLearningPattern,
+      chain: selectedLearningChain,
+      sessionId: selectedLearningSession && selectedLearningSession.id,
+      onSelectSession: function (sessionId) {
+        setSelectedLearningSessionId(sessionId || "");
+        var sessions = learningSessions(learningSnap.chains);
+        var session = sessions.find(function (s) { return s.id === sessionId; });
+        setSelectedLearningChainId(session && session.chains[0] ? session.chains[0].id : "");
+      },
+      onSelectChain: setSelectedLearningChainId,
     }) : h("div", { className: "wb-mem-main" },
       h("div", { className: "wb-mem-toolbar" },
         h("div", { className: "wb-mem-searchbox" },
@@ -855,7 +942,7 @@
     return h("section", { className: "wb-mem-page" },
       rail,
       main,
-      activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, selectedType: selectedLearningKind, skill: selectedLearningSkill, pattern: selectedLearningPattern }) : h(DetailPanel, {
+      activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, chain: selectedLearningChain, skill: selectedLearningSkill, pattern: selectedLearningPattern }) : h(DetailPanel, {
         memory: selected, related: related, busy: busy,
         onSelect: setSelectedId,
         onEdit: function (m) { setModal({ mode: "edit", id: m.id, draft: { content: m.content, category: m.category, source: m.source, confidence: m.confidence, tags: m.tags } }); },

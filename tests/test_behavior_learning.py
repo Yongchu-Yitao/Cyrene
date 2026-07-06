@@ -126,11 +126,13 @@ async def test_manual_pattern_learning_creates_skill(tmp_path, monkeypatch):
 
     await bl.process_unprocessed_turns(force=True)
     patterns = await bl.list_patterns()
+    learned = await bl.list_learned_skills()
     assert patterns
+    assert len(learned) == 1
 
     result = await bl.learn_skill_from_pattern(patterns[0]["id"])
     assert result["ok"] is True
-    assert result["created"] is True
+    assert result["created"] is False
     assert result["skill"] is not None
     assert result["skill"]["pattern_id"] == patterns[0]["id"]
 
@@ -138,6 +140,43 @@ async def test_manual_pattern_learning_creates_skill(tmp_path, monkeypatch):
     assert second["ok"] is True
     assert second["created"] is False
     assert second["skill_id"] == result["skill_id"]
+
+
+async def test_learning_agent_learn_decision_creates_skill_immediately(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+
+    async def reviewer(prompt: str, *, caller: str = "behavior_learning"):
+        if caller == "project_skill_learning_agent":
+            return {
+                "decision": "parameterize",
+                "confidence": 0.91,
+                "rationale": "Repeated project-local workflow.",
+                "proposed_skill": {
+                    "name": "修复并验证导出逻辑",
+                    "description": "读取文件、修改导出逻辑并运行测试。",
+                    "skill_type": "parameterized",
+                },
+            }
+        return {}
+
+    monkeypatch.setattr(bl, "_call_llm_json", reviewer)
+    await _record_code_fix_turn(
+        bl,
+        session_id="session-agent-learn",
+        round_id="round-agent-learn-1",
+        user_message="请检查 src/app.py 并修复导出逻辑，然后给我总结",
+    )
+
+    stats = await bl.process_unprocessed_turns(force=True)
+    skills = await bl.list_learned_skills()
+    chains = await bl.list_tool_chains()
+
+    assert stats["processed_turns"] == 1
+    assert stats["learning_reviews"] == 1
+    assert stats["agent_created_skills"] == 1
+    assert len(skills) == 1
+    assert skills[0]["skill_type"] == "parameterized"
+    assert chains[0]["review"]["decision"] == "parameterize"
 
 
 async def test_behavior_learning_patch_application_and_vocabulary_snapshot(tmp_path, monkeypatch):

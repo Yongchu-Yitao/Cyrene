@@ -243,6 +243,62 @@ async def test_workbench_knowledge_list_returns_total(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_workbench_knowledge_supports_paged_list_and_light_detail(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from cyrene import db
+    from cyrene.knowledge import store
+    from webui import routes_workbench_knowledge
+
+    db_path = str(tmp_path / "knowledge.db")
+    await db.init_knowledge_db(db_path)
+    docs = []
+    for i in range(3):
+        f = tmp_path / f"paged_{i}.md"
+        f.write_text(f"body {i}", encoding="utf-8")
+        doc = await store.upsert_document_by_path(
+            db_path,
+            path=str(f),
+            source="generated",
+            content_hash=store.content_hash_file(f),
+        )
+        docs.append(doc)
+    await store.replace_chunks(
+        db_path,
+        docs[0]["id"],
+        [{"ordinal": 0, "content": "chunk text"}],
+    )
+
+    async def _ensure_kb(workspace):
+        return db_path
+
+    monkeypatch.setattr(routes_workbench_knowledge, "_ensure_kb_db", _ensure_kb)
+
+    app = FastAPI()
+    routes_workbench_knowledge.register_workbench_knowledge_routes(app.router)
+    client = TestClient(app)
+
+    page = client.get(
+        "/api/workbench/knowledge/documents",
+        params={"workspace": "test", "limit": 2, "offset": 2},
+    ).json()
+    light_detail = client.get(
+        f"/api/workbench/knowledge/documents/{docs[0]['id']}",
+        params={"workspace": "test", "include_chunks": "false"},
+    ).json()
+    full_detail = client.get(
+        f"/api/workbench/knowledge/documents/{docs[0]['id']}",
+        params={"workspace": "test"},
+    ).json()
+
+    assert page["total"] == 3
+    assert len(page["documents"]) == 1
+    assert light_detail["chunks"] == []
+    assert full_detail["chunks"][0]["content"] == "chunk text"
+
+
+@pytest.mark.asyncio
 async def test_workbench_knowledge_shows_final_archives_by_default(tmp_path, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

@@ -310,6 +310,7 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
         tag: str = None,
         source: str = None,
         limit: int = 0,
+        offset: int = 0,
     ):
         """List documents in a workspace's knowledge base.
 
@@ -326,6 +327,7 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
                 tag=tag,
                 source=source,
                 limit=limit,
+                offset=max(0, offset),
             )
             total = await store.count_documents(
                 db_path,
@@ -355,14 +357,28 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
             return error_response("Stats failed", 500, "knowledge_stats_failed")
 
     @router.get("/api/workbench/knowledge/documents/{doc_id}")
-    async def wb_get_document(doc_id: str, workspace: str = ""):
+    async def wb_get_document(
+        doc_id: str,
+        workspace: str = "",
+        include_chunks: bool = True,
+        chunks_limit: int = 200,
+    ):
         """Get a document with its chunks and relations."""
         try:
             db_path = await _ensure_kb_db(workspace)
             doc = await store.get_document(db_path, doc_id)
             if not doc:
                 return JSONResponse({"error": "not found"}, status_code=404)
-            chunks = await store.get_chunks(db_path, doc_id, with_embedding=False, limit=200)
+            chunks = (
+                await store.get_chunks(
+                    db_path,
+                    doc_id,
+                    with_embedding=False,
+                    limit=max(1, min(chunks_limit, 500)),
+                )
+                if include_chunks
+                else []
+            )
             relations = await store.list_relations(db_path, document_id=doc_id)
             return {**doc, "chunks": chunks, "relations": relations}
         except Exception:

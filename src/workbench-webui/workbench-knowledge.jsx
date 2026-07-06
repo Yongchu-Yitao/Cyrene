@@ -9,6 +9,7 @@
   var useEffect = React.useEffect;
   var useMemo = React.useMemo;
   var useRef = React.useRef;
+  var KB_PAGE_SIZE = 80;
 
   // ── helpers ──────────────────────────────────────────────────────────
 
@@ -209,9 +210,15 @@
         docs._total = (payload && payload.total != null) ? payload.total : docs.length;
         return docs;
       },
-      detail: async function (id) {
-        var r = await fetch("/api/workbench/knowledge/documents/" + encodeURIComponent(id) + "?" + withWs());
-        return jsonOrThrow(r);
+      detail: async function (id, options) {
+        var qs = new URLSearchParams();
+        if (options && options.includeChunks === false) qs.set("include_chunks", "false");
+        if (options && options.chunksLimit) qs.set("chunks_limit", String(options.chunksLimit));
+        var r = await fetch("/api/workbench/knowledge/documents/" + encodeURIComponent(id) + "?" + withWs(qs.toString()));
+        return jsonOrThrow(r).then(function (payload) {
+          payload._chunksLoaded = !(options && options.includeChunks === false);
+          return payload;
+        });
       },
       related: async function (id) {
         var r = await fetch("/api/workbench/knowledge/documents/" + encodeURIComponent(id) + "/related?" + withWs());
@@ -485,7 +492,9 @@
     var detail = props.detail;
     var doc = props.doc;
     var chunks = (detail && Array.isArray(detail.chunks)) ? detail.chunks : [];
-    if (props.loading) return React.createElement("div", { className: "wb-kb-muted pad" }, "加载内容中…");
+    if (props.loading || (detail && detail._chunksLoaded === false)) {
+      return React.createElement("div", { className: "wb-kb-muted pad" }, "加载内容中…");
+    }
     if (!chunks.length) {
       var st = statusMeta(doc.status);
       return React.createElement("div", { className: "wb-kb-muted pad" },
@@ -611,6 +620,7 @@
 
     var docsState = useState([]); var documents = docsState[0]; var setDocuments = docsState[1];
     var loadState = useState(true); var loading = loadState[0]; var setLoading = loadState[1];
+    var moreLoadState = useState(false); var loadingMore = moreLoadState[0]; var setLoadingMore = moreLoadState[1];
     var errState = useState(""); var error = errState[0]; var setError = errState[1];
     var queryState = useState(""); var query = queryState[0]; var setQuery = queryState[1];
     var tabState = useState("all"); var activeTab = tabState[0]; var setActiveTab = tabState[1];
@@ -636,13 +646,34 @@
 
     var client = useMemo(function () { return api(workspace); }, [workspace]);
 
-    function loadDocuments() {
-      setLoading(true);
+    function mergeDocs(prev, next) {
+      var seen = {};
+      var out = [];
+      prev.concat(next).forEach(function (doc) {
+        if (!doc || seen[doc.id]) return;
+        seen[doc.id] = true;
+        out.push(doc);
+      });
+      return out;
+    }
+
+    function loadDocuments(options) {
+      var opts = options || {};
+      var append = !!opts.append;
+      var offset = Number(opts.offset || 0);
+      if (append) setLoadingMore(true); else setLoading(true);
       setError("");
-      return client.list({})
-        .then(function (docs) { setDocuments(Array.isArray(docs) ? docs : []); setTotalDocs(docs._total || 0); })
-        .catch(function (err) { setError(err.message || String(err)); setDocuments([]); setTotalDocs(0); })
-        .finally(function () { setLoading(false); });
+      return client.list({ limit: KB_PAGE_SIZE, offset: offset })
+        .then(function (docs) {
+          var nextDocs = Array.isArray(docs) ? docs : [];
+          setDocuments(function (prev) { return append ? mergeDocs(prev, nextDocs) : nextDocs; });
+          setTotalDocs(docs._total || 0);
+        })
+        .catch(function (err) {
+          setError(err.message || String(err));
+          if (!append) { setDocuments([]); setTotalDocs(0); }
+        })
+        .finally(function () { if (append) setLoadingMore(false); else setLoading(false); });
     }
 
     useEffect(function () {
@@ -658,7 +689,7 @@
         if (pendingDocId) {
           setTimeout(function () {
             setSelectedId(pendingDocId);
-            client.detail(pendingDocId)
+            client.detail(pendingDocId, { includeChunks: false })
               .then(function (full) { setDetail(full); })
               .catch(function () { setDetail(null); });
             window.__workbenchPendingSelection = null;
@@ -687,9 +718,21 @@
       setRelatedError("");
       setRelatedLoadedId("");
       setDetailLoading(true);
-      client.detail(id)
+      client.detail(id, { includeChunks: false })
         .then(function (full) { setDetail(full); })
         .catch(function () { setDetail(null); })
+        .finally(function () { setDetailLoading(false); });
+    }
+
+    function loadDocumentContent(id) {
+      if (!id) return Promise.resolve(null);
+      setDetailLoading(true);
+      return client.detail(id, { includeChunks: true, chunksLimit: 200 })
+        .then(function (full) {
+          setDetail(full);
+          return full;
+        })
+        .catch(function () { return null; })
         .finally(function () { setDetailLoading(false); });
     }
 
@@ -719,6 +762,13 @@
       loadRelated(selectedId);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [detailTab, selectedId, relatedLoadedId]);
+
+    useEffect(function () {
+      if (detailTab !== "content" || !selectedId || detailLoading) return;
+      if (detail && detail.id === selectedId && detail._chunksLoaded) return;
+      loadDocumentContent(selectedId);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [detailTab, selectedId, detail && detail._chunksLoaded, detailLoading]);
 
     function handleSaveTags(id, newTags) {
       return client.update(id, { tags: newTags })
@@ -776,6 +826,7 @@
     }, [documents]);
 
     var selectedDoc = selectedId ? (docsById[selectedId] || (detail && detail.id === selectedId ? detail : null)) : null;
+    var hasMoreDocs = totalDocs > documents.length;
 
     // filter + sort (client-side, snappy over the loaded set)
     var visibleDocs = useMemo(function () {
@@ -1023,7 +1074,23 @@
                   })
                 )
                 : renderCards(visibleDocs))
+            ),
+          !loading && hasMoreDocs && React.createElement(
+            "div", { className: "wb-kb-load-more" },
+            React.createElement(
+              "button",
+              {
+                type: "button",
+                className: "wb-btn tonal",
+                disabled: loadingMore,
+                onClick: function () {
+                  loadDocuments({ append: true, offset: documents.length });
+                },
+              },
+              loadingMore ? React.createElement("span", { className: "wb-kb-spin" }) : null,
+              React.createElement("span", null, loadingMore ? "加载中…" : "加载更多")
             )
+          )
         ),
         React.createElement(
           "div", { className: "wb-kb-count" },

@@ -21,6 +21,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -7632,6 +7633,39 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 return
 
         pump_task = asyncio.create_task(_pump())
+        browser_context: dict[str, str] = {"session_id": "", "round_id": ""}
+
+        async def _browser_page_meta() -> dict[str, str]:
+            page = getattr(session, "_page", None)
+            if page is None:
+                return {"url": "", "title": ""}
+            try:
+                title = await page.title()
+            except Exception:
+                title = ""
+            return {"url": str(getattr(page, "url", "") or ""), "title": str(title or "")}
+
+        async def _record_browser_event(kind: str, payload: dict[str, Any]) -> None:
+            try:
+                from cyrene import behavior_learning as _behavior_learning
+
+                meta = await _browser_page_meta()
+                await _behavior_learning.record_browser_user_event(
+                    session_id=browser_context.get("session_id", ""),
+                    round_id=browser_context.get("round_id", ""),
+                    event_kind=kind,
+                    payload=payload,
+                    browser_url=meta.get("url", ""),
+                    browser_title=meta.get("title", ""),
+                    target={
+                        "x": payload.get("x"),
+                        "y": payload.get("y"),
+                        "button": payload.get("button"),
+                    },
+                )
+            except Exception:
+                logger.debug("failed to record browser user event", exc_info=True)
+
         try:
             while True:
                 raw = await websocket.receive_text()
@@ -7643,32 +7677,62 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                     continue
                 mtype = str(msg.get("type") or "")
                 try:
+                    if mtype == "context":
+                        browser_context["session_id"] = str(msg.get("sessionId") or "").strip()
+                        browser_context["round_id"] = str(msg.get("roundId") or "").strip()
+                        continue
                     if mtype == "control":
                         # User took/released live control of the headless page.
-                        session.set_user_control(bool(msg.get("on")))
+                        on = bool(msg.get("on"))
+                        session.set_user_control(on)
+                        await _record_browser_event("control_start" if on else "control_stop", {"on": on})
                     elif mtype == "mouse":
+                        payload = {
+                            "event": str(msg.get("event") or ""),
+                            "x": float(msg.get("x") or 0),
+                            "y": float(msg.get("y") or 0),
+                            "button": str(msg.get("button") or "none"),
+                            "clickCount": int(msg.get("clickCount") or 0),
+                            "deltaX": float(msg.get("deltaX") or 0),
+                            "deltaY": float(msg.get("deltaY") or 0),
+                            "modifiers": int(msg.get("modifiers") or 0),
+                        }
                         await session.dispatch_mouse(
-                            type=str(msg.get("event") or ""),
-                            x=float(msg.get("x") or 0),
-                            y=float(msg.get("y") or 0),
-                            button=str(msg.get("button") or "none"),
-                            click_count=int(msg.get("clickCount") or 0),
-                            delta_x=float(msg.get("deltaX") or 0),
-                            delta_y=float(msg.get("deltaY") or 0),
-                            modifiers=int(msg.get("modifiers") or 0),
+                            type=payload["event"],
+                            x=payload["x"],
+                            y=payload["y"],
+                            button=payload["button"],
+                            click_count=payload["clickCount"],
+                            delta_x=payload["deltaX"],
+                            delta_y=payload["deltaY"],
+                            modifiers=payload["modifiers"],
                         )
+                        if payload["event"] in {"mouseReleased", "mouseWheel"}:
+                            await _record_browser_event("click" if payload["event"] == "mouseReleased" else "scroll", payload)
                     elif mtype == "key":
+                        payload = {
+                            "event": str(msg.get("event") or ""),
+                            "key": str(msg.get("key") or ""),
+                            "code": str(msg.get("code") or ""),
+                            "text": str(msg.get("text") or ""),
+                            "keyCode": int(msg.get("keyCode") or 0),
+                            "modifiers": int(msg.get("modifiers") or 0),
+                        }
                         await session.dispatch_key(
-                            type=str(msg.get("event") or ""),
-                            key=str(msg.get("key") or ""),
-                            code=str(msg.get("code") or ""),
-                            text=str(msg.get("text") or ""),
-                            key_code=int(msg.get("keyCode") or 0),
-                            modifiers=int(msg.get("modifiers") or 0),
+                            type=payload["event"],
+                            key=payload["key"],
+                            code=payload["code"],
+                            text=payload["text"],
+                            key_code=payload["keyCode"],
+                            modifiers=payload["modifiers"],
                         )
+                        if payload["event"] == "keyDown":
+                            await _record_browser_event("key", payload)
                     elif mtype == "text":
                         # Committed string (IME composition result / paste).
-                        await session.insert_text(str(msg.get("text") or ""))
+                        text = str(msg.get("text") or "")
+                        await session.insert_text(text)
+                        await _record_browser_event("text", {"text": text})
                 except Exception:
                     logger.debug("browser input dispatch failed", exc_info=True)
         except WebSocketDisconnect:
@@ -7919,15 +7983,147 @@ def register_routes(app, bot: Any, db_path: str) -> None:
 
     # ---- Evolution API ----
 
+    def _learning_project_id(project: str = "") -> str:
+        raw = str(project or "").strip()
+        if not raw:
+            return ""
+        try:
+            store = _read_workbench_store()
+            for item in store.get("projects") or []:
+                if str(item.get("id") or "") == raw or _workbench_project_data_key(item) == raw:
+                    return str(item.get("id") or raw)
+        except Exception:
+            pass
+        return raw
+
+    def _learning_project_ids(project: str = "") -> list[str]:
+        """Return all project id values that should match this project.
+
+        Returns [resolved_uuid, original_raw] so queries can match both
+        new-style (UUID) and legacy (dataKey / empty) project_id values.
+        """
+        raw = str(project or "").strip()
+        if not raw:
+            return []
+        resolved = _learning_project_id(raw)
+        ids = [resolved] if resolved else []
+        if raw and raw != resolved:
+            ids.append(raw)
+        return ids
+
+    _LEARNING_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+    _LEARNING_FILE_PATH_RE = re.compile(
+        r"(?P<path>(?:/[^\s\"'<>]+|[A-Za-z]:\\[^\s\"'<>]+)\.(?:png|jpg|jpeg|webp|gif|pdf|md|txt|json|csv|tsv|xlsx|docx|pptx|py|js|jsx|ts|tsx|css|html))",
+        re.IGNORECASE,
+    )
+
+    def _learning_extract_paths(value: Any) -> list[str]:
+        paths: list[str] = []
+        if isinstance(value, dict):
+            for item in value.values():
+                paths.extend(_learning_extract_paths(item))
+            return paths
+        if isinstance(value, list):
+            for item in value:
+                paths.extend(_learning_extract_paths(item))
+            return paths
+        text = str(value or "")
+        for match in _LEARNING_FILE_PATH_RE.finditer(text):
+            path = match.group("path").rstrip(".,);]")
+            if path and path not in paths:
+                paths.append(path)
+        return paths
+
+    def _learning_enrich_tool_chains(chains: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        enriched: list[dict[str, Any]] = []
+        for chain in chains:
+            if not isinstance(chain, dict):
+                continue
+            summary = chain.get("summary") if isinstance(chain.get("summary"), dict) else {}
+            if int(summary.get("total_steps") or 0) <= 0:
+                continue
+            screenshots: list[dict[str, Any]] = []
+            files: list[dict[str, Any]] = []
+            seen_paths: set[str] = set()
+            for step in chain.get("chain") or []:
+                if not isinstance(step, dict):
+                    continue
+                tool_name = str(step.get("tool") or "")
+                candidates: list[str] = []
+                candidates.extend(_learning_extract_paths(step.get("args") or {}))
+                candidates.extend(_learning_extract_paths(step.get("input_summary") or ""))
+                candidates.extend(_learning_extract_paths(step.get("output_summary") or ""))
+                for raw_path in candidates:
+                    if raw_path in seen_paths:
+                        continue
+                    seen_paths.add(raw_path)
+                    target = Path(raw_path).expanduser()
+                    suffix = target.suffix.lower()
+                    item = {
+                        "path": raw_path,
+                        "name": target.name or raw_path,
+                        "tool": tool_name,
+                    }
+                    if suffix in _LEARNING_IMAGE_EXTS and target.exists() and target.is_file():
+                        screenshots.append({
+                            **item,
+                            "url": "/api/tool-chain-media?path=" + quote(str(target.resolve())),
+                        })
+                    else:
+                        files.append(item)
+            chain = dict(chain)
+            chain["screenshots"] = screenshots
+            chain["files"] = files
+            enriched.append(chain)
+        return enriched
+
+    async def _learning_is_known_media_path(target: Path) -> bool:
+        try:
+            from cyrene import pattern as _pattern
+
+            chains = await _pattern.list_tool_chains("", 500)
+        except Exception:
+            return False
+        for chain in chains:
+            for step in chain.get("chain") or []:
+                if not isinstance(step, dict):
+                    continue
+                candidates: list[str] = []
+                candidates.extend(_learning_extract_paths(step.get("args") or {}))
+                candidates.extend(_learning_extract_paths(step.get("input_summary") or ""))
+                candidates.extend(_learning_extract_paths(step.get("output_summary") or ""))
+                for raw_path in candidates:
+                    try:
+                        if Path(raw_path).expanduser().resolve() == target:
+                            return True
+                    except Exception:
+                        continue
+        return False
+
+    @router.get("/api/tool-chain-media")
+    async def api_tool_chain_media(path: str = ""):
+        target = Path(str(path or "")).expanduser().resolve()
+        if target.suffix.lower() not in _LEARNING_IMAGE_EXTS:
+            return JSONResponse({"error": "unsupported media type"}, status_code=400)
+        if not target.exists() or not target.is_file():
+            return JSONResponse({"error": "media not found"}, status_code=404)
+        if not await _learning_is_known_media_path(target):
+            return JSONResponse({"error": "media not found"}, status_code=404)
+        media_type = mimetypes.guess_type(str(target))[0] or "image/png"
+        return FileResponse(target, media_type=media_type)
+
     @router.get("/api/evolution")
-    async def api_evolution():
+    async def api_evolution(project: str = ""):
         """Aggregated data for the Evolution page."""
         from cyrene import pattern as _pattern
-        status, scripts, patterns, learned_skills, cc_learning = await asyncio.gather(
+        project_ids = _learning_project_ids(project)
+        project_id = _learning_project_id(project)
+        status, scripts, patterns, learned_skills, tool_chains, cc_learning = await asyncio.gather(
             _build_status(),
-            _pattern.list_scripts("all"),
-            _pattern.list_patterns("all"),
-            _pattern.list_learned_skills(),
+            _pattern.list_scripts("all", project_id),
+            _pattern.list_patterns("all", project_id),
+            _pattern.list_learned_skills(project_id),
+            _pattern.list_tool_chains(project_ids),
             _build_cc_learning_snapshot(),
         )
         return {
@@ -7936,23 +8132,29 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             "scripts": scripts,
             "patterns": patterns,
             "learned_skills": learned_skills,
+            "tool_chains": _learning_enrich_tool_chains(tool_chains),
             "cc_learning": cc_learning,
         }
 
     @router.get("/api/scripts")
-    async def api_scripts(status: str = "all"):
+    async def api_scripts(status: str = "all", project: str = ""):
         from cyrene import pattern as _pattern
-        return {"scripts": await _pattern.list_scripts(status)}
+        return {"scripts": await _pattern.list_scripts(status, _learning_project_id(project))}
 
     @router.get("/api/patterns")
-    async def api_patterns(status: str = "all"):
+    async def api_patterns(status: str = "all", project: str = ""):
         from cyrene import pattern as _pattern
-        return {"patterns": await _pattern.list_patterns(status)}
+        return {"patterns": await _pattern.list_patterns(status, _learning_project_id(project))}
 
     @router.get("/api/learned-skills")
-    async def api_learned_skills():
+    async def api_learned_skills(project: str = ""):
         from cyrene import pattern as _pattern
-        return {"skills": await _pattern.list_learned_skills()}
+        return {"skills": await _pattern.list_learned_skills(_learning_project_id(project))}
+
+    @router.get("/api/tool-chains")
+    async def api_tool_chains(project: str = "", limit: int = 80):
+        from cyrene import pattern as _pattern
+        return {"tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(_learning_project_ids(project), limit))}
 
     @router.get("/api/learned-skills/{skill_id}")
     async def api_learned_skill_detail(skill_id: str):
@@ -8064,43 +8266,52 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {"ok": True, "result": result}
 
     @router.post("/api/patterns/learn")
-    async def api_patterns_learn():
+    async def api_patterns_learn(project: str = ""):
         from cyrene import pattern as _pattern
 
-        stats = await _pattern.scan_for_manual_learn()
+        project_id = _learning_project_id(project)
+        project_ids = _learning_project_ids(project)
+        stats = await _pattern.scan_for_manual_learn(project_id)
         return {
             "ok": True,
             "stats": stats,
-            "patterns": await _pattern.list_patterns("all"),
-            "learned_skills": await _pattern.list_learned_skills(),
-            "scripts": await _pattern.list_scripts("all"),
+            "patterns": await _pattern.list_patterns("all", project_id),
+            "learned_skills": await _pattern.list_learned_skills(project_id),
+            "tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(project_ids)),
+            "scripts": await _pattern.list_scripts("all", project_id),
         }
 
     @router.post("/api/patterns/{pattern_id}/learn-skill")
-    async def api_pattern_learn_skill(pattern_id: str):
+    async def api_pattern_learn_skill(pattern_id: str, project: str = ""):
         from cyrene import pattern as _pattern
 
-        result = await _pattern.learn_skill_from_pattern(pattern_id)
+        project_id = _learning_project_id(project)
+        project_ids = _learning_project_ids(project)
+        result = await _pattern.learn_skill_from_pattern(pattern_id, project_id)
         if not result.get("ok"):
             return JSONResponse(result, status_code=400)
         return {
             **result,
-            "patterns": await _pattern.list_patterns("all"),
-            "learned_skills": await _pattern.list_learned_skills(),
-            "scripts": await _pattern.list_scripts("all"),
+            "patterns": await _pattern.list_patterns("all", project_id),
+            "learned_skills": await _pattern.list_learned_skills(project_id),
+            "tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(project_ids)),
+            "scripts": await _pattern.list_scripts("all", project_id),
         }
 
     @router.post("/api/patterns/rebuild")
-    async def api_patterns_rebuild():
+    async def api_patterns_rebuild(project: str = ""):
         from cyrene import pattern as _pattern
 
-        result = await _pattern.rebuild_learning_state(reprocess_all_turns=True)
+        project_id = _learning_project_id(project)
+        project_ids = _learning_project_ids(project)
+        result = await _pattern.rebuild_learning_state(reprocess_all_turns=True, project_id=project_id)
         return {
             "ok": True,
             "result": result,
-            "patterns": await _pattern.list_patterns("all"),
-            "learned_skills": await _pattern.list_learned_skills(),
-            "scripts": await _pattern.list_scripts("all"),
+            "patterns": await _pattern.list_patterns("all", project_id),
+            "learned_skills": await _pattern.list_learned_skills(project_id),
+            "tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(project_ids)),
+            "scripts": await _pattern.list_scripts("all", project_id),
         }
 
     @router.get("/api/vocabulary")

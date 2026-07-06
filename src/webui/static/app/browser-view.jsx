@@ -253,7 +253,18 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
         const ws = new WebSocket(proto + "//" + location.host + "/ws/browser");
         wsRef.current = ws;
         ws.binaryType = "arraybuffer";
-        ws.onopen = function () { if (!closed) { setConnected(true); setError(""); } };
+        ws.onopen = function () {
+          if (!closed) {
+            setConnected(true); setError("");
+            try {
+              ws.send(JSON.stringify({
+                type: "context",
+                sessionId: String(browserSessionId || browser.sessionId || ""),
+                roundId: String(roundId || browser.roundId || ""),
+              }));
+            } catch (e) {}
+          }
+        };
         ws.onmessage = function (ev) {
           if (typeof ev.data !== "string") {
             const img = imgRef.current;
@@ -303,7 +314,7 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
         objectUrlRef.current = "";
       }
     };
-  }, []);
+  }, [browserSessionId, roundId]);
 
   function sendWs(obj) {
     const ws = wsRef.current;

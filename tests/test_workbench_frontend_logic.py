@@ -149,20 +149,49 @@ def test_workbench_task_controller_uses_current_session_from_returned_store():
     assert "(nextStore && nextStore.activeSession) || currentSession" not in controller
 
 
-def test_workbench_memory_skill_learning_selects_patterns():
+def test_workbench_memory_skill_learning_selects_tool_chains():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
     i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    routes = (root / "src" / "webui" / "routes.py").read_text(encoding="utf-8")
 
-    assert "selectedLearningKind" in source
-    assert "selectedLearningPatternId" in source
-    assert "onSelectPattern(pattern.id)" in source
-    assert "selectedType === \"pattern\"" in source
-    assert "memory.learning.learnNow" in source
-    assert "memory.learning.learnCurrentSkillTitle" in source
-    assert '"memory.learning.learnNow": "Learn now"' in i18n
-    assert '"memory.learning.learnNow": "立即学习"' in i18n
+    assert "selectedLearningChainId" in source
+    assert "selectedLearningSessionId" in source
+    assert "learningSessions(snap.chains)" in source
+    assert "tool_chains" in source
+    assert "onSelectChain(chain.id)" in source
+    assert "onSelectSession" in source
+    assert "memRenderMarkdown" in source
+    assert "dangerouslySetInnerHTML" in source
+    assert "toolIcon(step)" in source
+    assert "toolDisplayName(step)" in source
+    assert "toolParamsText(step)" in source
+    assert "detailScreenshot(chain)" in source
+    assert "detailFiles(chain)" in source
+    assert "className: \"wb-replay-learn\"" not in source
+    assert "Cyrene Browser" not in source
+    assert "回放速度" not in source
+    assert "工具链 Replay" not in source
+    assert "wb-replay-learn" not in styles
+    assert "wb-replay-timeline" not in styles
+    assert "wb-replay-logo" not in styles
+    assert "memory.learning.detailsTitle" in source
+    assert "memory.learning.agentAnswer" in source
+    assert "memory.learning.sessionSelect" in source
     assert "/learn-skill" in source
+    assert "grid-template-columns: 34px 42px minmax(0, 1fr) 22px" in styles
+    assert ".wb-detail-shot" in styles
+    assert ".wb-detail-files" in styles
+    assert "memory.learning.detailsTitle" in i18n
+    assert "memory.learning.sessionSelect" in i18n
+    assert "memory.learning.review.parameterize" in i18n
+    assert "memory.learning.processedNote" in i18n
+    learning_source = source[source.index("function learningSnapshot"):source.index("// ── main page")]
+    assert not any("\u4e00" <= ch <= "\u9fff" for ch in learning_source)
+    assert "_learning_enrich_tool_chains" in routes
+    assert "_learning_is_known_media_path" in routes
+    assert "/api/tool-chain-media" in routes
 
 
 def test_workbench_chat_overview_i18n_has_zh_labels():
