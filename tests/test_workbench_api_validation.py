@@ -225,6 +225,7 @@ def test_project_creation_validates_and_creates_writable_workspace(
 
     assert response.status_code == 200
     assert response.json()["project"]["workspacePath"] == str(target.resolve())
+    assert response.json()["project"]["workspacePathSource"] == "user"
     assert target.is_dir()
 
 

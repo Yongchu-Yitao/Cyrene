@@ -760,6 +760,36 @@ _WORKBENCH_TEMPLATE_LABELS = {
 _INIT_QUESTION_TYPES = {"text", "textarea", "single", "multi"}
 
 
+def _workbench_init_workspace_relationship_guidance(project: dict[str, Any]) -> str:
+    """Prompt guardrails for non-empty workspaces during project init."""
+    template = str(project.get("template") or "").strip()
+    template_label = _WORKBENCH_TEMPLATE_LABELS.get(template, template or "空白项目")
+    workspace_source = str(project.get("workspacePathSource") or "user").strip().lower()
+    user_selected_workspace = workspace_source != "generated"
+
+    if template == "import":
+        return (
+            "工作区关系判断：用户选择的是“导入项目”类型，可以把已有文件视为导入对象的重要线索，"
+            "但仍需要用问题确认导入范围、保留/改造边界和后续目标。"
+        )
+
+    if user_selected_workspace:
+        return (
+            "工作区关系判断：用户为新项目选择/使用了一个已有文件夹，且当前项目类型是"
+            f"「{template_label}」。这只说明工作区非空，不等于用户确认这些文件就是本项目，"
+            "也不等于用户要围绕这些文件继续开发。尤其当项目类型是“空白项目”时，"
+            "它可能只是默认选项，不能当作用户明确声明。\n"
+            "生成表单时必须把已有文件当作“待确认线索”，不要把探索到的题材、IP、代码库、"
+            "素材或文档直接描述成已确认的项目定位。第一组问题应优先确认：这些文件和新项目的关系"
+            "（复用/导入、仅作参考、需要忽略、需要整理归档或另建空目录），以及用户真正想启动的目标。"
+        )
+
+    return (
+        "工作区关系判断：工作区已有文件，可作为项目现状线索；仍不要把探索结论写成绝对事实，"
+        "需要通过问题确认用户希望如何处理已有内容。"
+    )
+
+
 class _WorkbenchGenerationError(RuntimeError):
     """Structured, user-displayable failure from a workbench generation call."""
 
@@ -1808,6 +1838,7 @@ async def _workbench_generate_init_form(
 
     workspace_path = str(project.get("workspacePath") or "").strip()
     workspace_root = Path(workspace_path).expanduser().resolve() if workspace_path else None
+    workspace_relationship_guidance = _workbench_init_workspace_relationship_guidance(project)
 
     init_form_schema = (
         "最后只返回一个 JSON 对象，不要包含任何额外说明或 Markdown 代码块标记。"
@@ -1871,12 +1902,14 @@ async def _workbench_generate_init_form(
             )
         return empty_form
 
-    # ── Has real files → agent explores thoroughly ─────────────────────
+    # ── Has real files → agent explores carefully without assuming intent ─
     prompt = (
         "你是一个项目初始化助理。用户刚刚创建了一个新项目，工作区已有文件。"
-        "你需要深度探索工作区，了解项目的内容、结构和现状，"
-        "然后同时结合用户的项目描述和已有文件，设计一组贴合实际的引导式问题，帮助用户完成项目初始化。\n\n"
+        "你需要探索工作区，了解里面可能存在的内容、结构和现状，"
+        "然后结合用户的项目描述、项目类型和已有文件线索，设计一组贴合实际的引导式问题，"
+        "帮助用户完成项目初始化。\n\n"
         f"项目信息：\n{details_block}\n\n"
+        f"{workspace_relationship_guidance}\n\n"
         "你可以使用 list_directory、read_file 和 glob 工具深度探索工作区。\n\n"
         "请多花几轮仔细探索，推荐的探索步骤：\n"
         "1. list_directory('.') — 先了解顶层结构\n"
@@ -1886,9 +1919,12 @@ async def _workbench_generate_init_form(
         "充分了解后再生成 JSON，不要过早下结论。\n\n"
         + init_form_schema +
         "要求：\n"
+        "- greeting 必须保持中性谨慎：可以说“我看到工作区里有一些已有文件/资料”，但不能说“这是一个围绕某某的项目”或“与你描述的空白项目差异较大”，除非用户描述中明确这么说；\n"
+        "- 不能把已有文件夹内容当作已确认项目事实；文件探索结论只能作为待确认线索来设计问题；\n"
         "- 根据工作区的实际情况，自主决定需要几个分组以及覆盖哪些方向；\n"
         "- 用户提供的项目描述是最高优先级需求信号；问题必须同时回应项目描述和文件现状，不要只围绕代码结构提问；\n"
         "- 如果项目描述与工作区内容存在缺口或不一致，要设计问题澄清差异和下一步取舍；\n"
+        "- 如果用户没有明确说明要导入/复用已有文件，第一组问题必须先确认已有文件与新项目的关系，再追问具体规划；\n"
         "- 每个分组 2-4 个问题，问题要贴合项目实际情况，避免空泛；\n"
         "- 优先围绕项目已有的内容提问（如需要完善的地方、可以补充的方向、后续步骤等）；\n"
         "- 多数问题用 text 或 textarea；涉及阶段/选择类的用 single 或 multi 并给出 options；\n"
@@ -2464,7 +2500,7 @@ def update_task_plan_for_session(
             if isinstance(item, dict)
         }
         field_values = fields if isinstance(fields, dict) else {}
-        structure_operation = op in ("add", "delete", "reorder", "set_dependencies")
+        structure_operation = op in ("add", "reorder", "set_dependencies")
         if op == "update" and any(
             field in field_values for field in ("title", "description", "dependsOn")
         ):
@@ -2525,8 +2561,11 @@ def update_task_plan_for_session(
             target["dependsOn"] = _workbench_dependency_ids(depends_on)
         elif op == "delete":
             target_id = str(step_id or "").strip()
-            if target_id not in by_id:
+            target = by_id.get(target_id)
+            if not target:
                 return {"ok": False, "error": "步骤不存在。", "code": "step_not_found"}
+            if str(target.get("status") or "pending") != "pending":
+                return {"ok": False, "error": "只能删除尚未运行的步骤。", "code": "step_started"}
             dependent_titles = [
                 str(item.get("title") or "")
                 for item in plan
@@ -4928,6 +4967,14 @@ _WORKBENCH_TASK_MODE_SYSTEM = (
     "- 如果最终交付文件是通过 Bash/shell/命令行生成的，也必须用 send_file 声明，否则不会出现在「产物」面板。\n"
     "- 交付物请写到 deliverables/ 子目录下；用 send_file 声明的文件会被自动归档到 deliverables/。\n"
     "- 不要只在回复里写出文件路径就当作已经交付。"
+)
+
+_WORKBENCH_TASK_REPLY_DIRECTIVE = (
+    "## 本轮任务对话回复模式\n"
+    "用户这次是在任务里继续对话或提问。优先根据当前任务上下文直接回复，并把完整回复放入 "
+    "quit(reply)。不要因为处于任务页就自动查看文件、执行命令或更新计划。只有用户明确要求"
+    "检查/执行/修改，或缺少必要事实无法准确回答时，才进入工具执行。若用户明确要求增删、"
+    "重排或实质修改步骤，再调用 update_task_plan。"
 )
 
 def _workbench_compose_static_system(
@@ -9113,6 +9160,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         now = _utc_now_iso()
         project_id = _short_id("project")
         raw_workspace = str(body.get("workspacePath") or "").strip()
+        workspace_path_source = "user" if raw_workspace else "generated"
         if not raw_workspace:
             # No explicit workspace folder picked — create a fresh per-project
             # subdirectory under the global WORKSPACE_DIR so the new project
@@ -9141,6 +9189,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             "color": str(body.get("color") or "").strip(),
             "template": str(body.get("template") or "blank").strip() or "blank",
             "workspacePath": workspace_path,
+            "workspacePathSource": workspace_path_source,
             "status": "active",
             "model": _get_model(),
             "accountTier": str(body.get("accountTier") or "Pro"),
@@ -9192,6 +9241,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 )
             except WorkspacePathError as exc:
                 return error_response(str(exc), 400, exc.code)
+            project["workspacePathSource"] = "user"
         for field in ("name", "description", "icon", "color", "template", "workspacePath", "status", "model", "accountTier"):
             if field in body:
                 project[field] = body[field]
@@ -9498,7 +9548,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 for step in plan
                 if isinstance(step, dict)
             }
-            structure_operation = operation in ("add", "delete", "reorder", "set_dependencies")
+            structure_operation = operation in ("add", "reorder", "set_dependencies")
             fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
             if operation == "update" and any(
                 field in fields for field in ("title", "description", "dependsOn")
@@ -9559,8 +9609,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 target["dependsOn"] = _workbench_dependency_ids(body.get("dependsOn"))
             elif operation == "delete":
                 step_id = str(body.get("stepId") or "").strip()
-                if step_id not in by_id:
+                target = by_id.get(step_id)
+                if not target:
                     return JSONResponse({"error": "步骤不存在。", "code": "step_not_found"}, status_code=404)
+                if str(target.get("status") or "pending") != "pending":
+                    return JSONResponse({"error": "只能删除尚未运行的步骤。", "code": "step_started"}, status_code=409)
                 dependent_titles = [
                     str(step.get("title") or "")
                     for step in plan
@@ -10283,8 +10336,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         ephemeral_system = _workbench_compose_ephemeral_system(
             project, session, workspace_root=workspace_root
         )
+        ephemeral_system = (ephemeral_system + "\n\n" + _WORKBENCH_TASK_REPLY_DIRECTIVE).strip()
         volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
-        agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+        agent_command = command or "workbench-task-reply"
+        agent_reply = await _workbench_agent_reply(message, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         workspace_text_after = _workbench_workspace_text_snapshot(workspace_root)
@@ -10486,8 +10541,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         )
         if finalizing:
             ephemeral_system = (ephemeral_system + "\n\n" + _workbench_finalize_directive(session)).strip()
+        elif kind == "answer":
+            ephemeral_system = (ephemeral_system + "\n\n" + _WORKBENCH_TASK_REPLY_DIRECTIVE).strip()
         volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
-        agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
+        agent_command = command or ("workbench-task-reply" if kind == "answer" else "")
+        agent_reply = await _workbench_agent_reply(user_input, session, [], attachments=attachments, permission_mode=mode, command=agent_command, project_workspace=str(project.get("workspacePath") or ""), ephemeral_system=ephemeral_system, volatile_ephemeral_system=volatile_ephemeral_system, static_system_extra=_workbench_compose_static_system(project, session))
         git_status_after = _workbench_git_status_snapshot(workspace_root)
         workspace_files_after = _workbench_workspace_file_snapshot(workspace_root)
         workspace_text_after = _workbench_workspace_text_snapshot(workspace_root)

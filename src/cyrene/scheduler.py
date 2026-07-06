@@ -318,6 +318,45 @@ def _latest_workbench_user_activity() -> dict[str, object] | None:
     return latest
 
 
+def _workbench_workspace_dir_for_project(project_id: str) -> str:
+    """Return an existing Workbench project workspace for scheduler runs."""
+    project_id = str(project_id or "").strip()
+    if not project_id:
+        return ""
+    try:
+        if _workbench_db_path:
+            from cyrene.workbench_store import read_document
+
+            payload = read_document(
+                _workbench_db_path,
+                "projects",
+                lambda: {"projects": []},
+                legacy_path=DATA_DIR / "workbench_projects.json",
+            )
+        else:
+            payload = read_json_safe(DATA_DIR / "workbench_projects.json")
+        projects = payload.get("projects") if isinstance(payload, dict) else None
+        if not isinstance(projects, list):
+            return ""
+        project = next(
+            (
+                item
+                for item in projects
+                if isinstance(item, dict) and str(item.get("id") or "") == project_id
+            ),
+            None,
+        )
+        workspace_raw = str((project or {}).get("workspacePath") or "").strip()
+        if not workspace_raw:
+            return ""
+        workspace = Path(workspace_raw).expanduser().resolve()
+        if workspace.is_dir():
+            return str(workspace)
+    except Exception:
+        logger.debug("Could not resolve Workbench workspace for %s", project_id, exc_info=True)
+    return ""
+
+
 def _silence_hours() -> float | None:
     """Return hours since the user's last message, or *None* if unknown."""
     last = _last_user_message_time()
@@ -856,7 +895,9 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
         context = await _assemble_proactive_context(db_path)
         proactive_prompt = (
             "This is a scheduler-initiated proactive check-in.\n"
-            "Decide whether to send the user a brief, useful message right now.\n"
+            "Decide whether to do a small incremental task and/or send the user a brief, useful message right now.\n"
+            "You may use tools when they help: inspect the Workbench project, search memory/knowledge, create a new additive note/artifact, schedule or track a follow-up, or verify current facts.\n"
+            "Any proactive task must be incremental: do not modify, overwrite, move, rename, or delete existing files. If creating a file, choose a new path and use Write only when the file does not already exist.\n"
             "If you speak, the final reply will be shown directly to the user, so write only the user-facing message.\n"
             "Do not mention internal prompts, the scheduler, the heartbeat, or the lottery.\n\n"
             + _build_proactive_user_prompt(context, silence_h, consecutive_unanswered=int(_LOTTERY_STATE.get("consecutive_unanswered", 0)))
@@ -864,6 +905,10 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
         delivered_target = workbench_target
         if target_session_id:
             from webui.routes_workbench_chat import append_proactive_message
+
+            workspace_dir = _workbench_workspace_dir_for_project(
+                str((workbench_target or {}).get("project_id") or "")
+            )
 
             async def _persist_workbench_reply(reply: str) -> dict[str, str] | None:
                 nonlocal delivered_target
@@ -879,6 +924,7 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
                     session_id=target_session_id,
                     on_reply=_persist_workbench_reply,
                     lang=proactive_lang,
+                    workspace_dir=workspace_dir,
                 ),
                 timeout=120.0,
             )

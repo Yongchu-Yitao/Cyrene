@@ -14,7 +14,22 @@ TOOL_NAME = 'Edit'
 TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL_NAME)
 
 
+def _is_system_initiated_round() -> bool:
+    try:
+        from cyrene.agent.state import _ui_round_assistant_meta
+
+        meta = _ui_round_assistant_meta.get()
+        return isinstance(meta, dict) and bool(meta.get("system_initiated"))
+    except Exception:
+        return False
+
+
 async def _tool_edit(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
+    if _is_system_initiated_round():
+        return (
+            "Tool unavailable: proactive system-initiated rounds may only do "
+            "incremental file work. Editing existing files is forbidden."
+        )
     from cyrene.settings_store import is_workspace_active
     if not is_workspace_active():
         return "Workspace access is disabled. Ask the user to add workspace via '+ add context' in the chat input, or set a workspace directory in Settings."

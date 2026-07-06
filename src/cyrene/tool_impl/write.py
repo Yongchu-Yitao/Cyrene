@@ -14,6 +14,16 @@ TOOL_NAME = 'Write'
 TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL_NAME)
 
 
+def _is_system_initiated_round() -> bool:
+    try:
+        from cyrene.agent.state import _ui_round_assistant_meta
+
+        meta = _ui_round_assistant_meta.get()
+        return isinstance(meta, dict) and bool(meta.get("system_initiated"))
+    except Exception:
+        return False
+
+
 async def _tool_write(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
     from cyrene.settings_store import is_workspace_active
     if not is_workspace_active():
@@ -26,6 +36,11 @@ async def _tool_write(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: 
             return elev
         # 已放行（完全访问 / 审核 agent 批准）：full-access 已置位，重新解析即成功
         path = _resolve_workspace_write_target(str(args["path"]))
+    if _is_system_initiated_round() and path.exists():
+        return (
+            "Not written: proactive system-initiated rounds may only create "
+            f"new files, and this path already exists: {path}"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(str(args.get("content", "")), encoding="utf-8")
     return f"Wrote {path}"

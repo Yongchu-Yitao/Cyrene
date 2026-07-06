@@ -643,8 +643,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     }).catch(function () {});
   }
 
-  function reloadWorkbench(nextProjectId, nextSessionId) {
-    setLoading(true);
+  function reloadWorkbench(nextProjectId, nextSessionId, options) {
+    options = options || {};
+    var showLoading = options.showLoading !== false;
+    if (showLoading) setLoading(true);
     setError("");
     return model.fetchProjects()
       .then(function (next) {
@@ -663,7 +665,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         setError(err.message || String(err));
       })
       .finally(function () {
-        setLoading(false);
+        if (showLoading) setLoading(false);
       });
   }
 
@@ -720,10 +722,12 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     });
   }
 
-  function fetchAndMergeSession(sessionId) {
+  function fetchAndMergeSession(sessionId, options) {
     if (!sessionId) return Promise.resolve(null);
+    options = options || {};
+    var showLoading = options.showLoading !== false;
     var seq = ++sessionLoadSeqRef.current;
-    setLoading(true);
+    if (showLoading) setLoading(true);
     return model.fetchSession(sessionId)
       .then(function (payload) {
         if (seq !== sessionLoadSeqRef.current) return null;
@@ -735,7 +739,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         return null;
       })
       .finally(function () {
-        if (seq === sessionLoadSeqRef.current) setLoading(false);
+        if (showLoading && seq === sessionLoadSeqRef.current) setLoading(false);
       });
   }
 
@@ -924,9 +928,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
 
   useWorkbenchEffect(function () {
     // Goal-loop runs emit a status event on every phase/step change. Reloading
-    // the whole store on each one would pile concurrent fetches onto a server
-    // that is already busy running the agent — exactly when requests start
-    // failing ("Load failed"). Coalesce bursts into a single trailing reload.
+    // the whole store on each one would briefly flip the task area into its
+    // loading shell and pile concurrent fetches onto a server that is already busy
+    // running the agent. Merge the lightweight event immediately, then do a silent
+    // trailing session refresh for fields that are only persisted server-side.
     var goalLoopReloadTimer = null;
     function handleRuntimeEvent(data) {
       if (!data) return;
@@ -934,8 +939,37 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         var activeSessionId = String((activeViewRef.current && activeViewRef.current.sessionId) || "");
         var eventSessionId = String(data.session_id || "");
         if (eventSessionId && eventSessionId !== activeSessionId) return;
+        var publicLoop = data.goal_loop && typeof data.goal_loop === "object" ? data.goal_loop : null;
+        if (activeSessionId && publicLoop) {
+          setStore(function (prev) {
+            var active = prev && prev.activeSession;
+            if (!active || String(active.id || "") !== activeSessionId) return prev;
+            var loopStatus = String(publicLoop.status || "");
+            var nextSessionPatch = { goalLoop: publicLoop };
+            if (["running", "waiting_for_user", "paused", "blocked", "review", "cancelled"].indexOf(loopStatus) >= 0) {
+              nextSessionPatch.status = loopStatus;
+            }
+            function mergeSession(session) {
+              return session && String(session.id || "") === activeSessionId
+                ? Object.assign({}, session, nextSessionPatch)
+                : session;
+            }
+            var nextProjects = (prev.projects || []).map(function (project) {
+              if (!project || project.id !== prev.activeProjectId) return project;
+              return Object.assign({}, project, { sessions: (project.sessions || []).map(mergeSession) });
+            });
+            return Object.assign({}, prev, {
+              projects: nextProjects,
+              activeProject: nextProjects.find(function (project) { return project.id === prev.activeProjectId; }) || prev.activeProject,
+              activeSession: Object.assign({}, active, nextSessionPatch),
+            });
+          });
+        }
         if (goalLoopReloadTimer) clearTimeout(goalLoopReloadTimer);
-        goalLoopReloadTimer = setTimeout(function () { goalLoopReloadTimer = null; reloadWorkbench(); }, 700);
+        goalLoopReloadTimer = setTimeout(function () {
+          goalLoopReloadTimer = null;
+          fetchAndMergeSession(eventSessionId || activeSessionId, { showLoading: false });
+        }, 1600);
         return;
       }
       if (["tool_call", "llm_call", "subagent_update"].indexOf(data.type) < 0) return;
@@ -3245,7 +3279,7 @@ function TaskWorkArea(props) {
       window.dispatchEvent(new CustomEvent("cyrene:add-task-attachments", { detail: { files: files } }));
     } catch (e) {}
   }, taskDropEnabled);
-  if (props.loading) {
+  if (props.loading && (!project || !session)) {
     return <main className="workbench-main"><div className="workbench-empty">正在加载工作台...</div></main>;
   }
   if (!project || !session) {

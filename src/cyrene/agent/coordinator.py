@@ -41,6 +41,7 @@ from cyrene.agent.prompts import (
     _MAIN_AGENT_PROMPT,
     _PHASE1_DECISION_PROMPT,
     _QUICK_ANSWER_PROMPT,
+    _WORKBENCH_TASK_REPLY_PROMPT,
     _WORKSPACE_SCOPE_BLOCK,
     _spawn_policy_prompt_block,
     conversation_identity_block,
@@ -662,6 +663,16 @@ async def _run_chat_agent(
                 transforms=["concat_into_system"],
                 content=_QUICK_ANSWER_PROMPT,
             ))
+        elif command == "workbench-task-reply":
+            main_system = main_system + "\n\n" + _WORKBENCH_TASK_REPLY_PROMPT
+            main_system_context.append(context_block(
+                "command.workbench-task-reply",
+                "command_prompt",
+                source="cyrene.agent.prompts._WORKBENCH_TASK_REPLY_PROMPT",
+                reason="Workbench task reply mode selected",
+                transforms=["concat_into_system"],
+                content=_WORKBENCH_TASK_REPLY_PROMPT,
+            ))
         elif command == "help-me-decide":
             main_system = main_system + "\n\n" + _HELP_ME_DECIDE_PROMPT
             main_system_context.append(context_block(
@@ -899,6 +910,7 @@ async def run_heartbeat_agent(
     session_id: str = "",
     on_reply: Callable[[str], Awaitable[Any]] | None = None,
     lang: str = "",
+    workspace_dir: str = "",
 ) -> str:
     # The scheduler runs server-side with no HTTP request, so it cannot read the
     # per-request UI ``lang`` that normal chats carry. When a language preference
@@ -927,9 +939,11 @@ async def run_heartbeat_agent(
         "- Lean toward reaching out. Only stay silent (call `quit`) when a message now would feel intrusive or repetitive — for example you just messaged, or there is truly nothing worth saying.\n"
         "- If the user did not reply to a recent proactive message, be more considerate: keep it lighter and don't pile on.\n"
         "- Keep it to 1–2 sentences. Be direct, warm, and specific.\n"
-        "- If tools are useful, use them before composing the reply."
+        "- If tools are useful, use them before composing the reply. You are allowed to do small, concrete incremental work instead of only speaking.\n"
+        "- Incremental-work boundary: you may read/search/inspect and may create new additive files or records, but you must not modify, overwrite, move, rename, or delete existing files. Use `Write` only for a path that does not already exist; do not use `Edit` for proactive work. Avoid shell write commands, redirects, `rm`, `mv`, or other file-changing shell operations."
     )
     session_token = _current_session_id.set(session_id)
+    workspace_token = _active_workspace_dir.set(workspace_dir or "")
     try:
         ctx = _ensure_session(session_id)
         # Proactive work is strictly non-preemptive. A user-owned run always
@@ -951,6 +965,7 @@ async def run_heartbeat_agent(
                     return ""
             return reply
     finally:
+        _active_workspace_dir.reset(workspace_token)
         _current_session_id.reset(session_token)
 
 

@@ -54,7 +54,56 @@ _BROWSER_TOOL_NAMES = {
 }
 
 
+def _is_system_initiated_round() -> bool:
+    try:
+        from cyrene.agent.state import _ui_round_assistant_meta
+
+        meta = _ui_round_assistant_meta.get()
+        return isinstance(meta, dict) and bool(meta.get("system_initiated"))
+    except Exception:
+        return False
+
+
+def _proactive_tool_refusal(name: str, arguments: dict[str, Any]) -> str | None:
+    """Hard-stop non-incremental filesystem tools during proactive rounds."""
+    if not _is_system_initiated_round():
+        return None
+    if name == "Edit":
+        return (
+            "Tool unavailable: proactive system-initiated rounds may only do "
+            "incremental file work. Editing existing files is forbidden."
+        )
+    if name in {"Bash", "SendShell", "StartShell"}:
+        command = str(arguments.get("command") or "").strip()
+        if not command:
+            return None
+        try:
+            from cyrene.tool_legacy import (
+                _classify_destructive_shell_command,
+                _command_is_file_deletion,
+                _shell_command_requires_write_guard,
+            )
+
+            writes = _shell_command_requires_write_guard(command)
+            destructive = _classify_destructive_shell_command(command) is not None
+            deletes = _command_is_file_deletion(command)
+        except Exception:
+            writes = any(token in command for token in (">", ">>"))
+            destructive = False
+            deletes = False
+        if writes or destructive or deletes:
+            return (
+                "Tool unavailable: proactive system-initiated rounds cannot run "
+                "shell commands that write, overwrite, move, or delete files. "
+                "Use read-only shell commands, or use Write for a brand-new file path."
+            )
+    return None
+
+
 async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id: int, db_path: str, notify_state: dict[str, bool] | None) -> str:
+    proactive_refusal = _proactive_tool_refusal(name, arguments)
+    if proactive_refusal is not None:
+        return proactive_refusal
     if name == "ask_user":
         from cyrene.agent.state import _ui_round_assistant_meta
 

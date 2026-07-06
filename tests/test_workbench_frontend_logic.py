@@ -225,6 +225,19 @@ def test_workbench_chat_reveals_browser_tab_from_live_browser_events():
     assert "(browserState && browserState.active) || browserMarkedActive" in source
 
 
+def test_workbench_chat_delete_detaches_local_fork_markers():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    handler = source.split("function handleDeleteChat(chatId)", 1)[1].split("function handleToTask", 1)[0]
+
+    assert "function detachDeletedForkSource(item)" in handler
+    assert "delete cleaned.forkedFromChatId" in handler
+    assert "delete cleaned.forkedAtMessageId" in handler
+    assert "delete cleaned.forkMessage" in handler
+    assert ".map(detachDeletedForkSource)" in handler
+    assert "setActiveChat(function (prev) { return detachDeletedForkSource(prev); })" in handler
+
+
 def test_workbench_chat_allows_drafting_but_not_sending_while_running():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
@@ -265,7 +278,12 @@ def test_workbench_chat_plan_confirmation_can_continue_in_auto_mode():
     assert "function answerChat(chatId, questionId, answerText, options)" in source
     assert 'mode: options.mode || undefined' in source
     assert 'kind === "plan_confirmation"' in source
+    assert "isPlanConfirmation && options.length > 0 ?" in source
     assert 'onAnswer(pq.id, options[0], "auto")' in source
+    plan_branch = source.split("isPlanConfirmation && options.length > 0 ?", 1)[1].split(
+        ") : options.length > 0 && (", 1
+    )[0]
+    assert "options.map" not in plan_branch
     assert "workbenchChat.approveAuto" in i18n
 
 
@@ -294,9 +312,15 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
 def test_workbench_chat_splits_live_tools_around_intermediate_messages():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    append_block = source.split("function appendIntermediate(chatId, message)", 1)[1].split(
+        "function streamHandlers(chatId)", 1
+    )[0]
 
     assert 'type === "intermediate_message"' in source
     assert "function appendIntermediate(chatId, message)" in source
+    assert "message.liveDedupeKey" in append_block
+    assert "messageKey === segmentKey" in append_block
+    assert "existingIndex >= 0" in append_block
     assert "segments: segments.concat" in source
     assert "progress: Array.isArray(message.trace) ? message.trace" in source
     assert "completedSegments.map" in source
@@ -1140,6 +1164,28 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
     assert "compiled/workbench-shortcuts.js?v=0.6.2" in index
+
+
+def test_workbench_about_related_actions_only_click_right_button():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+
+    related_block = source.split('React.createElement("section", { className: "wb-about-related-card" }', 1)[1].split(
+        "changelogOpen && React.createElement", 1
+    )[0]
+
+    assert 'React.createElement("div", { key: item.title, className: "wb-about-related-row" }' in related_block
+    assert 'React.createElement("button", { type: "button", className: "wb-about-related-action", onClick: item.onClick }' in related_block
+    assert 'React.createElement("a", { className: "wb-about-related-action", href: item.href, target: "_blank", rel: "noopener noreferrer" }' in related_block
+    assert 'className: "wb-about-related-row", onClick: item.onClick' not in related_block
+    assert 'className: "wb-about-related-row", href: item.href' not in related_block
+
+    related_row_rule = styles.split(".wb-about-related-row {", 1)[1].split("}", 1)[0]
+    assert "cursor: pointer" not in related_row_rule
+    assert ".wb-about-related-row:hover" not in styles
+    assert ".wb-about-related-action:hover" in styles
+    assert ".wb-about-related-action:focus-visible" in styles
 
 
 def test_workbench_help_center_lists_shortcuts_from_module_with_customize_link():

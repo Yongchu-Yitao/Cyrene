@@ -360,6 +360,15 @@ async def _run_main_agent(
             "- Call `ask_user` ONLY if the question is genuinely unclear.\n"
             "- This mode is for pure conversation only — no tools, no research."
         )
+    elif _current_command.get() == "workbench-task-reply":
+        phase1_decision = (
+            "Decision phase rules:\n"
+            "- You are replying inside a Workbench task, and this turn is a question/follow-up rather than a work request.\n"
+            "- If the current task/session context is enough, call `quit` immediately and put the complete answer in `reply`.\n"
+            "- Do NOT call `use_tools` merely because the conversation is attached to a task, project, plan, or workspace.\n"
+            "- Call `use_tools` only if the user explicitly asks you to inspect, execute, modify, or if an accurate answer truly needs facts not present in the current context.\n"
+            "- If clarification is needed before answering, call `ask_user`."
+        )
     else:
         phase1_decision = _PHASE1_DECISION_PROMPT
     if system_initiated:

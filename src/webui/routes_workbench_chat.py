@@ -374,6 +374,36 @@ def _find_chat(payload: dict[str, Any], chat_id: str) -> dict[str, Any] | None:
     return None
 
 
+_FORK_METADATA_FIELDS = ("forkedFromChatId", "forkedAtMessageId", "forkMessage")
+
+
+def _clear_fork_metadata(chat: dict[str, Any]) -> bool:
+    changed = False
+    for field in _FORK_METADATA_FIELDS:
+        if field in chat:
+            chat.pop(field, None)
+            changed = True
+    return changed
+
+
+def _prune_orphaned_fork_metadata(payload: dict[str, Any]) -> bool:
+    """Drop branch metadata when the source chat no longer exists."""
+    chats = payload.get("chats") if isinstance(payload.get("chats"), list) else []
+    chat_ids = {
+        str(chat.get("id") or "")
+        for chat in chats
+        if isinstance(chat, dict) and str(chat.get("id") or "")
+    }
+    changed = False
+    for chat in chats:
+        if not isinstance(chat, dict):
+            continue
+        parent_id = str(chat.get("forkedFromChatId") or "").strip()
+        if parent_id and parent_id not in chat_ids:
+            changed = _clear_fork_metadata(chat) or changed
+    return changed
+
+
 def _chat_preview(chat: dict[str, Any]) -> str:
     for message in reversed(chat.get("messages") or []):
         text = str(message.get("content") or "").strip()
@@ -1115,6 +1145,31 @@ def _segment_fallback_id(message: dict[str, Any], index: int) -> str:
     return "msg_live_" + hashlib.sha1(encoded.encode("utf-8")).hexdigest()[:16]
 
 
+def _live_segment_dedupe_key(entry: dict[str, Any]) -> str:
+    """Stable semantic key for live-published reply segments.
+
+    The live scanner may first see an assistant tool preamble before the agent
+    assigns ``message_id`` and then see the same segment again with its durable
+    id. Deduping only by id lets the Workbench render the same prose repeatedly
+    while the run is active. Keep this key deliberately narrow: visible text plus
+    delivered attachment identity, excluding trace because trace can grow around
+    the same preamble as tools settle.
+    """
+    content = re.sub(r"\s+", " ", str(entry.get("content") or "")).strip()
+    attachments: list[str] = []
+    for item in entry.get("attachments") or []:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("url") or item.get("id") or item.get("name") or "").strip()
+        if key:
+            attachments.append(key)
+    if not content and not attachments:
+        return ""
+    payload = {"content": content, "attachments": sorted(set(attachments))}
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return "msg_sem_" + hashlib.sha1(encoded.encode("utf-8")).hexdigest()[:16]
+
+
 def _extract_exchange_segments(
     state_messages: list[dict[str, Any]],
     state_ids_before: set[str],
@@ -1218,6 +1273,9 @@ def _published_intermediate_message_ids(run: ChatRun) -> set[str]:
         mid = str(message.get("id") or "").strip()
         if mid:
             ids.add(mid)
+        key = str(message.get("liveDedupeKey") or "").strip()
+        if key:
+            ids.add(key)
     return ids
 
 
@@ -1244,12 +1302,21 @@ async def _publish_live_exchange_segments_once(
     )
     for entry in intermediate_entries:
         mid = str(entry.get("id") or "").strip()
-        if not mid or mid in published_ids:
+        key = _live_segment_dedupe_key(entry)
+        if not mid or mid in published_ids or (key and key in published_ids):
+            if mid:
+                published_ids.add(mid)
             continue
         published_ids.add(mid)
+        if key:
+            published_ids.add(key)
+        public_entry = _public_message(entry)
+        if key and isinstance(public_entry, dict):
+            public_entry = dict(public_entry)
+            public_entry["liveDedupeKey"] = key
         await run.publish({
             "type": "intermediate_message",
-            "message": _public_message(entry),
+            "message": public_entry,
         })
 
 
@@ -1492,6 +1559,8 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
     @router.get("/api/workbench/chats")
     async def api_workbench_list_chats(project: str = ""):
         payload = _read_chats_store()
+        if _prune_orphaned_fork_metadata(payload):
+            _write_chats_store(payload)
         data_key = _project_data_key(project) if project else ""
         chats = [
             _public_chat_light(chat)
@@ -1601,6 +1670,8 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 return JSONResponse({"error": "chat not found"}, status_code=404)
             return {"chat": legacy[0]}
         payload = _read_chats_store()
+        if _prune_orphaned_fork_metadata(payload):
+            _write_chats_store(payload)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
@@ -1782,6 +1853,9 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         next_chats = [chat for chat in chats if str(chat.get("id") or "") != chat_id]
         if len(next_chats) == len(chats):
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        for chat in next_chats:
+            if str(chat.get("forkedFromChatId") or "") == chat_id:
+                _clear_fork_metadata(chat)
         payload["chats"] = next_chats
         _write_chats_store(payload)
         try:

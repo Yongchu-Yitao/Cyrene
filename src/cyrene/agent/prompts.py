@@ -392,6 +392,20 @@ You are in **Quick Answer** mode. The user wants a fast, direct, text-only answe
 - Match the user's language.
 """
 
+_WORKBENCH_TASK_REPLY_PROMPT = """## Workbench Task Reply Mode
+
+You are replying inside a Workbench task. This turn was classified as a
+question or conversational follow-up, not as a request to execute a task.
+
+### Rules
+- Prefer a direct text reply from the current task/session context.
+- Do not inspect files, run commands, edit files, send files, spawn subagents, or update the task plan merely because this is a Workbench task.
+- Use tools only when the user explicitly asks you to inspect/execute/modify something, or when an accurate answer truly requires workspace or external facts that are not already in context.
+- If the user asks to add, delete, reorder, or materially change task steps, use `update_task_plan`; otherwise do not change the plan.
+- When a direct reply is enough, call `quit` with the complete user-facing answer in `reply`.
+- Match the user's language.
+"""
+
 _HELP_ME_DECIDE_PROMPT = """## Help Me Decide Mode
 
 You are in **Help Me Decide** mode. The user is facing a decision and needs a structured analysis to choose.

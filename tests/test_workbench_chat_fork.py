@@ -129,6 +129,16 @@ def _write_chat(fork_env, chat_id, messages, **extra):
     return chat
 
 
+def _write_chats(fork_env, chats):
+    """Write multiple chats into the workbench chats store."""
+    from cyrene import io_utils
+
+    io_utils.atomic_write_json(
+        fork_env["data_dir"] / "workbench_chats.json",
+        {"chats": chats},
+    )
+
+
 def _write_state(fork_env, session_id, messages):
     """Write a raw agent state file for a session."""
     from cyrene import io_utils
@@ -558,3 +568,80 @@ def test_fork_exposes_fork_fields_in_chat_listing(client, fork_env):
     forked = [c for c in chats if c.get("forkedFromChatId") == "chat_src"]
     assert len(forked) == 1
     assert forked[0]["forkedAtMessageId"] == "u2"
+
+
+def test_delete_source_chat_removes_child_fork_marker(client, fork_env):
+    _write_chats(fork_env, [
+        {
+            "id": "chat_src",
+            "projectId": "project_1",
+            "kind": "chat",
+            "title": "Source",
+            "status": "idle",
+            "model": "gpt-4",
+            "createdAt": "2026-01-01T00:00:00+00:00",
+            "updatedAt": "2026-01-02T00:00:00+00:00",
+            "messages": [{"id": "u1", "role": "user", "content": "hello"}],
+        },
+        {
+            "id": "chat_child",
+            "projectId": "project_1",
+            "kind": "chat",
+            "title": "Child",
+            "status": "idle",
+            "model": "gpt-4",
+            "createdAt": "2026-01-03T00:00:00+00:00",
+            "updatedAt": "2026-01-04T00:00:00+00:00",
+            "forkedFromChatId": "chat_src",
+            "forkedAtMessageId": "u1",
+            "forkMessage": "edited hello",
+            "messages": [{"id": "u2", "role": "user", "content": "edited hello"}],
+        },
+    ])
+
+    delete_response = client.delete("/api/workbench/chats/chat_src")
+    assert delete_response.status_code == 200
+
+    child_response = client.get("/api/workbench/chats/chat_child")
+    assert child_response.status_code == 200
+    child = child_response.json()["chat"]
+    assert "forkedFromChatId" not in child
+    assert "forkedAtMessageId" not in child
+    assert "forkMessage" not in child
+
+    list_response = client.get("/api/workbench/chats?project=project_1")
+    listed_child = next(c for c in list_response.json()["chats"] if c["id"] == "chat_child")
+    assert "forkedFromChatId" not in listed_child
+    assert "forkedAtMessageId" not in listed_child
+
+
+def test_chat_listing_prunes_existing_orphaned_fork_marker(client, fork_env):
+    _write_chats(fork_env, [
+        {
+            "id": "chat_child",
+            "projectId": "project_1",
+            "kind": "chat",
+            "title": "Child",
+            "status": "idle",
+            "model": "gpt-4",
+            "createdAt": "2026-01-03T00:00:00+00:00",
+            "updatedAt": "2026-01-04T00:00:00+00:00",
+            "forkedFromChatId": "missing_source",
+            "forkedAtMessageId": "u1",
+            "forkMessage": "edited hello",
+            "messages": [{"id": "u2", "role": "user", "content": "edited hello"}],
+        },
+    ])
+
+    response = client.get("/api/workbench/chats?project=project_1")
+
+    assert response.status_code == 200
+    child = next(c for c in response.json()["chats"] if c["id"] == "chat_child")
+    assert "forkedFromChatId" not in child
+    assert "forkedAtMessageId" not in child
+    assert "forkMessage" not in child
+
+    stored = client.get("/api/workbench/chats/chat_child").json()["chat"]
+    assert "forkedFromChatId" not in stored
+    assert "forkedAtMessageId" not in stored
+    assert "forkMessage" not in stored

@@ -1464,13 +1464,16 @@ function UpdateSection({ t, config }) {
         React.createElement("div", null, React.createElement("span", null, t("settings.updatePublishedAt", null, "Published")), React.createElement("strong", null, fmtDate(info && info.published_at))),
       ),
       statusDetail && React.createElement("p", { className: "wb-about-update-status" }, statusDetail),
-      info && info.update_available && React.createElement("div", { className: "wb-update-notes" },
-        React.createElement("span", null, t("settings.updateReleaseNotes", null, "Release notes")),
-        React.createElement("pre", null, notesText())
-      ),
-      error && React.createElement("p", { className: "wb-hint", style: { color: "var(--wb-red)" } }, error),
       downloading && React.createElement("div", { className: "wb-progress-bar" },
         React.createElement("div", { style: { width: progress.total > 0 ? Math.round((progress.downloaded / progress.total) * 100) + "%" : "0%", height: 4, background: "var(--wb-blue)", borderRadius: 2, transition: "width 0.3s" } }),
+      ),
+      error && React.createElement("p", { className: "wb-hint", style: { color: "var(--wb-red)" } }, error),
+      info && info.update_available && React.createElement("div", { className: "wb-update-notes" },
+        React.createElement("span", null, t("settings.updateReleaseNotes", null, "Release notes")),
+        React.createElement("div", {
+          className: "wb-update-notes-body markdown",
+          dangerouslySetInnerHTML: { __html: renderSettingsMarkdown(notesText()) },
+        })
       ),
     ),
 
@@ -1478,13 +1481,13 @@ function UpdateSection({ t, config }) {
       React.createElement("h3", null, t("settings.relatedLinks", null, "Related links")),
       React.createElement("div", { className: "wb-about-related-list" },
         relatedLinks.map(function (item) {
-          var props = item.onClick
-            ? { key: item.title, type: "button", className: "wb-about-related-row", onClick: item.onClick }
-            : { key: item.title, className: "wb-about-related-row", href: item.href, target: "_blank", rel: "noopener noreferrer" };
-          return React.createElement(item.onClick ? "button" : "a", props,
+          var action = item.onClick
+            ? React.createElement("button", { type: "button", className: "wb-about-related-action", onClick: item.onClick }, item.action)
+            : React.createElement("a", { className: "wb-about-related-action", href: item.href, target: "_blank", rel: "noopener noreferrer" }, item.action);
+          return React.createElement("div", { key: item.title, className: "wb-about-related-row" },
             React.createElement("span", { className: "wb-about-related-icon" }, AboutRelatedIcon(item.icon)),
             React.createElement("strong", null, item.title),
-            React.createElement("span", { className: "wb-about-related-action" }, item.action),
+            action,
           );
         })
       ),

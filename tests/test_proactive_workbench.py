@@ -127,6 +127,9 @@ async def test_proactive_is_persisted_to_latest_workbench_chat(
     from webui import routes_workbench_chat
 
     chats_path = tmp_path / "workbench_chats.json"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    projects_path = tmp_path / "workbench_projects.json"
     _write_chats(chats_path, [
         {
             "id": "chat_latest",
@@ -137,6 +140,21 @@ async def test_proactive_is_persisted_to_latest_workbench_chat(
             "messages": [],
         }
     ])
+    projects_path.write_text(
+        json.dumps(
+            {
+                "projects": [
+                    {
+                        "id": "project_1",
+                        "name": "Launch",
+                        "workspacePath": str(workspace),
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     events = []
 
     async def publish(event):
@@ -144,10 +162,20 @@ async def test_proactive_is_persisted_to_latest_workbench_chat(
 
     captured = {}
 
-    async def run_agent(prompt, bot, chat_id, db_path, session_id="", on_reply=None, lang=""):
+    async def run_agent(
+        prompt,
+        bot,
+        chat_id,
+        db_path,
+        session_id="",
+        on_reply=None,
+        lang="",
+        workspace_dir="",
+    ):
         assert session_id == "chat_latest"
         assert on_reply is not None
         captured["lang"] = lang
+        captured["workspace_dir"] = workspace_dir
         await on_reply("How did the launch go?")
         return "How did the launch go?"
 
@@ -187,6 +215,7 @@ async def test_proactive_is_persisted_to_latest_workbench_chat(
     assert scheduler._LOTTERY_STATE["consecutive_unanswered"] == 1
     # The persisted UI language must be threaded into the proactive agent run.
     assert captured["lang"] == "zh"
+    assert captured["workspace_dir"] == str(workspace)
 
 
 async def test_heartbeat_agent_does_not_preempt_busy_target_session():
@@ -232,6 +261,73 @@ async def test_proactive_lang_is_pinned_in_ephemeral_system(monkeypatch):
         "hidden", None, 0, "db.sqlite3", session_id="lang_pin_none", lang="",
     )
     assert "based on their past messages" in captured["ephemeral_system"]
+
+
+async def test_proactive_write_allows_only_new_files(monkeypatch, tmp_path):
+    from cyrene.agent import state
+    from cyrene.tool_impl.write import _tool_write
+    import cyrene.settings_store as settings_store
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    existing = workspace / "existing.md"
+    existing.write_text("keep", encoding="utf-8")
+
+    monkeypatch.setattr(settings_store, "is_workspace_active", lambda: True)
+    workspace_token = state._active_workspace_dir.set(str(workspace))
+    meta_token = state._ui_round_assistant_meta.set({"system_initiated": True})
+    try:
+        result = await _tool_write(
+            {"path": "notes/new.md", "content": "hello"},
+            None,
+            0,
+            "db.sqlite3",
+            None,
+        )
+        assert "Wrote" in result
+        assert (workspace / "notes" / "new.md").read_text(encoding="utf-8") == "hello"
+
+        result = await _tool_write(
+            {"path": "existing.md", "content": "replace"},
+            None,
+            0,
+            "db.sqlite3",
+            None,
+        )
+        assert "may only create new files" in result
+        assert existing.read_text(encoding="utf-8") == "keep"
+    finally:
+        state._ui_round_assistant_meta.reset(meta_token)
+        state._active_workspace_dir.reset(workspace_token)
+
+
+async def test_proactive_rejects_edit_and_shell_file_mutations(monkeypatch):
+    from cyrene.agent import state
+    from cyrene.tool_executor import _execute_tool
+
+    meta_token = state._ui_round_assistant_meta.set({"system_initiated": True})
+    try:
+        edit_result = await _execute_tool(
+            "Edit",
+            {"path": "existing.md", "old_string": "a", "new_string": "b"},
+            None,
+            0,
+            "db.sqlite3",
+            None,
+        )
+        assert "Editing existing files is forbidden" in edit_result
+
+        shell_result = await _execute_tool(
+            "Bash",
+            {"command": "echo hello > existing.md"},
+            None,
+            0,
+            "db.sqlite3",
+            None,
+        )
+        assert "cannot run shell commands that write" in shell_result
+    finally:
+        state._ui_round_assistant_meta.reset(meta_token)
 
 
 def test_workbench_frontend_handles_proactive_sse():

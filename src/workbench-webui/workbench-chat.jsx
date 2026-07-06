@@ -650,9 +650,50 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     update(chatId, function (cur) {
       if (!cur) return null;
       var segments = Array.isArray(cur.segments) ? cur.segments : [];
-      if (segments.some(function (segment) {
-        return segment && segment.message && String(segment.message.id || "") === String(message.id || "");
-      })) return cur;
+      var messageFiles = Array.isArray(message.attachments) ? message.attachments : [];
+      var messageKey = String(message.liveDedupeKey || "").trim();
+      if (!messageKey && messageFiles.length === 0) {
+        var normalizedMessageContent = String(message.content || "").replace(/\s+/g, " ").trim();
+        if (normalizedMessageContent) messageKey = "content:" + normalizedMessageContent;
+      }
+      var existingIndex = -1;
+      for (var si = 0; si < segments.length; si++) {
+        var segment = segments[si];
+        var segmentMsg = segment && segment.message;
+        if (!segmentMsg) continue;
+        if (String(segmentMsg.id || "") === String(message.id || "")) {
+          existingIndex = si;
+          break;
+        }
+        var segmentFiles = Array.isArray(segmentMsg.attachments) ? segmentMsg.attachments : [];
+        var segmentKey = String(segmentMsg.liveDedupeKey || "").trim();
+        if (!segmentKey && segmentFiles.length === 0) {
+          var normalizedSegmentContent = String(segmentMsg.content || "").replace(/\s+/g, " ").trim();
+          if (normalizedSegmentContent) segmentKey = "content:" + normalizedSegmentContent;
+        }
+        if (messageKey && segmentKey && messageKey === segmentKey) {
+          existingIndex = si;
+          break;
+        }
+      }
+      if (existingIndex >= 0) {
+        var nextSegments = segments.slice();
+        var existing = nextSegments[existingIndex] || {};
+        nextSegments[existingIndex] = {
+          ...existing,
+          id: String(message.id || existing.id || ""),
+          message: { ...(existing.message || {}), ...message },
+          progress: Array.isArray(message.trace) ? message.trace : (Array.isArray(existing.progress) ? existing.progress : []),
+        };
+        return {
+          ...cur,
+          text: "",
+          progress: [],
+          replying: false,
+          lastEventAt: Date.now(),
+          segments: nextSegments,
+        };
+      }
       return {
         ...cur,
         text: "",
@@ -1384,6 +1425,14 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   function handleDeleteChat(chatId) {
     if (!chatId) return;
     var deletingActiveChat = activeChatId === chatId;
+    function detachDeletedForkSource(item) {
+      if (!item || String(item.forkedFromChatId || "") !== String(chatId)) return item;
+      var cleaned = { ...item };
+      delete cleaned.forkedFromChatId;
+      delete cleaned.forkedAtMessageId;
+      delete cleaned.forkMessage;
+      return cleaned;
+    }
     window.confirmModal({
       body: wbcT("workbenchChat.confirmDelete", "Delete this chat? Its messages cannot be recovered."),
       confirmLabel: wbcT("common.delete", "Delete"),
@@ -1394,11 +1443,14 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
         runtimeEngine.abort(chatId);
         runtimeEngine.clear(chatId);
         setChats(function (prev) {
-          var next = prev.filter(function (item) { return item.id !== chatId; });
+          var next = prev
+            .filter(function (item) { return item.id !== chatId; })
+            .map(detachDeletedForkSource);
           if (deletingActiveChat) setActiveChatId(next[0] ? next[0].id : "");
           return next;
         });
         if (deletingActiveChat) setActiveChat(null);
+        else setActiveChat(function (prev) { return detachDeletedForkSource(prev); });
       }).catch(function (err) { setError(wbcErrorText(err)); });
     });
   }
@@ -1775,16 +1827,20 @@ function WbcQuestionPrompt({ pending, onAnswer, busy }) {
         </div>
       ) : (
         <React.Fragment>
-          {options.length > 0 && (
+          {isPlanConfirmation && options.length > 0 ? (
+            <div className="wbc-question-options">
+              <button type="button" className="wbc-question-opt primary" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options[0], "auto"); }}>
+                {options[0] || wbcT("workbenchChat.approveAuto", "Confirm and continue in Auto")}
+              </button>
+              <button type="button" className="wbc-question-opt" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options.length ? options[options.length - 1] : "拒绝"); }}>
+                {options.length ? options[options.length - 1] : wbcT("workbenchChat.reject", "Reject")}
+              </button>
+            </div>
+          ) : options.length > 0 && (
             <div className="wbc-question-options">
               {options.map(function (opt, i) {
                 return <button key={i} type="button" className={"wbc-question-opt" + (i === 0 ? " primary" : "")} disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, opt); }}>{opt}</button>;
               })}
-              {isPlanConfirmation && options.length > 0 && (
-                <button type="button" className="wbc-question-opt primary" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options[0], "auto"); }}>
-                  {wbcT("workbenchChat.approveAuto", "Confirm and continue in Auto")}
-                </button>
-              )}
             </div>
           )}
           {pq.allowCustom && (

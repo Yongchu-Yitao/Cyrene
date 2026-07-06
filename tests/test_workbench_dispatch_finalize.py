@@ -123,3 +123,56 @@ def test_dispatch_finalize_summarizes_without_replanning(monkeypatch, tmp_path):
     # The completion directive was injected so the agent hands off, not re-works.
     assert "收尾交付" in finalize_directive_seen["ephemeral"]
     assert "guide.pdf" in finalize_directive_seen["ephemeral"]
+
+
+def test_dispatch_answer_uses_task_reply_mode_and_reply_card(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from webui import routes
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "workbench_projects.json"
+    _seed_store(store_path, tmp_path)
+
+    seen = {}
+    answer = "可以，当前计划里 PDF 已生成，剩下的是验证质量。"
+
+    async def fake_classify(_text, _session):
+        return "answer"
+
+    async def fake_reply(user_input, session, constraints, **kwargs):
+        seen["command"] = kwargs.get("command", "")
+        seen["ephemeral"] = kwargs.get("ephemeral_system", "")
+        return answer
+
+    async def no_archive(*_args, **_kwargs):
+        return None
+
+    def boom_plan(*_args, **_kwargs):
+        raise AssertionError("answer must not generate or revise a plan")
+
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "_workbench_classify_intent", fake_classify)
+    monkeypatch.setattr(routes, "_workbench_agent_reply", fake_reply)
+    monkeypatch.setattr(routes, "_workbench_generate_plan_steps", boom_plan)
+    monkeypatch.setattr(routes, "_workbench_archive_run_knowledge", no_archive)
+    monkeypatch.setattr(routes, "schedule_capture", lambda *_a, **_k: None)
+    monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+
+    app = FastAPI()
+    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    client = TestClient(app)
+
+    resp = client.post("/api/task-sessions/session_1/dispatch", json={"input": "现在进展到哪一步了？"})
+    assert resp.status_code == 200
+    body = resp.json()
+    session = body["session"]
+
+    assert body["replyKind"] == "answer"
+    assert session["status"] == "answered"
+    assert session["agentReply"] == answer
+    assert session["planRevision"] == 4
+    assert seen["command"] == "workbench-task-reply"
+    assert "本轮任务对话回复模式" in seen["ephemeral"]

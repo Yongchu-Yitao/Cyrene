@@ -218,6 +218,39 @@ async def test_live_preamble_without_message_id_is_published_once(monkeypatch):
     assert events[0]["message"]["id"].startswith("msg_live_")
 
 
+@pytest.mark.asyncio
+async def test_live_preamble_durable_id_does_not_republish_same_text(monkeypatch):
+    """A live preamble can gain message_id after the first scanner tick."""
+    from webui import routes_workbench_chat as chat_mod
+
+    live_messages = [
+        {"role": "user", "message_id": "u1", "content": "open"},
+        {
+            "role": "assistant",
+            "content": "我先打开页面看看。",
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "browser_navigate", "arguments": '{"url":"https://example.com"}'}}
+            ],
+        },
+    ]
+
+    monkeypatch.setattr(chat_mod, "_session_state_messages", lambda _chat_id: live_messages)
+    run = ChatRun("chat_live", {"type": "ack", "chatId": "chat_live"})
+    published_ids: set[str] = set()
+
+    await _publish_live_exchange_segments_once(run, "chat_live", {"u1"}, published_ids)
+    live_messages[1]["message_id"] = "a1"
+    # Simulate the publisher rebuilding its seen set from the run event log.
+    published_ids = set()
+    await _publish_live_exchange_segments_once(run, "chat_live", {"u1"}, published_ids)
+
+    events = [event for event in run.events if event.get("type") == "intermediate_message"]
+    assert len(events) == 1
+    assert events[0]["message"]["content"] == "我先打开页面看看。"
+    assert events[0]["message"]["liveDedupeKey"].startswith("msg_sem_")
+    assert "a1" in published_ids
+
+
 def test_live_extraction_surfaces_open_tool_preamble():
     messages = [
         {"role": "user", "message_id": "u1", "content": "打开 B 站看看"},

@@ -338,13 +338,23 @@ def test_workbench_plan_mutation_endpoint_validates_revision_dependencies_and_st
     stored = routes._read_workbench_store()
     stored["projects"][0]["sessions"][0]["plan"][0]["status"] = "completed"
     routes._write_workbench_store(stored)
-    locked = client.patch("/api/task-sessions/session_1/plan", json={
+    deleted = client.patch("/api/task-sessions/session_1/plan", json={
         "operation": "delete",
         "basePlanRevision": 4,
         "stepId": "step_b",
     })
+    assert deleted.status_code == 200
+    deleted_session = deleted.json()["session"]
+    assert [step["id"] for step in deleted_session["plan"]] == ["step_a"]
+    assert deleted_session["planDefinitionRevision"] == 5
+
+    locked = client.patch("/api/task-sessions/session_1/plan", json={
+        "operation": "delete",
+        "basePlanRevision": 5,
+        "stepId": "step_a",
+    })
     assert locked.status_code == 409
-    assert locked.json()["code"] == "plan_started"
+    assert locked.json()["code"] == "step_started"
 
 
 def test_workbench_step_run_rejects_unmet_dependencies_before_agent_call(monkeypatch, tmp_path):
@@ -775,6 +785,53 @@ async def test_workbench_non_empty_workspace_init_form_prioritizes_description(m
     assert "项目描述：面向医生的健康数据可视化仪表盘" in captured["prompt"]
     assert "最高优先级需求信号" in captured["prompt"]
     assert "不要只围绕代码结构提问" in captured["prompt"]
+
+
+async def test_workbench_blank_project_existing_workspace_prompt_keeps_files_unconfirmed(monkeypatch, tmp_path):
+    from webui import routes
+
+    (tmp_path / "script.txt").write_text("完整剧本\n", encoding="utf-8")
+    captured = {}
+
+    async def fake_agent(workspace_root, prompt, **kwargs):
+        captured["workspace_root"] = workspace_root
+        captured["prompt"] = prompt
+        return {
+            "greeting": "我看到工作区里有一些已有文件，我们先确认它们和新项目的关系。",
+            "sections": [{
+                "id": "workspace_relationship",
+                "title": "已有文件关系",
+                "questions": [{
+                    "id": "file_relationship",
+                    "type": "single",
+                    "label": "这些已有文件和新项目是什么关系？",
+                    "options": ["复用/导入", "仅作参考", "忽略", "另建空目录"],
+                }],
+            }],
+        }
+
+    monkeypatch.setattr(routes, "_workbench_run_explore_agent", fake_agent)
+
+    result = await routes._workbench_generate_init_form(
+        {
+            "id": "project_1",
+            "name": "新项目",
+            "description": "",
+            "template": "blank",
+            "workspacePath": str(tmp_path),
+            "workspacePathSource": "user",
+        },
+        lang="zh",
+    )
+
+    assert result is not None
+    assert result["sections"][0]["id"] == "workspace_relationship"
+    assert captured["workspace_root"] == tmp_path.resolve()
+    assert "不等于用户确认这些文件就是本项目" in captured["prompt"]
+    assert "空白项目" in captured["prompt"]
+    assert "待确认线索" in captured["prompt"]
+    assert "第一组问题必须先确认已有文件与新项目的关系" in captured["prompt"]
+    assert "不能说“这是一个围绕某某的项目”" in captured["prompt"]
 
 
 async def test_workbench_plan_revision_reuses_thread_without_tools(monkeypatch, tmp_path):
@@ -2078,6 +2135,24 @@ def test_workbench_task_plan_tool_helper_scopes_mutation_to_current_session(monk
     assert [step["title"] for step in session_b["plan"]] == ["B1"]
     assert session_b["planDefinitionRevision"] == 7
     assert stored["activeSessionId"] == "session_a"
+
+    added_step_id = session_a["plan"][1]["id"]
+    result = routes.update_task_plan_for_session(
+        "session_a",
+        "delete",
+        step_id=added_step_id,
+        reason="用户取消了追加步骤",
+    )
+
+    assert result["ok"] is True
+    stored = routes._read_workbench_store()
+    project = stored["projects"][0]
+    session_a = next(session for session in project["sessions"] if session["id"] == "session_a")
+    session_b = next(session for session in project["sessions"] if session["id"] == "session_b")
+    assert [step["title"] for step in session_a["plan"]] == ["A1"]
+    assert session_a["planDefinitionRevision"] == 3
+    assert [step["title"] for step in session_b["plan"]] == ["B1"]
+    assert session_b["planDefinitionRevision"] == 7
 
 
 def test_update_task_plan_is_registered_main_only():
