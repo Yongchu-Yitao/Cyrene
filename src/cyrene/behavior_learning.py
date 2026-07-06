@@ -14,8 +14,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import sqlite3
+import sys
 import time
 
 import aiosqlite
@@ -53,6 +55,7 @@ _ROUTER_JUDGE_THRESHOLD = 0.75
 _PATTERN_STRONG_THRESHOLD = 0.85
 _PATTERN_MEDIUM_THRESHOLD = 0.70
 _MAX_PATTERN_EXAMPLES = 8
+_SCRIPT_EXECUTION_TIMEOUT_SECONDS = 30.0
 
 _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS behavior_sessions (
@@ -563,6 +566,10 @@ _GENERIC_ROUTER_CONSTRAINTS = {
 }
 
 _SEMANTIC_FAMILIES = {
+    "browser": {
+        "browser", "web_browser", "webpage", "web_page", "navigate_to_site",
+        "navigate_to_url", "launch_application", "open_browser", "browser_navigate",
+    },
     "weather": {
         "weather", "forecast", "temperature", "humidity", "current_weather", "weather_data",
         "weather_report", "weather_forecast", "weather_lookup",
@@ -951,6 +958,8 @@ def _default_pattern_stats() -> dict[str, Any]:
 def _default_skill_stats() -> dict[str, Any]:
     return {
         "total_runs": 0,
+        "actual_runs": 0,
+        "shadow_runs": 0,
         "shadow_success": 0,
         "shadow_failure": 0,
         "active_success": 0,
@@ -1566,6 +1575,62 @@ async def record_browser_user_event(
         await _rebuild_tool_chain_for_turn(turn_id)
     except Exception:
         logger.debug("browser user event learning write failed (ignored)", exc_info=True)
+
+
+async def list_recent_browser_user_events(
+    *,
+    session_id: str = "",
+    round_id: str = "",
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    sid = str(session_id or _current_session_id.get() or "").strip()
+    rid = str(round_id or "").strip()
+    capped_limit = max(1, min(int(limit or 30), 100))
+    if not sid:
+        return []
+    async with _conn() as conn:
+        if rid:
+            cursor = await conn.execute(
+                """
+                SELECT *
+                FROM behavior_browser_user_events
+                WHERE session_id = ? AND round_id = ?
+                ORDER BY created_at DESC, event_index DESC
+                LIMIT ?
+                """,
+                (sid, rid, capped_limit),
+            )
+        else:
+            cursor = await conn.execute(
+                """
+                SELECT *
+                FROM behavior_browser_user_events
+                WHERE session_id = ?
+                ORDER BY created_at DESC, event_index DESC
+                LIMIT ?
+                """,
+                (sid, capped_limit),
+            )
+        rows = await cursor.fetchall()
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        events.append({
+            "id": str(item.get("event_id") or ""),
+            "session_id": str(item.get("session_id") or ""),
+            "round_id": str(item.get("round_id") or ""),
+            "turn_id": str(item.get("turn_id") or ""),
+            "created_at": str(item.get("created_at") or ""),
+            "index": int(item.get("event_index") or 0),
+            "kind": str(item.get("event_kind") or ""),
+            "tool": "browser.user." + str(item.get("event_kind") or "event"),
+            "url": str(item.get("browser_url") or ""),
+            "title": str(item.get("browser_title") or ""),
+            "target": _json_loads(item.get("target_json"), {}),
+            "payload": _json_loads(item.get("payload_json"), {}),
+        })
+    events.reverse()
+    return events
 
 
 async def mark_turn_skill_routed(skill_id: str) -> None:
@@ -2499,11 +2564,29 @@ def _is_trivial_skill_action(action: dict[str, Any]) -> bool:
 
 
 def _enabled_step_tool_names(steps: list[dict[str, Any]]) -> list[str]:
-    return [
-        str((step.get("implementation_reference") or {}).get("tool_name") or "")
-        for step in steps
-        if bool(step.get("enabled", True))
-    ]
+    tool_names: list[str] = []
+    for step in steps:
+        if not bool(step.get("enabled", True)):
+            continue
+        reference = step.get("implementation_reference") or {}
+        if str(step.get("implementation_kind") or "") == "script":
+            tool_names.extend(_enabled_step_tool_names(reference.get("original_steps") or []))
+            continue
+        tool_names.append(str(reference.get("tool_name") or ""))
+    return tool_names
+
+
+def _tool_call_steps_for_replay(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    replay_steps: list[dict[str, Any]] = []
+    for step in steps:
+        if not bool(step.get("enabled", True)):
+            continue
+        reference = step.get("implementation_reference") or {}
+        if str(step.get("implementation_kind") or "") == "script":
+            replay_steps.extend(_tool_call_steps_for_replay(reference.get("original_steps") or []))
+            continue
+        replay_steps.append(step)
+    return replay_steps
 
 
 def _has_auto_replay_blocked_step(steps: list[dict[str, Any]]) -> bool:
@@ -3067,6 +3150,218 @@ Context JSON:
     return proposed_name, proposed_description
 
 
+def _generated_skill_script_dir(skill_id: str) -> Path:
+    base = _DATA_DIR or DATA_DIR
+    path = Path(base) / "learned_skill_scripts" / _safe_slug(skill_id, default="skill")
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _generated_python_script_source(original_steps: list[dict[str, Any]], skill_name: str) -> str:
+    embedded_steps = json.dumps(original_steps, ensure_ascii=True, indent=2)
+    embedded_name = json.dumps(str(skill_name or "learned skill"), ensure_ascii=True)
+    return f'''#!/usr/bin/env python3
+"""Generated Workbench learned-skill script."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import re
+import subprocess
+import urllib.parse
+import urllib.request
+import webbrowser
+
+SKILL_NAME = {embedded_name}
+ORIGINAL_STEPS = {embedded_steps}
+
+
+def resolve(value, params):
+    if isinstance(value, str):
+        result = value
+        for key, param in params.items():
+            result = result.replace("{{{{" + str(key) + "}}}}", str(param))
+        return result
+    if isinstance(value, list):
+        return [resolve(item, params) for item in value]
+    if isinstance(value, dict):
+        return {{key: resolve(item, params) for key, item in value.items()}}
+    return value
+
+
+def run_tool(tool_name, args):
+    tool = str(tool_name or "")
+    if tool in {{"read_file", "Read"}}:
+        path = pathlib.Path(str(args.get("path") or args.get("file_path") or ""))
+        return {{"tool": tool, "ok": True, "output": path.read_text(encoding="utf-8", errors="replace")[:12000]}}
+    if tool in {{"Glob", "list_files", "search_files"}}:
+        pattern = str(args.get("pattern") or args.get("glob") or "*")
+        root = pathlib.Path(str(args.get("path") or args.get("cwd") or "."))
+        return {{"tool": tool, "ok": True, "output": sorted(str(path) for path in root.glob(pattern))[:500]}}
+    if tool in {{"Grep", "search_file_content"}}:
+        pattern = str(args.get("pattern") or args.get("query") or "")
+        root = pathlib.Path(str(args.get("path") or args.get("cwd") or "."))
+        regex = re.compile(pattern)
+        hits = []
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                for lineno, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                    if regex.search(line):
+                        hits.append({{"path": str(path), "line": lineno, "text": line[:500]}})
+                        if len(hits) >= 200:
+                            return {{"tool": tool, "ok": True, "output": hits}}
+            except Exception:
+                continue
+        return {{"tool": tool, "ok": True, "output": hits}}
+    if tool in {{"search_web", "WebSearch"}}:
+        query = str(args.get("query") or args.get("q") or "")
+        url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(query)
+        return {{"tool": tool, "ok": True, "output": {{"query": query, "search_url": url}}}}
+    if tool in {{"fetch_web_page", "WebFetch"}}:
+        url = str(args.get("url") or "")
+        with urllib.request.urlopen(url, timeout=20) as response:
+            body = response.read(200000).decode("utf-8", errors="replace")
+        return {{"tool": tool, "ok": True, "output": body[:12000]}}
+    if tool in {{"browser_navigate", "open_browser", "open_website"}}:
+        url = str(args.get("url") or args.get("website") or "")
+        if url:
+            webbrowser.open(url)
+        return {{"tool": tool, "ok": True, "output": url}}
+    if tool in {{"write_file", "Write"}}:
+        path = pathlib.Path(str(args.get("path") or ""))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(args.get("content") or ""), encoding="utf-8")
+        return {{"tool": tool, "ok": True, "output": str(path)}}
+    if tool in {{"edit_file", "Edit"}}:
+        path = pathlib.Path(str(args.get("path") or ""))
+        old = str(args.get("old_string") or "")
+        new = str(args.get("new_string") or "")
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if old not in text:
+            return {{"tool": tool, "ok": False, "error": "old_string not found", "path": str(path)}}
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+        return {{"tool": tool, "ok": True, "output": str(path)}}
+    if tool in {{"run_shell", "run_command", "Bash"}}:
+        command = str(args.get("command") or args.get("cmd") or "")
+        completed = subprocess.run(command, shell=True, text=True, capture_output=True, timeout=120)
+        return {{
+            "tool": tool,
+            "ok": completed.returncode == 0,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout[-12000:],
+            "stderr": completed.stderr[-12000:],
+        }}
+    return {{"tool": tool, "ok": False, "error": "unsupported generated-script tool", "args": args}}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run generated Workbench learned skill")
+    parser.add_argument("--params-json", default="{{}}")
+    ns = parser.parse_args()
+    params = json.loads(ns.params_json or "{{}}")
+    outputs = []
+    for step in ORIGINAL_STEPS:
+        if not step.get("enabled", True):
+            continue
+        ref = step.get("implementation_reference") or {{}}
+        tool_name = ref.get("tool_name") or ""
+        args_template = ref.get("args_template") or {{}}
+        items = args_template.get("_items")
+        arg_sets = items if isinstance(items, list) and items else [args_template]
+        for item in arg_sets:
+            outputs.append(run_tool(tool_name, resolve(item, params)))
+    print(json.dumps({{"skill": SKILL_NAME, "results": outputs}}, ensure_ascii=False, indent=2))
+    return 1 if any(not item.get("ok") for item in outputs) else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+
+def _should_generate_parameterized_script(steps: list[dict[str, Any]]) -> bool:
+    tool_steps = [
+        step for step in steps
+        if bool(step.get("enabled", True)) and str(step.get("implementation_kind") or "") == "tool_call"
+    ]
+    if len(tool_steps) >= 2:
+        return True
+    return any(
+        isinstance(((step.get("implementation_reference") or {}).get("args_template") or {}).get("_items"), list)
+        for step in tool_steps
+    )
+
+
+def _attach_generated_script_to_definition(definition: dict[str, Any], skill_id: str) -> dict[str, Any]:
+    steps = definition.get("steps") or []
+    if not _should_generate_parameterized_script(steps):
+        return definition
+    original_steps = _clone_json_value(steps)
+    script_path = _generated_skill_script_dir(skill_id) / "run.py"
+    script_path.write_text(
+        _generated_python_script_source(original_steps, str(definition.get("name") or "")),
+        encoding="utf-8",
+    )
+    try:
+        os.chmod(script_path, 0o755)
+    except Exception:
+        pass
+    definition["steps"] = [
+        {
+            "step_id": "script_1",
+            "type": "run_command",
+            "subtype": "generated_python_script",
+            "description": f"Run generated script for {definition.get('name') or 'learned skill'}",
+            "enabled": True,
+            "requires_llm": False,
+            "implementation_kind": "script",
+            "implementation_reference": {
+                "language": "python",
+                "script_path": str(script_path),
+                "original_steps": original_steps,
+            },
+            "failure_policy": "fail",
+        }
+    ]
+    inferred_risk = _infer_skill_risk_level(definition["steps"])
+    definition["risk_level"] = inferred_risk
+    if isinstance(definition.get("guards"), dict):
+        definition["guards"]["risk_level"] = inferred_risk
+    return definition
+
+
+async def _execute_script_step(reference: dict[str, Any], params: dict[str, Any]) -> tuple[str, bool, str]:
+    script_path = Path(str(reference.get("script_path") or ""))
+    if not script_path.exists():
+        return f"Script failed: missing script {script_path}", False, "missing_script"
+    if str(reference.get("language") or "python") != "python":
+        return "Script failed: unsupported script language", False, "unsupported_script_language"
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(script_path),
+        "--params-json",
+        _json_dumps(params or {}),
+        cwd=str(_WORKSPACE_DIR or Path.cwd()),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_SCRIPT_EXECUTION_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        return "Script failed: timed out", False, "script_timeout"
+    out = stdout.decode("utf-8", errors="replace")
+    err = stderr.decode("utf-8", errors="replace")
+    if proc.returncode == 0:
+        return out or "Script completed.", True, ""
+    return (out + ("\n" if out and err else "") + err).strip() or f"Script failed with exit code {proc.returncode}", False, "script_failed"
+
+
 async def _refresh_generated_skill_names_with_llm() -> None:
     async with _conn() as conn:
         cursor = await conn.execute(
@@ -3115,13 +3410,150 @@ async def _refresh_generated_skill_names_with_llm() -> None:
 
 def _infer_skill_risk_level(steps: list[dict[str, Any]]) -> str:
     """Return 'high' if any enabled step references a high-risk tool, else 'none'."""
-    for step in steps:
-        if not bool(step.get("enabled", True)):
-            continue
-        tool = str((step.get("implementation_reference") or {}).get("tool_name") or "")
+    for tool in _enabled_step_tool_names(steps):
         if tool in _HIGH_RISK_TOOLS:
             return "high"
     return "none"
+
+
+def _skill_stats_with_usage_counters(stats: dict[str, Any] | None) -> dict[str, Any]:
+    raw = stats or {}
+    merged = {**_default_skill_stats(), **raw}
+    actual_runs = int(merged.get("actual_runs") or 0)
+    if "actual_runs" not in raw:
+        actual_runs = int(merged.get("active_success") or 0) + int(merged.get("active_failure") or 0)
+    shadow_runs = int(merged.get("shadow_runs") or 0)
+    if "shadow_runs" not in raw:
+        shadow_runs = int(merged.get("shadow_success") or 0) + int(merged.get("shadow_failure") or 0)
+    merged["actual_runs"] = actual_runs
+    merged["shadow_runs"] = shadow_runs
+    return merged
+
+
+def _semantic_family(value: Any) -> str:
+    normalized = _safe_slug(str(value or ""), default="")
+    if not normalized:
+        return ""
+    for family, members in _SEMANTIC_FAMILIES.items():
+        if normalized == family or normalized in members:
+            return family
+    return normalized
+
+
+def _skill_duplicate_key(definition: dict[str, Any]) -> str:
+    trigger = definition.get("trigger") or {}
+    fp = trigger.get("base_fingerprint") or {}
+    intent = fp.get("intent") or {}
+    obj = fp.get("object") or {}
+    actions = fp.get("action_sequence") or []
+    action_signature = [
+        (
+            _semantic_family((action or {}).get("type")),
+            _semantic_family((action or {}).get("subtype")),
+        )
+        for action in actions[:6]
+        if isinstance(action, dict)
+    ]
+    if not action_signature:
+        action_signature = [
+            ("tool", _safe_slug(tool, default=""))
+            for tool in _enabled_step_tool_names(definition.get("steps") or [])[:6]
+            if tool
+        ]
+    parts = [
+        _semantic_family((intent or {}).get("type")),
+        _semantic_family((intent or {}).get("subtype")),
+        _semantic_family((obj or {}).get("type")),
+        _semantic_family((obj or {}).get("subtype")),
+        _semantic_family(fp.get("domain")),
+        "|".join(f"{kind}:{subtype}" for kind, subtype in action_signature),
+    ]
+    return "||".join(part for part in parts if part)
+
+
+def _skill_duplicate_score(left: dict[str, Any], right: dict[str, Any]) -> float:
+    left_fp = ((left.get("trigger") or {}).get("base_fingerprint") or {})
+    right_fp = ((right.get("trigger") or {}).get("base_fingerprint") or {})
+    if not left_fp or not right_fp:
+        return 0.0
+    sim = compute_fingerprint_similarity(left_fp, right_fp)
+    if bool(sim.get("hard_fail")):
+        return 0.0
+    total = float(sim.get("total") or 0.0)
+    if total >= 0.88:
+        return total
+    if _skill_duplicate_key(left) and _skill_duplicate_key(left) == _skill_duplicate_key(right) and total >= 0.70:
+        return total
+    return 0.0
+
+
+def _status_rank(status: str) -> int:
+    return {"active": 4, "shadow": 3, "refined": 2, "draft": 1}.get(str(status or ""), 0)
+
+
+def _dedupe_skill_definitions(definitions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: list[list[dict[str, Any]]] = []
+    for definition in definitions:
+        matched: list[dict[str, Any]] | None = None
+        for group in groups:
+            if any(_skill_duplicate_score(definition, existing) > 0 for existing in group):
+                matched = group
+                break
+        if matched is None:
+            groups.append([definition])
+        else:
+            matched.append(definition)
+    result: list[dict[str, Any]] = []
+    for group in groups:
+        ranked = sorted(
+            group,
+            key=lambda item: (
+                _status_rank(str(item.get("status") or "")),
+                int((_skill_stats_with_usage_counters(item.get("run_statistics") or {})).get("actual_runs") or 0),
+                str(item.get("updated_at") or ""),
+            ),
+            reverse=True,
+        )
+        primary = dict(ranked[0])
+        if len(ranked) > 1:
+            primary["duplicate_skill_ids"] = [
+                str(item.get("skill_id") or item.get("id") or "")
+                for item in ranked[1:]
+                if str(item.get("skill_id") or item.get("id") or "")
+            ]
+        result.append(primary)
+    result.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    return result
+
+
+async def _find_existing_duplicate_skill(
+    conn: aiosqlite.Connection,
+    *,
+    project_id: str,
+    definition: dict[str, Any],
+    exclude_skill_id: str = "",
+) -> str:
+    cursor = await conn.execute(
+        """
+        SELECT *
+        FROM learned_skills
+        WHERE project_id = ? AND status != 'deprecated'
+        ORDER BY updated_at DESC
+        """,
+        (str(project_id or ""),),
+    )
+    rows = await cursor.fetchall()
+    best_id = ""
+    best_score = 0.0
+    for row in rows:
+        existing = _skill_row_to_definition(row)
+        if exclude_skill_id and str(existing.get("skill_id") or "") == exclude_skill_id:
+            continue
+        score = _skill_duplicate_score(definition, existing)
+        if score > best_score:
+            best_score = score
+            best_id = str(existing.get("skill_id") or "")
+    return best_id
 
 
 def _skill_trigger_from_prototype(prototype: dict[str, Any], turn_examples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3221,7 +3653,6 @@ async def _skill_definition_from_pattern(pattern_id: str, skill_type: str) -> di
             "failure_case_list": [],
         },
     }
-
 
 def _skill_row_to_definition(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     data = dict(row)
@@ -3334,8 +3765,16 @@ async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
         definition = await _skill_definition_from_pattern(pattern_id, "draft")
         if not force and not _has_skillworthy_steps(definition.get("steps") or []):
             return None
+        duplicate_skill_id = await _find_existing_duplicate_skill(
+            conn,
+            project_id=str(pattern_row["project_id"] or ""),
+            definition=definition,
+        )
+        if duplicate_skill_id:
+            return duplicate_skill_id
         definition["name"] = await _unique_skill_name(conn, str(definition.get("name") or "学习技能"))
         skill_id = _new_id("learned_skill")
+        definition = _attach_generated_script_to_definition(definition, skill_id)
         now = _now_iso()
         replay_ids = await _insert_replay_tests(conn, skill_id, definition["created_from"]["turn_list"], definition["trigger"])
         definition["tests"] = replay_ids
@@ -3422,14 +3861,47 @@ async def learn_skill_from_pattern(pattern_id: str, project_id: str = "") -> dic
         )
         existing_row = await cursor.fetchone()
         existing_skill_id = str(existing_row["skill_id"]) if existing_row is not None else ""
+        cursor = await conn.execute(
+            "SELECT project_id, prototype_fingerprint FROM behavior_patterns WHERE pattern_id = ?",
+            (pid,),
+        )
+        current_pattern = await cursor.fetchone()
+        current_project_id = str(current_pattern["project_id"] or "") if current_pattern is not None else scoped_project_id
+        current_fp = _json_loads(current_pattern["prototype_fingerprint"], {}) if current_pattern is not None else {}
+        if not existing_skill_id and current_fp:
+            cursor = await conn.execute(
+                """
+                SELECT skill_id, trigger_json
+                FROM learned_skills
+                WHERE project_id = ? AND status != 'deprecated'
+                ORDER BY updated_at DESC
+                """,
+                (current_project_id,),
+            )
+            for skill_row in await cursor.fetchall():
+                trigger = _json_loads(skill_row["trigger_json"], {})
+                base_fp = trigger.get("base_fingerprint") or {}
+                if not base_fp:
+                    continue
+                similarity = compute_fingerprint_similarity(current_fp, base_fp)
+                if not similarity.get("hard_fail") and float(similarity.get("total") or 0) >= 0.88:
+                    duplicate_skill_id = str(skill_row["skill_id"] or "")
+                    return {
+                        "ok": True,
+                        "created": False,
+                        "skill": await get_learned_skill(duplicate_skill_id),
+                        "skill_id": duplicate_skill_id,
+                        "pattern_id": pid,
+                    }
 
     skill_id = await _create_skill(pid, force=True)
     if not skill_id:
         return {"ok": False, "code": "skill_generation_failed", "error": "Unable to generate a skill from this pattern"}
+    skill = await get_learned_skill(skill_id)
     return {
         "ok": True,
-        "created": not existing_skill_id,
-        "skill": await get_learned_skill(skill_id),
+        "created": bool(not existing_skill_id and skill is not None and str(skill.get("pattern_id") or "") == pid),
+        "skill": skill,
         "skill_id": skill_id,
         "pattern_id": pid,
     }
@@ -3462,6 +3934,7 @@ async def _update_skill_to_type(skill_id: str, target_type: str, reason: str) ->
         next_version = int(row["current_version"]) + 1
         pattern_id = current["pattern_id"]
         definition = await _skill_definition_from_pattern(pattern_id, target_type)
+        definition = _attach_generated_script_to_definition(definition, skill_id)
         definition["status"] = "shadow"
         definition["tests"] = current["tests"]
         persisted = {
@@ -3611,7 +4084,7 @@ async def _update_skill_run_stats(skill_id: str, *, execution_status: str, consi
         row = await cursor.fetchone()
         if row is None:
             return
-        stats = _json_loads(row["run_statistics_json"], _default_skill_stats())
+        stats = _skill_stats_with_usage_counters(_json_loads(row["run_statistics_json"], _default_skill_stats()))
         stats["total_runs"] = int(stats.get("total_runs") or 0) + 1
         stats["last_run_at"] = _now_iso()
         total_runs = stats["total_runs"]
@@ -3619,11 +4092,17 @@ async def _update_skill_run_stats(skill_id: str, *, execution_status: str, consi
         stats["consistency_avg"] = round(((old_consistency * (total_runs - 1)) + consistency_score) / total_runs, 4)
         if execution_status == "shadow_success":
             stats["shadow_success"] = int(stats.get("shadow_success") or 0) + 1
+            stats["shadow_runs"] = int(stats.get("shadow_runs") or 0) + 1
         elif execution_status == "shadow_failure":
             stats["shadow_failure"] = int(stats.get("shadow_failure") or 0) + 1
+            stats["shadow_runs"] = int(stats.get("shadow_runs") or 0) + 1
         elif execution_status == "success":
             stats["active_success"] = int(stats.get("active_success") or 0) + 1
-        elif execution_status in {"failure", "fallback"}:
+            stats["actual_runs"] = int(stats.get("actual_runs") or 0) + 1
+        elif execution_status == "failure":
+            stats["active_failure"] = int(stats.get("active_failure") or 0) + 1
+            stats["actual_runs"] = int(stats.get("actual_runs") or 0) + 1
+        elif execution_status == "fallback":
             stats["active_failure"] = int(stats.get("active_failure") or 0) + 1
         await conn.execute(
             "UPDATE learned_skills SET run_statistics_json = ?, updated_at = ? WHERE skill_id = ?",
@@ -3747,11 +4226,13 @@ async def list_learned_skills(project_id: str = "") -> list[dict[str, Any]]:
                 "SELECT * FROM learned_skills ORDER BY updated_at DESC"
             )
         rows = await cursor.fetchall()
+    definitions = _dedupe_skill_definitions([_skill_row_to_definition(row) for row in rows])
     skills: list[dict[str, Any]] = []
-    for row in rows:
-        definition = _skill_row_to_definition(row)
+    for definition in definitions:
         trigger = definition["trigger"]
-        stats = definition["run_statistics"]
+        stats = _skill_stats_with_usage_counters(definition["run_statistics"])
+        shadow_validation_count = int(stats.get("shadow_runs") or 0)
+        actual_usage_count = int(stats.get("actual_runs") or 0)
         skills.append(
             {
                 "id": definition["skill_id"],
@@ -3768,6 +4249,9 @@ async def list_learned_skills(project_id: str = "") -> list[dict[str, Any]]:
                 "input_schema": definition["input_schema"],
                 "steps": definition["steps"],
                 "run_statistics": stats,
+                "shadow_validation_count": shadow_validation_count,
+                "actual_usage_count": actual_usage_count,
+                "duplicate_skill_ids": definition.get("duplicate_skill_ids") or [],
                 "updated_at": definition["updated_at"],
                 "created_at": definition["created_at"],
                 "positive_examples": trigger.get("positive_examples") or [],
@@ -4564,8 +5048,7 @@ async def match_active_skill(user_message: str, history: list[dict[str, Any]]) -
         return None
     request_fp = await build_request_fingerprint(user_message, history)
     best: dict[str, Any] | None = None
-    for row in rows:
-        skill = _skill_row_to_definition(row)
+    for skill in _dedupe_skill_definitions([_skill_row_to_definition(row) for row in rows]):
         skill_steps = skill.get("steps", [])
         if (
             str(skill.get("risk_level") or "none") == "high"
@@ -4697,11 +5180,32 @@ async def try_route_and_execute_skill(
         dict(llm_user_entry),
     ]
     tool_calls: list[dict[str, Any]] = []
+    planned_calls: list[dict[str, Any]] = []
     for step in skill["steps"]:
         if not bool(step.get("enabled", True)):
             continue
         reference = step.get("implementation_reference") or {}
-        if str(step.get("implementation_kind") or "") != "tool_call":
+        implementation_kind = str(step.get("implementation_kind") or "")
+        if implementation_kind == "script":
+            call_id = _new_id("tc")
+            call_args = {
+                "script_path": str(reference.get("script_path") or ""),
+                "params": params,
+            }
+            tool_calls.append({
+                "id": call_id,
+                "type": "function",
+                "function": {"name": "run_generated_skill_script", "arguments": _json_dumps(call_args)},
+            })
+            planned_calls.append({
+                "id": call_id,
+                "kind": "script",
+                "reference": reference,
+                "tool_name": "run_generated_skill_script",
+                "args": call_args,
+            })
+            continue
+        if implementation_kind != "tool_call":
             continue
         tool_name = str(reference.get("tool_name") or "")
         args_template = reference.get("args_template") or {}
@@ -4716,6 +5220,12 @@ async def try_route_and_execute_skill(
                     "type": "function",
                     "function": {"name": tool_name, "arguments": _json_dumps(resolved)},
                 })
+                planned_calls.append({
+                    "id": call_id,
+                    "kind": "tool_call",
+                    "tool_name": tool_name,
+                    "args": resolved,
+                })
         else:
             call_id = _new_id("tc")
             resolved_args = _resolve_value_template(args_template, params)
@@ -4729,6 +5239,12 @@ async def try_route_and_execute_skill(
                     },
                 }
             )
+            planned_calls.append({
+                "id": call_id,
+                "kind": "tool_call",
+                "tool_name": tool_name,
+                "args": resolved_args,
+            })
     assistant_entry = {
         "role": "assistant",
         "content": _skill_assistant_content(skill["name"], lang),
@@ -4737,60 +5253,52 @@ async def try_route_and_execute_skill(
     if round_id:
         assistant_entry["round_id"] = round_id
     messages.append(_apply_assistant_meta(assistant_entry))
-    _enabled_steps = [
-        step for step in skill["steps"]
-        if bool(step.get("enabled", True))
-        and str((step.get("implementation_reference") or {}).get("tool_name") or "")
-    ]
-    _call_idx = 0
-    for step in _enabled_steps:
-        _ref = step.get("implementation_reference") or {}
-        _items = (_ref.get("args_template") or {}).get("_items")
-        _sub_calls = len(_items) if (isinstance(_items, list) and _items) else 1
-        for _ in range(_sub_calls):
-            if _call_idx >= len(tool_calls):
-                break
-            call = tool_calls[_call_idx]
-            _call_idx += 1
-            tool_name = str(call["function"]["name"])
-            try:
-                resolved_args = json.loads(call["function"]["arguments"])
+    for planned in planned_calls:
+        call = next((item for item in tool_calls if item["id"] == planned["id"]), None)
+        if call is None:
+            continue
+        tool_name = str(planned.get("tool_name") or "run_generated_skill_script")
+        try:
+            if planned.get("kind") == "script":
+                result, tool_success, failure_reason = await _execute_script_step(planned.get("reference") or {}, params)
+            else:
+                resolved_args = planned.get("args") or {}
                 result = await _execute_tool(tool_name, resolved_args, bot, chat_id, db_path, None)
                 tool_success = not str(result).lower().startswith("tool failed:")
                 failure_reason = "" if tool_success else str(result)
-            except Exception as exc:
-                result = f"Tool failed: {exc}"
-                tool_success = False
-                failure_reason = str(exc)
-            tool_entry = {"role": "tool", "tool_call_id": call["id"], "content": _truncate_text(result, 6000)}
-            if round_id:
-                tool_entry["round_id"] = round_id
-            messages.append(tool_entry)
-            if not tool_success:
-                run_id = _new_id("skill_run")
-                async with _conn() as conn:
-                    await conn.execute(
-                        """
-                        INSERT INTO learned_skill_runs
-                        (run_id, skill_id, version, turn_id, match_score, parameter_status, execution_status, failure_reason,
-                         fallback_used, user_feedback, dry_run, consistency_score, permission_snapshot, created_at)
-                        VALUES (?, ?, ?, ?, ?, 'complete', 'failure', ?, 1, '', 0, 0, ?, ?)
-                        """,
-                        (
-                            run_id,
-                            skill["skill_id"],
-                            skill["version"],
-                            current_turn,
-                            float(similarity["total"]),
-                            failure_reason or f"{tool_name} failed",
-                            permission_snapshot,
-                            _now_iso(),
-                        ),
-                    )
-                    await conn.commit()
-                await _update_skill_run_stats(skill["skill_id"], execution_status="failure")
-                await _maybe_propose_patch(skill["skill_id"], int(skill["version"]), failure_reason or f"{tool_name}_failed")
-                return None
+        except Exception as exc:
+            result = f"Tool failed: {exc}"
+            tool_success = False
+            failure_reason = str(exc)
+        tool_entry = {"role": "tool", "tool_call_id": call["id"], "content": _truncate_text(result, 6000)}
+        if round_id:
+            tool_entry["round_id"] = round_id
+        messages.append(tool_entry)
+        if not tool_success:
+            run_id = _new_id("skill_run")
+            async with _conn() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO learned_skill_runs
+                    (run_id, skill_id, version, turn_id, match_score, parameter_status, execution_status, failure_reason,
+                     fallback_used, user_feedback, dry_run, consistency_score, permission_snapshot, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'complete', 'failure', ?, 1, '', 0, 0, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        skill["skill_id"],
+                        skill["version"],
+                        current_turn,
+                        float(similarity["total"]),
+                        failure_reason or f"{tool_name} failed",
+                        permission_snapshot,
+                        _now_iso(),
+                    ),
+                )
+                await conn.commit()
+            await _update_skill_run_stats(skill["skill_id"], execution_status="failure")
+            await _maybe_propose_patch(skill["skill_id"], int(skill["version"]), failure_reason or f"{tool_name}_failed")
+            return None
     final_text = await _final_user_reply_from_history(messages, max_tokens=None)
     final_entry = {"role": "assistant", "content": final_text}
     if client_request_id:
@@ -4834,7 +5342,7 @@ async def _validate_shadow_skill_for_turn(skill: dict[str, Any], turn_row: dict[
     if similarity["hard_fail"] or float(similarity["total"]) < max(_ROUTER_JUDGE_THRESHOLD, float(trigger.get("min_match_score") or 0.0)):
         return
     step_actions = []
-    for step in skill["steps"]:
+    for step in _tool_call_steps_for_replay(skill["steps"]):
         if not bool(step.get("enabled", True)):
             continue
         step_actions.append(
@@ -5545,6 +6053,23 @@ Tool chain:
                 "rationale": "Heuristic fallback: not enough project-local evidence to promote this tool chain yet.",
                 "proposed_skill": {},
             }
+    if decision == "promote":
+        duplicate_skill = next(
+            (
+                item for item in similar.get("skills") or []
+                if str(item.get("pattern_id") or "") != pattern_id and float(item.get("similarity") or 0) >= 0.88
+            ),
+            None,
+        )
+        if duplicate_skill:
+            decision = "duplicate"
+            result = {
+                **result,
+                "decision": decision,
+                "target_skill_id": duplicate_skill.get("skill_id", ""),
+                "confidence": max(float(result.get("confidence") or 0), 0.80),
+                "rationale": "Existing project-local skill already covers this workflow; duplicate promotion suppressed.",
+            }
     proposed = result.get("proposed_skill") if isinstance(result.get("proposed_skill"), dict) else {}
     proposed["_decision"] = {
         "raw_decision": raw_decision,
@@ -5802,7 +6327,13 @@ async def run_learned_skill(skill_id: str, param_overrides: dict[str, Any] | Non
         if not bool(step.get("enabled", True)):
             continue
         reference = step.get("implementation_reference") or {}
-        if str(step.get("implementation_kind") or "") != "tool_call":
+        implementation_kind = str(step.get("implementation_kind") or "")
+        if implementation_kind == "script":
+            result, ok, reason = await _execute_script_step(reference, extraction["params"])
+            prefix = "run_generated_skill_script" if ok else f"run_generated_skill_script failed ({reason})"
+            results.append(f"{prefix}: {_truncate_text(result, 500)}")
+            continue
+        if implementation_kind != "tool_call":
             continue
         tool_name = str(reference.get("tool_name") or "")
         args_template = reference.get("args_template") or {}

@@ -39,7 +39,7 @@ function BrowserIcon({ name, size }) {
   return null;
 }
 
-function ElectronBrowserViewportPanel({ onClose, browserState }) {
+function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, browserState }) {
   browserState = browserState || (window.DATA && window.DATA.browser);
   const bridge = window.cyrene && window.cyrene.browser;
   const hostRef = React.useRef(null);
@@ -69,9 +69,16 @@ function ElectronBrowserViewportPanel({ onClose, browserState }) {
   }, []);
 
   React.useEffect(function () {
-    const nextUrl = (active && active.url) || (browserState && browserState.url) || "";
+    if (!bridge || typeof bridge.setContext !== "function") return undefined;
+    const sessionId = String(browserSessionId || (browserState && browserState.sessionId) || "").trim();
+    const rid = String(roundId || (browserState && browserState.roundId) || "").trim();
+    bridge.setContext({ sessionId: sessionId, roundId: rid }).catch(function () {});
+  }, [browserSessionId, roundId, browserState && browserState.sessionId, browserState && browserState.roundId]);
+
+  React.useEffect(function () {
+    const nextUrl = (active && active.url) || "";
     setAddress(nextUrl === "about:blank" ? "" : nextUrl);
-  }, [active && active.id, active && active.url, browserState && browserState.url]);
+  }, [active && active.id, active && active.url]);
 
   function sendBounds(visible) {
     if (!bridge || typeof bridge.setBounds !== "function") return;
@@ -141,12 +148,6 @@ function ElectronBrowserViewportPanel({ onClose, browserState }) {
   function createTab(url) {
     return run(function () { return bridge.createTab({ url: url || "about:blank", activate: true }); });
   }
-
-  React.useEffect(function () {
-    if (!tabs.length && ((browserState && browserState.active) || (browserState && browserState.url))) {
-      createTab(browserState.url || "about:blank");
-    }
-  }, [browserState && browserState.active, browserState && browserState.url, tabs.length]);
 
   function navigate() {
     const url = (addressRef.current ? addressRef.current.value : address).trim();

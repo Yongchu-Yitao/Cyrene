@@ -686,10 +686,42 @@ def test_electron_browser_panel_uses_native_browser_bridge():
     assert "browser_tab_new" in (root / "src" / "cyrene" / "registry_tools.py").read_text(encoding="utf-8")
     assert "browser: {" in preload
     assert "ipcRenderer.invoke('browser:navigate'" in preload
+    assert "ipcRenderer.invoke('browser:set-context'" in preload
     assert "window.cyrene && window.cyrene.browser" in view
     assert "ElectronBrowserViewportPanel" in view
     assert "bridge.setBounds" in view
+    assert "bridge.setContext" in view
     assert "bridge.setMuted" in view
+    assert "browser_user_events" in (root / "src" / "cyrene" / "registry_tools.py").read_text(encoding="utf-8")
+
+
+def test_electron_browser_user_events_are_recorded_for_learning():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    routes = (root / "src" / "webui" / "routes.py").read_text(encoding="utf-8")
+    view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
+
+    assert "BROWSER_USER_EVENT_CONSOLE_PREFIX" in main
+    assert "installUserEventCapture" in main
+    assert "handleCapturedUserEvent" in main
+    assert "postBackendJson('/api/browser/user-event'" in main
+    assert "recordUserEvent('navigate'" in main
+    assert "browser:set-context" in main
+    assert '"/api/browser/user-event"' in routes
+    assert "record_browser_user_event" in routes
+    assert "process_unprocessed_turns" in routes
+    assert "bridge.setContext({ sessionId: sessionId, roundId: rid })" in view
+
+
+def test_electron_browser_panel_does_not_restore_closed_tabs_from_stale_state():
+    root = Path(__file__).resolve().parent.parent
+    view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
+    panel = view.split("function ElectronBrowserViewportPanel", 1)[1].split("function ScreencastBrowserViewportPanel", 1)[0]
+
+    assert 'const nextUrl = (active && active.url) || "";' in panel
+    assert "browserState && browserState.url" not in panel
+    assert "browserState && browserState.active" not in panel
+    assert "if (!tabs.length" not in panel
 
 
 def test_workbench_chat_directory_picker_falls_back_on_macos_and_lists_default_workspace():

@@ -2677,6 +2677,7 @@ function ChatSide({ session, subagents, ccStatus, refreshCcStatus, onOpenCCModal
       return <div className="side-section side-section--flush" style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", borderBottom: 0 }}>
         {typeof window.BrowserViewportPanel !== "undefined" && React.createElement(window.BrowserViewportPanel, {
           roundId: roundId,
+          browserSessionId: session && session.id || "",
           onClose: function () { onViewChange("overview"); },
           onTakeoverComplete: onBrowserTakeoverComplete,
         })}

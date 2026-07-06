@@ -7742,6 +7742,36 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             session.set_user_control(False)
             await session.stop_screencast(queue)
 
+    @router.post("/api/browser/user-event")
+    async def api_browser_user_event(request: Request):
+        """Record a user-driven browser operation from the Electron BrowserView."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        try:
+            from cyrene import behavior_learning as _behavior_learning
+
+            await _behavior_learning.record_browser_user_event(
+                session_id=str(body.get("sessionId") or body.get("session_id") or ""),
+                round_id=str(body.get("roundId") or body.get("round_id") or ""),
+                event_kind=str(body.get("eventKind") or body.get("kind") or "event"),
+                payload=body.get("payload") if isinstance(body.get("payload"), dict) else {},
+                browser_url=str(body.get("browserUrl") or body.get("url") or ""),
+                browser_title=str(body.get("browserTitle") or body.get("title") or ""),
+                target=body.get("target") if isinstance(body.get("target"), dict) else {},
+            )
+            try:
+                asyncio.create_task(_behavior_learning.process_unprocessed_turns())
+            except Exception:
+                pass
+            return {"ok": True}
+        except Exception as exc:
+            logger.debug("failed to record browser user event", exc_info=True)
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
     # ---- Sessions API ----
 
     @router.get("/api/sessions")

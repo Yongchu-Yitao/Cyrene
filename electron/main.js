@@ -110,6 +110,7 @@ let tray = null;
 let browserTabManager = null;
 let electronRpcServer = null;
 let electronRpcPort = null;
+const BROWSER_USER_EVENT_CONSOLE_PREFIX = '__CYRENE_BROWSER_USER_EVENT__';
 
 const DEFAULT_DESKTOP_SETTINGS = Object.freeze({
   launchAtLogin: false,
@@ -120,6 +121,31 @@ const DEFAULT_DESKTOP_SETTINGS = Object.freeze({
   quickChatEnabled: false,
   quickChatShortcut: 'CommandOrControl+Shift+Space',
 });
+
+function postBackendJson(pathname, payload) {
+  if (!backendPort) return;
+  const body = JSON.stringify(payload || {});
+  const req = http.request({
+    hostname: '127.0.0.1',
+    port: backendPort,
+    path: pathname,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+      'X-Cyrene-Token': AUTH_TOKEN,
+    },
+    timeout: 3000,
+  }, (res) => {
+    res.resume();
+  });
+  req.on('error', () => {});
+  req.on('timeout', () => {
+    try { req.destroy(); } catch (_) {}
+  });
+  req.write(body);
+  req.end();
+}
 
 const DESKTOP_TRANSLATIONS = Object.freeze({
   en: {
@@ -395,6 +421,7 @@ class BrowserTabManager {
     this.obscured = false;
     this.attachedTabId = '';
     this._syncTimer = null;
+    this.browserContext = { sessionId: '', roundId: '' };
   }
 
   ownerWindow() {
@@ -435,6 +462,10 @@ class BrowserTabManager {
       console.warn(`[electron] Browser tab load failed (${code}) ${url}: ${desc}`);
       update();
     });
+    wc.on('did-finish-load', () => this.installUserEventCapture(view).catch(() => {}));
+    wc.on('console-message', (_event, _level, message) => {
+      this.handleCapturedUserEvent(view, message);
+    });
     wc.on('destroyed', () => {
       for (const [id, tab] of this.tabs.entries()) {
         if (tab.view === view) this.tabs.delete(id);
@@ -446,6 +477,147 @@ class BrowserTabManager {
       this.emitState();
     });
     return view;
+  }
+
+  setContext(info = {}) {
+    const sessionId = String(info.sessionId || info.session_id || '').trim();
+    const roundId = String(info.roundId || info.round_id || '').trim();
+    if (sessionId) this.browserContext.sessionId = sessionId;
+    this.browserContext.roundId = roundId;
+    return this.state();
+  }
+
+  _tabForView(view) {
+    for (const tab of this.tabs.values()) {
+      if (tab.view === view) return tab;
+    }
+    return null;
+  }
+
+  _markAgentInput(tab, ms = 1500) {
+    if (!tab) return;
+    tab.suppressUserEventsUntil = Date.now() + Math.max(0, Number(ms) || 0);
+  }
+
+  _shouldSuppressCapturedEvent(tab) {
+    return !!(tab && Number(tab.suppressUserEventsUntil || 0) > Date.now());
+  }
+
+  async installUserEventCapture(view) {
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
+    const wc = view.webContents;
+    const script = `
+      (() => {
+        if (window.__cyreneBrowserUserCaptureInstalled) return true;
+        window.__cyreneBrowserUserCaptureInstalled = true;
+        const prefix = ${JSON.stringify(BROWSER_USER_EVENT_CONSOLE_PREFIX)};
+        const clean = (value, limit = 240) => String(value == null ? "" : value).replace(/\\s+/g, " ").trim().slice(0, limit);
+        const describe = (el) => {
+          if (!el || !(el instanceof Element)) return {};
+          const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+          const tag = clean(el.tagName || "").toLowerCase();
+          const inputType = clean(el.getAttribute && el.getAttribute("type") || "").toLowerCase();
+          return {
+            tag,
+            type: inputType,
+            id: clean(el.id || ""),
+            name: clean(el.getAttribute && el.getAttribute("name") || ""),
+            role: clean(el.getAttribute && el.getAttribute("role") || ""),
+            text: clean(el.innerText || el.textContent || el.getAttribute && (el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("placeholder")) || "", 120),
+            x: rect ? Math.round(rect.left) : null,
+            y: rect ? Math.round(rect.top) : null,
+            w: rect ? Math.round(rect.width) : null,
+            h: rect ? Math.round(rect.height) : null,
+          };
+        };
+        const emit = (kind, payload, target) => {
+          try {
+            console.info(prefix + JSON.stringify({
+              kind,
+              payload: payload || {},
+              target: target || {},
+              url: location.href,
+              title: document.title || "",
+              ts: Date.now(),
+            }));
+          } catch (_) {}
+        };
+        document.addEventListener("click", (event) => {
+          emit("click", {
+            x: Math.round(event.clientX || 0),
+            y: Math.round(event.clientY || 0),
+            button: event.button || 0,
+          }, describe(event.target));
+        }, true);
+        document.addEventListener("input", (event) => {
+          const el = event.target;
+          const target = describe(el);
+          const isPassword = target.type === "password";
+          let value = "";
+          if (!isPassword && el && "value" in el) value = clean(el.value, 200);
+          else if (!isPassword && el && el.isContentEditable) value = clean(el.textContent, 200);
+          emit("input", {
+            inputType: clean(event.inputType || ""),
+            value: isPassword ? "[redacted-password]" : value,
+          }, target);
+        }, true);
+        document.addEventListener("submit", (event) => {
+          emit("submit", {}, describe(event.target));
+        }, true);
+        let lastScroll = 0;
+        document.addEventListener("scroll", () => {
+          const now = Date.now();
+          if (now - lastScroll < 500) return;
+          lastScroll = now;
+          emit("scroll", {
+            scrollX: Math.round(window.scrollX || 0),
+            scrollY: Math.round(window.scrollY || 0),
+          }, {});
+        }, true);
+        return true;
+      })()
+    `;
+    await wc.executeJavaScript(script, true).catch(() => {});
+  }
+
+  handleCapturedUserEvent(view, message) {
+    const raw = String(message || '');
+    if (!raw.startsWith(BROWSER_USER_EVENT_CONSOLE_PREFIX)) return;
+    const tab = this._tabForView(view);
+    if (this._shouldSuppressCapturedEvent(tab)) return;
+    let event = null;
+    try {
+      event = JSON.parse(raw.slice(BROWSER_USER_EVENT_CONSOLE_PREFIX.length));
+    } catch (_) {
+      return;
+    }
+    if (!event || typeof event !== 'object') return;
+    this.recordUserEvent(String(event.kind || 'event'), {
+      payload: event.payload && typeof event.payload === 'object' ? event.payload : {},
+      target: event.target && typeof event.target === 'object' ? event.target : {},
+      url: String(event.url || ''),
+      title: String(event.title || ''),
+      tab,
+    });
+  }
+
+  recordUserEvent(kind, { payload = {}, target = {}, url = '', title = '', tab = null } = {}) {
+    const active = tab || this.tabs.get(this.activeTabId);
+    const wc = active && active.view && !active.view.webContents.isDestroyed() ? active.view.webContents : null;
+    const finalUrl = url || (wc ? wc.getURL() : '');
+    const finalTitle = title || (wc ? wc.getTitle() : '');
+    postBackendJson('/api/browser/user-event', {
+      sessionId: this.browserContext.sessionId || '',
+      roundId: this.browserContext.roundId || '',
+      eventKind: kind || 'event',
+      browserUrl: finalUrl || '',
+      browserTitle: finalTitle || '',
+      target: target || {},
+      payload: {
+        ...(payload || {}),
+        tabId: active ? active.id : '',
+      },
+    });
   }
 
   tabState(tab) {
@@ -678,6 +850,7 @@ class BrowserTabManager {
     // sendInputEvent dispatches trusted OS-level events.  Chromium's input
     // pipeline generates the full click chain (pointerdown → mousedown →
     // pointerup → mouseup → click) with isTrusted=true.
+    this._markAgentInput(tab);
     wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
     wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
     wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
@@ -691,6 +864,7 @@ class BrowserTabManager {
     const wc = tab.view.webContents;
     const info = await this._findTarget(wc, { mode: 'ref', value: String(ref || '') });
     if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+    this._markAgentInput(tab);
     wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
     wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
     wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
@@ -704,6 +878,7 @@ class BrowserTabManager {
     const wc = tab.view.webContents;
     const info = await this._findTarget(wc, { mode: 'text', value: String(text || ''), exact: exact === true });
     if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+    this._markAgentInput(tab);
     wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
     wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
     wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
@@ -718,6 +893,7 @@ class BrowserTabManager {
     const px = Math.round(Number(x));
     const py = Math.round(Number(y));
     if (!Number.isFinite(px) || !Number.isFinite(py)) return { ok: false, error: 'Invalid coordinates.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+    this._markAgentInput(tab);
     wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
     wc.sendInputEvent({ type: 'mouseDown', x: px, y: py, button: 'left', clickCount: 1 });
     wc.sendInputEvent({ type: 'mouseUp', x: px, y: py, button: 'left', clickCount: 1 });
@@ -767,6 +943,7 @@ class BrowserTabManager {
         return { ok: true, tag, box: info.box };
       })(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${JSON.stringify(String(text || ''))}, ${submit ? 'true' : 'false'})
     `;
+    this._markAgentInput(tab);
     const result = await wc.executeJavaScript(script, true);
     if (!result || !result.ok) return { ok: false, error: (result && result.error) || 'Unable to type into element.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
     if (submit) await this._waitNav(wc);
@@ -868,6 +1045,7 @@ class BrowserTabManager {
   async scroll({ deltaX = 0, deltaY = 0, tabId = '' } = {}) {
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No browser tab is open.' };
+    this._markAgentInput(tab);
     await tab.view.webContents.executeJavaScript(`window.scrollBy(${JSON.stringify(deltaX)},${JSON.stringify(deltaY)})`, true).catch(() => {});
     return { ok: true };
   }
@@ -885,6 +1063,8 @@ async function handleBrowserRpc(method, args) {
       return manager.state();
     case 'setBounds':
       return manager.setBounds(args || {});
+    case 'setContext':
+      return manager.setContext(args || {});
     case 'setObscured':
       return manager.setObscured(args && args.obscured);
     case 'createTab':
@@ -2149,14 +2329,42 @@ if (!gotSingleInstanceLock) {
     });
     ipcMain.handle('browser:get-state', () => getBrowserTabManager().state());
     ipcMain.handle('browser:set-bounds', (_event, info) => handleBrowserRpc('setBounds', info || {}));
+    ipcMain.handle('browser:set-context', (_event, info) => handleBrowserRpc('setContext', info || {}));
     ipcMain.handle('browser:set-obscured', (_event, obscured) => handleBrowserRpc('setObscured', { obscured: obscured === true }));
-    ipcMain.handle('browser:create-tab', (_event, info) => handleBrowserRpc('createTab', info || {}));
-    ipcMain.handle('browser:activate-tab', (_event, tabId) => handleBrowserRpc('activateTab', { tabId }));
-    ipcMain.handle('browser:close-tab', (_event, tabId) => handleBrowserRpc('closeTab', { tabId }));
-    ipcMain.handle('browser:navigate', (_event, info) => handleBrowserRpc('navigate', info || {}));
-    ipcMain.handle('browser:go-back', () => handleBrowserRpc('goBack', {}));
-    ipcMain.handle('browser:go-forward', () => handleBrowserRpc('goForward', {}));
-    ipcMain.handle('browser:reload', () => handleBrowserRpc('reload', {}));
+    ipcMain.handle('browser:create-tab', async (_event, info) => {
+      const result = await handleBrowserRpc('createTab', info || {});
+      getBrowserTabManager().recordUserEvent('navigate', { payload: { action: 'create_tab', url: info && info.url || '' } });
+      return result;
+    });
+    ipcMain.handle('browser:activate-tab', async (_event, tabId) => {
+      const result = await handleBrowserRpc('activateTab', { tabId });
+      getBrowserTabManager().recordUserEvent('select_tab', { payload: { tabId: String(tabId || '') } });
+      return result;
+    });
+    ipcMain.handle('browser:close-tab', async (_event, tabId) => {
+      getBrowserTabManager().recordUserEvent('close_tab', { payload: { tabId: String(tabId || '') } });
+      return handleBrowserRpc('closeTab', { tabId });
+    });
+    ipcMain.handle('browser:navigate', async (_event, info) => {
+      const result = await handleBrowserRpc('navigate', info || {});
+      getBrowserTabManager().recordUserEvent('navigate', { payload: { url: info && info.url || '' } });
+      return result;
+    });
+    ipcMain.handle('browser:go-back', async () => {
+      const result = await handleBrowserRpc('goBack', {});
+      getBrowserTabManager().recordUserEvent('navigate', { payload: { action: 'go_back' } });
+      return result;
+    });
+    ipcMain.handle('browser:go-forward', async () => {
+      const result = await handleBrowserRpc('goForward', {});
+      getBrowserTabManager().recordUserEvent('navigate', { payload: { action: 'go_forward' } });
+      return result;
+    });
+    ipcMain.handle('browser:reload', async () => {
+      const result = await handleBrowserRpc('reload', {});
+      getBrowserTabManager().recordUserEvent('navigate', { payload: { action: 'reload' } });
+      return result;
+    });
     ipcMain.handle('browser:set-muted', (_event, info) => handleBrowserRpc('setMuted', info || {}));
     spawnPython();
     if (!launchHidden) {

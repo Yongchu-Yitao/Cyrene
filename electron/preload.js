@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('cyrene', {
   browser: {
     getState: () => ipcRenderer.invoke('browser:get-state'),
     setBounds: (info) => ipcRenderer.invoke('browser:set-bounds', info || {}),
+    setContext: (info) => ipcRenderer.invoke('browser:set-context', info || {}),
     setObscured: (obscured) => ipcRenderer.invoke('browser:set-obscured', obscured === true),
     createTab: (info) => ipcRenderer.invoke('browser:create-tab', info || {}),
     activateTab: (tabId) => ipcRenderer.invoke('browser:activate-tab', tabId),

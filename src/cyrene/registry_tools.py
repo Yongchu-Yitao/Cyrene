@@ -73,6 +73,7 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.browser_tab_select",  # browser_tab_select
     "cyrene.tool_impl.browser_tab_close",  # browser_tab_close
     "cyrene.tool_impl.browser_scroll",  # browser_scroll
+    "cyrene.tool_impl.browser_user_events",  # browser_user_events
     "cyrene.tool_impl.browser_request_takeover",  # browser_request_takeover
     "cyrene.tool_impl.send_notification",  # send_notification
     "cyrene.tool_impl.track_entity",  # track_entity
@@ -116,6 +117,7 @@ _MAIN_ONLY_TOOLS = {
     "browser_tab_select",
     "browser_tab_close",
     "browser_scroll",
+    "browser_user_events",
     "browser_request_takeover",
 }
 

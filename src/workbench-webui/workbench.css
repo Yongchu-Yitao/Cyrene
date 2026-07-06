@@ -9146,9 +9146,9 @@ html[data-theme="light"] .wb-tool-list .mono {
 }
 .wb-learning-foot {
   flex: 0 0 auto;
-  margin-top: auto;
-  padding: 12px 0 0;
-  border-top: 1px solid var(--wb-line);
+  margin-top: 0;
+  padding: 10px 30px 12px;
+  border-bottom: 1px solid var(--wb-line);
   color: var(--wb-faint);
   font-size: 12px;
 }
@@ -9156,7 +9156,7 @@ html[data-theme="light"] .wb-tool-list .mono {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 8px;
 }
 .wb-learning-foot-stats span {
@@ -12929,6 +12929,17 @@ html[data-theme="dark"] .wbc-trace {
   color: var(--wb-text, var(--text));
 }
 
+.browser-tab:focus {
+  outline: none;
+}
+
+.browser-tab:focus-visible {
+  border-color: var(--wb-line-2, var(--line-2));
+  box-shadow:
+    0 1px 0 rgba(20, 28, 45, 0.03),
+    0 0 0 2px color-mix(in srgb, var(--wb-line-2, var(--line-2)) 42%, transparent);
+}
+
 .browser-tab.active {
   border-color: color-mix(in srgb, var(--wb-accent, var(--accent)) 54%, var(--wb-line, var(--line)));
   background: color-mix(in srgb, var(--wb-accent, var(--accent)) 9%, var(--wb-card-bg, var(--bg-1)));
@@ -12936,7 +12947,9 @@ html[data-theme="dark"] .wbc-trace {
 }
 
 .browser-tab-title {
+  flex: 1 1 auto;
   min-width: 0;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -12951,6 +12964,7 @@ html[data-theme="dark"] .wbc-trace {
 }
 
 .browser-tab-close {
+  margin-left: auto;
   width: 20px;
   height: 20px;
   margin-right: -4px;

@@ -319,8 +319,8 @@ async def get_budget_state(
         if not five_hour_ws and remaining > 0 and prev.five_hour_target_raw > 0:
             prev.five_hour_budget = min(
                 prev.five_hour_target_raw,
-                remaining * 0.30,
-                max(prev.weekly_budget - prev.weekly_spent, 0.0) * 0.55,
+                remaining * 0.40,
+                max(prev.weekly_budget - prev.weekly_spent, 0.0) * 0.70,
             )
         return _build_response(prev)
 
@@ -374,8 +374,8 @@ async def get_budget_state(
         if not five_hour_ws and state.five_hour_target_raw > 0:
             state.five_hour_budget = min(
                 state.five_hour_target_raw,
-                remaining * 0.30,
-                max(state.weekly_budget - weekly_spent, 0.0) * 0.55,
+                remaining * 0.40,
+                max(state.weekly_budget - weekly_spent, 0.0) * 0.70,
             )
     except Exception:
         if prev is not None:

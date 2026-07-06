@@ -459,7 +459,9 @@
   }
   function skillUsageCount(skill) {
     var stats = (skill && skill.run_statistics) || {};
-    return Number(stats.total_runs || 0) || Number(stats.success || 0) + Number(stats.failure || 0) + Number(stats.fallback || 0) || 0;
+    if (skill && skill.actual_usage_count != null) return Number(skill.actual_usage_count || 0) || 0;
+    if (stats.actual_runs != null) return Number(stats.actual_runs || 0) || 0;
+    return Number(stats.active_success || 0) + Number(stats.active_failure || 0) || 0;
   }
   function learningErrorText(error, t) {
     var text = String(error || "");
@@ -660,6 +662,11 @@
               activeChain && h("p", { className: "wb-learning-theme" }, t("memory.learning.topic", "Topic: {topic}", { topic: activeChain.user_message || activeChain.context_summary || t("memory.learning.autoTopic", "Reusable tool chain") }))),
             h("button", { type: "button", className: "wb-learning-primary", disabled: loading || !!busy, onClick: function () { learning.runAction("learn"); } },
               busy ? t("memory.learning.learning", "Learning...") : t("memory.learning.learnAsSkill", "Learn as Skill ✨"))),
+          h("div", { className: "wb-learning-foot" },
+            h("div", { className: "wb-learning-foot-stats" },
+              h("span", null, t("memory.learning.footerChains", "{count} chains", { count: snap.chains.length })),
+              h("span", null, t("memory.learning.footerReviews", "{count} reviewed", { count: snap.reviewedChains })),
+              h("span", null, t("memory.learning.footerSkills", "{count} skills", { count: snap.skills.length })))),
           learning.error && h("div", { className: "wb-mem-error" }, learningErrorText(learning.error, t)),
           learning.note && h("div", { className: "wb-mem-skill-note main" }, learning.note),
           activeChain ? h("div", { className: "wb-learning-content" },
@@ -689,12 +696,7 @@
             h("section", { className: "wb-learning-section" },
               h("h3", null, t("memory.learning.agentAnswer", "Agent answer")),
               h("div", { className: "wb-learning-answer markdown", dangerouslySetInnerHTML: { __html: memRenderMarkdown(activeChain.agent_response || activeChain.context_summary || t("memory.learning.noAgentAnswer", "This round has no agent answer yet.")) } })))
-            : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noLearnableRounds", "No learnable rounds yet.")),
-          h("div", { className: "wb-learning-foot" },
-            h("div", { className: "wb-learning-foot-stats" },
-              h("span", null, t("memory.learning.footerChains", "{count} chains", { count: snap.chains.length })),
-              h("span", null, t("memory.learning.footerReviews", "{count} reviewed", { count: snap.reviewedChains })),
-              h("span", null, t("memory.learning.footerSkills", "{count} skills", { count: snap.skills.length })))))));
+            : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noLearnableRounds", "No learnable rounds yet.")))));
   }
 
   // ── main page ────────────────────────────────────────────────────────

@@ -104,6 +104,11 @@ async def test_behavior_learning_promotes_to_active_skill(tmp_path, monkeypatch)
     assert len(skills) == 1
     assert skills[0]["status"] == "active"
     assert skills[0]["skill_type"] == "parameterized"
+    assert skills[0]["steps"][0]["implementation_kind"] == "script"
+    assert Path(skills[0]["steps"][0]["implementation_reference"]["script_path"]).exists()
+    assert len(skills[0]["steps"][0]["implementation_reference"]["original_steps"]) == 3
+    assert skills[0]["actual_usage_count"] == 0
+    assert skills[0]["shadow_validation_count"] == skills[0]["run_statistics"]["shadow_success"]
     # Shadow validation backfills every eligible historical turn before activation,
     # so the counter reflects total successful dry runs, not the promotion threshold.
     assert skills[0]["run_statistics"]["shadow_success"] == 4
@@ -259,6 +264,139 @@ async def test_learning_agent_duplicate_decision_does_not_create_second_skill(tm
     assert second_stats["agent_created_skills"] == 0
     assert len(second_skills) == 1
     assert chains[0]["review"]["decision"] == "duplicate"
+
+
+async def test_browser_user_events_feed_learning_agent_and_are_queryable(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    prompts: list[str] = []
+
+    async def reviewer(prompt: str, *, caller: str = "behavior_learning"):
+        if caller == "project_skill_learning_agent":
+            prompts.append(prompt)
+            return {
+                "decision": "skip",
+                "confidence": 0.78,
+                "rationale": "Browser operation is visible but not reusable yet.",
+                "proposed_skill": {},
+            }
+        return {}
+
+    monkeypatch.setattr(bl, "_call_llm_json", reviewer)
+    context = await bl.begin_turn(
+        session_id="session-browser-user",
+        round_id="round-browser-user-1",
+        user_message="用户在浏览器里完成筛选后继续",
+        history=[],
+        session_title="Browser user session",
+    )
+    await bl.record_browser_user_event(
+        session_id="session-browser-user",
+        round_id="round-browser-user-1",
+        event_kind="click",
+        payload={"x": 128, "y": 64, "button": "left"},
+        browser_url="https://example.test/search",
+        browser_title="Search",
+        target={"tag": "button", "text": "Apply filters"},
+    )
+    await bl.record_browser_user_event(
+        session_id="session-browser-user",
+        round_id="round-browser-user-1",
+        event_kind="input",
+        payload={"value": "openai", "inputType": "insertText"},
+        browser_url="https://example.test/search",
+        browser_title="Search",
+        target={"tag": "input", "name": "q"},
+    )
+    await bl.complete_turn(
+        turn_id=context["turn_id"],
+        assistant_response="已根据页面状态继续。",
+        session_title="Browser user session",
+        round_title="round-browser-user-1",
+    )
+    bl.clear_turn_context(context)
+
+    stats = await bl.process_unprocessed_turns(force=True)
+    chains = await bl.list_tool_chains(limit=5)
+    events = await bl.list_recent_browser_user_events(
+        session_id="session-browser-user",
+        round_id="round-browser-user-1",
+        limit=10,
+    )
+
+    assert stats["learning_reviews"] == 1
+    assert chains[0]["source"] == "user_browser"
+    assert chains[0]["summary"]["browser_user_steps"] == 2
+    assert [step["tool"] for step in chains[0]["chain"]] == ["browser.user.click", "browser.user.input"]
+    assert [event["tool"] for event in events] == ["browser.user.click", "browser.user.input"]
+    assert prompts
+    assert "browser.user.click" in prompts[-1]
+    assert "https://example.test/search" in prompts[-1]
+
+
+async def test_duplicate_skill_hard_veto_reuses_existing_cross_pattern(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    fp = await bl._heuristic_request_fingerprint(
+        "帮我查一下上海今天的天气",
+        action_sequence=[
+            {
+                "domain": "external_information_query",
+                "type": "query_realtime_info",
+                "subtype": "search_web",
+                "raw_description": "search_web",
+            }
+        ],
+    )
+    now = bl._now_iso()
+    pattern_ids = ["pattern-weather-a", "pattern-weather-b"]
+    async with bl._conn() as conn:
+        for pid in pattern_ids:
+            await conn.execute(
+                """
+                INSERT INTO behavior_patterns
+                (pattern_id, project_id, project_key, description, prototype_fingerprint, statistics_json,
+                 skillability_json, status, linked_skill_list, created_at, updated_at)
+                VALUES (?, 'global', 'global', 'weather lookup', ?, ?, ?, 'skill_candidate', '[]', ?, ?)
+                """,
+                (
+                    pid,
+                    bl._json_dumps(fp),
+                    bl._json_dumps({"effective_count": 2, "frequency": 2}),
+                    bl._json_dumps({"draft": True}),
+                    now,
+                    now,
+                ),
+            )
+        await conn.commit()
+
+    first = await bl.learn_skill_from_pattern(pattern_ids[0])
+    second = await bl.learn_skill_from_pattern(pattern_ids[1])
+    skills = await bl.list_learned_skills()
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert second["skill_id"] == first["skill_id"]
+    assert second["created"] is False
+    assert len(skills) == 1
+
+
+async def test_list_learned_skills_separates_shadow_validation_from_actual_usage(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+
+    for index in range(1, 4):
+        await _record_web_search_turn(
+            bl,
+            session_id="session-weather-usage",
+            round_id=f"weather-usage-{index}",
+            user_message="帮我查一下上海今天的天气",
+        )
+
+    await bl.process_unprocessed_turns(force=True)
+    skills = await bl.list_learned_skills()
+
+    assert len(skills) == 1
+    assert skills[0]["run_statistics"]["total_runs"] > 0
+    assert skills[0]["shadow_validation_count"] > 0
+    assert skills[0]["actual_usage_count"] == 0
 
 
 async def test_similar_candidate_search_compares_purpose_and_tool_chain_within_project(tmp_path, monkeypatch):
