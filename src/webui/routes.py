@@ -8118,9 +8118,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         from cyrene import pattern as _pattern
         project_ids = _learning_project_ids(project)
         project_id = _learning_project_id(project)
-        status, scripts, patterns, learned_skills, tool_chains, cc_learning = await asyncio.gather(
+        status, patterns, learned_skills, tool_chains, cc_learning = await asyncio.gather(
             _build_status(),
-            _pattern.list_scripts("all", project_id),
             _pattern.list_patterns("all", project_id),
             _pattern.list_learned_skills(project_id),
             _pattern.list_tool_chains(project_ids),
@@ -8129,17 +8128,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {
             "phase": status.get("phase", ""),
             "state": status.get("state", ""),
-            "scripts": scripts,
             "patterns": patterns,
             "learned_skills": learned_skills,
             "tool_chains": _learning_enrich_tool_chains(tool_chains),
             "cc_learning": cc_learning,
         }
-
-    @router.get("/api/scripts")
-    async def api_scripts(status: str = "all", project: str = ""):
-        from cyrene import pattern as _pattern
-        return {"scripts": await _pattern.list_scripts(status, _learning_project_id(project))}
 
     @router.get("/api/patterns")
     async def api_patterns(status: str = "all", project: str = ""):
@@ -8232,37 +8225,19 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     @router.post("/api/learned-skills/{skill_id}/activate")
     async def api_activate_learned_skill(skill_id: str):
         from cyrene import pattern as _pattern
-        ok = await _pattern.approve_script(skill_id)
+        ok = await _pattern.activate_learned_skill(skill_id)
         return {"ok": ok}
 
     @router.post("/api/learned-skills/{skill_id}/deprecate")
     async def api_deprecate_learned_skill(skill_id: str):
         from cyrene import pattern as _pattern
-        ok = await _pattern.reject_script(skill_id)
+        ok = await _pattern.deprecate_learned_skill(skill_id)
         return {"ok": ok}
 
     @router.post("/api/learned-skills/{skill_id}/run")
     async def api_run_learned_skill(skill_id: str):
         from cyrene import pattern as _pattern
-        result = await _pattern.run_script(skill_id)
-        return {"ok": True, "result": result}
-
-    @router.post("/api/scripts/{script_id}/approve")
-    async def api_approve_script(script_id: str):
-        from cyrene import pattern as _pattern
-        ok = await _pattern.approve_script(script_id)
-        return {"ok": ok}
-
-    @router.post("/api/scripts/{script_id}/reject")
-    async def api_reject_script(script_id: str):
-        from cyrene import pattern as _pattern
-        ok = await _pattern.reject_script(script_id)
-        return {"ok": ok}
-
-    @router.post("/api/scripts/{script_id}/run")
-    async def api_run_script(script_id: str):
-        from cyrene import pattern as _pattern
-        result = await _pattern.run_script(script_id)
+        result = await _pattern.run_learned_skill(skill_id)
         return {"ok": True, "result": result}
 
     @router.post("/api/patterns/learn")
@@ -8278,7 +8253,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             "patterns": await _pattern.list_patterns("all", project_id),
             "learned_skills": await _pattern.list_learned_skills(project_id),
             "tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(project_ids)),
-            "scripts": await _pattern.list_scripts("all", project_id),
         }
 
     @router.post("/api/patterns/{pattern_id}/learn-skill")
@@ -8295,7 +8269,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             "patterns": await _pattern.list_patterns("all", project_id),
             "learned_skills": await _pattern.list_learned_skills(project_id),
             "tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(project_ids)),
-            "scripts": await _pattern.list_scripts("all", project_id),
         }
 
     @router.post("/api/patterns/rebuild")
@@ -8311,7 +8284,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             "patterns": await _pattern.list_patterns("all", project_id),
             "learned_skills": await _pattern.list_learned_skills(project_id),
             "tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(project_ids)),
-            "scripts": await _pattern.list_scripts("all", project_id),
         }
 
     @router.get("/api/vocabulary")

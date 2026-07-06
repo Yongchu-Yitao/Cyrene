@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
 
 from cyrene import behavior_learning as _behavior
-
-logger = logging.getLogger(__name__)
 
 
 async def record_action(
@@ -86,20 +83,16 @@ async def dismiss_unknown_label(unknown_id: str) -> bool:
     return await _behavior.dismiss_unknown_label(unknown_id)
 
 
-async def list_scripts(status: str = "all", project_id: str = "") -> list[dict[str, Any]]:
-    return await _behavior.list_compat_scripts(status, project_id)
+async def activate_learned_skill(skill_id: str) -> bool:
+    return await _behavior.manual_activate_skill(skill_id)
 
 
-async def approve_script(script_id: str) -> bool:
-    return await _behavior.manual_activate_skill(script_id)
+async def deprecate_learned_skill(skill_id: str) -> bool:
+    return await _behavior.manual_deprecate_skill(skill_id)
 
 
-async def reject_script(script_id: str) -> bool:
-    return await _behavior.manual_deprecate_skill(script_id)
-
-
-async def run_script(script_id: str, param_overrides: dict[str, Any] | None = None) -> str:
-    return await _behavior.run_learned_skill(script_id, param_overrides)
+async def run_learned_skill(skill_id: str, param_overrides: dict[str, Any] | None = None) -> str:
+    return await _behavior.run_learned_skill(skill_id, param_overrides)
 
 
 async def run_skill_replay_tests(skill_id: str) -> dict[str, Any]:
@@ -144,206 +137,3 @@ async def tick(bot: Any, db_path: str) -> None:
 
 async def init(data_dir: Path, workspace_dir: Path) -> None:
     await _behavior.init(data_dir, workspace_dir)
-    register_tools()
-
-
-async def _tool_list_scripts(
-    args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict | None,
-) -> str:
-    status = str(args.get("status", "all"))
-    skills = await list_scripts(status)
-    if not skills:
-        return "No learned skills found."
-    lines = []
-    for skill in skills:
-        lines.append(
-            f"- [{skill['status']}] {skill['id']} {skill['name']} ({skill.get('type', '')}) "
-            f"score>={skill.get('confidence', 0)}"
-        )
-    return "\n".join(lines)
-
-
-async def _tool_run_script(
-    args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict | None,
-) -> str:
-    script_id = str(args.get("script_id", "")).strip()
-    params = args.get("params")
-    return await run_script(script_id, params if isinstance(params, dict) else None)
-
-
-async def _tool_approve_script(
-    args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict | None,
-) -> str:
-    script_id = str(args.get("script_id", "")).strip()
-    ok = await approve_script(script_id)
-    return f"Activated '{script_id}'." if ok else f"Skill '{script_id}' not found."
-
-
-async def _tool_reject_script(
-    args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict | None,
-) -> str:
-    script_id = str(args.get("script_id", "")).strip()
-    ok = await reject_script(script_id)
-    return f"Deprecated '{script_id}'." if ok else f"Skill '{script_id}' not found."
-
-
-async def _tool_learn_patterns(
-    _args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict | None,
-) -> str:
-    stats = await scan_for_manual_learn()
-    return (
-        "Behavior learning completed. "
-        f"processed={int(stats.get('processed_turns') or 0)} "
-        f"merged={int(stats.get('merged_patterns') or 0)} "
-        f"new_patterns={int(stats.get('new_patterns') or 0)} "
-        f"skills_created={int(stats.get('skills_created') or 0)}"
-    )
-
-
-async def _tool_learn_skill(
-    args: dict[str, Any],
-    _bot: Any,
-    _chat_id: int,
-    _db_path: str,
-    _notify_state: dict | None,
-) -> str:
-    result = await _behavior.learn_skill_from_current_turn(
-        name=str(args.get("name", "")),
-        description=str(args.get("description", "")),
-    )
-    return result
-
-
-_PATTERN_TOOL_DEFS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "ListScripts",
-            "description": "List learned skills generated from behavior patterns.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "status": {
-                        "type": "string",
-                        "enum": ["draft", "shadow", "active", "refined", "deprecated", "all"],
-                    },
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "RunScript",
-            "description": "Run a learned skill by id with optional parameter overrides.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "script_id": {"type": "string"},
-                    "params": {"type": "object"},
-                },
-                "required": ["script_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "ApproveScript",
-            "description": "Manually activate a learned skill.",
-            "parameters": {
-                "type": "object",
-                "properties": {"script_id": {"type": "string"}},
-                "required": ["script_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "RejectScript",
-            "description": "Manually deprecate a learned skill.",
-            "parameters": {
-                "type": "object",
-                "properties": {"script_id": {"type": "string"}},
-                "required": ["script_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "LearnPatterns",
-            "description": "Process unlearned behavior turns and update behavior patterns plus learned skills immediately.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "LearnSkill",
-            "description": "Save the current turn's repetitive, deterministic tool call sequence as a "
-                           "reusable learned skill that can accept parameters. The system identifies "
-                           "varying arguments (queries, file paths, URLs, etc.) and turns them into "
-                           "inputs you can pass each time you run the skill. Best for workflows with "
-                           "less LLM involvement — repeated tool calls with a consistent pattern where "
-                           "only the arguments change. NOT for creative or one-shot tasks. The system "
-                           "also auto-detects patterns in the background. Call this proactively after "
-                           "finishing a reusable workflow.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Optional short name for the skill. If omitted, one is auto-generated.",
-                    },
-                },
-            },
-        },
-    },
-]
-
-_PATTERN_HANDLERS = {
-    "ListScripts": _tool_list_scripts,
-    "RunScript": _tool_run_script,
-    "ApproveScript": _tool_approve_script,
-    "RejectScript": _tool_reject_script,
-    "LearnPatterns": _tool_learn_patterns,
-    "LearnSkill": _tool_learn_skill,
-}
-
-
-def register_tools() -> bool:
-    try:
-        from cyrene.tools import TOOL_DEFS, TOOL_HANDLERS
-    except ImportError:
-        logger.debug("tools module not available, skipping behavior-learning tool registration")
-        return False
-    existing = {td["function"]["name"] for td in TOOL_DEFS}
-    for td in _PATTERN_TOOL_DEFS:
-        if td["function"]["name"] not in existing:
-            TOOL_DEFS.append(td)
-    for name, handler in _PATTERN_HANDLERS.items():
-        if name not in TOOL_HANDLERS:
-            TOOL_HANDLERS[name] = handler
-    return True

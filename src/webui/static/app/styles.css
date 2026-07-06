@@ -11622,3 +11622,166 @@ html[data-theme="dark"] .welcome-range .active {
   width: 18px;
   height: 18px;
 }
+
+/* ============================================================
+   Global presentation tweaks
+   Workbench settings write html[data-text-size] and html[data-density].
+   Keep these tokens at the end so the settings affect every frontend surface,
+   including legacy pages, setup, modals, tables, forms, and shared chat pieces.
+   ============================================================ */
+:root {
+  --cyrene-ui-font-scale: 1;
+  --cyrene-ui-body-font-size: 16px;
+  --cyrene-ui-density-scale: 1;
+  --cyrene-ui-control-py: 8px;
+  --cyrene-ui-control-px: 12px;
+  --cyrene-ui-panel-pad: 14px;
+  --cyrene-ui-row-pad-y: 8px;
+  --cyrene-ui-gap: 10px;
+}
+
+html[data-text-size="large"] {
+  --cyrene-ui-font-scale: 1.12;
+  --cyrene-ui-body-font-size: 18px;
+}
+
+html[data-density="compact"] {
+  --cyrene-ui-density-scale: 0.78;
+  --cyrene-ui-body-font-size: 14px;
+  --cyrene-ui-control-py: 6px;
+  --cyrene-ui-control-px: 10px;
+  --cyrene-ui-panel-pad: 10px;
+  --cyrene-ui-row-pad-y: 5px;
+  --cyrene-ui-gap: 7px;
+}
+
+html[data-density="compact"][data-text-size="large"] {
+  --cyrene-ui-body-font-size: 16px;
+}
+
+body,
+:where(.app, .setup-shell, .quick-chat-shell) {
+  font-size: var(--cyrene-ui-body-font-size) !important;
+}
+
+:where(button, input, select, textarea) {
+  font-size: calc(14px * var(--cyrene-ui-font-scale)) !important;
+}
+
+:where(.app, .setup-shell) :where(
+  .btn,
+  .seg-btn,
+  .nav-item,
+  .topbar-title,
+  .statlight,
+  .who,
+  .card-title,
+  .side-head,
+  .shell-card,
+  .sa-name,
+  .sa-task,
+  .session-detail-title,
+  .cell-title,
+  .skill-row-name,
+  .ctxdbg-event-title,
+  .kb-toolbar-item
+) {
+  font-size: calc(14px * var(--cyrene-ui-font-scale)) !important;
+}
+
+:where(.app, .setup-shell) :where(
+  .msg-body,
+  .last-msg-body,
+  .comm-body,
+  .settings-content,
+  .settings-pane,
+  .settings-content .subtitle,
+  .field .label,
+  .input,
+  .select,
+  .table,
+  .log-row,
+  .model-name,
+  .model-desc,
+  .kb-result-content,
+  .kb-search-hint,
+  .kb-map-placeholder
+) {
+  font-size: calc(15px * var(--cyrene-ui-font-scale)) !important;
+}
+
+:where(.app, .setup-shell) :where(
+  h1,
+  .settings-content h2,
+  .setup-copy h1,
+  .skill-detail-title,
+  .metric-big,
+  .summary-value
+) {
+  font-size: calc(24px * var(--cyrene-ui-font-scale)) !important;
+}
+
+:where(.app, .setup-shell) :where(
+  small,
+  .nav-section,
+  .nav-badge,
+  .nav-key,
+  .composer-hint,
+  .sa-meta,
+  .run-meta,
+  .insp-label,
+  .field .label small,
+  .settings-saved-msg,
+  .kb-doc-src,
+  .kb-result-mode
+) {
+  font-size: calc(12px * var(--cyrene-ui-font-scale)) !important;
+}
+
+:where(.app, .setup-shell) :where(.input, .select, .btn, .seg-btn, .composer-actions .send) {
+  padding-block: var(--cyrene-ui-control-py) !important;
+  padding-inline: var(--cyrene-ui-control-px) !important;
+}
+
+html[data-density="compact"] :where(.app, .setup-shell) :where(
+  .card,
+  .settings-pane,
+  .setup-panel,
+  .setup-step-card,
+  .dashboard-panel,
+  .dashboard-hero-panel,
+  .dashboard-side-panel,
+  .sessions-main,
+  .session-detail,
+  .skills-side,
+  .skill-detail,
+  .ctxdbg-detail-pane,
+  .ctxdbg-event,
+  .kb-result-card,
+  .kb-search-hint
+) {
+  padding: var(--cyrene-ui-panel-pad) !important;
+}
+
+html[data-density="compact"] :where(.app, .setup-shell) :where(
+  .page,
+  .settings-content,
+  .chat-scroll,
+  .composer,
+  .ctxdbg-header,
+  .ctxdbg-layout,
+  .kb-search-results,
+  .kb-map-tab,
+  .dashboard-feed,
+  .settings-subpane
+) {
+  gap: var(--cyrene-ui-gap) !important;
+}
+
+html[data-density="compact"] :where(.app, .setup-shell) :where(.table th, .table td) {
+  padding-block: var(--cyrene-ui-row-pad-y) !important;
+}
+
+html[data-density="compact"] :where(.app, .setup-shell) :where(.topbar) {
+  min-height: 50px !important;
+}

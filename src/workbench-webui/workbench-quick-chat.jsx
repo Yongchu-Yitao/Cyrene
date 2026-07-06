@@ -74,6 +74,11 @@ function quickChatApplyTheme() {
   document.documentElement.dataset.theme = actual;
 }
 
+function quickChatApplyPresentation() {
+  document.documentElement.dataset.density = quickChatReadTweak("density", "cozy") || "cozy";
+  document.documentElement.dataset.textSize = quickChatReadTweak("textSize", "default") || "default";
+}
+
 function quickChatJson(url) {
   if (window.WorkbenchAPI && typeof window.WorkbenchAPI.json === "function") {
     return window.WorkbenchAPI.json(url, { toast: false });
@@ -290,7 +295,8 @@ function QuickChatApp() {
   useQuickChatEffect(function () {
     quickChatApplyAccent();
     quickChatApplyTheme();
-    function onChange() { quickChatApplyAccent(); quickChatApplyTheme(); }
+    quickChatApplyPresentation();
+    function onChange() { quickChatApplyAccent(); quickChatApplyTheme(); quickChatApplyPresentation(); }
 
     // The settings overlay lives in the main window, so its custom events fire
     // on a different renderer's `window` and never reach us — but the
@@ -301,10 +307,13 @@ function QuickChatApp() {
       if (!e || !e.key) { onChange(); return; }
       if (e.key === "cyrene-tweak-theme" || e.key === "cyrene-theme-mode") quickChatApplyTheme();
       else if (e.key === "cyrene-tweak-accent") quickChatApplyAccent();
+      else if (e.key === "cyrene-tweak-density" || e.key === "cyrene-tweak-textSize") quickChatApplyPresentation();
     }
     window.addEventListener("storage", onStorage);
     window.addEventListener("cyrene-tweak-accent-change", onChange);
     window.addEventListener("cyrene-tweak-theme-change", onChange);
+    window.addEventListener("cyrene-tweak-density-change", onChange);
+    window.addEventListener("cyrene-tweak-textSize-change", onChange);
 
     // Follow the OS while the user is on "system" mode.
     var mq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
@@ -315,6 +324,8 @@ function QuickChatApp() {
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("cyrene-tweak-accent-change", onChange);
       window.removeEventListener("cyrene-tweak-theme-change", onChange);
+      window.removeEventListener("cyrene-tweak-density-change", onChange);
+      window.removeEventListener("cyrene-tweak-textSize-change", onChange);
       if (mq && mq.removeEventListener) mq.removeEventListener("change", onSystem);
     };
   }, []);
@@ -715,7 +726,7 @@ function QuickChatPicker({ targets, defaultProject, selectedChatId, search, onSe
 (function () {
   try {
     var surface = new URLSearchParams(window.location.search || "").get("surface");
-    if (surface === "quick-chat") { quickChatApplyAccent(); quickChatApplyTheme(); }
+    if (surface === "quick-chat") { quickChatApplyAccent(); quickChatApplyTheme(); quickChatApplyPresentation(); }
   } catch (e) {}
 })();
 

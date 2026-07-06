@@ -18,7 +18,7 @@ async def test_tool_stats_counts_and_ordering(tmp_path):
     await cy_db.init_db(db_path)
 
     ts = "2026-06-21T12:00:00+00:00"
-    for tool in ["web_search", "web_search", "web_search", "run_shell", "read_file", "read_file"]:
+    for tool in ["WebSearch", "web_search", "web_search", "run_shell", "read_file", "read_file"]:
         await cy_db.record_tool_call(db_path, ts, tool)
     # A tool_call with no name still bumps the total but must not create a tool row.
     await cy_db.record_tool_call(db_path, ts, "")
@@ -27,9 +27,44 @@ async def test_tool_stats_counts_and_ordering(tmp_path):
     assert [(r["tool"], r["count"]) for r in rows] == [
         ("web_search", 3),
         ("read_file", 2),
-        ("run_shell", 1),
+        ("bash", 1),
     ]
     assert all(r["tool"] for r in rows)  # the blank-name call did not leak in
+
+
+@pytest.mark.asyncio
+async def test_tool_stats_merges_profile_display_aliases_before_limit(tmp_path):
+    db_path = str(tmp_path / "stats.db")
+    await cy_db.init_db(db_path)
+
+    ts = "2026-06-21T12:00:00+00:00"
+    tool_counts = {
+        "browser_navigate": 4,
+        "browser_snapshot": 3,
+        "浏览器": 2,
+        "WebFetch": 5,
+        "fetch_url": 2,
+        "Bash": 3,
+        "StartShell": 2,
+        "WebSearch": 4,
+        "web_search": 1,
+        "Read": 4,
+        "read_file": 1,
+        "Edit": 4,
+    }
+    for tool, count in tool_counts.items():
+        for _ in range(count):
+            await cy_db.record_tool_call(db_path, ts, tool)
+
+    rows = await cy_db.get_tool_counts_range(db_path, "2000-01-01", "2100-01-01", limit=5)
+
+    assert [(r["tool"], r["count"]) for r in rows] == [
+        ("browser", 9),
+        ("web_fetch", 7),
+        ("bash", 5),
+        ("read_file", 5),
+        ("web_search", 5),
+    ]
 
 
 @pytest.mark.asyncio

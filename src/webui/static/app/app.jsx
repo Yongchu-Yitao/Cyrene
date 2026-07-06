@@ -1056,6 +1056,8 @@ function MainApp() {
   const [shellMode, setShellMode] = useStateApp(readUiShellMode);
   const [themeMode, setThemeMode] = useStateApp(function () { return readStoredTweak("theme", "system"); });
   const [accent, setAccent] = useStateApp(function () { return readStoredTweak("accent", null); });
+  const [density, setDensity] = useStateApp(function () { return readStoredTweak("density", "cozy"); });
+  const [textSize, setTextSize] = useStateApp(function () { return readStoredTweak("textSize", "default"); });
   const [systemTheme, setSystemTheme] = useStateApp(function () {
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
@@ -1077,6 +1079,17 @@ function MainApp() {
     document.documentElement.dataset.theme = actualTheme;
     delete document.documentElement.dataset.booting;
   }, [themeMode, actualTheme]);
+
+  useEffectApp(function () {
+    var nextDensity = density || "cozy";
+    var nextTextSize = textSize || "default";
+    try {
+      localStorage.setItem("cyrene-tweak-density", JSON.stringify(nextDensity));
+      localStorage.setItem("cyrene-tweak-textSize", JSON.stringify(nextTextSize));
+    } catch(e) {}
+    document.documentElement.dataset.density = nextDensity;
+    document.documentElement.dataset.textSize = nextTextSize;
+  }, [density, textSize]);
 
   // Apply the accent ("主题色") chosen in the new-UI settings overlay. The
   // workbench palette derives its tints from --accent, so this drives the whole
@@ -1109,11 +1122,17 @@ function MainApp() {
   useEffectApp(function () {
     function onTheme() { setThemeMode(readStoredTweak("theme", "system")); }
     function onAccent() { setAccent(readStoredTweak("accent", null)); }
+    function onDensity() { setDensity(readStoredTweak("density", "cozy")); }
+    function onTextSize() { setTextSize(readStoredTweak("textSize", "default")); }
     window.addEventListener("cyrene-tweak-theme-change", onTheme);
     window.addEventListener("cyrene-tweak-accent-change", onAccent);
+    window.addEventListener("cyrene-tweak-density-change", onDensity);
+    window.addEventListener("cyrene-tweak-textSize-change", onTextSize);
     return function () {
       window.removeEventListener("cyrene-tweak-theme-change", onTheme);
       window.removeEventListener("cyrene-tweak-accent-change", onAccent);
+      window.removeEventListener("cyrene-tweak-density-change", onDensity);
+      window.removeEventListener("cyrene-tweak-textSize-change", onTextSize);
     };
   }, []);
 

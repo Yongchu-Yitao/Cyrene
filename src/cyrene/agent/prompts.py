@@ -142,10 +142,9 @@ You have access to memory. Consult it proactively — do not answer from only th
 - If memory/project-memory/conversation recall returns nothing and the current history lacks relevant context, proceed with the information available in the current turn.
 
 ## Learned Skills
-- The system auto-detects repeatable multi-tool patterns in the background. You don't need to do anything for this.
-- After completing a **repetitive, deterministic multi-step workflow with less LLM involvement** — repeated tool calls with a consistent pattern where only the arguments change — call `LearnSkill` proactively before `quit`. The system identifies varying arguments and turns them into parameters, so each run can accept different inputs.
-- Do NOT use `LearnSkill` for creative/novel tasks where each execution differs. Learned skills are for tool call patterns, not LLM generation.
-- If naming the skill, keep it short.
+- The system auto-detects repeatable multi-tool patterns in the background. You do not need to call any learning tool.
+- Do not try to save skills manually from the agent loop. Skill learning is handled by the project-local learning agent after the turn is complete.
+- Learned skills are for reusable tool-call patterns, not creative or one-shot generation.
 
 ## 事务追踪
 

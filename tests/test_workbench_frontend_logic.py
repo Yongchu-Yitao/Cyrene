@@ -155,6 +155,8 @@ def test_workbench_memory_skill_learning_selects_tool_chains():
     styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
     i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
     routes = (root / "src" / "webui" / "routes.py").read_text(encoding="utf-8")
+    pattern = (root / "src" / "cyrene" / "pattern.py").read_text(encoding="utf-8")
+    prompts = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
 
     assert "selectedLearningChainId" in source
     assert "selectedLearningSessionId" in source
@@ -192,6 +194,11 @@ def test_workbench_memory_skill_learning_selects_tool_chains():
     assert "_learning_enrich_tool_chains" in routes
     assert "_learning_is_known_media_path" in routes
     assert "/api/tool-chain-media" in routes
+    assert "/api/scripts" not in routes
+    assert "ListScripts" not in pattern
+    assert "RunScript" not in pattern
+    assert "LearnSkill" not in pattern
+    assert "call `LearnSkill`" not in prompts
 
 
 def test_workbench_chat_overview_i18n_has_zh_labels():

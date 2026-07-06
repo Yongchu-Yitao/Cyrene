@@ -3,7 +3,6 @@ function EvolutionPage({ tab, setTab }) {
   useDataVersion();
   const { t } = useI18n();
   const [workbenchTab, setWorkbenchTab] = useStateSet("learned");
-  const [scripts, setScripts] = useStateSet([]);
   const [patterns, setPatterns] = useStateSet([]);
   const [learnedSkills, setLearnedSkills] = useStateSet([]);
   const [ccData, setCcData] = useStateSet(null);
@@ -34,7 +33,6 @@ function EvolutionPage({ tab, setTab }) {
         fetch("/api/evolution").then((r) => r.json()),
         fetch("/api/skills/installed").then((r) => r.json()),
       ]);
-      setScripts(evRes.scripts || []);
       setPatterns(evRes.patterns || []);
       setLearnedSkills(evRes.learned_skills || []);
       setCcData(evRes.cc_learning || null);
@@ -115,18 +113,7 @@ function EvolutionPage({ tab, setTab }) {
     }
   };
 
-  const handleApprove = async (id) => {
-    await fetch(`/api/scripts/${id}/approve`, { method: "POST" });
-    fetchOverview();
-  };
-  const handleReject = async (id) => {
-    await fetch(`/api/scripts/${id}/reject`, { method: "POST" });
-    fetchOverview();
-  };
-  const handleRun = async (id) => {
-    await fetch(`/api/scripts/${id}/run`, { method: "POST" });
-  };
-  const handleLearnPatterns = async () => {
+  const handleProcessLearning = async () => {
     setLearnBusy(true);
     setLearnMessage("");
     try {
@@ -137,7 +124,6 @@ function EvolutionPage({ tab, setTab }) {
         setLearnBusy(false);
         return;
       }
-      setScripts(data.scripts || []);
       setPatterns(data.patterns || []);
       setLearnedSkills(data.learned_skills || []);
       const stats = data.stats || {};
@@ -162,7 +148,6 @@ function EvolutionPage({ tab, setTab }) {
         setLearnMessage(data.error || t("evolution.learnFailed"));
         return;
       }
-      setScripts(data.scripts || []);
       setPatterns(data.patterns || []);
       setLearnedSkills(data.learned_skills || []);
       const stats = data.result || {};
@@ -596,7 +581,7 @@ function EvolutionPage({ tab, setTab }) {
                   <button className="btn" style={{ fontSize: 11 }} onClick={handleRebuildLearning} disabled={learnBusy}>
                     {t("evolution.rebuildLearning")}
                   </button>
-                  <button className="btn primary" style={{ fontSize: 11 }} onClick={handleLearnPatterns} disabled={learnBusy}>
+                  <button className="btn primary" style={{ fontSize: 11 }} onClick={handleProcessLearning} disabled={learnBusy}>
                     {learnBusy ? t("evolution.learning") : t("evolution.learnNow")}
                   </button>
                 </div>

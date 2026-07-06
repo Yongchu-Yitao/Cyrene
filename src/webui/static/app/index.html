@@ -15,6 +15,12 @@
       ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
       : mode;
     document.documentElement.dataset.theme = theme;
+    const readTweak = (key, fallback) => {
+      const raw = localStorage.getItem("cyrene-tweak-" + key);
+      return raw == null ? fallback : JSON.parse(raw);
+    };
+    document.documentElement.dataset.density = readTweak("density", "cozy");
+    document.documentElement.dataset.textSize = readTweak("textSize", "default") || "default";
     document.documentElement.dataset.booting = "1";
   } catch (e) {}
 })();

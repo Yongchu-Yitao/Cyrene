@@ -375,14 +375,36 @@
   function toolDisplayName(step) {
     return String((step && step.tool) || (step && step.subtype) || (step && step.type) || "tool");
   }
-  function toolParamsText(step) {
+  function translatedToolName(tool, t) {
+    var raw = String(tool || "tool");
+    var translated = t ? t("toolName." + raw, raw) : raw;
+    if (translated !== raw) return translated;
+    if (raw.indexOf("browser.user.") === 0) {
+      var kind = raw.slice("browser.user.".length);
+      return t ? t("toolName.browser.user." + kind, t("toolName.browser.user", "Browser user operation")) : "Browser user operation";
+    }
+    return translated;
+  }
+  function compactValue(value) {
+    if (value == null) return "";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    try { return JSON.stringify(value); } catch (e) { return String(value); }
+  }
+  function toolParamsEntries(step) {
     if (!step) return "";
     var args = step.args || {};
     var hasArgs = args && typeof args === "object" && Object.keys(args).length;
     if (hasArgs) {
-      try { return JSON.stringify(args); } catch (e) {}
+      return Object.keys(args).slice(0, 8).map(function (key) {
+        return { key: key, value: compactValue(args[key]) };
+      });
     }
-    return step.input_summary || "";
+    var fallback = step.input_summary || "";
+    return fallback ? [{ key: "input", value: fallback }] : [];
+  }
+  function toolParamsText(step) {
+    return toolParamsEntries(step).map(function (item) { return item.key + ": " + item.value; }).join(" · ");
   }
   function stepDescription(step) {
     if (!step) return "";
@@ -418,35 +440,131 @@
     if (variant === 2) return svg(common, h("rect", { x: 5, y: 5, width: 14, height: 14, rx: 3 }), h("path", { d: "M9 9h6v6H9z" }));
     return svg(common, h("path", { d: "M12 4 20 12 12 20 4 12z" }), h("circle", { cx: 12, cy: 12, r: 2 }));
   }
-  function detailScreenshot(chain) {
+  function detailScreenshots(chain) {
     var shots = (chain && chain.screenshots) || [];
+    return shots.filter(function (shot) { return !!(shot && (shot.url || shot.path)); });
+  }
+  function detailScreenshot(chain) {
+    var shots = detailScreenshots(chain);
     return shots.length ? shots[0] : null;
   }
   function detailFiles(chain) {
     return ((chain && chain.files) || []).slice(0, 12);
   }
+  function mediaUrl(shot) {
+    var url = String((shot && shot.url) || "").trim();
+    if (url) return url;
+    var path = String((shot && shot.path) || "").trim();
+    return path ? "/api/tool-chain-media?path=" + encodeURIComponent(path) : "";
+  }
+  function skillUsageCount(skill) {
+    var stats = (skill && skill.run_statistics) || {};
+    return Number(stats.total_runs || 0) || Number(stats.success || 0) + Number(stats.failure || 0) + Number(stats.fallback || 0) || 0;
+  }
+  function learningErrorText(error, t) {
+    var text = String(error || "");
+    if (text === "No tool operations executed; cannot learn from empty chain.") {
+      return t("memory.learning.emptyChainError", "No tool operations executed; cannot learn from empty chain.");
+    }
+    return text;
+  }
+  function skillStatusText(status, t) {
+    var value = String(status || "draft");
+    return t ? t("memory.learning.skillStatus." + value, value) : value;
+  }
+  function skillTypeText(type, t) {
+    var value = String(type || "draft");
+    return t ? t("memory.learning.skillType." + value, value) : value;
+  }
 
   function SkillLearningPanel(props) {
     var t = useMemoryT();
+    var shotState = useState(0); var shotIndex = shotState[0]; var setShotIndex = shotState[1];
+    var imgErrorState = useState(false); var imgError = imgErrorState[0]; var setImgError = imgErrorState[1];
     var learning = props.learning;
     var loading = learning.loading;
+    var detailKind = props.detailKind || "chain";
+    var skill = props.skill;
     var chain = props.chain;
     var summary = (chain && chain.summary) || {};
     var review = (chain && chain.review) || {};
-    var screenshot = detailScreenshot(chain);
+    var screenshots = detailScreenshots(chain);
+    var boundedShotIndex = Math.min(shotIndex, Math.max(0, screenshots.length - 1));
+    var screenshot = screenshots[boundedShotIndex] || detailScreenshot(chain);
     var files = detailFiles(chain);
     var similarity = summary.total_steps ? Math.round(((summary.success_steps || 0) / summary.total_steps) * 100) : 0;
+    useEffect(function () { setShotIndex(0); setImgError(false); }, [chain && chain.id]);
+
+    if (detailKind === "skill") {
+      var skillSteps = Array.isArray(skill && skill.steps) ? skill.steps : [];
+      var trigger = (skill && skill.trigger) || {};
+      var examples = Array.isArray(trigger.positive_examples) ? trigger.positive_examples : [];
+      return h("aside", { className: "wb-mem-detail wb-mem-skill-panel wb-mem-replay-panel" },
+        h("div", { className: "wb-mem-detail-tabs" },
+          h("button", { type: "button", className: "wb-mem-detail-tab active" }, t("memory.learning.skillDetails", "Skill details"))),
+        !skill ? h("div", { className: "wb-mem-detail-scroll" },
+          h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noSkillSelected", "Select a learned skill to inspect.")),
+          learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)))
+          : h("div", { className: "wb-mem-detail-scroll" },
+            h("div", { className: "wb-mem-skill-hero" },
+              h("span", { className: "wb-mem-ico blue" }, ICON.learning(17)),
+              h("div", null,
+                h("div", { className: "wb-mem-skill-title-row" },
+                  h("h3", null, skill.name || skill.id),
+                  h(Chip, { tone: skill.status === "active" ? "green" : "blue" }, skillStatusText(skill.status, t))),
+                h("p", null, skill.description || t("memory.learning.noSkillDescription", "No description yet.")))),
+            h("div", { className: "wb-mem-skill-stats" },
+              h("div", null, h("b", null, String(skillUsageCount(skill))), h("span", null, t("memory.learning.references", "References"))),
+              h("div", null, h("b", null, String(skill.version || 1)), h("span", null, t("memory.learning.version", "Version")))),
+            h("div", { className: "wb-mem-skill-detail-box" },
+              h("div", null, h("span", null, t("memory.learning.skillType", "Type")), h("b", null, skillTypeText(skill.skill_type, t))),
+              h("div", null, h("span", null, t("memory.learning.updatedAt", "Updated")), h("b", null, shortDateTime(skill.updated_at))),
+              h("div", null, h("span", null, t("memory.learning.minMatchScore", "Min match")), h("b", null, String(Math.round((skill.min_match_score || 0) * 100) / 100))),
+              h("div", null, h("span", null, t("memory.learning.stepCount", "Steps")), h("b", null, String(skillSteps.length)))),
+            examples.length ? h("div", { className: "wb-replay-section" },
+              h("h3", null, t("memory.learning.triggerExamples", "Trigger examples")),
+              h("div", { className: "wb-mem-skill-examples" }, examples.slice(0, 4).map(function (example, index) {
+                return h("p", { key: index }, example);
+              }))) : null,
+            h("div", { className: "wb-replay-section" },
+              h("h3", null, t("memory.learning.skillSteps", "Skill steps")),
+              skillSteps.length ? h("div", { className: "wb-mem-skill-step-list" }, skillSteps.map(function (step, index) {
+                var ref = (step && step.implementation_reference) || {};
+                var tool = ref.tool_name || step.tool || step.subtype || step.type || "";
+                return h("div", { key: step.step_id || index, className: "wb-mem-skill-step" },
+                  h("span", null, String(index + 1)),
+                  h("div", null,
+                    h("b", null, step.title || translatedToolName(tool, t)),
+                    h("p", null, step.intent || step.raw_description || translatedToolName(tool, t))));
+              })) : h("div", { className: "wb-mem-empty-soft compact" }, t("memory.learning.noSteps", "No steps"))),
+            learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)),
+            learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note)));
+    }
 
     return h("aside", { className: "wb-mem-detail wb-mem-skill-panel wb-mem-replay-panel" },
       h("div", { className: "wb-mem-detail-tabs" },
         h("button", { type: "button", className: "wb-mem-detail-tab active" }, t("memory.learning.detailsTitle", "Details"))),
       !chain ? h("div", { className: "wb-mem-detail-scroll" },
         h("div", { className: "wb-mem-empty-soft" }, loading ? t("memory.learning.loadingChains", "Loading tool chains...") : t("memory.learning.selectRound", "Select a round to inspect.")),
-        learning.error && h("div", { className: "wb-mem-error inline" }, learning.error))
+        learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)))
         : h("div", { className: "wb-mem-detail-scroll" },
         screenshot ? h("figure", { className: "wb-detail-shot" },
-          h("img", { src: screenshot.url, alt: screenshot.name || t("memory.learning.screenshotAlt", "Browser screenshot") }),
-          h("figcaption", null, screenshot.name || screenshot.path))
+          !imgError && mediaUrl(screenshot)
+            ? h("img", {
+              src: mediaUrl(screenshot),
+              alt: screenshot.name || t("memory.learning.screenshotAlt", "Browser screenshot"),
+              onError: function () { setImgError(true); },
+              onLoad: function () { setImgError(false); },
+            })
+            : h("div", { className: "wb-detail-shot-error" },
+              h("b", null, t("memory.learning.imageLoadFailed", "Image failed to load")),
+              h("small", null, screenshot.path || screenshot.name || "—")),
+          h("figcaption", null,
+            h("span", null, screenshot.name || screenshot.path),
+            screenshots.length > 1 && h("span", { className: "wb-detail-shot-pager" },
+              h("button", { type: "button", disabled: boundedShotIndex <= 0, onClick: function () { setShotIndex(Math.max(0, boundedShotIndex - 1)); setImgError(false); } }, t("common.previous", "Previous")),
+              h("em", null, String(boundedShotIndex + 1) + " / " + screenshots.length),
+              h("button", { type: "button", disabled: boundedShotIndex >= screenshots.length - 1, onClick: function () { setShotIndex(Math.min(screenshots.length - 1, boundedShotIndex + 1)); setImgError(false); } }, t("common.next", "Next")))))
           : files.length ? h("div", { className: "wb-detail-files" },
             h("h3", null, t("memory.learning.relatedFiles", "Related files")),
             files.map(function (file, index) {
@@ -470,7 +588,7 @@
         h("div", { className: "wb-replay-section" },
           h("h3", null, t("memory.learning.learningSuggestion", "Learning suggestion")),
           h("p", null, review.rationale || t("memory.learning.suggestionFallback", "The project-local learning agent decides whether this chain should become a reusable skill."))),
-        learning.error && h("div", { className: "wb-mem-error inline" }, learning.error),
+        learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)),
         learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note)));
   }
 
@@ -481,6 +599,7 @@
     var loading = learning.loading;
     var busy = learning.busy;
     var sessions = learningSessions(snap.chains);
+    var shownSkills = snap.skills.slice(0, 8);
     var activeSessionId = props.sessionId || (sessions[0] && sessions[0].id) || "";
     var activeSession = sessions.find(function (session) { return session.id === activeSessionId; }) || sessions[0] || null;
     var chains = activeSession ? activeSession.chains.slice(0, 40) : [];
@@ -490,30 +609,49 @@
     var activeReview = (activeChain && activeChain.review) || {};
     var onSelectChain = props.onSelectChain;
     var onSelectSession = props.onSelectSession;
+    var onSelectSkill = props.onSelectSkill;
+    var detailKind = props.detailKind || "chain";
+    var selectedSkillId = props.skillId || "";
 
     return h("div", { className: "wb-mem-main wb-mem-learning-main" },
       h("div", { className: "wb-learning-layout" },
         h("aside", { className: "wb-learning-session-list" },
-          h("div", { className: "wb-learning-list-head" },
-            h("b", null, t("memory.learning.sessionSelect", "Conversation session")),
-            h("select", {
-              value: activeSession ? activeSession.id : "",
-              onChange: function (e) { onSelectSession(e.target.value); },
-              disabled: !sessions.length,
-            }, sessions.length ? sessions.map(function (session) {
-              return h("option", { key: session.id, value: session.id }, sessionLabel(session, t));
-            }) : h("option", { value: "" }, t("memory.learning.noSession", "No session")))),
-          h("div", { className: "wb-learning-chain-list" },
-            loading && !learning.data
-              ? h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.loadingChains", "Loading tool chains..."))
-              : chains.length ? chains.map(function (chain, index) {
-                var summary = chain.summary || {};
-                return h("button", { key: chain.id, type: "button", className: "wb-learning-chain-card" + (activeChain && activeChain.id === chain.id ? " active" : ""), onClick: function () { onSelectChain(chain.id); } },
-                  h("div", null,
-                    h("b", null, shortDateTime(chain.updated_at || chain.created_at) + "  " + chainTitle(chain, t)),
-                    h("small", null, t("memory.learning.roundMeta", "{steps} steps · {review}", { steps: summary.total_steps || 0, review: chain.review ? reviewText(chain.review, t) : t("memory.learning.pending", "Pending") }))),
-                  h("span", null, String(index + 1)));
-              }) : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noToolChains", "No tool-call rounds in this session.")))),
+          h("section", { className: "wb-learning-side-section skills" },
+            h("div", { className: "wb-learning-side-head" },
+              h("b", null, t("memory.learning.autoLearnedSkills", "Auto-learned skills")),
+              h("span", null, t("memory.learning.skillCount", "{count} skills", { count: snap.skills.length }))),
+            h("div", { className: "wb-learning-skill-list" },
+              loading && !learning.data
+                ? h("div", { className: "wb-mem-empty-soft compact" }, t("memory.learning.loadingChains", "Loading tool chains..."))
+                : shownSkills.length ? shownSkills.map(function (skill) {
+                  var usage = skillUsageCount(skill);
+                  return h("button", { key: skill.id, type: "button", className: "wb-learning-skill-mini" + (detailKind === "skill" && selectedSkillId === skill.id ? " active" : ""), onClick: function () { onSelectSkill(skill.id); } },
+                    h("div", null,
+                      h("b", null, skill.name || skill.id),
+                      h("small", null, skill.description || skill.skill_type || "—")),
+                    h("span", null, t("memory.learning.skillUsedCount", "{count} refs", { count: usage })));
+                }) : h("div", { className: "wb-mem-empty-soft compact" }, t("memory.learning.noAutoSkills", "No auto-learned skills yet.")))),
+          h("section", { className: "wb-learning-side-section sessions" },
+            h("div", { className: "wb-learning-list-head" },
+              h("b", null, t("memory.learning.sessionSelect", "Conversation session")),
+              h("select", {
+                value: activeSession ? activeSession.id : "",
+                onChange: function (e) { onSelectSession(e.target.value); },
+                disabled: !sessions.length,
+              }, sessions.length ? sessions.map(function (session) {
+                return h("option", { key: session.id, value: session.id }, sessionLabel(session, t));
+              }) : h("option", { value: "" }, t("memory.learning.noSession", "No session")))),
+            h("div", { className: "wb-learning-chain-list" },
+              loading && !learning.data
+                ? h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.loadingChains", "Loading tool chains..."))
+                : chains.length ? chains.map(function (chain, index) {
+                  var summary = chain.summary || {};
+                  return h("button", { key: chain.id, type: "button", className: "wb-learning-chain-card" + (detailKind === "chain" && activeChain && activeChain.id === chain.id ? " active" : ""), onClick: function () { onSelectChain(chain.id); } },
+                    h("div", null,
+                      h("b", null, shortDateTime(chain.updated_at || chain.created_at) + "  " + chainTitle(chain, t)),
+                      h("small", null, t("memory.learning.roundMeta", "{steps} steps · {review}", { steps: summary.total_steps || 0, review: chain.review ? reviewText(chain.review, t) : t("memory.learning.pending", "Pending") }))),
+                    h("span", null, String(index + 1)));
+                }) : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noToolChains", "No tool-call rounds in this session."))))),
         h("section", { className: "wb-learning-detail" },
           h("div", { className: "wb-learning-hero" },
             h("div", null,
@@ -522,7 +660,7 @@
               activeChain && h("p", { className: "wb-learning-theme" }, t("memory.learning.topic", "Topic: {topic}", { topic: activeChain.user_message || activeChain.context_summary || t("memory.learning.autoTopic", "Reusable tool chain") }))),
             h("button", { type: "button", className: "wb-learning-primary", disabled: loading || !!busy, onClick: function () { learning.runAction("learn"); } },
               busy ? t("memory.learning.learning", "Learning...") : t("memory.learning.learnAsSkill", "Learn as Skill ✨"))),
-          learning.error && h("div", { className: "wb-mem-error" }, learning.error),
+          learning.error && h("div", { className: "wb-mem-error" }, learningErrorText(learning.error, t)),
           learning.note && h("div", { className: "wb-mem-skill-note main" }, learning.note),
           activeChain ? h("div", { className: "wb-learning-content" },
             h("div", { className: "wb-learning-review-pill " + ((activeReview && activeReview.decision) || "pending") },
@@ -532,12 +670,20 @@
             h("section", { className: "wb-learning-section" },
               h("h3", null, t("memory.learning.stepTitle", "Tool-chain execution steps ({count} steps)", { count: activeSummary.total_steps || activeSteps.length || 0 })),
               activeSteps.length ? h("div", { className: "wb-learning-step-list" }, activeSteps.map(function (step, index) {
+                var rawToolName = toolDisplayName(step);
+                var params = toolParamsEntries(step);
                 return h("div", { key: step.id || index, className: "wb-learning-step" + (step.source === "user_browser" ? " user" : "") },
                   h("span", { className: "wb-learning-step-no" }, String(index + 1)),
                   h("span", { className: "wb-learning-step-icon" }, toolIcon(step)),
                   h("div", null,
-                    h("b", null, toolDisplayName(step)),
-                    h("p", null, toolParamsText(step) || stepDescription(step))),
+                    h("b", null, translatedToolName(rawToolName, t)),
+                    params.length
+                      ? h("div", { className: "wb-learning-step-params" }, params.map(function (item) {
+                        return h("span", { key: item.key },
+                          h("em", null, item.key),
+                          h("code", null, item.value));
+                      }))
+                      : h("p", null, toolParamsText(step) || stepDescription(step))),
                   h("i", { className: step.success ? "ok" : "fail" }, step.success ? "✓" : "!"));
               })) : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noSteps", "No steps"))),
             h("section", { className: "wb-learning-section" },
@@ -545,7 +691,10 @@
               h("div", { className: "wb-learning-answer markdown", dangerouslySetInnerHTML: { __html: memRenderMarkdown(activeChain.agent_response || activeChain.context_summary || t("memory.learning.noAgentAnswer", "This round has no agent answer yet.")) } })))
             : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noLearnableRounds", "No learnable rounds yet.")),
           h("div", { className: "wb-learning-foot" },
-            t("memory.learning.footer", "{chains} chains · {reviews} reviewed · {skills} skills", { chains: snap.chains.length, reviews: snap.reviewedChains, skills: snap.skills.length })))));
+            h("div", { className: "wb-learning-foot-stats" },
+              h("span", null, t("memory.learning.footerChains", "{count} chains", { count: snap.chains.length })),
+              h("span", null, t("memory.learning.footerReviews", "{count} reviewed", { count: snap.reviewedChains })),
+              h("span", null, t("memory.learning.footerSkills", "{count} skills", { count: snap.skills.length })))))));
   }
 
   // ── main page ────────────────────────────────────────────────────────
@@ -572,6 +721,7 @@
     var learningErrState = useState(""); var learningError = learningErrState[0]; var setLearningError = learningErrState[1];
     var learningNoteState = useState(""); var learningNote = learningNoteState[0]; var setLearningNote = learningNoteState[1];
     var learningKindState = useState("skill"); var selectedLearningKind = learningKindState[0]; var setSelectedLearningKind = learningKindState[1];
+    var learningDetailKindState = useState("chain"); var selectedLearningDetailKind = learningDetailKindState[0]; var setSelectedLearningDetailKind = learningDetailKindState[1];
     var learningSelState = useState(""); var selectedLearningSkillId = learningSelState[0]; var setSelectedLearningSkillId = learningSelState[1];
     var learningPatternSelState = useState(""); var selectedLearningPatternId = learningPatternSelState[0]; var setSelectedLearningPatternId = learningPatternSelState[1];
     var learningChainSelState = useState(""); var selectedLearningChainId = learningChainSelState[0]; var setSelectedLearningChainId = learningChainSelState[1];
@@ -628,6 +778,7 @@
           });
           if (payload.skill_id) {
             setSelectedLearningKind("skill");
+            setSelectedLearningDetailKind("skill");
             setSelectedLearningSkillId(payload.skill_id);
           }
           setLearningNote(payload.created
@@ -639,16 +790,19 @@
     }
     function selectLearningSkill(id) {
       setSelectedLearningKind("skill");
+      setSelectedLearningDetailKind("skill");
       setSelectedLearningSkillId(id || "");
     }
     function selectLearningPattern(id) {
       setSelectedLearningKind("pattern");
+      setSelectedLearningDetailKind("skill");
       setSelectedLearningPatternId(id || "");
     }
     useEffect(function () {
       setSelectedId("");
       setActivePanel("");
       setSelectedLearningKind("skill");
+      setSelectedLearningDetailKind("chain");
       setSelectedLearningSkillId("");
       setSelectedLearningPatternId("");
       setSelectedLearningChainId("");
@@ -680,6 +834,30 @@
     useEffect(function () {
       if (activePanel === "learning" && !learningData && !learningLoading) loadLearning();
     }, [activePanel]);
+    useEffect(function () {
+      if (activePanel !== "learning") return undefined;
+      var stopped = false;
+      function refresh() {
+        if (stopped || learningBusy || learningLoading) return;
+        loadLearning();
+      }
+      var timer = setInterval(refresh, 5000);
+      function onFocus() { refresh(); }
+      function onVisibility() { if (!document.hidden) refresh(); }
+      function onChatCreated() { setTimeout(refresh, 800); }
+      window.addEventListener("focus", onFocus);
+      document.addEventListener("visibilitychange", onVisibility);
+      window.addEventListener("cyrene:wbc-chat-created", onChatCreated);
+      window.addEventListener("cyrene:wbc-refresh-chats", onChatCreated);
+      return function () {
+        stopped = true;
+        clearInterval(timer);
+        window.removeEventListener("focus", onFocus);
+        document.removeEventListener("visibilitychange", onVisibility);
+        window.removeEventListener("cyrene:wbc-chat-created", onChatCreated);
+        window.removeEventListener("cyrene:wbc-refresh-chats", onChatCreated);
+      };
+    }, [activePanel, workspace, learningBusy, learningLoading]);
 
     var memories = (payload && payload.memories) || [];
     var categories = (payload && payload.categories) || [];
@@ -720,6 +898,7 @@
       }
       if (!chains.length && selectedLearningChainId) setSelectedLearningChainId("");
       if (!sessions.length && selectedLearningSessionId) setSelectedLearningSessionId("");
+      if (!skills.length && selectedLearningDetailKind === "skill") setSelectedLearningDetailKind("chain");
       if (!skills.length) {
         if (selectedLearningSkillId) setSelectedLearningSkillId("");
         if (patterns.length) {
@@ -737,7 +916,7 @@
         setSelectedLearningKind("skill");
         setSelectedLearningSkillId(skills[0].id);
       }
-    }, [learningData, selectedLearningKind, selectedLearningSkillId, selectedLearningPatternId, selectedLearningChainId, selectedLearningSessionId]);
+    }, [learningData, selectedLearningKind, selectedLearningDetailKind, selectedLearningSkillId, selectedLearningPatternId, selectedLearningChainId, selectedLearningSessionId]);
 
     var visible = useMemo(function () {
       var q = query.trim().toLowerCase();
@@ -910,13 +1089,20 @@
       learning: learning,
       chain: selectedLearningChain,
       sessionId: selectedLearningSession && selectedLearningSession.id,
+      detailKind: selectedLearningDetailKind,
+      skillId: selectedLearningSkill && selectedLearningSkill.id,
       onSelectSession: function (sessionId) {
+        setSelectedLearningDetailKind("chain");
         setSelectedLearningSessionId(sessionId || "");
         var sessions = learningSessions(learningSnap.chains);
         var session = sessions.find(function (s) { return s.id === sessionId; });
         setSelectedLearningChainId(session && session.chains[0] ? session.chains[0].id : "");
       },
-      onSelectChain: setSelectedLearningChainId,
+      onSelectChain: function (chainId) {
+        setSelectedLearningDetailKind("chain");
+        setSelectedLearningChainId(chainId || "");
+      },
+      onSelectSkill: selectLearningSkill,
     }) : h("div", { className: "wb-mem-main" },
       h("div", { className: "wb-mem-toolbar" },
         h("div", { className: "wb-mem-searchbox" },
@@ -942,7 +1128,7 @@
     return h("section", { className: "wb-mem-page" },
       rail,
       main,
-      activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, chain: selectedLearningChain, skill: selectedLearningSkill, pattern: selectedLearningPattern }) : h(DetailPanel, {
+      activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, detailKind: selectedLearningDetailKind, chain: selectedLearningChain, skill: selectedLearningSkill, pattern: selectedLearningPattern }) : h(DetailPanel, {
         memory: selected, related: related, busy: busy,
         onSelect: setSelectedId,
         onEdit: function (m) { setModal({ mode: "edit", id: m.id, draft: { content: m.content, category: m.category, source: m.source, confidence: m.confidence, tags: m.tags } }); },

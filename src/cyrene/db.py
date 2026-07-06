@@ -611,6 +611,65 @@ async def record_tool_call(db_path: str, timestamp: str, tool_name: str = "") ->
         await db.commit()
 
 
+def _canonical_tool_for_stats(tool_name: str) -> str:
+    """Return the stable feature key used by profile usage stats."""
+    raw = str(tool_name or "").strip()
+    if not raw:
+        return ""
+
+    compact = re.sub(r"\s+", "", raw).lower()
+    localized_aliases = {
+        "浏览器": "browser",
+        "浏览器操作": "browser",
+        "用户浏览器操作": "browser",
+        "网络搜索": "web_search",
+        "联网搜索": "web_search",
+        "网页抓取": "web_fetch",
+        "获取网页": "web_fetch",
+        "终端": "bash",
+        "执行命令": "bash",
+    }
+    if compact in localized_aliases:
+        return localized_aliases[compact]
+
+    snake = re.sub(r"[\s.\-]+", "_", raw)
+    snake = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", snake)
+    snake = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", snake)
+    snake = re.sub(r"_+", "_", snake).strip("_").lower()
+    if not snake:
+        return ""
+    if snake == "browser" or snake.startswith("browser_"):
+        return "browser"
+
+    aliases = {
+        "websearch": "web_search",
+        "web_search": "web_search",
+        "webfetch": "web_fetch",
+        "web_fetch": "web_fetch",
+        "fetch_url": "web_fetch",
+        "bash": "bash",
+        "run_shell": "bash",
+        "run_command": "bash",
+        "start_shell": "bash",
+        "send_shell": "bash",
+        "read": "read_file",
+        "read_file": "read_file",
+        "write": "write_file",
+        "write_file": "write_file",
+        "edit": "edit_file",
+        "edit_file": "edit_file",
+        "recallmemory": "recall_memory",
+        "recall_memory": "recall_memory",
+        "recallconversation": "recall_conversation",
+        "recall_conversation": "recall_conversation",
+        "listknowledgedocuments": "list_knowledge_documents",
+        "list_knowledge_documents": "list_knowledge_documents",
+        "searchknowledge": "search_knowledge",
+        "search_knowledge": "search_knowledge",
+    }
+    return aliases.get(snake, snake)
+
+
 async def get_tool_counts_range(db_path: str, day_from: str, day_to: str, limit: int = 5) -> list[dict]:
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
@@ -620,13 +679,18 @@ async def get_tool_counts_range(db_path: str, day_from: str, day_to: str, limit:
             FROM daily_tool_stats
             WHERE day >= ? AND day <= ?
             GROUP BY tool
-            ORDER BY count DESC, tool ASC
-            LIMIT ?
             """,
-            (day_from, day_to, int(limit)),
+            (day_from, day_to),
         )
         rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        merged: dict[str, int] = {}
+        for row in rows:
+            tool = _canonical_tool_for_stats(str(row["tool"] or ""))
+            if not tool:
+                continue
+            merged[tool] = merged.get(tool, 0) + int(row["count"] or 0)
+        top = sorted(merged.items(), key=lambda item: (-item[1], item[0]))[: int(limit)]
+        return [{"tool": tool, "count": count} for tool, count in top]
 
 
 async def record_archive_exchange(

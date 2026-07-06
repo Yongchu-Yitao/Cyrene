@@ -456,7 +456,6 @@ _INTERNAL_TOOLS: frozenset[str] = frozenset({
     "spawn_subagent",
     "send_agent_message",
     "broadcast_agent_message",
-    "LearnSkill",
 })
 
 # Tools that should not trigger skill creation when used alone — they're interactive
@@ -5187,56 +5186,6 @@ async def rollback_learned_skill(skill_id: str, rollback_version: int) -> dict[s
     }
 
 
-async def _maybe_create_or_update_skill(pattern_id: str) -> None:
-    async with _conn() as conn:
-        cursor = await conn.execute(
-            "SELECT prototype_fingerprint, statistics_json FROM behavior_patterns WHERE pattern_id = ?",
-            (pattern_id,),
-        )
-        pattern_row = await cursor.fetchone()
-        cursor = await conn.execute(
-            "SELECT skill_id FROM learned_skills WHERE pattern_id = ?",
-            (pattern_id,),
-        )
-        skill_row = await cursor.fetchone()
-    if pattern_row is None:
-        return
-    prototype = _json_loads(pattern_row["prototype_fingerprint"], {})
-    stats = _json_loads(pattern_row["statistics_json"], _default_pattern_stats())
-    effective = float(stats.get("effective_count") or 0.0)
-    if effective < 2:
-        return
-    skill_id = str(skill_row["skill_id"]) if skill_row is not None else await _create_skill(pattern_id)
-    if not skill_id:
-        return
-    target_type = _target_skill_type(stats, prototype)
-    skill = await get_learned_skill(skill_id)
-    if skill is None:
-        return
-    if _SKILL_TYPE_ORDER.get(target_type, 0) > _SKILL_TYPE_ORDER.get(skill["skill_type"], 0):
-        await _update_skill_to_type(skill_id, target_type, f"Promoted to {target_type} based on stronger pattern evidence.")
-        replay_result = await _run_replay_tests(skill_id)
-        if replay_result["total"] and replay_result["pass_rate"] < 0.50:
-            refreshed = await get_learned_skill(skill_id)
-            if refreshed is not None:
-                await _create_patch_proposal(
-                    skill_id,
-                    int(refreshed["version"]),
-                    "update_trigger",
-                    "Replay tests show low pass rate after promotion.",
-                    {
-                        **replay_result,
-                        "change_list": _build_patch_change_list(
-                            refreshed,
-                            "update_trigger",
-                            "Replay tests show low pass rate after promotion.",
-                            replay_result,
-                        ),
-                    },
-                )
-    await _backfill_shadow_validation(skill_id)
-
-
 async def _promote_unknown_pool() -> None:
     async with _conn() as conn:
         cursor = await conn.execute(
@@ -5310,7 +5259,169 @@ async def _load_tool_chain_for_turn(turn_id: str) -> dict[str, Any]:
     }
 
 
-async def _learning_agent_review_turn(turn_id: str, fingerprint: dict[str, Any]) -> dict[str, Any]:
+async def _pattern_summary_for_learning(pattern_id: str) -> dict[str, Any]:
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            "SELECT * FROM behavior_patterns WHERE pattern_id = ?",
+            (str(pattern_id or ""),),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return {}
+    item = dict(row)
+    stats = _json_loads(item.get("statistics_json"), _default_pattern_stats())
+    skillability = _json_loads(item.get("skillability_json"), {})
+    linked = _json_loads(item.get("linked_skill_list"), [])
+    return {
+        "pattern_id": str(item.get("pattern_id") or ""),
+        "project_id": str(item.get("project_id") or ""),
+        "description": str(item.get("description") or ""),
+        "status": str(item.get("status") or ""),
+        "frequency": int(stats.get("frequency") or 0),
+        "effective_count": float(stats.get("effective_count") or 0),
+        "success_rate": float(stats.get("success_rate") or 0),
+        "skillability": skillability,
+        "linked_skill_list": linked,
+        "prototype_fingerprint": _json_loads(item.get("prototype_fingerprint"), {}),
+    }
+
+
+async def _learning_similar_candidates(
+    *,
+    project_id: str,
+    current_pattern_id: str,
+    fingerprint: dict[str, Any],
+    limit: int = 6,
+) -> dict[str, list[dict[str, Any]]]:
+    pattern_hits: list[dict[str, Any]] = []
+    for pattern in await _read_patterns(project_id):
+        pid = str(pattern.get("pattern_id") or "")
+        if not pid or pid == current_pattern_id or str(pattern.get("status") or "") == "deprecated":
+            continue
+        prototype = pattern.get("prototype_fingerprint") or {}
+        sim = compute_fingerprint_similarity(fingerprint, prototype)
+        score = float(sim.get("total") or 0.0)
+        if score < 0.40 or bool(sim.get("hard_fail")):
+            continue
+        stats = pattern.get("statistics") or {}
+        pattern_hits.append({
+            "pattern_id": pid,
+            "description": str(pattern.get("description") or ""),
+            "status": str(pattern.get("status") or ""),
+            "similarity": round(score, 4),
+            "frequency": int(stats.get("frequency") or 0),
+            "effective_count": float(stats.get("effective_count") or 0),
+            "linked_skill_list": pattern.get("linked_skill_list") or [],
+            "breakdown": sim.get("breakdown") or {},
+        })
+    skill_hits: list[dict[str, Any]] = []
+    for skill in await list_learned_skills(project_id):
+        if str(skill.get("status") or "") == "deprecated":
+            continue
+        trigger = skill.get("trigger") or {}
+        prototype = trigger.get("base_fingerprint") or {}
+        if not prototype:
+            continue
+        sim = compute_fingerprint_similarity(fingerprint, prototype)
+        score = float(sim.get("total") or 0.0)
+        if score < 0.40 or bool(sim.get("hard_fail")):
+            continue
+        skill_hits.append({
+            "skill_id": str(skill.get("id") or ""),
+            "pattern_id": str(skill.get("pattern_id") or ""),
+            "name": str(skill.get("name") or ""),
+            "description": str(skill.get("description") or ""),
+            "status": str(skill.get("status") or ""),
+            "skill_type": str(skill.get("skill_type") or ""),
+            "similarity": round(score, 4),
+            "breakdown": sim.get("breakdown") or {},
+        })
+    pattern_hits.sort(key=lambda item: float(item.get("similarity") or 0), reverse=True)
+    skill_hits.sort(key=lambda item: float(item.get("similarity") or 0), reverse=True)
+    return {
+        "patterns": pattern_hits[: max(1, limit)],
+        "skills": skill_hits[: max(1, limit)],
+    }
+
+
+def _normalize_learning_decision(raw_decision: Any) -> str:
+    decision = str(raw_decision or "").strip().lower()
+    if decision in {"promote", "learn", "parameterize", "create_skill", "promote_candidate"}:
+        return "promote"
+    if decision in {"duplicate", "already_exists", "covered", "reuse_existing"}:
+        return "duplicate"
+    if decision in {"merge", "merge_candidate", "merge_pattern"}:
+        return "merge"
+    return "skip"
+
+
+def _target_type_from_review(review: dict[str, Any], stats: dict[str, Any], prototype: dict[str, Any]) -> str:
+    proposed = review.get("proposed_skill") if isinstance(review.get("proposed_skill"), dict) else {}
+    target_type = str(proposed.get("skill_type") or "").strip()
+    if target_type in _SKILL_TYPE_ORDER:
+        return target_type
+    raw_decision = str(review.get("raw_decision") or review.get("decision") or "")
+    if raw_decision == "parameterize":
+        return "parameterized"
+    return _target_skill_type(stats, prototype)
+
+
+async def _merge_pattern_into(target_pattern_id: str, source_pattern_id: str) -> bool:
+    target = str(target_pattern_id or "").strip()
+    source = str(source_pattern_id or "").strip()
+    if not target or not source or target == source:
+        return False
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            "SELECT project_id FROM behavior_patterns WHERE pattern_id = ?",
+            (target,),
+        )
+        target_row = await cursor.fetchone()
+        cursor = await conn.execute(
+            "SELECT project_id FROM behavior_patterns WHERE pattern_id = ?",
+            (source,),
+        )
+        source_row = await cursor.fetchone()
+        if target_row is None or source_row is None:
+            return False
+        if str(target_row["project_id"] or "") != str(source_row["project_id"] or ""):
+            return False
+        cursor = await conn.execute(
+            "SELECT skill_id FROM learned_skills WHERE pattern_id = ?",
+            (source,),
+        )
+        if await cursor.fetchone() is not None:
+            return False
+        cursor = await conn.execute(
+            "SELECT turn_id, similarity, created_at FROM behavior_pattern_turns WHERE pattern_id = ?",
+            (source,),
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            await conn.execute(
+                """
+                INSERT OR REPLACE INTO behavior_pattern_turns
+                (pattern_id, turn_id, similarity, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    target,
+                    str(row["turn_id"] or ""),
+                    float(row["similarity"] or 0),
+                    str(row["created_at"] or _now_iso()),
+                ),
+            )
+        await conn.execute("DELETE FROM behavior_pattern_turns WHERE pattern_id = ?", (source,))
+        await conn.execute(
+            "UPDATE behavior_patterns SET status = 'deprecated', updated_at = ? WHERE pattern_id = ?",
+            (_now_iso(), source),
+        )
+        await conn.commit()
+    await _upsert_pattern(target)
+    return True
+
+
+async def _learning_agent_review_turn(turn_id: str, fingerprint: dict[str, Any], pattern_id: str) -> dict[str, Any]:
     scope = await _project_scope_for_turn(turn_id)
     async with _conn() as conn:
         cursor = await conn.execute(
@@ -5333,16 +5444,25 @@ async def _learning_agent_review_turn(turn_id: str, fingerprint: dict[str, Any])
         turn_row = await cursor.fetchone()
     chain = await _load_tool_chain_for_turn(turn_id)
     summary = chain.get("summary") or {}
+    current_candidate = await _pattern_summary_for_learning(pattern_id)
+    similar = await _learning_similar_candidates(
+        project_id=scope["project_id"],
+        current_pattern_id=pattern_id,
+        fingerprint=fingerprint,
+    )
     prompt = f"""You are the project-local skill learning agent for project {scope["project_id"]}.
 
 Review one completed conversation round and its exact tool/user-browser operation chain.
-Decide whether it should become a reusable skill or parameterized method for THIS project only.
+First inspect whether this project already has a similar skill candidate or learned skill.
+Then decide whether to promote a candidate into a skill, merge with an existing candidate, or avoid duplicate learning.
 
 Return JSON:
 {{
-  "decision": "learn" | "parameterize" | "skip",
+  "decision": "promote" | "merge" | "duplicate" | "skip",
   "confidence": 0-1,
   "rationale": "short reason",
+  "target_pattern_id": "pattern id to promote or merge into, if any",
+  "target_skill_id": "existing skill id if duplicate",
   "proposed_skill": {{
     "name": "short Chinese user-facing name",
     "description": "one sentence",
@@ -5350,7 +5470,12 @@ Return JSON:
   }}
 }}
 
-Learn only recurring, operational chains with concrete steps. Skip one-off answers, pure chat, or unsafe side effects that need fresh permission.
+Decision rules:
+- duplicate: choose this if an existing learned skill already covers the same purpose. Do not create a new skill.
+- If the existing learned skill is linked to the current candidate, choose promote when the candidate needs an upgrade; that is not a duplicate.
+- merge: choose this if a similar candidate exists and the new chain should be folded into that candidate before any future promotion.
+- promote: choose this only when the current or target candidate is worth becoming a reusable project-local skill now.
+- skip: choose this for one-off answers, pure chat, unsafe side effects, weak/noisy chains, or insufficient evidence.
 
 User message:
 {turn_row["user_message"] if turn_row else ""}
@@ -5364,25 +5489,70 @@ Fingerprint:
 Tool chain summary:
 {json.dumps(summary, ensure_ascii=False, indent=2)}
 
+Current candidate:
+{json.dumps(current_candidate, ensure_ascii=False, indent=2)[:8000]}
+
+Similar candidates and learned skills:
+{json.dumps(similar, ensure_ascii=False, indent=2)[:12000]}
+
 Tool chain:
 {json.dumps(chain.get("chain") or [], ensure_ascii=False, indent=2)[:12000]}
 """
     result = await _call_llm_json(prompt, caller="project_skill_learning_agent")
-    decision = str(result.get("decision") or "").strip().lower()
-    if decision not in {"learn", "parameterize", "skip"}:
+    raw_decision = str(result.get("decision") or "").strip().lower()
+    decision = _normalize_learning_decision(raw_decision)
+    if not result or raw_decision not in {"promote", "merge", "duplicate", "skip", "learn", "parameterize", "create_skill", "promote_candidate", "already_exists", "covered", "reuse_existing", "merge_candidate", "merge_pattern"}:
         chain_items = chain.get("chain") or []
         has_skillworthy = _has_skillworthy_steps([
             {"enabled": True, "implementation_reference": {"tool_name": str(item.get("tool") or "")}}
             for item in chain_items
         ])
-        decision = "learn" if has_skillworthy and int(summary.get("total_steps") or 0) >= 2 else "skip"
-        result = {
-            "decision": decision,
-            "confidence": 0.55 if decision != "skip" else 0.4,
-            "rationale": "Heuristic fallback because the learning agent did not return a valid decision.",
-            "proposed_skill": {},
+        linked_skill_ids = current_candidate.get("linked_skill_list") or []
+        current_stats = {
+            "effective_count": current_candidate.get("effective_count") or 0,
+            "frequency": current_candidate.get("frequency") or 0,
         }
+        duplicate_skill = next(
+            (
+                item for item in similar.get("skills") or []
+                if str(item.get("pattern_id") or "") != pattern_id and float(item.get("similarity") or 0) >= 0.88
+            ),
+            None,
+        )
+        if duplicate_skill:
+            decision = "duplicate"
+            result = {
+                "decision": decision,
+                "confidence": 0.72,
+                "rationale": "Heuristic fallback found an existing project-local skill with the same purpose.",
+                "target_skill_id": duplicate_skill.get("skill_id", ""),
+                "proposed_skill": {},
+            }
+        elif linked_skill_ids or (has_skillworthy and float(current_stats.get("effective_count") or 0) >= 2):
+            decision = "promote"
+            result = {
+                "decision": decision,
+                "confidence": 0.62,
+                "rationale": "Heuristic fallback: reusable tool chain has enough project-local evidence and no duplicate skill was found.",
+                "target_pattern_id": pattern_id,
+                "proposed_skill": {},
+            }
+        else:
+            decision = "skip"
+            result = {
+                "decision": decision,
+                "confidence": 0.45,
+                "rationale": "Heuristic fallback: not enough project-local evidence to promote this tool chain yet.",
+                "proposed_skill": {},
+            }
     proposed = result.get("proposed_skill") if isinstance(result.get("proposed_skill"), dict) else {}
+    proposed["_decision"] = {
+        "raw_decision": raw_decision,
+        "target_pattern_id": str(result.get("target_pattern_id") or ""),
+        "target_skill_id": str(result.get("target_skill_id") or ""),
+        "similar_patterns": similar.get("patterns") or [],
+        "similar_skills": similar.get("skills") or [],
+    }
     now = _now_iso()
     async with _conn() as conn:
         await conn.execute(
@@ -5418,9 +5588,12 @@ Tool chain:
         await conn.commit()
     return {
         "decision": decision,
+        "raw_decision": raw_decision,
         "confidence": float(result.get("confidence") or 0),
         "rationale": str(result.get("rationale") or ""),
         "proposed_skill": proposed,
+        "target_pattern_id": str(result.get("target_pattern_id") or ""),
+        "target_skill_id": str(result.get("target_skill_id") or ""),
     }
 
 
@@ -5457,6 +5630,9 @@ async def process_unprocessed_turns(force: bool = False, project_id: str = "") -
             "shadow_checks": 0,
             "learning_reviews": 0,
             "learning_skipped": 0,
+            "learning_duplicates": 0,
+            "candidate_merges": 0,
+            "candidate_promotions": 0,
             "agent_created_skills": 0,
         }
         for row in turn_rows:
@@ -5465,32 +5641,48 @@ async def process_unprocessed_turns(force: bool = False, project_id: str = "") -
             if not fingerprint:
                 continue
             scope = await _project_scope_for_turn(turn_id)
-            review = await _learning_agent_review_turn(turn_id, fingerprint)
-            stats["learning_reviews"] += 1
-            if str(review.get("decision") or "") == "skip":
-                stats["learning_skipped"] += 1
-                async with _conn() as conn:
-                    await conn.execute(
-                        "UPDATE behavior_turns SET processed_status = 1, updated_at = ? WHERE turn_id = ?",
-                        (_now_iso(), turn_id),
-                    )
-                    await conn.commit()
-                stats["processed_turns"] += 1
-                continue
             before_skills = {item["id"]: item for item in await list_learned_skills(scope["project_id"])}
             pattern_id, merged = await _merge_turn_into_pattern(turn_id, fingerprint)
+            review = await _learning_agent_review_turn(turn_id, fingerprint, pattern_id)
+            stats["learning_reviews"] += 1
             review_decision = str(review.get("decision") or "")
-            if review_decision in {"learn", "parameterize"}:
+            target_pattern_id = str(review.get("target_pattern_id") or "") or pattern_id
+            if review_decision == "merge":
+                if target_pattern_id != pattern_id and await _merge_pattern_into(target_pattern_id, pattern_id):
+                    stats["candidate_merges"] += 1
+                    pattern_id = target_pattern_id
+                else:
+                    stats["learning_skipped"] += 1
+            elif review_decision == "duplicate":
+                target_skill_id = str(review.get("target_skill_id") or "")
+                target_skill = await get_learned_skill(target_skill_id) if target_skill_id else None
+                if target_skill is not None and str(target_skill.get("pattern_id") or "") == pattern_id:
+                    review_decision = "promote"
+                else:
+                    stats["learning_duplicates"] += 1
+            elif review_decision == "skip":
+                stats["learning_skipped"] += 1
+            if review_decision == "promote":
+                if target_pattern_id != pattern_id:
+                    target_summary = await _pattern_summary_for_learning(target_pattern_id)
+                    if target_summary.get("project_id") == scope["project_id"]:
+                        pattern_id = target_pattern_id
                 skill_id = await _create_skill(pattern_id, force=True)
                 if skill_id:
                     stats["agent_created_skills"] += 1 if skill_id not in before_skills else 0
-                    proposed = review.get("proposed_skill") if isinstance(review.get("proposed_skill"), dict) else {}
-                    target_type = str(proposed.get("skill_type") or ("parameterized" if review_decision == "parameterize" else "draft"))
+                    stats["candidate_promotions"] += 1
+                    pattern_summary = await _pattern_summary_for_learning(pattern_id)
+                    target_type = _target_type_from_review(
+                        review,
+                        {
+                            "effective_count": pattern_summary.get("effective_count") or 0,
+                            "frequency": pattern_summary.get("frequency") or 0,
+                        },
+                        pattern_summary.get("prototype_fingerprint") or {},
+                    )
                     if target_type in _SKILL_TYPE_ORDER and target_type != "draft":
                         await _update_skill_to_type(skill_id, target_type, "Project skill learning agent selected this reusable workflow.")
-                await _maybe_create_or_update_skill(pattern_id)
-            else:
-                await _maybe_create_or_update_skill(pattern_id)
+                    await _backfill_shadow_validation(skill_id)
             after_skills = {item["id"]: item for item in await list_learned_skills(scope["project_id"])}
             if merged:
                 stats["merged_patterns"] += 1
@@ -5631,124 +5823,3 @@ async def run_learned_skill(skill_id: str, param_overrides: dict[str, Any] | Non
                 result = f"Tool failed: {exc}"
             results.append(f"{tool_name}: {_truncate_text(result, 500)}")
     return "\n".join(results) if results else f"Skill '{skill_id}' has no executable steps."
-
-
-async def list_compat_scripts(status: str = "all", project_id: str = "") -> list[dict[str, Any]]:
-    learned = await list_learned_skills(project_id)
-    if status != "all":
-        learned = [item for item in learned if item.get("status") == status]
-    return [
-        {
-            "id": item["id"],
-            "name": item["name"],
-            "description": item["description"],
-            "status": item["status"],
-            "type": item["skill_type"],
-            "occurrences": len(item.get("positive_examples") or []),
-            "confidence": float(item.get("min_match_score") or 0.0),
-            "last_used": item.get("run_statistics", {}).get("last_run_at", ""),
-            "steps": [
-                {"tool": str((step.get("implementation_reference") or {}).get("tool_name") or "")}
-                for step in item.get("steps") or []
-                if (step.get("implementation_reference") or {}).get("tool_name")
-            ],
-        }
-        for item in learned
-    ]
-
-
-async def learn_skill_from_current_turn(*, name: str = "", description: str = "") -> str:
-    """Create a learned skill from the current turn's tool calls.
-
-    Called by the LearnSkill tool when the agent actively saves a workflow.
-    """
-    turn_id = current_turn_id()
-    if not turn_id:
-        return "No active turn found."
-
-    actions = await _action_rows_for_turn(turn_id)
-    # Filter out internal tools — they won't be in the learned skill
-    actions = [a for a in actions if a["tool_name"] not in _INTERNAL_TOOLS]
-    if not actions:
-        return "No tool calls recorded in the current turn."
-    # Require at least one non-trivial tool — interactive-only is not skill-worthy
-    if not any(a["tool_name"] not in _TRIVIAL_SKILL_TOOLS for a in actions):
-        return "Tool calls in this turn are all interactive (ask_user, send_message, etc.) and not suitable for a learned skill."
-
-    # Create a single-turn pattern
-    pattern_id = _new_id("pattern")
-    now = _now_iso()
-    async with _conn() as conn:
-        await conn.execute(
-            """INSERT INTO behavior_patterns
-               (pattern_id, description, prototype_fingerprint, statistics_json, skillability_json,
-                status, linked_skill_list, created_at, updated_at)
-               VALUES (?, '', '{}', '{}', '{}', 'linked_to_skill', '[]', ?, ?)""",
-            (pattern_id, now, now),
-        )
-        await conn.execute(
-            """INSERT INTO behavior_pattern_turns (pattern_id, turn_id, similarity, created_at)
-               VALUES (?, ?, 1.0, ?)""",
-            (pattern_id, turn_id, now),
-        )
-
-    # Build fingerprint for the turn
-    fp = await _fingerprint_for_turn(turn_id)
-    if not fp:
-        fp = {}
-
-    # Build trigger from fingerprint
-    trigger = _skill_trigger_from_prototype(fp, [])
-    stats = {
-        "frequency": 1,
-        "success_count": 1.0,
-        "partial_success_count": 0.0,
-        "failure_count": 0.0,
-        "correction_count": 0.0,
-        "success_rate": 1.0,
-        "effective_count": 2.0,  # override to pass _create_skill guard
-        "action_stability": 1.0,
-        "io_stability": 1.0,
-        "total_actions": len(fp.get("action_sequence") or []),
-        "last_seen_at": now,
-    }
-    skillability = _pattern_skillability(stats, fp)
-    async with _conn() as conn:
-        await conn.execute(
-            """UPDATE behavior_patterns
-               SET prototype_fingerprint = ?, statistics_json = ?, skillability_json = ?,
-                   updated_at = ?
-               WHERE pattern_id = ?""",
-            (_json_dumps(fp), _json_dumps(stats), _json_dumps(skillability), now, pattern_id),
-        )
-        await conn.commit()
-
-    skill_id = await _create_skill(pattern_id, force=True)
-    if not skill_id:
-        return "Failed to create skill."
-
-    if name or description:
-        async with _conn() as conn:
-            _sets: list[str] = []
-            _vals: list[Any] = []
-            if name:
-                _sets.append("name = ?")
-                _vals.append(name)
-            if description:
-                _sets.append("description = ?")
-                _vals.append(description)
-            _now = _now_iso()
-            _vals.extend([_now, skill_id])
-            await conn.execute(
-                f"UPDATE learned_skills SET {', '.join(_sets)}, updated_at = ? WHERE skill_id = ?",
-                _vals,
-            )
-            await conn.commit()
-
-    skill = await get_learned_skill(skill_id)
-    skill_name = skill["name"] if skill else skill_id
-    step_count = len(skill.get("steps") or []) if skill else 0
-    return (
-        f"Learned skill `{skill_name}` ({skill_id}) created with {step_count} step(s). "
-        f"It will replay the {len(actions)} tool call(s) from this turn."
-    )

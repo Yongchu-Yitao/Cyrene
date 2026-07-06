@@ -49,6 +49,7 @@
   --wb-red: var(--err);
   --wb-accent-text: var(--accent-text, #fff);
   --wb-sans: var(--sans, "Inter", system-ui, -apple-system, sans-serif);
+  --wb-font: var(--wb-sans);
   --wb-notif-pop-bg: #ffffff;
   --wb-notif-pop-border: #d9e0e8;
   --wb-notif-shadow: 0 18px 56px rgba(20, 28, 45, 0.16), 0 3px 12px rgba(20, 28, 45, 0.07);
@@ -6663,6 +6664,7 @@ html[data-theme="light"] .wb-tool-list .mono {
   color: var(--wb-text);
   background: transparent;
   padding: 0;
+  font-family: var(--wb-font);
 }
 
 .wb-about-related-icon,
@@ -6679,6 +6681,7 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 .wb-about-related-row strong {
   color: var(--wb-text);
+  font-family: var(--wb-font);
   font-size: 14px;
   font-weight: 650;
 }
@@ -6698,10 +6701,12 @@ html[data-theme="light"] .wb-tool-list .mono {
   background: var(--wb-control-bg);
   text-align: center;
   text-decoration: none;
-  font: inherit;
+  font-family: var(--wb-font);
   font-size: 13px;
   font-weight: 640;
   line-height: 1;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
@@ -8709,17 +8714,119 @@ html[data-theme="light"] .wb-tool-list .mono {
   min-height: 0;
   display: grid;
   grid-template-columns: 300px minmax(420px, 1fr);
-  background: var(--wb-surface);
+  background: var(--wb-main-bg);
 }
 .wb-learning-session-list {
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 24px 18px;
+  gap: 12px;
+  padding: 16px;
   border-right: 1px solid var(--wb-line);
-  background: color-mix(in srgb, var(--wb-card-bg) 72%, var(--wb-surface));
+  background: var(--wb-task-rail-bg, color-mix(in srgb, var(--wb-card-bg) 72%, var(--wb-surface)));
+}
+.wb-learning-side-section {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-card-bg) 86%, transparent);
+  padding: 12px;
+}
+.wb-learning-side-section.skills {
+  flex: 0 0 auto;
+  max-height: 38%;
+}
+.wb-learning-side-section.sessions {
+  flex: 1 1 auto;
+}
+.wb-learning-side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.wb-learning-side-head b {
+  min-width: 0;
+  color: var(--wb-text);
+  font-size: 13.5px;
+  font-weight: 760;
+}
+.wb-learning-side-head span {
+  flex: 0 0 auto;
+  color: var(--wb-faint);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.wb-learning-skill-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wb-learning-skill-mini {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-blue) 12%);
+  color: inherit;
+  padding: 9px 10px;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 6%, transparent);
+  transition: background 130ms ease, border-color 130ms ease, box-shadow 130ms ease;
+}
+.wb-learning-skill-mini:hover {
+  background: color-mix(in srgb, var(--wb-card-bg) 82%, var(--wb-blue) 18%);
+  border-color: color-mix(in srgb, var(--wb-accent) 28%, var(--wb-line));
+}
+.wb-learning-skill-mini.active {
+  background: color-mix(in srgb, var(--wb-accent) 8%, var(--wb-card-bg));
+  border-color: color-mix(in srgb, var(--wb-accent) 42%, var(--wb-line));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--wb-accent) 18%, transparent);
+}
+.wb-learning-skill-mini > div {
+  min-width: 0;
+}
+.wb-learning-skill-mini b,
+.wb-learning-skill-mini small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-learning-skill-mini b {
+  color: var(--wb-text);
+  font-size: 12.5px;
+  font-weight: 730;
+}
+.wb-learning-skill-mini small {
+  margin-top: 4px;
+  color: var(--wb-muted);
+  font-size: 11.5px;
+}
+.wb-learning-skill-mini > span {
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+  color: var(--wb-accent);
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 720;
+  white-space: nowrap;
 }
 .wb-learning-list-head {
   display: flex;
@@ -8742,6 +8849,12 @@ html[data-theme="light"] .wb-tool-list .mono {
   padding: 0 10px;
   font: inherit;
   font-size: 12.5px;
+}
+.wb-learning-list-head select:focus,
+.wb-replay-speed select:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--wb-accent) 40%, var(--wb-line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 12%, transparent);
 }
 .wb-learning-chain-list {
   min-height: 0;
@@ -8952,6 +9065,32 @@ html[data-theme="light"] .wb-tool-list .mono {
   color: var(--wb-faint);
   font-size: 12px;
 }
+.wb-learning-step-params {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+.wb-learning-step-params span {
+  min-width: 0;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  border: 1px solid var(--wb-line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--wb-muted) 7%, transparent);
+  padding: 3px 6px;
+}
+.wb-learning-step-params em {
+  flex: 0 0 auto;
+  color: var(--wb-faint);
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 720;
+}
 .wb-learning-step code {
   min-width: 0;
   overflow: hidden;
@@ -9013,6 +9152,25 @@ html[data-theme="light"] .wb-tool-list .mono {
   color: var(--wb-faint);
   font-size: 12px;
 }
+.wb-learning-foot-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.wb-learning-foot-stats span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid var(--wb-line);
+  border-radius: 999px;
+  background: var(--wb-card-bg);
+  color: var(--wb-muted);
+  padding: 0 10px;
+  font-size: 11.5px;
+  font-weight: 650;
+}
 .wb-mem-replay-panel {
   flex-basis: 390px;
   width: 390px;
@@ -9031,14 +9189,70 @@ html[data-theme="light"] .wb-tool-list .mono {
   object-fit: contain;
   background: color-mix(in srgb, var(--wb-muted) 8%, transparent);
 }
+.wb-detail-shot-error {
+  min-height: 160px;
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  padding: 18px;
+  background: color-mix(in srgb, var(--wb-muted) 8%, transparent);
+  text-align: center;
+}
+.wb-detail-shot-error b {
+  color: var(--wb-text);
+  font-size: 13px;
+}
+.wb-detail-shot-error small {
+  max-width: 100%;
+  color: var(--wb-faint);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
 .wb-detail-shot figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   border-top: 1px solid var(--wb-line);
   padding: 9px 11px;
   color: var(--wb-faint);
   font-size: 11.5px;
+}
+.wb-detail-shot figcaption > span:first-child {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.wb-detail-shot-pager {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.wb-detail-shot-pager button {
+  border: 1px solid var(--wb-line);
+  border-radius: 6px;
+  background: var(--wb-control-bg);
+  color: var(--wb-muted);
+  padding: 2px 7px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.wb-detail-shot-pager button:not(:disabled):hover {
+  color: var(--wb-text);
+  background: var(--wb-control-hover-bg);
+}
+.wb-detail-shot-pager button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.wb-detail-shot-pager em {
+  color: var(--wb-faint);
+  font-style: normal;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 .wb-detail-files {
   display: flex;
@@ -9333,6 +9547,21 @@ html[data-theme="light"] .wb-tool-list .mono {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.wb-mem-skill-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.wb-mem-skill-examples p {
+  margin: 0;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-card-bg) 90%, var(--wb-blue) 10%);
+  color: var(--wb-muted);
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
 }
 .wb-mem-skill-step-list {
   display: flex;
@@ -14359,4 +14588,169 @@ html[data-theme="dark"] .wbc-map .leaflet-control-zoom a {
   border-radius: 2px;
   background: var(--wb-accent);
   opacity: 0.5;
+}
+
+/* ============================================================
+   Global presentation tweaks for Workbench surfaces
+   The settings overlay stores text size and density on <html>. These final
+   rules make the two presentation settings apply across every Workbench view,
+   modal, shared chat surface, quick-chat window, forms, tables, and controls.
+   ============================================================ */
+.workbench-shell {
+  --wb-ui-font-scale: var(--cyrene-ui-font-scale, 1);
+  --wb-ui-density-scale: var(--cyrene-ui-density-scale, 1);
+  --wb-ui-control-py: var(--cyrene-ui-control-py, 8px);
+  --wb-ui-control-px: var(--cyrene-ui-control-px, 12px);
+  --wb-ui-panel-pad: var(--cyrene-ui-panel-pad, 14px);
+  --wb-ui-row-pad-y: var(--cyrene-ui-row-pad-y, 8px);
+  --wb-ui-gap: var(--cyrene-ui-gap, 10px);
+  --wb-font: var(--wb-sans, var(--sans, "Inter", system-ui, -apple-system, sans-serif));
+  font-size: var(--cyrene-ui-body-font-size, 16px) !important;
+}
+
+html[data-text-size="large"] .workbench-shell,
+html[data-text-size="large"] :where(.workbench-confirm-modal, .workbench-toast-host, .wbq-shell) {
+  font-size: 18px !important;
+}
+
+html[data-density="compact"] .workbench-shell,
+html[data-density="compact"] :where(.workbench-confirm-modal, .workbench-toast-host, .wbq-shell) {
+  font-size: var(--cyrene-ui-body-font-size, 14px) !important;
+}
+
+.workbench-shell :where(button, input, textarea, select),
+:where(.workbench-confirm-modal, .workbench-toast-host, .wbq-shell) :where(button, input, textarea, select) {
+  font-size: calc(13px * var(--cyrene-ui-font-scale, 1)) !important;
+}
+
+.workbench-shell :where(
+  .workbench-brand strong,
+  .workbench-crumbs,
+  .workbench-icon-btn,
+  .workbench-toast-msg,
+  .workbench-confirm-body,
+  .wb-btn,
+  .wb-seg-btn,
+  .wb-card-head,
+  .wb-agent-body,
+  .wb-brief-row p,
+  .wb-running-stage,
+  .wb-mode-item-label,
+  .wbp-status,
+  .wbp-summary-actions,
+  .wbc-message,
+  .wbc-message-body,
+  .wbc-composer textarea,
+  .wbq-target-title,
+  .wbq-picker-title,
+  .wbq-send-error
+),
+:where(.workbench-confirm-modal, .workbench-toast-host, .wbq-shell) :where(
+  .wb-btn,
+  .wb-seg-btn,
+  .wbc-message,
+  .wbc-message-body,
+  .wbc-composer textarea,
+  .wbq-target-title,
+  .wbq-picker-title,
+  .wbq-send-error
+) {
+  font-size: calc(14px * var(--cyrene-ui-font-scale, 1)) !important;
+}
+
+.workbench-shell :where(
+  .workbench-brand span,
+  .wb-hint-label,
+  .wb-risk,
+  .wb-progress-badge,
+  .wb-kv,
+  .wb-live-line,
+  .wb-log-body,
+  .wb-mode-item-desc,
+  .wb-accept-state,
+  .wb-budget-stat-label,
+  .wb-budget-model-head,
+  .wb-budget-model-row,
+  .wb-budget-model-name,
+  .wbq-target-label,
+  .wbq-picker-meta,
+  .wbq-screenshot-status,
+  .wbq-permission
+),
+:where(.workbench-confirm-modal, .workbench-toast-host, .wbq-shell) :where(
+  small,
+  .wbq-target-label,
+  .wbq-picker-meta,
+  .wbq-screenshot-status,
+  .wbq-permission
+) {
+  font-size: calc(12px * var(--cyrene-ui-font-scale, 1)) !important;
+}
+
+.workbench-shell :where(
+  .wb-goal-loop-head h2,
+  .wb-changelog-head h3,
+  .wb-budget-stat-value,
+  .settings-content h2
+) {
+  font-size: calc(20px * var(--cyrene-ui-font-scale, 1)) !important;
+}
+
+.workbench-shell :where(.wb-btn, .wb-seg-btn, .wb-about-related-action, .wbp-tiny-btn),
+:where(.workbench-confirm-modal, .wbq-shell) :where(.wb-btn, .wb-seg-btn, .wbq-close, .wbq-screenshot-btn) {
+  min-height: calc(32px * var(--wb-ui-density-scale, 1)) !important;
+  padding-block: var(--wb-ui-control-py) !important;
+  padding-inline: var(--wb-ui-control-px) !important;
+}
+
+html[data-density="compact"] .workbench-shell :where(
+  .wb-card,
+  .wb-panel,
+  .wb-card-head,
+  .wb-brief-row,
+  .wb-agent-card,
+  .wb-scope-prompt,
+  .wb-goal-loop-modal,
+  .wb-changelog-modal,
+  .wb-budget-summary,
+  .wb-budget-model-row,
+  .wbp-page,
+  .wbp-summary-card,
+  .workbench-flow,
+  .workbench-composer,
+  .settings-pane,
+  .settings-subpane,
+  .wbq-panel,
+  .wbq-permission,
+  .wbq-send-error
+) {
+  padding: var(--wb-ui-panel-pad) !important;
+}
+
+html[data-density="compact"] .workbench-shell :where(
+  .workbench-topbar,
+  .workbench-brand,
+  .workbench-crumbs,
+  .workbench-top-actions,
+  .wb-card-actions,
+  .wb-goal-loop-grid,
+  .wb-mode-list,
+  .wb-step-mini,
+  .wbc-thread,
+  .wbc-composer,
+  .wbq-thread,
+  .wbq-toolbar,
+  .wbq-target,
+  .wbq-picker-list
+) {
+  gap: var(--wb-ui-gap) !important;
+}
+
+html[data-density="compact"] .workbench-topbar {
+  height: 50px !important;
+}
+
+html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-budget-model-row, .wb-about-related-row) {
+  min-height: calc(38px * var(--wb-ui-density-scale, 1)) !important;
+  padding-block: var(--wb-ui-row-pad-y) !important;
 }

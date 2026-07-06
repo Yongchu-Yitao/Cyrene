@@ -51,6 +51,34 @@ async def _record_code_fix_turn(bl, *, session_id: str, round_id: str, user_mess
         round_title=round_id,
     )
     bl.clear_turn_context(context)
+    return context["turn_id"]
+
+
+async def _record_web_search_turn(bl, *, session_id: str, round_id: str, user_message: str):
+    context = await bl.begin_turn(
+        session_id=session_id,
+        round_id=round_id,
+        user_message=user_message,
+        history=[],
+        session_title="Behavior test session",
+    )
+    await bl.record_action(
+        "search_web",
+        {"query": "today weather Shanghai"},
+        "main_agent",
+        round_id,
+        30,
+        result="weather result",
+        success=True,
+    )
+    await bl.complete_turn(
+        turn_id=context["turn_id"],
+        assistant_response="已查询天气。",
+        session_title="Behavior test session",
+        round_title=round_id,
+    )
+    bl.clear_turn_context(context)
+    return context["turn_id"]
 
 
 async def test_behavior_learning_promotes_to_active_skill(tmp_path, monkeypatch):
@@ -128,11 +156,11 @@ async def test_manual_pattern_learning_creates_skill(tmp_path, monkeypatch):
     patterns = await bl.list_patterns()
     learned = await bl.list_learned_skills()
     assert patterns
-    assert len(learned) == 1
+    assert len(learned) == 0
 
     result = await bl.learn_skill_from_pattern(patterns[0]["id"])
     assert result["ok"] is True
-    assert result["created"] is False
+    assert result["created"] is True
     assert result["skill"] is not None
     assert result["skill"]["pattern_id"] == patterns[0]["id"]
 
@@ -176,7 +204,131 @@ async def test_learning_agent_learn_decision_creates_skill_immediately(tmp_path,
     assert stats["agent_created_skills"] == 1
     assert len(skills) == 1
     assert skills[0]["skill_type"] == "parameterized"
-    assert chains[0]["review"]["decision"] == "parameterize"
+    assert chains[0]["review"]["decision"] == "promote"
+    assert chains[0]["review"]["proposed_skill"]["_decision"]["raw_decision"] == "parameterize"
+
+
+async def test_learning_agent_duplicate_decision_does_not_create_second_skill(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+
+    async def reviewer(prompt: str, *, caller: str = "behavior_learning"):
+        if caller == "project_skill_learning_agent":
+            if '"skills": []' not in prompt:
+                return {
+                    "decision": "duplicate",
+                    "confidence": 0.95,
+                    "rationale": "Existing skill already covers this workflow.",
+                    "target_skill_id": "existing-skill-from-prompt",
+                    "proposed_skill": {},
+                }
+            return {
+                "decision": "parameterize",
+                "confidence": 0.9,
+                "rationale": "First occurrence should become a project-local skill.",
+                "proposed_skill": {
+                    "name": "修复并验证导出逻辑",
+                    "description": "读取文件、修改导出逻辑并运行测试。",
+                    "skill_type": "parameterized",
+                },
+            }
+        return {}
+
+    monkeypatch.setattr(bl, "_call_llm_json", reviewer)
+    await _record_code_fix_turn(
+        bl,
+        session_id="session-agent-duplicate",
+        round_id="round-agent-duplicate-1",
+        user_message="请检查 src/app.py 并修复导出逻辑，然后给我总结",
+    )
+    first_stats = await bl.process_unprocessed_turns(force=True)
+    first_skills = await bl.list_learned_skills()
+    assert first_stats["agent_created_skills"] == 1
+    assert len(first_skills) == 1
+
+    await _record_code_fix_turn(
+        bl,
+        session_id="session-agent-duplicate",
+        round_id="round-agent-duplicate-2",
+        user_message="请检查 src/app.py 并修复导出逻辑，然后给我总结",
+    )
+    second_stats = await bl.process_unprocessed_turns(force=True)
+    second_skills = await bl.list_learned_skills()
+    chains = await bl.list_tool_chains()
+
+    assert second_stats["learning_duplicates"] == 1
+    assert second_stats["agent_created_skills"] == 0
+    assert len(second_skills) == 1
+    assert chains[0]["review"]["decision"] == "duplicate"
+
+
+async def test_similar_candidate_search_compares_purpose_and_tool_chain_within_project(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+
+    def project_scope(session_id: str | None):
+        sid = str(session_id or "")
+        if sid.startswith("project-b"):
+            return {"project_id": "project-b", "project_key": "project-b", "session_kind": "test"}
+        return {"project_id": "project-a", "project_key": "project-a", "session_kind": "test"}
+
+    monkeypatch.setattr(bl, "_project_scope_for_session", project_scope)
+
+    await _record_code_fix_turn(
+        bl,
+        session_id="project-a-session-seed",
+        round_id="seed-code-fix",
+        user_message="导出逻辑坏了，请读文件、改代码并跑测试",
+    )
+    await bl.process_unprocessed_turns(force=True, project_id="project-a")
+    seed_pattern = (await bl.list_patterns(project_id="project-a"))[0]
+    created = await bl.learn_skill_from_pattern(seed_pattern["id"], "project-a")
+    assert created["ok"] is True
+
+    await _record_web_search_turn(
+        bl,
+        session_id="project-a-session-weather",
+        round_id="weather-search",
+        user_message="帮我查一下上海今天的天气",
+    )
+    await bl.process_unprocessed_turns(force=True, project_id="project-a")
+    weather_pattern = next(
+        item for item in await bl.list_patterns(project_id="project-a")
+        if item["id"] != seed_pattern["id"]
+    )
+
+    await _record_code_fix_turn(
+        bl,
+        session_id="project-b-session-seed",
+        round_id="other-project-code-fix",
+        user_message="导出逻辑坏了，请读文件、改代码并跑测试",
+    )
+    await bl.process_unprocessed_turns(force=True, project_id="project-b")
+    other_project_pattern = (await bl.list_patterns(project_id="project-b"))[0]
+
+    new_turn_id = await _record_code_fix_turn(
+        bl,
+        session_id="project-a-session-new",
+        round_id="new-code-fix",
+        user_message="帮我检查 src/app.py 的导出问题，修完后执行测试确认",
+    )
+    new_fp = await bl.build_turn_fingerprint(new_turn_id)
+    similar = await bl._learning_similar_candidates(
+        project_id="project-a",
+        current_pattern_id="new-unmerged-candidate",
+        fingerprint=new_fp,
+        limit=10,
+    )
+
+    pattern_hits = {item["pattern_id"]: item for item in similar["patterns"]}
+    skill_hits = {item["pattern_id"]: item for item in similar["skills"]}
+
+    assert seed_pattern["id"] in pattern_hits
+    assert pattern_hits[seed_pattern["id"]]["similarity"] >= 0.85
+    assert pattern_hits[seed_pattern["id"]]["breakdown"]["action_sequence"] == 1.0
+    assert created["skill_id"] in {item["skill_id"] for item in similar["skills"]}
+    assert skill_hits[seed_pattern["id"]]["similarity"] >= 0.85
+
+    assert weather_pattern["id"] not in pattern_hits
+    assert other_project_pattern["id"] not in pattern_hits
 
 
 async def test_behavior_learning_patch_application_and_vocabulary_snapshot(tmp_path, monkeypatch):
