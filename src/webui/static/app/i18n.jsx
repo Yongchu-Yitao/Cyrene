@@ -1276,6 +1276,7 @@ const TRANSLATIONS = {
     "tool.desc.browser_type_ref": "Type into an editable element returned by browser_snapshot.",
     "tool.desc.browser_wait": "Wait for SPA navigation or async rendering.",
     "tool.desc.browser_network_log": "Inspect recent browser network resource URLs.",
+    "tool.desc.browser_user_events": "List recent user-driven operations in the embedded browser including clicks, text input, scrolling, and navigation.",
     "tool.desc.send_notification": "Send a desktop notification or webhook alert to the user.",
 
     // ── Search ────────────────────────────────────────────────────────────
@@ -2582,6 +2583,7 @@ const TRANSLATIONS = {
     "tool.desc.browser_type_ref": "向 browser_snapshot 返回的引用元素输入文字。",
     "tool.desc.browser_wait": "等待 SPA 导航或异步渲染完成。",
     "tool.desc.browser_network_log": "检查最近的浏览器网络资源 URL。",
+    "tool.desc.browser_user_events": "列出用户在嵌入式浏览器中的最近操作，包括点击、文本输入、滚动和导航。",
     "tool.desc.send_notification": "向用户发送桌面通知或 webhook 告警。",
 
     // ── 搜索 ──────────────────────────────────────────────────────────────

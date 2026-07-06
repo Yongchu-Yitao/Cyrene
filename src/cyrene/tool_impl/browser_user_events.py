@@ -30,6 +30,30 @@ TOOL_DEF = {
     },
 }
 
+# i18n: translations for tool output strings
+_OUTPUT_TEXTS: dict[str, dict[str, str]] = {
+    "en": {
+        "no_events": "No recent user browser operations were recorded for the current chat session.",
+        "header": "Recent user browser operations:",
+    },
+    "zh": {
+        "no_events": "当前对话会话中没有记录到最近的用户浏览器操作。",
+        "header": "最近的用户浏览器操作：",
+    },
+}
+
+
+def _t(key: str) -> str:
+    """Return translated output string for the current language."""
+    try:
+        from cyrene.config_store import get_setting
+        lang = str(get_setting("app_language", "") or "").strip().lower()
+        lang = lang if lang in ("en", "zh") else "en"
+    except Exception:
+        lang = "en"
+    texts = _OUTPUT_TEXTS.get(lang, _OUTPUT_TEXTS["en"])
+    return texts.get(key, key)
+
 
 def _event_label(event: dict[str, Any]) -> str:
     kind = str(event.get("kind") or "event")
@@ -83,8 +107,8 @@ async def _tool_browser_user_events(
             limit=limit,
         )
     if not events:
-        return "No recent user browser operations were recorded for the current chat session."
-    return "Recent user browser operations:\n" + "\n".join(_event_label(event) for event in events)
+        return _t("no_events")
+    return _t("header") + "\n" + "\n".join(_event_label(event) for event in events)
 
 
 handler = _tool_browser_user_events
