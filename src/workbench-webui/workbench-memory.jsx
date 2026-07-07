@@ -550,7 +550,7 @@
                 h("div", { className: "wb-mem-skill-title-row" },
                   h("h3", null, skill.name || skill.id),
                   h(Chip, { tone: skill.status === "active" ? "green" : "blue" }, skillStatusText(skill.status, t))),
-                h("p", null, skill.description || t("memory.learning.noSkillDescription", "No description yet.")))),
+                h("p", null, skill.description || t("memory.learning.noSkillDescription", "No description yet."))))),
             h("div", { className: "wb-mem-skill-stats" },
               h("div", null, h("b", null, String(skillUsageCount(skill))), h("span", null, t("memory.learning.references", "References"))),
               h("div", null, h("b", null, String(skill.version || 1)), h("span", null, t("memory.learning.version", "Version")))),

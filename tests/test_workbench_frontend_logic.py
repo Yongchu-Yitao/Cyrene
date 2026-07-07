@@ -299,7 +299,7 @@ def test_workbench_chat_allows_drafting_but_not_sending_while_running():
         root / "src" / "workbench-webui" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
     assert "workbench-chat.js?v=0.6.3" in index
-    assert "workbench-i18n.js?v=0.6.4" in index
+    assert "workbench-i18n.js?v=0.6.5" in index
 
 
 def test_workbench_chat_plan_confirmation_can_continue_in_auto_mode():
@@ -606,8 +606,8 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
     assert "gap: 2px;" in compact_tabs[0]
     assert "padding-inline: 8px;" in compact_tabs[0]
     assert "padding-inline: 2px;" in compact_tabs[1]
-    assert "font-size: 12px;" in compact_tabs[1]
-    assert "workbench.css?v=0.6.4" in index
+    assert "font-size: calc(12px * var(--wb-ui-font-scale, 1));" in compact_tabs[1]
+    assert "workbench.css?v=0.6.5" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -629,7 +629,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.6.4" in index
+    assert "workbench.css?v=0.6.5" in index
 
 
 def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
@@ -649,7 +649,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=0.6.4" in index
+    assert "settings-overlay.js?v=0.6.5" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -865,7 +865,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.models || p.primary_candidates || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=0.6.4" in index
+    assert "settings-overlay.js?v=0.6.5" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
