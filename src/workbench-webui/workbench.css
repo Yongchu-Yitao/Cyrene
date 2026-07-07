@@ -8994,6 +8994,15 @@ html[data-theme="light"] .wb-tool-list .mono {
   opacity: 0.6;
   cursor: default;
 }
+.wb-learning-bottom {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 30px;
+  border-top: 1px solid var(--wb-line);
+  background: var(--wb-bg);
+}
 .wb-learning-content {
   flex: 1 1 auto;
   min-height: 0;

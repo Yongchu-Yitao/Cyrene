@@ -5,10 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextvars import ContextVar
 from typing import Any
 
 from cyrene.registry_tools import TOOL_HANDLERS
 from cyrene.secret_redaction import redact_text, redact_value
+
+# Set to True to suppress background action recording (used by RunLearnedSkill replay).
+_skip_action_recording: ContextVar[bool] = ContextVar("_skip_action_recording", default=False)
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +21,8 @@ _pending_action_record_tasks: set[asyncio.Task[Any]] = set()
 
 def _record_action_background(*args: Any, **kwargs: Any) -> None:
     """Record behavior-learning telemetry without delaying tool results."""
+    if _skip_action_recording.get():
+        return
     try:
         from cyrene.pattern import record_action
 

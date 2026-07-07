@@ -8274,15 +8274,24 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     async def api_run_learned_skill(skill_id: str):
         from cyrene import pattern as _pattern
         result = await _pattern.run_learned_skill(skill_id)
-        return {"ok": True, "result": result}
+        ok = not str(result).startswith("Learned skill")
+        return {"ok": ok, "result": result}
 
     @router.post("/api/patterns/learn")
-    async def api_patterns_learn(project: str = ""):
+    async def api_patterns_learn(project: str = "", turn_id: str = ""):
         from cyrene import pattern as _pattern
 
-        project_id = _learning_project_id(project)
-        project_ids = _learning_project_ids(project)
-        stats = await _pattern.scan_for_manual_learn(project_id)
+        tid = turn_id.strip() if turn_id else ""
+        if tid:
+            stats = await _pattern.learn_from_turn(tid)
+            # Use the turn's actual project for the response so the UI sees the new skill.
+            from cyrene import behavior_learning as _bl
+            scope = await _bl._project_scope_for_turn(tid)
+            project_id = scope["project_id"]
+        else:
+            project_id = _learning_project_id(project)
+            stats = await _pattern.scan_for_manual_learn(project_id)
+        project_ids = _learning_project_ids(project_id or project)
         return {
             "ok": True,
             "stats": stats,

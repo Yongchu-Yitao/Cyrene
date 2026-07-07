@@ -666,44 +666,45 @@
                       h("small", null, t("memory.learning.roundMeta", "{steps} steps · {review}", { steps: summary.total_steps || 0, review: chain.review ? reviewText(chain.review, t) : t("memory.learning.pending", "Pending") }))),
                     h("span", null, String(index + 1)));
                 }) : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noToolChains", "No tool-call rounds in this session."))))),
-        h("section", { className: "wb-learning-detail" },
-          h("div", { className: "wb-learning-hero" },
-            h("div", null,
-              h("h2", null, activeChain ? shortDateTime(activeChain.updated_at || activeChain.created_at) + "  " + chainTitle(activeChain, t) : t("memory.learning.title", "Skill learning")),
-              h("p", null, activeChain ? chainSubtitle(activeChain, t) : t("memory.learning.emptyIntro", "Tool-call rounds are recorded separately for each project.")),
-              activeChain && h("p", { className: "wb-learning-theme" }, t("memory.learning.topic", "Topic: {topic}", { topic: activeChain.user_message || activeChain.context_summary || t("memory.learning.autoTopic", "Reusable tool chain") }))),
-            h("button", { type: "button", className: "wb-learning-primary", disabled: loading || !!busy, onClick: function () { learning.runAction("learn"); } },
-              busy ? t("memory.learning.learning", "Learning...") : t("memory.learning.learnAsSkill", "Learn as Skill ✨"))),
-          learning.error && h("div", { className: "wb-mem-error" }, learningErrorText(learning.error, t)),
-          learning.note && h("div", { className: "wb-mem-skill-note main" }, learning.note),
-          activeChain ? h("div", { className: "wb-learning-content" },
-            h("div", { className: "wb-learning-review-pill " + ((activeReview && activeReview.decision) || "pending") },
-              h("b", null, t("memory.learning.agentDecision", "Learning agent decision")),
-              h("span", null, reviewText(activeReview, t)),
-              h("p", null, (activeReview && activeReview.rationale) || t("memory.learning.decisionFallback", "The project-local learning agent will review the full chain and decide."))),
-            h("section", { className: "wb-learning-section" },
-              h("h3", null, t("memory.learning.stepTitle", "Tool-chain execution steps ({count} steps)", { count: activeSummary.total_steps || activeSteps.length || 0 })),
-              activeSteps.length ? h("div", { className: "wb-learning-step-list" }, activeSteps.map(function (step, index) {
-                var rawToolName = toolDisplayName(step);
-                var params = toolParamsEntries(step);
-                return h("div", { key: step.id || index, className: "wb-learning-step" + (step.source === "user_browser" ? " user" : "") },
-                  h("span", { className: "wb-learning-step-no" }, String(index + 1)),
-                  h("span", { className: "wb-learning-step-icon" }, toolIcon(step)),
-                  h("div", null,
-                    h("b", null, translatedToolName(rawToolName, t)),
-                    params.length
-                      ? h("div", { className: "wb-learning-step-params" }, params.map(function (item) {
-                        return h("span", { key: item.key },
-                          h("em", null, item.key),
-                          h("code", null, item.value));
-                      }))
-                      : h("p", null, toolParamsText(step) || stepDescription(step))),
-                  h("i", { className: step.success ? "ok" : "fail" }, step.success ? "✓" : "!"));
-              })) : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noSteps", "No steps"))),
-            h("section", { className: "wb-learning-section" },
-              h("h3", null, t("memory.learning.agentAnswer", "Agent answer")),
-              h("div", { className: "wb-learning-answer markdown", dangerouslySetInnerHTML: { __html: memRenderMarkdown(activeChain.agent_response || activeChain.context_summary || t("memory.learning.noAgentAnswer", "This round has no agent answer yet.")) } })))
-            : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noLearnableRounds", "No learnable rounds yet.")))));
+          h("section", { className: "wb-learning-detail" },
+            h("div", { className: "wb-learning-hero" },
+              h("div", null,
+                h("h2", null, activeChain ? shortDateTime(activeChain.updated_at || activeChain.created_at) + "  " + chainTitle(activeChain, t) : t("memory.learning.title", "Skill learning")),
+                h("p", null, activeChain ? chainSubtitle(activeChain, t) : t("memory.learning.emptyIntro", "Tool-call rounds are recorded separately for each project.")),
+                activeChain && h("p", { className: "wb-learning-theme" }, t("memory.learning.topic", "Topic: {topic}", { topic: activeChain.user_message || activeChain.context_summary || t("memory.learning.autoTopic", "Reusable tool chain") })))),
+            learning.error && h("div", { className: "wb-mem-error" }, learningErrorText(learning.error, t)),
+            learning.note && h("div", { className: "wb-mem-skill-note main" }, learning.note),
+            activeChain ? h("div", { className: "wb-learning-content" },
+              h("div", { className: "wb-learning-review-pill " + ((activeReview && activeReview.decision) || "pending") },
+                h("b", null, t("memory.learning.agentDecision", "Learning agent decision")),
+                h("span", null, reviewText(activeReview, t)),
+                h("p", null, (activeReview && activeReview.rationale) || t("memory.learning.decisionFallback", "The project-local learning agent will review the full chain and decide."))),
+              h("section", { className: "wb-learning-section" },
+                h("h3", null, t("memory.learning.stepTitle", "Tool-chain execution steps ({count} steps)", { count: activeSummary.total_steps || activeSteps.length || 0 })),
+                activeSteps.length ? h("div", { className: "wb-learning-step-list" }, activeSteps.map(function (step, index) {
+                  var rawToolName = toolDisplayName(step);
+                  var params = toolParamsEntries(step);
+                  return h("div", { key: step.id || index, className: "wb-learning-step" + (step.source === "user_browser" ? " user" : "") },
+                    h("span", { className: "wb-learning-step-no" }, String(index + 1)),
+                    h("span", { className: "wb-learning-step-icon" }, toolIcon(step)),
+                    h("div", null,
+                      h("b", null, translatedToolName(rawToolName, t)),
+                      params.length
+                        ? h("div", { className: "wb-learning-step-params" }, params.map(function (item) {
+                          return h("span", { key: item.key },
+                            h("em", null, item.key),
+                            h("code", null, item.value));
+                        }))
+                        : h("p", null, toolParamsText(step) || stepDescription(step))),
+                    h("i", { className: step.success ? "ok" : "fail" }, step.success ? "✓" : "!"));
+                })) : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noSteps", "No steps"))),
+              h("section", { className: "wb-learning-section" },
+                h("h3", null, t("memory.learning.agentAnswer", "Agent answer")),
+                h("div", { className: "wb-learning-answer markdown", dangerouslySetInnerHTML: { __html: memRenderMarkdown(activeChain.agent_response || activeChain.context_summary || t("memory.learning.noAgentAnswer", "This round has no agent answer yet.")) } })))
+              : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noLearnableRounds", "No learnable rounds yet."))),
+          h("div", { className: "wb-learning-bottom" },
+            h("button", { type: "button", className: "wb-learning-primary", disabled: loading || !!busy, onClick: function () { learning.runAction("learn", activeChain && (activeChain.turn_id || activeChain.id)); } },
+              busy ? t("memory.learning.learning", "Learning...") : t("memory.learning.learnAsSkill", "Learn as Skill ✨")))),
   }
 
   // ── main page ────────────────────────────────────────────────────────
@@ -752,8 +753,9 @@
         .catch(function (e) { setLearningError(e.message || String(e)); setLearningData({ learned_skills: [], patterns: [], tool_chains: [] }); })
         .finally(function () { setLearningLoading(false); });
     }
-    function runLearningAction(kind) {
+    function runLearningAction(kind, turnId) {
       var url = (kind === "rebuild" ? "/api/patterns/rebuild" : "/api/patterns/learn") + "?project=" + encodeURIComponent(workspace);
+      if (kind === "learn" && turnId) url += "&turn_id=" + encodeURIComponent(turnId);
       setLearningBusy(kind); setLearningNote(""); setLearningError("");
       return fetch(url, { method: "POST" }).then(jsonOrThrow)
         .then(function (payload) {

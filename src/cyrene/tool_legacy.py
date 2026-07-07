@@ -2872,6 +2872,39 @@ TOOL_DEFS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "GetLearnedSkill",
+            "description": "View the full details of an auto-learned skill by name. Returns the skill's description, trigger pattern, steps, input schema, and run statistics.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "The name of the learned skill to inspect."},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "RunLearnedSkill",
+            "description": "Execute an auto-learned skill by name. Runs all its steps (tool calls) with optional parameter overrides and returns the results from each step. Increments the skill's run counter. Only skills without high-risk steps (shell commands, file writes) can be executed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "The name of the learned skill to execute."},
+                    "params": {
+                        "type": "object",
+                        "description": "Optional parameter values to substitute into the skill's argument templates.",
+                        "additionalProperties": {"type": "string"},
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
 ]
 
 

@@ -145,6 +145,9 @@ You have access to memory. Consult it proactively — do not answer from only th
 - The system auto-detects repeatable multi-tool patterns in the background. You do not need to call any learning tool.
 - Do not try to save skills manually from the agent loop. Skill learning is handled by the project-local learning agent after the turn is complete.
 - Learned skills are for reusable tool-call patterns, not creative or one-shot generation.
+- **Use `GetLearnedSkill`** to inspect the details of any active learned skill (its steps, trigger, input schema, and statistics).
+- **Use `RunLearnedSkill`** to execute an active learned skill's steps. Only skills without high-risk steps (shell commands, file writes) can be auto-executed.
+- `RunLearnedSkill` increments the skill's run counter each time it executes.
 
 ## 事务追踪
 

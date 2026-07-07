@@ -56,6 +56,8 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.install_skill",  # InstallSkill
     "cyrene.tool_impl.uninstall_skill",  # UninstallSkill
     "cyrene.tool_impl.list_skills",  # ListSkills
+    "cyrene.tool_impl.get_learned_skill",  # GetLearnedSkill
+    "cyrene.tool_impl.run_learned_skill",  # RunLearnedSkill
     "cyrene.tool_impl.send_wechat_file",  # send_wechat_file
     "cyrene.tool_impl.browser_navigate",  # browser_navigate
     "cyrene.tool_impl.browser_snapshot",  # browser_snapshot

@@ -131,6 +131,10 @@ async def rebuild_learning_state(*, reprocess_all_turns: bool = True, project_id
     return await _behavior.rebuild_learning_state(reprocess_all_turns=reprocess_all_turns, project_id=project_id)
 
 
+async def learn_from_turn(turn_id: str) -> dict[str, Any]:
+    return await _behavior.learn_from_turn(turn_id)
+
+
 async def learn_skill_from_pattern(pattern_id: str, project_id: str = "") -> dict[str, Any]:
     return await _behavior.learn_skill_from_pattern(pattern_id, project_id)
 

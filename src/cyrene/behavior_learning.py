@@ -495,6 +495,9 @@ _HIGH_RISK_TOOLS: frozenset[str] = frozenset({
     "Write", "write_file", "Edit", "edit_file",
     # Persistent scheduled task creation
     "schedule_task",
+    # Browser automation (navigates and interacts with external pages)
+    "browser_navigate", "browser_click", "browser_click_ref", "browser_click_text", "browser_click_at",
+    "browser_type", "browser_type_ref",
 })
 
 _CORRECTION_TERMS = (
@@ -654,6 +657,19 @@ def _get_process_lock() -> asyncio.Lock:
         _PROCESS_LOCK = asyncio.Lock()
         _PROCESS_LOCK_LOOP = loop
     return _PROCESS_LOCK
+
+
+_STATS_LOCK: asyncio.Lock | None = None
+_STATS_LOCK_LOOP: object | None = None
+
+
+def _get_stats_lock() -> asyncio.Lock:
+    global _STATS_LOCK, _STATS_LOCK_LOOP
+    loop = asyncio.get_running_loop()
+    if _STATS_LOCK is None or _STATS_LOCK_LOOP is not loop:
+        _STATS_LOCK = asyncio.Lock()
+        _STATS_LOCK_LOOP = loop
+    return _STATS_LOCK
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -4094,38 +4110,41 @@ async def _update_shadow_promotion(skill_id: str) -> None:
 
 
 async def _update_skill_run_stats(skill_id: str, *, execution_status: str, consistency_score: float = 0.0) -> None:
-    async with _conn() as conn:
-        cursor = await conn.execute(
-            "SELECT * FROM learned_skills WHERE skill_id = ?", (skill_id,)
-        )
-        row = await cursor.fetchone()
-        if row is None:
-            return
-        stats = _skill_stats_with_usage_counters(_json_loads(row["run_statistics_json"], _default_skill_stats()))
-        stats["total_runs"] = int(stats.get("total_runs") or 0) + 1
-        stats["last_run_at"] = _now_iso()
-        total_runs = stats["total_runs"]
-        old_consistency = float(stats.get("consistency_avg") or 0.0)
-        stats["consistency_avg"] = round(((old_consistency * (total_runs - 1)) + consistency_score) / total_runs, 4)
-        if execution_status == "shadow_success":
-            stats["shadow_success"] = int(stats.get("shadow_success") or 0) + 1
-            stats["shadow_runs"] = int(stats.get("shadow_runs") or 0) + 1
-        elif execution_status == "shadow_failure":
-            stats["shadow_failure"] = int(stats.get("shadow_failure") or 0) + 1
-            stats["shadow_runs"] = int(stats.get("shadow_runs") or 0) + 1
-        elif execution_status == "success":
-            stats["active_success"] = int(stats.get("active_success") or 0) + 1
-            stats["actual_runs"] = int(stats.get("actual_runs") or 0) + 1
-        elif execution_status == "failure":
-            stats["active_failure"] = int(stats.get("active_failure") or 0) + 1
-            stats["actual_runs"] = int(stats.get("actual_runs") or 0) + 1
-        elif execution_status == "fallback":
-            stats["active_failure"] = int(stats.get("active_failure") or 0) + 1
-        await conn.execute(
-            "UPDATE learned_skills SET run_statistics_json = ?, updated_at = ? WHERE skill_id = ?",
-            (_json_dumps(stats), _now_iso(), skill_id),
-        )
-        await conn.commit()
+    # Serialize concurrent stat updates so two callers don't read the same
+    # baseline and silently lose one increment (read-modify-write race).
+    async with _get_stats_lock():
+        async with _conn() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM learned_skills WHERE skill_id = ?", (skill_id,)
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return
+            stats = _skill_stats_with_usage_counters(_json_loads(row["run_statistics_json"], _default_skill_stats()))
+            stats["total_runs"] = int(stats.get("total_runs") or 0) + 1
+            stats["last_run_at"] = _now_iso()
+            total_runs = stats["total_runs"]
+            old_consistency = float(stats.get("consistency_avg") or 0.0)
+            stats["consistency_avg"] = round(((old_consistency * (total_runs - 1)) + consistency_score) / total_runs, 4)
+            if execution_status == "shadow_success":
+                stats["shadow_success"] = int(stats.get("shadow_success") or 0) + 1
+                stats["shadow_runs"] = int(stats.get("shadow_runs") or 0) + 1
+            elif execution_status == "shadow_failure":
+                stats["shadow_failure"] = int(stats.get("shadow_failure") or 0) + 1
+                stats["shadow_runs"] = int(stats.get("shadow_runs") or 0) + 1
+            elif execution_status == "success":
+                stats["active_success"] = int(stats.get("active_success") or 0) + 1
+                stats["actual_runs"] = int(stats.get("actual_runs") or 0) + 1
+            elif execution_status == "failure":
+                stats["active_failure"] = int(stats.get("active_failure") or 0) + 1
+                stats["actual_runs"] = int(stats.get("actual_runs") or 0) + 1
+            elif execution_status == "fallback":
+                stats["active_failure"] = int(stats.get("active_failure") or 0) + 1
+            await conn.execute(
+                "UPDATE learned_skills SET run_statistics_json = ?, updated_at = ? WHERE skill_id = ?",
+                (_json_dumps(stats), _now_iso(), skill_id),
+            )
+            await conn.commit()
     await _update_shadow_promotion(skill_id)
 
 
@@ -4414,6 +4433,54 @@ async def get_learned_skill(skill_id: str) -> dict[str, Any] | None:
         )
         row = await cursor.fetchone()
     return _skill_row_to_definition(row) if row is not None else None
+
+
+async def get_learned_skill_by_name(name: str, session_id: str = "") -> dict[str, Any] | None:
+    """Look up an active learned skill by name for the current session's project."""
+    current_sid = str(session_id or _current_session_id.get() or "").strip()
+    scope = _project_scope_for_session(current_sid or None)
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            "SELECT * FROM learned_skills WHERE status = 'active' AND project_id = ? AND name = ?",
+            (scope["project_id"], str(name or "").strip()),
+        )
+        row = await cursor.fetchone()
+    return _skill_row_to_definition(row) if row is not None else None
+
+
+async def record_manual_skill_run(
+    skill_id: str,
+    version: int,
+    *,
+    execution_status: str = "success",
+    consistency_score: float = 0.0,
+) -> None:
+    """Record a skill run initiated by the agent (not by the auto-router)."""
+    from cyrene.settings_store import get_write_permission_mode as _get_perm_mode
+
+    run_id = _new_id("skill_run")
+    turn_id = _current_turn_id.get()
+    async with _conn() as conn:
+        await conn.execute(
+            """
+            INSERT INTO learned_skill_runs
+            (run_id, skill_id, version, turn_id, match_score, parameter_status, execution_status, failure_reason,
+             fallback_used, user_feedback, dry_run, consistency_score, permission_snapshot, created_at)
+            VALUES (?, ?, ?, ?, 1.0, 'manual', ?, '', 0, '', 0, ?, ?, ?)
+            """,
+            (
+                run_id,
+                skill_id,
+                version,
+                turn_id or "",
+                execution_status,
+                round(consistency_score, 4),
+                _get_perm_mode(),
+                _now_iso(),
+            ),
+        )
+        await conn.commit()
+    await _update_skill_run_stats(skill_id, execution_status=execution_status, consistency_score=consistency_score)
 
 
 async def list_learned_skill_versions(skill_id: str) -> list[dict[str, Any]]:
@@ -6174,6 +6241,23 @@ Tool chain:
     }
 
 
+def _fresh_learning_stats() -> dict[str, int]:
+    return {
+        "processed_turns": 0,
+        "merged_patterns": 0,
+        "new_patterns": 0,
+        "skills_created": 0,
+        "skills_updated": 0,
+        "shadow_checks": 0,
+        "learning_reviews": 0,
+        "learning_skipped": 0,
+        "learning_duplicates": 0,
+        "candidate_merges": 0,
+        "candidate_promotions": 0,
+        "agent_created_skills": 0,
+    }
+
+
 async def process_unprocessed_turns(force: bool = False, project_id: str = "") -> dict[str, Any]:
     async with _get_process_lock():
         async with _conn() as conn:
@@ -6198,96 +6282,11 @@ async def process_unprocessed_turns(force: bool = False, project_id: str = "") -
                     """
                 )
             turn_rows = await cursor.fetchall()
-        stats = {
-            "processed_turns": 0,
-            "merged_patterns": 0,
-            "new_patterns": 0,
-            "skills_created": 0,
-            "skills_updated": 0,
-            "shadow_checks": 0,
-            "learning_reviews": 0,
-            "learning_skipped": 0,
-            "learning_duplicates": 0,
-            "candidate_merges": 0,
-            "candidate_promotions": 0,
-            "agent_created_skills": 0,
-        }
+        stats = _fresh_learning_stats()
         for row in turn_rows:
             turn_id = str(row["turn_id"])
-            fingerprint = await build_turn_fingerprint(turn_id)
-            if not fingerprint:
-                continue
-            scope = await _project_scope_for_turn(turn_id)
-            before_skills = {item["id"]: item for item in await list_learned_skills(scope["project_id"])}
-            pattern_id, merged = await _merge_turn_into_pattern(turn_id, fingerprint)
-            review = await _learning_agent_review_turn(turn_id, fingerprint, pattern_id)
-            stats["learning_reviews"] += 1
-            review_decision = str(review.get("decision") or "")
-            target_pattern_id = str(review.get("target_pattern_id") or "") or pattern_id
-            if review_decision == "merge":
-                if target_pattern_id != pattern_id and await _merge_pattern_into(target_pattern_id, pattern_id):
-                    stats["candidate_merges"] += 1
-                    pattern_id = target_pattern_id
-                else:
-                    stats["learning_skipped"] += 1
-            elif review_decision == "duplicate":
-                target_skill_id = str(review.get("target_skill_id") or "")
-                target_skill = await get_learned_skill(target_skill_id) if target_skill_id else None
-                if target_skill is not None and str(target_skill.get("pattern_id") or "") == pattern_id:
-                    review_decision = "promote"
-                else:
-                    stats["learning_duplicates"] += 1
-            elif review_decision == "skip":
-                stats["learning_skipped"] += 1
-            if review_decision == "promote":
-                if target_pattern_id != pattern_id:
-                    target_summary = await _pattern_summary_for_learning(target_pattern_id)
-                    if target_summary.get("project_id") == scope["project_id"]:
-                        pattern_id = target_pattern_id
-                skill_id = await _create_skill(pattern_id, force=True)
-                if skill_id:
-                    stats["agent_created_skills"] += 1 if skill_id not in before_skills else 0
-                    stats["candidate_promotions"] += 1
-                    pattern_summary = await _pattern_summary_for_learning(pattern_id)
-                    target_type = _target_type_from_review(
-                        review,
-                        {
-                            "effective_count": pattern_summary.get("effective_count") or 0,
-                            "frequency": pattern_summary.get("frequency") or 0,
-                        },
-                        pattern_summary.get("prototype_fingerprint") or {},
-                    )
-                    if target_type in _SKILL_TYPE_ORDER and target_type != "draft":
-                        await _update_skill_to_type(skill_id, target_type, "Project skill learning agent selected this reusable workflow.")
-                    await _backfill_shadow_validation(skill_id)
-            after_skills = {item["id"]: item for item in await list_learned_skills(scope["project_id"])}
-            if merged:
-                stats["merged_patterns"] += 1
-            else:
-                stats["new_patterns"] += 1
-            created_skill_ids = set(after_skills) - set(before_skills)
-            if created_skill_ids:
-                stats["skills_created"] += len(created_skill_ids)
-            updated_skill_ids = {
-                skill_id
-                for skill_id in set(after_skills) & set(before_skills)
-                if (
-                    int(after_skills[skill_id].get("version") or 0) != int(before_skills[skill_id].get("version") or 0)
-                    or str(after_skills[skill_id].get("status") or "") != str(before_skills[skill_id].get("status") or "")
-                    or str(after_skills[skill_id].get("skill_type") or "") != str(before_skills[skill_id].get("skill_type") or "")
-                )
-            }
-            if updated_skill_ids:
-                stats["skills_updated"] += len(updated_skill_ids)
-            await _validate_shadow_skills_for_turn(turn_id, fingerprint)
-            stats["shadow_checks"] += 1
-            async with _conn() as conn:
-                await conn.execute(
-                    "UPDATE behavior_turns SET processed_status = 1, updated_at = ? WHERE turn_id = ?",
-                    (_now_iso(), turn_id),
-                )
-                await conn.commit()
-            stats["processed_turns"] += 1
+            if await _process_single_turn(turn_id, stats):
+                stats["processed_turns"] += 1
         await _promote_unknown_pool()
         return stats
 
@@ -6301,6 +6300,113 @@ async def tick(_bot: Any, _db_path: str) -> None:
 
 async def scan_for_session_start() -> dict[str, Any]:
     return await process_unprocessed_turns()
+
+
+async def _process_single_turn(turn_id: str, stats: dict[str, int], *, update_reason: str = "") -> bool:
+    """Run the fingerprint→merge→review→promote pipeline on one turn, mutating *stats* in place.
+
+    Returns True if a fingerprint was found and processing ran; False otherwise.
+    Always marks the turn as processed via DB so it is not re-scanned.
+
+    NOTE: Caller MUST hold ``_get_process_lock()`` to prevent concurrent
+    processing of the same turn by the background tick or other callers.
+    """
+    fingerprint = await build_turn_fingerprint(turn_id)
+    if not fingerprint:
+        async with _conn() as conn:
+            await conn.execute(
+                "UPDATE behavior_turns SET processed_status = 1, updated_at = ? WHERE turn_id = ?",
+                (_now_iso(), turn_id),
+            )
+            await conn.commit()
+        return False
+
+    scope = await _project_scope_for_turn(turn_id)
+    before_skills = {item["id"]: item for item in await list_learned_skills(scope["project_id"])}
+    pattern_id, merged = await _merge_turn_into_pattern(turn_id, fingerprint)
+    review = await _learning_agent_review_turn(turn_id, fingerprint, pattern_id)
+    stats["learning_reviews"] += 1
+
+    review_decision = str(review.get("decision") or "")
+    target_pattern_id = str(review.get("target_pattern_id") or "") or pattern_id
+
+    if review_decision == "merge":
+        if target_pattern_id != pattern_id and await _merge_pattern_into(target_pattern_id, pattern_id):
+            stats["candidate_merges"] += 1
+            pattern_id = target_pattern_id
+        else:
+            stats["learning_skipped"] += 1
+    elif review_decision == "duplicate":
+        target_skill_id = str(review.get("target_skill_id") or "")
+        target_skill = await get_learned_skill(target_skill_id) if target_skill_id else None
+        if target_skill is not None and str(target_skill.get("pattern_id") or "") == pattern_id:
+            review_decision = "promote"
+        else:
+            stats["learning_duplicates"] += 1
+    elif review_decision == "skip":
+        stats["learning_skipped"] += 1
+
+    tracked_created = False
+    if review_decision == "promote":
+        if target_pattern_id != pattern_id:
+            target_summary = await _pattern_summary_for_learning(target_pattern_id)
+            if target_summary.get("project_id") == scope["project_id"]:
+                pattern_id = target_pattern_id
+        skill_id = await _create_skill(pattern_id, force=True)
+        if skill_id:
+            tracked_created = skill_id not in before_skills
+            stats["agent_created_skills"] += 1 if tracked_created else 0
+            stats["candidate_promotions"] += 1
+            if tracked_created:
+                stats["skills_created"] += 1
+            pattern_summary = await _pattern_summary_for_learning(pattern_id)
+            target_type = _target_type_from_review(
+                review,
+                {
+                    "effective_count": pattern_summary.get("effective_count") or 0,
+                    "frequency": pattern_summary.get("frequency") or 0,
+                },
+                pattern_summary.get("prototype_fingerprint") or {},
+            )
+            if target_type in _SKILL_TYPE_ORDER and target_type != "draft":
+                await _update_skill_to_type(skill_id, target_type, update_reason or "Project skill learning agent selected this reusable workflow.")
+            await _backfill_shadow_validation(skill_id)
+
+    if merged:
+        stats["merged_patterns"] += 1
+    else:
+        stats["new_patterns"] += 1
+    await _validate_shadow_skills_for_turn(turn_id, fingerprint)
+    stats["shadow_checks"] += 1
+
+    async with _conn() as conn:
+        await conn.execute(
+            "UPDATE behavior_turns SET processed_status = 1, updated_at = ? WHERE turn_id = ?",
+            (_now_iso(), turn_id),
+        )
+        await conn.commit()
+    return True
+
+
+async def learn_from_turn(turn_id: str) -> dict[str, Any]:
+    tid = str(turn_id or "").strip()
+    if not tid:
+        return {"processed_turns": 0, "skills_created": 0, "error": "turn_id is required"}
+
+    async with _get_process_lock():
+        # Reset so the turn is picked up even if already processed
+        async with _conn() as conn:
+            await conn.execute(
+                "UPDATE behavior_turns SET processed_status = 0, updated_at = ? WHERE turn_id = ?",
+                (_now_iso(), tid),
+            )
+            await conn.commit()
+
+        stats = _fresh_learning_stats()
+
+        await _process_single_turn(tid, stats, update_reason="User-initiated single-turn skill learning.")
+        stats["processed_turns"] = 1
+        return stats
 
 
 async def scan_for_manual_learn(project_id: str = "") -> dict[str, Any]:
