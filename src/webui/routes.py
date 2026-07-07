@@ -5441,9 +5441,10 @@ async def _workbench_classify_intent(text: str, session: dict[str, Any]) -> str:
     goal = str(session.get("goal") or session.get("title") or "").strip()
     plan = session.get("plan") if isinstance(session.get("plan"), list) else []
     plan_note = (
-        "\n注意：本任务已经有一份执行计划。若用户是在增删/调整步骤、改变做法或追加目标 → "
-        "task（会按计划修订处理，保留已完成/进行中的步骤，不清空进度）；只是就计划或项目"
-        "提问 → question；一条立刻能做完的小改动 → command；表示整件事已经做完、要收尾/"
+        "\n注意：本任务已经有一份执行计划。只是单纯的增删步骤、调整顺序、修改步骤标题/说明 → "
+        "command（agent 可直接使用 update_task_plan 工具修改）；需要结合项目内容重新规划执行路径、"
+        "改变做法或追加目标 → task（会按计划修订处理）；只是就计划或项目提问 → question；"
+        "一条立刻能做完的小改动 → command；表示整件事已经做完、要收尾/"
         "交付/验收、或让你把成果汇总出来给他看 → done（不要再据此规划或重排步骤）。"
         if plan else ""
     )

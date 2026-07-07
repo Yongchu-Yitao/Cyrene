@@ -4345,10 +4345,11 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
     );
   });
   var canEditStructure = !controller.busy
-    && !planStarted
     && ["running", "waiting_for_user"].indexOf(String(session.status || "")) < 0;
-  // Adding / deleting / editing a step is gated behind an explicit Edit toggle;
-  // reordering by drag stays available even in the read-only (view) mode.
+  // Add/reorder are blocked by the backend once any step starts executing.
+  var canAddReorder = canEditStructure && !planStarted;
+  // Step-level editing (delete, update command/contextFiles) stays available
+  // as long as the specific step is still pending.
   var editing = canEditStructure && planEditing;
 
   // Drop out of edit mode the moment the structure locks (execution begins).
@@ -4368,7 +4369,7 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
   }
 
   function moveStep(sourceId, targetId, placeAfter) {
-    if (!canEditStructure || !sourceId || !targetId || sourceId === targetId) return;
+    if (!canAddReorder || !sourceId || !targetId || sourceId === targetId) return;
     var next = steps.slice();
     var sourceIndex = next.findIndex(function (step) { return step.id === sourceId; });
     if (sourceIndex < 0) return;
@@ -4415,9 +4416,11 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
           <div className="wbp-head-actions">
             {planEditing ? (
               <>
-                <button type="button" className="wb-btn ghost compact" onClick={function () { setAdding(!adding); }}>
-                  {adding ? wbT("common.cancel", "Cancel") : wbT("task.plan.addStep", "Add step")}
-                </button>
+                {canAddReorder && (
+                  <button type="button" className="wb-btn ghost compact" onClick={function () { setAdding(!adding); }}>
+                    {adding ? wbT("common.cancel", "Cancel") : wbT("task.plan.addStep", "Add step")}
+                  </button>
+                )}
                 <button type="button" className="wb-btn ghost compact" onClick={exitEditMode}>
                   {wbT("common.done", "Done")}
                 </button>
@@ -4480,7 +4483,7 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
             <div
               key={step.id}
               className={"wbp-step " + state + (expanded ? " expanded" : "") + (dragStepId === step.id ? " dragging" : "") + (dragOverId === step.id ? " drag-over" : "")}
-              onDragOver={function (e) { if (canEditStructure && dragStepId) { e.preventDefault(); setDragOverId(step.id); } }}
+              onDragOver={function (e) { if (canAddReorder && dragStepId) { e.preventDefault(); setDragOverId(step.id); } }}
               onDragLeave={function () { if (dragOverId === step.id) setDragOverId(""); }}
               onDrop={function (e) {
                 e.preventDefault();
@@ -4503,7 +4506,7 @@ function TaskPlanList({ session, expandedStepId, onToggleStep, onRightTab, contr
                 onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggleStep(step.id); } }}>
                 <div className="wbp-line-main">
                   <div className="wbp-copy">
-                    {canEditStructure && (
+                    {canAddReorder && (
                       <button
                         type="button"
                         draggable
