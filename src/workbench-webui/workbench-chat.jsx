@@ -1193,24 +1193,21 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   }, []);
 
   // 页面加载时检查 Electron 原生浏览器 bridge 是否有活跃 tabs，用于刷新后保持浏览器 tab 可见。
+  // BrowserTabManager.state() 不存 sessionId/chatId，不做精确匹配：只要有 tabs 就恢复。
   useWbcEffect(function () {
     var bridge = window.cyrene && window.cyrene.browser;
     if (!bridge || typeof bridge.getState !== "function") return;
     var chatId = activeChatId || "";
     if (!chatId) return;
     bridge.getState().then(function (state) {
-      if (state && state.tabs && Array.isArray(state.tabs) && state.tabs.length > 0) {
-        var sid = String(state.sessionId || state.chatId || activeChatId || "").trim();
-        if (sid && sid === chatId) {
-          setBrowserActiveByChat(function (prev) {
-            if (prev[chatId]) return prev;
-            return Object.assign({}, prev, { [chatId]: true });
-          });
-          // 自动切到浏览器 tab，让用户能看到恢复的浏览器内容
-          setSideTab("browser");
-        }
-      }
-    }).catch(function () {});
+      if (!state || !state.tabs || !Array.isArray(state.tabs) || !state.tabs.length) return;
+      setBrowserActiveByChat(function (prev) {
+        if (prev[chatId]) return prev;
+        // 首次:设置活跃状态并切到浏览器 tab
+        setSideTab("browser");
+        return Object.assign({}, prev, { [chatId]: true });
+      });
+    }).catch(function (err) { console.error("getState failed", err); });
   }, [activeChatId]);
 
   function ensureChat() {

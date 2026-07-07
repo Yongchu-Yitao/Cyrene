@@ -4700,7 +4700,7 @@ html[data-theme="light"] .wb-tool-list .mono {
 /* Must be above the browser view (screencast/iframe compositing layer) and
    all workbench content. High z-index ensures it paints on top even when
    the browser view creates a GPU compositing layer. */
-.workbench-shell .search-overlay {
+.search-overlay {
   z-index: 10050;
 }
 

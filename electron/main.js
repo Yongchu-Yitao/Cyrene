@@ -1894,24 +1894,27 @@ function positionQuickChatWindow() {
 }
 
 function installLocalNavigationGuards(window, port, { allowLocalPopups = false } = {}) {
-  // 页面导航/刷新时隐藏原生浏览器视图（但保留 tabs），
-  // will-navigate + did-start-navigation 双重保障，应对 Cmd+R 等场景。
-  function hideBrowserView() {
-    if (browserTabManager) browserTabManager.setBounds({ visible: false });
-  }
-  window.webContents.on('will-navigate', hideBrowserView);
-  window.webContents.on('did-start-navigation', (event, url, isInPlace, isMainFrame) => {
-    if (isMainFrame) hideBrowserView();
-  });
+  // 页面导航/刷新时隐藏原生浏览器视图（但保留 tabs）。
+  // 只在导航允许（即目标为本地后端）时隐藏，防止导航被阻止后浏览器不恢复。
   window.webContents.on('will-navigate', (event, navigationUrl) => {
     try {
       const target = new URL(navigationUrl);
       if (target.hostname !== '127.0.0.1' || target.port !== String(port)) {
         event.preventDefault();
+        return;
       }
     } catch (_) {
       event.preventDefault();
+      return;
     }
+    // Navigation allowed — hide the browser view
+    if (browserTabManager) browserTabManager.setBounds({ visible: false });
+  });
+  // did-start-navigation 补充 will-navigate 不触发的场景（Cmd+R 等），
+  // 但排除 SPA 同文档导航（hash 变更 / pushState）。
+  window.webContents.on('did-start-navigation', (event, url, isInPlace, isMainFrame) => {
+    if (isInPlace) return;
+    if (isMainFrame && browserTabManager) browserTabManager.setBounds({ visible: false });
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {

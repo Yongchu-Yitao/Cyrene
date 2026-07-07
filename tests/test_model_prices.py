@@ -35,11 +35,18 @@ def test_only_current_claude_versions_are_built_in():
 
 
 def test_price_hint_and_user_price_parsing():
-    assert price_hint("deepseek-v4-flash") == "¥1/2/0.02"
+    assert price_hint("deepseek-v4-flash") == "¥1/0.02/2"
+    assert parse_user_price("3/0.3/15") == {
+        "input": 3.0,
+        "cache_hit": 0.3,
+        "output": 15.0,
+        "currency": "CNY",
+    }
+    # Auto-detect old format (input/output/cache_hit) where middle > last
     assert parse_user_price("3/15/0.3") == {
         "input": 3.0,
-        "output": 15.0,
         "cache_hit": 0.3,
+        "output": 15.0,
         "currency": "CNY",
     }
     assert parse_user_price("¥2/8") == {"input": 2.0, "output": 8.0, "currency": "CNY"}
@@ -60,11 +67,11 @@ def test_explicit_user_price_overrides_built_in(monkeypatch):
 @pytest.mark.parametrize(
     ("model", "expected_hint"),
     [
-        ("glm-5.2", "¥8/28/2"),
-        ("MiniMax-M3", "¥2.1/8.4/0.42"),
-        ("mimo-v2.5-pro", "¥3/6/0.025"),
-        ("kimi-k2.7-code", "¥6.5/27/1.3"),
-        ("gemini-3.5-flash", "¥10.875/65.25/1.0875"),
+        ("glm-5.2", "¥8/2/28"),
+        ("MiniMax-M3", "¥2.1/0.42/8.4"),
+        ("mimo-v2.5-pro", "¥3/0.025/6"),
+        ("kimi-k2.7-code", "¥6.5/1.3/27"),
+        ("gemini-3.5-flash", "¥10.875/1.0875/65.25"),
     ],
 )
 def test_current_model_families_use_cny(model, expected_hint):

@@ -91,19 +91,25 @@ def _format_number(value: float | str) -> str:
 
 
 def price_hint(model: str) -> str:
-    """Return ``input/output[/cache-hit]`` for use as a price placeholder."""
+    """Return ``input/cache-hit/output`` for use as a price placeholder."""
     pricing = lookup_price(model)
     if not pricing:
         return ""
     symbol = _CURRENCY_SYMBOL.get(str(pricing.get("currency", "USD")), "$")
-    values = [_format_number(pricing["input"]), _format_number(pricing["output"])]
+    input_fmt = _format_number(pricing["input"])
+    output_fmt = _format_number(pricing["output"])
     if "cache_hit" in pricing:
-        values.append(_format_number(pricing["cache_hit"]))
-    return symbol + "/".join(values)
+        cache_fmt = _format_number(pricing["cache_hit"])
+        return f"{symbol}{input_fmt}/{cache_fmt}/{output_fmt}"
+    return f"{symbol}{input_fmt}/{output_fmt}"
 
 
 def parse_user_price(price_str: str, *, default_currency: str = "CNY") -> Pricing | None:
-    """Parse ``input/output[/cache-hit]`` with an optional ``$`` or ``¥``."""
+    """Parse ``input[/cache-hit]/output`` with an optional ``$`` or ``¥``.
+
+    Two parts  = ``input/output``
+    Three parts = ``input/cache-hit/output``
+    """
     value = str(price_str or "").strip()
     if not value:
         return None
@@ -122,10 +128,14 @@ def parse_user_price(price_str: str, *, default_currency: str = "CNY") -> Pricin
         return None
     if any(not math.isfinite(number) or number < 0 for number in numbers):
         return None
-    result: Pricing = {"input": numbers[0], "output": numbers[1], "currency": currency}
     if len(numbers) == 3:
-        result["cache_hit"] = numbers[2]
-    return result
+        # Auto-detect old format (input/output/cache_hit) where cache_hit was last.
+        # In the new format cache_hit is the middle value and should be <= output.
+        # Old format: numbers[1] = output > numbers[2] = cache_hit (typically)
+        if numbers[1] > numbers[2]:  # cache_hit (mid) > output? means old format
+            return {"input": numbers[0], "cache_hit": numbers[2], "output": numbers[1], "currency": currency}
+        return {"input": numbers[0], "cache_hit": numbers[1], "output": numbers[2], "currency": currency}
+    return {"input": numbers[0], "output": numbers[1], "currency": currency}
 
 
 def configured_user_price(model: str) -> Pricing | None:

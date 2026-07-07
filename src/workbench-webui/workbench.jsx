@@ -767,24 +767,23 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     reloadNotifications();
   }, []);
 
-  useWorkbenchEffect(function () {
+  // 覆盖层遮挡状态计数器：任意覆盖层打开时隐藏原生浏览器窗口。
+  // 用 ref 计数而非依赖单个布尔值，防止 settings/search 重叠时互相覆盖。
+  var obscuredRef = useWorkbenchRef(0);
+  function updateObscured(delta) {
+    obscuredRef.current = Math.max(0, obscuredRef.current + delta);
     var bridge = window.cyrene && window.cyrene.browser;
-    if (!bridge || typeof bridge.setObscured !== "function") return undefined;
-    bridge.setObscured(!!settingsOpen).catch(function () {});
-    return function () {
-      bridge.setObscured(false).catch(function () {});
-    };
+    if (bridge && typeof bridge.setObscured === "function") {
+      bridge.setObscured(obscuredRef.current > 0).catch(function (err) {
+        console.error("setObscured failed", err);
+      });
+    }
+  }
+  useWorkbenchEffect(function () {
+    if (settingsOpen) { updateObscured(1); return function () { updateObscured(-1); }; }
   }, [settingsOpen]);
-
-  // 搜索覆盖层打开时也隐藏原生浏览器窗口，防止 OS 级 BrowserView 覆盖搜索 UI。
-  // 参见上方 settingsOpen 对应的 setObscured — 两者分开以便各自独立 cleanup。
   useWorkbenchEffect(function () {
-    var bridge = window.cyrene && window.cyrene.browser;
-    if (!bridge || typeof bridge.setObscured !== "function") return undefined;
-    bridge.setObscured(!!searchOpen).catch(function () {});
-    return function () {
-      bridge.setObscured(false).catch(function () {});
-    };
+    if (searchOpen) { updateObscured(1); return function () { updateObscured(-1); }; }
   }, [searchOpen]);
 
   // 页面刷新/卸载时隐藏原生浏览器窗口，防止 OS 级 BrowserView 残留。
@@ -792,7 +791,9 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     function onBeforeUnload() {
       var bridge = window.cyrene && window.cyrene.browser;
       if (bridge && typeof bridge.setObscured === "function") {
-        bridge.setObscured(true).catch(function () {});
+        bridge.setObscured(true).catch(function (err) {
+          console.error("beforeunload setObscured failed", err);
+        });
       }
     }
     window.addEventListener('beforeunload', onBeforeUnload);
@@ -1513,7 +1514,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           </div>
         </div>
       )}
-      {searchOpen && ReactDOM.createPortal(React.createElement(
+      {searchOpen && typeof ReactDOM !== "undefined" && ReactDOM.createPortal(React.createElement(
         window.SearchOverlay || function () { return null; },
         {
           onClose: function () { setSearchOpen(false); },
