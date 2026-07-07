@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.4] - 2026-07-07
+
+0.6.4 修复了因旧数据库缺少 `project_id` 列导致 Python 后端启动崩溃的问题。
+
+### Fixed
+
+- **启动崩溃 (Startup Crash)** — 旧数据库文件中 7 张表的 `project_id` 列不存在，但 `CREATE INDEX` 引用了该列，导致 `executescript` 抛出 `no such column: project_id`。已将 project_id 索引从 DDL 中分离，在 ALTER TABLE 迁移之后创建，确保列存在后再建索引。
+
 ## [0.6.3] - 2026-07-07
 
 0.6.3 是一个以**技能学习 (Behavior Learning)** 与**浏览器集成**为核心的更新，引入技能生命周期管理（构建、查询、执行、删除）、浏览器用户事件追踪、多语言支持，同时大幅重构 Workbench UI 与学习引擎。

@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS behavior_sessions (
     metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_behavior_sessions_updated_at ON behavior_sessions(updated_at);
-CREATE INDEX IF NOT EXISTS idx_behavior_sessions_project ON behavior_sessions(project_id, updated_at);
+
 
 CREATE TABLE IF NOT EXISTS behavior_turns (
     turn_id TEXT PRIMARY KEY,
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS behavior_turns (
     FOREIGN KEY (session_id) REFERENCES behavior_sessions(session_id)
 );
 CREATE INDEX IF NOT EXISTS idx_behavior_turns_session_id ON behavior_turns(session_id);
-CREATE INDEX IF NOT EXISTS idx_behavior_turns_project ON behavior_turns(project_id, updated_at);
+
 CREATE INDEX IF NOT EXISTS idx_behavior_turns_processed_status ON behavior_turns(processed_status, created_at);
 CREATE INDEX IF NOT EXISTS idx_behavior_turns_round_id ON behavior_turns(round_id);
 
@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS behavior_patterns (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_behavior_patterns_status ON behavior_patterns(status, updated_at);
-CREATE INDEX IF NOT EXISTS idx_behavior_patterns_project ON behavior_patterns(project_id, updated_at);
+
 
 CREATE TABLE IF NOT EXISTS behavior_pattern_turns (
     pattern_id TEXT NOT NULL,
@@ -222,7 +222,7 @@ CREATE TABLE IF NOT EXISTS learned_skills (
 );
 CREATE INDEX IF NOT EXISTS idx_learned_skills_status ON learned_skills(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_learned_skills_pattern_id ON learned_skills(pattern_id);
-CREATE INDEX IF NOT EXISTS idx_learned_skills_project ON learned_skills(project_id, updated_at);
+
 
 CREATE TABLE IF NOT EXISTS learned_skill_versions (
     skill_id TEXT NOT NULL,
@@ -304,8 +304,7 @@ CREATE TABLE IF NOT EXISTS behavior_turn_tool_chains (
     updated_at TEXT NOT NULL,
     FOREIGN KEY (turn_id) REFERENCES behavior_turns(turn_id)
 );
-CREATE INDEX IF NOT EXISTS idx_behavior_turn_tool_chains_project
-    ON behavior_turn_tool_chains(project_id, updated_at DESC);
+
 
 CREATE TABLE IF NOT EXISTS behavior_browser_user_events (
     event_id TEXT PRIMARY KEY,
@@ -325,8 +324,7 @@ CREATE TABLE IF NOT EXISTS behavior_browser_user_events (
 );
 CREATE INDEX IF NOT EXISTS idx_behavior_browser_user_events_turn
     ON behavior_browser_user_events(turn_id, event_index);
-CREATE INDEX IF NOT EXISTS idx_behavior_browser_user_events_project
-    ON behavior_browser_user_events(project_id, created_at DESC);
+
 
 CREATE TABLE IF NOT EXISTS behavior_learning_agent_reviews (
     review_id TEXT PRIMARY KEY,
@@ -343,6 +341,17 @@ CREATE TABLE IF NOT EXISTS behavior_learning_agent_reviews (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_behavior_learning_agent_reviews_turn
     ON behavior_learning_agent_reviews(turn_id);
+"""
+
+_PROJECT_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_behavior_sessions_project ON behavior_sessions(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_behavior_turns_project ON behavior_turns(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_behavior_patterns_project ON behavior_patterns(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_learned_skills_project ON learned_skills(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_behavior_turn_tool_chains_project
+    ON behavior_turn_tool_chains(project_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_behavior_browser_user_events_project
+    ON behavior_browser_user_events(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_behavior_learning_agent_reviews_project
     ON behavior_learning_agent_reviews(project_id, updated_at DESC);
 """
@@ -1029,6 +1038,18 @@ async def _ensure_tables() -> None:
                 ("project_id", "TEXT NOT NULL DEFAULT ''"),
                 ("project_key", "TEXT NOT NULL DEFAULT ''"),
             ],
+            "behavior_turn_tool_chains": [
+                ("project_id", "TEXT NOT NULL DEFAULT ''"),
+                ("project_key", "TEXT NOT NULL DEFAULT ''"),
+            ],
+            "behavior_browser_user_events": [
+                ("project_id", "TEXT NOT NULL DEFAULT ''"),
+                ("project_key", "TEXT NOT NULL DEFAULT ''"),
+            ],
+            "behavior_learning_agent_reviews": [
+                ("project_id", "TEXT NOT NULL DEFAULT ''"),
+                ("project_key", "TEXT NOT NULL DEFAULT ''"),
+            ],
         }.items():
             for column, decl in columns:
                 try:
@@ -1036,6 +1057,10 @@ async def _ensure_tables() -> None:
                     await conn.commit()
                 except Exception:
                     pass
+        # Create project_id-dependent indexes after the ALTER TABLE migration
+        # ensures the column exists on old databases before referencing it in an index.
+        await conn.executescript(_PROJECT_INDEXES)
+        await conn.commit()
 
 
 async def _seed_core_vocabulary() -> None:
