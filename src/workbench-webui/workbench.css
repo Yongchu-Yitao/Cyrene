@@ -4887,7 +4887,12 @@ html[data-theme="light"] .wb-tool-list .mono {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   padding: 24px 28px;
+}
+.settings-overlay-content::-webkit-scrollbar {
+  display: none;
 }
 
 .settings-panel {
@@ -5003,7 +5008,14 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 .wb-skill-card.active {
   border-color: color-mix(in srgb, var(--wb-accent) 35%, var(--wb-line));
-  background: color-mix(in srgb, var(--wb-accent) 3%, var(--wb-card-bg));
+  background: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-card-bg));
+}
+.wb-skill-card.enabled {
+  border-color: color-mix(in srgb, var(--wb-green) 25%, var(--wb-line));
+}
+.wb-skill-card.enabled.active {
+  border-color: color-mix(in srgb, var(--wb-green) 40%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-green) 5%, var(--wb-card-bg));
 }
 
 .wb-skill-card-head {
@@ -5242,6 +5254,11 @@ html[data-theme="light"] .wb-tool-list .mono {
   color: var(--wb-text);
   max-height: 180px;
   overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.wb-skill-code::-webkit-scrollbar {
+  display: none;
 }
 
 .wb-skill-preview {
@@ -8764,9 +8781,14 @@ html[data-theme="light"] .wb-tool-list .mono {
 .wb-learning-skill-list {
   min-height: 0;
   overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+.wb-learning-skill-list::-webkit-scrollbar {
+  display: none;
 }
 .wb-learning-skill-mini {
   width: 100%;
@@ -8777,7 +8799,7 @@ html[data-theme="light"] .wb-tool-list .mono {
   gap: 10px;
   border: 1px solid var(--wb-line);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-blue) 12%);
+  background: color-mix(in srgb, var(--wb-card-bg) 96%, var(--wb-green) 4%);
   color: inherit;
   padding: 9px 10px;
   text-align: left;
@@ -8786,7 +8808,7 @@ html[data-theme="light"] .wb-tool-list .mono {
   transition: background 130ms ease, border-color 130ms ease, box-shadow 130ms ease;
 }
 .wb-learning-skill-mini:hover {
-  background: color-mix(in srgb, var(--wb-card-bg) 82%, var(--wb-blue) 18%);
+  background: color-mix(in srgb, var(--wb-card-bg) 90%, var(--wb-green) 10%);
   border-color: color-mix(in srgb, var(--wb-accent) 28%, var(--wb-line));
 }
 .wb-learning-skill-mini.active {
@@ -8859,9 +8881,14 @@ html[data-theme="light"] .wb-tool-list .mono {
 .wb-learning-chain-list {
   min-height: 0;
   overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.wb-learning-chain-list::-webkit-scrollbar {
+  display: none;
 }
 .wb-learning-chain-card {
   width: 100%;
@@ -9476,6 +9503,18 @@ html[data-theme="light"] .wb-tool-list .mono {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+.wb-mem-skill-delete-bottom {
+  flex: 0 0 auto;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--wb-line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--wb-surface);
+}
+.wb-mem-skill-delete-bottom .wb-btn {
+  justify-content: center;
 }
 .wb-mem-skill-hero h3 {
   margin: 0;

@@ -4060,6 +4060,23 @@ async def manual_deprecate_skill(skill_id: str) -> bool:
     return True
 
 
+async def delete_learned_skill(skill_id: str) -> bool:
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            "SELECT skill_id FROM learned_skills WHERE skill_id = ?", (skill_id,)
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return False
+        await conn.execute("DELETE FROM behavior_replay_tests WHERE skill_id = ?", (skill_id,))
+        await conn.execute("DELETE FROM learned_skill_patches WHERE skill_id = ?", (skill_id,))
+        await conn.execute("DELETE FROM learned_skill_runs WHERE skill_id = ?", (skill_id,))
+        await conn.execute("DELETE FROM learned_skill_versions WHERE skill_id = ?", (skill_id,))
+        await conn.execute("DELETE FROM learned_skills WHERE skill_id = ?", (skill_id,))
+        await conn.commit()
+    return True
+
+
 async def _update_shadow_promotion(skill_id: str) -> None:
     async with _conn() as conn:
         cursor = await conn.execute(

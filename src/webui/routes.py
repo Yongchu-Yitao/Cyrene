@@ -8264,6 +8264,12 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         ok = await _pattern.deprecate_learned_skill(skill_id)
         return {"ok": ok}
 
+    @router.post("/api/learned-skills/{skill_id}/delete")
+    async def api_delete_learned_skill(skill_id: str):
+        from cyrene import pattern as _pattern
+        ok = await _pattern.delete_learned_skill(skill_id)
+        return {"ok": ok}
+
     @router.post("/api/learned-skills/{skill_id}/run")
     async def api_run_learned_skill(skill_id: str):
         from cyrene import pattern as _pattern

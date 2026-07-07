@@ -497,6 +497,16 @@
     var similarity = summary.total_steps ? Math.round(((summary.success_steps || 0) / summary.total_steps) * 100) : 0;
     useEffect(function () { setShotIndex(0); setImgError(false); }, [chain && chain.id]);
 
+    function deleteLearnedSkill() {
+      if (!skill || !skill.id) return;
+      window.confirmModal({
+        body: t("memory.learning.deleteSkillConfirm", "Delete skill \"{name}\"? This cannot be undone.", { name: skill.name || skill.id }),
+        confirmLabel: t("memory.learning.deleteSkill", "Delete"),
+        danger: true,
+      }).then(function (ok) {
+        if (ok && props.onDeleteSkill) props.onDeleteSkill(skill.id);
+      });
+    }
     if (detailKind === "skill") {
       var skillSteps = Array.isArray(skill && skill.steps) ? skill.steps : [];
       var trigger = (skill && skill.trigger) || {};
@@ -538,9 +548,11 @@
                   h("div", null,
                     h("b", null, step.title || translatedToolName(tool, t)),
                     h("p", null, step.intent || step.raw_description || translatedToolName(tool, t))));
-              })) : h("div", { className: "wb-mem-empty-soft compact" }, t("memory.learning.noSteps", "No steps"))),
-            learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)),
-            learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note)));
+              })) : h("div", { className: "wb-mem-empty-soft compact" }, t("memory.learning.noSteps", "No steps")))),
+        skill ? h("div", { className: "wb-mem-skill-delete-bottom" },
+          h("button", { type: "button", className: "wb-btn danger", onClick: deleteLearnedSkill }, t("memory.learning.deleteSkill", "Delete")),
+          learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)),
+          learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note)) : null);
     }
 
     return h("aside", { className: "wb-mem-detail wb-mem-skill-panel wb-mem-replay-panel" },
@@ -662,11 +674,6 @@
               activeChain && h("p", { className: "wb-learning-theme" }, t("memory.learning.topic", "Topic: {topic}", { topic: activeChain.user_message || activeChain.context_summary || t("memory.learning.autoTopic", "Reusable tool chain") }))),
             h("button", { type: "button", className: "wb-learning-primary", disabled: loading || !!busy, onClick: function () { learning.runAction("learn"); } },
               busy ? t("memory.learning.learning", "Learning...") : t("memory.learning.learnAsSkill", "Learn as Skill ✨"))),
-          h("div", { className: "wb-learning-foot" },
-            h("div", { className: "wb-learning-foot-stats" },
-              h("span", null, t("memory.learning.footerChains", "{count} chains", { count: snap.chains.length })),
-              h("span", null, t("memory.learning.footerReviews", "{count} reviewed", { count: snap.reviewedChains })),
-              h("span", null, t("memory.learning.footerSkills", "{count} skills", { count: snap.skills.length })))),
           learning.error && h("div", { className: "wb-mem-error" }, learningErrorText(learning.error, t)),
           learning.note && h("div", { className: "wb-mem-skill-note main" }, learning.note),
           activeChain ? h("div", { className: "wb-learning-content" },
@@ -799,6 +806,20 @@
       setSelectedLearningKind("pattern");
       setSelectedLearningDetailKind("skill");
       setSelectedLearningPatternId(id || "");
+    }
+    function handleDeleteLearnedSkill(skillId) {
+      if (!skillId) return Promise.resolve();
+      setLearningBusy("delete");
+      return fetch("/api/learned-skills/" + encodeURIComponent(skillId) + "/delete", { method: "POST" }).then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data && data.ok) {
+            loadLearning();
+            setSelectedLearningDetailKind("chain");
+            setSelectedLearningSkillId("");
+          }
+        })
+        .catch(function () {})
+        .finally(function () { setLearningBusy(""); });
     }
     useEffect(function () {
       setSelectedId("");
@@ -1130,7 +1151,7 @@
     return h("section", { className: "wb-mem-page" },
       rail,
       main,
-      activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, detailKind: selectedLearningDetailKind, chain: selectedLearningChain, skill: selectedLearningSkill, pattern: selectedLearningPattern }) : h(DetailPanel, {
+      activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, detailKind: selectedLearningDetailKind, chain: selectedLearningChain, skill: selectedLearningSkill, pattern: selectedLearningPattern, onDeleteSkill: handleDeleteLearnedSkill }) : h(DetailPanel, {
         memory: selected, related: related, busy: busy,
         onSelect: setSelectedId,
         onEdit: function (m) { setModal({ mode: "edit", id: m.id, draft: { content: m.content, category: m.category, source: m.source, confidence: m.confidence, tags: m.tags } }); },

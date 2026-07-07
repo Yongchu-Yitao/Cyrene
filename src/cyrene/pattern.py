@@ -115,6 +115,10 @@ async def rollback_learned_skill(skill_id: str, version: int) -> dict[str, Any]:
     return await _behavior.rollback_learned_skill(skill_id, version)
 
 
+async def delete_learned_skill(skill_id: str) -> bool:
+    return await _behavior.delete_learned_skill(skill_id)
+
+
 async def scan_for_session_start() -> dict[str, Any]:
     return await _behavior.scan_for_session_start()
 

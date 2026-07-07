@@ -1737,7 +1737,7 @@ function SkillsPanel(p) {
         var isActive = selected && selected.id === skill.id;
         return React.createElement("div", {
           key: skill.id,
-          className: "wb-card wb-skill-card" + (isActive ? " active" : ""),
+          className: "wb-card wb-skill-card" + (isActive ? " active" : "") + (skill.enabled !== false ? " enabled" : ""),
           onClick: function (e) {
             if (e.target.closest(".wb-skill-card-actions") || e.target.closest(".wb-toggle")) return;
             setSelectedId(isActive ? "" : skill.id);
