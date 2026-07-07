@@ -1894,6 +1894,15 @@ function positionQuickChatWindow() {
 }
 
 function installLocalNavigationGuards(window, port, { allowLocalPopups = false } = {}) {
+  // 页面导航/刷新时隐藏原生浏览器视图（但保留 tabs），
+  // will-navigate + did-start-navigation 双重保障，应对 Cmd+R 等场景。
+  function hideBrowserView() {
+    if (browserTabManager) browserTabManager.setBounds({ visible: false });
+  }
+  window.webContents.on('will-navigate', hideBrowserView);
+  window.webContents.on('did-start-navigation', (event, url, isInPlace, isMainFrame) => {
+    if (isMainFrame) hideBrowserView();
+  });
   window.webContents.on('will-navigate', (event, navigationUrl) => {
     try {
       const target = new URL(navigationUrl);

@@ -776,6 +776,31 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     };
   }, [settingsOpen]);
 
+  // 搜索覆盖层打开时也隐藏原生浏览器窗口，防止 OS 级 BrowserView 覆盖搜索 UI。
+  // 参见上方 settingsOpen 对应的 setObscured — 两者分开以便各自独立 cleanup。
+  useWorkbenchEffect(function () {
+    var bridge = window.cyrene && window.cyrene.browser;
+    if (!bridge || typeof bridge.setObscured !== "function") return undefined;
+    bridge.setObscured(!!searchOpen).catch(function () {});
+    return function () {
+      bridge.setObscured(false).catch(function () {});
+    };
+  }, [searchOpen]);
+
+  // 页面刷新/卸载时隐藏原生浏览器窗口，防止 OS 级 BrowserView 残留。
+  useWorkbenchEffect(function () {
+    function onBeforeUnload() {
+      var bridge = window.cyrene && window.cyrene.browser;
+      if (bridge && typeof bridge.setObscured === "function") {
+        bridge.setObscured(true).catch(function () {});
+      }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return function () {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+    };
+  }, []);
+
   // 原生菜单操作（macOS 菜单栏 → menu:action IPC）
   // 每次渲染更新 ref，避免菜单回调中捕获到 stale closure
   useWorkbenchEffect(function () {
@@ -1488,7 +1513,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           </div>
         </div>
       )}
-      {searchOpen && React.createElement(
+      {searchOpen && ReactDOM.createPortal(React.createElement(
         window.SearchOverlay || function () { return null; },
         {
           onClose: function () { setSearchOpen(false); },
@@ -1497,7 +1522,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             setFullPage("chat");
           },
         }
-      )}
+      ), document.body)}
       {settingsOpen && React.createElement(
         window.SettingsOverlay || function () { return null; },
         {
