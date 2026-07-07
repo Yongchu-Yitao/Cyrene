@@ -4278,6 +4278,41 @@ async def list_learned_skills(project_id: str = "") -> list[dict[str, Any]]:
     return skills
 
 
+async def build_learned_skill_block(session_id: str = "", max_skills: int = 20) -> str:
+    """Build a compact system-prompt block listing active learned skill names.
+
+    Returns empty string when there are no active skills for the session's
+    project.  Within a session the result is stable, so callers can safely
+    cache it in the system prompt without degrading prefix-cache hit rates.
+    """
+    current_sid = str(session_id or _current_session_id.get() or "").strip()
+    scope = _project_scope_for_session(current_sid or None)
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            """
+            SELECT name, description, skill_type
+            FROM learned_skills
+            WHERE status = 'active' AND project_id = ?
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (scope["project_id"], max(int(max_skills or 20), 1)),
+        )
+        rows = await cursor.fetchall()
+    if not rows:
+        return ""
+    lines: list[str] = ["## Learned Skills"]
+    for row in rows:
+        name = str(row["name"] or "").strip()
+        desc = str(row["description"] or "").strip()
+        if name:
+            entry = f"- {name}"
+            if desc:
+                entry += f": {desc[:120]}"
+            lines.append(entry)
+    return "\n".join(lines)
+
+
 async def list_tool_chains(project_id: str | list[str] = "", limit: int = 80) -> list[dict[str, Any]]:
     if isinstance(project_id, list):
         pids = [str(p).strip() for p in project_id if str(p).strip()]

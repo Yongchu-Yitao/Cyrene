@@ -509,6 +509,20 @@ async def _run_chat_agent(
                 transforms=["preview", "concat_into_system"],
                 content=skill_prompt_block,
             ))
+        try:
+            learned_skill_block = await _behavior_learning.build_learned_skill_block()
+            if learned_skill_block:
+                main_system = main_system + "\n\n" + learned_skill_block
+                main_system_context.append(context_block(
+                    "skills.learned",
+                    "skills",
+                    source="cyrene.behavior_learning.build_learned_skill_block",
+                    reason="auto-detected learned patterns visible to the agent",
+                    transforms=["concat_into_system"],
+                    content=learned_skill_block,
+                ))
+        except Exception:
+            logger.warning("Failed to build learned-skill names block", exc_info=True)
         # ``temporal_context`` is deliberately NOT concatenated into the system
         # prefix: the date rolls over daily, which would invalidate the entire
         # system+history prefix every midnight. It is run-fixed context instead.
