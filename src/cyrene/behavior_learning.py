@@ -468,7 +468,14 @@ _TRIVIAL_SKILL_TOOLS: frozenset[str] = frozenset({
     "send_message",
     "send_message_to_user",
     "query_round",
+    "browser.user.control_start",
+    "browser.user.control_stop",
+    "browser.user.key",
+    "browser.user.mousemove",
+    "browser.user.mouseMove",
 })
+
+_MIN_SKILL_CHAIN_STEPS = 2
 
 # These steps change the conversation state or pause for the user. They are
 # useful in the normal agent loop, but learned-skill replay should never run
@@ -1328,21 +1335,108 @@ def _chain_item_from_action(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _browser_target_label(target: dict[str, Any]) -> str:
+    if not isinstance(target, dict):
+        return ""
+    text = _truncate_text(str(target.get("text") or target.get("innerText") or "").strip(), 80)
+    aria = _truncate_text(str(target.get("ariaLabel") or target.get("aria_label") or "").strip(), 80)
+    name = _truncate_text(str(target.get("name") or "").strip(), 80)
+    placeholder = _truncate_text(str(target.get("placeholder") or "").strip(), 80)
+    element_id = _truncate_text(str(target.get("id") or "").strip(), 80)
+    role = _truncate_text(str(target.get("role") or "").strip(), 40)
+    tag = _truncate_text(str(target.get("tag") or target.get("tagName") or "").strip().lower(), 40)
+    label = text or aria or placeholder or name or element_id
+    prefix = role or tag
+    if prefix and label:
+        return f"{prefix} {label!r}"
+    return label or prefix
+
+
+def _browser_value_preview(kind: str, payload: dict[str, Any], target: dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    target_type = str((target or {}).get("type") or "").lower()
+    target_name = str((target or {}).get("name") or (target or {}).get("id") or "").lower()
+    if "password" in target_type or "password" in target_name:
+        return "[redacted]"
+    for key in ("value", "text", "query", "url", "href"):
+        if key in payload and payload.get(key) not in (None, ""):
+            value = str(payload.get(key) or "")
+            if len(value) > 120:
+                value = value[:117] + "..."
+            return value
+    if kind in {"scroll", "wheel"}:
+        x = payload.get("scrollX", payload.get("x", ""))
+        y = payload.get("scrollY", payload.get("y", ""))
+        return _truncate_text(f"x={x}, y={y}", 80)
+    return ""
+
+
+def _browser_event_learning_fields(
+    kind: str,
+    payload: dict[str, Any],
+    target: dict[str, Any],
+    url: str,
+    title: str,
+) -> dict[str, str]:
+    event_kind = str(kind or "event").strip() or "event"
+    target_label = _browser_target_label(target)
+    value_preview = _browser_value_preview(event_kind, payload, target)
+    page = title or url
+    if event_kind in {"input", "text"}:
+        destination = target_label or "focused field"
+        action = f"entered {value_preview!r} into {destination}" if value_preview else f"entered text into {destination}"
+        purpose = f"provide browser input for {destination}"
+    elif event_kind == "click":
+        destination = target_label or "page element"
+        action = f"clicked {destination}"
+        purpose = f"activate {destination}"
+    elif event_kind == "submit":
+        destination = target_label or "browser form"
+        action = f"submitted {destination}"
+        purpose = f"submit {destination}"
+    elif event_kind in {"navigate", "navigation"}:
+        destination = value_preview or url or "browser page"
+        action = f"navigated to {destination}"
+        purpose = "open or change browser page"
+    elif event_kind in {"scroll", "wheel"}:
+        action = f"scrolled {page or 'browser page'}"
+        purpose = "inspect more page content"
+    elif event_kind in {"back", "forward", "reload", "select_tab", "close_tab"}:
+        action = f"{event_kind.replace('_', ' ')} on {page or 'browser tab'}"
+        purpose = "manage browser navigation state"
+    else:
+        destination = target_label or page or "browser page"
+        action = f"performed browser user event {event_kind} on {destination}"
+        purpose = "continue browser task"
+    return {
+        "purpose": _truncate_text(purpose, 240),
+        "action_summary": _truncate_text(action, 300),
+        "object_summary": _truncate_text(target_label or page or url, 240),
+        "value_preview": _truncate_text(value_preview, 160),
+    }
+
+
 def _chain_item_from_browser_event(row: dict[str, Any]) -> dict[str, Any]:
     payload = _json_loads(row.get("payload_json"), {})
     target = _json_loads(row.get("target_json"), {})
+    event_kind = str(row.get("event_kind") or "event")
+    url = str(row.get("browser_url") or "")
+    title = str(row.get("browser_title") or "")
+    learning_fields = _browser_event_learning_fields(event_kind, payload, target, url, title)
     return {
         "id": str(row.get("event_id") or ""),
         "source": "user_browser",
         "index": int(row.get("event_index") or 0),
-        "tool": "browser.user." + str(row.get("event_kind") or "event"),
+        "tool": "browser.user." + event_kind,
         "type": "browser_user_operation",
-        "subtype": str(row.get("event_kind") or "event"),
+        "subtype": event_kind,
         "domain": "browser_operation",
         "args": payload,
         "target": target,
-        "url": str(row.get("browser_url") or ""),
-        "title": str(row.get("browser_title") or ""),
+        "url": url,
+        "title": title,
+        **learning_fields,
         "success": True,
         "created_at": str(row.get("created_at") or ""),
     }
@@ -1631,6 +1725,12 @@ async def list_recent_browser_user_events(
     events: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
+        kind = str(item.get("event_kind") or "")
+        url = str(item.get("browser_url") or "")
+        title = str(item.get("browser_title") or "")
+        target = _json_loads(item.get("target_json"), {})
+        payload = _json_loads(item.get("payload_json"), {})
+        learning_fields = _browser_event_learning_fields(kind, payload, target, url, title)
         events.append({
             "id": str(item.get("event_id") or ""),
             "session_id": str(item.get("session_id") or ""),
@@ -1638,12 +1738,13 @@ async def list_recent_browser_user_events(
             "turn_id": str(item.get("turn_id") or ""),
             "created_at": str(item.get("created_at") or ""),
             "index": int(item.get("event_index") or 0),
-            "kind": str(item.get("event_kind") or ""),
-            "tool": "browser.user." + str(item.get("event_kind") or "event"),
-            "url": str(item.get("browser_url") or ""),
-            "title": str(item.get("browser_title") or ""),
-            "target": _json_loads(item.get("target_json"), {}),
-            "payload": _json_loads(item.get("payload_json"), {}),
+            "kind": kind,
+            "tool": "browser.user." + (kind or "event"),
+            "url": url,
+            "title": title,
+            "target": target,
+            "payload": payload,
+            **learning_fields,
         })
     events.reverse()
     return events
@@ -2225,13 +2326,16 @@ async def build_turn_fingerprint(turn_id: str) -> dict[str, Any]:
     for item in browser_chain_items:
         payload = item.get("args") or {}
         deterministic_entities.extend(_normalize_entities(list(payload.values())))
+        browser_summary = str(item.get("action_summary") or item.get("purpose") or "")
         action_summary.append(
             {
                 "tool_name": item.get("tool"),
                 "action_type": item.get("type"),
                 "action_subtype": item.get("subtype"),
-                "input_summary": _truncate_text(_json_dumps(payload), 500),
+                "input_summary": _truncate_text(browser_summary or _json_dumps(payload), 500),
                 "output_summary": item.get("url") or "",
+                "purpose": item.get("purpose") or "",
+                "object_summary": item.get("object_summary") or "",
                 "success": True,
             }
         )
@@ -2240,7 +2344,7 @@ async def build_turn_fingerprint(turn_id: str) -> dict[str, Any]:
                 "domain": "browser_operation",
                 "type": "browser_user_operation",
                 "subtype": str(item.get("subtype") or "event"),
-                "raw_description": str(item.get("tool") or "browser.user.event"),
+                "raw_description": browser_summary or str(item.get("tool") or "browser.user.event"),
             }
         )
     prompt = f"""You are building a structured behavior fingerprint for an autonomous coding agent turn.
@@ -2606,14 +2710,20 @@ def _tool_call_steps_for_replay(steps: list[dict[str, Any]]) -> list[dict[str, A
 
 
 def _has_auto_replay_blocked_step(steps: list[dict[str, Any]]) -> bool:
-    return any(tool in _AUTO_REPLAY_BLOCKED_TOOLS for tool in _enabled_step_tool_names(steps))
+    return any(
+        tool in _AUTO_REPLAY_BLOCKED_TOOLS or tool.startswith("browser.user.")
+        for tool in _enabled_step_tool_names(steps)
+    )
 
 
 def _has_skillworthy_steps(steps: list[dict[str, Any]]) -> bool:
-    tool_names = [tool for tool in _enabled_step_tool_names(steps) if tool]
-    if not tool_names:
+    tool_names = [
+        tool for tool in _enabled_step_tool_names(steps)
+        if tool and tool not in _TRIVIAL_SKILL_TOOLS and tool not in _INTERNAL_TOOLS
+    ]
+    if len(tool_names) < _MIN_SKILL_CHAIN_STEPS:
         return False
-    return any(tool not in _TRIVIAL_SKILL_TOOLS for tool in tool_names)
+    return len(set(tool_names)) >= _MIN_SKILL_CHAIN_STEPS
 
 
 async def _llm_workflow_merge(
@@ -3329,9 +3439,11 @@ def _attach_generated_script_to_definition(definition: dict[str, Any], skill_id:
     definition["steps"] = [
         {
             "step_id": "script_1",
+            "title": f"Execute {definition.get('name') or 'learned skill'}",
             "type": "run_command",
             "subtype": "generated_python_script",
             "description": f"Run generated script for {definition.get('name') or 'learned skill'}",
+            "raw_description": f"Run generated script ({script_path.name})",
             "enabled": True,
             "requires_llm": False,
             "implementation_kind": "script",
@@ -3779,7 +3891,7 @@ async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
         if existing is not None:
             return str(existing["skill_id"])
         definition = await _skill_definition_from_pattern(pattern_id, "draft")
-        if not force and not _has_skillworthy_steps(definition.get("steps") or []):
+        if not _has_skillworthy_steps(definition.get("steps") or []):
             return None
         duplicate_skill_id = await _find_existing_duplicate_skill(
             conn,
@@ -3852,6 +3964,84 @@ async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
     return skill_id
 
 
+async def _create_manual_skill_review(
+    pattern_id: str,
+    skill_id: str,
+    project_id: str = "",
+) -> None:
+    """Create a learning-agent review record for a manually promoted skill.
+
+    This lets the behavior-analysis UI match the skill to its source chain
+    via ``_decision.target_pattern_id`` when the user promotes a pattern
+    directly (bypassing the full LLM review pipeline).
+    """
+    pid = str(pattern_id or "").strip()
+    sid = str(skill_id or "").strip()
+    if not pid or not sid:
+        return
+    now = _now_iso()
+    try:
+        async with _conn() as conn:
+            turn_cursor = await conn.execute(
+                "SELECT turn_id FROM behavior_pattern_turns WHERE pattern_id = ? ORDER BY created_at ASC LIMIT 1",
+                (pid,),
+            )
+            turn_row = await turn_cursor.fetchone()
+            if turn_row is None:
+                return
+            source_turn_id = str(turn_row["turn_id"] or "")
+            chain_cursor = await conn.execute(
+                "SELECT chain_id, project_id, project_key FROM behavior_turn_tool_chains WHERE turn_id = ?",
+                (source_turn_id,),
+            )
+            chain_row = await chain_cursor.fetchone()
+            chain_id = str(chain_row["chain_id"] or "") if chain_row is not None else ""
+            review_proj_id = str(chain_row["project_id"] or project_id) if chain_row is not None else project_id
+            review_proj_key = str(chain_row["project_key"] or "") if chain_row is not None else ""
+            proposed = {
+                "_decision": {
+                    "raw_decision": "promote",
+                    "target_pattern_id": pid,
+                    "target_skill_id": sid,
+                    "similar_patterns": [],
+                    "similar_skills": [],
+                }
+            }
+            await conn.execute(
+                """
+                INSERT INTO behavior_learning_agent_reviews
+                (review_id, project_id, project_key, turn_id, chain_id, decision, confidence, rationale,
+                 proposed_skill_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(turn_id) DO UPDATE SET
+                    project_id = excluded.project_id,
+                    project_key = excluded.project_key,
+                    chain_id = excluded.chain_id,
+                    decision = excluded.decision,
+                    confidence = excluded.confidence,
+                    rationale = excluded.rationale,
+                    proposed_skill_json = excluded.proposed_skill_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    _new_id("learning_review"),
+                    review_proj_id,
+                    review_proj_key,
+                    source_turn_id,
+                    chain_id,
+                    "promote",
+                    1.0,
+                    "User manually promoted this pattern to a skill.",
+                    _json_dumps(proposed),
+                    now,
+                    now,
+                ),
+            )
+            await conn.commit()
+    except Exception:
+        logger.warning("Failed to create review for manually created skill", exc_info=True)
+
+
 async def learn_skill_from_pattern(pattern_id: str, project_id: str = "") -> dict[str, Any]:
     pid = str(pattern_id or "").strip()
     scoped_project_id = str(project_id or "").strip()
@@ -3902,6 +4092,12 @@ async def learn_skill_from_pattern(pattern_id: str, project_id: str = "") -> dic
                 similarity = compute_fingerprint_similarity(current_fp, base_fp)
                 if not similarity.get("hard_fail") and float(similarity.get("total") or 0) >= 0.88:
                     duplicate_skill_id = str(skill_row["skill_id"] or "")
+                    # Create review for the new pattern's turn so the existing
+                    # skill's behavior analysis can also match via this chain.
+                    try:
+                        await _create_manual_skill_review(pid, duplicate_skill_id, scoped_project_id)
+                    except Exception:
+                        pass
                     return {
                         "ok": True,
                         "created": False,
@@ -3914,6 +4110,10 @@ async def learn_skill_from_pattern(pattern_id: str, project_id: str = "") -> dic
     if not skill_id:
         return {"ok": False, "code": "skill_generation_failed", "error": "Unable to generate a skill from this pattern"}
     skill = await get_learned_skill(skill_id)
+    try:
+        await _create_manual_skill_review(pid, skill_id, scoped_project_id)
+    except Exception:
+        pass
     return {
         "ok": True,
         "created": bool(not existing_skill_id and skill is not None and str(skill.get("pattern_id") or "") == pid),
@@ -6077,6 +6277,12 @@ async def _learning_agent_review_turn(turn_id: str, fingerprint: dict[str, Any],
         current_pattern_id=pattern_id,
         fingerprint=fingerprint,
     )
+    chain_items = chain.get("chain") or []
+    chain_steps = [
+        {"enabled": True, "implementation_reference": {"tool_name": str(item.get("tool") or "")}}
+        for item in chain_items
+    ]
+    has_skillworthy_chain = _has_skillworthy_steps(chain_steps)
     prompt = f"""You are the project-local skill learning agent for project {scope["project_id"]}.
 
 Review one completed conversation round and its exact tool/user-browser operation chain.
@@ -6102,6 +6308,8 @@ Decision rules:
 - If the existing learned skill is linked to the current candidate, choose promote when the candidate needs an upgrade; that is not a duplicate.
 - merge: choose this if a similar candidate exists and the new chain should be folded into that candidate before any future promotion.
 - promote: choose this only when the current or target candidate is worth becoming a reusable project-local skill now.
+- Prefer long task-chain skills: promote only chains with at least two meaningful and distinct operations.
+- Do not promote a single tool call, repeated single-tool usage, or a lone browser event as a skill.
 - skip: choose this for one-off answers, pure chat, unsafe side effects, weak/noisy chains, or insufficient evidence.
 
 User message:
@@ -6129,11 +6337,6 @@ Tool chain:
     raw_decision = str(result.get("decision") or "").strip().lower()
     decision = _normalize_learning_decision(raw_decision)
     if not result or raw_decision not in {"promote", "merge", "duplicate", "skip", "learn", "parameterize", "create_skill", "promote_candidate", "already_exists", "covered", "reuse_existing", "merge_candidate", "merge_pattern"}:
-        chain_items = chain.get("chain") or []
-        has_skillworthy = _has_skillworthy_steps([
-            {"enabled": True, "implementation_reference": {"tool_name": str(item.get("tool") or "")}}
-            for item in chain_items
-        ])
         linked_skill_ids = current_candidate.get("linked_skill_list") or []
         current_stats = {
             "effective_count": current_candidate.get("effective_count") or 0,
@@ -6155,7 +6358,7 @@ Tool chain:
                 "target_skill_id": duplicate_skill.get("skill_id", ""),
                 "proposed_skill": {},
             }
-        elif linked_skill_ids or (has_skillworthy and float(current_stats.get("effective_count") or 0) >= 2):
+        elif linked_skill_ids or (has_skillworthy_chain and float(current_stats.get("effective_count") or 0) >= 2):
             decision = "promote"
             result = {
                 "decision": decision,
@@ -6172,6 +6375,15 @@ Tool chain:
                 "rationale": "Heuristic fallback: not enough project-local evidence to promote this tool chain yet.",
                 "proposed_skill": {},
             }
+    if decision == "promote" and not has_skillworthy_chain:
+        decision = "skip"
+        result = {
+            **result,
+            "decision": decision,
+            "confidence": min(float(result.get("confidence") or 0), 0.50),
+            "rationale": "Promotion suppressed: skill learning requires a multi-step chain with at least two meaningful distinct operations.",
+            "proposed_skill": {},
+        }
     if decision == "promote":
         duplicate_skill = next(
             (
@@ -6359,6 +6571,9 @@ async def _process_single_turn(turn_id: str, stats: dict[str, int], *, update_re
             stats["candidate_promotions"] += 1
             if tracked_created:
                 stats["skills_created"] += 1
+            # Upgrade skill type first (may set status to "shadow"), then
+            # activate — the learning agent's review is authoritative, so we
+            # skip the shadow-validation pipeline entirely.
             pattern_summary = await _pattern_summary_for_learning(pattern_id)
             target_type = _target_type_from_review(
                 review,
@@ -6370,7 +6585,7 @@ async def _process_single_turn(turn_id: str, stats: dict[str, int], *, update_re
             )
             if target_type in _SKILL_TYPE_ORDER and target_type != "draft":
                 await _update_skill_to_type(skill_id, target_type, update_reason or "Project skill learning agent selected this reusable workflow.")
-            await _backfill_shadow_validation(skill_id)
+            await _activate_skill(skill_id, "Learning agent promoted this pattern to active skill.")
 
     if merged:
         stats["merged_patterns"] += 1

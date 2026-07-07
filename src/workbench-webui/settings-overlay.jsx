@@ -225,15 +225,24 @@ function SettingsOverlay({
   var [exportMsg, setExportMsg] = useStateSt("");
 
   // ── Tweak helpers ──
-  var tweaks = {
-    theme: initialTheme,
-    accent: readTweak("accent", null),
-    textSize: readTweak("textSize", "default"),
-    density: readTweak("density", "cozy"),
-    animatePulse: readTweak("animatePulse", true),
-  };
+  var [tweaks, setTweaks] = useStateSt(function () {
+    return {
+      theme: initialTheme,
+      accent: readTweak("accent", null),
+      textSize: readTweak("textSize", "default"),
+      density: readTweak("density", "cozy"),
+      animatePulse: readTweak("animatePulse", true),
+    };
+  });
+
+  useEffectSt(function () {
+    setTweaks(function (prev) {
+      return prev.theme === initialTheme ? prev : { ...prev, theme: initialTheme };
+    });
+  }, [initialTheme]);
 
   function setTweak(key, val) {
+    setTweaks(function (prev) { return { ...prev, [key]: val }; });
     try { localStorage.setItem("cyrene-tweak-" + key, JSON.stringify(val)); } catch (e) {}
     if (key === "density") document.documentElement.dataset.density = val;
     if (key === "textSize") document.documentElement.dataset.textSize = val || "default";
@@ -1039,8 +1048,8 @@ function AppearancePanel(p) {
     ),
     FieldRow(t("settings.textSize"), t("settings.textSizeHint"),
       React.createElement("div", { className: "wb-seg" },
-        React.createElement("button", { className: "wb-seg-btn" + (tweaks.textSize === "default" ? " active" : ""), onClick: function () { setTweak("textSize", "default"); } }, React.createElement("span", { style: { fontSize: 11 } }, "A"), " ", t("settings.default")),
-        React.createElement("button", { className: "wb-seg-btn" + (tweaks.textSize === "large" ? " active" : ""), onClick: function () { setTweak("textSize", "large"); } }, React.createElement("span", { style: { fontSize: 15 } }, "A"), " ", t("settings.large")),
+        React.createElement("button", { className: "wb-seg-btn" + (tweaks.textSize === "default" ? " active" : ""), onClick: function () { setTweak("textSize", "default"); } }, React.createElement("span", { className: "wb-text-size-sample default" }, "A"), " ", t("settings.default")),
+        React.createElement("button", { className: "wb-seg-btn" + (tweaks.textSize === "large" ? " active" : ""), onClick: function () { setTweak("textSize", "large"); } }, React.createElement("span", { className: "wb-text-size-sample large" }, "A"), " ", t("settings.large")),
       ),
     ),
     FieldRow(t("settings.density"), t("settings.densityHint"),
@@ -1519,7 +1528,7 @@ function SkillsPanel(p) {
   var [skills, setSkills] = useStateSt([]);
   var [loading, setLoading] = useStateSt(true);
   var [query, setQuery] = useStateSt("");
-  var [selectedId, setSelectedId] = useStateSt("");
+  var [expandedId, setExpandedId] = useStateSt("");
   var [busy, setBusy] = useStateSt(false);
   var [message, setMessage] = useStateSt("");
   var [messageKind, setMessageKind] = useStateSt("");
@@ -1548,8 +1557,8 @@ function SkillsPanel(p) {
       .then(function (data) {
         var list = (data && data.skills) || [];
         setSkills(list);
-        setSelectedId(function (prev) {
-          return prev && list.some(function (s) { return s.id === prev; }) ? prev : (list[0] && list[0].id) || "";
+        setExpandedId(function (prev) {
+          return prev && list.some(function (s) { return s.id === prev; }) ? prev : "";
         });
         setLoading(false);
       })
@@ -1688,8 +1697,6 @@ function SkillsPanel(p) {
     var q = query.toLowerCase();
     return [skill.name, skill.desc, skill.file_name, skill.source_path].join(" ").toLowerCase().indexOf(q) >= 0;
   });
-  var selected = filtered.find(function (s) { return s.id === selectedId; }) || filtered[0] || null;
-
   return React.createElement("div", { className: "wb-skills-page" },
     React.createElement("div", { className: "wb-skills-head" },
       SectionTitle(t("settings.skills"), t("settings.skillsSubtitle")),
@@ -1734,13 +1741,24 @@ function SkillsPanel(p) {
     ),
     React.createElement("div", { className: "wb-skills-list" },
       filtered.map(function (skill) {
-        var isActive = selected && selected.id === skill.id;
+        var isExpanded = expandedId === skill.id;
+        var detailId = "wb-skill-detail-" + skill.id;
         return React.createElement("div", {
           key: skill.id,
-          className: "wb-card wb-skill-card" + (isActive ? " active" : "") + (skill.enabled !== false ? " enabled" : ""),
+          className: "wb-card wb-skill-card" + (isExpanded ? " active" : "") + (skill.enabled !== false ? " enabled" : ""),
+          role: "button",
+          tabIndex: 0,
+          "aria-expanded": isExpanded ? "true" : "false",
+          "aria-controls": detailId,
           onClick: function (e) {
             if (e.target.closest(".wb-skill-card-actions") || e.target.closest(".wb-toggle")) return;
-            setSelectedId(isActive ? "" : skill.id);
+            setExpandedId(isExpanded ? "" : skill.id);
+          },
+          onKeyDown: function (e) {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            if (e.target.closest(".wb-skill-card-actions") || e.target.closest(".wb-toggle")) return;
+            e.preventDefault();
+            setExpandedId(isExpanded ? "" : skill.id);
           },
         },
           React.createElement("div", { className: "wb-skill-card-head" },
@@ -1756,6 +1774,14 @@ function SkillsPanel(p) {
               )
             ),
             React.createElement("div", { className: "wb-skill-card-actions" },
+              React.createElement("span", {
+                className: "wb-skill-expand-indicator",
+                "aria-hidden": "true",
+                onClick: function (e) {
+                  e.stopPropagation();
+                  setExpandedId(isExpanded ? "" : skill.id);
+                },
+              }, ExternalChevron()),
               Toggle(skill.enabled !== false, function (e) {
                 if (e && e.stopPropagation) e.stopPropagation();
                 handleToggle(skill.id);
@@ -1767,7 +1793,7 @@ function SkillsPanel(p) {
               }, t("settings.uninstallSkill"))
             )
           ),
-          isActive && React.createElement("div", { className: "wb-skill-detail-body" },
+          isExpanded && React.createElement("div", { id: detailId, className: "wb-skill-detail-body" },
             SectionBlock(t("settings.skillDetails"), null,
               React.createElement("div", { className: "wb-skill-meta-grid" },
                 React.createElement("div", { className: "wb-skill-meta-row wide" },

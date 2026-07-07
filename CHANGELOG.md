@@ -1,5 +1,75 @@
 # Changelog
 
+## [0.6.3] - 2026-07-07
+
+0.6.3 是一个以**技能学习 (Behavior Learning)** 与**浏览器集成**为核心的更新，引入技能生命周期管理（构建、查询、执行、删除）、浏览器用户事件追踪、多语言支持，同时大幅重构 Workbench UI 与学习引擎。
+
+### Added
+
+- **技能执行引擎** — 新增 `GetLearnedSkill` 与 `RunLearnedSkill` 两个 Agent 工具，支持通过名称查询已学技能详情并以安全沙箱执行技能。`RunLearnedSkill` 包含高危步骤确认机制与 30 秒脚本执行超时，防止恶意或失控操作。配套 `tool_legacy.py` 适配层，保持与旧注册系统的兼容性。
+- **技能构建与删除** — 学习 Agent 在识别到可复用的工具链（tool chain）时可即时构建技能块，`coordinator.py` 注入 `build_learned_skill_chunks` 以支持结构化技能展示。前端记忆页（workbench-memory.jsx）新增删除按钮与确认流程，配套 `/api/behavior/learned-skills/{id}` DELETE 端点与 `pattern.py` 删除注册表。
+- **浏览器用户事件追踪** — 全新 `browser_user_events` 工具，记录并查询用户在嵌入式浏览器中的点击、文本输入、滚动、导航等操作。Electron 端新增 `BrowserViewportPanel` session/round ID 上下文管理，`beforeinput`/`click`/`scroll`/`keydown`/`popstate`/`hashchange` 六类事件捕获与 IPC 中继。`/api/behavior/browser-events` 端点持久化事件到 `behavior_browser_user_events` 表。学习引擎将浏览器事件纳入特征指纹计算与模式识别。
+- **浏览器视图交互优化** — 导航栏与搜索覆盖层在用户操作后自动隐藏（`autoHideOverlay`），避免遮挡页面内容。IPC 通道支持 `browser-nav:hide-overlay` / `browser-search:hide-overlay`。
+- **多语言 (i18n) 支持** — 浏览器用户事件工具的输出文本与工具描述支持中/英双语言，根据 `app_language` 设置自动切换。`i18n.jsx` 新增翻译条目覆盖浏览器事件 UI。
+- **模型价格新格式** — `model_prices.py` 支持新格式价格提示（如 `GPT-4.1-nano: $0.1/1M in, $0.4/1M out`），兼容旧格式解析。`electron/main.js` 价格菜单同步更新。Workbench 对话页 `model-pricing` 渲染逻辑支持新的定价展示结构。
+- **工作台 Profile 功能标签** — `workbench-profile.jsx` 新增工具对应的 Feature Label 展示，直观提示用户当前启用的工具集。
+- **呈现设置 (Presentation Settings)** — 全局支持文字大小 (`textSize`) 与密度 (`density`) 偏好设置。`app.jsx` 新增 `useEffect` 将偏好写入 localStorage 及 `document.documentElement.dataset`，并监听 `cyrene-tweak-density-change` / `cyrene-tweak-text-size-change` 事件。quick-chat 模式同步应用该设定。
+- **i18n 工具名表清理** — `chat-surface.jsx` 移除遗留的脚本系统条目（`ApproveScript`/`RejectScript`/`RunScript`/`ListScripts`/`LearnPatterns`/`LearnSkill`），新增 `GetLearnedSkill` / `RunLearnedSkill` / `save_project_memory` / `retire_project_memory`。
+
+### Changed
+
+- **行为学习引擎全面重构** — `behavior_learning.py` 核心变化包括：
+  - 新增 `behavior_turn_tool_chains`、`behavior_learning_agent_reviews`、`behavior_browser_user_events` 三张表，按 `project_id` 隔离数据；
+  - 学习引擎新增 `project_id` / `project_key` / `session_kind` 多租户字段，所有查询支持项目维度过滤；
+  - 特征指纹计算纳入浏览器用户事件维度；
+  - `_INTERNAL_TOOLS` 移除 `LearnSkill`（使其对学习流程可见），`_HIGH_RISK_TOOLS` 新增浏览器自动化与 Shell 操作类工具；
+  - 新增 `browser.user.*` 工具系列至 `_AUTO_REPLAY_BLOCKED_TOOLS` 防止因自动回放导致意外的浏览器操作；
+  - 调度器与 replay 模块支持并发技能运行统计更新；
+  - 新增 `behavior_replay_tests` 集成测试框架，覆盖回放链的端到端验证。
+- **`pattern.py` 全面重写** — 移除旧 scripts 系统（`list_scripts`/`approve_script`/`reject_script`/`run_script` 及关联工具注册），替换为基于 learned_skills 的一致 API：`list_learned_skills(project_id)`、`activate_learned_skill`、`deprecate_learned_skill`、`run_learned_skill`、`delete_learned_skill`、`learn_from_turn`、`rebuild_learning_state(project_id)`、`list_tool_chains(project_id)`。所有函数新增 `project_id` 参数支持多项目过滤。
+- **技能块注入 Agent 提示** — `coordinator.py` 中 `_run_chat_agent` 在构建 system prompt 时调用 `build_learned_skill_block()` 将已学技能名列表注入 agent 上下文，使 agent 感知可用技能。
+- **配置文件读写权限增强** — `tool_executor.py` 新增工具级权限检查：`Write` / `Edit` / `read_file` / `write_file` 在读写前检测 workspace 边界，超出时弹权限提升请求。`scheduler.py` 增设 60 秒 shell 超时防止任务挂起。
+- **Workbench UI 大幅重构** — 涉及学习板块布局、技能链卡片（`.learning-chain-cards`）、记忆页统计面板（`.memory-stats`）、更新笔记 Markdown 渲染、错误状态等。`workbench.css` 整体风格统一，侧栏折叠与面板隐藏按钮统一样式。对话组件 (`workbench-chat.jsx`) 增强消息去重与分段更新逻辑。
+- **Workbench 核心运行时优化** — `workbench.jsx` 多项改进：
+  - `reloadWorkbench` / `fetchAndMergeSession` 新增 `{showLoading: false}` 参数支持静默后台刷新（不显示加载壳）；
+  - goal-loop 运行时事件改为轻量 in-place store 合并（原地 patch `goalLoop` + `status`），取代全量 store 重载，1.6s 尾随静默刷新拉取服务端持久化字段；
+  - `setObscured` 改为计数器机制（`obscuredRef`），支持 settings 与 search 覆盖层同时打开时不互相覆盖；
+  - SearchOverlay 改为 `ReactDOM.createPortal` 渲染到 `document.body`，解决 z-index 层级问题；
+  - 任务区域加载壳（`loading shell`）仅在缺少 project 或 session 时显示，避免 goal-loop 静默刷新时闪现 loading 状态。
+- **知识库分页与惰性加载** — `workbench-knowledge.jsx`：文档列表改为分页加载（每页 80 条，支持 `?limit=` + `?offset=`）；文档内容（chunks）仅当用户切换到「内容」页签时才发起懒加载请求（`include_chunks=false` → `true` 按需拉取，`chunksLimit=200`）。`mergeDocs` 按 ID 去重防止翻页重复。
+- **数据库索引与工具名规范化** — `db.py`：新增 `_canonical_tool_for_stats()` 将工具名统一映射为稳定 feature key（含中文别名→英文键，如"浏览器"→`browser`），profile 使用量统计从按行聚合改为全量聚合后客户端截断；`kb_documents` 表新增 `idx_kb_documents_updated_at` 索引。
+- **WebSocket 浏览器事件录制** — `routes.py` 中 WebSocket 处理器新增 `_record_browser_event` 异步函数，将 `control_start/stop`、`click`、`scroll`、`key`、`text_input` 事件经 `behavior_learning.record_browser_user_event` 持久化，附带当前页面 URL 与标题上下文。
+- **直播分段语义去重** — `routes_workbench_chat.py`：新增 `_live_segment_dedupe_key` 基于内容+附件的稳定语义指纹，与 `_published_intermediate_message_ids` 联动，防止直播流扫描时同一段 prosa 因先后拥有不同 ID 被重复渲染。
+- **孤立 Fork 元数据清理** — `routes_workbench_chat.py`：`_prune_orphaned_fork_metadata` 在读取会话 payload 时自动检测并擦除引用已不存在源聊天的 `forkedFromChatId` / `forkedAtMessageId` / `forkMessage` 字段。
+- **更新笔记 Markdown 渲染** — `settings-overlay.jsx` 升级更新笔记渲染，支持 Markdown（标题、列表、代码块）与统一链接样式。关联链接重构为一致性按钮组。
+- **设置覆盖层工具列表更新** — 新增 `browser_user_events` 等工具至工具列表 UI。
+- **聊天 Fork 处理** — 删除的聊天来源自动从其子 Fork 分离（`detach_deleted_source_from_child_forks`），防止孤立引用。配套 `route_workbench_chat.py` 中 `PUT /api/workbench/chats/{id}/detach-source` 端点。
+- **记忆页统计优化** — 阴影验证与真实使用量分别展示，按 workspace 隔离数据。
+- **自适应预算分配调整** — `adaptive_budget.py`：5 小时窗口剩余预算分配比例从 30% 提升到 40%，加快短期预算消耗节奏。
+- **提示词优化** — `prompts.py` 新增 `_PROACTIVE_EXECUTION_RULES`、`_ARCHIVED_KNOWLEDGE_REMINDER` 与 `_WORKBENCH_TASK_REPLY_PROMPT`，分别约束主动执行行为、提示已归档知识库的存在，以及 Workbench 任务页对话模式的回复纪律。`agent.py` 同步在 `workbench-task-reply` 命令下替换 `phase1_decision`，强制优先 `quit` 避免误入工具执行。`coordinator.py` 中 `run_heartbeat_agent` 新增 `workspace_dir` 参数与增量工作规则（只读+新建文件，禁止修改/覆盖/删除已有文件）。
+- **项目初始化表单增强** — `routes.py` 新增 `_workbench_init_workspace_relationship_guidance()`，根据项目模板类型与 workspace 来源生成关系判断守卫语，防止初始化 Agent 将已有文件误当作已确认的项目事实。引导式问题第一组优先澄清已有文件与新项目的关系。
+- **任务步骤删除限制** — `routes.py` `update_task_plan_for_session` 中 `delete` 操作从 `structure_operation` 移出并独立校验，仅允许删除 `pending` 状态的步骤；已开始（包括 running/completed）的步骤拒绝删除。
+
+### Fixed
+
+- **聊天 Fork 重连处理** — `workbench-chat.jsx` 中 context 重建时丢失分段列表导致 `srcSegments is null` 的异常，添加空值守卫。
+- **意图分类与最终确认一致性** — `dispatch.ts` 最终确认 (finalize) 时不再触发重复计划生成，确保 `role=review` 状态的 session 保持预期行为。
+- **Shell stderr 重定向解析**（延续修复）— 防止正则错误匹配 shell 元字符。
+
+### Tests
+
+- 新增 `test_behavior_learning.py` 测试用例：Web 搜索学习行为、浏览器用户事件记录与回放、即时技能创建、学习 Agent review 决策验证。
+- 新增 `test_workbench_chat_fork.py`：Fork 创建、源删除与分离、workspace 隔离测试。
+- 新增 `test_workbench_chat_segments.py`：对话分段完整性测试。
+- 新增 `test_workbench_dispatch_finalize.py`：意图分发 finalize 流程测试。
+- 新增 `test_workbench_init_plan.py`：初始化计划生成测试。
+- 新增 `test_workbench_knowledge_archive.py`：知识文档分页与详情测试。
+- 新增 `test_workbench_api_validation.py`：API 校验入口注册。
+- 更新 `test_workbench_frontend_logic.py`：验证 index.html 已弃用脚本路由不再注入，新增 browser-view 样式与学习板块断言。
+- 更新 `test_model_prices.py`：覆盖新价格格式解析。
+- 更新 `test_profile_stats.py`：合并工具显示别名与正确工具计数验证。
+- 更新 `test_proactive_workbench.py`：多项主动执行场景测试增强。
+
 ## [0.6.2] - 2026-07-05
 
 0.6.2 是一个功能型更新，重点引入自适应预算控制系统与经济模式以优化 token 花费，同时补齐 macOS 原生菜单栏、Workbench UI 体验改进与多项运行时修复。

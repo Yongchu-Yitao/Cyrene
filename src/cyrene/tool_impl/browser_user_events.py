@@ -62,6 +62,15 @@ def _event_label(event: dict[str, Any]) -> str:
     url = str(event.get("url") or "")
     title = str(event.get("title") or "")
     bits = [f"{event.get('created_at')}: browser.user.{kind}"]
+    purpose = str(event.get("purpose") or "")
+    action_summary = str(event.get("action_summary") or "")
+    object_summary = str(event.get("object_summary") or "")
+    if purpose:
+        bits.append(f"purpose={purpose!r}")
+    if action_summary:
+        bits.append(f"action={action_summary!r}")
+    if object_summary:
+        bits.append(f"object={object_summary!r}")
     if title:
         bits.append(f"title={title!r}")
     if url:

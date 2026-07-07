@@ -1193,17 +1193,21 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   }, []);
 
   // 页面加载时检查 Electron 原生浏览器 bridge 是否有活跃 tabs，用于刷新后保持浏览器 tab 可见。
-  // BrowserTabManager.state() 不存 sessionId/chatId，不做精确匹配：只要有 tabs 就恢复。
+  // 仅在页面刷新/重新加载时恢复一次（挂载态首次有 chatId 时）；
+  // 不随 activeChatId 变化重新触发，防止切到另一对话时误恢复不属于它的浏览器 tab。
+  // BrowserTabManager.state() 不存 sessionId/chatId，不做精确匹配——只要有 tabs 就恢复。
+  var browserRestoredRef = useWbcRef(false);
   useWbcEffect(function () {
+    if (browserRestoredRef.current) return;
     var bridge = window.cyrene && window.cyrene.browser;
     if (!bridge || typeof bridge.getState !== "function") return;
     var chatId = activeChatId || "";
     if (!chatId) return;
+    browserRestoredRef.current = true;
     bridge.getState().then(function (state) {
       if (!state || !state.tabs || !Array.isArray(state.tabs) || !state.tabs.length) return;
       setBrowserActiveByChat(function (prev) {
         if (prev[chatId]) return prev;
-        // 首次:设置活跃状态并切到浏览器 tab
         setSideTab("browser");
         return Object.assign({}, prev, { [chatId]: true });
       });

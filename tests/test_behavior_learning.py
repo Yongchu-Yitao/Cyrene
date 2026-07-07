@@ -327,8 +327,16 @@ async def test_browser_user_events_feed_learning_agent_and_are_queryable(tmp_pat
     assert chains[0]["source"] == "user_browser"
     assert chains[0]["summary"]["browser_user_steps"] == 2
     assert [step["tool"] for step in chains[0]["chain"]] == ["browser.user.click", "browser.user.input"]
+    assert chains[0]["chain"][0]["purpose"] == "activate button 'Apply filters'"
+    assert chains[0]["chain"][0]["action_summary"] == "clicked button 'Apply filters'"
+    assert chains[0]["chain"][1]["purpose"] == "provide browser input for input 'q'"
+    assert chains[0]["chain"][1]["action_summary"] == "entered 'openai' into input 'q'"
     assert [event["tool"] for event in events] == ["browser.user.click", "browser.user.input"]
+    assert events[0]["purpose"] == "activate button 'Apply filters'"
+    assert events[1]["value_preview"] == "openai"
     assert prompts
+    assert "clicked button 'Apply filters'" in prompts[-1]
+    assert "entered 'openai' into input 'q'" in prompts[-1]
     assert "browser.user.click" in prompts[-1]
     assert "https://example.test/search" in prompts[-1]
 
@@ -336,26 +344,96 @@ async def test_browser_user_events_feed_learning_agent_and_are_queryable(tmp_pat
 async def test_duplicate_skill_hard_veto_reuses_existing_cross_pattern(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
     fp = await bl._heuristic_request_fingerprint(
-        "帮我查一下上海今天的天气",
+        "帮我查一下上海今天的天气并打开来源页面核对",
         action_sequence=[
             {
                 "domain": "external_information_query",
                 "type": "query_realtime_info",
                 "subtype": "search_web",
                 "raw_description": "search_web",
-            }
+            },
+            {
+                "domain": "external_information_query",
+                "type": "retrieve_external_knowledge",
+                "subtype": "fetch_web_page",
+                "raw_description": "fetch_web_page",
+            },
         ],
     )
     now = bl._now_iso()
     pattern_ids = ["pattern-weather-a", "pattern-weather-b"]
     async with bl._conn() as conn:
-        for pid in pattern_ids:
+        for index, pid in enumerate(pattern_ids, start=1):
+            session_id = f"session-{pid}"
+            turn_id = f"turn-{pid}"
+            round_id = f"round-{pid}"
+            await conn.execute(
+                """
+                INSERT INTO behavior_sessions
+                (session_id, project_id, project_key, session_kind, created_at, updated_at, session_summary, metadata_json)
+                VALUES (?, 'global', 'global', 'test', ?, ?, '', '{}')
+                """,
+                (session_id, now, now),
+            )
+            await conn.execute(
+                """
+                INSERT INTO behavior_turns
+                (turn_id, session_id, project_id, project_key, session_kind, round_id, created_at, updated_at,
+                 user_message, context_summary, agent_response, outcome_status, user_feedback, processed_status,
+                 linked_skill_id, metadata_json)
+                VALUES (?, ?, 'global', 'global', 'test', ?, ?, ?, ?, '', '已核对来源。', 'success', '', 1, '', '{}')
+                """,
+                (turn_id, session_id, round_id, now, now, f"帮我查一下上海今天的天气并打开来源页面核对 {index}"),
+            )
+            actions = [
+                (
+                    f"action-{pid}-1",
+                    0,
+                    "external_information_query",
+                    "query_realtime_info",
+                    "search_web",
+                    {"query": "上海 今天 天气"},
+                    "weather result",
+                ),
+                (
+                    f"action-{pid}-2",
+                    1,
+                    "external_information_query",
+                    "retrieve_external_knowledge",
+                    "fetch_web_page",
+                    {"url": "https://example.test/weather"},
+                    "source page",
+                ),
+            ]
+            for action_id, action_index, action_type, action_subtype, tool_name, args, output in actions:
+                await conn.execute(
+                    """
+                    INSERT INTO behavior_actions
+                    (action_id, turn_id, session_id, round_id, created_at, action_index, action_type, action_subtype,
+                     tool_name, input_summary, output_summary, success, error_summary, requires_llm, risk_level, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', 0, 'none', ?)
+                    """,
+                    (
+                        action_id,
+                        turn_id,
+                        session_id,
+                        round_id,
+                        now,
+                        action_index,
+                        action_type,
+                        action_subtype,
+                        tool_name,
+                        bl._json_dumps(args),
+                        output,
+                        bl._json_dumps({"raw_args": args, "action_domain": action_type}),
+                    ),
+                )
             await conn.execute(
                 """
                 INSERT INTO behavior_patterns
                 (pattern_id, project_id, project_key, description, prototype_fingerprint, statistics_json,
                  skillability_json, status, linked_skill_list, created_at, updated_at)
-                VALUES (?, 'global', 'global', 'weather lookup', ?, ?, ?, 'skill_candidate', '[]', ?, ?)
+                VALUES (?, 'global', 'global', 'weather lookup with source check', ?, ?, ?, 'skill_candidate', '[]', ?, ?)
                 """,
                 (
                     pid,
@@ -365,6 +443,14 @@ async def test_duplicate_skill_hard_veto_reuses_existing_cross_pattern(tmp_path,
                     now,
                     now,
                 ),
+            )
+            await conn.execute(
+                """
+                INSERT INTO behavior_pattern_turns
+                (pattern_id, turn_id, similarity, created_at)
+                VALUES (?, ?, 1.0, ?)
+                """,
+                (pid, turn_id, now),
             )
         await conn.commit()
 
@@ -382,12 +468,12 @@ async def test_duplicate_skill_hard_veto_reuses_existing_cross_pattern(tmp_path,
 async def test_list_learned_skills_separates_shadow_validation_from_actual_usage(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
 
-    for index in range(1, 4):
-        await _record_web_search_turn(
+    for index in range(1, 5):
+        await _record_code_fix_turn(
             bl,
-            session_id="session-weather-usage",
-            round_id=f"weather-usage-{index}",
-            user_message="帮我查一下上海今天的天气",
+            session_id="session-code-usage",
+            round_id=f"code-usage-{index}",
+            user_message="请检查 src/app.py 并修复导出逻辑，然后给我总结",
         )
 
     await bl.process_unprocessed_turns(force=True)
@@ -397,6 +483,27 @@ async def test_list_learned_skills_separates_shadow_validation_from_actual_usage
     assert skills[0]["run_statistics"]["total_runs"] > 0
     assert skills[0]["shadow_validation_count"] > 0
     assert skills[0]["actual_usage_count"] == 0
+
+
+async def test_single_tool_repetition_records_pattern_but_does_not_create_skill(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+
+    for index in range(1, 4):
+        await _record_web_search_turn(
+            bl,
+            session_id="session-weather-single-tool",
+            round_id=f"weather-single-tool-{index}",
+            user_message="帮我查一下上海今天的天气",
+        )
+
+    stats = await bl.process_unprocessed_turns(force=True)
+    patterns = await bl.list_patterns()
+    skills = await bl.list_learned_skills()
+
+    assert stats["processed_turns"] == 3
+    assert patterns
+    assert skills == []
+    assert stats["agent_created_skills"] == 0
 
 
 async def test_similar_candidate_search_compares_purpose_and_tool_chain_within_project(tmp_path, monkeypatch):
@@ -708,6 +815,9 @@ async def test_skill_risk_level_inferred_on_creation(tmp_path, monkeypatch):
     # Disabled risky step should not count
     disabled_bash = {**_make_step("Bash"), "enabled": False}
     assert bl._infer_skill_risk_level([disabled_bash]) == "none"
-    assert bl._has_skillworthy_steps([_make_step("read_file")]) is True
+    assert bl._has_skillworthy_steps([_make_step("read_file")]) is False
+    assert bl._has_skillworthy_steps([_make_step("read_file"), _make_step("edit_file")]) is True
+    assert bl._has_skillworthy_steps([_make_step("search_web"), _make_step("search_web")]) is False
     assert bl._has_skillworthy_steps([_make_step("ask_user")]) is False
     assert bl._has_auto_replay_blocked_step([_make_step("ask_user")]) is True
+    assert bl._has_auto_replay_blocked_step([_make_step("browser.user.navigate")]) is True
