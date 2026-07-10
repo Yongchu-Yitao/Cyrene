@@ -46,7 +46,10 @@ _STEP_FAILURE_CAP = 3
 # A step is only finished once the subagents it spawned settle. Cap that wait so
 # a wedged subagent can't stall the loop forever — on timeout the step proceeds
 # to verification with a warning rather than hanging.
-_SUBAGENT_SETTLE_TIMEOUT_SECONDS = 30 * 60
+# A stalled subagent should become visible as timed out within a few minutes;
+# a 30-minute silent wait looked like a healthy run while producing no work.
+_SUBAGENT_SETTLE_TIMEOUT_SECONDS = 5 * 60
+_SUBAGENT_HEARTBEAT_SECONDS = 15
 _SQLITE_TIMEOUT_SECONDS = 15
 # db_paths whose schema + WAL pragma have already been ensured this process.
 # The durable goal-loop tables are created once instead of on every query,
@@ -541,13 +544,16 @@ class GoalLoopManager:
         await _ensure_schema(self.db_path)
         rows = await _fetch_all(
             self.db_path,
-            "SELECT * FROM goal_runs WHERE status = 'running'",
+            "SELECT * FROM goal_runs WHERE status = 'running' "
+            "OR (status = 'paused' AND stop_reason = 'server_shutdown')",
         )
         for row in rows:
             await _update_run(
                 self.db_path,
                 str(row["id"]),
+                status="running",
                 phase="recovering",
+                stop_reason=None,
                 active_started_at=_utc_iso(),
                 lease_owner=None,
                 lease_until=None,
@@ -571,9 +577,11 @@ class GoalLoopManager:
             await _update_run(
                 self.db_path,
                 str(row["id"]),
-                phase="recovering",
+                status="paused",
+                phase="paused",
                 active_seconds=active_seconds,
                 active_started_at=None,
+                stop_reason="server_shutdown",
                 lease_owner=None,
                 lease_until=None,
             )
@@ -635,7 +643,7 @@ class GoalLoopManager:
             if message:
                 session["agentReply"] = message
             status = str(run.get("status") or "")
-            if status in {"running", "waiting_for_user", "paused", "blocked", "review", "cancelled"}:
+            if status in {"running", "waiting_for_user", "paused", "blocked", "review", "completed", "cancelled"}:
                 session["status"] = status
 
         try:
@@ -819,9 +827,10 @@ class GoalLoopManager:
                 from cyrene import subagent as _subagent
 
                 last_lease = _utc_now()
+                last_heartbeat = last_lease
 
                 async def _keep_waiting() -> bool:
-                    nonlocal last_lease
+                    nonlocal last_lease, last_heartbeat
                     current = await _get_run_by_id(self.db_path, run_id)
                     if not current or str(current.get("status") or "") != "running":
                         return False
@@ -831,6 +840,13 @@ class GoalLoopManager:
                         if not await self._lease(current):
                             return False
                         last_lease = _utc_now()
+                    now = _utc_now()
+                    if now - last_heartbeat >= timedelta(seconds=_SUBAGENT_HEARTBEAT_SECONDS):
+                        await _subagent.publish_active_heartbeat(
+                            session_id=str(run["session_id"]),
+                            message="仍在等待子代理完成，任务尚未停止。",
+                        )
+                        last_heartbeat = now
                     return True
 
                 leftover = await _subagent.wait_until_settled(
@@ -842,6 +858,10 @@ class GoalLoopManager:
                     logger.warning(
                         "Goal-loop step %s proceeding with %d subagent(s) unsettled: %s",
                         step_id, len(leftover), leftover,
+                    )
+                    await _subagent.timeout_subagents(
+                        leftover,
+                        reason="子代理超过 5 分钟没有完成，已标记超时并停止等待。",
                     )
                 latest_run = await _get_run_by_id(self.db_path, run_id)
                 if not latest_run or str(latest_run.get("status") or "") != "running":
@@ -1077,9 +1097,10 @@ class GoalLoopManager:
             results = verdict.get("results") if isinstance(verdict.get("results"), list) else []
             by_id = {str(item.get("id") or ""): item for item in results if isinstance(item, dict)}
             any_failed = False
+            acceptance_passed = False
 
             def apply_verdict(_p: dict[str, Any], _project: dict[str, Any], fresh: dict[str, Any]) -> None:
-                nonlocal any_failed
+                nonlocal any_failed, acceptance_passed
                 criteria = [item for item in (fresh.get("acceptanceCriteria") or []) if isinstance(item, dict)]
                 for criterion in criteria:
                     result = by_id.get(str(criterion.get("id") or ""))
@@ -1094,20 +1115,26 @@ class GoalLoopManager:
                     any_failed = any_failed or not passed
                 fresh["acceptanceCriteria"] = criteria
                 fresh["verifyReason"] = str(verdict.get("reason") or "")
+                acceptance_passed = bool(criteria) and not any_failed
+                if acceptance_passed:
+                    R._workbench_mark_completed_if_acceptance_passed(
+                        fresh,
+                        event_body="持续执行独立验收通过，所有验收标准均已通过，任务自动标记为已完成。",
+                    )
 
             _write_session(str(run["session_id"]), apply_verdict)
             await _event(self.db_path, run_id, "goal_verified", payload=verdict)
 
-            if not any_failed:
+            if acceptance_passed:
                 completed = await _set_inactive_status(
                     self.db_path,
                     verifying,
-                    "review",
-                    phase="review",
+                    "completed",
+                    phase="completed",
                     stop_reason="acceptance_passed",
                 )
                 if completed:
-                    await self._sync_projection(completed, message="自动验收通过，持续执行已停止，等待你的最终确认。")
+                    await self._sync_projection(completed, message="自动验收通过，任务已自动标记为已完成。")
                     try:
                         _, final_project, final_session = _read_session(str(run["session_id"]))
                         await R._workbench_archive_run_knowledge(

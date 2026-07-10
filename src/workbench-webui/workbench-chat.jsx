@@ -442,7 +442,7 @@ function wbcFileViewKind(file) {
   var ct = String(file.content_type || "").split(";", 1)[0].trim().toLowerCase();
   var ext = String(file.name || "").split(".").pop().toLowerCase();
   if (ct.indexOf("image/") === 0 || file.kind === "image") return "image";
-  if (ct === "application/pdf" || ext === "pdf") return "pdf";
+  if (ct === "application/pdf" || ext === "pdf" || file.kind === "pdf") return "pdf";
   if (ct === "text/html" || ct === "application/xhtml+xml" || ext === "html" || ext === "htm") return "html";
   if (file.kind === "markdown" || ext === "md" || ext === "markdown") return "markdown";
   if (file.kind === "code" || WBC_CODE_EXTS.indexOf(ext) !== -1 || ct.indexOf("text/") === 0) return "code";
@@ -1043,6 +1043,30 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     activeChat && activeChat.activePlan && activeChat.activePlan.planId,
     activeChat && activeChat.pendingQuestion && activeChat.pendingQuestion.id,
   ]);
+
+  // Auto-open PDF viewer when new messages contain PDF attachments
+  var lastAutoPdfUrlRef = useWbcRef("");
+  useWbcEffect(function () {
+    if (!activeChat || !Array.isArray(activeChat.messages)) return;
+    var msgs = activeChat.messages;
+    for (var mi = msgs.length - 1; mi >= 0; mi--) {
+      var files = Array.isArray(msgs[mi].attachments) ? msgs[mi].attachments : [];
+      for (var fi = 0; fi < files.length; fi++) {
+        var f = files[fi];
+        var isPdf = wbcFileViewKind(f) === "pdf";
+        if (isPdf) {
+          var fUrl = f.url || f.id || "";
+          if (fUrl && fUrl !== lastAutoPdfUrlRef.current) {
+            lastAutoPdfUrlRef.current = fUrl;
+            openViewer(f);
+            return;
+          }
+        }
+      }
+    }
+  }, [activeChat && activeChat.messages && activeChat.messages.map(function (m) {
+    return (m.attachments || []).map(function (a) { return a.url || a.id || ''; }).join(',');
+  }).join('|')]);
 
   // Surface the active conversation title in the topbar crumbs.
   useWbcEffect(function () {
@@ -3527,31 +3551,201 @@ function WbcPlanTab({ plan }) {
   );
 }
 
+// ---- PDF.js viewer (replaces <embed> for PDF files) -------------------------
+
+function WbcPdfJsViewer({ file, url }) {
+  var containerRef = useWbcRef(null);
+  var viewerRef = useWbcRef(null);
+  var [pageNum, setPageNum] = useWbcState(1);
+  var [pageCount, setPageCount] = useWbcState(0);
+  var [scale, setScale] = useWbcState(1);
+  var [loading, setLoading] = useWbcState(true);
+  var [failed, setFailed] = useWbcState(false);
+  var [failReason, setFailReason] = useWbcState("");
+  var [analyzing, setAnalyzing] = useWbcState(false);
+  var [analysisResult, setAnalysisResult] = useWbcState("");
+
+  useWbcEffect(function () {
+    var container = containerRef.current;
+    if (!container) { setFailReason('container not mounted'); setFailed(true); setLoading(false); return; }
+    if (!url) { setFailReason('no URL'); setFailed(true); setLoading(false); return; }
+    if (!window.pdfjsLib || !window.pdfjsViewer || !window.pdfjsSetupViewer) { setFailReason('PDF.js not loaded'); setFailed(true); setLoading(false); return; }
+
+    var cancelled = false;
+    var abortLoader = new AbortController();
+    var timer = setTimeout(function () {
+      abortLoader.abort();
+      setFailReason('timeout (15s)');
+      setFailed(true);
+      setLoading(false);
+    }, 15000);
+
+    var result = window.pdfjsSetupViewer(container);
+    var viewer = result.viewer;
+    var eventBus = result.eventBus;
+    viewerRef.current = viewer;
+
+    // Track page changes
+    eventBus.on('pagechanging', function (evt) {
+      if (!cancelled) setPageNum(evt.pageNumber);
+    });
+
+    // Handle resize (e.g. sidebar panel resize)
+    var resizeObserver = new ResizeObserver(function () { viewer.update(); });
+    resizeObserver.observe(container);
+
+    // Copy the original PDF text rather than browser-measured text-layer content.
+    var selectionSanitizer = window.pdfjsInstallSelectionSanitizer(container, viewer, eventBus);
+    var copyFix = window.pdfjsInstallCopyFix(container, viewer);
+
+    // Fetch and load PDF document
+    window.pdfjsLoadPdf(url, viewer, abortLoader.signal).then(function (doc) {
+      if (cancelled) return;
+      clearTimeout(timer);
+      setPageCount(doc.numPages);
+      setPageNum(1);
+      setLoading(false);
+      setScale(viewer.currentScale);
+    }).catch(function (err) {
+      if (!cancelled) { clearTimeout(timer); setFailReason(String(err && err.message || err)); setFailed(true); setLoading(false); }
+    });
+
+    return function () {
+      cancelled = true;
+      clearTimeout(timer);
+      abortLoader.abort();
+      selectionSanitizer.abort();
+      copyFix.abort();
+      resizeObserver.disconnect();
+      if (viewerRef.current) {
+        try { viewerRef.current.setDocument(null); } catch (e) {}
+      }
+      viewerRef.current = null;
+    };
+  }, [url]);
+
+  function zoomIn() {
+    var v = viewerRef.current;
+    if (v) { v.currentScale = Math.min(5, v.currentScale * 1.15); setScale(v.currentScale); }
+  }
+  function zoomOut() {
+    var v = viewerRef.current;
+    if (v) { v.currentScale = Math.max(0.25, v.currentScale / 1.15); setScale(v.currentScale); }
+  }
+  function zoomReset() {
+    var v = viewerRef.current;
+    if (v) { v.currentScaleValue = 'page-width'; setScale(v.currentScale); }
+  }
+
+  // Text selection → agent analysis
+  function analyzePdfText() {
+    var text = window.pdfjsGetSelectedText(containerRef.current).trim();
+    if (!text) return;
+
+    setAnalyzing(true);
+
+    fetch('/api/pdf/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text, pdf_name: file ? file.name || 'PDF' : 'PDF' }),
+    }).then(function (r) { return r.json(); })
+      .then(function (data) {
+        setAnalysisResult(data.result || data.error || '(no result)');
+        var sel = window.getSelection();
+        if (sel) sel.removeAllRanges();
+      }).catch(function (err) {
+        setAnalysisResult('Analysis failed: ' + err.message);
+      }).finally(function () {
+        setAnalyzing(false);
+      });
+  }
+
+  var head = (
+    <div className="wbc-viewer-head">
+      <span className="wbc-viewer-name" title={file && file.name}>{(file && file.name) || "PDF"}</span>
+      {!loading && !failed && (
+        <span className="wbc-viewer-switch">
+          <button type="button" onClick={zoomOut}>−</button>
+          <button type="button" onClick={zoomReset}>{Math.round(scale * 100) + "%"}</button>
+          <button type="button" onClick={zoomIn}>+</button>
+        </span>
+      )}
+      {!loading && !failed && (
+        <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 4, whiteSpace: 'nowrap' }}>
+          {pageNum} / {pageCount}
+        </span>
+      )}
+      {url ? <a className="wbc-viewer-open" href={"/pdf/viewer?url=" + encodeURIComponent(url) + "&name=" + encodeURIComponent((file && file.name) || "PDF")} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
+      {file ? wbcDownloadLink(file, { className: "wbc-viewer-download" }) : null}
+    </div>
+  );
+
+  var body = (
+    <div className="wbc-viewer-scroll" style={{ overflow: 'hidden', position: 'relative' }} onMouseUp={function () {
+      if (loading || failed) return;
+      setTimeout(function () {
+        if (window.pdfjsGetSelectedText(containerRef.current).trim()) {
+          document.getElementById('wbc-pdf-analyze-btn') && (document.getElementById('wbc-pdf-analyze-btn').style.display = 'block');
+        }
+      }, 200);
+    }}>
+      {/* Container div for PDF.js — always rendered so ref is available */}
+      <div ref={containerRef} style={{ position: 'relative', overflow: 'auto', height: '100%' }} />
+
+      {loading && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg, #fff)', zIndex: 10 }}>
+          <p className="workbench-muted wbc-viewer-pad">{wbcT("settings.pathLoading", "Loading...")}</p>
+        </div>
+      )}
+      {failed && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg, #fff)', zIndex: 10 }}>
+          <p className="workbench-muted wbc-viewer-pad">
+            {wbcT("workbenchChat.viewerLoadFailed", "File failed to load.")}
+            {url ? " " + wbcT("workbenchChat.viewerOpenFallback", "Try opening it in a new window.") : ""}
+            {failReason ? <><br /><small style={{ opacity: 0.6 }}>{failReason}</small></> : null}
+          </p>
+        </div>
+      )}
+
+      <button id="wbc-pdf-analyze-btn" style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 200, background: '#4a90d9', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 16px', fontSize: 13, cursor: 'pointer', display: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}
+        onClick={analyzePdfText}
+      >{analyzing ? '分析中…' : '分析选中的文字'}</button>
+
+      {analysisResult ? (
+        <div style={{ position: 'fixed', bottom: 60, right: 16, zIndex: 200, width: 360, maxHeight: '50vh', overflowY: 'auto', background: '#2a2a2a', color: '#e0e0e0', borderRadius: 8, padding: 12, fontSize: 13, lineHeight: 1.5, boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
+          <button style={{ float: 'right', background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: 16 }} onClick={function () { setAnalysisResult(''); }}>×</button>
+          <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{analysisResult}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  return (
+    <div className="wbc-viewer">
+      {head}
+      {body}
+    </div>
+  );
+}
+
 // ---- side viewer (PDF / HTML / Markdown / 代码 / 图片) ----------------------
 
 function WbcViewerTab({ file }) {
   var kind = wbcFileViewKind(file);
   var [text, setText] = useWbcState("");
-  var [blobUrl, setBlobUrl] = useWbcState("");
   var [htmlMode, setHtmlMode] = useWbcState("rendered");
-  var [zoom, setZoom] = useWbcState(1);
   var [failed, setFailed] = useWbcState(false);
   var codeRef = useWbcRef(null);
   var url = file && file.url;
   var htmlPreview = useWbcMemo(function () {
     return kind === "html" ? wbcHtmlPreviewDocument(text, url) : "";
   }, [text, url, kind]);
-  var pdfSrc = blobUrl ? blobUrl + "#zoom=" + Math.round(zoom * 100) : "";
 
-  // text-ish contents are fetched; pdf goes through a blob URL (same as the
-  // legacy viewer — <embed src=...> with a route URL re-downloads on zoom).
+  // text-ish contents are fetched (PDF is handled by WbcPdfJsViewer)
   useWbcEffect(function () {
     setText("");
     setFailed(false);
     setHtmlMode("rendered");
-    setZoom(1);
-    if (blobUrl) { try { URL.revokeObjectURL(blobUrl); } catch (e) {} }
-    setBlobUrl("");
     if (!url) return;
     var cancelled = false;
     if (kind === "html" || kind === "markdown" || kind === "code") {
@@ -3561,21 +3755,9 @@ function WbcViewerTab({ file }) {
       }).then(function (body) {
         if (!cancelled) setText(body);
       }).catch(function () { if (!cancelled) setFailed(true); });
-    } else if (kind === "pdf") {
-      fetch(url).then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.blob();
-      }).then(function (blob) {
-        if (cancelled) return;
-        setBlobUrl(URL.createObjectURL(blob));
-      }).catch(function () { if (!cancelled) setFailed(true); });
     }
     return function () { cancelled = true; };
   }, [url, kind]);
-
-  useWbcEffect(function () {
-    return function () { if (blobUrl) { try { URL.revokeObjectURL(blobUrl); } catch (e) {} } };
-  }, [blobUrl]);
 
   // syntax highlight code once loaded
   useWbcEffect(function () {
@@ -3586,6 +3768,11 @@ function WbcViewerTab({ file }) {
 
   if (!file) return <p className="workbench-muted">{wbcT("workbenchChat.viewerEmpty", "Select a file from message attachments or artifacts.")}</p>;
 
+  // PDF is handled entirely by its own component — skip the wrapper.
+  if (kind === "pdf") {
+    return <WbcPdfJsViewer file={file} url={url} />;
+  }
+
   var head = (
     <div className="wbc-viewer-head">
       <span className="wbc-viewer-name" title={file.name}>{file.name || "file"}</span>
@@ -3593,13 +3780,6 @@ function WbcViewerTab({ file }) {
         <span className="wbc-viewer-switch">
           <button type="button" className={htmlMode === "rendered" ? "active" : ""} onClick={function () { setHtmlMode("rendered"); }}>{wbcT("workbenchChat.viewerRendered", "Rendered")}</button>
           <button type="button" className={htmlMode === "source" ? "active" : ""} onClick={function () { setHtmlMode("source"); }}>{wbcT("workbenchChat.viewerSource", "Source")}</button>
-        </span>
-      )}
-      {kind === "pdf" && (
-        <span className="wbc-viewer-switch">
-          <button type="button" onClick={function () { setZoom(function (z) { return Math.max(0.4, z - 0.2); }); }}>−</button>
-          <button type="button" onClick={function () { setZoom(1); }}>{Math.round(zoom * 100) + "%"}</button>
-          <button type="button" onClick={function () { setZoom(function (z) { return Math.min(3, z + 0.2); }); }}>+</button>
         </span>
       )}
       {wbcCanOpenExternally(file) ? <a className="wbc-viewer-open" href={url} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
@@ -3612,12 +3792,6 @@ function WbcViewerTab({ file }) {
     body = <p className="workbench-muted wbc-viewer-pad">{wbcT("workbenchChat.viewerLoadFailed", "File failed to load.")}{url ? " " + wbcT("workbenchChat.viewerOpenFallback", "Try opening it in a new window.") : ""}</p>;
   } else if (kind === "image") {
     body = <div className="wbc-viewer-scroll center"><img className="wbc-viewer-img" src={url} alt={file.name || "image"} /></div>;
-  } else if (kind === "pdf") {
-    body = blobUrl ? (
-      <div className="wbc-viewer-scroll">
-        <embed key={pdfSrc} className="wbc-viewer-embed" src={pdfSrc} type="application/pdf" />
-      </div>
-    ) : <p className="workbench-muted wbc-viewer-pad">{wbcT("settings.pathLoading", "Loading...")}</p>;
   } else if (kind === "html") {
     body = htmlMode === "rendered"
       ? <iframe key={url + "::" + (text ? "1" : "0")} className="wbc-viewer-iframe" sandbox="allow-scripts" srcDoc={htmlPreview} title={file.name || "HTML"} />

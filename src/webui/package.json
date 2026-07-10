@@ -18,6 +18,7 @@
     "@codemirror/view": "^6.36.5",
     "@lezer/highlight": "^1.2.1",
     "esbuild": "^0.28.0",
-    "katex": "^0.16.22"
+    "katex": "^0.16.22",
+    "pdfjs-dist": "^6.1.200"
   }
 }

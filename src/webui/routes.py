@@ -123,6 +123,7 @@ from cyrene.workbench_store import read_document, write_document
 from cyrene.workbench_task_context import (
     build_main_context as _workbench_task_build_main_context,
     build_volatile_context as _workbench_task_build_volatile_context,
+    _clean_text as _workbench_clean_text,
     ensure_shared_context as _workbench_task_ensure_shared_context,
 )
 from cyrene.io_utils import atomic_write_json, read_json_safe
@@ -455,6 +456,44 @@ def _workbench_new_session(
         "summary": None,
         "titleLocked": False,
     }
+
+
+def _workbench_acceptance_fully_passed(criteria: Any) -> bool:
+    """Return whether a task has a non-empty, completely passed acceptance set."""
+    if not isinstance(criteria, list) or not criteria:
+        return False
+    return all(
+        isinstance(item, dict)
+        and str(item.get("status") or "").strip().lower() in {"passed", "done", "completed"}
+        for item in criteria
+    )
+
+
+def _workbench_mark_completed_if_acceptance_passed(
+    session: dict[str, Any],
+    *,
+    now: str | None = None,
+    event_body: str = "所有验收标准均已通过，任务自动标记为已完成。",
+) -> bool:
+    """Promote a task to completed once every acceptance criterion is passed.
+
+    This is deliberately server-side so manual criterion updates, independent
+    verification, and background goal-loop verification share the same rule.
+    The event is emitted only on the transition, keeping retries idempotent.
+    """
+    if not _workbench_acceptance_fully_passed(session.get("acceptanceCriteria")):
+        return False
+    if str(session.get("status") or "").strip().lower() in {"completed", "done"}:
+        return True
+    session["status"] = "completed"
+    timestamp = now or _utc_now_iso()
+    session["events"] = list(session.get("events") or []) + [{
+        "id": _short_id("event"),
+        "type": "TaskCompleted",
+        "createdAt": timestamp,
+        "body": event_body,
+    }]
+    return True
 
 
 # ---- Project initialization (the "初始化项目" onboarding session) ------------
@@ -4778,6 +4817,7 @@ def _collect_run_activity_events(session_id: str, run_start_ts: str, run_id: str
         elif event_type == "llm_call":
             actor = _workbench_actor_label(e.get("caller"))
             phase = str(e.get("phase") or "").strip()
+            llm_status = str(e.get("status") or "completed").strip()
             duration = e.get("duration_ms")
             duration_text = ""
             try:
@@ -4796,13 +4836,20 @@ def _collect_run_activity_events(session_id: str, run_start_ts: str, run_id: str
                 "actor": actor,
                 "phase": phase,
                 "model": str(e.get("model") or ""),
-                "body": f"{actor} 完成一轮思考{phase_text}{tool_text}{duration_text}",
+                "status": llm_status,
+                "body": (
+                    f"{actor} 正在思考{phase_text}"
+                    if llm_status == "started"
+                    else f"{actor} 完成一轮思考{phase_text}{tool_text}{duration_text}"
+                ),
             })
         elif event_type == "subagent_update":
             actor = _workbench_actor_label("", e.get("agent_id"))
             status_text = _workbench_subagent_status_text(e.get("status"))
             task = str(e.get("task") or "").strip()
-            body = f"{actor} {status_text}" + (f"：{task[:120]}" if task else "")
+            message = str(e.get("message") or "").strip()
+            detail = message or task
+            body = f"{actor} {status_text}" + (f"：{detail[:180]}" if detail else "")
             out.append({
                 "id": _short_id("event"),
                 "type": "SubagentStatusEvent",
@@ -4810,6 +4857,7 @@ def _collect_run_activity_events(session_id: str, run_start_ts: str, run_id: str
                 "createdAt": created_at,
                 "actor": actor,
                 "status": str(e.get("status") or ""),
+                "message": message,
                 "body": body,
             })
     out.sort(key=lambda item: str(item.get("createdAt") or ""))
@@ -5398,6 +5446,39 @@ def _workbench_finalize_directive(session: dict[str, Any]) -> str:
             names.append(name)
     if names:
         lines.append("- 已登记的产物（交付汇总里应当体现）：" + "；".join(names[:12]) + "。")
+    return "\n".join(lines)
+
+
+def _workbench_acceptance_repair_directive(session: dict[str, Any]) -> str:
+    """Tell a same-session repair run how to use the latest verification.
+
+    Verification is deliberately independent from the task agent, so the repair
+    turn must receive an explicit hand-off: preserve passed criteria, inspect the
+    failed evidence, and make the concrete workspace changes needed to satisfy
+    the current task.  This directive keeps the action in the existing session
+    instead of silently creating a new plan/task.
+    """
+    criteria = session.get("acceptanceCriteria") if isinstance(session.get("acceptanceCriteria"), list) else []
+    failed = [
+        item for item in criteria
+        if isinstance(item, dict) and str(item.get("status") or "") == "failed"
+    ]
+    lines = [
+        "## 验收未完全通过：继续修改当前 session",
+        "这是一次基于最近验收结果的修复回合。必须继续当前 session，不要新建任务、不要只给建议，也不要跳过未通过标准。",
+        "先检查工作区和已有产物，逐条处理未通过的验收标准；已通过的标准视为约束，不要为了修复其他问题回退它们。",
+        "完成必要的代码、配置、测试或文档修改后，在回复中说明实际改动和仍未解决的风险。",
+    ]
+    if failed:
+        lines.append("最近一次未通过的验收标准：")
+        for item in failed[:8]:
+            text = _workbench_clean_text(item.get("text"), 300)
+            evidence = _workbench_clean_text(item.get("evidence"), 700)
+            if text:
+                lines.append("- " + text + (f"；验收依据：{evidence}" if evidence else ""))
+    reason = _workbench_clean_text(session.get("verifyReason"), 1000)
+    if reason:
+        lines.append("验收器结论：" + reason)
     return "\n".join(lines)
 
 
@@ -6794,6 +6875,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     register_workbench_memory_routes(router, db_path)
     register_workbench_schedule_routes(router, db_path)
     register_workbench_chat_routes(router, bot, db_path)
+    from webui.routes_pdf import register_pdf_routes
+
+    register_pdf_routes(router)
     router.include_router(code_router)
 
     # ---- SPA root ----
@@ -9925,6 +10009,15 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         for field in ("constraints", "events", "runs", "artifacts", "acceptanceCriteria"):
             if isinstance(body.get(field), list):
                 session[field] = body[field]
+        if isinstance(body.get("acceptanceCriteria"), list):
+            # Editing a criterion invalidates the previous independent verdict.
+            # Move the task back to review so the user can run验收 again instead
+            # of leaving it stuck in the old failed branch.
+            if prev_status == "failed":
+                session["status"] = "review"
+                session["verifyReason"] = ""
+                session["recommendReflection"] = False
+                session["agentReply"] = "验收条件已修改，请重新验收。"
         _workbench_prune_non_file_artifacts(session)
         if isinstance(body.get("plan"), list):
             previous_definition = _workbench_plan_definition_signature(session.get("plan"))
@@ -9945,6 +10038,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if isinstance(body.get("init"), dict):
             session["init"] = {**(session.get("init") or {}), **body["init"]}
         now = _utc_now_iso()
+        _workbench_mark_completed_if_acceptance_passed(session, now=now)
         session["updatedAt"] = now
         project["updatedAt"] = now
         payload["activeProjectId"] = project.get("id")
@@ -10219,12 +10313,16 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         any_failed = False
         for a in criteria:
             r = by_id.get(str(a.get("id")))
-            if isinstance(r, dict):
-                passed = bool(r.get("passed"))
-                a["status"] = "passed" if passed else "failed"
-                a["evidence"] = str(r.get("evidence") or "")
-                if not passed:
-                    any_failed = True
+            if not isinstance(r, dict):
+                a["status"] = "failed"
+                a["evidence"] = "验收器未返回这一项的结论。"
+                any_failed = True
+                continue
+            passed = bool(r.get("passed"))
+            a["status"] = "passed" if passed else "failed"
+            a["evidence"] = str(r.get("evidence") or "")
+            if not passed:
+                any_failed = True
         session["acceptanceCriteria"] = criteria
         recommend = bool(verdict.get("recommend_reflection")) if any_failed else False
         now = _utc_now_iso()
@@ -10239,11 +10337,17 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             }]
         else:
             session["recommendReflection"] = False
+            session["verifyReason"] = ""
             session["agentReply"] = "独立验收通过：所有验收标准均已达成。"
             session["events"] = list(session.get("events") or []) + [{
                 "id": _short_id("event"), "type": "VerificationPassed", "createdAt": now,
                 "body": "独立验收通过，所有标准达成。",
             }]
+            _workbench_mark_completed_if_acceptance_passed(
+                session,
+                now=now,
+                event_body="独立验收通过，所有验收标准均已通过，任务自动标记为已完成。",
+            )
         session["updatedAt"] = now
         project["updatedAt"] = now
         payload["activeProjectId"] = project.get("id")
@@ -10760,6 +10864,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         # can report what actually happened. finalize additionally instructs the
         # agent to summarize+hand off the existing deliverables and lands in review.
         finalizing = kind == "finalize"
+        repairing_acceptance = command == "workbench-task-repair"
         run_start_ts = _utc_now_iso()
         workspace_root = _workbench_workspace_root(project)
         git_status_before = _workbench_git_status_snapshot(workspace_root)
@@ -10770,6 +10875,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         )
         if finalizing:
             ephemeral_system = (ephemeral_system + "\n\n" + _workbench_finalize_directive(session)).strip()
+        elif repairing_acceptance:
+            ephemeral_system = (ephemeral_system + "\n\n" + _workbench_acceptance_repair_directive(session)).strip()
         elif kind == "answer":
             ephemeral_system = (ephemeral_system + "\n\n" + _WORKBENCH_TASK_REPLY_DIRECTIVE).strip()
         volatile_ephemeral_system = _workbench_compose_volatile_ephemeral_system(project, session)
@@ -10789,7 +10896,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             _schedule_task_report(project, session)
         session["status"] = (
             "waiting_for_user" if awaiting_user
-            else "review" if finalizing
+            else "review" if (finalizing or repairing_acceptance)
             else "acted" if kind == "direct"
             else "answered"
         )
@@ -10848,6 +10955,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             title="Agent 回复完成",
             body=f"Agent 在「{session.get('title') or '任务'}」中" + (
                 "整理并交付了任务成果，待你验收。" if finalizing
+                else "参考验收结果继续修改了当前任务。" if repairing_acceptance
                 else "执行了你的指令。" if kind == "direct"
                 else "回复了你。"
             ),
@@ -10858,7 +10966,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             link_label=str(session.get("title") or ""),
             meta={"sessionId": session_id, "runId": run_id},
         )
-        return {"ok": True, "replyKind": kind, "project": project, "session": session, "run": run, **payload}
+        return {"ok": True, "replyKind": "repair" if repairing_acceptance else kind, "project": project, "session": session, "run": run, **payload}
 
     @router.post("/api/task-sessions/{session_id}/answer")
     async def api_workbench_answer(

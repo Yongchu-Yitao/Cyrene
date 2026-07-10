@@ -245,6 +245,8 @@ async def test_proactive_lang_is_pinned_in_ephemeral_system(monkeypatch):
 
     async def fake_run_chat_agent(prompt, bot, chat_id, db_path, **kwargs):
         captured["ephemeral_system"] = kwargs.get("ephemeral_system", "")
+        captured["behavior_user_message"] = kwargs.get("behavior_user_message")
+        captured["behavior_system_initiated"] = kwargs.get("behavior_system_initiated")
         return ""
 
     monkeypatch.setattr(coordinator, "_run_chat_agent", fake_run_chat_agent)
@@ -255,6 +257,8 @@ async def test_proactive_lang_is_pinned_in_ephemeral_system(monkeypatch):
     )
     assert "简体中文" in captured["ephemeral_system"]
     assert "based on their past messages" not in captured["ephemeral_system"]
+    assert captured["behavior_user_message"] == "Scheduled proactive check-in"
+    assert captured["behavior_system_initiated"] is True
 
     # No persisted language falls back to inferring from past messages.
     await coordinator.run_heartbeat_agent(

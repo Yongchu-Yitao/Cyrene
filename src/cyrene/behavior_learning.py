@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import time
@@ -56,6 +57,15 @@ _PATTERN_STRONG_THRESHOLD = 0.85
 _PATTERN_MEDIUM_THRESHOLD = 0.70
 _MAX_PATTERN_EXAMPLES = 8
 _SCRIPT_EXECUTION_TIMEOUT_SECONDS = 30.0
+_INTERNAL_PROACTIVE_PROMPT_PREFIX = "This is a scheduler-initiated proactive check-in."
+_SCHEDULED_CHECK_IN_LABEL = "Scheduled proactive check-in"
+_IMAGE_ARTIFACT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+_MAX_IMAGE_ARTIFACT_BYTES = 20 * 1024 * 1024
+_MAX_IMAGE_ARTIFACTS_PER_ACTION = 8
+_IMAGE_ARTIFACT_PATH_RE = re.compile(
+    r"(?P<path>(?:/[^\s\"'<>]+|[A-Za-z]:\\[^\s\"'<>]+)\.(?:png|jpg|jpeg|webp|gif))",
+    re.IGNORECASE,
+)
 
 _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS behavior_sessions (
@@ -643,6 +653,44 @@ def _json_loads(raw: Any, fallback: Any) -> Any:
     return parsed
 
 
+async def _persist_image_artifacts(turn_id: str, value: Any) -> str:
+    """Copy tool-produced images out of the expiring temp directory.
+
+    Behavior chains keep a textual tool result. Replacing temporary paths with
+    durable, per-turn artifact paths lets the Workbench preview those images
+    after a restart or temporary-cache cleanup.
+    """
+    text = str(value or "")
+    if not text or not turn_id:
+        return text
+    matches = []
+    for match in _IMAGE_ARTIFACT_PATH_RE.finditer(text):
+        path = match.group("path").rstrip(".,);")
+        if path and path not in matches:
+            matches.append(path)
+    if not matches:
+        return text
+
+    artifact_root = (_DATA_DIR or DATA_DIR) / "behavior-media" / str(turn_id)
+    replacements: dict[str, str] = {}
+    for index, raw_path in enumerate(matches[:_MAX_IMAGE_ARTIFACTS_PER_ACTION]):
+        source = Path(raw_path).expanduser()
+        try:
+            if source.suffix.lower() not in _IMAGE_ARTIFACT_EXTS or not source.is_file():
+                continue
+            if source.stat().st_size > _MAX_IMAGE_ARTIFACT_BYTES:
+                continue
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            target = artifact_root / f"{index:02d}-{uuid4().hex[:8]}-{source.name}"
+            await asyncio.to_thread(shutil.copy2, source, target)
+            replacements[raw_path] = str(target.resolve())
+        except OSError:
+            logger.debug("Unable to preserve image artifact %s", raw_path, exc_info=True)
+    for raw_path, stored_path in replacements.items():
+        text = text.replace(raw_path, stored_path)
+    return text
+
+
 class _Conn:
     """Async context manager wrapping aiosqlite with sqlite3.Row row_factory."""
     def __init__(self):
@@ -1213,6 +1261,7 @@ async def begin_turn(
     user_message: str,
     history: list[dict[str, Any]],
     session_title: str = "",
+    system_initiated: bool = False,
 ) -> dict[str, Any]:
     if not _INIT_DONE:
         await _ensure_tables()
@@ -1228,6 +1277,7 @@ async def begin_turn(
         "session_title": str(session_title or "").strip(),
         "correction_feedback": False,
         "round_title": "",
+        "system_initiated": bool(system_initiated),
     }
     async with _conn() as conn:
         cursor = await conn.execute(
@@ -1584,6 +1634,7 @@ async def record_action(
     now = _now_iso()
     action_id = _new_id("action")
     domain, action_type, action_subtype, requires_llm = _map_tool_to_action(tool_name)
+    persisted_result = await _persist_image_artifacts(turn_id, result)
     metadata = {
         "caller": str(caller or "unknown"),
         "round_id": str(round_id or _current_round_id.get()),
@@ -1618,7 +1669,7 @@ async def record_action(
                     action_subtype,
                     tool_name,
                     _truncate_text(_json_dumps(args or {}), 500),
-                    _truncate_text(result, 500),
+                    _truncate_text(persisted_result, 500),
                     1 if success else 0,
                     _truncate_text(error, 400),
                     requires_llm,
@@ -2751,6 +2802,19 @@ def _has_skillworthy_steps(steps: list[dict[str, Any]]) -> bool:
     return len(set(tool_names)) >= _MIN_SKILL_CHAIN_STEPS
 
 
+def _is_reusable_skill_definition(definition: dict[str, Any] | None) -> bool:
+    """Return whether a stored skill is eligible for learning or execution.
+
+    This is intentionally checked at every read boundary as well as during
+    creation. Older databases can contain skills created before the
+    multi-operation guard was introduced, and a generated-script wrapper may
+    make such a skill look like a one-step skill in the UI.
+    """
+    if not isinstance(definition, dict):
+        return False
+    return _has_skillworthy_steps(definition.get("steps") or [])
+
+
 async def _llm_workflow_merge(
     turn_id: str,
     turn_fp: dict[str, Any],
@@ -2970,11 +3034,15 @@ async def _upsert_pattern(pattern_id: str) -> None:
     skillability = _pattern_skillability(stats, prototype)
     async with _conn() as conn:
         cursor = await conn.execute(
-            "SELECT skill_id FROM learned_skills WHERE pattern_id = ? ORDER BY created_at ASC",
+            "SELECT * FROM learned_skills WHERE pattern_id = ? AND status != 'deprecated' ORDER BY created_at ASC",
             (pattern_id,),
         )
         linked_skill_rows = await cursor.fetchall()
-        linked_skill_ids = [str(row["skill_id"]) for row in linked_skill_rows]
+        linked_skill_ids = [
+            str(row["skill_id"])
+            for row in linked_skill_rows
+            if _is_reusable_skill_definition(_skill_row_to_definition(row))
+        ]
         status = _pattern_status(stats, linked_skill_ids)
         await conn.execute(
             """
@@ -3700,6 +3768,8 @@ async def _find_existing_duplicate_skill(
     best_score = 0.0
     for row in rows:
         existing = _skill_row_to_definition(row)
+        if not _is_reusable_skill_definition(existing):
+            continue
         if exclude_skill_id and str(existing.get("skill_id") or "") == exclude_skill_id:
             continue
         score = _skill_duplicate_score(definition, existing)
@@ -3909,12 +3979,20 @@ async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
             if not bool(skillability.get("draft")):
                 return None
         cursor = await conn.execute(
-            "SELECT skill_id FROM learned_skills WHERE pattern_id = ?",
+            "SELECT * FROM learned_skills WHERE pattern_id = ?",
             (pattern_id,),
         )
         existing = await cursor.fetchone()
         if existing is not None:
-            return str(existing["skill_id"])
+            existing_definition = _skill_row_to_definition(existing)
+            if _is_reusable_skill_definition(existing_definition):
+                return str(existing["skill_id"])
+            # A legacy one-tool skill must not block a valid skill from being
+            # learned later from the same pattern.
+            await conn.execute(
+                "UPDATE learned_skills SET status = 'deprecated', updated_at = ? WHERE skill_id = ?",
+                (_now_iso(), str(existing["skill_id"])),
+            )
         definition = await _skill_definition_from_pattern(pattern_id, "draft")
         if not _has_skillworthy_steps(definition.get("steps") or []):
             return None
@@ -4487,7 +4565,17 @@ async def list_learned_skills(project_id: str = "") -> list[dict[str, Any]]:
                 "SELECT * FROM learned_skills ORDER BY updated_at DESC"
             )
         rows = await cursor.fetchall()
-    definitions = _dedupe_skill_definitions([_skill_row_to_definition(row) for row in rows])
+    # Do not expose legacy or malformed one-tool records.  This also keeps
+    # them out of the Workbench's "auto-learned skills" section, which only
+    # receives this API response and cannot reliably reconstruct the source
+    # chain itself.
+    definitions = _dedupe_skill_definitions(
+        [
+            definition
+            for definition in (_skill_row_to_definition(row) for row in rows)
+            if _is_reusable_skill_definition(definition)
+        ]
+    )
     skills: list[dict[str, Any]] = []
     for definition in definitions:
         trigger = definition["trigger"]
@@ -4534,7 +4622,7 @@ async def build_learned_skill_block(session_id: str = "", max_skills: int = 20) 
     async with _conn() as conn:
         cursor = await conn.execute(
             """
-            SELECT name, description, skill_type
+            SELECT *
             FROM learned_skills
             WHERE status = 'active' AND project_id = ?
             ORDER BY updated_at DESC
@@ -4547,14 +4635,17 @@ async def build_learned_skill_block(session_id: str = "", max_skills: int = 20) 
         return ""
     lines: list[str] = ["## Learned Skills"]
     for row in rows:
-        name = str(row["name"] or "").strip()
-        desc = str(row["description"] or "").strip()
+        definition = _skill_row_to_definition(row)
+        if not _is_reusable_skill_definition(definition):
+            continue
+        name = str(definition["name"] or "").strip()
+        desc = str(definition["description"] or "").strip()
         if name:
             entry = f"- {name}"
             if desc:
                 entry += f": {desc[:120]}"
             lines.append(entry)
-    return "\n".join(lines)
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 async def list_tool_chains(project_id: str | list[str] = "", limit: int = 80) -> list[dict[str, Any]]:
@@ -4641,6 +4732,7 @@ async def list_tool_chains(project_id: str | list[str] = "", limit: int = 80) ->
                 "agent_response": str(item.get("agent_response") or metadata.get("assistant_preview") or ""),
                 "session_title": str(metadata.get("session_title") or ""),
                 "round_title": str(metadata.get("round_title") or ""),
+                "system_initiated": bool(metadata.get("system_initiated")),
                 "chain": _json_loads(item.get("chain_json"), []),
                 "summary": _json_loads(item.get("summary_json"), {}),
                 "review": review,
@@ -4657,7 +4749,10 @@ async def get_learned_skill(skill_id: str) -> dict[str, Any] | None:
             "SELECT * FROM learned_skills WHERE skill_id = ?", (skill_id,)
         )
         row = await cursor.fetchone()
-    return _skill_row_to_definition(row) if row is not None else None
+    if row is None:
+        return None
+    definition = _skill_row_to_definition(row)
+    return definition if _is_reusable_skill_definition(definition) else None
 
 
 async def get_learned_skill_by_name(name: str, session_id: str = "") -> dict[str, Any] | None:
@@ -4670,7 +4765,10 @@ async def get_learned_skill_by_name(name: str, session_id: str = "") -> dict[str
             (scope["project_id"], str(name or "").strip()),
         )
         row = await cursor.fetchone()
-    return _skill_row_to_definition(row) if row is not None else None
+    if row is None:
+        return None
+    definition = _skill_row_to_definition(row)
+    return definition if _is_reusable_skill_definition(definition) else None
 
 
 async def record_manual_skill_run(
@@ -5392,7 +5490,13 @@ async def match_active_skill(user_message: str, history: list[dict[str, Any]]) -
         return None
     request_fp = await build_request_fingerprint(user_message, history)
     best: dict[str, Any] | None = None
-    for skill in _dedupe_skill_definitions([_skill_row_to_definition(row) for row in rows]):
+    for skill in _dedupe_skill_definitions(
+        [
+            definition
+            for definition in (_skill_row_to_definition(row) for row in rows)
+            if _is_reusable_skill_definition(definition)
+        ]
+    ):
         skill_steps = skill.get("steps", [])
         if (
             str(skill.get("risk_level") or "none") == "high"
@@ -6539,7 +6643,13 @@ async def scan_for_session_start() -> dict[str, Any]:
     return await process_unprocessed_turns()
 
 
-async def _process_single_turn(turn_id: str, stats: dict[str, int], *, update_reason: str = "") -> bool:
+async def _process_single_turn(
+    turn_id: str,
+    stats: dict[str, int],
+    *,
+    update_reason: str = "",
+    allow_single_evidence: bool = False,
+) -> bool:
     """Run the fingerprint→merge→review→promote pipeline on one turn, mutating *stats* in place.
 
     Returns True if a fingerprint was found and processing ran; False otherwise.
@@ -6548,6 +6658,24 @@ async def _process_single_turn(turn_id: str, stats: dict[str, int], *, update_re
     NOTE: Caller MUST hold ``_get_process_lock()`` to prevent concurrent
     processing of the same turn by the background tick or other callers.
     """
+    # Scheduler prompts are internal execution guidance, not user requests.
+    # Older versions recorded the entire prompt. Replace it with the same safe
+    # event label used for new turns, while preserving its action history for
+    # behavior learning.
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            "SELECT user_message, metadata_json FROM behavior_turns WHERE turn_id = ?", (turn_id,)
+        )
+        turn_row = await cursor.fetchone()
+        if turn_row is not None and str(turn_row["user_message"] or "").lstrip().startswith(_INTERNAL_PROACTIVE_PROMPT_PREFIX):
+            metadata = _json_loads(turn_row["metadata_json"], {})
+            metadata["system_initiated"] = True
+            await conn.execute(
+                "UPDATE behavior_turns SET user_message = ?, metadata_json = ?, updated_at = ? WHERE turn_id = ?",
+                (_SCHEDULED_CHECK_IN_LABEL, _json_dumps(metadata), _now_iso(), turn_id),
+            )
+            await conn.commit()
+
     fingerprint = await build_turn_fingerprint(turn_id)
     if not fingerprint:
         async with _conn() as conn:
@@ -6589,7 +6717,11 @@ async def _process_single_turn(turn_id: str, stats: dict[str, int], *, update_re
             target_summary = await _pattern_summary_for_learning(target_pattern_id)
             if target_summary.get("project_id") == scope["project_id"]:
                 pattern_id = target_pattern_id
-        skill_id = await _create_skill(pattern_id, force=True)
+        # Automatic learning must still satisfy the evidence threshold inside
+        # _create_skill.  ``force=True`` is reserved for the explicit
+        # user-facing “Learn as Skill” action; otherwise one completed turn
+        # can be promoted directly from an optimistic model decision.
+        skill_id = await _create_skill(pattern_id, force=allow_single_evidence)
         if skill_id:
             tracked_created = skill_id not in before_skills
             stats["agent_created_skills"] += 1 if tracked_created else 0
@@ -6644,7 +6776,12 @@ async def learn_from_turn(turn_id: str) -> dict[str, Any]:
 
         stats = _fresh_learning_stats()
 
-        await _process_single_turn(tid, stats, update_reason="User-initiated single-turn skill learning.")
+        await _process_single_turn(
+            tid,
+            stats,
+            update_reason="User-initiated single-turn skill learning.",
+            allow_single_evidence=True,
+        )
         stats["processed_turns"] = 1
         return stats
 

@@ -114,6 +114,68 @@ async def test_behavior_learning_promotes_to_active_skill(tmp_path, monkeypatch)
     assert skills[0]["run_statistics"]["shadow_success"] == 4
 
 
+async def test_behavior_learning_sanitizes_legacy_scheduler_prompts(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    context = await bl.begin_turn(
+        session_id="session-proactive",
+        round_id="round-proactive-1",
+        user_message="This is a scheduler-initiated proactive check-in.\nInternal guidance only.",
+        history=[],
+        session_title="Scheduled check-in",
+    )
+    await bl.record_action(
+        "search_web", {"query": "weather"}, "main_agent", "round-proactive-1", 10,
+        result="weather result", success=True,
+    )
+    await bl.complete_turn(
+        turn_id=context["turn_id"],
+        assistant_response="A user-facing update.",
+        session_title="Scheduled check-in",
+        round_title="proactive check-in",
+    )
+    bl.clear_turn_context(context)
+
+    stats = await bl.process_unprocessed_turns(force=True)
+
+    assert stats["processed_turns"] == 1
+    assert len(await bl.list_patterns()) == 1
+    assert await bl.list_learned_skills() == []
+    chain = (await bl.list_tool_chains())[0]
+    assert chain["user_message"] == "Scheduled proactive check-in"
+    assert chain["system_initiated"] is True
+
+
+async def test_behavior_learning_preserves_screenshot_artifacts(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    screenshot = tmp_path / "capture.png"
+    screenshot.write_bytes(b"png-content")
+    context = await bl.begin_turn(
+        session_id="session-screenshot",
+        round_id="round-screenshot-1",
+        user_message="截取当前网页截图",
+        history=[],
+        session_title="Screenshot test session",
+    )
+    await bl.record_action(
+        "browser_screenshot", {}, "main_agent", "round-screenshot-1", 10,
+        result=f"Screenshot taken.\nPath: {screenshot}", success=True,
+    )
+    await bl.complete_turn(
+        turn_id=context["turn_id"],
+        assistant_response="截图已保存。",
+        session_title="Screenshot test session",
+        round_title="网页截图",
+    )
+    bl.clear_turn_context(context)
+
+    chain = (await bl.list_tool_chains())[0]
+    stored_path = Path(chain["chain"][0]["output_summary"].split("Path: ", 1)[1])
+
+    assert stored_path.exists()
+    assert stored_path.parent.parent.name == "behavior-media"
+    assert stored_path.read_bytes() == b"png-content"
+
+
 async def test_behavior_learning_manual_edit_and_rollback(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
 
@@ -175,7 +237,7 @@ async def test_manual_pattern_learning_creates_skill(tmp_path, monkeypatch):
     assert second["skill_id"] == result["skill_id"]
 
 
-async def test_learning_agent_learn_decision_creates_skill_immediately(tmp_path, monkeypatch):
+async def test_learning_agent_does_not_auto_learn_from_one_turn(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
 
     async def reviewer(prompt: str, *, caller: str = "behavior_learning"):
@@ -193,7 +255,7 @@ async def test_learning_agent_learn_decision_creates_skill_immediately(tmp_path,
         return {}
 
     monkeypatch.setattr(bl, "_call_llm_json", reviewer)
-    await _record_code_fix_turn(
+    turn_id = await _record_code_fix_turn(
         bl,
         session_id="session-agent-learn",
         round_id="round-agent-learn-1",
@@ -206,11 +268,19 @@ async def test_learning_agent_learn_decision_creates_skill_immediately(tmp_path,
 
     assert stats["processed_turns"] == 1
     assert stats["learning_reviews"] == 1
-    assert stats["agent_created_skills"] == 1
-    assert len(skills) == 1
-    assert skills[0]["skill_type"] == "parameterized"
+    assert stats["agent_created_skills"] == 0
+    assert skills == []
     assert chains[0]["review"]["decision"] == "promote"
     assert chains[0]["review"]["proposed_skill"]["_decision"]["raw_decision"] == "parameterize"
+
+    # An explicit user action may promote this single-turn workflow, while
+    # background automatic learning must wait for repeated evidence.
+    manual_stats = await bl.learn_from_turn(turn_id)
+    skills = await bl.list_learned_skills()
+    assert manual_stats["processed_turns"] == 1
+    assert manual_stats["agent_created_skills"] == 1
+    assert len(skills) == 1
+    assert skills[0]["skill_type"] == "parameterized"
 
 
 async def test_learning_agent_duplicate_decision_does_not_create_second_skill(tmp_path, monkeypatch):
@@ -247,8 +317,8 @@ async def test_learning_agent_duplicate_decision_does_not_create_second_skill(tm
     )
     first_stats = await bl.process_unprocessed_turns(force=True)
     first_skills = await bl.list_learned_skills()
-    assert first_stats["agent_created_skills"] == 1
-    assert len(first_skills) == 1
+    assert first_stats["agent_created_skills"] == 0
+    assert first_skills == []
 
     await _record_code_fix_turn(
         bl,
@@ -258,11 +328,23 @@ async def test_learning_agent_duplicate_decision_does_not_create_second_skill(tm
     )
     second_stats = await bl.process_unprocessed_turns(force=True)
     second_skills = await bl.list_learned_skills()
+
+    assert second_stats["agent_created_skills"] == 1
+    assert len(second_skills) == 1
+
+    await _record_code_fix_turn(
+        bl,
+        session_id="session-agent-duplicate",
+        round_id="round-agent-duplicate-3",
+        user_message="请检查 src/app.py 并修复导出逻辑，然后给我总结",
+    )
+    third_stats = await bl.process_unprocessed_turns(force=True)
+    third_skills = await bl.list_learned_skills()
     chains = await bl.list_tool_chains()
 
-    assert second_stats["learning_duplicates"] == 1
-    assert second_stats["agent_created_skills"] == 0
-    assert len(second_skills) == 1
+    assert third_stats["learning_duplicates"] == 1
+    assert third_stats["agent_created_skills"] == 0
+    assert len(third_skills) == 1
     assert chains[0]["review"]["decision"] == "duplicate"
 
 
@@ -504,6 +586,68 @@ async def test_single_tool_repetition_records_pattern_but_does_not_create_skill(
     assert patterns
     assert skills == []
     assert stats["agent_created_skills"] == 0
+
+
+async def test_single_tool_cannot_be_auto_learned_even_if_agent_promotes_it(tmp_path, monkeypatch):
+    """The model's promotion decision must not bypass the structural guard."""
+    bl = await _init_behavior(tmp_path, monkeypatch)
+
+    async def reviewer(prompt: str, *, caller: str = "behavior_learning"):
+        if caller == "project_skill_learning_agent":
+            return {
+                "decision": "promote",
+                "confidence": 0.99,
+                "rationale": "The model incorrectly promoted a one-tool turn.",
+                "proposed_skill": {"skill_type": "workflow"},
+            }
+        return {}
+
+    monkeypatch.setattr(bl, "_call_llm_json", reviewer)
+    await _record_web_search_turn(
+        bl,
+        session_id="session-single-tool-promote",
+        round_id="single-tool-promote-1",
+        user_message="帮我查一下上海今天的天气",
+    )
+
+    stats = await bl.process_unprocessed_turns(force=True)
+
+    assert stats["processed_turns"] == 1
+    assert stats["agent_created_skills"] == 0
+    assert await bl.list_learned_skills() == []
+    assert (await bl.list_tool_chains())[0]["review"]["decision"] == "skip"
+
+
+async def test_legacy_single_tool_skill_is_hidden_from_learning_surfaces(tmp_path, monkeypatch):
+    """Old databases must not keep exposing skills created before the guard."""
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    now = bl._now_iso()
+    async with bl._conn() as conn:
+        await conn.execute(
+            """
+            INSERT INTO learned_skills
+            (skill_id, project_id, project_key, name, description, current_version, status,
+             skill_type, risk_level, requires_llm, trigger_json, input_schema_json,
+             parameter_extractor_json, steps_json, guards_json, fallback_policy_json,
+             tests_json, editable_fields_json, created_from_json, run_statistics_json,
+             pattern_id, created_at, updated_at)
+            VALUES (?, 'global', 'global', ?, '', 1, 'active', 'draft', 'none', 0,
+                    '{}', '[]', '{}', ?, '{}', '{}', '[]', '[]', '{}', '{}', ?, ?, ?)
+            """,
+            (
+                "legacy-single-tool",
+                "旧的单工具技能",
+                bl._json_dumps([_make_step("search_web")]),
+                "legacy-pattern",
+                now,
+                now,
+            ),
+        )
+        await conn.commit()
+
+    assert await bl.list_learned_skills() == []
+    assert await bl.get_learned_skill("legacy-single-tool") is None
+    assert await bl.build_learned_skill_block() == ""
 
 
 async def test_similar_candidate_search_compares_purpose_and_tool_chain_within_project(tmp_path, monkeypatch):

@@ -6,6 +6,21 @@ var {
   useRef: useWorkbenchRef,
 } = React;
 
+// Native WebContentsView instances live above the renderer's CSS stacking
+// context. Keep a shared count of renderer overlays that must cover it, so a
+// popover can safely overlap another modal without restoring the native view
+// too early.
+var wbBrowserOverlayCount = 0;
+function wbSetBrowserOverlayObscured(delta) {
+  wbBrowserOverlayCount = Math.max(0, wbBrowserOverlayCount + delta);
+  var bridge = window.cyrene && window.cyrene.browser;
+  if (bridge && typeof bridge.setObscured === "function") {
+    bridge.setObscured(wbBrowserOverlayCount > 0).catch(function (err) {
+      console.error("setObscured failed", err);
+    });
+  }
+}
+
 // Tag the host platform on <html> so CSS can reserve the macOS traffic-light
 // gutter only where it actually exists. window.cyrene.platform comes from the
 // Electron preload ('darwin' | 'win32' | 'linux'); fall back to 'web' in a
@@ -315,6 +330,7 @@ function wbSubagentStatusText(status) {
     waiting: "等待其他 subagent",
     done: "已完成",
     timeout: "已超时",
+    error: "执行失败",
   };
   return map[String(status || "").trim()] || String(status || "状态更新");
 }
@@ -340,6 +356,7 @@ function wbLiveEventFromSse(data) {
   if (data.type === "llm_call") {
     var actor2 = wbActorLabel(data.caller);
     var phase = String(data.phase || "").trim();
+    var llmStatus = String(data.status || "completed").trim();
     return {
       id: data.event_id || ("live_llm_" + createdAt + "_" + actor2),
       type: "LlmCallEvent",
@@ -347,7 +364,7 @@ function wbLiveEventFromSse(data) {
       actor: actor2,
       phase: phase,
       model: String(data.model || ""),
-      body: actor2 + " 正在思考…",
+      body: llmStatus === "started" ? actor2 + " 正在思考…" : actor2 + " 完成一轮思考",
       live: true,
     };
   }
@@ -355,12 +372,13 @@ function wbLiveEventFromSse(data) {
     var actor3 = wbActorLabel("", data.agent_id);
     var task = String(data.task || "").trim();
     return {
-      id: "live_subagent_" + actor3 + "_" + createdAt,
+      id: data.event_id || ("live_subagent_" + actor3 + "_" + createdAt),
       type: "SubagentStatusEvent",
       createdAt: createdAt,
       actor: actor3,
       status: String(data.status || ""),
-      body: actor3 + " " + wbSubagentStatusText(data.status) + (task ? "：" + task.slice(0, 120) : ""),
+      body: actor3 + " " + wbSubagentStatusText(data.status)
+        + (data.message ? "：" + String(data.message).slice(0, 180) : (task ? "：" + task.slice(0, 120) : "")),
       live: true,
     };
   }
@@ -596,6 +614,9 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       return null;
     } catch (e) { return null; }
   });
+  // The task entry point is a project-wide board. A task detail is opened only
+  // after the user selects a card (or follows a direct task link/search hit).
+  var [taskView, setTaskView] = useWorkbenchState("board");
   var [rightTab, setRightTab] = useWorkbenchState("context");
   var [railCollapsed, setRailCollapsed] = useWorkbenchState(function () {
     // Default to collapsed (icon strip); honour the user's stored choice once set.
@@ -617,7 +638,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var [activeChatId, setActiveChatId] = useWorkbenchState("");
   // Always-fresh snapshot of what the user is looking at, read inside async
   // notification callbacks (interval / SSE closures captured once on mount).
-  var activeViewRef = useWorkbenchRef({ page: null, chatId: "", sessionId: "" });
+  var activeViewRef = useWorkbenchRef({ page: null, taskView: "board", chatId: "", sessionId: "" });
   var sessionLoadSeqRef = useWorkbenchRef(0);
   var menuActionsRef = useWorkbenchRef({ createProject: function () {}, createSession: function () {}, onToggleTheme: function () {} });
 
@@ -669,9 +690,58 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       });
   }
 
+  // Board refreshes must not discard a fully-loaded active task. The summary
+  // endpoint is intentionally lightweight, so merge its project/session list
+  // around the user's current selection and let task detail lazy-loading keep
+  // ownership of the full payload.
+  function refreshTaskBoard() {
+    return model.fetchProjects().then(function (next) {
+      setStore(function (prev) {
+        var activeProjectId = (prev && prev.activeProjectId) || next.activeProjectId;
+        var activeProject = (next.projects || []).find(function (project) {
+          return project && String(project.id || "") === String(activeProjectId || "");
+        }) || next.activeProject;
+        var activeSessionId = (prev && prev.activeSessionId) || next.activeSessionId;
+        var activeSession = activeProject && (activeProject.sessions || []).find(function (session) {
+          return session && String(session.id || "") === String(activeSessionId || "");
+        });
+        if (!activeSession && activeProject) activeSession = (activeProject.sessions || [])[0] || null;
+        return Object.assign({}, next, {
+          activeProjectId: activeProject ? activeProject.id : "",
+          activeProject: activeProject || null,
+          activeSessionId: activeSession ? activeSession.id : "",
+          activeSession: activeSession || null,
+        });
+      });
+      return next;
+    }).catch(function () {
+      // The board keeps the last known state during a transient refresh error;
+      // explicit task actions still surface their own errors to the user.
+      return null;
+    });
+  }
+
   function mergeSessionPayload(prev, payload) {
     if (!prev || !payload || !payload.session) return prev;
     var fullSession = Object.assign({}, payload.session, { isSummary: false });
+    // A silent refresh can arrive while SSE activity is still streaming. Keep
+    // live runtime entries so the run-log panel does not blink back to an old
+    // snapshot between two subagent updates.
+    var priorSession = prev.activeSession && String(prev.activeSession.id || "") === String(fullSession.id || "")
+      ? prev.activeSession : null;
+    if (priorSession && Array.isArray(priorSession.events)) {
+      var persistedEvents = Array.isArray(fullSession.events) ? fullSession.events.slice() : [];
+      var seenEventIds = {};
+      persistedEvents.forEach(function (event) { if (event && event.id) seenEventIds[event.id] = true; });
+      priorSession.events.forEach(function (event) {
+        if (event && event.live && event.id && !seenEventIds[event.id]) {
+          persistedEvents.push(event);
+          seenEventIds[event.id] = true;
+        }
+      });
+      persistedEvents.sort(function (a, b) { return String(a.createdAt || "").localeCompare(String(b.createdAt || "")); });
+      fullSession.events = persistedEvents.slice(-240);
+    }
     var projectPayload = payload.project && typeof payload.project === "object" ? payload.project : null;
     var projectId = String(
       (projectPayload && projectPayload.id)
@@ -767,23 +837,14 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     reloadNotifications();
   }, []);
 
-  // 覆盖层遮挡状态计数器：任意覆盖层打开时隐藏原生浏览器窗口。
-  // 用 ref 计数而非依赖单个布尔值，防止 settings/search 重叠时互相覆盖。
-  var obscuredRef = useWorkbenchRef(0);
-  function updateObscured(delta) {
-    obscuredRef.current = Math.max(0, obscuredRef.current + delta);
-    var bridge = window.cyrene && window.cyrene.browser;
-    if (bridge && typeof bridge.setObscured === "function") {
-      bridge.setObscured(obscuredRef.current > 0).catch(function (err) {
-        console.error("setObscured failed", err);
-      });
-    }
-  }
+  // Any renderer overlay must temporarily detach the native browser view.
+  // The coordinator also covers topbar popovers, which cannot rely on CSS
+  // z-index to appear above an Electron WebContentsView.
   useWorkbenchEffect(function () {
-    if (settingsOpen) { updateObscured(1); return function () { updateObscured(-1); }; }
+    if (settingsOpen) { wbSetBrowserOverlayObscured(1); return function () { wbSetBrowserOverlayObscured(-1); }; }
   }, [settingsOpen]);
   useWorkbenchEffect(function () {
-    if (searchOpen) { updateObscured(1); return function () { updateObscured(-1); }; }
+    if (searchOpen) { wbSetBrowserOverlayObscured(1); return function () { wbSetBrowserOverlayObscured(-1); }; }
   }, [searchOpen]);
 
   // 页面刷新/卸载时隐藏原生浏览器窗口，防止 OS 级 BrowserView 残留。
@@ -845,10 +906,11 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   useWorkbenchEffect(function () {
     activeViewRef.current = {
       page: fullPage || null,
+      taskView: taskView,
       chatId: activeChatId || "",
       sessionId: (store && store.activeSessionId) || "",
     };
-  }, [fullPage, activeChatId, store && store.activeSessionId]);
+  }, [fullPage, taskView, activeChatId, store && store.activeSessionId]);
 
   // Global keyboard shortcuts (search, new chat/task, command palette,
   // switch project, toggle sidebar, settings). Bindings come from the
@@ -952,6 +1014,44 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     };
   }, []);
 
+  // Keep the board aligned with background task transitions. Goal-loop events
+  // trigger an immediate summary pull; a short visibility-aware poll covers
+  // status changes produced by other task endpoints or another app window.
+  useWorkbenchEffect(function () {
+    if (fullPage || taskView !== "board") return undefined;
+    var INTERVAL_MS = 4000;
+    var timer = null;
+    var trailing = null;
+    var inFlight = false;
+    function tick() {
+      if (document.hidden || inFlight) return;
+      inFlight = true;
+      refreshTaskBoard().finally(function () { inFlight = false; });
+    }
+    function scheduleTick() {
+      if (trailing) clearTimeout(trailing);
+      trailing = setTimeout(function () { trailing = null; tick(); }, 220);
+    }
+    function onVisibility() {
+      if (!document.hidden) tick();
+    }
+    function onRuntimeEvent(data) {
+      if (!data) return;
+      if (["goal_loop_update", "session_update", "notification"].indexOf(data.type) >= 0) scheduleTick();
+    }
+    timer = setInterval(tick, INTERVAL_MS);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", tick);
+    if (window.__sseHandlers && window.__sseHandlers.add) window.__sseHandlers.add(onRuntimeEvent);
+    return function () {
+      if (timer) clearInterval(timer);
+      if (trailing) clearTimeout(trailing);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", tick);
+      if (window.__sseHandlers && window.__sseHandlers.delete) window.__sseHandlers.delete(onRuntimeEvent);
+    };
+  }, [fullPage, taskView]);
+
   useWorkbenchEffect(function () {
     // Goal-loop runs emit a status event on every phase/step change. Reloading
     // the whole store on each one would briefly flip the task area into its
@@ -1049,6 +1149,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       return next;
     });
     setExpandedStepId("");
+    if (!fullPage) setTaskView("board");
     if (nextSession && nextSession.isSummary) fetchAndMergeSession(nextSessionId);
     window.WorkbenchModel.setActiveProject(project.id, nextSessionId).catch(function () {});
   }
@@ -1061,6 +1162,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     setStore(function (prev) {
       return { ...prev, activeSessionId: session.id, activeSession: session };
     });
+    setTaskView("detail");
     setExpandedStepId("");
     if (session.isSummary) fetchAndMergeSession(session.id);
     window.WorkbenchModel.setActiveProject(project.id, sessionId).catch(function () {});
@@ -1092,11 +1194,13 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           };
         });
         setExpandedStepId("");
+        setTaskView("detail");
         setFullPage(null);
         window.WorkbenchModel.setActiveProject(project.id, session.id).catch(function () {});
       }
     } else if (type === "project" && project) {
       selectProject(project.id);
+      setTaskView("board");
       setFullPage(null);
     } else {
       if (project && project.id !== store.activeProjectId) {
@@ -1205,6 +1309,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       setStore(next);
       setExpandedStepId("");
       setRightTab("context");
+      setTaskView("detail");
       // Land in the freshly-created project's task view — important when the
       // project was created from the welcome page, so we leave it behind.
       setFullPage(null);
@@ -1217,6 +1322,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     return model.createSession(store.activeProject.id, input).then(function (next) {
       setStore(next);
       setExpandedStepId("");
+      setTaskView("detail");
+      setFullPage(null);
       return next;
     });
   }
@@ -1260,6 +1367,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       return model.deleteProject(project.id).then(function (next) {
         setStore(next);
         setFullPage(null);
+        setTaskView("board");
         setExpandedStepId("");
         return next;
       }).catch(function (err) {
@@ -1272,10 +1380,11 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     setStore(next);
     setExpandedStepId(next.activeSession && next.activeSession.plan[0] ? next.activeSession.plan[0].id : "");
     setRightTab("context");
+    setTaskView("detail");
   }
 
   function handleOpenPage(page) {
-    if (page === "task") { setFullPage(null); return; }
+    if (page === "task") { setTaskView("board"); setFullPage(null); return; }
     setFullPage(function (prev) { return prev === page ? null : page; });
   }
 
@@ -1285,6 +1394,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     var next = model.normalizeStore(payload);
     setStore(next);
     setFullPage(null);
+    setTaskView("detail");
     setExpandedStepId("");
     setRightTab("context");
   }
@@ -1352,6 +1462,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         project={store.activeProject}
         session={store.activeSession}
         activePage={fullPage}
+        taskView={taskView}
         chatCrumb={chatCrumb}
         notifications={notifications}
         onReloadNotifications={reloadNotifications}
@@ -1367,7 +1478,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       {fullPageConfig ? (
         <WorkbenchFullPage config={fullPageConfig} onClose={function () { setFullPage(null); }} />
       ) : (
-        <div ref={wbApplyStoredRightWidth} className={"workbench-grid" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "") + (isProfile ? " is-profile" : "")}>
+        <div ref={wbApplyStoredRightWidth} className={"workbench-grid" + (railCollapsed ? " rail-collapsed" : "") + (isKnowledge ? " is-knowledge" : "") + (isSchedule ? " is-schedule" : "") + (isMemory ? " is-memory" : "") + (isChat ? " is-chat" : "") + (isWelcome ? " is-welcome" : "") + (isProfile ? " is-profile" : "") + (!isModulePage ? (taskView === "board" ? " is-task-board" : " is-task-detail") : "")}>
           <ProjectRail
             projects={store.projects}
             activeProjectId={store.activeProjectId}
@@ -1442,14 +1553,17 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           )}
           <div style={{ display: isModulePage ? "none" : "contents" }}>
           <>
-          <TaskRail
-            project={store.activeProject}
-            activeSessionId={store.activeSessionId}
-            onSelectSession={selectSession}
-            onCreateSession={createSession}
-            onDeleteSession={handleDeleteSession}
-            loading={loading}
-          />
+          {taskView === "board" ? (
+            <TaskBoard
+              project={store.activeProject}
+              loading={loading}
+              error={error}
+              onOpenSession={selectSession}
+              onCreateSession={createSession}
+              onDeleteSession={handleDeleteSession}
+            />
+          ) : (
+          <>
           {/* Key by session id so each task gets its OWN controller instance:
               the controller's transient `busy` marker (and draft/attachments)
               must not bleed across tasks. Without this, switching to another
@@ -1467,6 +1581,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             onCreateRun={handleRunCreated}
             onRightTab={setRightTab}
             onSelectSession={selectSession}
+            onBackToBoard={function () { setTaskView("board"); }}
             onCreateSession={createSession}
             onInitPatch={patchActiveInit}
             onLocalPatch={patchActiveSessionLocal}
@@ -1510,6 +1625,8 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
               });
             }}
           />
+          </>
+          )}
           </>
           </div>
         </div>
@@ -1567,11 +1684,13 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   );
 }
 
-function WorkbenchTopbar({ project, session, activePage, chatCrumb, notifications, onReloadNotifications, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
+function WorkbenchTopbar({ project, session, activePage, taskView, chatCrumb, notifications, onReloadNotifications, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = window.useWorkbenchI18n();
   var title = project ? project.name : "Project";
   var pageLabels = { chat: t("workbench.page.chat"), knowledge: t("workbench.page.knowledge"), schedule: t("workbench.page.schedule"), memory: t("workbench.page.memory"), welcome: t("workbench.page.welcome"), profile: t("rail.profile") };
-  var sessionTitle = activePage && pageLabels[activePage] ? pageLabels[activePage] : (session ? session.title : t("workbench.page.task"));
+  var sessionTitle = activePage && pageLabels[activePage]
+    ? pageLabels[activePage]
+    : (taskView === "board" ? t("taskBoard.title") : (session ? session.title : t("workbench.page.task")));
   var chatTail = activePage === "chat" ? String(chatCrumb || "").trim() : "";
   var themeTitle = theme === "system" ? t("workbench.theme.system") : actualTheme === "dark" ? t("workbench.theme.dark") : t("workbench.theme.light");
   var themeIcon = theme === "system" ? (
@@ -1655,6 +1774,14 @@ function WorkbenchNotificationCenter({ notifications, onReload, onSettings }) {
       document.removeEventListener("mousedown", handlePointer);
       document.removeEventListener("keydown", handleKey);
     };
+  }, [open]);
+
+  // A WebContentsView is a native sibling of the renderer, so it otherwise
+  // paints over this popover regardless of its CSS z-index.
+  useWorkbenchEffect(function () {
+    if (!open) return undefined;
+    wbSetBrowserOverlayObscured(1);
+    return function () { wbSetBrowserOverlayObscured(-1); };
   }, [open]);
 
   useWorkbenchEffect(function () {
@@ -1785,6 +1912,14 @@ function WorkbenchHelpCenter({ onNewProject, onNewTask, onOpenPage, onSettings }
       document.removeEventListener("mousedown", handlePointer);
       document.removeEventListener("keydown", handleKey);
     };
+  }, [open]);
+
+  // See WorkbenchNotificationCenter: native browser content cannot be layered
+  // beneath a DOM popover with CSS alone.
+  useWorkbenchEffect(function () {
+    if (!open) return undefined;
+    wbSetBrowserOverlayObscured(1);
+    return function () { wbSetBrowserOverlayObscured(-1); };
   }, [open]);
 
   function run(action) {
@@ -2131,7 +2266,13 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
       <div className="workbench-global-nav">
         {navItems.map(function (item) {
           return (
-            <button key={item.id} type="button" title={item.label} className={"workbench-nav-button" + ((activePage === item.id || (item.id === "task" && !activePage)) ? " active" : "")} onClick={item.action}>
+            <button key={item.id} type="button" title={item.label} className={"workbench-nav-button" + ((activePage === item.id || (item.id === "task" && !activePage)) ? " active" : "")} onClick={function (event) {
+              item.action();
+              // A mouse click should reveal the destination immediately. Keep
+              // keyboard focus intact for keyboard navigation, but release the
+              // collapsed rail's focus-within hover expansion after pointer use.
+              if (collapsed && Number(event.detail || 0) > 0) event.currentTarget.blur();
+            }}>
               <span className="workbench-nav-icon">{item.icon}</span>
               <span>{item.label}</span>
             </button>
@@ -2212,6 +2353,175 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
         )}
       </div>
     </aside>
+  );
+}
+
+var WB_TASK_BOARD_COLUMNS = [
+  { id: "planning", labelKey: "taskBoard.column.planning" },
+  { id: "executing", labelKey: "taskBoard.column.executing" },
+  { id: "review", labelKey: "taskBoard.column.review" },
+  { id: "completed", labelKey: "taskBoard.column.completed" },
+  { id: "blocked", labelKey: "taskBoard.column.blocked" },
+];
+
+function wbTaskBoardColumnKey(status) {
+  var raw = String(status || "idle");
+  if (["running", "answered", "acted", "waiting_for_user", "waiting_for_approval", "paused"].indexOf(raw) >= 0) return "executing";
+  if (["review", "done"].indexOf(raw) >= 0) return "review";
+  if (["completed", "skipped"].indexOf(raw) >= 0) return "completed";
+  if (["blocked", "failed", "cancelled"].indexOf(raw) >= 0) return "blocked";
+  return "planning";
+}
+
+function TaskBoard({ project, loading, error, onOpenSession, onCreateSession, onDeleteSession }) {
+  var { t } = window.useWorkbenchI18n();
+  var sessions = project && Array.isArray(project.sessions) ? project.sessions : [];
+  var [recentFirst, setRecentFirst] = useWorkbenchState(false);
+  var [menuId, setMenuId] = useWorkbenchState("");
+  var [completedOpen, setCompletedOpen] = useWorkbenchState(true);
+
+  useWorkbenchEffect(function () {
+    setMenuId("");
+  }, [project && project.id]);
+
+  var visibleSessions = sessions;
+  if (recentFirst) {
+    visibleSessions = visibleSessions.slice().sort(function (a, b) {
+      return String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""));
+    });
+  }
+  var completedSessions = sessions.filter(function (session) {
+    return wbTaskBoardColumnKey(session.status) === "completed";
+  });
+
+  if (!project) {
+    return (
+      <main className="workbench-task-board wb-board-no-project">
+        <div className="wb-board-empty-overall">
+          <b>{t("taskBoard.noProject")}</b>
+          <span>{t("taskBoard.noProjectHint")}</span>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="workbench-task-board" aria-label={t("taskBoard.title")}>
+      {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
+      <header className="wb-board-header">
+        <div className="wb-board-heading">
+          <span className="wb-board-kicker">{t("taskBoard.title")}</span>
+          <h1>{project.name}</h1>
+          <p>{project.description || t("taskBoard.subtitle")}</p>
+        </div>
+        <div className="wb-board-toolbar">
+          <button type="button" className={"wb-board-tool-btn" + (recentFirst ? " active" : "")} onClick={function () { setRecentFirst(!recentFirst); }}>
+            {recentFirst ? t("taskBoard.sortRecent") : t("taskBoard.sortDefault")}
+          </button>
+          <button type="button" className="wb-board-new-btn" onClick={onCreateSession}>{t("taskBoard.newTask")}</button>
+        </div>
+      </header>
+      {error && <div className="workbench-error wb-board-error">{error}</div>}
+      {loading && sessions.length === 0 ? (
+        <div className="wb-board-loading">{t("rail.loadingTasks")}</div>
+      ) : (
+        <div className="wb-board-scroll">
+          <div className="wb-board-columns">
+            {WB_TASK_BOARD_COLUMNS.map(function (column) {
+              var cards = visibleSessions.filter(function (session) {
+                return wbTaskBoardColumnKey(session.status) === column.id;
+              });
+              return (
+                <section key={column.id} className={"wb-board-column is-" + column.id} aria-label={t(column.labelKey)}>
+                  <header className="wb-board-column-head">
+                    <span className="wb-board-column-title">{t(column.labelKey)}</span>
+                    <span className="wb-board-column-count">{cards.length}</span>
+                    <button type="button" onClick={onCreateSession} aria-label={t("taskBoard.addInColumn", { stage: t(column.labelKey) })}>{t("taskBoard.add")}</button>
+                  </header>
+                  <div className="wb-board-column-body">
+                    {cards.map(function (session) {
+                      return (
+                        <TaskBoardCard
+                          key={session.id}
+                          session={session}
+                          column={column.id}
+                          menuOpen={menuId === session.id}
+                          onMenu={function () { setMenuId(menuId === session.id ? "" : session.id); }}
+                          onOpen={function () { setMenuId(""); onOpenSession(session.id); }}
+                          onDelete={function () { setMenuId(""); onDeleteSession && onDeleteSession(session); }}
+                        />
+                      );
+                    })}
+                    {cards.length === 0 && (
+                      <div className="wb-board-column-empty">
+                        <b>{column.id === "blocked" ? t("taskBoard.emptyBlocked") : t("taskBoard.empty")}</b>
+                        <span>{column.id === "blocked" ? t("taskBoard.emptyBlockedHint") : t("taskBoard.emptyHint")}</span>
+                      </div>
+                    )}
+                  </div>
+                  <button type="button" className="wb-board-column-add" onClick={onCreateSession}>{t("taskBoard.newTask")}</button>
+                </section>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {completedSessions.length > 0 && (
+        <section className="wb-board-completed-strip">
+          <button type="button" className="wb-board-completed-toggle" onClick={function () { setCompletedOpen(!completedOpen); }} aria-expanded={completedOpen}>
+            <span>{t("taskBoard.completedStrip", { count: completedSessions.length })}</span>
+            <small>{completedOpen ? t("common.collapse") : t("common.expand")}</small>
+          </button>
+          {completedOpen && (
+            <div className="wb-board-completed-list">
+              {completedSessions.map(function (session) {
+                return (
+                  <button key={session.id} type="button" onClick={function () { onOpenSession(session.id); }} title={session.title}>
+                    <span className="wb-board-completed-check">{ICONS.checkSmall}</span>
+                    <span>{session.title}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+    </main>
+  );
+}
+
+function TaskBoardCard({ session, column, menuOpen, onMenu, onOpen, onDelete }) {
+  var { t } = window.useWorkbenchI18n();
+  var tone = WorkbenchModel.statusTone(session.status);
+  var summary = sessionSummaryText(session);
+  var stepCount = Number(session.planStepCount != null ? session.planStepCount : (Array.isArray(session.plan) ? session.plan.length : 0));
+  return (
+    <article
+      role="button"
+      tabIndex={0}
+      className={"wb-board-card is-" + column + (menuOpen ? " menu-open" : "")}
+      onClick={onOpen}
+      onKeyDown={function (event) {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); }
+      }}
+    >
+      <div className="wb-board-card-title">
+        <span className={"workbench-status-dot " + tone}></span>
+        <b>{session.title}</b>
+        <button type="button" className="wb-card-menu-btn wb-board-card-menu-btn" onClick={function (event) { event.stopPropagation(); onMenu(); }} aria-label={t("common.moreActions")}>{ICONS.dots}</button>
+      </div>
+      {summary && summary !== session.title && <p>{summary}</p>}
+      <div className="wb-board-card-meta">
+        <span className={"workbench-task-status " + tone}>{WorkbenchModel.statusText(session.status)}</span>
+        {stepCount > 0 && <span>{t("taskBoard.steps", { count: stepCount })}</span>}
+        <time>{WorkbenchModel.formatRelativeTime(session.updatedAt || session.createdAt)}</time>
+      </div>
+      {menuOpen && (
+        <div className="wb-card-menu wb-board-card-menu" onClick={function (event) { event.stopPropagation(); }}>
+          <button type="button" className="danger" onClick={onDelete}>{t("rail.deleteTask")}</button>
+        </div>
+      )}
+    </article>
   );
 }
 
@@ -2972,6 +3282,33 @@ function useTaskController(session, onRefresh, runtime) {
 
     retry: function () { return ctrl.execute(); },
 
+    // After independent acceptance fails, repair the current task in-place. The
+    // server receives the explicit repair command and injects the latest failed
+    // criteria/evidence into the same session's agent context.
+    continueModify: function () {
+      var criteria = Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : [];
+      var failed = criteria.filter(function (item) { return item && item.status === "failed"; });
+      var lines = ["请参考最近一次验收结果，继续修改并完成当前 session 的任务。请保留已通过的验收标准，优先修复未通过项。"];
+      failed.slice(0, 8).forEach(function (item) {
+        var text = String(item.text || "").trim();
+        var evidence = String(item.evidence || "").trim();
+        if (text) lines.push("- 未通过：" + text + (evidence ? "；验收依据：" + evidence : ""));
+      });
+      if (session.verifyReason) lines.push("验收结论：" + String(session.verifyReason));
+      return runAgentic({ kind: "repair", label: "正在参考验收结果继续修改…" }, model.continueAcceptanceRepair(sid, lines.join("\n"), {
+        attachments: (runtime && runtime.attachments) || [],
+        mode: (runtime && runtime.mode) || undefined,
+      }).then(function (store) {
+        if (runtime && runtime.clearAttachments) runtime.clearAttachments();
+        return store;
+      }));
+    },
+
+    // The acceptance-failure action is intentionally the same in-session repair
+    // path; the separate label makes the intent clearer than the old reflection
+    // action while keeping the repair evidence hand-off identical.
+    repairProblem: function () { return ctrl.continueModify(); },
+
     // Skip the failed step (or the first unresolved one) — only that step, not
     // the whole plan. Continue if work remains, else go to review.
     skipStep: function () {
@@ -3322,6 +3659,7 @@ function TaskWorkArea(props) {
           session: session,
           onRefresh: props.onRefresh,
           onInitPatch: props.onInitPatch,
+          onBackToBoard: props.onBackToBoard,
         })}
       </main>
     );
@@ -3332,7 +3670,7 @@ function TaskWorkArea(props) {
   return (
     <main className="workbench-main">
       {taskFileDropActive && <WorkbenchFileDropOverlay label={wbT("workbenchChat.dropToAttach", "Release to add files to the task input")} />}
-      <TaskHeader project={project} session={session} controller={controller} onRightTab={props.onRightTab} onSelectSession={props.onSelectSession} />
+      <TaskHeader project={project} session={session} controller={controller} onRightTab={props.onRightTab} onSelectSession={props.onSelectSession} onBackToBoard={props.onBackToBoard} />
       {props.error && <div className="workbench-error">{props.error}</div>}
       <div className="workbench-stage">
         <ReflectionHintBanner session={session} controller={controller} />
@@ -3437,6 +3775,19 @@ function focusComposer() {
   window.dispatchEvent(new CustomEvent("wb-focus-composer"));
 }
 
+function hasAcceptanceFailure(session) {
+  if (!session) return false;
+  if (String(session.status || "") !== "failed") return false;
+  var criteria = Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : [];
+  return !!session.verifyReason || criteria.some(function (item) {
+    return item && item.status === "failed";
+  });
+}
+
+function openAcceptanceEditor(onRightTab) {
+  if (onRightTab) onRightTab("acceptance");
+}
+
 function openNextSession(session, project, onSelectSession) {
   if (!project || !onSelectSession) return;
   var sessions = Array.isArray(project.sessions) ? project.sessions : [];
@@ -3461,7 +3812,7 @@ function sessionSummaryText(session) {
   return compactText(summary || wbRealGoal(session) || session.agentReply || wbT("task.summaryFallback", "Agent will generate a summary for this session during execution."), 128);
 }
 
-function TaskHeader({ project, session, controller, onRightTab, onSelectSession }) {
+function TaskHeader({ project, session, controller, onRightTab, onSelectSession, onBackToBoard }) {
   var tone = WorkbenchModel.statusTone(session.status);
   var status = String(session.status || "idle");
   var [editing, setEditing] = useWorkbenchState(false);
@@ -3510,6 +3861,7 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession 
   return (
     <div className="workbench-task-header">
       <div className="wb-th-main">
+        <button type="button" className="wb-task-back-board" onClick={onBackToBoard}>{wbT("taskBoard.back", "Back to board")}</button>
         <div className="wb-th-title-row">
           {editing ? (
             <input
@@ -4645,7 +4997,6 @@ function composerChips(status, controller, onRightTab, session) {
     }
     return [
       { label: wbT("task.action.approveExecution", "Approve execution"), onClick: function () { controller.execute(); } },
-      { label: wbT("task.action.viewDetails", "View details"), guard: false, onClick: function () { onRightTab && onRightTab("context"); } },
       { label: wbT("task.action.reject", "Reject"), onClick: function () { controller.reject(); } },
     ];
   }
@@ -4679,6 +5030,14 @@ function composerChips(status, controller, onRightTab, session) {
     ];
   }
   if (status === "failed") {
+    if (hasAcceptanceFailure(session)) {
+      return [
+        { label: wbT("task.action.reflectFork", "深度反思+新建任务"), onClick: function () { controller.reflectAndFork(); } },
+        { label: wbT("task.action.repairProblem", "修复问题"), onClick: function () { controller.repairProblem(); } },
+        { label: wbT("task.action.continueModify", "继续修改"), onClick: function () { controller.continueModify(); } },
+        { label: wbT("task.action.reviseRequest", "修改要求"), onClick: function () { openAcceptanceEditor(onRightTab); } },
+      ];
+    }
     return [
       { label: wbT("task.action.reflectFork", "深度反思+新建任务"), onClick: function () { controller.reflectAndFork(); } },
       { label: wbT("task.action.reflect", "深度反思"), onClick: function () { controller.reflect(); } },
@@ -5222,7 +5581,14 @@ function LogsTab({ session }) {
 function AcceptanceTab({ session, onRefresh }) {
   var [busy, setBusy] = useWorkbenchState(false);
   var items = session && Array.isArray(session.acceptanceCriteria) ? session.acceptanceCriteria : [];
+  var acceptanceFailure = hasAcceptanceFailure(session);
+  var [editing, setEditing] = useWorkbenchState(acceptanceFailure);
+  var [draft, setDraft] = useWorkbenchState(items.map(function (item) { return String((item && item.text) || ""); }));
   var passed = items.filter(function (a) { return a.status === "passed" || a.status === "done"; }).length;
+  useWorkbenchEffect(function () {
+    setDraft(items.map(function (item) { return String((item && item.text) || ""); }));
+    if (acceptanceFailure) setEditing(true);
+  }, [session && session.id, JSON.stringify(items.map(function (item) { return [item && item.id, item && item.text, item && item.status]; }))]);
   function generate() {
     setBusy(true);
     window.WorkbenchModel.generateAcceptance(session.id)
@@ -5242,21 +5608,74 @@ function AcceptanceTab({ session, onRefresh }) {
       .catch(function (err) { window.showToast(err.message || String(err), "error"); })
       .finally(function () { setBusy(false); });
   }
+  function saveEdits() {
+    var next = items.map(function (item, index) {
+      var text = String(draft[index] || "").trim();
+      var changed = text !== String((item && item.text) || "").trim();
+      return Object.assign({}, item, {
+        text: text,
+        // A changed criterion needs a fresh verification; do not keep stale
+        // failed evidence attached to the new wording.
+        status: changed ? "pending" : item.status,
+        evidence: changed ? "" : item.evidence,
+      });
+    }).filter(function (item) { return item.text; });
+    if (!next.length) {
+      window.showToast("至少保留一条验收条件。", "warning");
+      return;
+    }
+    setBusy(true);
+    window.WorkbenchModel.patchSession(session.id, { acceptanceCriteria: next })
+      .then(function (n) { setEditing(false); onRefresh && onRefresh(n); })
+      .catch(function (err) { window.showToast(err.message || String(err), "error"); })
+      .finally(function () { setBusy(false); });
+  }
+  function cancelEdits() {
+    setDraft(items.map(function (item) { return String((item && item.text) || ""); }));
+    setEditing(false);
+  }
   return (
     <div className="workbench-side-stack">
       <SideSection title={items.length ? wbT("task.side.acceptanceCount", "Acceptance criteria ({passed}/{count})", { passed: passed, count: items.length }) : wbT("task.field.acceptance", "Acceptance criteria")}>
-        {items.length ? items.map(function (item) {
-          var done = item.status === "passed" || item.status === "done";
-          var dot = done ? "green" : item.status === "failed" ? "red" : "muted";
-          var label = done ? wbT("task.acceptance.passed", "Passed") : item.status === "failed" ? wbT("task.acceptance.failed", "Failed") : wbT("task.acceptance.pending", "Pending");
-          return (
-            <button type="button" className="workbench-check wb-accept-toggle" key={item.id} disabled={busy} onClick={function () { toggle(item.id); }} title={wbT("task.acceptance.toggleTitle", "Click to verify this acceptance criterion")}>
-              <span className={"workbench-status-dot " + dot}></span>
-              <span className="wb-accept-text">{item.text}</span>
-              <span className={"wb-accept-state " + dot}>{label}</span>
-            </button>
-          );
-        }) : (
+        {items.length ? (
+          <React.Fragment>
+            {acceptanceFailure && (
+              <div className="wb-acceptance-edit-hint">修改验收条件后会重新等待验收，已通过条件保持不变。</div>
+            )}
+            {items.map(function (item, index) {
+              var done = item.status === "passed" || item.status === "done";
+              var dot = done ? "green" : item.status === "failed" ? "red" : "muted";
+              var label = done ? wbT("task.acceptance.passed", "Passed") : item.status === "failed" ? wbT("task.acceptance.failed", "Failed") : wbT("task.acceptance.pending", "Pending");
+              if (editing) {
+                return (
+                  <div className="wb-accept-edit-row" key={item.id}>
+                    <span className={"workbench-status-dot " + dot}></span>
+                    <input type="text" autoFocus={index === 0} value={draft[index] || ""} disabled={busy} onChange={function (event) {
+                      var value = event.target.value;
+                      setDraft(function (current) { var next = current.slice(); next[index] = value; return next; });
+                    }} aria-label={"验收条件 " + (index + 1)} />
+                    <span className={"wb-accept-state " + dot}>{label}</span>
+                  </div>
+                );
+              }
+              return (
+                <button type="button" className="workbench-check wb-accept-toggle" key={item.id} disabled={busy} onClick={function () { toggle(item.id); }} title={wbT("task.acceptance.toggleTitle", "Click to verify this acceptance criterion")}>
+                  <span className={"workbench-status-dot " + dot}></span>
+                  <span className="wb-accept-text">{item.text}</span>
+                  <span className={"wb-accept-state " + dot}>{label}</span>
+                </button>
+              );
+            })}
+            {editing ? (
+              <div className="wb-accept-edit-actions">
+                <button type="button" className="wb-btn ghost compact" disabled={busy} onClick={cancelEdits}>取消</button>
+                <button type="button" className="wb-btn primary compact" disabled={busy} onClick={saveEdits}>保存验收条件</button>
+              </div>
+            ) : (
+              <button type="button" className="wb-btn ghost compact wb-accept-edit-trigger" disabled={busy} onClick={function () { setEditing(true); }}>修改验收条件</button>
+            )}
+          </React.Fragment>
+        ) : (
           <div className="wb-empty-action">
             <p className="workbench-muted">{wbT("task.acceptance.empty", "No acceptance criteria yet.")}</p>
             <button type="button" className="wb-btn ghost" disabled={busy} onClick={generate}>{busy ? wbT("init.generating", "Generating...") : wbT("task.acceptance.generate", "Ask Agent to generate acceptance criteria")}</button>

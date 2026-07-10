@@ -260,10 +260,40 @@ def render_session_plan_block(session: dict[str, Any]) -> str:
 
 
 def render_session_acceptance_block(session: dict[str, Any]) -> str:
-    texts = _acceptance_texts(session)
-    if not texts:
+    raw = session.get("acceptanceCriteria")
+    if not isinstance(raw, list):
         return ""
-    return "## 当前计划的验收标准\n" + "\n".join(f"- {text}" for text in texts)
+    rows: list[str] = []
+    status_labels = {
+        "passed": "已通过",
+        "done": "已通过",
+        "failed": "未通过",
+        "pending": "待验证",
+    }
+    for item in raw[:8]:
+        if not isinstance(item, dict):
+            text = _clean_text(item)
+            if text:
+                rows.append(f"- [{status_labels['pending']}] {text}")
+            continue
+        text = _clean_text(item.get("text"))
+        if not text:
+            continue
+        status = status_labels.get(str(item.get("status") or "pending"), "待验证")
+        evidence = _clean_text(item.get("evidence"), 600)
+        row = f"- [{status}] {text}"
+        if evidence:
+            row += f"；验收依据：{evidence}"
+        rows.append(row)
+    if not rows:
+        return ""
+    reason = _clean_text(session.get("verifyReason"), 1000)
+    # Keep the stable heading so existing context consumers remain compatible;
+    # status/evidence on each row carry the latest verification result.
+    result = "## 当前计划的验收标准\n" + "\n".join(rows)
+    if reason:
+        result += "\n验收结论：" + reason
+    return result
 
 
 def build_main_context(

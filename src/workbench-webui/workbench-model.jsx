@@ -345,6 +345,18 @@ var WorkbenchModel = (function () {
     return apiJson("/api/task-sessions/" + encodeURIComponent(sessionId) + "/dispatch", init).then(normalizeStore);
   }
 
+  // Continue an acceptance-failed task in the same session.  The dedicated
+  // command bypasses intent classification and lets the backend attach the
+  // latest per-criterion evidence to the repair prompt.
+  function continueAcceptanceRepair(sessionId, input, options) {
+    options = options || {};
+    return dispatch(sessionId, input, {
+      command: "workbench-task-repair",
+      attachments: options.attachments || [],
+      mode: options.mode,
+    });
+  }
+
   function sendChat(sessionId, message, options) {
     options = options || {};
     var init = {
@@ -839,6 +851,7 @@ var WorkbenchModel = (function () {
     updateGoalLoopLimits: updateGoalLoopLimits,
     fetchGoalLoop: fetchGoalLoop,
     dispatch: dispatch,
+    continueAcceptanceRepair: continueAcceptanceRepair,
     sendChat: sendChat,
     answer: answer,
     fetchFileDiff: fetchFileDiff,

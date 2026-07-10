@@ -316,6 +316,8 @@ async def _run_chat_agent(
     persist_insert_at: int | None = None,
     client_request_id: str = "",
     persist_user_message: bool = True,
+    behavior_user_message: str | None = None,
+    behavior_system_initiated: bool = False,
     public_user_message: str | None = None,
     public_attachments: list[dict[str, Any]] | None = None,
     public_prompt: str | None = None,
@@ -406,8 +408,11 @@ async def _run_chat_agent(
                 labels = get_session_labels(round_id)
                 behavior_turn_context = await _behavior_learning.begin_turn(
                     session_id=labels.get("archive_session_id", ""),
-                    round_id=round_id, user_message=user_message,
-                    history=history, session_title=labels.get("session_title", ""),
+                    round_id=round_id,
+                    user_message=(behavior_user_message if behavior_user_message is not None else user_message),
+                    history=history,
+                    session_title=labels.get("session_title", ""),
+                    system_initiated=behavior_system_initiated,
                 )
             except Exception:
                 logger.warning("Failed to initialize behavior-learning turn context", exc_info=True)
@@ -969,7 +974,10 @@ async def run_heartbeat_agent(
             ctx.interrupt_event.clear()
             reply = await _run_chat_agent(
                 prompt, bot, chat_id, db_path,
-                ephemeral_system=proactive_system, persist_user_message=False,
+                ephemeral_system=proactive_system,
+                persist_user_message=False,
+                behavior_user_message="Scheduled proactive check-in",
+                behavior_system_initiated=True,
                 public_prompt="", refresh_labels=False, hide_initial_detail=True,
                 assistant_message_meta={"proactive": True, "system_initiated": True},
             )

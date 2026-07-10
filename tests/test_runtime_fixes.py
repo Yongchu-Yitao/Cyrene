@@ -1079,8 +1079,8 @@ async def test_save_session_messages_emits_session_update(tmp_path, monkeypatch)
 
     seen = []
 
-    async def fake_publish_event(event):
-        seen.append(event)
+    async def fake_publish_event(event, **kwargs):
+        seen.append({**event, **kwargs})
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -3777,12 +3777,12 @@ async def test_subagent_registry_emits_update_events(monkeypatch):
 
     seen = []
 
-    async def fake_publish_event(event):
-        seen.append(event)
+    async def fake_publish_event(event, **kwargs):
+        seen.append({**event, **kwargs})
 
     monkeypatch.setattr(debug, "publish_event", fake_publish_event)
     await subagent.clear()
-    await subagent.register("alice", "review ssh", round_id="round_live")
+    await subagent.register("alice", "review ssh", round_id="round_live", session_id="session_live")
     await subagent.save_messages("alice", [{"role": "assistant", "content": "checking"}])
     await subagent.set_waiting("alice", result="draft ready")
     await subagent.set_resumed("alice")
@@ -3797,6 +3797,7 @@ async def test_subagent_registry_emits_update_events(monkeypatch):
     assert "resumed" in statuses
     assert statuses[-1] == "done"
     assert seen[-1]["round_id"] == "round_live"
+    assert seen[-1]["session_id"] == "session_live"
     assert seen[-1]["message_count"] == 1
 
 

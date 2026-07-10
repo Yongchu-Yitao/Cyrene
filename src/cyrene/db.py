@@ -4,6 +4,7 @@ Note: Message history is stored in conversations/ folder (not in DB).
 The DB is used for structured data that needs querying and stable aggregates.
 """
 
+import json
 import re
 import sqlite3
 import uuid

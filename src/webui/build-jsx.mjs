@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild'
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from 'fs'
 import { join, relative, dirname, extname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 
@@ -61,6 +61,67 @@ async function build() {
 
   const total = files.length
   console.log(`\nDone. ${total} JSX file${total > 1 ? 's' : ''} compiled to ${OUT_DIR}`)
+
+  // ---- Copy pdfjs-dist assets ------------------------------------------------
+  const PDFJS_SRC = resolve(__dirname, 'node_modules/pdfjs-dist')
+  const PDFJS_DST = resolve(APP_DIR, 'pdfjs')
+  if (existsSync(PDFJS_SRC)) {
+    mkdirSync(join(PDFJS_DST, 'images'), { recursive: true })
+
+    const files = [
+      ['build/pdf.min.mjs', 'pdf.min.js'],
+      ['build/pdf.worker.min.mjs', 'pdf.worker.min.js'],
+      ['web/pdf_viewer.mjs', 'pdf_viewer.js'],
+      ['web/pdf_viewer.css', 'pdf_viewer.css'],
+    ]
+    for (const [src, dst] of files) {
+      const srcPath = join(PDFJS_SRC, src)
+      const dstPath = join(PDFJS_DST, dst)
+      if (existsSync(srcPath)) {
+        let content = readFileSync(srcPath, 'utf-8')
+        // pdfjs-dist uses import.meta.url / export {} which are only valid in
+        // ES modules. Replace/fix so the files work as regular <script> tags.
+        content = content.replace(/import\.meta\.url/g, '"file://"')
+        // Remove sourcemap reference (file renamed, map doesn't exist)
+        content = content.replace(/\/\/# sourceMappingURL.*/g, '')
+        if (dst === 'pdf.min.js') {
+          // pdf.min.mjs already sets globalThis.pdfjsLib = {...} — its
+          // export { ... } is redundant for classic script usage, just drop it.
+          content = content.replace(/\bexport\s*\{[^}]*\};?/g, '/* export removed */')
+          // Wrap in IIFE to avoid module-level const/let/class declarations
+          // (like `const t=...`) leaking to global scope.
+          content = '(function(){\n' + content + '\n})();'
+        } else if (dst === 'pdf_viewer.js') {
+          // Transform export { X as Y, Z } → globalThis.pdfjsViewer={Y:X, Z}
+          // so viewer components are accessible as window.pdfjsViewer.XXX.
+          content = content.replace(/\bexport\s*\{([\s\S]*?)\};?/g, (_m, body) => {
+            const parts = body.split(',').map(s => s.trim()).filter(Boolean)
+            const props = parts.map(p => {
+              const asMatch = p.match(/^(\S+)\s+as\s+(\S+)$/)
+              return asMatch ? `${asMatch[2]}: ${asMatch[1]}` : p
+            })
+            return `globalThis.pdfjsViewer={${props.join(',')}};`
+          })
+          content = '(function(){\n' + content + '\n})();'
+        } else if (dst === 'pdf.worker.min.js') {
+          // Worker — just remove export, keep globalThis.pdfjsWorker intact.
+          content = content.replace(/\bexport\s*\{[^}]*\};?/g, '/* export removed */')
+        }
+        writeFileSync(dstPath, content)
+        console.log(`✓ pdfjs/${dst}`)
+      }
+    }
+    // Copy images
+    const imgSrc = join(PDFJS_SRC, 'web', 'images')
+    const imgDst = join(PDFJS_DST, 'images')
+    if (existsSync(imgSrc)) {
+      const entries = readdirSync(imgSrc)
+      for (const f of entries) {
+        copyFileSync(join(imgSrc, f), join(imgDst, f))
+      }
+      console.log(`✓ pdfjs/images/ (${entries.length} files)`)
+    }
+  }
 }
 
 build().catch(e => {

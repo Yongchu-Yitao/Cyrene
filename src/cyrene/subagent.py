@@ -71,15 +71,21 @@ def _matches_round(entry: dict[str, Any], round_id: str = "", session_id: str = 
     return str(entry.get("round_id", "")) == round_id
 
 
-async def _publish_registry_event(agent_id: str) -> None:
-    """Publish the latest subagent snapshot for live UI updates."""
+async def _publish_registry_event(agent_id: str, *, message: str = "") -> None:
+    """Publish the latest subagent snapshot for live UI updates.
+
+    Keep the session id on the SSE envelope.  Workbench filters runtime events
+    by session, so omitting it makes otherwise valid subagent events disappear
+    from the task's live activity/log view.
+    """
     async with _lock:
         entry = dict(_registry.get(agent_id, {}))
     if not entry:
         return
-    await debug.publish_event({
+    event = {
         "type": "subagent_update",
         "agent_id": agent_id,
+        "caller": f"subagent_{agent_id}",
         "task": entry.get("task", ""),
         "status": entry.get("status", ""),
         "result_preview": str(entry.get("result", "") or "")[:200],
@@ -87,8 +93,14 @@ async def _publish_registry_event(agent_id: str) -> None:
         "created_at": entry.get("created_at"),
         "updated_at": entry.get("updated_at"),
         "round_id": entry.get("round_id", ""),
-        "session_id": entry.get("session_id", ""),
-    })
+    }
+    if message:
+        event["message"] = str(message)[:240]
+    session_id = str(entry.get("session_id") or "")
+    if session_id:
+        await debug.publish_event(event, session_id=session_id)
+    else:
+        await debug.publish_event(event)
 
 
 async def register(agent_id: str, task: str, round_id: str = "", role: str = "", session_id: str = "") -> None:
@@ -150,6 +162,18 @@ async def mark_done(agent_id: str, result: str = "") -> None:
                         _registry[agent_id]["result"] = (existing + "\n---\n" + result)[:_limit(_MAX_FINAL_RESULT_CHARS)]
                 else:
                     _registry[agent_id]["result"] = result[:_limit(_MAX_FINAL_RESULT_CHARS)]
+    await _publish_registry_event(agent_id)
+
+
+async def mark_timeout(agent_id: str, result: str = "") -> None:
+    """Mark an active subagent as settled after a timeout or infrastructure failure."""
+    async with _lock:
+        if agent_id not in _registry:
+            return
+        _registry[agent_id]["status"] = TIMEOUT
+        _registry[agent_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if result:
+            _registry[agent_id]["result"] = str(result)[:_limit(_MAX_FINAL_RESULT_CHARS)]
     await _publish_registry_event(agent_id)
 
 
@@ -1032,11 +1056,64 @@ async def cancel_subagent_tasks(round_id: str, session_id: str = "") -> None:
         await asyncio.sleep(0.1)  # brief yield so CancelledError can propagate
 
 
+async def timeout_subagents(agent_ids: list[str], reason: str = "子代理执行超时。") -> None:
+    """Settle and cancel a bounded set of still-active subagents."""
+    ids: list[str] = []
+    async with _lock:
+        for agent_id in agent_ids:
+            info = _registry.get(agent_id)
+            if not info or agent_id.startswith(_SUMMARY_AGENT_PREFIX):
+                continue
+            if str(info.get("status") or "") in (DONE, TIMEOUT):
+                continue
+            info["status"] = TIMEOUT
+            info["updated_at"] = datetime.now(timezone.utc).isoformat()
+            info["result"] = str(reason)[:_limit(_MAX_FINAL_RESULT_CHARS)]
+            ids.append(agent_id)
+    for agent_id in ids:
+        await _publish_registry_event(agent_id, message=reason)
+        task = _subagent_tasks.get(agent_id)
+        if task is not None and not task.done():
+            task.cancel()
+    if ids:
+        await asyncio.sleep(0.1)
+
+
+async def timeout_all_subagent_tasks(reason: str = "服务关闭，子代理已停止。") -> None:
+    """Settle all active subagents before the web server tears down its loop."""
+    async with _lock:
+        ids = [
+            agent_id for agent_id, info in _registry.items()
+            if not agent_id.startswith(_SUMMARY_AGENT_PREFIX)
+            and str(info.get("status") or "") in (RUNNING, RESUMED)
+        ]
+    await timeout_subagents(ids, reason=reason)
+
+
+async def publish_active_heartbeat(
+    *,
+    session_id: str = "",
+    round_id: str = "",
+    message: str = "仍在执行。",
+) -> list[str]:
+    """Publish a lightweight progress pulse for active subagents."""
+    async with _lock:
+        ids = [
+            agent_id for agent_id, info in _registry.items()
+            if not agent_id.startswith(_SUMMARY_AGENT_PREFIX)
+            and _matches_round(info, round_id=round_id, session_id=session_id)
+            and str(info.get("status") or "") in (RUNNING, RESUMED)
+        ]
+    for agent_id in ids:
+        await _publish_registry_event(agent_id, message=message)
+    return ids
+
+
 async def wait_until_settled(
     *,
     session_id: str = "",
     round_id: str = "",
-    timeout: float = 1800.0,
+    timeout: float = 300.0,
     poll_interval: float = 2.0,
     on_poll: Callable[[], Awaitable[bool]] | None = None,
 ) -> list[str]:

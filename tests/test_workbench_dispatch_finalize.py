@@ -176,3 +176,50 @@ def test_dispatch_answer_uses_task_reply_mode_and_reply_card(monkeypatch, tmp_pa
     assert session["planRevision"] == 4
     assert seen["command"] == "workbench-task-reply"
     assert "本轮任务对话回复模式" in seen["ephemeral"]
+
+
+def test_dispatch_acceptance_repair_does_not_return_500(monkeypatch, tmp_path):
+    """A failed verification can be repaired through the normal dispatch path."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from webui import routes
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store_path = data_dir / "workbench_projects.json"
+    _seed_store(store_path, tmp_path)
+    payload = json.loads(store_path.read_text(encoding="utf-8"))
+    session = payload["projects"][0]["sessions"][0]
+    session["status"] = "failed"
+    session["verifyReason"] = "PDF 缺少目录。"
+    session["acceptanceCriteria"][0].update({"status": "failed", "evidence": "未找到目录页。"})
+    store_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    seen = {}
+
+    async def fake_reply(_user_input, _session, _constraints, **kwargs):
+        seen["ephemeral"] = kwargs.get("ephemeral_system", "")
+        return "已补充目录并重新生成 PDF。"
+
+    async def no_archive(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "_workbench_agent_reply", fake_reply)
+    monkeypatch.setattr(routes, "_workbench_archive_run_knowledge", no_archive)
+    monkeypatch.setattr(routes, "schedule_capture", lambda *_a, **_k: None)
+    monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
+
+    app = FastAPI()
+    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    client = TestClient(app)
+
+    resp = client.post(
+        "/api/task-sessions/session_1/dispatch",
+        json={"input": "按验收结果继续修复", "command": "workbench-task-repair"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["replyKind"] == "repair"
+    assert "验收未完全通过" in seen["ephemeral"]
+    assert "PDF 缺少目录" in seen["ephemeral"]

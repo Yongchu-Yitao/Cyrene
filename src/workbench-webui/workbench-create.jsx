@@ -746,6 +746,7 @@
 
     return (
       <div className="wb-init">
+        <button type="button" className="wb-task-back-board wb-init-back-board" onClick={props.onBackToBoard}>{T("taskBoard.back")}</button>
         <div className="wb-init-head">
           <div className="wb-init-head-main">
             <h1>{T("init.title")}</h1>

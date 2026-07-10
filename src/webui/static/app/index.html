@@ -37,6 +37,7 @@
 <link rel="stylesheet" href="code/highlight.css?v=0.6.3" />
 <link rel="stylesheet" href="code/editor.css?v=0.6.3" />
 <link rel="stylesheet" href="code/diff.css?v=0.6.3" />
+<link rel="stylesheet" href="pdfjs/pdf_viewer.css?v=0.7.2" />
 </head>
 <body>
 <div id="root"></div>
@@ -52,6 +53,12 @@
 <script src="vis-network.min.js"></script>
 <script src="xterm.min.js"></script>
 
+<script src="pdfjs/pdf.min.js?v=0.7.2"></script>
+<script src="pdfjs/pdf_viewer.js?v=0.7.2"></script>
+<script src="pdfjs/pdf-setup.js?v=0.7.2"></script>
+<script>
+window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/app/pdfjs/pdf.worker.min.js';
+</script>
 <script src="compiled/tweaks-panel.js?v=0.6.3"></script>
 <script src="compiled/data.js?v=0.6.3"></script>
 <script src="compiled/i18n.js?v=0.6.3"></script>

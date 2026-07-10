@@ -331,6 +331,17 @@
     if (!chain) return t ? t("memory.learning.noRoundSelected", "No round selected") : "No round selected";
     return chain.round_title || chain.session_title || (chain.user_message ? String(chain.user_message).slice(0, 32) : "") || (t ? t("memory.learning.toolChain", "Tool chain") : "Tool chain");
   }
+  function isInternalProactiveChain(chain) {
+    var message = String((chain && chain.user_message) || "").trim();
+    return !!(chain && chain.system_initiated)
+      || String((chain && chain.round_title) || "") === "proactive check-in"
+      || message === "Scheduled proactive check-in"
+      || message.indexOf("This is a scheduler-initiated proactive check-in.") === 0;
+  }
+  function chainTopic(chain, t) {
+    if (isInternalProactiveChain(chain)) return t("memory.learning.proactiveTopic", "Scheduled check-in");
+    return chain.user_message || chain.context_summary || t("memory.learning.autoTopic", "Reusable tool chain");
+  }
   function chainSubtitle(chain, t) {
     if (!chain) return "—";
     var summary = chain.summary || {};
@@ -544,14 +555,14 @@
           h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noSkillSelected", "Select a learned skill to inspect.")),
           learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)))
           : h("div", { className: "wb-mem-detail-scroll" },
-            h("div", { className: "wb-mem-skill-hero" },
+            h("header", { className: "wb-mem-skill-hero" },
               h("span", { className: "wb-mem-ico blue" }, ICON.learning(17)),
               h("div", null,
                 h("div", { className: "wb-mem-skill-title-row" },
-                  h("h3", null, skill.name || skill.id),
+                  h("h2", null, skill.name || skill.id),
                   h(Chip, { tone: skill.status === "active" ? "green" : "blue" }, skillStatusText(skill.status, t))),
-                h("p", null, skill.description || t("memory.learning.noSkillDescription", "No description yet."))))),
-            h("div", { className: "wb-mem-skill-stats" },
+                h("p", null, skill.description || t("memory.learning.noSkillDescription", "No description yet.")))),
+            h("div", { className: "wb-mem-skill-stats wb-mem-skill-overview", "aria-label": t("memory.learning.skillOverview", "Skill overview") },
               h("div", null, h("b", null, String(skillUsageCount(skill))), h("span", null, t("memory.learning.references", "References"))),
               h("div", null, h("b", null, String(skill.version || 1)), h("span", null, t("memory.learning.version", "Version")))),
             h("div", { className: "wb-mem-skill-detail-box" },
@@ -588,7 +599,7 @@
               var matchScore = skill.min_match_score || 0;
               return h("div", { className: "wb-replay-section" },
                 h("h3", null, t("memory.learning.behaviorAnalysis", "Behavior analysis")),
-                h("div", { className: "wb-mem-skill-stats" },
+                h("div", { className: "wb-mem-skill-stats wb-mem-skill-analysis-metrics", "aria-label": t("memory.learning.behaviorAnalysis", "Behavior analysis") },
                   h("div", null, h("b", null, String(srcTotalSteps)), h("span", null, t("memory.learning.totalSteps", "Total steps"))),
                   h("div", null, h("b", null, String(srcBrowserSteps)), h("span", null, t("memory.learning.browserOps", "User browser ops"))),
                   h("div", null, h("b", null, srcSuccessRate + "%"), h("span", null, t("memory.learning.successRate", "Success rate"))),
@@ -617,12 +628,13 @@
               return h("div", { className: "wb-replay-section" },
                 h("h3", null, t("memory.learning.generatedScript", "Generated script")),
                 h("div", { className: "wb-detail-files" },
-                  h("div", { className: "wb-detail-file-row", style: { cursor: "pointer" }, title: scriptPath, onClick: function () { window.showToast({ body: t("memory.learning.scriptPathCopied", "Script path copied to clipboard"), duration: 2000 }); navigator.clipboard.writeText(scriptPath).catch(function(){}); } },
+                  h("button", { type: "button", className: "wb-detail-file-row wb-mem-script-file", title: scriptPath, "aria-label": t("memory.learning.copyScriptPath", "Copy script path") + ": " + scriptName, onClick: function () { window.showToast({ body: t("memory.learning.scriptPathCopied", "Script path copied to clipboard"), duration: 2000 }); navigator.clipboard.writeText(scriptPath).catch(function(){}); } },
                     h("span", null, toolIcon({ tool: "file" })),
                     h("div", null,
                       h("b", null, scriptName),
-                      h("small", null, scriptPath)))));
-            })(),
+                      h("small", null, scriptPath)),
+                    h("em", null, t("memory.learning.copy", "Copy")))));
+            })()),
         skill ? h("div", { className: "wb-mem-skill-delete-bottom" },
           h("button", { type: "button", className: "wb-btn danger", onClick: deleteLearnedSkill }, t("memory.learning.deleteSkill", "Delete")),
           learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)),
@@ -756,7 +768,7 @@
                 h("p", null, detailKind === "skill" && activeSkill ? (activeSkill.description || t("memory.learning.noSkillDescription", "No description yet.")) : (activeChain ? chainSubtitle(activeChain, t) : t("memory.learning.emptyIntro", "Tool-call rounds are recorded separately for each project."))),
                 detailKind === "skill" && activeSkill
                   ? h("p", { className: "wb-learning-theme" }, t("memory.learning.skillSource", "Source: {source}", { source: activeSkillSourceChain ? chainTitle(activeSkillSourceChain, t) : (activeSkill.pattern_id || activeSkill.id) }))
-                  : activeChain && h("p", { className: "wb-learning-theme" }, t("memory.learning.topic", "Topic: {topic}", { topic: activeChain.user_message || activeChain.context_summary || t("memory.learning.autoTopic", "Reusable tool chain") })))),
+                  : activeChain && h("p", { className: "wb-learning-theme" }, t("memory.learning.topic", "Topic: {topic}", { topic: chainTopic(activeChain, t) })))),
             learning.error && h("div", { className: "wb-mem-error" }, learningErrorText(learning.error, t)),
             learning.note && h("div", { className: "wb-mem-skill-note main" }, learning.note),
             detailKind === "skill" && activeSkill ? h("div", { className: "wb-learning-content" },
@@ -817,6 +829,11 @@
   function WorkbenchMemoryPage(props) {
     var project = props && props.project;
     var workspace = (project && (project.dataKey || project.id)) || "default";
+    // Memory storage still uses the workspace/dataKey compatibility key, but
+    // learning records are scoped by the canonical Workbench project id. In
+    // particular, the legacy default project has dataKey="default", which
+    // must not make the learning API include records from other projects.
+    var learningProject = (project && project.id) || workspace;
     var t = useMemoryT();
 
     var payloadState = useState(null); var payload = payloadState[0]; var setPayload = payloadState[1];
@@ -854,13 +871,13 @@
     }
     function loadLearning() {
       setLearningLoading(true); setLearningError("");
-      return fetch("/api/evolution?project=" + encodeURIComponent(workspace)).then(jsonOrThrow)
+      return fetch("/api/evolution?project=" + encodeURIComponent(learningProject)).then(jsonOrThrow)
         .then(function (p) { setLearningData(p || {}); return p; })
         .catch(function (e) { setLearningError(e.message || String(e)); setLearningData({ learned_skills: [], patterns: [], tool_chains: [] }); })
         .finally(function () { setLearningLoading(false); });
     }
     function runLearningAction(kind, turnId) {
-      var url = (kind === "rebuild" ? "/api/patterns/rebuild" : "/api/patterns/learn") + "?project=" + encodeURIComponent(workspace);
+      var url = (kind === "rebuild" ? "/api/patterns/rebuild" : "/api/patterns/learn") + "?project=" + encodeURIComponent(learningProject);
       if (kind === "learn" && turnId) url += "&turn_id=" + encodeURIComponent(turnId);
       setLearningBusy(kind); setLearningNote(""); setLearningError("");
       return fetch(url, { method: "POST" }).then(jsonOrThrow)
@@ -885,7 +902,7 @@
       if (!patternId) return Promise.resolve();
       var busyKey = "pattern:" + patternId;
       setLearningBusy(busyKey); setLearningNote(""); setLearningError("");
-      return fetch("/api/patterns/" + encodeURIComponent(patternId) + "/learn-skill?project=" + encodeURIComponent(workspace), { method: "POST" }).then(jsonOrThrow)
+      return fetch("/api/patterns/" + encodeURIComponent(patternId) + "/learn-skill?project=" + encodeURIComponent(learningProject), { method: "POST" }).then(jsonOrThrow)
         .then(function (payload) {
           setLearningData({
             learned_skills: payload.learned_skills || [],
@@ -956,7 +973,7 @@
           window.__workbenchPendingSelection = null;
         }
       });
-    }, [workspace]);
+    }, [workspace, learningProject]);
 
     // Listen for search-navigation events while already mounted.
     useEffect(function () {
@@ -995,7 +1012,7 @@
         window.removeEventListener("cyrene:wbc-chat-created", onChatCreated);
         window.removeEventListener("cyrene:wbc-refresh-chats", onChatCreated);
       };
-    }, [activePanel, workspace, learningBusy, learningLoading]);
+    }, [activePanel, workspace, learningProject, learningBusy, learningLoading]);
 
     var memories = (payload && payload.memories) || [];
     var categories = (payload && payload.categories) || [];

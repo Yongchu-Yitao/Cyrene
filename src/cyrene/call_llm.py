@@ -659,6 +659,7 @@ async def _publish_llm_event(
     duration_ms: int,
     session_id: str = "",
     round_id: str = "",
+    status: str = "completed",
 ) -> None:
     from cyrene import debug
 
@@ -673,10 +674,14 @@ async def _publish_llm_event(
         "response": response,
         "usage": response.get("usage") or {},
         "duration_ms": duration_ms,
+        "status": status,
     }
     if round_id:
         event["round_id"] = round_id
-    await debug.publish_event(event, session_id=session_id)
+    if session_id:
+        await debug.publish_event(event, session_id=session_id)
+    else:
+        await debug.publish_event(event)
 
 
 # ---------------------------------------------------------------------------
@@ -800,6 +805,11 @@ async def call_llm(
                 candidate_error: Exception | None = None
 
                 for endpoint in endpoints:
+                    if publish_events:
+                        await _publish_llm_event(
+                            caller, phase, messages, tools, {}, model, 0,
+                            session_id=session_id, round_id=round_id, status="started",
+                        )
                     try:
                         network_retries = 0
                         server_error_retries = 0
@@ -910,7 +920,7 @@ async def call_llm(
                         if publish_events:
                             await _publish_llm_event(
                                 caller, phase, messages, tools, msg, model, duration_ms,
-                                session_id=session_id, round_id=round_id,
+                                session_id=session_id, round_id=round_id, status="completed",
                             )
 
                         if record_usage:

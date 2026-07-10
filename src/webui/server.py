@@ -145,7 +145,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         # Cancel all active session tasks
         try:
             from cyrene.agent.state import _sessions
-            from cyrene.subagent import _subagent_tasks
+            from cyrene.subagent import timeout_all_subagent_tasks
 
             for session_id, ctx in list(_sessions.items()):
                 ctx.interrupt_event.set()
@@ -164,12 +164,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
                     except RuntimeError:
                         pass
                     ctx.main_inbox_worker = None
-            for t in _subagent_tasks.values():
-                try:
-                    if not t.done() and not t.get_loop().is_closed():
-                        t.cancel()
-                except RuntimeError:
-                    pass
+            await timeout_all_subagent_tasks("Web UI 服务关闭，子代理已停止；重启后可重新执行任务。")
         except Exception:
             logger.warning("Session cleanup during shutdown failed")
 

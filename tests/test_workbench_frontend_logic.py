@@ -102,6 +102,18 @@ def test_workbench_plan_ui_uses_step_ids_and_operation_endpoint():
     assert "firstUnresolvedStepIndex" not in source
 
 
+def test_workbench_keeps_live_subagent_logs_across_silent_refreshes():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+
+    assert 'data.type === "subagent_update"' in source
+    assert 'session_id = str(entry.get("session_id") or "")' in (
+        root / "src" / "cyrene" / "subagent.py"
+    ).read_text(encoding="utf-8")
+    assert "event.live && event.id" in source
+    assert "data.message" in source
+
+
 def test_workbench_uses_light_project_payload_and_lazy_session_detail():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
@@ -191,6 +203,11 @@ def test_workbench_memory_skill_learning_selects_tool_chains():
     assert "memory.learning.processedNote" in i18n
     learning_source = source[source.index("function learningSnapshot"):source.index("// ── main page")]
     assert not any("\u4e00" <= ch <= "\u9fff" for ch in learning_source)
+    # Memory records use the compatibility workspace/dataKey, while learning
+    # sessions must always be requested with the canonical project id.
+    assert 'var learningProject = (project && project.id) || workspace;' in source
+    assert '"/api/evolution?project=" + encodeURIComponent(learningProject)' in source
+    assert '"?project=" + encodeURIComponent(learningProject)' in source
     assert "_learning_enrich_tool_chains" in routes
     assert "_learning_is_known_media_path" in routes
     assert "/api/tool-chain-media" in routes
@@ -460,6 +477,25 @@ def test_workbench_chat_tool_trace_preserves_i18n_metadata():
     assert "}, [heartbeatLang]);" in chat
 
 
+def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    # Dynamic context block and tool IDs must resolve through the same
+    # translation table as the surrounding labels instead of leaking raw IDs.
+    assert 'var key = "workbenchChat.ctxBlock." + id;' in chat
+    assert 'wbcT("toolName." + toolKey, toolKey)' in chat
+    assert '"workbenchChat.ctxBlock.skills.learned": "Learned skills"' in i18n
+    assert '"workbenchChat.ctxBlock.skills.learned": "已学习技能"' in i18n
+    assert '"toolName.browser_user_events": "User browser operations"' in i18n
+    assert '"toolName.browser_user_events": "用户浏览器操作"' in i18n
+
+
 def test_workbench_phase_events_publish_translation_keys():
     root = Path(__file__).resolve().parent.parent
     planning = (root / "src" / "cyrene" / "agent" / "planning.py").read_text(encoding="utf-8")
@@ -543,7 +579,7 @@ def test_code_blocks_use_declared_language_and_resilient_clipboard_actions():
     assert "bottom: 0;" not in styles.split(".code-block-actions", 1)[1].split("}", 1)[0]
 
 
-def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_native_pdf_zoom():
+def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
@@ -557,8 +593,10 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_native_pdf_zoom():
     assert '<base href="' in source
     assert 'sandbox="allow-scripts"' in source
     assert 'srcDoc={htmlPreview}' in source
-    assert 'blobUrl + "#zoom="' in source
-    assert 'key={pdfSrc}' in source
+    assert 'window.pdfjsInstallCopyFix(container, viewer)' in source
+    assert 'window.pdfjsInstallSelectionSanitizer(container, viewer, eventBus)' in source
+    assert 'selectionSanitizer.abort();' in source
+    assert '.wbc-viewer .pdfViewer .textLayer' not in styles
     assert "width: 100%;" in styles
     assert "height: 100%;" in styles
     assert r"/\.html?$/i.test(target.pathname)" in main

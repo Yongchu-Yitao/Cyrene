@@ -180,6 +180,63 @@ def test_goal_loop_changed_goal_regenerates_plan_and_requires_full_access_confir
     assert preview.json()["plan"][0]["id"] == "new_step"
 
 
+def test_acceptance_patch_auto_completes_task_when_all_criteria_pass(monkeypatch, tmp_path):
+    app, _db_path, store_path = _app(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.patch(
+        "/api/task-sessions/session_1",
+        json={
+            "acceptanceCriteria": [
+                {"id": "accept_1", "text": "认证测试通过", "status": "passed"},
+                {"id": "accept_2", "text": "回归测试通过", "status": "passed"},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    session = response.json()["session"]
+    assert session["status"] == "completed"
+    assert [event["type"] for event in session["events"]] == ["TaskCompleted"]
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    assert stored["projects"][0]["sessions"][0]["status"] == "completed"
+
+    # Replaying the same update is idempotent and does not duplicate the event.
+    replay = client.patch(
+        "/api/task-sessions/session_1",
+        json={
+            "acceptanceCriteria": [
+                {"id": "accept_1", "text": "认证测试通过", "status": "passed"},
+                {"id": "accept_2", "text": "回归测试通过", "status": "passed"},
+            ]
+        },
+    )
+    assert replay.status_code == 200
+    assert len(replay.json()["session"]["events"]) == 1
+
+
+def test_independent_verification_auto_completes_task(monkeypatch, tmp_path):
+    from webui import routes
+
+    async def fake_verify(_session, _project):
+        return {
+            "results": [{"id": "accept_1", "passed": True, "evidence": "测试通过"}],
+            "reason": "全部通过",
+        }
+
+    monkeypatch.setattr(routes, "_workbench_verify_acceptance", fake_verify)
+    app, _db_path, _store_path = _app(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post("/api/task-sessions/session_1/verify", json={})
+
+    assert response.status_code == 200
+    session = response.json()["session"]
+    assert session["status"] == "completed"
+    assert session["acceptanceCriteria"][0]["status"] == "passed"
+    assert any(event["type"] == "TaskCompleted" for event in session["events"])
+
+
 def test_goal_loop_preview_returns_service_unavailable_before_generation_when_storage_is_busy(
     monkeypatch,
     tmp_path,
@@ -223,7 +280,7 @@ def test_goal_loop_preview_returns_service_unavailable_before_generation_when_st
     assert generation_called is False
 
 
-async def test_goal_loop_runner_reaches_review_only_after_independent_verification(monkeypatch, tmp_path):
+async def test_goal_loop_runner_completes_after_independent_verification(monkeypatch, tmp_path):
     from webui import routes
     from webui import workbench_goal_loop as goal_loop
 
@@ -271,11 +328,11 @@ async def test_goal_loop_runner_reaches_review_only_after_independent_verificati
     await manager._run("run_1")
 
     run = await goal_loop._get_run_by_id(db_path, "run_1")
-    assert run["status"] == "review"
+    assert run["status"] == "completed"
     assert run["stop_reason"] == "acceptance_passed"
     stored = json.loads(store_path.read_text(encoding="utf-8"))
     session = stored["projects"][0]["sessions"][0]
-    assert session["status"] == "review"
+    assert session["status"] == "completed"
     assert session["plan"][0]["status"] == "completed"
     assert session["acceptanceCriteria"][0]["status"] == "passed"
 
@@ -470,7 +527,7 @@ async def test_begin_async_answer_tags_step_and_resumes_run(monkeypatch, tmp_pat
     assert await goal_loop.begin_async_answer(db_path, "session_1", "q1", "同意") is False
 
 
-async def test_goal_loop_worker_resumes_via_answer_pending_not_fresh_execute(monkeypatch, tmp_path):
+async def test_goal_loop_worker_resumes_via_answer_pending_and_completes(monkeypatch, tmp_path):
     from webui import routes
     from webui import workbench_goal_loop as goal_loop
 
@@ -536,7 +593,7 @@ async def test_goal_loop_worker_resumes_via_answer_pending_not_fresh_execute(mon
     assert calls["answer"] == 1   # resumed via answer_pending
     assert calls["fresh"] == 0    # did NOT re-execute from scratch
     run = await goal_loop._get_run_by_id(db_path, "run_1")
-    assert run["status"] == "review"
+    assert run["status"] == "completed"
     stored = json.loads(store_path.read_text(encoding="utf-8"))
     step = stored["projects"][0]["sessions"][0]["plan"][0]
     assert step["status"] == "completed"
