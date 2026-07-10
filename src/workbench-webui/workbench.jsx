@@ -5658,10 +5658,13 @@ function AcceptanceTab({ session, onRefresh }) {
                   </div>
                 );
               }
-              return (
-                <button type="button" className="workbench-check wb-accept-toggle" key={item.id} disabled={busy} onClick={function () { toggle(item.id); }} title={wbT("task.acceptance.toggleTitle", "Click to verify this acceptance criterion")}>
+                return (
+                  <button type="button" className="workbench-check wb-accept-toggle" key={item.id} disabled={busy} onClick={function () { toggle(item.id); }} title={wbT("task.acceptance.toggleTitle", "Click to verify this acceptance criterion")}>
                   <span className={"workbench-status-dot " + dot}></span>
-                  <span className="wb-accept-text">{item.text}</span>
+                  <span className="wb-accept-copy">
+                    <span className="wb-accept-text">{item.text}</span>
+                    {item.evidence ? <small className="wb-accept-evidence">验收依据：{item.evidence}</small> : null}
+                  </span>
                   <span className={"wb-accept-state " + dot}>{label}</span>
                 </button>
               );

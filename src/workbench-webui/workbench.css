@@ -4174,7 +4174,9 @@ html[data-theme="dark"] .wb-composer-disclaimer {
 }
 .wb-accept-toggle:hover { background: color-mix(in srgb, var(--wb-accent) 5%, transparent); }
 .wb-accept-toggle:disabled { cursor: default; opacity: 0.7; }
-.wb-accept-text { flex: 1; min-width: 0; color: var(--wb-text); overflow-wrap: anywhere; }
+.wb-accept-copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.wb-accept-text { color: var(--wb-text); overflow-wrap: anywhere; }
+.wb-accept-evidence { color: var(--wb-muted); font-size: calc(11px * var(--wb-ui-font-scale, 1)); line-height: 1.4; overflow-wrap: anywhere; }
 .wb-accept-state { font-size: calc(11.5px * var(--wb-ui-font-scale, 1)); font-weight: 600; white-space: nowrap; }
 .wb-accept-state.green { color: var(--wb-green); }
 .wb-accept-state.red { color: var(--wb-red); }
