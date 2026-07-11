@@ -1,26 +1,55 @@
 import asyncio
 import logging
 
-from cyrene.channels.telegram import setup_bot
-from cyrene.config import (
-    ASSISTANT_NAME, DATA_DIR, DB_PATH, INBOX_DIR,
-    SEARXNG_AUTO_START, SEARXNG_HOST, SEARXNG_PORT,
-    SOUL_PATH, STORE_DIR, WORKSPACE_DIR,
-)
-from cyrene.db import init_db
-from cyrene.inbox import ensure_inbox
-from cyrene.short_term import init_short_term
-from cyrene.soul import ensure_soul
-
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+_runtime_started = False
+
+
+def _print_help() -> None:
+    print(
+        """usage: python -m cyrene [mode] [options]
+
+Cyrene runtime entry point.
+
+modes:
+  --workbench       Start the Workbench web UI
+  --agent           Start the legacy agent web UI
+  --gui              Start the native GUI wrapper
+  --telegram         Start the Telegram bot (also the legacy no-argument mode)
+
+options:
+  --port PORT        Web server port (Workbench/agent modes)
+  --verbose, -v      Enable verbose diagnostics
+  -h, --help         Show this help without initializing the runtime
+
+The installed `cyrene` command provides daemon/client subcommands; run
+`cyrene --help` for those commands.
+"""
+    )
 
 
 async def _prepare_runtime() -> None:
     """初始化运行时所需的目录和文件"""
+    from cyrene.config import (
+        DATA_DIR,
+        DB_PATH,
+        INBOX_DIR,
+        SEARXNG_AUTO_START,
+        SEARXNG_HOST,
+        SEARXNG_PORT,
+        SOUL_PATH,
+        STORE_DIR,
+        WORKSPACE_DIR,
+    )
+    from cyrene.db import init_db
+    from cyrene.inbox import ensure_inbox
+    from cyrene.short_term import init_short_term
+    from cyrene.soul import ensure_soul
+
     # 创建目录
     for d in (WORKSPACE_DIR, STORE_DIR, DATA_DIR, INBOX_DIR):
         d.mkdir(parents=True, exist_ok=True)
@@ -72,6 +101,9 @@ async def _prepare_runtime() -> None:
 
 
 def _run_bot() -> None:
+    from cyrene.channels.telegram import setup_bot
+    from cyrene.config import ASSISTANT_NAME
+
     app = setup_bot()
     logger.info("%s is starting...", ASSISTANT_NAME)
     app.run_polling()
@@ -79,18 +111,26 @@ def _run_bot() -> None:
 
 def main() -> None:
     import sys
+    global _runtime_started
+    if "--help" in sys.argv or "-h" in sys.argv:
+        _print_help()
+        return
     if "--workbench" in sys.argv:
+        _runtime_started = True
         from cyrene.local_cli import _run_web_mode
         _run_web_mode(ui_mode="workbench")
         return
     if "--agent" in sys.argv:
+        _runtime_started = True
         from cyrene.local_cli import _run_web_mode
         _run_web_mode(ui_mode="legacy")
         return
     if "--gui" in sys.argv or "--electron-mode" in sys.argv:
+        _runtime_started = True
         from cyrene.local_cli import main as _local_main
         _local_main()
         return
+    _runtime_started = True
     asyncio.run(_prepare_runtime())
     _run_bot()
 
@@ -103,7 +143,8 @@ if __name__ == "__main__":
     except Exception:
         logger.exception("Fatal error")
     finally:
-        from cyrene.searxng_manager import stop_searxng
-        stop_searxng()
-        from cyrene.mcp_manager import stop_mcp as _stop_mcp
-        _stop_mcp()
+        if _runtime_started:
+            from cyrene.searxng_manager import stop_searxng
+            stop_searxng()
+            from cyrene.mcp_manager import stop_mcp as _stop_mcp
+            _stop_mcp()

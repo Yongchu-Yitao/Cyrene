@@ -27,6 +27,32 @@ def _clean_cooldowns():
     cl._candidate_cooldowns.clear()
 
 
+def test_deepseek_disabled_thinking_is_explicit():
+    payload = cl._build_payload(
+        [{"role": "user", "content": "ping"}],
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="deepseek-v4-flash",
+        thinking="disabled",
+    )
+
+    assert payload["thinking"] == {"type": "disabled"}
+
+
+def test_generic_model_does_not_receive_deepseek_thinking_extension():
+    payload = cl._build_payload(
+        [{"role": "user", "content": "ping"}],
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="gpt-compatible-model",
+        thinking="disabled",
+    )
+
+    assert "thinking" not in payload
+
+
 class _CountingHandler(BaseHTTPRequestHandler):
     """Tiny OpenAI-compatible stub; per-server hit counter + fixed status."""
 

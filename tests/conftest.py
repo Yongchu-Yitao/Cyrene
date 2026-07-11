@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
 @pytest.fixture(autouse=True)
-async def _reset_agent_global_state():
+def _reset_agent_global_state():
     """Force-reset process-wide agent state before each test (setup phase).
 
     Always access the globals through the module object (``_state._agent_lock``
@@ -99,9 +99,27 @@ async def _reset_agent_global_state():
 
     yield
 
-    # Production shutdown uses the same aggregator.  Awaiting it here, while
-    # this test's event loop is still alive, catches ownership regressions and
-    # prevents SQLite worker threads from leaking into the next test loop.
+
+@pytest.hookimpl(hookwrapper=True, trylast=True)
+def pytest_runtest_call(item):
+    """Drain runtime work immediately after a test's call phase.
+
+    This must remain a hook instead of an async autouse fixture.  Several
+    knowledge-base fixtures call ``asyncio.run()`` during setup.  An async
+    autouse fixture makes pytest-asyncio install the test loop *before* those
+    fixtures run, and ``asyncio.run()`` then clears that loop before the test
+    coroutine starts.  The call hook runs after the coroutine but before
+    pytest-asyncio tears its loop down, which is the safe window for exercising
+    the production shutdown aggregator.
+    """
+    yield
+
+    loop = item.funcargs.get("event_loop")
+    if loop is None:
+        return
+    if loop.is_closed() or loop.is_running():
+        return
+
     from cyrene.runtime_lifecycle import shutdown_background_work
 
-    await shutdown_background_work()
+    loop.run_until_complete(shutdown_background_work())

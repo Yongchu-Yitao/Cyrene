@@ -631,6 +631,7 @@
     var [planning, setPlanning] = useState(false);
     var genRef = useRef({});
     var saveTimer = useRef(null);
+    var answersRef = useRef(init.answers || {});
 
     // Re-sync answers + expanded section when the session changes or the agent
     // regenerates the question set. Deliberately NOT keyed on `init.answers`:
@@ -638,7 +639,9 @@
     // depending on them here would reset the expanded section on every keystroke.
     useEffect(function () {
       var nextInit = (session && session.init) || {};
-      setAnswers(nextInit.answers || {});
+      var nextAnswers = nextInit.answers || {};
+      answersRef.current = nextAnswers;
+      setAnswers(nextAnswers);
       var secs = Array.isArray(nextInit.sections) ? nextInit.sections : [];
       setExpanded(function (prev) {
         if (prev && secs.some(function (s) { return s.id === prev; })) return prev;
@@ -674,23 +677,22 @@
       }, 600);
     }
     function setAnswer(qid, value) {
-      setAnswers(function (prev) {
-        var nextAnswers = Object.assign({}, prev);
-        nextAnswers[qid] = value;
-        persist(nextAnswers);
-        return nextAnswers;
-      });
+      var nextAnswers = Object.assign({}, answersRef.current);
+      nextAnswers[qid] = value;
+      answersRef.current = nextAnswers;
+      setAnswers(nextAnswers);
+      persist(nextAnswers);
     }
     function toggleMulti(qid, opt) {
-      setAnswers(function (prev) {
-        var arr = Array.isArray(prev[qid]) ? prev[qid].slice() : [];
-        var i = arr.indexOf(opt);
-        if (i >= 0) arr.splice(i, 1); else arr.push(opt);
-        var nextAnswers = Object.assign({}, prev);
-        nextAnswers[qid] = arr;
-        persist(nextAnswers);
-        return nextAnswers;
-      });
+      var prev = answersRef.current;
+      var arr = Array.isArray(prev[qid]) ? prev[qid].slice() : [];
+      var i = arr.indexOf(opt);
+      if (i >= 0) arr.splice(i, 1); else arr.push(opt);
+      var nextAnswers = Object.assign({}, prev);
+      nextAnswers[qid] = arr;
+      answersRef.current = nextAnswers;
+      setAnswers(nextAnswers);
+      persist(nextAnswers);
     }
 
     function regenerate() {
@@ -705,7 +707,7 @@
       if (busy) return;
       setBusy(true);
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      model.submitInit(sid, answers)
+      model.submitInit(sid, answersRef.current)
         .then(function (next) { props.onRefresh && props.onRefresh(next); })
         .catch(function (e) { window.showToast((e && e.message) || String(e), "error"); })
         .finally(function () { setBusy(false); });
@@ -714,7 +716,7 @@
       if (busy) return;
       setBusy(true);
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      model.patchSession(sid, { init: { answers: answers } })
+      model.patchSession(sid, { init: { answers: answersRef.current } })
         .then(function (next) { props.onRefresh && props.onRefresh(next); })
         .catch(function (e) { window.showToast((e && e.message) || String(e), "error"); })
         .finally(function () { setBusy(false); });

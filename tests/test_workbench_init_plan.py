@@ -1907,7 +1907,7 @@ def test_workbench_promote_file_artifacts_promotes_and_dedups():
     assert _workbench_promote_file_artifacts(session, changes, "2026-06-14T01:00:00Z") == 0
 
 
-def test_workbench_promote_file_artifacts_relabels_moved_diff_headers(tmp_path):
+def test_workbench_promote_file_artifacts_copies_source_and_relabels_diff_headers(tmp_path):
     from webui.routes import _workbench_promote_file_artifacts
 
     (tmp_path / "report.md").write_text("# Report\n", encoding="utf-8")
@@ -1923,6 +1923,8 @@ def test_workbench_promote_file_artifacts_relabels_moved_diff_headers(tmp_path):
     assert _workbench_promote_file_artifacts(session, changes, "2026-06-14T00:00:00Z", tmp_path) == 1
     artifact = session["artifacts"][0]
     assert artifact["path"] == "deliverables/report.md"
+    assert (tmp_path / "report.md").read_text(encoding="utf-8") == "# Report\n"
+    assert (tmp_path / "deliverables" / "report.md").read_text(encoding="utf-8") == "# Report\n"
     assert "+++ b/deliverables/report.md" in artifact["diff"]
     assert "+++ b/report.md" not in artifact["diff"]
 
@@ -1975,6 +1977,29 @@ def test_workbench_backfill_file_artifacts_from_runs_and_steps():
     assert names == set()
     # idempotent
     assert _workbench_backfill_file_artifacts(session, "2026-06-14T00:00:00Z") == 0
+
+
+def test_workbench_backfill_does_not_restore_missing_produced_artifact(tmp_path):
+    from webui.routes import _workbench_backfill_file_artifacts
+
+    session = {
+        "runs": [{
+            "fileChanges": [{
+                "path": "missing.txt",
+                "status": "produced",
+                "source": "send_file",
+            }],
+        }],
+        "plan": [],
+        "artifacts": [],
+    }
+
+    assert _workbench_backfill_file_artifacts(
+        session,
+        "2026-06-14T00:00:00Z",
+        tmp_path,
+    ) == 0
+    assert session["artifacts"] == []
 
 
 def test_workbench_prunes_non_file_and_duplicate_artifacts():

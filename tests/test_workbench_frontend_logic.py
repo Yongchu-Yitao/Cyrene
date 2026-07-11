@@ -891,6 +891,17 @@ def test_workbench_init_plan_failure_shows_details_and_restart():
     ]
 
 
+def test_workbench_init_answer_updates_do_not_set_parent_state_inside_local_updater():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-create.jsx").read_text(encoding="utf-8")
+    answer_block = source.split("function setAnswer(qid, value)", 1)[1].split("function regenerate()", 1)[0]
+
+    assert "answersRef.current = nextAnswers;" in answer_block
+    assert "setAnswers(nextAnswers);" in answer_block
+    assert "persist(nextAnswers);" in answer_block
+    assert "setAnswers(function" not in answer_block
+
+
 def test_workbench_model_settings_preserve_form_on_failed_response():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "settings-overlay.jsx").read_text(encoding="utf-8")

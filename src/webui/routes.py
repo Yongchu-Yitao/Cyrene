@@ -2405,7 +2405,11 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
                 changed = True
             if _workbench_prune_invalid_file_records(project, session):
                 changed = True
-            if _workbench_backfill_file_artifacts(session, now):
+            if _workbench_backfill_file_artifacts(
+                session,
+                now,
+                _workbench_workspace_root(project),
+            ):
                 changed = True
             if _workbench_backfill_referenced_file_artifacts(project, session, now):
                 changed = True
@@ -4416,8 +4420,9 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
     """Surface explicitly produced files as task artifacts (dedup by path).
 
     When ``workspace_root`` is provided, files declared via ``send_file``
-    (changeType ``produced``) are physically moved into ``deliverables/``
-    under the workspace root so the root stays clean.
+    (changeType ``produced``) are copied into ``deliverables/`` for artifact
+    download.  The source must remain in place: moving it after the Agent has
+    verified the requested path can silently invalidate the task's result.
     """
     _workbench_prune_non_file_artifacts(session)
     if not file_changes:
@@ -4451,8 +4456,8 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
         if not status:
             continue
         original_path = path
-        # Move send_file deliverables into deliverables/ so the workspace root
-        # doesn't accumulate flat files. Skip files already under deliverables/.
+        # Copy send_file deliverables into deliverables/ for download while
+        # preserving the Agent-verified source path. Skip files already there.
         if change_type == "produced" and deliverables_dir:
             src_path = (workspace_root / path).resolve()  # type: ignore[union-attr]
             try:
@@ -4467,7 +4472,7 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
                         suffix = Path(dest_name).suffix or ".bin"
                         dest_path = deliverables_dir / f"{stem}_{_short_id('f')}{suffix}"
                     if src_path != dest_path:
-                        shutil.move(str(src_path), str(dest_path))
+                        shutil.copy2(str(src_path), str(dest_path))
                         path = str(dest_path.relative_to(workspace_root))  # type: ignore[union-attr]
         known_paths.add(path)
         artifact = {
@@ -4490,7 +4495,11 @@ def _workbench_promote_file_artifacts(session: dict[str, Any], file_changes: lis
     return added
 
 
-def _workbench_backfill_file_artifacts(session: dict[str, Any], now: str) -> int:
+def _workbench_backfill_file_artifacts(
+    session: dict[str, Any],
+    now: str,
+    workspace_root: Path | None = None,
+) -> int:
     """Derive file_change artifacts from a session's already-recorded runs and
     plan steps, for tasks that ran before file promotion existed."""
     changes: list[dict[str, Any]] = []
@@ -4500,7 +4509,29 @@ def _workbench_backfill_file_artifacts(session: dict[str, Any], now: str) -> int
     for step in session.get("plan") or []:
         if isinstance(step, dict):
             changes.extend(c for c in (step.get("relatedFiles") or []) if isinstance(c, dict))
-    return _workbench_promote_file_artifacts(session, _workbench_merge_file_changes(changes), now)
+    merged = _workbench_merge_file_changes(changes)
+    if workspace_root is not None:
+        existing: list[dict[str, Any]] = []
+        for change in merged:
+            if not _workbench_is_artifact_change(change):
+                existing.append(change)
+                continue
+            try:
+                target = _workbench_resolve_workspace_file(
+                    workspace_root,
+                    change.get("path") or change.get("name"),
+                )
+            except (OSError, ValueError):
+                continue
+            if target.is_file():
+                existing.append(change)
+        merged = existing
+    return _workbench_promote_file_artifacts(
+        session,
+        merged,
+        now,
+        workspace_root,
+    )
 
 
 _WORKBENCH_OUTPUT_EVIDENCE = re.compile(

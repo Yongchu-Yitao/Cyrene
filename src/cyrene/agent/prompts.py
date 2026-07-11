@@ -42,7 +42,8 @@ def workspace_scope_block(workspace_dir: Any = WORKSPACE_DIR, shell_kind: str = 
         f"  - `deliverables/` — reports, exports, data files, downloads that the user should receive\n"
         f"  - `scratch/` — temporary scripts, intermediate files, working files (not final deliverables)\n"
         f"  - Do NOT dump deliverable files directly into the workspace root.\n"
-        f"- Files declared via `send_file` are automatically moved to `deliverables/`."
+        f"- In Workbench, files declared via `send_file` are copied to `deliverables/` for download; "
+        f"the original source path is preserved."
     )
     if shell_kind and shell_kind != "bash":
         block += (

@@ -422,7 +422,13 @@ def _build_payload(
     elif thinking == "enabled":
         payload["thinking"] = {"type": "enabled"}
     elif thinking == "disabled":
-        payload.pop("thinking", None)
+        # DeepSeek V4 defaults to thinking mode when the field is omitted.
+        # Send an explicit opt-out so small deterministic calls do not spend
+        # their whole output budget on reasoning and return an empty answer.
+        # Other OpenAI-compatible providers may reject this extension, so keep
+        # the field provider/model-specific just like the automatic opt-in.
+        if "deepseek" in model.lower():
+            payload["thinking"] = {"type": "disabled"}
     return payload
 
 
