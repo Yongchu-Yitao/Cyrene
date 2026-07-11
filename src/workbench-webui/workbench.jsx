@@ -13,9 +13,17 @@ var {
 var wbBrowserOverlayCount = 0;
 function wbSetBrowserOverlayObscured(delta) {
   wbBrowserOverlayCount = Math.max(0, wbBrowserOverlayCount + delta);
+  var obscured = wbBrowserOverlayCount > 0;
+  // Let the renderer-side browser host stop publishing visible bounds too.
+  // setObscured is the authoritative native-view guard, while this event makes
+  // the transition immediate and prevents a pending ResizeObserver/rAF bounds
+  // update from re-showing the view during an overlay.
+  window.dispatchEvent(new CustomEvent("workbench:browser-obscured", {
+    detail: { obscured: obscured },
+  }));
   var bridge = window.cyrene && window.cyrene.browser;
   if (bridge && typeof bridge.setObscured === "function") {
-    bridge.setObscured(wbBrowserOverlayCount > 0).catch(function (err) {
+    bridge.setObscured(obscured).catch(function (err) {
       console.error("setObscured failed", err);
     });
   }

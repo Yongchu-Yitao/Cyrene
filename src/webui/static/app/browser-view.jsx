@@ -45,6 +45,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   const hostRef = React.useRef(null);
   const addressRef = React.useRef(null);
   const boundsRafRef = React.useRef(0);
+  const overlayObscuredRef = React.useRef(false);
   const [state, setState] = React.useState({ tabs: [], activeTabId: "", activeTab: null });
   const [address, setAddress] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -83,7 +84,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   function sendBounds(visible) {
     if (!bridge || typeof bridge.setBounds !== "function") return;
     const node = hostRef.current;
-    if (!visible || !node) {
+    if (!visible || overlayObscuredRef.current || !node) {
       bridge.setBounds({ visible: false }).catch(function () {});
       return;
     }
@@ -116,6 +117,26 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       if (ro) ro.disconnect();
       window.removeEventListener("resize", scheduleBounds);
       sendBounds(false);
+    };
+  }, []);
+
+  React.useEffect(function () {
+    function onBrowserObscured(event) {
+      const obscured = !!(event && event.detail && event.detail.obscured);
+      overlayObscuredRef.current = obscured;
+      if (obscured) {
+        if (boundsRafRef.current) {
+          cancelAnimationFrame(boundsRafRef.current);
+          boundsRafRef.current = 0;
+        }
+        sendBounds(false);
+      } else {
+        scheduleBounds();
+      }
+    }
+    window.addEventListener("workbench:browser-obscured", onBrowserObscured);
+    return function () {
+      window.removeEventListener("workbench:browser-obscured", onBrowserObscured);
     };
   }, []);
 
