@@ -14,6 +14,8 @@
 - **运行时帮助信息增强** — `__main__.py` 扩展 CLI 帮助输出，包含 verbose mode 支持、后端服务状态列表（SearXNG、MCP 等）。
 - **后台备份导出** — `backup.py` 将阻塞性文件压缩操作迁移到 `asyncio.to_thread`，不阻塞事件循环。
 - **LLM 候选端点日志** — `call_llm.py` 新增候选端点自动切换日志，便于调试模型端点故障。
+- **浏览器访问接管信号** — 浏览器结果新增统一的 `page_signal`，识别“内容暂不可用 / 请打开 App / 登录后查看”等临时访问门槛，并明确恢复冷却时间、单次重试和用户接管路径。
+- **浏览器交互观察输出** — 新增统一的浏览器页面观察格式，导航、快照和点击结果会携带页面信号与受限访问提示，减少 Agent 对页面状态的误判。
 
 ### Changed
 
@@ -41,6 +43,11 @@
   - 依赖 esbuild v0.25+。
 - **文件交付优化** — `routes.py` 文件发送端点增强路径解析，支持更宽泛的临时文件路径；`index.html` 新增 PDF.js 资源引用。
 - **LLM 意图分类增强** — `call_llm.py` 改进 dispatch 意图分类的上下文传递，子 agent 场景下分类更准确。
+- **浏览器自动化稳定性增强** — 导航和 SPA 路由变化增加有界的页面稳定等待；点击操作统一等待内容结果、增加 800ms 防抖，并覆盖按选择器、引用、文本和坐标点击，避免重复点击和过早读取页面。
+- **构建与打包流程增强** — PyInstaller 打包排除 `node_modules`，macOS 构建兼容多架构目录；Electron 生产环境支持通过 `CYRENE_USER_DATA_DIR`、`CYRENE_CACHE_DIR`、`CYRENE_TEMP_DIR` 指定隔离路径，便于便携安装、诊断和打包冒烟测试。
+- **配置与 CLI 运行时增强** — 新增 `CYRENE_CONFIG_KEYRING=0/false/no/off` 禁用系统密钥环；Electron 后端退出时对清理任务提供取消保护，并正确记录用户通过 `Ctrl+C` 退出的情况。
+- **Goal Loop 并发与恢复增强** — 启动流程增加短临界区锁与失败回滚，避免重复点击产生重复执行实例或残留幻影记录；服务重启后会将中断中的步骤重新排队，并恢复 Workbench 投影状态。
+- **项目请求兼容性增强** — 项目创建接口继续接受 `workspace_path` 蛇形命名，同时保留 `workspacePath` 驼峰命名。
 
 ### Fixed
 
@@ -50,6 +57,10 @@
 - **WebUI Nonce 处理** — 修复 Content-Security-Policy nonce 的生成与传播逻辑。
 - **`workbench-memory.jsx` 缺少闭合括号** — 修复 JSX 语法错误导致 esbuild 构建失败。
 - **其他运行时修复** — SSE 事件发布的 session_id 保证；知识库搜索的边界处理；通知已读状态的多 tab 一致性。
+- **浏览器访问门槛处理** — 临时访问门槛只允许一次带冷却时间的恢复尝试；仍受阻时引导调用 `browser_request_takeover`，不再无限重试或尝试绕过站点限制。
+- **浏览器点击竞态** — 修复多种点击入口可能快速连续触发、点击后过早返回旧页面内容的问题。
+- **任务恢复一致性** — 进程恢复时清理已失效聊天的 `pendingQuestion`，并将崩溃后仍标记为 `running` 的计划步骤安全恢复为 `pending`。
+- **构建环境污染** — 修复 `node_modules` 被错误枚举进 Python 打包模块列表的问题。
 
 ### Tests
 
@@ -64,6 +75,10 @@
 - 更新 `tests/test_proactive_workbench.py` — 用户消息捕获与系统主动触发场景。
 - 更新 `tests/test_workbench_frontend_logic.py` — 动态 i18n 标签与 HTML sandbox 断言。
 - 更新 `tests/test_workbench_init_plan.py` — 初始化计划生成断言扩充。
+- 新增 `tests/test_browser_session.py` 场景 — 覆盖访问门槛信号、Electron 字段归一化、点击防抖、恢复尝试和用户接管。
+- 新增 `tests/test_workbench_chat_run_recovery.py` — 覆盖异常退出后的聊天运行状态恢复。
+- 更新 `tests/test_goal_loop.py`、`tests/test_workbench_api_validation.py`、`tests/test_workbench_sqlite_store.py` 与 `tests/test_workbench_frontend_logic.py` — 覆盖 Goal Loop 并发启动/恢复、请求字段兼容、数据库恢复与版本化前端资源。
+- 更新 `tests/test_config_store.py`、`tests/test_quick_chat_feature.py` 与 `tests/test_agent_pure.py` — 覆盖密钥环退出开关、版本缓存和浏览器访问门槛提示。
 
 ## [0.6.3] - 2026-07-07
 
