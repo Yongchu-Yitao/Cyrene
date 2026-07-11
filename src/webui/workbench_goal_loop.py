@@ -539,6 +539,10 @@ class GoalLoopManager:
         self.db_path = str(db_path)
         self.owner = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         self.tasks: dict[str, asyncio.Task[Any]] = {}
+        # Starting a run spans the goal-loop tables and the Workbench document.
+        # Serialize that short cross-store critical section so duplicate clicks
+        # cannot interleave into a SQLite lock error or a half-created run.
+        self.start_lock = asyncio.Lock()
         self.closed = False
 
     async def startup(self) -> None:
@@ -549,7 +553,7 @@ class GoalLoopManager:
             "OR (status = 'paused' AND stop_reason = 'server_shutdown')",
         )
         for row in rows:
-            await _update_run(
+            recovered = await _update_run(
                 self.db_path,
                 str(row["id"]),
                 status="running",
@@ -559,6 +563,31 @@ class GoalLoopManager:
                 lease_owner=None,
                 lease_until=None,
             )
+            if recovered:
+                def apply(
+                    _payload: dict[str, Any],
+                    _project: dict[str, Any],
+                    session: dict[str, Any],
+                ) -> None:
+                    # A hard crash can leave the document projection midway
+                    # through a step even though no agent owns that execution
+                    # anymore. Re-queue it so the recovered worker can inspect
+                    # existing side effects and execute idempotently.
+                    for step in session.get("plan") or []:
+                        if not isinstance(step, dict) or str(step.get("status") or "") != "running":
+                            continue
+                        step["status"] = "pending"
+                        step["startedAt"] = None
+                        step.pop("currentAction", None)
+                    session["status"] = "running"
+                    session["goalLoop"] = _public_run(recovered)
+                    session["agentReply"] = "检测到上次执行被中断，正在从已保存进度恢复。"
+
+                try:
+                    _write_session(str(row["session_id"]), apply)
+                except KeyError:
+                    pass
+                await _publish(recovered)
             self.wake(str(row["id"]))
 
     async def shutdown(self) -> None:
@@ -1409,7 +1438,23 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
         else:
             plan = json.loads(_json_dumps(session.get("plan") or []))
             draft_session["plan"] = plan
-            acceptance, from_llm = await R._workbench_generate_acceptance_criteria(draft_session, project)
+            # Existing criteria are the user's explicit success contract. Do
+            # not silently replace them with newly generated criteria when the
+            # objective itself is unchanged: an LLM can introduce contradictory
+            # requirements and make a correct result impossible to accept.
+            existing_acceptance = [
+                {
+                    **json.loads(_json_dumps(item)),
+                    "status": "pending",
+                }
+                for item in (session.get("acceptanceCriteria") or [])
+                if isinstance(item, dict) and str(item.get("text") or "").strip()
+            ]
+            if existing_acceptance:
+                acceptance = existing_acceptance
+                from_llm = False
+            else:
+                acceptance, from_llm = await R._workbench_generate_acceptance_criteria(draft_session, project)
         if not plan:
             return JSONResponse({"error": "无法生成可执行计划。"}, status_code=503)
         if not acceptance:
@@ -1465,6 +1510,12 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
     async def start_goal_loop(
         session_id: str, body_model: api_models.GoalLoopStartBody
     ):
+        async with manager.start_lock:
+            return await _start_goal_loop_impl(session_id, body_model)
+
+    async def _start_goal_loop_impl(
+        session_id: str, body_model: api_models.GoalLoopStartBody
+    ):
         body = api_models.body_dict(body_model)
         draft_id = str(body.get("draftId") or "").strip()
         draft = await _fetch_one(
@@ -1473,6 +1524,12 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
             (draft_id, session_id),
         )
         if not draft:
+            existing = await _get_run_by_session(db_path, session_id)
+            if existing and str(existing.get("status") or "") not in _TERMINAL_STATUSES | {"cancelled"}:
+                return JSONResponse(
+                    {"error": "该任务已有持续执行实例。", "code": "goal_loop_exists"},
+                    status_code=409,
+                )
             return JSONResponse({"error": "目标配置草稿不存在或已过期。", "code": "draft_not_found"}, status_code=404)
         try:
             if datetime.fromisoformat(str(draft["expires_at"])) <= _utc_now():
@@ -1545,7 +1602,17 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
 
         from webui import routes as R
 
-        payload, project, session = _write_session(session_id, apply)
+        try:
+            payload, project, session = _write_session(session_id, apply)
+        except Exception:
+            # The run row is only a reservation until its Workbench projection
+            # is durable. Remove it on failure so a retry is not rejected by a
+            # phantom running instance.
+            try:
+                await _execute(db_path, "DELETE FROM goal_runs WHERE id = ?", (run_id,))
+            except Exception:
+                logger.exception("Failed to roll back unprojected goal-loop run %s", run_id)
+            raise
         await _execute(db_path, "DELETE FROM goal_loop_drafts WHERE id = ?", (draft_id,))
         await _event(db_path, run_id, "started", payload={"limits": limits})
         if run:

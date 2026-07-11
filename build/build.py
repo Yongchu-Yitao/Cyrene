@@ -14,8 +14,12 @@ import sys
 import struct
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from playwright_bundle import has_required_chromium_bundles
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BUILD_DIR = PROJECT_ROOT / "build"
@@ -434,7 +438,7 @@ def run_electron_builder(arch: str = "x64") -> None:
         print("  [hint] Run: cd electron && npm install")
         return
 
-    print(f"\n[electron-builder] Packaging...")
+    print("\n[electron-builder] Packaging...")
     cmd = [eb]
     if IS_MAC:
         cmd.append("--mac")
@@ -457,8 +461,9 @@ def run_electron_builder(arch: str = "x64") -> None:
 
     # macOS: sign the .app and repackage.
     if IS_MAC:
-        mac_app = PROJECT_ROOT / "dist-electron" / "mac" / "Cyrene.app"
-        if mac_app.exists():
+        mac_apps = sorted((PROJECT_ROOT / "dist-electron").glob("mac*/Cyrene.app"))
+        if mac_apps:
+            mac_app = mac_apps[0]
             print(f"\n[macOS] Re-signing {mac_app}...")
             _codesign_mac(mac_app)
             # Strict verification: codesign -v --deep --strict checks that
@@ -476,7 +481,7 @@ def run_electron_builder(arch: str = "x64") -> None:
             # the unsigned .app (before we signed python-bundle).
             # hdiutil create with staging preserves resource forks and
             # extended attributes (code signatures) on macOS.
-            import tempfile, shutil, glob
+            import glob
             version = get_version()
             dmg_path = PROJECT_ROOT / "dist-electron" / f"Cyrene-{version}-mac.dmg"
             _old_dmgs = sorted(glob.glob(str(PROJECT_ROOT / "dist-electron" / f"Cyrene-{version}-mac*.dmg")))

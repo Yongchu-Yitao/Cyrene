@@ -256,7 +256,7 @@ async def _handle_menu():
             return
 
         elif choice == "1":
-            from cyrene.setup import init_setup_flag, mark_setup_done, run_setup
+            from cyrene.setup import init_setup_flag, run_setup
             init_setup_flag()
             print("\n--- 重新注入人格 ---")
             await run_setup()
@@ -484,15 +484,29 @@ def _run_electron_mode() -> None:
         finally:
             from cyrene.task_lifecycle import cancel_and_wait
 
-            await cancel_and_wait(
-                task
-                for task in (update_check_task, background_services_task)
-                if task is not None
-            )
-            scheduler.shutdown(wait=False)
+            async def _cleanup() -> None:
+                await cancel_and_wait(
+                    task
+                    for task in (update_check_task, background_services_task)
+                    if task is not None
+                )
+                scheduler.shutdown(wait=False)
+
+            # SIGINT may cancel the main coroutine while it is already inside
+            # this finalizer. Give the owned cleanup task a cancellation shield
+            # so scheduler/background teardown still completes before exit.
+            cleanup_task = asyncio.create_task(_cleanup())
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                await cleanup_task
+                raise
 
     try:
-        asyncio.run(_start())
+        try:
+            asyncio.run(_start())
+        except KeyboardInterrupt:
+            logger.info("Electron backend stopped by user")
     finally:
         from cyrene.searxng_manager import stop_searxng
         stop_searxng()
@@ -824,7 +838,6 @@ def _run_web_gui() -> None:
 
 def _fallback_to_browser(url: str, _server_thread=None) -> None:
     """Open the web UI in the default browser and keep the process alive."""
-    import sys as _sys
     print(f"Cyrene server is running at {url}", flush=True)
     try:
         import webbrowser
@@ -833,7 +846,6 @@ def _fallback_to_browser(url: str, _server_thread=None) -> None:
         pass
     print("Press Ctrl+C to stop.", flush=True)
     import http.client
-    import json as _json
     _health_host = "127.0.0.1"
     _health_port = int(url.rsplit(":", 1)[1])
     _health_skip = 0
@@ -906,7 +918,7 @@ def main() -> None:
             elif flag == "--mcp-toggle" and idx + 1 < len(sys.argv):
                 asyncio.run(_run_one_shot_mcp(["toggle", sys.argv[idx + 1]]))
             else:
-                print(f"Usage: --mcp-list | --mcp-test <name> | --mcp-add <name> stdio <cmd> [args...] | --mcp-add <name> sse <url> | --mcp-remove <name> | --mcp-toggle <name>")
+                print("Usage: --mcp-list | --mcp-test <name> | --mcp-add <name> stdio <cmd> [args...] | --mcp-add <name> sse <url> | --mcp-remove <name> | --mcp-toggle <name>")
         return
 
     if "--verbose" in sys.argv:

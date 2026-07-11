@@ -2,6 +2,8 @@ import asyncio
 import json
 import sqlite3
 
+import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -83,11 +85,10 @@ def _app(monkeypatch, tmp_path):
 def test_goal_loop_preview_and_start_without_changing_goal(monkeypatch, tmp_path):
     from webui import routes
 
-    async def fake_acceptance(session, project):
-        assert session["goal"] == "完成账号登录功能"
-        return [{"id": "fresh", "text": "登录测试全部通过", "status": "pending"}], True
+    async def unexpected_generation(*_args, **_kwargs):
+        raise AssertionError("existing user acceptance criteria must be preserved")
 
-    monkeypatch.setattr(routes, "_workbench_generate_acceptance_criteria", fake_acceptance)
+    monkeypatch.setattr(routes, "_workbench_generate_acceptance_criteria", unexpected_generation)
     app, db_path, store_path = _app(monkeypatch, tmp_path)
     client = TestClient(app)
 
@@ -106,7 +107,9 @@ def test_goal_loop_preview_and_start_without_changing_goal(monkeypatch, tmp_path
     draft = preview.json()
     assert draft["goalChanged"] is False
     assert draft["plan"][0]["id"] == "step_1"
-    assert draft["acceptanceCriteria"][0]["text"] == "登录测试全部通过"
+    assert draft["acceptanceCriteria"][0]["id"] == "accept_1"
+    assert draft["acceptanceCriteria"][0]["text"] == "认证测试通过"
+    assert draft["planSource"] == "fallback"
 
     started = client.post(
         "/api/task-sessions/session_1/goal-loop/start",
@@ -130,6 +133,169 @@ def test_goal_loop_preview_and_start_without_changing_goal(monkeypatch, tmp_path
     run = asyncio.run(read_run())
     assert run["max_active_seconds"] == 7200
     assert run["max_repair_rounds"] == 3
+
+
+async def test_goal_loop_concurrent_start_returns_conflict_not_server_error(monkeypatch, tmp_path):
+    """A double click or retried HTTP request must create exactly one run."""
+    app, db_path, _store_path = _app(monkeypatch, tmp_path)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        preview = await client.post(
+            "/api/task-sessions/session_1/goal-loop/preview",
+            json={
+                "goal": "完成账号登录功能",
+                "maxRuntimeHours": 2,
+                "maxRepairRounds": 3,
+                "permissionMode": "auto",
+                "reflectionMode": "proactive",
+                "basePlanDefinitionRevision": 3,
+            },
+        )
+        assert preview.status_code == 200
+        draft_id = preview.json()["draftId"]
+        first, second = await asyncio.gather(
+            client.post(
+                "/api/task-sessions/session_1/goal-loop/start",
+                json={"draftId": draft_id},
+            ),
+            client.post(
+                "/api/task-sessions/session_1/goal-loop/start",
+                json={"draftId": draft_id},
+            ),
+        )
+
+    assert sorted((first.status_code, second.status_code)) == [200, 409]
+    conflict = first if first.status_code == 409 else second
+    assert conflict.json()["code"] == "goal_loop_exists"
+
+    from webui import workbench_goal_loop as goal_loop
+
+    rows = await goal_loop._fetch_all(db_path, "SELECT * FROM goal_runs WHERE session_id = ?", ("session_1",))
+    assert len(rows) == 1
+
+
+async def test_goal_loop_start_rolls_back_run_when_projection_write_fails(monkeypatch, tmp_path):
+    from webui import workbench_goal_loop as goal_loop
+
+    app, db_path, _store_path = _app(monkeypatch, tmp_path)
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=True)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        preview = await client.post(
+            "/api/task-sessions/session_1/goal-loop/preview",
+            json={
+                "goal": "完成账号登录功能",
+                "maxRuntimeHours": 2,
+                "maxRepairRounds": 3,
+                "permissionMode": "auto",
+                "reflectionMode": "proactive",
+                "basePlanDefinitionRevision": 3,
+            },
+        )
+        draft_id = preview.json()["draftId"]
+        monkeypatch.setattr(goal_loop, "_write_session", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")))
+        with pytest.raises(OSError, match="disk full"):
+            await client.post(
+                "/api/task-sessions/session_1/goal-loop/start",
+                json={"draftId": draft_id},
+            )
+
+    assert await goal_loop._get_run_by_session(db_path, "session_1") is None
+
+
+async def test_goal_loop_startup_recovers_hard_crash_state_and_stale_lease(monkeypatch, tmp_path):
+    """Persisted running state is the exact state left by SIGKILL/power loss."""
+    from webui import routes
+    from webui import workbench_goal_loop as goal_loop
+
+    data_dir, store_path = _store(tmp_path, status="running")
+    db_path = str(tmp_path / "test.db")
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    await goal_loop._ensure_schema(db_path)
+    payload = routes._read_workbench_store()
+    payload["projects"][0]["sessions"][0]["plan"][0].update(
+        status="running",
+        startedAt="2026-07-11T00:00:00+00:00",
+        currentAction="旧进程正在执行",
+    )
+    routes._write_workbench_store(payload)
+    now = goal_loop._utc_iso()
+    await goal_loop._execute(
+        db_path,
+        """
+        INSERT INTO goal_runs
+        (id, session_id, project_id, objective, status, phase,
+         plan_definition_revision, permission_mode, reflection_mode,
+         max_active_seconds, max_repair_rounds, active_seconds,
+         active_started_at, repair_round, lease_owner, lease_until,
+         created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'running', 'executing', ?, 'auto', 'standard',
+                3600, 2, 12, ?, 0, 'dead-process', ?, ?, ?)
+        """,
+        ("run_crashed", "session_1", "project_1", "完成账号登录功能", 3, now, now, now, now),
+    )
+
+    manager = goal_loop.GoalLoopManager(db_path)
+    awakened = []
+    monkeypatch.setattr(manager, "wake", awakened.append)
+    await manager.startup()
+
+    recovered = await goal_loop._get_run_by_id(db_path, "run_crashed")
+    assert recovered["status"] == "running"
+    assert recovered["phase"] == "recovering"
+    assert recovered["lease_owner"] is None
+    assert recovered["lease_until"] is None
+    assert recovered["active_started_at"]
+    assert awakened == ["run_crashed"]
+    stored = routes._read_workbench_store()
+    session = stored["projects"][0]["sessions"][0]
+    step = session["plan"][0]
+    assert session["status"] == "running"
+    assert session["goalLoop"]["phase"] == "recovering"
+    assert step["status"] == "pending"
+    assert step["startedAt"] is None
+    assert "currentAction" not in step
+
+
+async def test_goal_loop_graceful_restart_pauses_then_recovers(monkeypatch, tmp_path):
+    from webui import routes
+    from webui import workbench_goal_loop as goal_loop
+
+    data_dir, store_path = _store(tmp_path, status="running")
+    db_path = str(tmp_path / "test.db")
+    monkeypatch.setattr(routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    await goal_loop._ensure_schema(db_path)
+    now = goal_loop._utc_iso()
+    await goal_loop._execute(
+        db_path,
+        """
+        INSERT INTO goal_runs
+        (id, session_id, project_id, objective, status, phase,
+         plan_definition_revision, permission_mode, reflection_mode,
+         max_active_seconds, max_repair_rounds, active_seconds,
+         active_started_at, repair_round, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'running', 'executing', ?, 'auto', 'standard',
+                3600, 2, 0, ?, 0, ?, ?)
+        """,
+        ("run_restart", "session_1", "project_1", "完成账号登录功能", 3, now, now, now),
+    )
+
+    old_manager = goal_loop.GoalLoopManager(db_path)
+    await old_manager.shutdown()
+    paused = await goal_loop._get_run_by_id(db_path, "run_restart")
+    assert paused["status"] == "paused"
+    assert paused["stop_reason"] == "server_shutdown"
+
+    new_manager = goal_loop.GoalLoopManager(db_path)
+    awakened = []
+    monkeypatch.setattr(new_manager, "wake", awakened.append)
+    await new_manager.startup()
+    resumed = await goal_loop._get_run_by_id(db_path, "run_restart")
+    assert resumed["status"] == "running"
+    assert resumed["phase"] == "recovering"
+    assert resumed["stop_reason"] is None
+    assert awakened == ["run_restart"]
 
 
 def test_goal_loop_changed_goal_regenerates_plan_and_requires_full_access_confirmation(monkeypatch, tmp_path):

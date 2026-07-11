@@ -244,6 +244,20 @@ def test_project_creation_validates_and_creates_writable_workspace(
     assert target.is_dir()
 
 
+def test_project_creation_accepts_snake_case_workspace_alias(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    target = tmp_path / "snake-project"
+
+    response = client.post(
+        "/api/projects",
+        json={"name": "Snake project", "workspace_path": str(target)},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["project"]["workspacePath"] == str(target.resolve())
+    assert response.json()["project"]["workspacePathSource"] == "user"
+
+
 def test_project_creation_rejects_workspace_outside_allowed_roots(
     monkeypatch, tmp_path
 ):

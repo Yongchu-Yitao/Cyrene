@@ -295,6 +295,10 @@ class ChatRunManager:
             for chat in payload.get("chats", []) or []:
                 if str(chat.get("status") or "") == "running":
                     chat["status"] = "idle"
+                    # A question left on a record that was subsequently marked
+                    # running belongs to the crashed exchange. There is no live
+                    # agent state in this process that can resume it safely.
+                    chat.pop("pendingQuestion", None)
                     changed = True
             if changed:
                 chat_mod._write_chats_store(payload)

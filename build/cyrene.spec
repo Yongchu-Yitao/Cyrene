@@ -61,7 +61,7 @@ def _enumerate_local_package(src: Path, pkg: str) -> list:
         return []
     names = []
     for f in sorted(root.rglob("*.py")):
-        if "__pycache__" in f.parts:
+        if "__pycache__" in f.parts or "node_modules" in f.parts:
             continue
         rel = f.relative_to(src)
         mod = str(rel.with_suffix("")).replace("/", ".").replace("\\", ".")

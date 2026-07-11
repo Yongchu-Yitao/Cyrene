@@ -38,6 +38,19 @@ def _write_encrypted(config_store, config: dict) -> None:
     config_store._ENCRYPTED_PATH.write_bytes(Fernet(key).encrypt(plain))
 
 
+def test_explicit_keyring_opt_out_uses_isolated_plaintext_key(
+    isolated_config_store,
+    monkeypatch,
+):
+    monkeypatch.setenv("CYRENE_CONFIG_KEYRING", "0")
+
+    cipher = isolated_config_store._get_fernet()
+
+    assert cipher is not None
+    assert isolated_config_store._KEY_PATH.exists()
+    assert isolated_config_store._KEY_PATH.stat().st_mode & 0o777 == 0o600
+
+
 def test_migration_fixes_incomplete_model_entries(isolated_config_store):
     """Older onboarding wrote model entries without model/base_url/api_key."""
     config = {

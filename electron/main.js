@@ -1596,9 +1596,12 @@ function spawnPython() {
     CYRENE_ELECTRON_RPC_TOKEN: AUTH_TOKEN,
   };
   if (!isDev) {
-    childEnv.CYRENE_USER_DATA_DIR = getCyreneUserDataDir();
-    childEnv.CYRENE_CACHE_DIR = getCyreneCacheDir();
-    childEnv.CYRENE_TEMP_DIR = getCyreneTempDir();
+    // Respect explicit path overrides for portable installs, diagnostics and
+    // isolated packaged-app smoke tests. Normal launches have no overrides and
+    // continue to use Electron's platform-specific application directories.
+    childEnv.CYRENE_USER_DATA_DIR = process.env.CYRENE_USER_DATA_DIR || getCyreneUserDataDir();
+    childEnv.CYRENE_CACHE_DIR = process.env.CYRENE_CACHE_DIR || getCyreneCacheDir();
+    childEnv.CYRENE_TEMP_DIR = process.env.CYRENE_TEMP_DIR || getCyreneTempDir();
   }
 
   if (binaryPath) {

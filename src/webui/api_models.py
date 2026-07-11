@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 SessionStatus = Literal[
@@ -55,14 +55,17 @@ class ProjectCreateBody(APIBody):
     icon: str | None = Field(default=None, max_length=80)
     color: str | None = Field(default=None, max_length=80)
     template: str | None = Field(default=None, max_length=80)
-    workspacePath: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("workspacePath", "workspace_path"),
-        max_length=4096,
-    )
+    workspacePath: str | None = Field(default=None, max_length=4096)
     accountTier: str | None = Field(default=None, max_length=80)
     summary: str | None = Field(default=None, max_length=20_000)
     stack: list[Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_workspace_snake_case(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "workspacePath" not in value and "workspace_path" in value:
+            value = {**value, "workspacePath": value["workspace_path"]}
+        return value
 
 
 class ProjectUpdateBody(APIBody):

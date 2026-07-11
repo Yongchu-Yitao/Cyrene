@@ -315,7 +315,7 @@ def test_workbench_chat_allows_drafting_but_not_sending_while_running():
     assert "Agent 正在回复，可先输入；停止后才能发送。" in (
         root / "src" / "workbench-webui" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
-    assert "workbench-chat.js?v=0.6.3" in index
+    assert "workbench-chat.js?v=0.6.4" in index
     assert "workbench-i18n.js?v=0.6.5" in index
 
 
@@ -838,7 +838,7 @@ def test_workbench_context_picker_contains_long_workspace_paths():
     assert "text-overflow: ellipsis;" in text_rule
     assert "white-space: nowrap;" in text_rule
     assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=0.6.3" in index
+    assert "workbench-chat.js?v=0.6.4" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -854,7 +854,7 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=0.6.3" in index
+    assert "workbench-model.js?v=0.6.4" in index
     assert "workbench.js?v=0.6.7" in index
 
 
@@ -1294,7 +1294,7 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=0.6.3" in index
+    assert "compiled/workbench-shortcuts.js?v=0.6.4" in index
 
 
 def test_workbench_about_related_actions_only_click_right_button():
@@ -1440,3 +1440,12 @@ def test_workbench_knowledge_list_does_not_silently_truncate():
     assert "_total" in source
     assert "totalDocs" in source
     assert "显示前" in source
+
+
+def test_packaged_electron_preserves_explicit_runtime_path_overrides():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "electron" / "main.js").read_text(encoding="utf-8")
+
+    assert "process.env.CYRENE_USER_DATA_DIR || getCyreneUserDataDir()" in source
+    assert "process.env.CYRENE_CACHE_DIR || getCyreneCacheDir()" in source
+    assert "process.env.CYRENE_TEMP_DIR || getCyreneTempDir()" in source

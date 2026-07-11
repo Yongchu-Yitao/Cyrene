@@ -184,3 +184,30 @@ def test_concurrent_process_counter_increments_use_deltas(tmp_path: Path) -> Non
 
     entries = read_document(db_path, "memory:project", list)
     assert entries[0]["mention_count"] == 3
+
+
+def test_eight_process_counter_burst_has_no_lost_updates_or_lock_failures(tmp_path: Path) -> None:
+    """Bounded pressure check for the process-safe merge/write path."""
+    db_path = str(tmp_path / "cyrene.db")
+    write_document(
+        db_path,
+        "memory:project",
+        [{"id": "mem_1", "mention_count": 0}],
+        list,
+    )
+
+    worker_count = 8
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(worker_count)
+    processes = [
+        context.Process(target=_increment_worker, args=(db_path, barrier))
+        for _ in range(worker_count)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=20)
+        assert process.exitcode == 0
+
+    entries = read_document(db_path, "memory:project", list)
+    assert entries[0]["mention_count"] == worker_count

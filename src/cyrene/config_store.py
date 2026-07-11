@@ -146,6 +146,12 @@ _EDITABLE_ENV_KEYS = {
 
 
 def _keyring_available() -> bool:
+    # Explicit opt-out for portable/headless installs and isolated packaged-app
+    # diagnostics. Normal desktop launches keep using the OS keyring.
+    if str(os.environ.get("CYRENE_CONFIG_KEYRING") or "").strip().lower() in {
+        "0", "false", "no", "off",
+    }:
+        return False
     return keyring is not None and keyring_errors is not None
 
 
