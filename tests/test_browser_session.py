@@ -825,6 +825,7 @@ async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
     import tempfile
 
     from cyrene.tool_impl import browser_screenshot as _mod
+    from cyrene import attachments as _attachments
 
     # Create a real temp file to simulate what screenshot() returns.
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
@@ -835,6 +836,7 @@ async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
 
     from cyrene import browser as _browser
     monkeypatch.setattr(_browser, "screenshot", fake_screenshot)
+    monkeypatch.setattr(_attachments, "primary_model_supports_vision", lambda: False)
 
     result = await _mod._tool_browser_screenshot(
         {"url": "https://example.com"}, None, 0, "db", None
@@ -844,6 +846,42 @@ async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
     assert tmp.name in result
     assert "Test Page" in result
     assert os.path.exists(tmp.name)
+    os.unlink(tmp.name)
+
+
+async def test_tool_browser_screenshot_returns_primary_model_visual_observation(monkeypatch):
+    """A verified primary model receives the screenshot and reports it to the agent."""
+    import os
+    import tempfile
+
+    from cyrene import attachments as _attachments
+    from cyrene import browser as _browser
+    from cyrene.tool_impl import browser_screenshot as _mod
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    tmp.write(b"not-decoded-in-this-mocked-test")
+    tmp.close()
+
+    async def fake_screenshot(url, **_kw):
+        return {"ok": True, "path": tmp.name, "title": "Visual Test Page"}
+
+    seen = {}
+
+    async def fake_analyze(path, prompt):
+        seen["path"] = path
+        seen["prompt"] = prompt
+        return {"vision_model": "gpt-4o", "vision_text": "A green confirmation button is visible."}
+
+    monkeypatch.setattr(_browser, "screenshot", fake_screenshot)
+    monkeypatch.setattr(_attachments, "primary_model_supports_vision", lambda: True)
+    monkeypatch.setattr(_attachments, "analyze_image_with_primary_model", fake_analyze)
+
+    result = await _mod._tool_browser_screenshot({}, None, 0, "db", None)
+
+    assert seen["path"] == tmp.name
+    assert "untrusted data" in seen["prompt"]
+    assert "Visual observation from the primary model" in result
+    assert "green confirmation button" in result
     os.unlink(tmp.name)
 
 

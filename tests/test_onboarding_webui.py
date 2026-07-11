@@ -65,6 +65,11 @@ async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(onboarding, "write_env_keys", lambda updates: True)
     monkeypatch.setattr(onboarding, "_test_llm_connection", AsyncMock(return_value="OK"))
+    monkeypatch.setattr(onboarding, "_test_llm_vision_capability", AsyncMock(return_value={
+        "vision_capable": True,
+        "vision_checked_at": "2026-07-12T00:00:00+00:00",
+        "vision_check_error": "",
+    }))
 
     # Isolate the encrypted config store so the test does not touch user data.
     monkeypatch.setattr(config_store, "DATA_DIR", tmp_path / "data")
@@ -92,6 +97,82 @@ async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path
     assert models[0]["model"] == "qwen3"
     assert models[0]["base_url"] == "http://localhost:11434/v1"
     assert models[0]["api_key"] == "sk-test"
+    assert models[0]["vision_capable"] is True
+
+
+async def test_vision_capability_probe_sends_an_image(monkeypatch):
+    from cyrene import onboarding
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Image received"}}]}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, endpoint, headers=None, json=None):
+            calls.append({"endpoint": endpoint, "headers": headers, "json": json})
+            return FakeResponse()
+
+    monkeypatch.setattr(onboarding.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+
+    result = await onboarding._test_llm_vision_capability("sk-test", "https://example.test/v1", "vision-model")
+
+    assert result["vision_capable"] is True
+    content = calls[0]["json"]["messages"][0]["content"]
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_settings_model_save_persists_vision_probe_result(monkeypatch, tmp_path):
+    """The Settings model form records the probe result used by browser_screenshot."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from cyrene import config, onboarding, settings_store
+    from webui import routes
+
+    saved = {}
+
+    async def fake_text_probe(api_key, base_url, model):
+        return "OK"
+
+    async def fake_vision_probe(api_key, base_url, model):
+        return {
+            "vision_capable": model == "visual-primary",
+            "vision_checked_at": "2026-07-12T00:00:00+00:00",
+            "vision_check_error": "" if model == "visual-primary" else "image input unsupported",
+        }
+
+    monkeypatch.setattr(onboarding, "_test_llm_connection", fake_text_probe)
+    monkeypatch.setattr(onboarding, "_test_llm_vision_capability", fake_vision_probe)
+    monkeypatch.setattr(settings_store, "save_models", lambda models: saved.setdefault("models", models))
+    monkeypatch.setattr(settings_store, "save_vision_models", lambda models: saved.setdefault("vision_models", models))
+    monkeypatch.setattr(settings_store, "save_secondary_model", lambda model: None)
+    monkeypatch.setattr(settings_store, "get_secondary_model", lambda: {})
+    monkeypatch.setattr(config, "write_env_keys", lambda values: None)
+
+    app = FastAPI()
+    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    response = TestClient(app).put("/api/settings/models", json={
+        "models": [{"id": "primary", "model": "visual-primary", "api_key": "sk-test", "base_url": "https://example.test/v1"}],
+        "vision_models": [{"id": "vision", "model": "visual-primary", "api_key": "sk-test", "base_url": "https://example.test/v1"}],
+    })
+
+    assert response.status_code == 200
+    assert saved["models"][0]["vision_capable"] is True
+    assert saved["models"][0]["vision_checked_at"]
+    assert saved["vision_models"][0]["vision_capable"] is True
+    assert response.json()["models"][0]["vision_capable"] is True
 
 
 async def test_save_personality_setup_marks_setup_done(monkeypatch, tmp_path):

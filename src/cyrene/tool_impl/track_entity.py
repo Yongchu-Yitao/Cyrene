@@ -30,7 +30,7 @@ async def _tool_track_entity(args, bot, chat_id, db_path, notify_state):
         source_round_id=args.get("source_round_id"),
         project_id=project_id,
     )
-    return f"已记录事务：{entity['title']}（ID: {entity['id'][:8]}）"
+    return f"已记录事务：{entity['title']}（ID: {entity['id']}）"
 
 
 handler = _tool_track_entity

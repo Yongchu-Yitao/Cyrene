@@ -18,7 +18,11 @@ async def _tool_list_entities(args, bot, chat_id, db_path, notify_state):
     )
     if not entities:
         return "没有找到符合条件的事务。"
-    lines = [f"- [{e['type']}] {e['title']}（{e['status']}）{' 截止：'+e['due_date'] if e.get('due_date') else ''}" for e in entities]
+    lines = [
+        f"- [{e['type']}] {e['title']}（ID: {e['id']}，{e['status']}）"
+        f"{' 截止：'+e['due_date'] if e.get('due_date') else ''}"
+        for e in entities
+    ]
     return f"找到 {len(entities)} 条事务：\n" + "\n".join(lines)
 
 

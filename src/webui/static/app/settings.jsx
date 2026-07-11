@@ -55,6 +55,9 @@ function createEmptyModelCandidate() {
     priceHint: "",
     api_key: "",
     base_url: DEFAULT_MODEL_BASE_URL,
+    vision_capable: false,
+    vision_checked_at: "",
+    vision_check_error: "",
   };
 }
 
@@ -70,6 +73,9 @@ function normalizeModelCandidate(raw, index, fallbackBaseUrl, fallbackApiKey) {
     priceHint: String(raw && raw.priceHint || "").trim(),
     api_key: String(raw && raw.api_key || fallbackApiKey || "").trim(),
     base_url: String(raw && raw.base_url || fallbackBaseUrl || DEFAULT_MODEL_BASE_URL).trim() || DEFAULT_MODEL_BASE_URL,
+    vision_capable: !!(raw && raw.vision_capable),
+    vision_checked_at: String(raw && raw.vision_checked_at || "").trim(),
+    vision_check_error: String(raw && raw.vision_check_error || "").trim(),
   };
 }
 

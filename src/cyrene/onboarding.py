@@ -17,6 +17,15 @@ from cyrene.soul import get_default_soul_content, get_soul_path, read_soul
 
 logger = logging.getLogger(__name__)
 
+# A tiny valid PNG used to verify that an OpenAI-compatible endpoint accepts
+# multimodal ``image_url`` messages. The probe checks transport capability, not
+# image quality, so it stays cheap and does not depend on OCR accuracy.
+_VISION_CAPABILITY_TEST_IMAGE = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/"
+    "0eQnAAAAAElFTkSuQmCC"
+)
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -269,6 +278,53 @@ async def _test_llm_connection(api_key: str, base_url: str, model: str) -> str:
     return content or "OK"
 
 
+async def _test_llm_vision_capability(api_key: str, base_url: str, model: str) -> dict[str, Any]:
+    """Return a persisted capability record for one configured model.
+
+    A rejected image input is an expected result for text-only models, so this
+    probe never prevents an otherwise healthy text model from being saved.
+    """
+    checked_at = _now_iso()
+    endpoint = f"{base_url.rstrip('/')}/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    payload = {
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "This is a capability check. Briefly confirm that an image was received.",
+                },
+                {"type": "image_url", "image_url": {"url": _VISION_CAPABILITY_TEST_IMAGE}},
+            ],
+        }],
+        "max_tokens": 16,
+    }
+    try:
+        transport = httpx.AsyncHTTPTransport(retries=1)
+        async with httpx.AsyncClient(transport=transport, timeout=30.0) as client:
+            response = await client.post(endpoint, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+        if not (data.get("choices") or []):
+            raise ValueError("LLM endpoint returned no choices for the vision capability check")
+    except Exception as exc:
+        detail = " ".join(str(exc).split())[:500]
+        return {
+            "vision_capable": False,
+            "vision_checked_at": checked_at,
+            "vision_check_error": detail or type(exc).__name__,
+        }
+    return {
+        "vision_capable": True,
+        "vision_checked_at": checked_at,
+        "vision_check_error": "",
+    }
+
+
 async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> dict[str, Any]:
     clean_base_url = base_url.strip()
     clean_model = model.strip()
@@ -279,6 +335,7 @@ async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> di
         raise ValueError("Model name is required")
 
     preview = await _test_llm_connection(clean_api_key, clean_base_url, clean_model)
+    vision_capability = await _test_llm_vision_capability(clean_api_key, clean_base_url, clean_model)
     write_env_keys({
         "OPENAI_API_KEY": clean_api_key,
         "OPENAI_BASE_URL": clean_base_url,
@@ -302,8 +359,15 @@ async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> di
             "price": "",
             "api_key": clean_api_key,
             "base_url": clean_base_url,
+            **vision_capability,
         }
         save_models([new_entry] + list(current_models or []))
+    else:
+        refreshed_models = []
+        for entry in current_models or []:
+            entry_model = str(entry.get("model") or entry.get("name") or entry.get("id") or "").strip()
+            refreshed_models.append({**entry, **vision_capability} if entry_model == clean_model else entry)
+        save_models(refreshed_models)
 
     state = load_onboarding_state()
     state["llm"] = {

@@ -165,6 +165,7 @@ You have access to memory. Consult it proactively — do not answer from only th
 - 开始处理延续性工作（项目推进、计划执行、跟进待办）前：先 `list_entities(status="active")` 确认活跃事务，避免遗漏上下文。
 - **生成或执行某个项目任务的计划前**：先 `list_entities(status="active")` 拉活跃任务/项目，并对任务主题 `query_entities(q="关键词")` 检索相关的决策、问题、资源、知识，复用已有结论、避免与既有事务重复或冲突。
 - 用户要求更新事务状态（"标记完成"、"改优先级"、"延期"等）时：先 `query_entities` 找到 ID，再 `update_entity`。
+- `list_entities` 和 `query_entities` 会返回完整实体 ID；删除或更新时优先使用完整 ID，不要截断 UUID。`delete_entity` 也支持精确标题，但同名事务会返回候选 ID 并拒绝盲删；需要逐条用 ID 操作。
 
 ### 何时记录（显式记录）
 用户说"记一下"、"提醒我"、"帮我记着"、"设个任务"、"记录"等明确指令时，立即调用 `track_entity`（source="explicit", confidence=1.0），完成后在回复中确认已记录。记录前先用 `query_entities` 检查是否已有相同事务，避免重复。

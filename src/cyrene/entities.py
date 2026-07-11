@@ -264,6 +264,64 @@ async def delete_entity(db_path: str, entity_id: str, permanent: bool = False) -
         return True
 
 
+async def find_entities_by_title(
+    db_path: str,
+    title: str,
+    *,
+    type: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Find entities whose title matches exactly.
+
+    This is intentionally an exact-title lookup.  Delete/update operations must
+    never turn a fuzzy search result into an implicit destructive action.
+    Archived rows are included so an operator can also clean up stale duplicates.
+    """
+    normalized_title = str(title or "").strip()
+    if not normalized_title:
+        return []
+
+    query = "SELECT * FROM entities WHERE title = ?"
+    params: list[Any] = [normalized_title]
+    if type:
+        query += " AND type = ?"
+        params.append(type)
+    query += " ORDER BY updated_at DESC LIMIT ?"
+    params.append(limit)
+
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(query, params)
+        rows = await cursor.fetchall()
+        return [_row_to_entity(row) for row in rows]
+
+
+async def find_entities_by_id_prefix(
+    db_path: str,
+    id_prefix: str,
+    *,
+    limit: int = 20,
+) -> list[dict]:
+    """Find entities whose IDs start with ``id_prefix``.
+
+    ``track_entity`` historically exposed only the first eight UUID characters,
+    so accepting a unique prefix keeps those older references usable while still
+    refusing ambiguous matches.
+    """
+    normalized_prefix = str(id_prefix or "").strip()
+    if not normalized_prefix:
+        return []
+
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM entities WHERE substr(id, 1, ?) = ? ORDER BY updated_at DESC LIMIT ?",
+            (len(normalized_prefix), normalized_prefix, limit),
+        )
+        rows = await cursor.fetchall()
+        return [_row_to_entity(row) for row in rows]
+
+
 async def get_entity(db_path: str, entity_id: str) -> dict | None:
     """Get a single entity by ID."""
     async with aiosqlite.connect(db_path) as db:

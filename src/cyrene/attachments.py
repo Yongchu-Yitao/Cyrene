@@ -130,6 +130,45 @@ def model_supports_multimodal(model: str | None = None) -> bool:
         return False
     return any(hint in model_name for hint in _MULTIMODAL_MODEL_HINTS)
 
+
+def primary_model_supports_vision() -> bool:
+    """Whether the configured primary model passed Cyrene's vision probe.
+
+    Browser screenshots are only sent as image input after this persisted check;
+    model-name heuristics are intentionally not used for that high-cost path.
+    """
+    try:
+        from cyrene.settings_store import get_models
+
+        models = get_models() or []
+        primary = models[0] if models else {}
+        return isinstance(primary, dict) and primary.get("vision_capable") is True
+    except Exception:
+        return False
+
+
+async def analyze_image_with_primary_model(path_str: str, prompt: str) -> dict[str, Any]:
+    """Send a local image to the configured primary model as multimodal input."""
+    path = Path(path_str).resolve()
+    mime_type = mimetypes.guess_type(str(path))[0] or "image/png"
+    image_b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    content = [
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
+    ]
+    result = await call_llm(
+        [{"role": "user", "content": content}],
+        model_type="primary",
+        thinking="disabled",
+        caller="browser_vision",
+        publish_events=False,
+        record_usage=False,
+    )
+    return {
+        "vision_model": result.get("model", ""),
+        "vision_text": _truncate((_assistant_text(result) or "").strip(), 12000),
+    }
+
 def safe_attachment_filename(filename: str, fallback_stem: str = "file") -> str:
     """Return an ASCII-safe filename while preserving its original extension."""
     raw = Path(str(filename or f"{fallback_stem}.bin")).name

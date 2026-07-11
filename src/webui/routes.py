@@ -8975,6 +8975,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                         "priceHint": _price_hint(model_identifier) if not user_price else "",
                         "api_key": model_api_key,
                         "base_url": model_base_url,
+                        "vision_capable": model.get("vision_capable") is True,
+                        "vision_checked_at": str(model.get("vision_checked_at") or ""),
+                        "vision_check_error": str(model.get("vision_check_error") or ""),
                     }
                 )
             return normalized_items
@@ -9083,7 +9086,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         from cyrene.settings_store import save_models, save_vision_models, save_secondary_model, get_secondary_model
         from cyrene.config import DEFAULT_OPENAI_BASE_URL, write_env_keys
         from cyrene.model_prices import price_hint as _price_hint
-        from cyrene.onboarding import _test_llm_connection
+        from cyrene.onboarding import _test_llm_connection, _test_llm_vision_capability
         body = await request.json()
         raw_models = body.get("models")
         raw_vision_models = body.get("vision_models")
@@ -9145,6 +9148,25 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+
+        # Check every model being saved, but de-duplicate identical endpoint
+        # configurations so the default primary/vision mirror costs one probe.
+        vision_checks: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for candidate in [*normalized, *normalized_vision]:
+            check_key = (
+                str(candidate.get("model") or ""),
+                str(candidate.get("base_url") or "").rstrip("/"),
+                str(candidate.get("api_key") or ""),
+            )
+            capability = vision_checks.get(check_key)
+            if capability is None:
+                capability = await _test_llm_vision_capability(
+                    str(candidate.get("api_key") or ""),
+                    str(candidate.get("base_url") or ""),
+                    str(candidate.get("model") or ""),
+                )
+                vision_checks[check_key] = capability
+            candidate.update(capability)
 
         save_models(normalized)
         if raw_vision_models is not None:
