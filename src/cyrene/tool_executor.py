@@ -10,6 +10,7 @@ from typing import Any
 
 from cyrene.registry_tools import TOOL_HANDLERS
 from cyrene.secret_redaction import redact_text, redact_value
+from cyrene.task_lifecycle import drain_or_cancel, track_task
 
 # Set to True to suppress background action recording (used by RunLearnedSkill replay).
 _skip_action_recording: ContextVar[bool] = ContextVar("_skip_action_recording", default=False)
@@ -31,18 +32,18 @@ def _record_action_background(*args: Any, **kwargs: Any) -> None:
         logger.debug("failed to schedule behavior action telemetry", exc_info=True)
         return
 
-    _pending_action_record_tasks.add(task)
+    track_task(
+        task,
+        _pending_action_record_tasks,
+        logger=logger,
+        label="behavior action telemetry",
+    )
 
-    def _done(completed: asyncio.Task[Any]) -> None:
-        _pending_action_record_tasks.discard(completed)
-        try:
-            completed.exception()
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            logger.debug("behavior action telemetry task failed", exc_info=True)
 
-    task.add_done_callback(_done)
+async def shutdown_background_tasks() -> None:
+    """Flush behavior telemetry before the event loop closes."""
+    await drain_or_cancel(_pending_action_record_tasks, grace_seconds=2.0)
+    _pending_action_record_tasks.clear()
 
 _BROWSER_TOOL_NAMES = {
     "browser_navigate",

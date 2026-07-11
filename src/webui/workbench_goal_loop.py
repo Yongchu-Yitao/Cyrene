@@ -1351,14 +1351,7 @@ async def resume_after_answer(db_path: str, session_id: str, *, permission_denie
 def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> GoalLoopManager:
     manager = GoalLoopManager(str(db_path))
     _MANAGERS[str(db_path)] = manager
-
-    @app.on_event("startup")
-    async def _goal_loop_startup() -> None:
-        await manager.startup()
-
-    @app.on_event("shutdown")
-    async def _goal_loop_shutdown() -> None:
-        await manager.shutdown()
+    app.state.goal_loop_manager = manager
 
     @router.post("/api/task-sessions/{session_id}/goal-loop/preview")
     async def preview_goal_loop(

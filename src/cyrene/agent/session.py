@@ -45,6 +45,7 @@ from cyrene.agent.state import (
     _session_state_lock,
 )
 from cyrene.llm import _assistant_text
+from cyrene.task_lifecycle import cancel_and_wait, track_task
 
 logger = logging.getLogger(__name__)
 
@@ -558,8 +559,12 @@ def _schedule_compaction_distill() -> None:
     ctx.pending_distill_task = asyncio.create_task(
         _distill_pending_compacted_blocks(session_id=session_id)
     )
-    ctx.pending_compressors.add(ctx.pending_distill_task)
-    ctx.pending_distill_task.add_done_callback(ctx.pending_compressors.discard)
+    track_task(
+        ctx.pending_distill_task,
+        ctx.pending_compressors,
+        logger=logger,
+        label="session compaction distillation",
+    )
 
 
 async def _distill_pending_compacted_blocks(session_id: str = "") -> None:
@@ -833,8 +838,12 @@ def _expand_report_reference_history(history: list[dict[str, Any]], user_message
 def _schedule_memory_compression(messages: list[dict[str, Any]], session_id: str = "") -> None:
     task = asyncio.create_task(_compress_old_messages(list(messages), session_id=session_id))
     ctx = _ensure_session(session_id)
-    ctx.pending_compressors.add(task)
-    task.add_done_callback(ctx.pending_compressors.discard)
+    track_task(
+        task,
+        ctx.pending_compressors,
+        logger=logger,
+        label="session memory compression",
+    )
 
 
 async def _write_session_messages_locked(state: dict[str, Any], messages: list[dict[str, Any]]) -> None:
@@ -1322,8 +1331,12 @@ def _schedule_session_label_refresh(current_user_message: str, round_id: str) ->
 
     task = asyncio.create_task(_runner())
     ctx = _ensure_session(session_id)
-    ctx.pending_label_refreshes.add(task)
-    task.add_done_callback(ctx.pending_label_refreshes.discard)
+    track_task(
+        task,
+        ctx.pending_label_refreshes,
+        logger=logger,
+        label="session label refresh",
+    )
 
 
 async def _refresh_session_labels(current_user_message: str, round_id: str, session_id: str = "") -> None:
@@ -1503,20 +1516,13 @@ async def clear_session_id(session_id: str = "") -> None:
 
     ctx = _ensure_session(session_id)
 
-    def _cancel_pending_tasks(tasks: set[asyncio.Task[Any]]) -> None:
-        for task in list(tasks):
-            try:
-                if not task.done() and not task.get_loop().is_closed():
-                    task.cancel()
-            except RuntimeError:
-                pass
-        tasks.clear()
-
-    _cancel_pending_tasks(ctx.pending_interrupt_clearers)
-    _cancel_pending_tasks(ctx.pending_label_refreshes)
+    await cancel_and_wait(ctx.pending_interrupt_clearers)
+    ctx.pending_interrupt_clearers.clear()
+    await cancel_and_wait(ctx.pending_label_refreshes)
+    ctx.pending_label_refreshes.clear()
     ctx.interrupt_event.clear()
     if ctx.main_inbox_worker is not None:
-        _cancel_pending_tasks({ctx.main_inbox_worker})
+        await cancel_and_wait({ctx.main_inbox_worker})
         ctx.main_inbox_worker = None
     ctx.active_main_round_id = ""
     ctx.active_main_round_prompt = ""
@@ -1539,11 +1545,73 @@ async def clear_session_id(session_id: str = "") -> None:
     # Keep module-level epoch in sync for the default session
     if not session_id:
         _state._session_epoch = ctx.session_epoch
-    # Remove the session context from cache (unless it's the default session)
-    if session_id:
-        _state._sessions.pop(session_id, None)
     try:
         from cyrene import pattern as _pattern_module
-        _ = asyncio.create_task(_pattern_module.scan_for_session_start())
+        task = asyncio.create_task(_pattern_module.scan_for_session_start())
+        track_task(
+            task,
+            ctx.pending_housekeeping,
+            logger=logger,
+            label="post-clear behavior scan",
+        )
     except Exception:
-        pass
+        logger.debug("Failed to schedule post-clear behavior scan", exc_info=True)
+
+    if session_id:
+        def _retire_context_when_idle(_completed: asyncio.Task[Any]) -> None:
+            pending = (
+                ctx.pending_compressors
+                | ctx.pending_label_refreshes
+                | ctx.pending_interrupt_clearers
+                | ctx.pending_housekeeping
+            )
+            if any(not task.done() for task in pending):
+                return
+            if ctx.main_inbox_worker is not None and not ctx.main_inbox_worker.done():
+                return
+            if ctx.active_task is not None and not ctx.active_task.done():
+                return
+            if _state._sessions.get(session_id) is ctx:
+                _state._sessions.pop(session_id, None)
+
+        pending_tasks = (
+            ctx.pending_compressors
+            | ctx.pending_label_refreshes
+            | ctx.pending_interrupt_clearers
+            | ctx.pending_housekeeping
+        )
+        if pending_tasks:
+            for pending_task in pending_tasks:
+                pending_task.add_done_callback(_retire_context_when_idle)
+        else:
+            _state._sessions.pop(session_id, None)
+
+
+async def shutdown_session_tasks() -> None:
+    """Cancel and await all per-session work before the event loop closes."""
+    current = asyncio.current_task()
+    for session_id, ctx in list(_state._sessions.items()):
+        ctx.interrupt_event.set()
+        tasks: set[asyncio.Task[Any]] = set()
+        for registry in (
+            ctx.pending_compressors,
+            ctx.pending_label_refreshes,
+            ctx.pending_interrupt_clearers,
+            ctx.pending_housekeeping,
+        ):
+            tasks.update(registry)
+        if ctx.main_inbox_worker is not None:
+            tasks.add(ctx.main_inbox_worker)
+        if ctx.active_task is not None and ctx.active_task is not current:
+            tasks.add(ctx.active_task)
+        await cancel_and_wait(tasks)
+        ctx.pending_compressors.clear()
+        ctx.pending_label_refreshes.clear()
+        ctx.pending_interrupt_clearers.clear()
+        ctx.pending_housekeeping.clear()
+        ctx.pending_distill_task = None
+        ctx.main_inbox_worker = None
+        if ctx.active_task is not current:
+            ctx.active_task = None
+        if session_id:
+            _state._sessions.pop(session_id, None)

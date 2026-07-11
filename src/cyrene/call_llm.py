@@ -24,6 +24,7 @@ from cyrene.config import (
 )
 from cyrene.context_trace import strip_context_metadata, summarize_context_trace
 from cyrene.settings_store import get_models, get_vision_models, get_secondary_model
+from cyrene.task_lifecycle import drain_or_cancel, track_task
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +35,18 @@ _pending_token_tasks: set[asyncio.Task] = set()
 
 
 def _bg_token_task(task: asyncio.Task) -> None:
-    _pending_token_tasks.add(task)
-    task.add_done_callback(_pending_token_tasks.discard)
+    track_task(
+        task,
+        _pending_token_tasks,
+        logger=logger,
+        label="token usage persistence",
+    )
+
+
+async def shutdown_background_tasks() -> None:
+    """Flush short usage writes and cancel any stalled database operation."""
+    await drain_or_cancel(_pending_token_tasks, grace_seconds=2.0)
+    _pending_token_tasks.clear()
 
 
 # ---------------------------------------------------------------------------

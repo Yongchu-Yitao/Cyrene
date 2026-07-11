@@ -97,24 +97,25 @@ from cyrene.short_term import get_context
 from cyrene.skills_registry import build_skill_prompt_block
 from cyrene.settings_store import get as _get_setting, get_spawn_policy
 from cyrene.tools import TOOL_HANDLERS, _execute_tool, get_active_tool_defs
+from cyrene.task_lifecycle import cancel_and_wait, track_task
 
 logger = logging.getLogger(__name__)
 _BACKGROUND_BEHAVIOR_TASKS: set[asyncio.Task[Any]] = set()
 
 
 def _track_background_behavior_task(task: asyncio.Task[Any]) -> None:
-    _BACKGROUND_BEHAVIOR_TASKS.add(task)
+    track_task(
+        task,
+        _BACKGROUND_BEHAVIOR_TASKS,
+        logger=logger,
+        label="coordinator background task",
+    )
 
-    def _done(completed: asyncio.Task[Any]) -> None:
-        _BACKGROUND_BEHAVIOR_TASKS.discard(completed)
-        try:
-            completed.exception()
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            logger.debug("background behavior-learning task finished with exception", exc_info=True)
 
-    task.add_done_callback(_done)
+async def shutdown_background_tasks() -> None:
+    """Stop coordinator-owned jobs before runtime teardown."""
+    await cancel_and_wait(_BACKGROUND_BEHAVIOR_TASKS)
+    _BACKGROUND_BEHAVIOR_TASKS.clear()
 
 
 async def _kick_behavior_learning_processing() -> None:
@@ -288,7 +289,7 @@ def interrupt_active_run(session_id: str = "") -> bool:
                 logger.exception("Failed to cancel subagents for interrupted session %s", session_id)
 
         try:
-            asyncio.create_task(_cancel_subagents())
+            _track_background_behavior_task(asyncio.create_task(_cancel_subagents()))
         except RuntimeError:
             pass
     task = asyncio.create_task(_clear_interrupt_when_idle(session_id=session_id))

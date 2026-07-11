@@ -3812,6 +3812,10 @@ function sessionSummaryText(session) {
   return compactText(summary || wbRealGoal(session) || session.agentReply || wbT("task.summaryFallback", "Agent will generate a summary for this session during execution."), 128);
 }
 
+function canPauseTaskStatus(status) {
+  return ["running", "waiting_for_user"].indexOf(String(status || "")) >= 0;
+}
+
 function TaskHeader({ project, session, controller, onRightTab, onSelectSession, onBackToBoard }) {
   var tone = WorkbenchModel.statusTone(session.status);
   var status = String(session.status || "idle");
@@ -3896,16 +3900,18 @@ function TaskHeader({ project, session, controller, onRightTab, onSelectSession,
         </div>
       </div>
       <div className="wb-th-action-wrap">
-        <button
-          type="button"
-          className="wb-th-control-btn wb-th-pause"
-          disabled={controller.busy || status === "paused" || status === "completed" || status === "cancelled"}
-          onClick={function () { status === "running" ? controller.interrupt() : controller.pause(); }}
-          title={wbT("task.action.pauseTask", "Pause task")}
-          aria-label={wbT("task.action.pauseTask", "Pause task")}
-        >
-          {ICONS.pause}
-        </button>
+        {canPauseTaskStatus(status) && (
+          <button
+            type="button"
+            className="wb-th-control-btn wb-th-pause"
+            disabled={controller.busy}
+            onClick={function () { status === "running" ? controller.interrupt() : controller.pause(); }}
+            title={wbT("task.action.pauseTask", "Pause task")}
+            aria-label={wbT("task.action.pauseTask", "Pause task")}
+          >
+            {ICONS.pause}
+          </button>
+        )}
         <div className="wb-th-menu-wrap">
           <button type="button" className="wb-th-control-btn wb-th-menu-btn" onClick={function () { setMenuOpen(!menuOpen); }} title={wbT("task.detailMenu", "Details menu")} aria-label={wbT("task.detailMenu", "Details menu")}>
             {ICONS.dots}
@@ -4300,7 +4306,11 @@ function PausedCard({ session, controller }) {
   return (
     <WbCard tone="paused" icon={ICONS.pause} title={wbT("task.card.paused", "Task paused")}>
       {session.goalLoop && <AgentReplyBlock text={session.agentReply || wbT("goalLoop.paused", "持续执行已暂停，当前进度已保留。")} />}
-      <p className="wb-card-hint">{wbT("task.pausedAt", "Paused at step {n}{title}.", { n: Math.min(done + 1, plan.length || 1), title: current ? ": " + current.title : "" })}</p>
+      <p className="wb-card-hint">
+        {plan.length > 0
+          ? wbT("task.pausedAt", "Paused at step {n}{title}.", { n: Math.min(done + 1, plan.length), title: current ? ": " + current.title : "" })
+          : wbT("task.pausedNoSteps", "This task has not started and has no execution steps yet.")}
+      </p>
     </WbCard>
   );
 }

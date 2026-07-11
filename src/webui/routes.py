@@ -8539,7 +8539,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             return JSONResponse({"ok": False, "error": f"Skill picker not supported on {system}"}, status_code=400)
 
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 ["osascript", "-e",
                  'POSIX path of (choose folder with prompt "Select skill folder containing SKILL.md")'],
                 capture_output=True,
@@ -8842,10 +8843,14 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         import subprocess
         system = platform.system()
         if system == "Darwin":
-            result = subprocess.run(
-                ['osascript', '-e', 'POSIX path of (choose folder with prompt "Select workspace directory")'],
-                capture_output=True, text=True, timeout=30,
-            )
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ['osascript', '-e', 'POSIX path of (choose folder with prompt "Select workspace directory")'],
+                    capture_output=True, text=True, timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                return {"path": "", "error": "Directory picker timed out"}
             path = result.stdout.strip()
             if path:
                 return {"path": path}
@@ -9995,6 +10000,18 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
         prev_status = str(session.get("status") or "")
+        requested_status = str(body.get("status") or "")
+        if requested_status == "paused" and prev_status not in {
+            "running",
+            "waiting_for_user",
+        }:
+            return JSONResponse(
+                {
+                    "error": "only an active task can be paused",
+                    "code": "invalid_status_transition",
+                },
+                status_code=409,
+            )
         # A title coming through this user-facing endpoint is a manual edit (the
         # agent uses the set_task_goal tool, never HTTP) — lock it so the agent can
         # no longer override the title the user chose.

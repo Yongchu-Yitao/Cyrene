@@ -18,6 +18,7 @@ import copy
 import json
 import logging
 import sqlite3
+import threading
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,8 @@ CREATE TABLE IF NOT EXISTS workbench_state (
 
 _MISSING = object()
 T = TypeVar("T")
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_READY: set[str] = set()
 _COUNTER_FIELDS = {
     "mention_count",
     "planRevision",
@@ -60,12 +63,21 @@ class TrackedList(list):
 
 
 def ensure_schema(db_path: str | Path) -> None:
-    path = Path(db_path)
+    path = Path(db_path).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path, timeout=30) as conn:
-        conn.execute("PRAGMA busy_timeout = 30000")
-        conn.execute(_SCHEMA)
-        conn.commit()
+    cache_key = str(path)
+    if cache_key in _SCHEMA_READY and path.exists():
+        return
+    with _SCHEMA_LOCK:
+        if cache_key in _SCHEMA_READY and path.exists():
+            return
+        with sqlite3.connect(path, timeout=30) as conn:
+            conn.execute("PRAGMA busy_timeout = 30000")
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")
+            conn.execute(_SCHEMA)
+            conn.commit()
+        _SCHEMA_READY.add(cache_key)
 
 
 def _connect(db_path: str | Path) -> sqlite3.Connection:
@@ -179,11 +191,13 @@ def _merge_entity_list(base: list[Any], local: list[Any], remote: list[Any], pat
 
     # Keep the caller's ordering, then include entities committed since its read.
     order: list[str] = []
+    ordered_ids: set[str] = set()
     for source in (local, remote):
         for item in source:
             item_id = _entity_id(item)
-            if item_id and item_id not in order:
+            if item_id and item_id not in ordered_ids:
                 order.append(item_id)
+                ordered_ids.add(item_id)
 
     merged: list[Any] = []
     for item_id in order:

@@ -24,6 +24,7 @@ Security guarantees
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -88,6 +89,17 @@ def _priority(name: str) -> int:
 
 
 async def export_backup(
+    *, include_db: bool = True, target_path: str | Path | None = None
+) -> dict[str, Any]:
+    """Create a backup without blocking the Agent/Web event loop."""
+    return await asyncio.to_thread(
+        _export_backup_sync,
+        include_db=include_db,
+        target_path=target_path,
+    )
+
+
+def _export_backup_sync(
     *, include_db: bool = True, target_path: str | Path | None = None
 ) -> dict[str, Any]:
     """Export all agent state into a timestamped zip file.
@@ -268,9 +280,9 @@ async def _restore_with_locks(zf: ZipFile, payload: list[str], version: str) -> 
     try:
         if _agent_lock is not None:
             async with _agent_lock:
-                return _restore_staged(zf, payload, version)
+                return await asyncio.to_thread(_restore_staged, zf, payload, version)
         else:
-            return _restore_staged(zf, payload, version)
+            return await asyncio.to_thread(_restore_staged, zf, payload, version)
     finally:
         if sched_was_running:
             sched.resume()

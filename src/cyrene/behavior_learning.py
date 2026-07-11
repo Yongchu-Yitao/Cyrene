@@ -19,7 +19,6 @@ import re
 import shutil
 import sqlite3
 import sys
-import time
 
 import aiosqlite
 from collections import defaultdict
@@ -4238,29 +4237,33 @@ def _target_skill_type(stats: dict[str, Any], prototype: dict[str, Any]) -> str:
     return "draft"
 
 
-async def _update_skill_to_type(skill_id: str, target_type: str, reason: str) -> None:
+async def _update_skill_to_type(skill_id: str, target_type: str, reason: str) -> bool:
     async with _conn() as conn:
         cursor = await conn.execute(
             "SELECT * FROM learned_skills WHERE skill_id = ?", (skill_id,)
         )
         row = await cursor.fetchone()
         if row is None:
-            return
+            return False
         current = _skill_row_to_definition(row)
         current_type = current["skill_type"]
         if _SKILL_TYPE_ORDER.get(target_type, 0) <= _SKILL_TYPE_ORDER.get(current_type, 0):
-            return
+            return False
         next_version = int(row["current_version"]) + 1
         pattern_id = current["pattern_id"]
         definition = await _skill_definition_from_pattern(pattern_id, target_type)
         definition = _attach_generated_script_to_definition(definition, skill_id)
         definition["status"] = "shadow"
         definition["tests"] = current["tests"]
+        # Validation counters apply to one executable definition.  Carrying
+        # them across an upgrade could activate unvalidated steps using the
+        # predecessor's successful shadow runs.
+        definition["run_statistics"] = _default_skill_stats()
         persisted = {
             "skill_id": skill_id,
             **definition,
             "version": next_version,
-            "run_statistics": current["run_statistics"],
+            "run_statistics": definition["run_statistics"],
             "pattern_id": pattern_id,
             "created_at": current["created_at"],
             "updated_at": _now_iso(),
@@ -4271,7 +4274,8 @@ async def _update_skill_to_type(skill_id: str, target_type: str, reason: str) ->
             SET name = ?, description = ?, current_version = ?, status = 'shadow', skill_type = ?,
                 risk_level = ?, requires_llm = ?, trigger_json = ?, input_schema_json = ?,
                 parameter_extractor_json = ?, steps_json = ?, guards_json = ?, fallback_policy_json = ?,
-                tests_json = ?, editable_fields_json = ?, created_from_json = ?, updated_at = ?
+                tests_json = ?, editable_fields_json = ?, created_from_json = ?,
+                run_statistics_json = ?, updated_at = ?
             WHERE skill_id = ?
             """,
             (
@@ -4290,6 +4294,7 @@ async def _update_skill_to_type(skill_id: str, target_type: str, reason: str) ->
                 _json_dumps(definition["tests"]),
                 _json_dumps(definition["editable_fields"]),
                 _json_dumps(definition["created_from"]),
+                _json_dumps(definition["run_statistics"]),
                 _now_iso(),
                 skill_id,
             ),
@@ -4304,6 +4309,7 @@ async def _update_skill_to_type(skill_id: str, target_type: str, reason: str) ->
             change_summary=reason,
         )
         await conn.commit()
+    return True
 
 
 async def _activate_skill(skill_id: str, reason: str) -> None:
@@ -4317,22 +4323,27 @@ async def _activate_skill(skill_id: str, reason: str) -> None:
         current = _skill_row_to_definition(row)
         if current["status"] == "active":
             return
-        next_version = int(row["current_version"]) + 1
         current["status"] = "active"
-        current["version"] = next_version
         current["updated_at"] = _now_iso()
         await conn.execute(
-            "UPDATE learned_skills SET status = 'active', current_version = ?, updated_at = ? WHERE skill_id = ?",
-            (next_version, current["updated_at"], skill_id),
+            "UPDATE learned_skills SET status = 'active', updated_at = ? WHERE skill_id = ?",
+            (current["updated_at"], skill_id),
         )
-        await _save_skill_version(
-            conn=conn,
-            skill_id=skill_id,
-            version=next_version,
-            parent_version=int(row["current_version"]),
-            definition=current,
-            change_type="activate",
-            change_summary=reason,
+        # Activation is lifecycle state, not a new executable definition.
+        # Keep the current snapshot coherent so a rollback does not turn a
+        # validated definition back into a draft.
+        await conn.execute(
+            """
+            UPDATE learned_skill_versions
+            SET skill_definition = ?, change_summary = ?
+            WHERE skill_id = ? AND version = ?
+            """,
+            (
+                _json_dumps(current),
+                reason,
+                skill_id,
+                int(row["current_version"]),
+            ),
         )
         await conn.commit()
 
@@ -4412,7 +4423,13 @@ async def _update_shadow_promotion(skill_id: str) -> None:
         await _activate_skill(skill_id, "Shadow validation passed and skill promoted to active.")
 
 
-async def _update_skill_run_stats(skill_id: str, *, execution_status: str, consistency_score: float = 0.0) -> None:
+async def _update_skill_run_stats(
+    skill_id: str,
+    *,
+    execution_status: str,
+    consistency_score: float = 0.0,
+    promote: bool = True,
+) -> None:
     # Serialize concurrent stat updates so two callers don't read the same
     # baseline and silently lose one increment (read-modify-write race).
     async with _get_stats_lock():
@@ -4448,7 +4465,8 @@ async def _update_skill_run_stats(skill_id: str, *, execution_status: str, consi
                 (_json_dumps(stats), _now_iso(), skill_id),
             )
             await conn.commit()
-    await _update_shadow_promotion(skill_id)
+    if promote:
+        await _update_shadow_promotion(skill_id)
 
 
 async def _create_patch_proposal(skill_id: str, base_version: int, patch_type: str, reason: str, patch_content: dict[str, Any]) -> None:
@@ -5784,7 +5802,13 @@ async def try_route_and_execute_skill(
     }
 
 
-async def _validate_shadow_skill_for_turn(skill: dict[str, Any], turn_row: dict[str, Any], fingerprint: dict[str, Any]) -> None:
+async def _validate_shadow_skill_for_turn(
+    skill: dict[str, Any],
+    turn_row: dict[str, Any],
+    fingerprint: dict[str, Any],
+    *,
+    promote: bool = True,
+) -> None:
     trigger = skill["trigger"]
     similarity = compute_fingerprint_similarity(fingerprint, trigger.get("base_fingerprint") or {})
     if similarity["hard_fail"] or float(similarity["total"]) < max(_ROUTER_JUDGE_THRESHOLD, float(trigger.get("min_match_score") or 0.0)):
@@ -5842,6 +5866,7 @@ async def _validate_shadow_skill_for_turn(skill: dict[str, Any], turn_row: dict[
         skill["skill_id"],
         execution_status="shadow_success" if success else "shadow_failure",
         consistency_score=round(consistency, 4),
+        promote=promote,
     )
 
 
@@ -5865,7 +5890,7 @@ async def _validate_shadow_skills_for_turn(turn_id: str, fingerprint: dict[str, 
         await _validate_shadow_skill_for_turn(skill, dict(turn_row), fingerprint)
 
 
-async def _backfill_shadow_validation(skill_id: str) -> None:
+async def _backfill_shadow_validation(skill_id: str, *, exclude_turn_id: str = "") -> None:
     skill = await get_learned_skill(skill_id)
     if skill is None or str(skill.get("status") or "") != "shadow":
         return
@@ -5873,6 +5898,8 @@ async def _backfill_shadow_validation(skill_id: str) -> None:
     if not turn_ids and skill.get("pattern_id"):
         turn_ids = await _member_turn_ids(str(skill["pattern_id"]))
     for turn_id in turn_ids:
+        if str(turn_id) == str(exclude_turn_id or ""):
+            continue
         async with _conn() as conn:
             cursor = await conn.execute(
                 """
@@ -5894,10 +5921,18 @@ async def _backfill_shadow_validation(skill_id: str) -> None:
         fingerprint = await _fingerprint_for_turn(str(turn_id))
         if not fingerprint:
             continue
-        await _validate_shadow_skill_for_turn(skill, dict(turn_row), fingerprint)
+        # Replay all available history before promotion.  Promoting inside the
+        # loop made the result depend on row order and skipped later evidence.
+        await _validate_shadow_skill_for_turn(
+            skill,
+            dict(turn_row),
+            fingerprint,
+            promote=False,
+        )
         skill = await get_learned_skill(skill_id)
-        if skill is None or str(skill.get("status") or "") != "shadow":
+        if skill is None:
             return
+    await _update_shadow_promotion(skill_id)
 
 
 async def _replay_tests_for_skill(skill_id: str) -> list[dict[str, Any]]:
@@ -6740,9 +6775,19 @@ async def _process_single_turn(
                 },
                 pattern_summary.get("prototype_fingerprint") or {},
             )
+            upgraded = False
             if target_type in _SKILL_TYPE_ORDER and target_type != "draft":
-                await _update_skill_to_type(skill_id, target_type, update_reason or "Project skill learning agent selected this reusable workflow.")
-            await _activate_skill(skill_id, "Learning agent promoted this pattern to active skill.")
+                upgraded = await _update_skill_to_type(
+                    skill_id,
+                    target_type,
+                    update_reason or "Project skill learning agent selected this reusable workflow.",
+                )
+            if upgraded:
+                await _backfill_shadow_validation(skill_id, exclude_turn_id=turn_id)
+            else:
+                current_skill = await get_learned_skill(skill_id)
+                if current_skill is not None and str(current_skill.get("status") or "") == "draft":
+                    await _activate_skill(skill_id, "Learning agent promoted this pattern to active skill.")
 
     if merged:
         stats["merged_patterns"] += 1

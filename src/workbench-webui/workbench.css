@@ -15114,7 +15114,7 @@ html[data-density="compact"] .workbench-shell :where(.wb-budget-model-head, .wb-
   flex-direction: column;
   gap: 14px;
   overflow: hidden;
-  background: var(--wb-bg);
+  background: var(--wb-topbar-bg);
   color: var(--wb-text);
 }
 

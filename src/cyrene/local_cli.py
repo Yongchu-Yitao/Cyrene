@@ -479,7 +479,17 @@ def _run_electron_mode() -> None:
 
         server.startup = _startup_and_notify
 
-        await server.serve()
+        try:
+            await server.serve()
+        finally:
+            from cyrene.task_lifecycle import cancel_and_wait
+
+            await cancel_and_wait(
+                task
+                for task in (update_check_task, background_services_task)
+                if task is not None
+            )
+            scheduler.shutdown(wait=False)
 
     try:
         asyncio.run(_start())
@@ -556,7 +566,12 @@ def _run_web_mode(ui_mode: str = "workbench") -> None:
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         finally:
-            scheduler.shutdown()
+            from cyrene.task_lifecycle import cancel_and_wait
+
+            await cancel_and_wait(
+                task for task in (update_check_task,) if task is not None
+            )
+            scheduler.shutdown(wait=False)
 
     try:
         asyncio.run(_start())
@@ -692,7 +707,17 @@ def _run_web_gui() -> None:
         import uvicorn
         config = uvicorn.Config(app, host="127.0.0.1", port=selected_port, log_level="info")
         server = uvicorn.Server(config)
-        await server.serve()
+        try:
+            await server.serve()
+        finally:
+            from cyrene.task_lifecycle import cancel_and_wait
+
+            await cancel_and_wait(
+                task
+                for task in (update_check_task, background_services_task)
+                if task is not None
+            )
+            scheduler.shutdown(wait=False)
 
     def _run_server():
         try:

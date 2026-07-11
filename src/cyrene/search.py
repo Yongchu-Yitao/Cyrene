@@ -10,7 +10,6 @@ import asyncio
 import ipaddress
 import logging
 import re
-from typing import Any
 from urllib.parse import urlparse
 
 import requests
@@ -123,14 +122,14 @@ async def _search_simplexng(query: str) -> list[dict]:
         else:
             # External SearXNG may require Cyrene's configured search proxy.
             sess = _proxied_session()
-        r = sess.get(url, params={"q": query, "format": "json", "language": "zh-CN", "safesearch": "0"}, headers=headers, timeout=_HTTP_TIMEOUT)
-        r.raise_for_status()
-        data = r.json()
-        return data.get("results", [])
+        with sess:
+            r = sess.get(url, params={"q": query, "format": "json", "language": "zh-CN", "safesearch": "0"}, headers=headers, timeout=_HTTP_TIMEOUT)
+            r.raise_for_status()
+            data = r.json()
+            return data.get("results", [])
 
-    loop = asyncio.get_event_loop()
     try:
-        raw_results = await loop.run_in_executor(None, _fetch)
+        raw_results = await asyncio.to_thread(_fetch)
     except Exception as exc:
         logger.warning("SimpleXNG search failed: %s", exc)
         return []
@@ -166,14 +165,13 @@ async def _fetch_url(url: str) -> str:
     """Fetch a URL and return its plain text content, truncated to 3000 chars."""
 
     def _fetch() -> str:
-        sess = _proxied_session()
-        r = sess.get(url, timeout=_HTTP_TIMEOUT)
-        r.raise_for_status()
-        return r.text
+        with _proxied_session() as sess:
+            r = sess.get(url, timeout=_HTTP_TIMEOUT)
+            r.raise_for_status()
+            return r.text
 
-    loop = asyncio.get_event_loop()
     try:
-        html = await loop.run_in_executor(None, _fetch)
+        html = await asyncio.to_thread(_fetch)
     except Exception as exc:
         logger.debug("Failed to fetch URL %r: %s", url, exc)
         return ""
@@ -296,7 +294,7 @@ async def _synthesize(relevant_results: list[dict], fetched_contents: list[str],
 
 def _fallback_synthesis(relevant_results: list[dict], fetched_contents: list[str]) -> str:
     """Build a simple text summary when the LLM synthesis fails."""
-    parts: list[str] = [f"Search results for your question:\n"]
+    parts: list[str] = ["Search results for your question:\n"]
     for i, r in enumerate(relevant_results):
         title = r.get("title", "?")
         url = r.get("url", "")

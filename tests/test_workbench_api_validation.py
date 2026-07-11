@@ -82,6 +82,21 @@ def test_session_patch_accepts_existing_statuses(monkeypatch, tmp_path):
     assert response.json()["session"]["status"] == "waiting_for_approval"
 
 
+def test_unstarted_session_cannot_be_paused(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.patch(
+        "/api/task-sessions/session_1",
+        json={"status": "paused"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "invalid_status_transition"
+    current = client.get("/api/task-sessions/session_1")
+    assert current.status_code == 200
+    assert current.json()["session"]["status"] == "idle"
+
+
 def test_projects_summary_keeps_active_session_full_and_compacts_inactive(monkeypatch, tmp_path):
     from webui import routes
 

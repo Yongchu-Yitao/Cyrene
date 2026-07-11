@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
 @pytest.fixture(autouse=True)
-def _reset_agent_global_state():
+async def _reset_agent_global_state():
     """Force-reset process-wide agent state before each test (setup phase).
 
     Always access the globals through the module object (``_state._agent_lock``
@@ -91,9 +91,17 @@ def _reset_agent_global_state():
     _cancel_pending_tasks(_state._pending_interrupt_clearers)
     _cancel_pending_tasks(_state._pending_label_refreshes)
     _cancel_pending_tasks(_state._pending_compressors)
+    _cancel_pending_tasks(_state._pending_housekeeping)
 
     if _state._main_inbox_worker is not None:
         _cancel_pending_tasks({_state._main_inbox_worker})
         _state._main_inbox_worker = None
 
     yield
+
+    # Production shutdown uses the same aggregator.  Awaiting it here, while
+    # this test's event loop is still alive, catches ownership regressions and
+    # prevents SQLite worker threads from leaking into the next test loop.
+    from cyrene.runtime_lifecycle import shutdown_background_work
+
+    await shutdown_background_work()

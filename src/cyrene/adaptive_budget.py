@@ -8,8 +8,7 @@ activity density.  All inputs are explicit — never calls datetime.now().
 from __future__ import annotations
 
 import calendar
-import math
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
@@ -20,6 +19,7 @@ MIN_RECALCULATION_INTERVAL_SECONDS = 60.0
 
 WEEKLY_ALPHA = 0.10
 FIVE_HOUR_ALPHA = 0.25
+FIVE_HOUR_REMAINING_CAP = 0.15
 
 WEEKLY_CHANGE_MAX_DECREASE = 0.10  # -10 %
 WEEKLY_CHANGE_MAX_INCREASE = 0.25  # +25 %
@@ -92,7 +92,6 @@ def _remaining_hours_in_month(now: datetime, start_day: int = 1) -> float:
     y, m = now.year, now.month
     _, days_in_this_month = calendar.monthrange(y, m)
     period_start_day = min(start_day, days_in_this_month)
-    period_end_day = min(start_day, calendar.monthrange(y if m < 12 else y + 1, m + 1 if m < 12 else 1)[1]) if m < 12 else min(start_day, 31)
     period_start = datetime(y, m, period_start_day, tzinfo=timezone.utc)
     # If now is before period start, the period started last month
     if now < period_start:
@@ -370,7 +369,7 @@ class AdaptiveBudgetController:
         five_hour_target = min(
             five_hour_target,
             max(weekly_remaining, 0.0) * 0.70,
-            remaining_budget * 0.40,
+            remaining_budget * FIVE_HOUR_REMAINING_CAP,
         )
 
         # ── Exhausted budget guard ──
@@ -402,7 +401,7 @@ class AdaptiveBudgetController:
         five_hour_budget = min(
             five_hour_budget,
             max(weekly_budget - weekly_spent, 0.0) * 0.70,
-            remaining_budget * 0.40,
+            remaining_budget * FIVE_HOUR_REMAINING_CAP,
         )
 
         # ── Active‑limit floor (must be AFTER hard caps) ──
@@ -470,4 +469,3 @@ class AdaptiveBudgetController:
             FIVE_HOUR_CHANGE_MAX_DECREASE,
             FIVE_HOUR_CHANGE_MAX_INCREASE,
         )
-

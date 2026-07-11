@@ -1930,6 +1930,7 @@ var WORKBENCH_TRANSLATIONS = {
     "task.menu.runLogs": "运行日志",
     "task.menu.viewContext": "查看上下文",
     "task.pausedAt": "当前停在：第 {n} 步{title}。",
+    "task.pausedNoSteps": "任务尚未开始，当前没有执行步骤。",
     "task.plan.defaultReply": "我将按以下步骤执行当前任务。",
     "task.plan.hint": "是否继续？批准后会进入确认环节，再开始执行。",
     "task.priorityPrefix": "优先级 {priority}",

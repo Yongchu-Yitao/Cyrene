@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from cyrene.config import WEB_PORT
+from cyrene.task_lifecycle import cancel_and_wait
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,19 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
 
     from webui.auth import LocalAuthMiddleware
 
-    app = FastAPI(title="Cyrene")
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        await _start_workbench_chat_runs()
+        await _start_wechat()
+        await _migrate_knowledge_db()
+        await _sync_knowledge_catalog()
+        await _decouple_default_project_knowledge()
+        try:
+            yield
+        finally:
+            await _close_browser_session()
+
+    app = FastAPI(title="Cyrene", lifespan=_lifespan)
     app.add_middleware(LocalAuthMiddleware)
     app.state.instance_id = instance_id
     app.state.ui_mode = ui_mode
@@ -60,20 +74,20 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
 
     register_routes(app, bot, db_path)
 
-    @app.on_event("startup")
     async def _start_workbench_chat_runs() -> None:
         from webui.routes_workbench_chat import startup_chat_runs
 
         startup_chat_runs()
+        manager = getattr(app.state, "goal_loop_manager", None)
+        if manager is not None:
+            await manager.startup()
 
-    @app.on_event("startup")
     async def _start_wechat() -> None:
         try:
             await _setup_wechat(app, db_path)
         except Exception:
             logger.warning("WeChat bot setup failed — check your config / proxy setup")
 
-    @app.on_event("startup")
     async def _migrate_knowledge_db() -> None:
         try:
             from cyrene.config import migrate_knowledge_to_workspace_db
@@ -83,7 +97,6 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         except Exception:
             logger.warning("Knowledge base migration failed (non-fatal)")
 
-    @app.on_event("startup")
     async def _sync_knowledge_catalog() -> None:
         try:
             from cyrene.config import get_knowledge_db_path
@@ -92,11 +105,12 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
             _kb_db_path = str(get_knowledge_db_path())
             await init_knowledge_db(_kb_db_path)
             await store.sync_filesystem(_kb_db_path)
-            asyncio.create_task(ingest.process_pending(_kb_db_path))
+            app.state._knowledge_sync_task = asyncio.create_task(
+                ingest.process_pending(_kb_db_path)
+            )
         except Exception:
             logger.warning("Knowledge catalog sync failed — check your knowledge base")
 
-    @app.on_event("startup")
     async def _decouple_default_project_knowledge() -> None:
         # One-time: lift the Workbench default project's own knowledge docs out of
         # the shared legacy kb_default.db (which the catalog fills with every
@@ -127,8 +141,14 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
 
         app.state._decouple_task = asyncio.create_task(_run())
 
-    @app.on_event("shutdown")
     async def _close_browser_session() -> None:
+        manager = getattr(app.state, "goal_loop_manager", None)
+        if manager is not None:
+            try:
+                await manager.shutdown()
+            except Exception:
+                logger.warning("Goal-loop shutdown failed", exc_info=True)
+
         try:
             from webui.routes_workbench_chat import shutdown_chat_runs
 
@@ -142,31 +162,38 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         except Exception:
             logger.warning("Browser session shutdown failed")
 
-        # Cancel all active session tasks
         try:
-            from cyrene.agent.state import _sessions
-            from cyrene.subagent import timeout_all_subagent_tasks
+            updater = getattr(app.state, "wechat_updater", None)
+            if updater is not None:
+                await updater.stop()
+                app.state.wechat_updater = None
+            from cyrene.channels.wechat import get_current_client, set_current_client
 
-            for session_id, ctx in list(_sessions.items()):
-                ctx.interrupt_event.set()
-                for tasks in (ctx.pending_compressors, ctx.pending_label_refreshes, ctx.pending_interrupt_clearers):
-                    for t in list(tasks):
-                        try:
-                            if not t.done() and not t.get_loop().is_closed():
-                                t.cancel()
-                        except RuntimeError:
-                            pass
-                    tasks.clear()
-                if ctx.main_inbox_worker is not None:
-                    try:
-                        if not ctx.main_inbox_worker.done() and not ctx.main_inbox_worker.get_loop().is_closed():
-                            ctx.main_inbox_worker.cancel()
-                    except RuntimeError:
-                        pass
-                    ctx.main_inbox_worker = None
-            await timeout_all_subagent_tasks("Web UI 服务关闭，子代理已停止；重启后可重新执行任务。")
+            client = get_current_client()
+            set_current_client(None)
+            if client is not None:
+                await client.close()
         except Exception:
-            logger.warning("Session cleanup during shutdown failed")
+            logger.warning("WeChat shutdown failed", exc_info=True)
+
+        app_tasks = {
+            task
+            for task in (
+                getattr(app.state, "_knowledge_sync_task", None),
+                getattr(app.state, "_decouple_task", None),
+            )
+            if isinstance(task, asyncio.Task)
+        }
+        await cancel_and_wait(app_tasks)
+
+        # Cancel and await all agent/telemetry/indexing work while the event loop
+        # and SQLite worker threads are still alive.
+        try:
+            from cyrene.runtime_lifecycle import shutdown_background_work
+
+            await shutdown_background_work()
+        except Exception:
+            logger.warning("Runtime cleanup during shutdown failed", exc_info=True)
 
     return app
 

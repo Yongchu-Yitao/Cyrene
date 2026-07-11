@@ -49,6 +49,7 @@ class SessionContext:
     pending_compressors: set[asyncio.Task] = field(default_factory=set)
     pending_label_refreshes: set[asyncio.Task] = field(default_factory=set)
     pending_interrupt_clearers: set[asyncio.Task] = field(default_factory=set)
+    pending_housekeeping: set[asyncio.Task] = field(default_factory=set)
     pending_distill_task: asyncio.Task | None = None
     main_inbox_worker: asyncio.Task | None = None
     active_task: asyncio.Task | None = None
@@ -103,6 +104,7 @@ def _ensure_session(session_id: str = "") -> SessionContext:
             ctx.pending_compressors = _pending_compressors
             ctx.pending_label_refreshes = _pending_label_refreshes
             ctx.pending_interrupt_clearers = _pending_interrupt_clearers
+            ctx.pending_housekeeping = _pending_housekeeping
             ctx.main_inbox_worker = _main_inbox_worker
             ctx.active_main_round_id = _active_main_round_id
             ctx.active_main_round_prompt = _active_main_round_prompt
@@ -178,6 +180,7 @@ def _get_max_tool_rounds() -> int:
 _pending_compressors: set[asyncio.Task] = set()
 _pending_label_refreshes: set[asyncio.Task] = set()
 _pending_interrupt_clearers: set[asyncio.Task] = set()
+_pending_housekeeping: set[asyncio.Task] = set()
 _main_inbox_worker: asyncio.Task | None = None
 
 _active_main_round_id = ""

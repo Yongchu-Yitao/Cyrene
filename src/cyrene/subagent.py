@@ -1070,13 +1070,15 @@ async def timeout_subagents(agent_ids: list[str], reason: str = "子代理执行
             info["updated_at"] = datetime.now(timezone.utc).isoformat()
             info["result"] = str(reason)[:_limit(_MAX_FINAL_RESULT_CHARS)]
             ids.append(agent_id)
+    cancelled_tasks: list[asyncio.Task[Any]] = []
     for agent_id in ids:
         await _publish_registry_event(agent_id, message=reason)
         task = _subagent_tasks.get(agent_id)
         if task is not None and not task.done():
             task.cancel()
-    if ids:
-        await asyncio.sleep(0.1)
+            cancelled_tasks.append(task)
+    if cancelled_tasks:
+        await asyncio.gather(*cancelled_tasks, return_exceptions=True)
 
 
 async def timeout_all_subagent_tasks(reason: str = "服务关闭，子代理已停止。") -> None:
