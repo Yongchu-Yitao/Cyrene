@@ -42,6 +42,8 @@ def test_main_agent_prompt_proactively_consults_knowledge_base():
     assert "retry with concrete entities, filenames, synonyms" in _MAIN_AGENT_PROMPT
     assert "may depend on project history" in _PHASE1_DECISION_PROMPT
     assert "consult the knowledge base" in _EXECUTION_SYSTEM_PROMPT
+    assert "PAGE_SIGNAL: access_gate" in _EXECUTION_SYSTEM_PROMPT
+    assert "single cooldown/recovery attempt" in _EXECUTION_SYSTEM_PROMPT
 
 
 # ===========================================================================

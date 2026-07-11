@@ -832,7 +832,7 @@
   // ── main page ────────────────────────────────────────────────────────
   function WorkbenchMemoryPage(props) {
     var project = props && props.project;
-    var workspace = (project && (project.dataKey || project.id)) || "default";
+    var workspace = (project && (project.id || project.dataKey)) || "default";
     // Memory storage still uses the workspace/dataKey compatibility key, but
     // learning records are scoped by the canonical Workbench project id. In
     // particular, the legacy default project has dataKey="default", which
@@ -875,7 +875,7 @@
     }
     function loadLearning() {
       setLearningLoading(true); setLearningError("");
-      return fetch("/api/evolution?project=" + encodeURIComponent(learningProject)).then(jsonOrThrow)
+      return fetch("/api/evolution?project=" + encodeURIComponent(learningProject) + "&compact=1").then(jsonOrThrow)
         .then(function (p) { setLearningData(p || {}); return p; })
         .catch(function (e) { setLearningError(e.message || String(e)); setLearningData({ learned_skills: [], patterns: [], tool_chains: [] }); })
         .finally(function () { setLearningLoading(false); });
@@ -997,10 +997,10 @@
       if (activePanel !== "learning") return undefined;
       var stopped = false;
       function refresh() {
-        if (stopped || learningBusy || learningLoading) return;
+        if (stopped || document.hidden || learningBusy || learningLoading) return;
         loadLearning();
       }
-      var timer = setInterval(refresh, 5000);
+      var timer = setInterval(refresh, 15000);
       function onFocus() { refresh(); }
       function onVisibility() { if (!document.hidden) refresh(); }
       function onChatCreated() { setTimeout(refresh, 800); }

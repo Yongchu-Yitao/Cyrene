@@ -8132,6 +8132,11 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         raw = str(project or "").strip()
         if not raw:
             return ""
+        # Workbench project ids are canonical and already encode the storage
+        # identity.  Do not reread and normalize the multi-megabyte project
+        # document for the common case.
+        if re.fullmatch(r"project_[A-Za-z0-9]+", raw):
+            return raw
         try:
             store = _read_workbench_store()
             for item in store.get("projects") or []:
@@ -8258,25 +8263,38 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return FileResponse(target, media_type=media_type)
 
     @router.get("/api/evolution")
-    async def api_evolution(project: str = ""):
+    async def api_evolution(project: str = "", compact: bool = False):
         """Aggregated data for the Evolution page."""
         from cyrene import pattern as _pattern
-        project_ids = _learning_project_ids(project)
         project_id = _learning_project_id(project)
-        status, patterns, learned_skills, tool_chains, cc_learning = await asyncio.gather(
-            _build_status(),
-            _pattern.list_patterns("all", project_id),
-            _pattern.list_learned_skills(project_id),
-            _pattern.list_tool_chains(project_ids),
-            _build_cc_learning_snapshot(),
-        )
+        raw_project = str(project or "").strip()
+        project_ids = [project_id] if project_id else []
+        if raw_project and raw_project != project_id:
+            project_ids.append(raw_project)
+        if compact:
+            status, learned_skills, tool_chains = await asyncio.gather(
+                _build_status(),
+                _pattern.list_learned_skills(project_id),
+                _pattern.list_tool_chains(project_ids),
+            )
+            patterns = []
+        else:
+            status, patterns, learned_skills, tool_chains = await asyncio.gather(
+                _build_status(),
+                _pattern.list_patterns("all", project_id),
+                _pattern.list_learned_skills(project_id),
+                _pattern.list_tool_chains(project_ids),
+            )
         return {
             "phase": status.get("phase", ""),
             "state": status.get("state", ""),
             "patterns": patterns,
             "learned_skills": learned_skills,
             "tool_chains": _learning_enrich_tool_chains(tool_chains),
-            "cc_learning": cc_learning,
+            # Claude Code transcript analysis is intentionally not part of the
+            # aggregate learning payload.  It is an expensive, unrelated
+            # operation and must not delay the skill-learning workbench.
+            "cc_learning": None,
         }
 
     @router.get("/api/patterns")

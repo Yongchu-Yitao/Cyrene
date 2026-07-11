@@ -82,6 +82,49 @@ def _normalize_http_url(url: str) -> str:
     return "https://" + value
 
 
+_TEMPORARILY_UNAVAILABLE_MARKERS = (
+    "暂时无法浏览", "暂时无法访问", "内容暂不可用",
+    "temporarily unavailable", "content is not available",
+)
+_ALTERNATE_ACCESS_MARKERS = (
+    "请打开app", "扫码查看", "登录后查看",
+    "open in the app", "scan", "sign in", "log in to",
+)
+
+
+def _browser_page_signal(url: str, title: str = "", text: str = "") -> dict[str, Any]:
+    """Classify a conservative, site-independent temporary access gate."""
+    haystack = re.sub(r"\s+", "", f"{title}\n{text}").lower()
+    unavailable = tuple(re.sub(r"\s+", "", marker).lower() for marker in _TEMPORARILY_UNAVAILABLE_MARKERS)
+    alternate = tuple(re.sub(r"\s+", "", marker).lower() for marker in _ALTERNATE_ACCESS_MARKERS)
+    if any(marker in haystack for marker in unavailable) and any(marker in haystack for marker in alternate):
+        return {
+            "kind": "access_gate",
+            "requires_user_takeover": False,
+            "retry_allowed": True,
+            "max_retries": 1,
+            "cooldown_ms": 10_000,
+            "message": "页面内容暂不可用；允许一次有冷却时间的恢复尝试，仍失败时请求用户接管。",
+        }
+    return {
+        "kind": "normal",
+        "requires_user_takeover": False,
+        "retry_allowed": True,
+        "message": "",
+    }
+
+
+def _page_text_preview(text: str, max_chars: int = 2000) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()[:max_chars]
+
+
+def _normalize_browser_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Normalize Electron's camelCase observation fields for Python tools."""
+    if isinstance(result, dict) and "page_signal" not in result and "pageSignal" in result:
+        result["page_signal"] = result.pop("pageSignal")
+    return result
+
+
 def _check_url(url: str) -> None:
     """Validate *url* before any fetch or navigation.
 
@@ -530,6 +573,7 @@ class _BrowserSession:
         self._control_released.set()
         self._action_lock = asyncio.Lock()
         self._mode_lock = asyncio.Lock()
+        self._last_agent_click_completed_at = 0.0
         # Screencast (M2): live JPEG frames fanned out to WebSocket subscribers.
         self._cdp: Any = None
         self._screencasting = False
@@ -748,7 +792,14 @@ class _BrowserSession:
             html = await page.content()
             text = _html_to_text(html, max_chars=max_chars)
             await self._emit_frame("navigate", url=page.url, title=title)
-            return {"url": page.url, "status": status, "title": title, "text": text, "error": None}
+            return {
+                "url": page.url,
+                "status": status,
+                "title": title,
+                "text": text,
+                "page_signal": _browser_page_signal(page.url, title, text),
+                "error": None,
+            }
 
     async def inspect(self, *, max_elements: int = 80, text_limit: int = 160) -> dict[str, Any]:
         if not await self._wait_for_control():
@@ -760,6 +811,11 @@ class _BrowserSession:
                 [max_elements, text_limit],
             )
             if isinstance(result, dict):
+                result["page_signal"] = _browser_page_signal(
+                    str(result.get("url") or page.url),
+                    str(result.get("title") or await page.title()),
+                    str(result.get("text") or ""),
+                )
                 return result
             return {"ok": False, "url": page.url, "title": await page.title(), "error": "Unable to inspect page.", "elements": []}
 
@@ -771,22 +827,91 @@ class _BrowserSession:
         )
         return result if isinstance(result, dict) else {"ok": False, "error": "not found"}
 
+    async def _semantic_content_state(self, page: Any) -> dict[str, str]:
+        try:
+            state = await page.evaluate(
+                r"""() => {
+                    const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+                    const semantic = Array.from(document.querySelectorAll(
+                        'h1,h2,[role="heading"],main,article,[role="dialog"]'
+                    )).filter((el) => {
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+                    }).map((el) => clean(el.innerText || el.textContent).slice(0, 500))
+                      .filter(Boolean).slice(0, 12).join('\n').slice(0, 3000);
+                    return {url: location.href, title: document.title, semantic};
+                }"""
+            )
+            if isinstance(state, dict):
+                return {key: str(state.get(key) or "") for key in ("url", "title", "semantic")}
+        except Exception:
+            pass
+        return {"url": str(page.url or ""), "title": "", "semantic": ""}
+
+    async def _settle_after_interaction(
+        self, page: Any, *, before: dict[str, str] | None = None, timeout_ms: int = 3000
+    ) -> None:
+        """Wait for semantic content, title, or route changes after a click."""
+        if before is not None:
+            deadline = time.monotonic() + max(0, timeout_ms) / 1000
+            while time.monotonic() < deadline:
+                current = await self._semantic_content_state(page)
+                if any(current.get(key) != before.get(key) for key in ("url", "title", "semantic")):
+                    await asyncio.sleep(0.4)
+                    return
+                await asyncio.sleep(0.1)
+            return
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+        except Exception:
+            pass
+        await asyncio.sleep(0.4)
+
+    def _click_debounced(self, debounce_seconds: float = 0.8) -> bool:
+        return time.monotonic() - self._last_agent_click_completed_at < debounce_seconds
+
+    def _click_debounced_result(self, page: Any) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "url": str(page.url or ""),
+            "title": "",
+            "error": "Click suppressed: this tab received another agent click too recently.",
+            "code": "CLICK_DEBOUNCED",
+        }
+
+    async def _interaction_observation(self, page: Any) -> dict[str, Any]:
+        try:
+            body_text = await page.locator("body").inner_text(timeout=1000)
+        except Exception:
+            body_text = ""
+        title = await page.title()
+        preview = _page_text_preview(body_text)
+        return {
+            "page_signal": _browser_page_signal(page.url, title, preview),
+            "text": preview,
+        }
+
     async def _mouse_click_target(self, mode: str, value: str, *, exact: bool = False, target_label: str = "") -> dict[str, Any]:
         if not await self._wait_for_control():
             return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
         async with self._action_lock:
             page = await self.page()
+            if self._click_debounced():
+                return self._click_debounced_result(page)
             info = await self._find_target(mode, value, exact=exact)
             if not info.get("ok"):
                 return {"ok": False, "url": page.url, "title": await page.title(), "error": "Element " + str(info.get("error") or "not found")}
-            await page.mouse.click(float(info.get("x") or 0), float(info.get("y") or 0))
+            before = await self._semantic_content_state(page)
             try:
-                await page.wait_for_load_state(timeout=5000)
-            except Exception:
-                pass
+                await page.mouse.click(float(info.get("x") or 0), float(info.get("y") or 0))
+                await self._settle_after_interaction(page, before=before)
+            finally:
+                self._last_agent_click_completed_at = time.monotonic()
             title = await page.title()
+            observation = await self._interaction_observation(page)
             await self._emit_frame("click", target=target_label or value, box=info.get("box"), url=page.url, title=title)
-            return {"ok": True, "url": page.url, "title": title, "box": info.get("box")}
+            return {"ok": True, "url": page.url, "title": title, "box": info.get("box"), **observation}
 
     async def click(self, selector: str) -> dict[str, Any]:
         if not await self._wait_for_control():
@@ -795,14 +920,21 @@ class _BrowserSession:
             from playwright.async_api import expect
 
             page = await self.page()
+            if self._click_debounced():
+                return self._click_debounced_result(page)
             el = page.locator(selector)
             await expect(el).to_be_visible(timeout=5000)
             box = await el.bounding_box()
-            await el.click()
-            await page.wait_for_load_state()
+            before = await self._semantic_content_state(page)
+            try:
+                await el.click()
+                await self._settle_after_interaction(page, before=before)
+            finally:
+                self._last_agent_click_completed_at = time.monotonic()
             title = await page.title()
+            observation = await self._interaction_observation(page)
             await self._emit_frame("click", target=selector, box=box, url=page.url, title=title)
-            return {"ok": True, "url": page.url, "title": title}
+            return {"ok": True, "url": page.url, "title": title, **observation}
 
     async def click_ref(self, ref: str) -> dict[str, Any]:
         return await self._mouse_click_target("ref", ref, target_label=ref)
@@ -815,15 +947,19 @@ class _BrowserSession:
             return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
         async with self._action_lock:
             page = await self.page()
-            await page.mouse.click(x, y)
+            if self._click_debounced():
+                return self._click_debounced_result(page)
+            before = await self._semantic_content_state(page)
             try:
-                await page.wait_for_load_state(timeout=5000)
-            except Exception:
-                pass
+                await page.mouse.click(x, y)
+                await self._settle_after_interaction(page, before=before)
+            finally:
+                self._last_agent_click_completed_at = time.monotonic()
             title = await page.title()
+            observation = await self._interaction_observation(page)
             box = {"x": x, "y": y, "w": 1, "h": 1}
             await self._emit_frame("click", target=f"{x},{y}", box=box, url=page.url, title=title)
-            return {"ok": True, "url": page.url, "title": title, "box": box}
+            return {"ok": True, "url": page.url, "title": title, "box": box, **observation}
 
     async def type_text(self, selector: str, text: str, *, submit: bool = False) -> dict[str, Any]:
         if not await self._wait_for_control():
@@ -1260,10 +1396,10 @@ async def navigate(
         return {"url": url, "status": 0, "title": "", "text": "", "error": str(exc)}
     if electron_browser_available():
         try:
-            result = await _electron_browser_rpc(
+            result = _normalize_browser_result(await _electron_browser_rpc(
                 "navigate",
                 {"url": url, "maxChars": max_chars, "extractText": extract_text},
-            )
+            ))
             if result.get("ok") is False:
                 logger.warning("Electron navigate failed (%s); falling back", result.get("error"))
             else:
@@ -1326,6 +1462,9 @@ async def _httpx_navigate(
 
             if extract_text:
                 result["text"] = _html_to_text(html, max_chars=max_chars)
+            result["page_signal"] = _browser_page_signal(
+                str(response.url), str(result.get("title") or ""), str(result.get("text") or "")
+            )
     except SSRFBlockedError as exc:
         result["error"] = str(exc)
     except httpx.TimeoutException:
@@ -1398,8 +1537,16 @@ async def inspect_page(*, max_elements: int = 80, text_limit: int = 160) -> dict
     """Return a structured snapshot of visible, actionable elements on the current page."""
     if electron_browser_available():
         try:
-            result = await _electron_browser_rpc("inspect", {"maxElements": max_elements, "textLimit": text_limit})
+            result = _normalize_browser_result(await _electron_browser_rpc("inspect", {"maxElements": max_elements, "textLimit": text_limit}))
             if result.get("ok") is True:
+                result.setdefault(
+                    "page_signal",
+                    _browser_page_signal(
+                        str(result.get("url") or ""),
+                        str(result.get("title") or ""),
+                        str(result.get("text") or ""),
+                    ),
+                )
                 await _emit_electron_frame("inspect", result)
             return result
         except Exception as exc:
@@ -1419,7 +1566,7 @@ async def click(selector: str) -> dict[str, Any]:
     """Click an element on the current page by CSS selector."""
     if electron_browser_available():
         try:
-            result = await _electron_browser_rpc("click", {"selector": selector})
+            result = _normalize_browser_result(await _electron_browser_rpc("click", {"selector": selector}))
             if result.get("ok") is True:
                 await _emit_electron_frame("click", result, target=selector, box=result.get("box"))
                 return result
@@ -1442,7 +1589,7 @@ async def click_ref(ref: str) -> dict[str, Any]:
     """Click an element from browser_snapshot by its stable ref (e.g. e12)."""
     if electron_browser_available():
         try:
-            result = await _electron_browser_rpc("clickRef", {"ref": ref})
+            result = _normalize_browser_result(await _electron_browser_rpc("clickRef", {"ref": ref}))
             if result.get("ok") is True:
                 await _emit_electron_frame("click", result, target=ref, box=result.get("box"))
             return result
@@ -1463,7 +1610,7 @@ async def click_text(text: str, *, exact: bool = False) -> dict[str, Any]:
     """Click a visible element whose accessible/text content matches *text*."""
     if electron_browser_available():
         try:
-            result = await _electron_browser_rpc("clickText", {"text": text, "exact": exact})
+            result = _normalize_browser_result(await _electron_browser_rpc("clickText", {"text": text, "exact": exact}))
             if result.get("ok") is True:
                 await _emit_electron_frame("click", result, target=text, box=result.get("box"))
             return result
@@ -1484,7 +1631,7 @@ async def click_at(x: int, y: int) -> dict[str, Any]:
     """Click the current page at viewport coordinates."""
     if electron_browser_available():
         try:
-            result = await _electron_browser_rpc("clickAt", {"x": x, "y": y})
+            result = _normalize_browser_result(await _electron_browser_rpc("clickAt", {"x": x, "y": y}))
             if result.get("ok") is True:
                 await _emit_electron_frame("click", result, target=f"{x},{y}", box=result.get("box"))
             return result

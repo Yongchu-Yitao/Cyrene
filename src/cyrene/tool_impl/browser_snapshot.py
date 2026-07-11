@@ -56,6 +56,8 @@ async def _tool_browser_snapshot(args: dict[str, Any], _bot: Any, _chat_id: int,
         f"Title: {result.get('title', '—')}",
         f"URL: {result.get('url', '—')}",
     ]
+    from cyrene.tool_impl.browser_output import page_observation_lines
+    parts.extend(page_observation_lines(result))
     elements = result.get("elements") if isinstance(result.get("elements"), list) else []
     if not elements:
         parts.append("No visible actionable elements found.")

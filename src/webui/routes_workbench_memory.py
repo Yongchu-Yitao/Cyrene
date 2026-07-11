@@ -131,6 +131,12 @@ def _resolve_workspace_id(workspace_id: str | None) -> str:
     """
     wid = _safe_workspace_id(workspace_id)
     raw = str(workspace_id or "").strip()
+    # Workbench sends canonical project ids for normal projects.  They already
+    # are the durable memory key, so avoid loading the full projects document
+    # just to resolve an id to itself.  Keep the lookup below for legacy dataKey
+    # values such as the default project's "default" key.
+    if re.fullmatch(r"project_[A-Za-z0-9]+", raw):
+        return raw
     try:
         from webui import routes as R
 

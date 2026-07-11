@@ -10,6 +10,7 @@ Covers the live-view foundation without launching a real browser:
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -181,6 +182,74 @@ async def test_navigate_normalizes_bare_domain_before_validation(monkeypatch):
 
     assert called["url"] == "https://example.com/page"
     assert result["url"] == "https://example.com/page"
+
+
+def test_generic_access_gate_signal_requires_paired_markers_and_allows_one_retry():
+    from cyrene.browser import _browser_page_signal
+
+    signal = _browser_page_signal(
+        "https://example.com/article/abc",
+        "Example",
+        "当前内容暂时无法浏览 请打开 App 扫码查看",
+    )
+
+    assert signal["kind"] == "access_gate"
+    assert signal["requires_user_takeover"] is False
+    assert signal["retry_allowed"] is True
+    assert signal["max_retries"] == 1
+
+    normal = _browser_page_signal("https://example.com/article/abc", "Example", "扫码查看其他内容")
+    assert normal["kind"] == "normal"
+    assert normal["retry_allowed"] is True
+
+
+def test_normalize_electron_page_signal_for_python_tools():
+    from cyrene.browser import _normalize_browser_result
+
+    result = _normalize_browser_result({"pageSignal": {"kind": "access_gate"}})
+
+    assert result["page_signal"] == {"kind": "access_gate"}
+    assert "pageSignal" not in result
+
+
+async def test_browser_click_ref_surfaces_bounded_access_gate_recovery(monkeypatch):
+    import importlib
+
+    module = importlib.import_module("cyrene.tool_impl.browser_click_ref")
+
+    async def fake_click_ref(_ref):
+        return {
+            "ok": True,
+            "url": "https://example.com/article/abc",
+            "title": "Example",
+            "page_signal": {
+                "kind": "access_gate",
+                "requires_user_takeover": False,
+                "retry_allowed": True,
+                "max_retries": 1,
+                "cooldown_ms": 10000,
+                "message": "页面内容暂不可用。",
+            },
+            "text": "当前笔记暂时无法浏览",
+        }
+
+    monkeypatch.setattr("cyrene.browser.click_ref", fake_click_ref)
+    result = await module._tool_browser_click_ref({"ref": "e1"}, None, 0, "db", None)
+
+    assert "PAGE_SIGNAL: access_gate" in result
+    assert "make at most one recovery attempt" in result
+    assert "browser_request_takeover" in result
+
+
+def test_click_debounce_is_short_lived_and_session_scoped():
+    from cyrene import browser
+
+    session = browser._BrowserSession()
+    assert session._click_debounced() is False
+    session._last_agent_click_completed_at = time.monotonic()
+    assert session._click_debounced() is True
+    session._last_agent_click_completed_at -= 1
+    assert session._click_debounced() is False
 
 
 async def test_screenshot_normalizes_bare_domain(monkeypatch):

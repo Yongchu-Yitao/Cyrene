@@ -32,7 +32,11 @@ async def _tool_browser_click_at(args: dict[str, Any], _bot: Any, _chat_id: int,
         return "Click failed: invalid coordinates."
     result = await click_at(x, y)
     if result.get("ok"):
-        return f"Clicked at {x},{y}.\nURL: {result.get('url', '—')}\nTitle: {result.get('title', '—')}"
+        from cyrene.tool_impl.browser_output import page_observation_lines
+
+        parts = [f"Clicked at {x},{y}.", f"URL: {result.get('url', '—')}", f"Title: {result.get('title', '—')}" ]
+        parts.extend(page_observation_lines(result))
+        return "\n".join(parts)
     return f"Click failed: {result.get('error', 'unknown error')}"
 
 

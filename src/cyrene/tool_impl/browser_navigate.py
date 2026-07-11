@@ -17,6 +17,8 @@ async def _tool_browser_navigate(args: dict[str, Any], _bot: Any, _chat_id: int,
         return "No URL provided."
     result = await navigate(url, extract_text=True)
     parts = [f"Title: {result.get('title', '—')}", f"URL: {result.get('url', url)}"]
+    from cyrene.tool_impl.browser_output import page_observation_lines
+    parts.extend(page_observation_lines(result))
     if result.get("text"):
         parts.append(result["text"])
     if result.get("error"):

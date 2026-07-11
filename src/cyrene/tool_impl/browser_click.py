@@ -17,7 +17,11 @@ async def _tool_browser_click(args: dict[str, Any], _bot: Any, _chat_id: int, _d
         return "No CSS selector provided."
     result = await click(selector)
     if result.get("ok"):
-        return f"Clicked {selector}.\nURL: {result.get('url', '—')}\nTitle: {result.get('title', '—')}"
+        from cyrene.tool_impl.browser_output import page_observation_lines
+
+        parts = [f"Clicked {selector}.", f"URL: {result.get('url', '—')}", f"Title: {result.get('title', '—')}" ]
+        parts.extend(page_observation_lines(result))
+        return "\n".join(parts)
     return f"Click failed: {result.get('error', 'unknown error')}"
 
 

@@ -263,6 +263,29 @@ function trimBrowserText(text, maxChars = 8000) {
   return limit && value.length > limit ? value.slice(0, limit) : value;
 }
 
+function browserPageSignal(url, title, text) {
+  const compact = `${title || ''} ${text || ''}`.replace(/\s+/g, '').toLowerCase();
+  const unavailable = [
+    '暂时无法浏览', '暂时无法访问', '内容暂不可用',
+    'temporarilyunavailable', 'contentisnotavailable',
+  ].some((marker) => compact.includes(marker));
+  const alternateAction = [
+    '请打开app', '扫码查看', '登录后查看',
+    'openintheapp', 'scan', 'signin', 'loginto',
+  ].some((marker) => compact.includes(marker));
+  if (unavailable && alternateAction) {
+    return {
+      kind: 'access_gate',
+      requiresUserTakeover: false,
+      retryAllowed: true,
+      maxRetries: 1,
+      cooldownMs: 10000,
+      message: '页面内容暂不可用；允许一次有冷却时间的恢复尝试，仍失败时请求用户接管。',
+    };
+  }
+  return { kind: 'normal', requiresUserTakeover: false, retryAllowed: true, message: '' };
+}
+
 const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
 (function(maxArg, textArg) {
   const maxElements = Math.max(1, Math.min(200, Number(maxArg) || 80));
@@ -779,12 +802,16 @@ class BrowserTabManager {
     } catch (_) {
       text = '';
     }
+    const url = wc.getURL();
+    const title = wc.getTitle();
+    const trimmedText = trimBrowserText(text, maxChars);
     return {
       ok: true,
-      url: wc.getURL(),
-      title: wc.getTitle(),
+      url,
+      title,
       status: 0,
-      text: trimBrowserText(text, maxChars),
+      text: trimmedText,
+      pageSignal: browserPageSignal(url, title, trimmedText),
       tabId: tab.id,
     };
   }
@@ -819,7 +846,10 @@ class BrowserTabManager {
   // did-navigate (page load) and did-navigate-in-page (SPA route change).
   async _waitNav(wc) {
     const beforeUrl = wc.getURL();
+    const startedAt = Date.now();
+    const settleMs = 400;
     let navigated = false;
+    let idleSince = 0;
     const onNav = () => { navigated = true; };
     const onSpaNav = (_e, url) => { if (url !== beforeUrl) navigated = true; };
     wc.on('did-navigate', onNav);
@@ -829,7 +859,17 @@ class BrowserTabManager {
         try {
           if (wc.isDestroyed()) { clearInterval(i); r(); return; }
           if (wc.getURL() !== beforeUrl) navigated = true;
-          if (navigated || !wc.isLoading()) { clearInterval(i); r(); }
+          if (!wc.isLoading()) {
+            if (!idleSince) idleSince = Date.now();
+          } else {
+            idleSince = 0;
+          }
+          // Give both full navigations and SPA route handlers a short, bounded
+          // settle window. This prevents the agent from reading the page while
+          // its first async note request is still being scheduled.
+          if (idleSince && Date.now() - idleSince >= settleMs && Date.now() - startedAt >= settleMs) {
+            clearInterval(i); r();
+          }
         } catch (_) { clearInterval(i); r(); }
       }, 100);
       setTimeout(() => { clearInterval(i); wc.removeListener('did-navigate', onNav); wc.removeListener('did-navigate-in-page', onSpaNav); r(); }, 3000);
@@ -837,6 +877,73 @@ class BrowserTabManager {
     wc.removeListener('did-navigate', onNav);
     wc.removeListener('did-navigate-in-page', onSpaNav);
     return navigated;
+  }
+
+  async _contentState(wc) {
+    try {
+      return await wc.executeJavaScript(`(() => {
+        const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const semantic = Array.from(document.querySelectorAll('h1,h2,[role="heading"],main,article,[role="dialog"]'))
+          .filter((el) => {
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+          })
+          .map((el) => clean(el.innerText || el.textContent).slice(0, 500))
+          .filter(Boolean)
+          .slice(0, 12);
+        return { url: location.href, title: document.title, semantic: semantic.join('\\n').slice(0, 3000) };
+      })()`, true);
+    } catch (_) {
+      return { url: wc.getURL(), title: wc.getTitle(), semantic: '' };
+    }
+  }
+
+  async _waitForClickOutcome(wc, before, timeoutMs = 3000) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (wc.isDestroyed()) return;
+      const current = await this._contentState(wc);
+      if (current.url !== before.url || current.title !== before.title || current.semantic !== before.semantic) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    // A click may legitimately update no semantic region (for example, a
+    // toggle). The bounded wait is sufficient; do not add another timeout.
+  }
+
+  _beginClick(tab, debounceMs = 800) {
+    const now = Date.now();
+    if (tab.agentClickInFlight || (tab.lastAgentClickAt && now - tab.lastAgentClickAt < debounceMs)) {
+      return { ok: false, error: 'Click suppressed: this tab received another agent click too recently.', code: 'CLICK_DEBOUNCED', tabId: tab.id };
+    }
+    tab.agentClickInFlight = true;
+    return null;
+  }
+
+  async _dispatchClick(tab, info) {
+    const blocked = this._beginClick(tab);
+    if (blocked) return blocked;
+    const wc = tab.view.webContents;
+    try {
+      const before = await this._contentState(wc);
+      this._markAgentInput(tab);
+      wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
+      wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
+      wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
+      await this._waitForClickOutcome(wc, before);
+      return this._finishClick(tab, info);
+    } finally {
+      tab.agentClickInFlight = false;
+      tab.lastAgentClickAt = Date.now();
+    }
+  }
+
+  async _finishClick(tab, info) {
+    const snapshot = await this.pageSnapshot(tab.id, 4000);
+    return { ...snapshot, tabId: tab.id, box: info && info.box ? info.box : null };
   }
 
   async click({ selector, tabId = '' } = {}) {
@@ -850,12 +957,7 @@ class BrowserTabManager {
     // sendInputEvent dispatches trusted OS-level events.  Chromium's input
     // pipeline generates the full click chain (pointerdown → mousedown →
     // pointerup → mouseup → click) with isTrusted=true.
-    this._markAgentInput(tab);
-    wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
-    wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
-    wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
-    await this._waitNav(wc);
-    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id, box: info.box };
+    return this._dispatchClick(tab, info);
   }
 
   async clickRef({ ref, tabId = '' } = {}) {
@@ -864,12 +966,7 @@ class BrowserTabManager {
     const wc = tab.view.webContents;
     const info = await this._findTarget(wc, { mode: 'ref', value: String(ref || '') });
     if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
-    this._markAgentInput(tab);
-    wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
-    wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
-    wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
-    await this._waitNav(wc);
-    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id, box: info.box };
+    return this._dispatchClick(tab, info);
   }
 
   async clickText({ text, exact = false, tabId = '' } = {}) {
@@ -878,12 +975,7 @@ class BrowserTabManager {
     const wc = tab.view.webContents;
     const info = await this._findTarget(wc, { mode: 'text', value: String(text || ''), exact: exact === true });
     if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
-    this._markAgentInput(tab);
-    wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
-    wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
-    wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
-    await this._waitNav(wc);
-    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id, box: info.box };
+    return this._dispatchClick(tab, info);
   }
 
   async clickAt({ x, y, tabId = '' } = {}) {
@@ -893,12 +985,7 @@ class BrowserTabManager {
     const px = Math.round(Number(x));
     const py = Math.round(Number(y));
     if (!Number.isFinite(px) || !Number.isFinite(py)) return { ok: false, error: 'Invalid coordinates.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
-    this._markAgentInput(tab);
-    wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
-    wc.sendInputEvent({ type: 'mouseDown', x: px, y: py, button: 'left', clickCount: 1 });
-    wc.sendInputEvent({ type: 'mouseUp', x: px, y: py, button: 'left', clickCount: 1 });
-    await this._waitNav(wc);
-    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id, box: { x: px, y: py, w: 1, h: 1 } };
+    return this._dispatchClick(tab, { x: px, y: py, box: { x: px, y: py, w: 1, h: 1 } });
   }
 
   async _typeIntoTarget({ mode = 'selector', value = '', text = '', submit = false, tabId = '' } = {}) {

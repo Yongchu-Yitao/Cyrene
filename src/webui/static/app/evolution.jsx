@@ -60,6 +60,17 @@ function EvolutionPage({ tab, setTab }) {
   useEffect(() => { fetchOverview(); }, []);
 
   useEffect(() => {
+    if (tab !== "cc") return;
+    let stopped = false;
+    setCcData(null);
+    fetch("/api/cc/learning")
+      .then((r) => r.json())
+      .then((data) => { if (!stopped) setCcData(data || null); })
+      .catch(() => { if (!stopped) setCcData(null); });
+    return () => { stopped = true; };
+  }, [tab]);
+
+  useEffect(() => {
     if (!selectedLearnedSkillId) {
       setLearnedSkillLoading(false);
       setLearnedSkillDetail(null);
