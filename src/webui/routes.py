@@ -2662,7 +2662,6 @@ def update_task_plan_for_session(
         }]
         session["updatedAt"] = now
         project["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = sid
         _write_workbench_store(payload)
         return {
@@ -9795,7 +9794,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         now = _utc_now_iso()
         session["updatedAt"] = now
         project["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session.get("id")
         _write_workbench_store(payload)
         return {"ok": True, "project": project, "session": session, **payload}
@@ -10016,7 +10014,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             }]
             session["updatedAt"] = now
             project["updatedAt"] = now
-            payload["activeProjectId"] = project.get("id")
             payload["activeSessionId"] = session_id
             _write_workbench_store(payload)
             return {"ok": True, "project": project, "session": session, **payload}
@@ -10089,7 +10086,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         _workbench_mark_completed_if_acceptance_passed(session, now=now)
         session["updatedAt"] = now
         project["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         next_status = str(session.get("status") or "")
@@ -10253,7 +10249,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         }]
         latest_session["updatedAt"] = now
         latest_project["updatedAt"] = now
-        latest_payload["activeProjectId"] = latest_project.get("id")
         latest_payload["activeSessionId"] = session_id
         _write_workbench_store(latest_payload)
         return {
@@ -10283,7 +10278,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         }]
         session["updatedAt"] = now
         project["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         return {
@@ -10315,7 +10309,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         now = _utc_now_iso()
         session["updatedAt"] = now
         project["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         return {"ok": True, "project": project, "session": session, **payload}
@@ -10398,7 +10391,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             )
         session["updatedAt"] = now
         project["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         return {"ok": True, "verdict": verdict, "project": project, "session": session, **payload}
@@ -10460,7 +10452,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         now = _utc_now_iso()
         session["updatedAt"] = now
         project["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         return {"ok": True, "project": project, "session": session, **payload}
@@ -10478,7 +10469,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         hint["status"] = "dismissed"
         now = _utc_now_iso()
         session["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         return {"ok": True, "project": project, "session": session, **payload}
@@ -10671,7 +10661,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             await _workbench_archive_run_knowledge(
                 project, session, run, workspace_root, now,
             )
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         append_notification(
@@ -10751,7 +10740,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if chat_tool_events:
             session.setdefault("events", []).extend(chat_tool_events)
         _workbench_promote_file_artifacts(session, file_changes, now, workspace_root)
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         append_notification(
@@ -10894,7 +10882,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             }]
             latest_session["updatedAt"] = now
             latest_project["updatedAt"] = now
-            latest_payload["activeProjectId"] = latest_project.get("id")
             latest_payload["activeSessionId"] = session_id
             _write_workbench_store(latest_payload)
             return {
@@ -10996,7 +10983,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             )
         session["updatedAt"] = now
         project["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         append_notification(
@@ -11240,7 +11226,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             )
         session["updatedAt"] = now
         project["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         if pending_plan_step and bool(pending_plan_step.get("goalLoop")) and not awaiting_user:
@@ -11323,7 +11308,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         session["summary"] = brief or session.get("summary")
         session["updatedAt"] = now
         project["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         return {"ok": True, "project": project, "session": session, **payload}
@@ -11376,7 +11360,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         now = _utc_now_iso()
         session["updatedAt"] = now
         project["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         return {"ok": True, "project": project, "session": session, **payload}

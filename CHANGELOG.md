@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.6.4] - 2026-07-11
+
+0.6.4 是一个以**任务生命周期管理**与**工作台打磨**为核心的更新，引入全局后台任务追踪与优雅关闭、内置 PDF 查看器、行为学习引擎深度增强，以及大量 Workbench UI 与运行时稳定性修复。
+
+### Added
+
+- **全局后台任务生命周期管理** — 全新 `task_lifecycle.py` 模块，提供 `track_task` / `cancel_and_wait` 原语统一管理 asyncio 任务生命周期。`SessionContext` 新增 `pending_housekeeping` 追踪，session 关闭时确保所有 owned task finalizer 被等待。`adaptive_budget.py` / `call_llm.py` / `search.py` 等模块接入，实现优雅关闭。
+- **内置 PDF 查看器** — 集成 PDF.js (`routes_pdf.py` + `pdfjs/` 静态资源)，在 Workbench 中直接渲染 PDF 文档，支持缩放、搜索、页面导航。配套 `pdf-setup.js` 嵌入逻辑。
+- **运行时生命周期管理** — 新增 `runtime_lifecycle.py` 模块，提供 `get_lifespan_manager()` 作为 Web 应用单一生命周期管理器，server shutdown 时统一清理后台任务与资源。
+- **行为学习数据库增强** — `behavior_learning.py` 新增 `project_id` 列的数据库迁移逻辑，支持旧 DB 自动升级；新增 `pending_housekeeping` 关联，后台任务完成时自动触发学习评估。
+- **Workbench 会话管理增强** — 阻止未启动 session 被暂停的错误路径；`workbench_store.py` 支持数据库重初始化时无损迁移数据。
+- **运行时帮助信息增强** — `__main__.py` 扩展 CLI 帮助输出，包含 verbose mode 支持、后端服务状态列表（SearXNG、MCP 等）。
+- **后台备份导出** — `backup.py` 将阻塞性文件压缩操作迁移到 `asyncio.to_thread`，不阻塞事件循环。
+- **LLM 候选端点日志** — `call_llm.py` 新增候选端点自动切换日志，便于调试模型端点故障。
+
+### Changed
+
+- **行为学习引擎重构（第二阶段）** — `behavior_learning.py` 核心变化：
+  - 技能学习流程重写：从基于 `internal_review_tokens` 的自循环改为基于 LLM review 决策的管道（`_learn_step_core` → `_run_learning_review`），review 结果决定批准/驳回/修正；
+  - 新增 `project_id` 参数贯穿所有查询，技能、工具链和 review 数据按项目完全隔离；
+  - 提示词净化 (`sanitize_legacy_prompts`) 自动移除含 `system_reminder` 标签的旧 prompt 片段，避免历史数据污染新学习流程；
+  - 截图产物保留优化：学习评估不再删除运行过程中的截图文件，仅做引用清理；
+  - 单轮技能不再自动学习：`_AUTO_LEARN_MIN_TURNS` 门槛确保至少需要多轮交互才能形成技能，减少噪声。
+- **Subagent 增强** — `subagent.py`：
+  - 新增 `wait_until_settled()` 会话级原语，等 subagent 完全稳定后再收尾，解决"步骤假完成"问题（subagent 还在跑却标 completed）；
+  - 新增 `dispatch_acceptance_repair` 支持：验收标准验证失败时自动触发修复子流程。
+- **任务验收自动完成** — `routes.py` 新增 `_workbench_acceptance_fully_passed` / `_workbench_mark_completed_if_acceptance_passed`：任务的所有验收标准通过后自动标记 `status=completed`，无需手动操作。
+- **Workbench UI 打磨** — `workbench.jsx` / `workbench.css`：
+  - 任务计划编辑权限细化：步骤执行中禁用添加/重新排序操作（`2d6e429`）；
+  - 接受标准卡片（acceptance criteria）UI 重写：按钮文本更清晰（"标记为满足" → "我已验证"), 证据内容与标准正文视觉分离；
+  - `workbench-create.jsx` 优化文件处理与 UI 交互。
+- **Web 应用服务器重构** — `server.py`：
+  - 从 `lifespan_ctx` 装饰器迁移到 `LifespanManager` 类，支持 `add_shutdown_handler` 注册；
+  - SSE 事件总线的清理逻辑与 lifespan 管理器集成；
+  - 端口绑定与 SIGTERM 处理更可靠。
+- **WebUI 构建工具升级** — `build-jsx.mjs`：
+  - 支持 watch 模式（`--watch`），开发时自动增量编译 JSX；
+  - 支持 `--measure` 输出编译耗时；
+  - 依赖 esbuild v0.25+。
+- **文件交付优化** — `routes.py` 文件发送端点增强路径解析，支持更宽泛的临时文件路径；`index.html` 新增 PDF.js 资源引用。
+- **LLM 意图分类增强** — `call_llm.py` 改进 dispatch 意图分类的上下文传递，子 agent 场景下分类更准确。
+
+### Fixed
+
+- **任务页面编辑权限** — 计划步骤执行中，添加和重新排序按钮被正确禁用，防止中间状态篡改。
+- **Behavior Learning 旧 DB 兼容** — 缺少 `project_id` 列的旧数据库在启动时不再因 `CREATE INDEX` 引用了不存在的列而崩溃。
+- **Workbench 前端空值守卫** — 多个 JSX 组件增加 `null`/`undefined` 安全访问（可选链、空值合并），防止部分加载状态下的白屏。
+- **WebUI Nonce 处理** — 修复 Content-Security-Policy nonce 的生成与传播逻辑。
+- **`workbench-memory.jsx` 缺少闭合括号** — 修复 JSX 语法错误导致 esbuild 构建失败。
+- **其他运行时修复** — SSE 事件发布的 session_id 保证；知识库搜索的边界处理；通知已读状态的多 tab 一致性。
+
+### Tests
+
+- 新增 `tests/test_performance_stability.py` — 压力与稳定性测试（87 行）。
+- 新增 `tests/test_call_llm_candidates.py` — 候选端点切换与日志验证（26 行）。
+- 新增 `tests/test_cli_entrypoint.py` — CLI 入口点参数解析测试（31 行）。
+- 新增 `tests/test_workbench_dispatch_finalize.py` — dispatch 意图收尾验收修复流程（47 行）。
+- 更新 `tests/test_runtime_fixes.py` — event session_id 等运行时修复断言。
+- 更新 `tests/test_workbench_api_validation.py` — 同步新增 API 校验场景。
+- 更新 `tests/test_behavior_learning.py` — 大量新增：web 搜索学习、浏览器事件、review 决策、提示词净化、截图保留、单轮过滤。
+- 更新 `tests/test_goal_loop.py` — 验收标准独立验证与任务完成判定。
+- 更新 `tests/test_proactive_workbench.py` — 用户消息捕获与系统主动触发场景。
+- 更新 `tests/test_workbench_frontend_logic.py` — 动态 i18n 标签与 HTML sandbox 断言。
+- 更新 `tests/test_workbench_init_plan.py` — 初始化计划生成断言扩充。
+
 ## [0.6.3] - 2026-07-07
 
 0.6.3 是一个以**技能学习 (Behavior Learning)** 与**浏览器集成**为核心的更新，引入技能生命周期管理（构建、查询、执行、删除）、浏览器用户事件追踪、多语言支持，同时大幅重构 Workbench UI 与学习引擎。

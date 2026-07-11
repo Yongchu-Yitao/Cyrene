@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.6.3-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.6.4-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-beta-orange" alt="Status">
 </p>
@@ -81,7 +81,7 @@ Where you actually talk to Cyrene.
 
 ---
 
-## Limitations (current as of v0.6.3)
+## Limitations (current as of v0.6.4)
 
 - **Single-user** — one workspace, one `SOUL.md`, no user isolation
 - **Local-only Web UI** — binds to `127.0.0.1`; the desktop app uses OS keyring auth, but the raw web server has no auth layer

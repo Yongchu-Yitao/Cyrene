@@ -642,6 +642,53 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var sessionLoadSeqRef = useWorkbenchRef(0);
   var menuActionsRef = useWorkbenchRef({ createProject: function () {}, createSession: function () {}, onToggleTheme: function () {} });
 
+  function projectForSession(snapshot, sessionId) {
+    if (!snapshot || !sessionId) return null;
+    var projects = Array.isArray(snapshot.projects) ? snapshot.projects : [];
+    for (var i = 0; i < projects.length; i++) {
+      var sessions = Array.isArray(projects[i].sessions) ? projects[i].sessions : [];
+      if (sessions.some(function (item) { return item && String(item.id || "") === String(sessionId); })) {
+        return projects[i];
+      }
+    }
+    return null;
+  }
+
+  // Merge a task response without allowing a late response from an old task
+  // to change the project the user is currently viewing. The response still
+  // updates the project/session lists, so background work is not lost.
+  function mergeTaskResponse(prev, nextStore, sourceSessionId) {
+    if (!nextStore || typeof nextStore !== "object") return prev;
+    var merged = Object.assign({}, prev);
+    if (Array.isArray(nextStore.projects)) merged.projects = nextStore.projects;
+
+    var sourceId = String(sourceSessionId || "");
+    if (sourceId && String(prev.activeSessionId || "") !== sourceId) return merged;
+
+    var responseSession = null;
+    var responseProject = projectForSession(nextStore, sourceId);
+    if (responseProject) {
+      responseSession = (responseProject.sessions || []).find(function (item) {
+        return item && String(item.id || "") === sourceId;
+      }) || null;
+    }
+    if (!responseSession && nextStore.activeSession && (!sourceId || String(nextStore.activeSession.id || "") === sourceId)) {
+      responseSession = nextStore.activeSession;
+    }
+    if (!responseProject && nextStore.activeProject && (!sourceId || !responseSession || String(nextStore.activeProject.id || "") === String(responseSession.projectId || ""))) {
+      responseProject = nextStore.activeProject;
+    }
+    if (responseProject && String(responseProject.id || "") === String(prev.activeProjectId || "")) {
+      merged.activeProject = responseProject;
+      merged.activeProjectId = responseProject.id;
+    }
+    if (responseSession && String(responseSession.id || "") === String(prev.activeSessionId || "")) {
+      merged.activeSession = responseSession;
+      merged.activeSessionId = responseSession.id;
+    }
+    return merged;
+  }
+
   function reloadNotifications(tab, limit) {
     var activeView = activeViewRef.current;
     var visibleView = null;
@@ -671,15 +718,22 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     setError("");
     return model.fetchProjects()
       .then(function (next) {
-        if (nextProjectId) next.activeProjectId = nextProjectId;
-        var project = next.projects.find(function (item) { return item.id === next.activeProjectId; }) || next.activeProject;
-        if (project) {
-          next.activeProject = project;
-          if (nextSessionId) next.activeSessionId = nextSessionId;
-          next.activeSession = project.sessions.find(function (item) { return item.id === next.activeSessionId; }) || project.sessions[0] || null;
-          next.activeSessionId = next.activeSession ? next.activeSession.id : "";
-        }
-        setStore(next);
+        setStore(function (prev) {
+          // Prefer an explicit target, then the already-visible UI selection.
+          // This prevents the initial request from winning a race against a
+          // click made while the project list is still loading.
+          var projectId = nextProjectId || (prev && prev.activeProjectId) || next.activeProjectId;
+          var sessionId = nextSessionId || (prev && prev.activeSessionId) || next.activeSessionId;
+          var project = (next.projects || []).find(function (item) { return item.id === projectId; }) || next.activeProject;
+          if (!project) return next;
+          var session = (project.sessions || []).find(function (item) { return item.id === sessionId; }) || project.sessions[0] || null;
+          return Object.assign({}, next, {
+            activeProjectId: project.id,
+            activeProject: project,
+            activeSessionId: session ? session.id : "",
+            activeSession: session,
+          });
+        });
         return next;
       })
       .catch(function (err) {
@@ -700,7 +754,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         var activeProjectId = (prev && prev.activeProjectId) || next.activeProjectId;
         var activeProject = (next.projects || []).find(function (project) {
           return project && String(project.id || "") === String(activeProjectId || "");
-        }) || next.activeProject;
+        }) || (prev && prev.activeProject) || next.activeProject;
         var activeSessionId = (prev && prev.activeSessionId) || next.activeSessionId;
         var activeSession = activeProject && (activeProject.sessions || []).find(function (session) {
           return session && String(session.id || "") === String(activeSessionId || "");
@@ -774,8 +828,14 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     if (!foundProject && projectPayload) {
       nextProjects = nextProjects.concat([Object.assign({}, projectPayload, { sessions: [fullSession] })]);
     }
-    var activeProject = nextProjects.find(function (project) { return String(project.id || "") === projectId; }) || prev.activeProject;
+    var updatedProject = nextProjects.find(function (project) { return String(project.id || "") === projectId; }) || null;
     var shouldActivate = String(prev.activeSessionId || "") === String(fullSession.id || "");
+    // The fetched session may belong to an old project after the user has
+    // switched projects. Keep that data in the list, but preserve the visible
+    // project/session unless this response is for the current session.
+    var activeProject = nextProjects.find(function (project) {
+      return String(project.id || "") === String(prev.activeProjectId || "");
+    }) || (shouldActivate ? updatedProject : prev.activeProject);
     var activeSession = shouldActivate
       ? fullSession
       : (
@@ -1376,11 +1436,18 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     });
   }
 
-  function handleRunCreated(next) {
-    setStore(next);
-    setExpandedStepId(next.activeSession && next.activeSession.plan[0] ? next.activeSession.plan[0].id : "");
-    setRightTab("context");
-    setTaskView("detail");
+  function handleRunCreated(next, sourceSessionId) {
+    setStore(function (prev) {
+      return mergeTaskResponse(prev, next, sourceSessionId);
+    });
+    var visibleSessionId = activeViewRef.current && activeViewRef.current.sessionId;
+    if (!sourceSessionId || String(sourceSessionId) === String(visibleSessionId || "")) {
+      var currentSession = next && next.activeSession && String(next.activeSession.id || "") === String(sourceSessionId || visibleSessionId || "")
+        ? next.activeSession : null;
+      setExpandedStepId(currentSession && currentSession.plan && currentSession.plan[0] ? currentSession.plan[0].id : "");
+      setRightTab("context");
+      setTaskView("detail");
+    }
   }
 
   function handleOpenPage(page) {
@@ -1578,7 +1645,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             session={store.activeSession}
             expandedStepId={expandedStepId}
             onToggleStep={function (stepId) { setExpandedStepId(expandedStepId === stepId ? "" : stepId); }}
-            onCreateRun={handleRunCreated}
+            onCreateRun={function (next) { handleRunCreated(next, store.activeSessionId); }}
             onRightTab={setRightTab}
             onSelectSession={selectSession}
             onBackToBoard={function () { setTaskView("board"); }}
@@ -1587,22 +1654,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             onLocalPatch={patchActiveSessionLocal}
             onRefresh={function (nextStore) {
               setStore(function (prev) {
-                // Preserve expandedStepId, rightTab, etc. from current UI state
-                // but replace project/session data from the server response
-                var merged = { ...prev };
-                if (nextStore && nextStore.activeProject) {
-                  merged.activeProject = nextStore.activeProject;
-                  merged.activeProjectId = nextStore.activeProjectId || merged.activeProjectId;
-                }
-                if (nextStore && nextStore.activeSession) {
-                  merged.activeSession = nextStore.activeSession;
-                  merged.activeSessionId = nextStore.activeSessionId || merged.activeSessionId;
-                }
-                // Also refresh the projects + sessions lists
-                if (nextStore && Array.isArray(nextStore.projects)) {
-                  merged.projects = nextStore.projects;
-                }
-                return merged;
+                return mergeTaskResponse(prev, nextStore, store.activeSessionId);
               });
             }}
             error={error}
@@ -1617,11 +1669,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             onTabChange={setRightTab}
             onRefresh={function (nextStore) {
               setStore(function (prev) {
-                var merged = { ...prev };
-                if (nextStore && nextStore.activeProject) merged.activeProject = nextStore.activeProject;
-                if (nextStore && nextStore.activeSession) merged.activeSession = nextStore.activeSession;
-                if (nextStore && Array.isArray(nextStore.projects)) merged.projects = nextStore.projects;
-                return merged;
+                return mergeTaskResponse(prev, nextStore, store.activeSessionId);
               });
             }}
           />

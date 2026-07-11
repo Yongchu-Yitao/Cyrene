@@ -628,7 +628,11 @@
               return h("div", { className: "wb-replay-section" },
                 h("h3", null, t("memory.learning.generatedScript", "Generated script")),
                 h("div", { className: "wb-detail-files" },
-                  h("button", { type: "button", className: "wb-detail-file-row wb-mem-script-file", title: scriptPath, "aria-label": t("memory.learning.copyScriptPath", "Copy script path") + ": " + scriptName, onClick: function () { window.showToast({ body: t("memory.learning.scriptPathCopied", "Script path copied to clipboard"), duration: 2000 }); navigator.clipboard.writeText(scriptPath).catch(function(){}); } },
+                  h("button", { type: "button", className: "wb-detail-file-row wb-mem-script-file", title: scriptPath, "aria-label": t("memory.learning.copyScriptPath", "Copy script path") + ": " + scriptName, onClick: function () {
+                    navigator.clipboard.writeText(scriptPath).then(function () {
+                      window.showToast(t("memory.learning.scriptPathCopied", "Script path copied to clipboard"), "info", { duration: 2000 });
+                    }).catch(function () {});
+                  } },
                     h("span", null, toolIcon({ tool: "file" })),
                     h("div", null,
                       h("b", null, scriptName),

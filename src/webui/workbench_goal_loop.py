@@ -294,8 +294,9 @@ def _write_session(
         now = R._utc_now_iso()
         session["updatedAt"] = now
         project["updatedAt"] = now
-        payload["activeProjectId"] = project.get("id")
-        payload["activeSessionId"] = session_id
+        # Goal-loop runs in the background and must not steal the user's
+        # persisted project selection. Only explicit UI activation is allowed
+        # to change activeProjectId / activeSessionId.
         R._write_workbench_store(payload)
         return payload, project, session
 

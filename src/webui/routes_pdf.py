@@ -143,15 +143,15 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str) -> str:
   <div id="resultBody"></div>
 </div>
 
-<script src="/static/app/pdfjs/pdf.min.js?v=0.7.2"></script>
-<script src="/static/app/pdfjs/pdf_viewer.js?v=0.7.2"></script>
-<script src="/static/app/pdfjs/pdf-setup.js?v=0.7.2"></script>
+<script src="/static/app/pdfjs/pdf.min.js?v=0.7.3"></script>
+<script src="/static/app/pdfjs/pdf_viewer.js?v=0.7.3"></script>
+<script src="/static/app/pdfjs/pdf-setup.js?v=0.7.3"></script>
 <script>
 (function() {{
   var pdfUrl = {js_url};
   if (!pdfUrl) return;
 
-  pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/app/pdfjs/pdf.worker.min.js';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/app/pdfjs/pdf.worker.min.js?v=0.7.3';
 
   var container = document.getElementById('viewerContainer');
   var result = pdfjsSetupViewer(container);

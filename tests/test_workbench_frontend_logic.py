@@ -319,6 +319,20 @@ def test_workbench_chat_allows_drafting_but_not_sending_while_running():
     assert "workbench-i18n.js?v=0.6.5" in index
 
 
+def test_workbench_chat_does_not_render_previous_transcript_during_switch():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    load_effect = source.split("// Load the full transcript when the selection changes.", 1)[1].split(
+        "// Viewer / content tabs belong to one conversation", 1
+    )[0]
+
+    assert load_effect.index("setActiveChat(null)") < load_effect.index("if (!activeChatId)")
+    assert 'String(activeChat.id || "") === String(activeChatId || "")' in source
+    assert "chat={visibleChat}" in source
+
+
 def test_workbench_chat_plan_confirmation_can_continue_in_auto_mode():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(

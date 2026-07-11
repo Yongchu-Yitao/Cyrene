@@ -1000,8 +1000,12 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
 
   // Load the full transcript when the selection changes.
   useWbcEffect(function () {
+    // Do not keep rendering the previous transcript while the newly selected
+    // chat is being fetched. This matters especially when the previous chat is
+    // streaming: its latest user message would otherwise appear to belong to
+    // every chat the user clicks during the request.
+    setActiveChat(null);
     if (!activeChatId) {
-      setActiveChat(null);
       setSubagentData({ rounds: [], activeRoundId: "", agents: [], messages: [] });
       return;
     }
@@ -1562,6 +1566,11 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   // conversations continue streaming in the background.
   var activeRuntime = runtimes[activeChatId] || null;
   var activeRunning = !!activeRuntime;
+  // Effects run after paint, so also guard the render itself against a stale
+  // activeChat during the ID -> transcript fetch gap.
+  var visibleChat = activeChat && String(activeChat.id || "") === String(activeChatId || "")
+    ? activeChat
+    : null;
 
   return (
     <div className={"wbc-page" + (sideVisible ? "" : " wbc-side-hidden")}>
@@ -1577,7 +1586,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
       />
       <WbcMain
         project={project}
-        chat={activeChat}
+        chat={visibleChat}
         runtime={activeRuntime}
         error={error}
         errorKind={errorKind}
@@ -1598,7 +1607,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
       />
       <WbcSide
         project={project}
-        chat={activeChat}
+        chat={visibleChat}
         chats={chats}
         activeChatId={activeChatId}
         onSelectChat={function (id) { setActiveChatId(id); }}
