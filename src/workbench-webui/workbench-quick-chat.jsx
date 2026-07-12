@@ -499,6 +499,21 @@ function QuickChatApp() {
     }
   }
 
+  function handleGuidance(message) {
+    var chatId = activeChatIdRef.current;
+    var text = String(message || "").trim();
+    if (!chatId || !text || !sending) return Promise.resolve(null);
+    setSendError("");
+    return model.sendGuidance(chatId, text, "guide_" + Date.now()).catch(function (err) {
+      if (err && err.code === "chat_not_running" && runtimeEngine.deferSend) {
+        runtimeEngine.deferSend(chatId, { message: text }, model);
+        return { deferred: true };
+      }
+      showSendError(err);
+      throw err;
+    });
+  }
+
   var screenshot = context && context.screenshot;
   var permissionStatus = context && context.screenPermissionStatus;
   var screenshotKey = screenshot ? (screenshot.capturedAt || "ready") : "";
@@ -638,6 +653,7 @@ function QuickChatApp() {
                     project={composerProject}
                     running={sending}
                     onSend={handleSend}
+                    onGuidance={handleGuidance}
                     onInterrupt={handleInterrupt}
                     draftNamespace="quick-chat:"
                     autoFocus={true}

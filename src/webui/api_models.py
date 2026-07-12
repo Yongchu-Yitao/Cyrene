@@ -203,6 +203,11 @@ class ChatMessageBody(APIBody):
     lang: Literal["", "en", "zh"] = ""
 
 
+class ChatGuidanceBody(APIBody):
+    message: str = Field(min_length=1, max_length=200_000)
+    clientRequestId: str | None = Field(default=None, max_length=200)
+
+
 class ChatToTaskBody(APIBody):
     title: str | None = Field(default=None, max_length=160)
     goal: str | None = Field(default=None, max_length=50_000)

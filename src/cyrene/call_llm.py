@@ -13,6 +13,7 @@ import os
 import re
 import time as _time
 import uuid
+import weakref
 from typing import Any, Callable, Awaitable
 
 import httpx
@@ -23,7 +24,13 @@ from cyrene.config import (
     _strip_wrapping_quotes,
 )
 from cyrene.context_trace import strip_context_metadata, summarize_context_trace
-from cyrene.settings_store import get_models, get_vision_models, get_secondary_model
+from cyrene.settings_store import (
+    get as get_setting,
+    get_models,
+    get_secondary_model,
+    get_vision_models,
+    set_ as set_setting,
+)
 from cyrene.task_lifecycle import drain_or_cancel, track_task
 
 logger = logging.getLogger(__name__)
@@ -32,6 +39,17 @@ logger = logging.getLogger(__name__)
 # Background task tracking — prevent GC from collecting fire-and-forget tasks
 # ---------------------------------------------------------------------------
 _pending_token_tasks: set[asyncio.Task] = set()
+
+# One keep-alive pool per event loop and timeout profile. This keeps production
+# calls on persistent HTTP/1.1 or HTTP/2 connections while avoiding cross-loop
+# reuse in tests, desktop restarts, and embedded runtimes.
+_http_clients: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[float, tuple[Any, httpx.AsyncClient]]
+] = weakref.WeakKeyDictionary()
+_HTTP_MAX_CONNECTIONS = 40
+_HTTP_MAX_KEEPALIVE_CONNECTIONS = 20
+_LAST_SUCCESS_SETTING = "llm_last_success_endpoints"
+_last_success_cache: dict[str, dict[str, str]] | None = None
 
 
 def _bg_token_task(task: asyncio.Task) -> None:
@@ -45,8 +63,101 @@ def _bg_token_task(task: asyncio.Task) -> None:
 
 async def shutdown_background_tasks() -> None:
     """Flush short usage writes and cancel any stalled database operation."""
+    clients = [
+        client
+        for per_loop in list(_http_clients.values())
+        for _factory, client in per_loop.values()
+    ]
+    _http_clients.clear()
+    if clients:
+        await asyncio.gather(
+            *(client.aclose() for client in clients if hasattr(client, "aclose")),
+            return_exceptions=True,
+        )
     await drain_or_cancel(_pending_token_tasks, grace_seconds=2.0)
     _pending_token_tasks.clear()
+
+
+def _get_http_client(timeout: float) -> tuple[httpx.AsyncClient, str, bool]:
+    loop = asyncio.get_running_loop()
+    timeout_key = float(timeout)
+    per_loop = _http_clients.setdefault(loop, {})
+    factory = httpx.AsyncClient
+    existing = per_loop.get(timeout_key)
+    if existing is not None and existing[0] is factory:
+        return existing[1], f"loop:{id(loop)}:timeout:{timeout_key:g}", True
+    transport = httpx.AsyncHTTPTransport(
+        retries=0,
+        limits=httpx.Limits(
+            max_connections=_HTTP_MAX_CONNECTIONS,
+            max_keepalive_connections=_HTTP_MAX_KEEPALIVE_CONNECTIONS,
+            keepalive_expiry=30.0,
+        ),
+    )
+    client_timeout = httpx.Timeout(
+        timeout, connect=min(_CONNECT_TIMEOUT_SECONDS, timeout)
+    )
+    client = factory(transport=transport, timeout=client_timeout, http2=False)
+    per_loop[timeout_key] = (factory, client)
+    return client, f"loop:{id(loop)}:timeout:{timeout_key:g}", False
+
+
+def _last_success_map() -> dict[str, dict[str, str]]:
+    global _last_success_cache
+    if _last_success_cache is None:
+        raw = get_setting(_LAST_SUCCESS_SETTING, {})
+        _last_success_cache = dict(raw) if isinstance(raw, dict) else {}
+    return _last_success_cache
+
+
+def _prioritize_last_success(
+    candidates: list[dict[str, Any]], model_type: str
+) -> list[dict[str, Any]]:
+    affinity = _last_success_map().get(model_type) or {}
+    prepared: list[dict[str, Any]] = []
+    for configured_rank, original in enumerate(candidates):
+        candidate = dict(original)
+        candidate["_configured_rank"] = configured_rank
+        endpoints = list(candidate.get("endpoints") or [])
+        candidate["_endpoint_ranks"] = {endpoint: rank for rank, endpoint in enumerate(endpoints)}
+        if (
+            str(candidate.get("id") or "") == str(affinity.get("candidate_id") or "")
+            and str(candidate.get("model") or "") == str(affinity.get("model") or "")
+            and _base_root(candidate.get("base_url") or "") == _base_root(affinity.get("base_url") or "")
+        ):
+            preferred_endpoint = str(affinity.get("endpoint") or "")
+            if preferred_endpoint in endpoints:
+                endpoints.remove(preferred_endpoint)
+                endpoints.insert(0, preferred_endpoint)
+        candidate["endpoints"] = endpoints
+        prepared.append(candidate)
+    preferred_id = str(affinity.get("candidate_id") or "")
+    preferred_model = str(affinity.get("model") or "")
+    preferred_root = _base_root(affinity.get("base_url") or "")
+    prepared.sort(
+        key=lambda candidate: 0
+        if (
+            str(candidate.get("id") or "") == preferred_id
+            and str(candidate.get("model") or "") == preferred_model
+            and _base_root(candidate.get("base_url") or "") == preferred_root
+        )
+        else 1
+    )
+    return prepared
+
+
+def _remember_success(model_type: str, candidate: dict[str, Any], endpoint: str) -> None:
+    affinity = {
+        "candidate_id": str(candidate.get("id") or ""),
+        "model": str(candidate.get("model") or ""),
+        "base_url": str(candidate.get("base_url") or ""),
+        "endpoint": str(endpoint or ""),
+    }
+    saved = _last_success_map()
+    if saved.get(model_type) == affinity:
+        return
+    saved[model_type] = affinity
+    set_setting(_LAST_SUCCESS_SETTING, dict(saved))
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +374,7 @@ _INTERNAL_MSG_KEYS = frozenset({
     "report_ref", "report_archive_session_id", "report_round_id",
     "report_title", "deep_reflection_record", "reflection_id",
     "subagent_flow_snapshot", "proactive",
+    "runtime_guidance",
     # Per-response metadata we attach to the returned message for callers to
     # inspect (e.g. detecting a max_tokens truncation), but which must not be
     # echoed back upstream when the message is replayed in history.
@@ -661,6 +773,13 @@ def _record_token_usage_faf(
     )))
 
 
+def _record_latency_faf(event: dict[str, Any]) -> None:
+    """Persist a request-attempt span without delaying the model loop."""
+    from cyrene.db import record_llm_latency
+
+    _bg_token_task(asyncio.create_task(record_llm_latency(str(DB_PATH), **event)))
+
+
 # ---------------------------------------------------------------------------
 # SSE event publishing
 # ---------------------------------------------------------------------------
@@ -701,6 +820,31 @@ async def _publish_llm_event(
         await debug.publish_event(event)
 
 
+async def _publish_model_fallback_event(
+    *,
+    session_id: str,
+    round_id: str,
+    failed_model: str,
+    fallback_model: str,
+) -> None:
+    from cyrene import debug
+
+    event = {
+        "type": "phase_transition",
+        "from": "primary_model",
+        "to": "fallback_model",
+        "detail": "Primary model unavailable, switching to a fallback model.",
+        "detail_key": "phase.modelFallback",
+        "detail_params": {
+            "failedModel": str(failed_model or ""),
+            "fallbackModel": str(fallback_model or ""),
+        },
+    }
+    if round_id:
+        event["round_id"] = round_id
+    await debug.publish_event(event, session_id=session_id)
+
+
 # ---------------------------------------------------------------------------
 # The unified call_llm function
 # ---------------------------------------------------------------------------
@@ -723,6 +867,7 @@ async def call_llm(
     return_text: bool = False,
     publish_events: bool = True,
     record_usage: bool = True,
+    record_latency: bool | None = None,
     round_id: str = "",
     session_id: str = "",
 ) -> dict | str:
@@ -744,6 +889,9 @@ async def call_llm(
         return_text: Return plain ``str`` instead of a message ``dict``.
         publish_events: Whether to publish ``llm_call`` SSE events.
         record_usage: Whether to record token usage to the database.
+        record_latency: Whether to record per-attempt latency spans. Defaults to
+            the value of ``record_usage`` so lightweight/test calls can disable
+            all persistence with one flag.
 
     Returns:
         Message ``dict`` with keys ``role``, ``content``, ``usage``, ``model``
@@ -756,6 +904,8 @@ async def call_llm(
     global _secondary_in_flight
 
     _t0 = _time.monotonic()
+    call_id = f"llm_{uuid.uuid4().hex}"
+    latency_enabled = record_usage if record_latency is None else bool(record_latency)
 
     resolved = candidates if candidates is not None else _resolve_candidates(model_type)
     if not resolved:
@@ -770,6 +920,20 @@ async def call_llm(
             caller, phase,
         )
         return ""
+    if candidates is None:
+        resolved = _prioritize_last_success(resolved, model_type)
+    else:
+        resolved = [
+            {
+                **candidate,
+                "_configured_rank": index,
+                "_endpoint_ranks": {
+                    endpoint: rank
+                    for rank, endpoint in enumerate(candidate.get("endpoints") or [])
+                },
+            }
+            for index, candidate in enumerate(resolved)
+        ]
 
     # ctx_limit check for secondary model: if messages exceed the limit,
     # skip secondary and fall through to primary candidates
@@ -788,18 +952,25 @@ async def call_llm(
         available = resolved
         skipped_cooling = []
     failed_this_call: list[str] = []
+    configured_primary = next(
+        (candidate for candidate in resolved if int(candidate.get("_configured_rank") or 0) == 0),
+        resolved[0],
+    )
+    failed_primary_model = ""
+    if available and int(available[0].get("_configured_rank") or 0) > 0:
+        failed_primary_model = str(configured_primary.get("model") or "")
+    fallback_notice_sent = False
+    attempt_number = 0
+    retry_backoff_ms = 0.0
 
     def _candidate_label(c: dict[str, Any]) -> str:
         return f"{c.get('id')}({c.get('model')}@{c.get('base_url')})"
 
-    # Keep the transport's connect-only retry disabled so the explicit policy
-    # below is the single bounded retry budget for all transport failures.
-    transport = httpx.AsyncHTTPTransport(retries=0)
-    client_timeout = httpx.Timeout(timeout, connect=min(_CONNECT_TIMEOUT_SECONDS, timeout))
-    async with httpx.AsyncClient(transport=transport, timeout=client_timeout) as client:
+    client, connection_pool_key, client_pool_reused = _get_http_client(timeout)
+    try:
         last_error: Exception | None = None
 
-        for candidate in available:
+        for candidate_position, candidate in enumerate(available):
             is_secondary = candidate.get("id") == "secondary"
             max_conc = int(candidate.get("max_concurrency") or 0)
 
@@ -808,6 +979,19 @@ async def call_llm(
                 continue
 
             try:
+                if (
+                    int(candidate.get("_configured_rank") or 0) > 0
+                    and failed_primary_model
+                    and not fallback_notice_sent
+                    and model_type == "primary"
+                ):
+                    await _publish_model_fallback_event(
+                        session_id=session_id,
+                        round_id=round_id,
+                        failed_model=failed_primary_model,
+                        fallback_model=str(candidate.get("model") or ""),
+                    )
+                    fallback_notice_sent = True
                 if is_secondary and max_conc > 0:
                     _secondary_in_flight += 1
                 model = str(candidate.get("model") or "").strip()
@@ -821,7 +1005,7 @@ async def call_llm(
                 endpoints = list(candidate.get("endpoints") or [])
                 candidate_error: Exception | None = None
 
-                for endpoint in endpoints:
+                for endpoint_position, endpoint in enumerate(endpoints):
                     if publish_events:
                         await _publish_llm_event(
                             caller, phase, messages, tools, {}, model, 0,
@@ -831,6 +1015,9 @@ async def call_llm(
                         network_retries = 0
                         server_error_retries = 0
                         while True:
+                            attempt_number += 1
+                            attempt_started = _time.monotonic()
+                            stream_timing: dict[str, float] = {}
                             stream_event_emitted = False
 
                             async def _tracked_stream_callback(event: dict[str, Any]) -> None:
@@ -847,6 +1034,7 @@ async def call_llm(
                                         payload,
                                         headers,
                                         _tracked_stream_callback,
+                                        stream_timing,
                                     )
                                 else:
                                     resp = await client.post(endpoint, json=payload, headers=headers)
@@ -860,8 +1048,30 @@ async def call_llm(
                                         _finish = _choices[0].get("finish_reason")
                                         if _finish:
                                             msg["finish_reason"] = str(_finish)
+                                request_ms = (_time.monotonic() - attempt_started) * 1000
                                 break
                             except httpx.TransportError as exc:
+                                request_ms = (_time.monotonic() - attempt_started) * 1000
+                                if latency_enabled:
+                                    _record_latency_faf({
+                                    "call_id": call_id, "session_id": session_id,
+                                    "round_id": round_id, "caller": caller, "phase": phase,
+                                    "model_type": model_type,
+                                    "candidate_id": candidate.get("id"), "model": model,
+                                    "endpoint": endpoint,
+                                    "candidate_rank": candidate.get("_configured_rank", candidate_position),
+                                    "endpoint_rank": (candidate.get("_endpoint_ranks") or {}).get(endpoint, endpoint_position),
+                                    "attempt": attempt_number, "outcome": "transport_error",
+                                    "error_type": exc.__class__.__name__,
+                                    "queue_wait_ms": (attempt_started - _t0) * 1000,
+                                    "pre_attempt_wait_ms": (attempt_started - _t0) * 1000,
+                                    "request_ms": request_ms,
+                                    "retry_backoff_ms": retry_backoff_ms,
+                                    "total_call_ms": (_time.monotonic() - _t0) * 1000,
+                                    "fallback_used": int(candidate.get("_configured_rank") or 0) > 0,
+                                    "client_pool_reused": client_pool_reused,
+                                    "connection_pool_key": connection_pool_key,
+                                    })
                                 # Restarting a stream after visible deltas would
                                 # duplicate text in the UI. Only retry before the
                                 # first stream event reaches the caller.
@@ -869,6 +1079,7 @@ async def call_llm(
                                     raise
                                 network_retries += 1
                                 delay = _NETWORK_RETRY_BASE_DELAY_SECONDS * (2 ** (network_retries - 1))
+                                retry_backoff_ms += delay * 1000
                                 logger.warning(
                                     "call_llm transient network failure; retrying "
                                     "[caller=%s phase=%s model=%s endpoint=%s retry=%d/%d delay=%.1fs]: %s",
@@ -883,6 +1094,28 @@ async def call_llm(
                                 )
                                 await asyncio.sleep(delay)
                             except httpx.HTTPStatusError as exc:
+                                request_ms = (_time.monotonic() - attempt_started) * 1000
+                                if latency_enabled:
+                                    _record_latency_faf({
+                                    "call_id": call_id, "session_id": session_id,
+                                    "round_id": round_id, "caller": caller, "phase": phase,
+                                    "model_type": model_type,
+                                    "candidate_id": candidate.get("id"), "model": model,
+                                    "endpoint": endpoint,
+                                    "candidate_rank": candidate.get("_configured_rank", candidate_position),
+                                    "endpoint_rank": (candidate.get("_endpoint_ranks") or {}).get(endpoint, endpoint_position),
+                                    "attempt": attempt_number, "outcome": "http_error",
+                                    "status_code": exc.response.status_code,
+                                    "error_type": exc.__class__.__name__,
+                                    "queue_wait_ms": (attempt_started - _t0) * 1000,
+                                    "pre_attempt_wait_ms": (attempt_started - _t0) * 1000,
+                                    "request_ms": request_ms,
+                                    "retry_backoff_ms": retry_backoff_ms,
+                                    "total_call_ms": (_time.monotonic() - _t0) * 1000,
+                                    "fallback_used": int(candidate.get("_configured_rank") or 0) > 0,
+                                    "client_pool_reused": client_pool_reused,
+                                    "connection_pool_key": connection_pool_key,
+                                    })
                                 # Transient upstream 5xx (incl. non-standard overload
                                 # codes like 550 / 529): back off and retry the same
                                 # endpoint before rotating. A 4xx is a real client
@@ -897,6 +1130,7 @@ async def call_llm(
                                     raise
                                 server_error_retries += 1
                                 delay = _SERVER_ERROR_RETRY_BASE_DELAY_SECONDS * (2 ** (server_error_retries - 1))
+                                retry_backoff_ms += delay * 1000
                                 logger.warning(
                                     "call_llm transient upstream error; retrying "
                                     "[caller=%s phase=%s model=%s endpoint=%s status=%d retry=%d/%d delay=%.1fs]",
@@ -918,8 +1152,54 @@ async def call_llm(
                             msg["usage"]["model"] = model
 
                         duration_ms = round((_time.monotonic() - _t0) * 1000)
+                        ttft_ms = stream_timing.get("ttft_ms") if stream else None
+                        response_headers_ms = (
+                            stream_timing.get("response_headers_ms") if stream else None
+                        )
+                        first_token_after_headers_ms = (
+                            max(0.0, ttft_ms - response_headers_ms)
+                            if ttft_ms is not None and response_headers_ms is not None
+                            else None
+                        )
+                        generation_ms = max(0.0, request_ms - ttft_ms) if ttft_ms is not None else None
+                        usage = msg.get("usage") or {}
+                        completion_tokens = int(usage.get("completion_tokens") or 0)
+                        tokens_per_second = (
+                            completion_tokens / (generation_ms / 1000)
+                            if generation_ms and completion_tokens > 0
+                            else None
+                        )
+
+                        if latency_enabled:
+                            _record_latency_faf({
+                            "call_id": call_id, "session_id": session_id,
+                            "round_id": round_id, "caller": caller, "phase": phase,
+                            "model_type": model_type,
+                            "candidate_id": candidate.get("id"), "model": model,
+                            "endpoint": endpoint,
+                            "candidate_rank": candidate.get("_configured_rank", candidate_position),
+                            "endpoint_rank": (candidate.get("_endpoint_ranks") or {}).get(endpoint, endpoint_position),
+                            "attempt": attempt_number, "outcome": "success", "status_code": 200,
+                            "queue_wait_ms": (attempt_started - _t0) * 1000,
+                            "pre_attempt_wait_ms": (attempt_started - _t0) * 1000,
+                            "request_ms": request_ms,
+                            "response_headers_ms": response_headers_ms,
+                            "ttft_ms": ttft_ms,
+                            "first_token_after_headers_ms": first_token_after_headers_ms,
+                            "generation_ms": generation_ms,
+                            "retry_backoff_ms": retry_backoff_ms,
+                            "total_call_ms": duration_ms,
+                            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                            "completion_tokens": completion_tokens,
+                            "output_tokens_per_second": tokens_per_second,
+                            "fallback_used": int(candidate.get("_configured_rank") or 0) > 0,
+                            "client_pool_reused": client_pool_reused,
+                            "connection_pool_key": connection_pool_key,
+                            })
 
                         _clear_candidate_cooldown(_candidate_key(candidate))
+                        if candidates is None:
+                            _remember_success(model_type, candidate, endpoint)
                         if failed_this_call or skipped_cooling:
                             logger.warning(
                                 "call_llm succeeded on %s after %d failed and %d cooled-down candidate(s)%s "
@@ -969,12 +1249,16 @@ async def call_llm(
                     failed_this_call.append(
                         f"{_candidate_label(candidate)}: {_format_httpx_error(candidate_error)}"
                     )
+                    if not failed_primary_model:
+                        failed_primary_model = model
                     continue
 
             except Exception as exc:
                 last_error = exc
                 _set_candidate_cooldown(_candidate_key(candidate))
                 failed_this_call.append(f"{_candidate_label(candidate)}: {exc.__class__.__name__}: {exc}")
+                if not failed_primary_model:
+                    failed_primary_model = str(candidate.get("model") or "")
                 if model_type == "vision" and _looks_like_vision_capability_error(exc):
                     continue
                 continue
@@ -988,6 +1272,10 @@ async def call_llm(
                 caller, phase, _format_httpx_error(last_error),
             )
             raise last_error
+    finally:
+        # The shared client belongs to the process/loop pool and is closed by
+        # runtime_lifecycle.shutdown_background_work, not after each request.
+        pass
     return ""
 
 
@@ -1140,6 +1428,7 @@ async def _handle_stream(
     payload: dict[str, Any],
     headers: dict[str, str],
     stream_callback: Callable[[dict[str, Any]], Awaitable[None]] | None,
+    timing: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     accumulated: list[str] = []  # raw content — kept for tool-call normalization
     reasoning_parts: list[str] = []
@@ -1147,6 +1436,7 @@ async def _handle_stream(
     usage: dict[str, Any] = {}
     started = False
     dsml_filter = _DsmlStreamFilter()
+    request_started = _time.monotonic()
 
     async def _forward(text: str) -> None:
         nonlocal started
@@ -1159,6 +1449,8 @@ async def _handle_stream(
             await stream_callback({"type": "reply_delta", "delta": text})
 
     async with client.stream("POST", endpoint, json=payload, headers=headers) as resp:
+        if timing is not None:
+            timing["response_headers_ms"] = (_time.monotonic() - request_started) * 1000
         if resp.status_code != 200:
             resp.raise_for_status()
         async for raw_line in resp.aiter_lines():
@@ -1171,6 +1463,8 @@ async def _handle_stream(
                 continue
             if line == "[DONE]":
                 break
+            if timing is not None and "ttft_ms" not in timing:
+                timing["ttft_ms"] = (_time.monotonic() - request_started) * 1000
             try:
                 data = json.loads(line)
             except json.JSONDecodeError:

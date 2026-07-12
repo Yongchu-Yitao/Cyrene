@@ -15,12 +15,99 @@ Covers the fixes for the "send me the file" exchange:
 
 import pytest
 
+from cyrene.agent.message import _apply_assistant_meta, _assistant_entry_from_response
 from webui.workbench_chat_runs import ChatRun
 from webui.routes_workbench_chat import (
     _extract_exchange_segments,
+    _merge_chat_messages_chronologically,
+    _pending_question_message,
     _publish_live_exchange_segments_once,
+    _remove_retry_replaced_messages,
     _tool_result_is_error,
 )
+
+
+def test_late_discovered_assistant_message_is_inserted_before_guidance():
+    chat = {
+        "messages": [
+            {"id": "u1", "role": "user", "content": "start", "createdAt": "2026-01-01T00:00:00+00:00"},
+            {"id": "g1", "role": "user", "content": "steer", "createdAt": "2026-01-01T00:00:02+00:00", "guidance": True},
+        ]
+    }
+    _merge_chat_messages_chronologically(chat, [
+        {"id": "a1", "role": "assistant", "content": "working", "createdAt": "2026-01-01T00:00:01+00:00"},
+        {"id": "a2", "role": "assistant", "content": "done", "createdAt": "2026-01-01T00:00:03+00:00"},
+    ])
+
+    assert [message["id"] for message in chat["messages"]] == ["u1", "a1", "g1", "a2"]
+
+
+def test_pending_question_is_a_durable_transcript_message_with_trace():
+    message = _pending_question_message(
+        {"id": "q1", "text": "Which option?", "kind": "clarification"},
+        trace=[{"tool": "request_user_input"}],
+        model="test-model",
+    )
+
+    assert message["id"] == "msg_question_q1"
+    assert message["questionPrompt"] is True
+    assert message["questionId"] == "q1"
+    assert message["content"] == "Which option?"
+    assert message["trace"] == [{"tool": "request_user_input"}]
+
+
+def test_all_assistant_entry_builders_stamp_event_time():
+    direct = _assistant_entry_from_response({"content": "working"}, "round_1")
+    applied = _apply_assistant_meta({"role": "assistant", "content": "done"})
+
+    assert direct["created_at"]
+    assert applied["created_at"]
+
+
+def test_retry_cut_preserves_guidance_added_during_regeneration():
+    chat = {
+        "messages": [
+            {"id": "u1", "role": "user", "content": "try this"},
+            {"id": "old_a", "role": "assistant", "content": "old answer"},
+            {"id": "g_new", "role": "user", "content": "new guidance", "guidance": True},
+        ]
+    }
+
+    _remove_retry_replaced_messages(chat, "u1", {"old_a"})
+
+    assert [message["id"] for message in chat["messages"]] == ["u1", "g_new"]
+
+
+def test_live_intermediate_checkpoint_is_updated_not_duplicated(monkeypatch):
+    from webui import routes_workbench_chat as chat_mod
+
+    store = {
+        "chats": [{
+            "id": "chat_live",
+            "messages": [{"id": "u1", "role": "user", "content": "go", "createdAt": "2026-01-01T00:00:00+00:00"}],
+        }]
+    }
+    monkeypatch.setattr(chat_mod, "_read_chats_store", lambda: store)
+    monkeypatch.setattr(chat_mod, "_write_chats_store", lambda payload: store.update(payload))
+
+    chat_mod._persist_live_public_message("chat_live", {
+        "id": "a1",
+        "role": "assistant",
+        "content": "checking",
+        "createdAt": "2026-01-01T00:00:01+00:00",
+    })
+    chat_mod._merge_chat_messages_chronologically(store["chats"][0], [{
+        "id": "a1",
+        "role": "assistant",
+        "content": "checking",
+        "createdAt": "2026-01-01T00:00:01+00:00",
+        "intermediate": True,
+        "trace": [{"tool": "Bash"}],
+    }])
+
+    messages = store["chats"][0]["messages"]
+    assert [message["id"] for message in messages] == ["u1", "a1"]
+    assert messages[1]["trace"] == [{"tool": "Bash"}]
 
 
 def _asst_tool(mid, name, call_id, args="{}", content=""):
@@ -184,6 +271,31 @@ def test_preamble_prose_is_kept_as_its_own_reply_block():
     assert segments[0].get("trace") in (None, [])
     # …and the tool it requested becomes the card shown with the final reply.
     assert [t["tool"] for t in trailing] == ["Bash"]
+
+
+def test_plain_text_guidance_ack_before_final_reply_is_kept():
+    messages = [
+        {"role": "user", "message_id": "u1", "content": "start"},
+        {
+            "role": "assistant",
+            "message_id": "a1",
+            "content": "收到，我会按新的要求调整。",
+            "created_at": "2026-01-01T00:00:02+00:00",
+            "guidance_ack_for_guidance_id": "g1",
+        },
+        {
+            "role": "assistant",
+            "message_id": "a2",
+            "content": "调整后的最终结果。",
+            "created_at": "2026-01-01T00:00:03+00:00",
+        },
+    ]
+
+    segments, trailing, _usage, _files = _extract_exchange_segments(messages, set())
+
+    assert [segment["content"] for segment in segments] == ["收到，我会按新的要求调整。"]
+    assert segments[0]["createdAt"] == "2026-01-01T00:00:02+00:00"
+    assert trailing == []
 
 
 @pytest.mark.asyncio

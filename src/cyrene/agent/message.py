@@ -216,7 +216,11 @@ async def _insert_intermediate_user_reply(
 # ---------------------------------------------------------------------------
 
 def _assistant_entry_from_response(response: dict[str, Any], round_id: str, include_tool_calls: bool = True) -> dict[str, Any]:
-    entry: dict[str, Any] = {"role": "assistant", "content": response.get("content") or ""}
+    entry: dict[str, Any] = {
+        "role": "assistant",
+        "content": response.get("content") or "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
     if response.get("reasoning_content"):
         entry["reasoning_content"] = response["reasoning_content"]
     if include_tool_calls and response.get("tool_calls"):
@@ -232,6 +236,7 @@ def _assistant_entry_from_response(response: dict[str, Any], round_id: str, incl
 
 
 def _apply_assistant_meta(entry: dict[str, Any]) -> dict[str, Any]:
+    entry.setdefault("created_at", datetime.now(timezone.utc).isoformat())
     extra_meta = _ui_round_assistant_meta.get()
     if extra_meta:
         entry.update(extra_meta)

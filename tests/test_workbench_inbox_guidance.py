@@ -1,0 +1,871 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import sqlite3
+
+
+async def test_tool_result_returns_through_session_inbox_while_guidance_is_retained(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    db_path = tmp_path / "workbench.db"
+    inbox = WorkbenchAgentInbox("chat_1", str(db_path))
+    inbox.round_id = "round_1"
+    release = asyncio.Event()
+
+    async def slow_tool() -> str:
+        await release.wait()
+        return "tool output"
+
+    inbox.submit_tool("call_1", "Read", slow_tool)
+    waiter = asyncio.create_task(inbox.wait_for_tool_result("call_1"))
+    guidance = await inbox.put_guidance("先检查后端", client_request_id="guide_1")
+    await asyncio.sleep(0)
+    assert not waiter.done()
+
+    release.set()
+    assert await asyncio.wait_for(waiter, timeout=1) == "tool output"
+    retained = inbox.collect_guidance_nowait()
+    assert [event["payload"]["text"] for event in retained] == ["先检查后端"]
+    inbox.acknowledge(retained)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT event_type, status, session_id, round_id FROM workbench_agent_inbox ORDER BY created_at"
+        ).fetchall()
+    assert rows == [
+        ("guidance", "completed", "chat_1", "round_1"),
+        ("tool_result", "completed", "chat_1", "round_1"),
+    ]
+    assert guidance["event_id"].startswith("evt_")
+    await inbox.close()
+
+
+async def test_workbench_chat_run_installs_its_own_inbox_context(tmp_path):
+    from cyrene.workbench_inbox import current_workbench_inbox
+    from webui.workbench_chat_runs import ChatRunManager
+
+    manager = ChatRunManager(retention_seconds=0)
+    manager.configure(str(tmp_path / "workbench.db"))
+    seen = {}
+
+    async def runner(run):
+        seen["inbox"] = current_workbench_inbox()
+        seen["chat_id"] = run.inbox.session_id
+
+    run, is_new = manager.start_or_get("chat_a", {"type": "ack"}, runner, stream=True)
+    await asyncio.wait_for(run.done.wait(), timeout=1)
+    assert is_new is True
+    assert seen == {"inbox": run.inbox, "chat_id": "chat_a"}
+
+
+async def test_guidance_dedupe_returns_original_event_without_second_delivery(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_dedupe", str(tmp_path / "workbench.db"))
+    first = await inbox.put_guidance("first", client_request_id="same-request")
+    duplicate = await inbox.put_guidance("first", client_request_id="same-request")
+    assert duplicate["duplicate"] is True
+    assert duplicate["event_id"] == first["event_id"]
+    events = inbox.collect_guidance_nowait()
+    assert len(events) == 1
+    inbox.acknowledge(events)
+    await inbox.close()
+
+
+async def test_claimed_guidance_is_recovered_after_run_restart(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    db_path = tmp_path / "workbench.db"
+    first = WorkbenchAgentInbox("chat_recover", str(db_path))
+    event = await first.put_guidance("恢复这条引导", client_request_id="recover-1")
+    claimed = first.collect_guidance_nowait()
+    assert claimed[0]["event_id"] == event["event_id"]
+    # No close call: simulate a hard process stop, where graceful cleanup never ran.
+    resumed = WorkbenchAgentInbox("chat_recover", str(db_path))
+    recovered = resumed.collect_guidance_nowait()
+    assert [item["event_id"] for item in recovered] == [event["event_id"]]
+    resumed.acknowledge(recovered)
+    await first.close()
+    await resumed.close()
+
+
+async def test_graceful_close_cancels_unconsumed_events_with_run_reason(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    db_path = tmp_path / "workbench.db"
+    inbox = WorkbenchAgentInbox("chat_close", str(db_path), run_id="run_close")
+    await inbox.put_guidance("还没有处理", client_request_id="close-guide")
+    claimed = inbox.collect_guidance_nowait()
+    assert len(claimed) == 1
+    await inbox.put(
+        "tool_result",
+        {"tool_call_id": "call_orphan", "tool_name": "Read", "result": "done"},
+        batch_id="batch_orphan",
+        dedupe_key="tool-result:call_orphan",
+    )
+
+    await inbox.close(termination_reason="user_interrupted")
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT event_type, status, run_id, batch_id, termination_reason "
+            "FROM workbench_agent_inbox ORDER BY created_at"
+        ).fetchall()
+    assert rows == [
+        ("guidance", "cancelled", "run_close", "", "user_interrupted"),
+        ("tool_result", "cancelled", "run_close", "batch_orphan", "user_interrupted"),
+    ]
+
+
+async def test_tool_lifecycle_telemetry_records_batch_queue_and_durations(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    db_path = tmp_path / "workbench.db"
+    inbox = WorkbenchAgentInbox("chat_trace", str(db_path), run_id="run_trace")
+
+    async def tool() -> str:
+        await asyncio.sleep(0)
+        return "ok"
+
+    batch_id = inbox.submit_tool_batch(
+        [("call_trace", "Read", tool)], batch_id="batch_trace"
+    )
+    assert batch_id == "batch_trace"
+    assert await inbox.wait_for_tool_result("call_trace") == "ok"
+    await inbox.close(termination_reason="completed")
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT event_type, run_id, batch_id, tool_call_id, tool_name, "
+            "queue_length, duration_ms, termination_reason, tool_execution_ms, "
+            "result_wait_ms, result_queue_delay_ms, tool_queue_wait_ms, agent_wait_ms "
+            "FROM workbench_agent_run_events ORDER BY created_at, rowid"
+        ).fetchall()
+    assert [row[0] for row in rows] == [
+        "tool_submitted",
+        "tool_started",
+        "tool_result_queued",
+        "tool_result_consumed",
+        "run_terminated",
+    ]
+    assert all(row[1] == "run_trace" for row in rows)
+    assert all(row[5] >= 0 for row in rows)
+    assert rows[0][2:5] == ("batch_trace", "call_trace", "Read")
+    assert rows[2][6] is not None
+    assert rows[3][6] is not None
+    assert rows[-1][7] == "completed"
+    assert rows[2][8] is not None
+    assert rows[3][9] is not None
+    assert rows[3][10] is not None
+    assert rows[1][11] is not None
+    assert rows[3][12] is not None
+
+
+def test_inbox_schema_migrates_existing_database_without_dropping_events(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    db_path = tmp_path / "workbench.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE workbench_agent_inbox (
+                event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+                round_id TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL,
+                status TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0,
+                dedupe_key TEXT NOT NULL DEFAULT '', payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL, completed_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO workbench_agent_inbox VALUES "
+            "('old_event','other_chat','','tool_result','completed',0,'','{}','old','old')"
+        )
+
+    WorkbenchAgentInbox("new_chat", str(db_path), run_id="run_migrated")
+
+    with sqlite3.connect(db_path) as conn:
+        inbox_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(workbench_agent_inbox)")
+        }
+        trace_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(workbench_agent_run_events)")
+        }
+        old_event = conn.execute(
+            "SELECT event_id, status FROM workbench_agent_inbox WHERE event_id='old_event'"
+        ).fetchone()
+    assert {"run_id", "batch_id", "termination_reason"} <= inbox_columns
+    assert {
+        "run_id", "batch_id", "queue_length", "tool_queue_wait_ms",
+        "tool_execution_ms", "agent_wait_ms", "result_wait_ms",
+        "result_queue_delay_ms", "termination_reason",
+    } <= trace_columns
+    assert old_event == ("old_event", "completed")
+
+
+async def test_guidance_skips_not_yet_started_tools_in_submitted_batch(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_batch", str(tmp_path / "workbench.db"))
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_ran = False
+
+    async def first_tool() -> str:
+        first_started.set()
+        await release_first.wait()
+        return "first result"
+
+    async def second_tool() -> str:
+        nonlocal second_ran
+        second_ran = True
+        return "second result"
+
+    inbox.submit_tool_batch([
+        ("call_1", "Read", first_tool),
+        ("call_2", "Write", second_tool),
+    ])
+    await asyncio.wait_for(first_started.wait(), timeout=1)
+    await inbox.put_guidance("不要执行第二步", client_request_id="stop-second")
+    release_first.set()
+
+    assert await asyncio.wait_for(inbox.wait_for_tool_result("call_1"), timeout=1) == "first result"
+    second_result = await asyncio.wait_for(inbox.wait_for_tool_result("call_2"), timeout=1)
+    assert second_result.startswith("Skipped before execution")
+    assert second_ran is False
+    guidance = inbox.collect_guidance_nowait()
+    inbox.acknowledge(guidance)
+    await inbox.close()
+
+
+async def test_read_only_calls_on_same_resource_run_in_parallel(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_parallel_reads", str(tmp_path / "workbench.db"))
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def first() -> str:
+        first_started.set()
+        await release.wait()
+        return "first"
+
+    async def second() -> str:
+        second_started.set()
+        await release.wait()
+        return "second"
+
+    read_meta = {
+        "read_only": True,
+        "resource_keys": ("fs:/tmp/shared",),
+        "requires_order": False,
+    }
+    inbox.submit_tool_batch([
+        ("call_read_1", "Read", first, read_meta),
+        ("call_read_2", "Read", second, read_meta),
+    ])
+    await asyncio.wait_for(
+        asyncio.gather(first_started.wait(), second_started.wait()), timeout=1
+    )
+    release.set()
+    assert await inbox.wait_for_tool_result("call_read_1") == "first"
+    assert await inbox.wait_for_tool_result("call_read_2") == "second"
+    await inbox.close()
+
+
+def test_tool_registry_resolves_parallel_safety_metadata_from_arguments(tmp_path):
+    from cyrene.registry_tools import TOOL_DEFS, TOOL_METADATA, get_tool_execution_metadata
+
+    target = tmp_path / "nested" / "file.txt"
+    read_meta = get_tool_execution_metadata("Read", {"path": str(target)})
+    write_meta = get_tool_execution_metadata("Write", {"path": str(target)})
+    browser_meta = get_tool_execution_metadata("browser_snapshot", {})
+    unknown_meta = get_tool_execution_metadata("mcp_unknown", {})
+
+    assert read_meta == {
+        "read_only": True,
+        "resource_keys": (f"fs:{target.resolve()}",),
+        "requires_order": False,
+    }
+    assert write_meta == {
+        "read_only": False,
+        "resource_keys": (f"fs:{target.resolve()}",),
+        "requires_order": False,
+    }
+    assert browser_meta["requires_order"] is True
+    assert unknown_meta == {
+        "read_only": False,
+        "resource_keys": ("tool:mcp_unknown",),
+        "requires_order": True,
+    }
+    registered_names = {
+        str((tool_def.get("function") or {}).get("name") or "")
+        for tool_def in TOOL_DEFS
+    }
+    assert registered_names <= set(TOOL_METADATA)
+    assert all(
+        {"read_only", "resource_keys", "requires_order"} <= set(TOOL_METADATA[name])
+        for name in registered_names
+    )
+
+
+async def test_writes_to_same_resource_are_serial_but_distinct_resources_parallel(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_resource_conflict", str(tmp_path / "workbench.db"))
+    first_started = asyncio.Event()
+    conflicting_started = asyncio.Event()
+    distinct_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def first() -> str:
+        first_started.set()
+        await release_first.wait()
+        return "first"
+
+    async def conflicting() -> str:
+        conflicting_started.set()
+        return "conflicting"
+
+    async def distinct() -> str:
+        distinct_started.set()
+        return "distinct"
+
+    def write_meta(resource: str) -> dict:
+        return {
+            "read_only": False,
+            "resource_keys": (resource,),
+            "requires_order": False,
+        }
+
+    inbox.submit_tool_batch([
+        ("call_write_1", "Write", first, write_meta("fs:/tmp/a")),
+        ("call_write_2", "Edit", conflicting, write_meta("fs:/tmp/a")),
+        ("call_write_3", "Write", distinct, write_meta("fs:/tmp/b")),
+    ])
+    await asyncio.wait_for(
+        asyncio.gather(first_started.wait(), distinct_started.wait()), timeout=1
+    )
+    assert conflicting_started.is_set() is False
+    release_first.set()
+    await asyncio.wait_for(conflicting_started.wait(), timeout=1)
+    assert await inbox.wait_for_tool_result("call_write_1") == "first"
+    assert await inbox.wait_for_tool_result("call_write_2") == "conflicting"
+    assert await inbox.wait_for_tool_result("call_write_3") == "distinct"
+    await inbox.close()
+
+
+async def test_requires_order_call_is_a_batch_barrier(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_order_barrier", str(tmp_path / "workbench.db"))
+    first_started = asyncio.Event()
+    barrier_started = asyncio.Event()
+    trailing_started = asyncio.Event()
+    release_first = asyncio.Event()
+    release_barrier = asyncio.Event()
+    read_meta = {"read_only": True, "resource_keys": ("network:web",), "requires_order": False}
+    barrier_meta = {"read_only": False, "resource_keys": ("chat:messages",), "requires_order": True}
+
+    async def first() -> str:
+        first_started.set()
+        await release_first.wait()
+        return "first"
+
+    async def barrier() -> str:
+        barrier_started.set()
+        await release_barrier.wait()
+        return "barrier"
+
+    async def trailing() -> str:
+        trailing_started.set()
+        return "trailing"
+
+    inbox.submit_tool_batch([
+        ("call_before", "WebFetch", first, read_meta),
+        ("call_barrier", "send_message", barrier, barrier_meta),
+        ("call_after", "WebFetch", trailing, read_meta),
+    ])
+    await asyncio.wait_for(first_started.wait(), timeout=1)
+    assert not barrier_started.is_set()
+    assert not trailing_started.is_set()
+    release_first.set()
+    await asyncio.wait_for(barrier_started.wait(), timeout=1)
+    assert not trailing_started.is_set()
+    release_barrier.set()
+    await asyncio.wait_for(trailing_started.wait(), timeout=1)
+    assert await inbox.wait_for_tool_result("call_before") == "first"
+    assert await inbox.wait_for_tool_result("call_barrier") == "barrier"
+    assert await inbox.wait_for_tool_result("call_after") == "trailing"
+    await inbox.close()
+
+
+async def test_parallel_results_can_arrive_out_of_order_and_are_consumed_in_model_order(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_out_of_order", str(tmp_path / "workbench.db"))
+    slow_started = asyncio.Event()
+    fast_done = asyncio.Event()
+    release_slow = asyncio.Event()
+    read_meta = {"read_only": True, "resource_keys": ("network:web",), "requires_order": False}
+
+    async def slow() -> str:
+        slow_started.set()
+        await release_slow.wait()
+        return "slow"
+
+    async def fast() -> str:
+        fast_done.set()
+        return "fast"
+
+    inbox.submit_tool_batch([
+        ("call_slow", "WebFetch", slow, read_meta),
+        ("call_fast", "WebFetch", fast, read_meta),
+    ])
+    await asyncio.wait_for(asyncio.gather(slow_started.wait(), fast_done.wait()), timeout=1)
+    slow_waiter = asyncio.create_task(inbox.wait_for_tool_result("call_slow"))
+    await asyncio.sleep(0)
+    assert not slow_waiter.done()
+    release_slow.set()
+    assert await asyncio.wait_for(slow_waiter, timeout=1) == "slow"
+    assert await asyncio.wait_for(inbox.wait_for_tool_result("call_fast"), timeout=1) == "fast"
+    await inbox.close()
+
+
+async def test_live_inbox_prioritizes_guidance_over_already_queued_tool_result(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_priority", str(tmp_path / "workbench.db"))
+    await inbox.put(
+        "tool_result",
+        {"tool_call_id": "call_1", "tool_name": "Read", "result": "ready"},
+        dedupe_key="tool-result:call_1",
+    )
+    await inbox.put_guidance("优先处理我", client_request_id="priority-guide")
+
+    guidance = inbox.collect_guidance_nowait()
+    assert [event["payload"]["text"] for event in guidance] == ["优先处理我"]
+    inbox.acknowledge(guidance)
+    assert await asyncio.wait_for(inbox.wait_for_tool_result("call_1"), timeout=1) == "ready"
+    await inbox.close()
+
+
+async def test_acknowledging_one_guidance_does_not_clear_newer_guidance_signal(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_guidance_race", str(tmp_path / "workbench.db"))
+    await inbox.put_guidance("first", client_request_id="race-1")
+    first = inbox.collect_guidance_nowait()
+    await inbox.put_guidance("second", client_request_id="race-2")
+    inbox.acknowledge(first)
+
+    ran = False
+
+    async def should_not_run() -> str:
+        nonlocal ran
+        ran = True
+        return "bad"
+
+    inbox.submit_tool_batch([("call_race", "Write", should_not_run)])
+    result = await asyncio.wait_for(inbox.wait_for_tool_result("call_race"), timeout=1)
+    assert result.startswith("Skipped before execution")
+    assert ran is False
+    second = inbox.collect_guidance_nowait()
+    assert [event["payload"]["text"] for event in second] == ["second"]
+    inbox.acknowledge(second)
+    await inbox.close()
+
+
+async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tmp_path):
+    import httpx
+    from fastapi import FastAPI
+    from webui import routes_workbench_chat as chat_mod
+    from webui.workbench_chat_runs import ChatRunManager
+
+    db_path = tmp_path / "workbench.db"
+    chats_path = tmp_path / "workbench_chats.json"
+    chats_path.write_text(
+        json.dumps({
+            "chats": [{
+                "id": "chat_live",
+                "projectId": "project_1",
+                "title": "Live",
+                "status": "running",
+                "messages": [],
+                "createdAt": "2026-01-01T00:00:00+00:00",
+                "updatedAt": "2026-01-01T00:00:00+00:00",
+            }]
+        }),
+        encoding="utf-8",
+    )
+    manager = ChatRunManager(retention_seconds=0)
+    monkeypatch.setattr(chat_mod, "_CHATS_STORE", chats_path)
+    monkeypatch.setattr(chat_mod, "_CONFIGURED_CHATS_STORE", None)
+    monkeypatch.setattr(chat_mod, "_CHAT_RUN_MANAGER", manager)
+
+    app = FastAPI()
+    chat_mod.register_workbench_chat_routes(app, bot=None, db_path=str(db_path))
+    release = asyncio.Event()
+
+    async def runner(_run):
+        await release.wait()
+
+    run, _ = manager.start_or_get("chat_live", {"type": "ack"}, runner, stream=True)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/workbench/chats/chat_live/guidance",
+            json={"message": "先做后端", "clientRequestId": "guide_http_1"},
+        )
+    assert response.status_code == 200
+    assert response.json()["queued"] is True
+    queued = run.inbox.collect_guidance_nowait()
+    assert [event["payload"]["text"] for event in queued] == ["先做后端"]
+    run.inbox.acknowledge(queued)
+    stored = chat_mod._read_chats_store()
+    assert stored["chats"][0]["messages"][-1]["guidance"] is True
+    assert stored["chats"][0]["messages"][-1]["content"] == "先做后端"
+    assert any(event.get("type") == "guidance_received" for event in run.events)
+    run.status = "finishing"
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        late = await client.post(
+            "/api/workbench/chats/chat_live/guidance",
+            json={"message": "too late", "clientRequestId": "guide_http_2"},
+        )
+    assert late.status_code == 409
+    release.set()
+    await asyncio.wait_for(run.done.wait(), timeout=1)
+
+
+async def test_main_agent_resumes_from_tool_result_and_applies_runtime_guidance(monkeypatch, tmp_path):
+    from cyrene.agent import agent as agent_mod
+    from cyrene.agent import state as state_mod
+    from cyrene.workbench_inbox import WorkbenchAgentInbox, _workbench_agent_inbox
+
+    inbox = WorkbenchAgentInbox("chat_agent", str(tmp_path / "workbench.db"))
+    tool_started = asyncio.Event()
+    release_tool = asyncio.Event()
+    model_calls = []
+
+    async def fake_llm(messages, tools=None, **_kwargs):
+        model_calls.append(messages)
+        if len(model_calls) == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "phase1_use",
+                    "type": "function",
+                    "function": {"name": "use_tools", "arguments": '{"task":"inspect"}'},
+                }],
+            }
+        if len(model_calls) == 2:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_read",
+                    "type": "function",
+                    "function": {"name": "Read", "arguments": '{"file_path":"x"}'},
+                }],
+            }
+        assert any(
+            "先只检查后端" in str(message.get("content") or "")
+            for message in messages
+        )
+        assert any(
+            message.get("role") == "tool"
+            and message.get("tool_call_id") == "call_read"
+            and message.get("content") == "read result"
+            for message in messages
+        )
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_quit",
+                "type": "function",
+                "function": {"name": "quit", "arguments": '{"reply":"已按引导完成"}'},
+            }],
+        }
+
+    async def fake_tool(name, _args, _bot, _chat_id, _db_path, _notify):
+        assert name == "Read"
+        tool_started.set()
+        await release_tool.wait()
+        return "read result"
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(agent_mod, "_call_llm", fake_llm)
+    monkeypatch.setattr(agent_mod, "_execute_tool", fake_tool)
+    monkeypatch.setattr(agent_mod, "_append_session_message", noop)
+    monkeypatch.setattr(agent_mod, "_save_session_messages", noop)
+    monkeypatch.setattr(agent_mod, "_publish_runtime_event", noop)
+    monkeypatch.setattr(agent_mod, "get_active_tool_defs", lambda: [
+        {"type": "function", "function": {"name": "Read", "description": "read", "parameters": {"type": "object"}}},
+        {"type": "function", "function": {"name": "quit", "description": "quit", "parameters": {"type": "object"}}},
+    ])
+
+    round_token = state_mod._current_round_id.set("round_agent")
+    inbox_token = _workbench_agent_inbox.set(inbox)
+    try:
+        task = asyncio.create_task(
+            agent_mod._run_main_agent("inspect", [], None, 0, "db.sqlite3")
+        )
+        await asyncio.wait_for(tool_started.wait(), timeout=1)
+        await inbox.put_guidance("先只检查后端", client_request_id="guide_agent")
+        release_tool.set()
+        assert await asyncio.wait_for(task, timeout=2) == "已按引导完成"
+    finally:
+        _workbench_agent_inbox.reset(inbox_token)
+        state_mod._current_round_id.reset(round_token)
+        await inbox.close()
+
+    assert len(model_calls) == 3
+
+
+async def test_main_agent_runs_independent_read_calls_in_parallel(monkeypatch, tmp_path):
+    from cyrene.agent import agent as agent_mod
+    from cyrene.agent import state as state_mod
+    from cyrene.workbench_inbox import WorkbenchAgentInbox, _workbench_agent_inbox
+
+    inbox = WorkbenchAgentInbox("chat_agent_parallel", str(tmp_path / "workbench.db"))
+    started = {"a": asyncio.Event(), "b": asyncio.Event()}
+    release = asyncio.Event()
+    model_calls = 0
+
+    async def fake_llm(messages, tools=None, **_kwargs):
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            return {
+                "role": "assistant", "content": "",
+                "tool_calls": [{
+                    "id": "phase1_use", "type": "function",
+                    "function": {"name": "use_tools", "arguments": '{"task":"inspect"}'},
+                }],
+            }
+        if model_calls == 2:
+            return {
+                "role": "assistant", "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_a", "type": "function",
+                        "function": {"name": "Read", "arguments": '{"path":"a.txt"}'},
+                    },
+                    {
+                        "id": "call_b", "type": "function",
+                        "function": {"name": "Read", "arguments": '{"path":"b.txt"}'},
+                    },
+                ],
+            }
+        assert any(message.get("tool_call_id") == "call_a" for message in messages)
+        assert any(message.get("tool_call_id") == "call_b" for message in messages)
+        return {
+            "role": "assistant", "content": "parallel reads completed successfully",
+            "tool_calls": [{
+                "id": "call_quit", "type": "function",
+                "function": {"name": "quit", "arguments": '{"reply":"parallel reads completed successfully"}'},
+            }],
+        }
+
+    async def fake_tool(_name, args, _bot, _chat_id, _db_path, _notify):
+        key = str(args["path"])[0]
+        started[key].set()
+        await release.wait()
+        return key
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(agent_mod, "_call_llm", fake_llm)
+    monkeypatch.setattr(agent_mod, "_execute_tool", fake_tool)
+    monkeypatch.setattr(agent_mod, "_append_session_message", noop)
+    monkeypatch.setattr(agent_mod, "_save_session_messages", noop)
+    monkeypatch.setattr(agent_mod, "_publish_runtime_event", noop)
+    monkeypatch.setattr(agent_mod, "get_active_tool_defs", lambda: [
+        {"type": "function", "function": {"name": "Read", "description": "read", "parameters": {"type": "object"}}},
+        {"type": "function", "function": {"name": "quit", "description": "quit", "parameters": {"type": "object"}}},
+    ])
+
+    round_token = state_mod._current_round_id.set("round_parallel")
+    inbox_token = _workbench_agent_inbox.set(inbox)
+    try:
+        task = asyncio.create_task(
+            agent_mod._run_main_agent("inspect", [], None, 0, "db.sqlite3")
+        )
+        await asyncio.wait_for(
+            asyncio.gather(started["a"].wait(), started["b"].wait()), timeout=1
+        )
+        release.set()
+        assert await asyncio.wait_for(task, timeout=2) == "parallel reads completed successfully"
+    finally:
+        _workbench_agent_inbox.reset(inbox_token)
+        state_mod._current_round_id.reset(round_token)
+        await inbox.close()
+
+    assert model_calls == 3
+
+
+async def test_main_agent_applies_guidance_sent_while_model_call_is_in_flight(monkeypatch, tmp_path):
+    from cyrene.agent import agent as agent_mod
+    from cyrene.agent import state as state_mod
+    from cyrene.workbench_inbox import WorkbenchAgentInbox, _workbench_agent_inbox
+
+    inbox = WorkbenchAgentInbox("chat_model_guidance", str(tmp_path / "workbench.db"))
+    model_started = asyncio.Event()
+    release_model = asyncio.Event()
+    model_calls = []
+
+    async def fake_llm(messages, tools=None, **_kwargs):
+        model_calls.append(messages)
+        if len(model_calls) == 1:
+            model_started.set()
+            await release_model.wait()
+            return {
+                "role": "assistant", "content": "旧答案",
+                "tool_calls": [{
+                    "id": "quit_old", "type": "function",
+                    "function": {"name": "quit", "arguments": '{"reply":"旧答案"}'},
+                }],
+            }
+        assert any(
+            "改成新答案" in str(message.get("content") or "")
+            for message in messages
+        )
+        return {
+            "role": "assistant", "content": "新答案",
+            "tool_calls": [{
+                "id": "quit_new", "type": "function",
+                "function": {"name": "quit", "arguments": '{"reply":"新答案"}'},
+            }],
+        }
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(agent_mod, "_call_llm", fake_llm)
+    monkeypatch.setattr(agent_mod, "_append_session_message", noop)
+    monkeypatch.setattr(agent_mod, "_save_session_messages", noop)
+    monkeypatch.setattr(agent_mod, "_publish_runtime_event", noop)
+    monkeypatch.setattr(agent_mod, "get_active_tool_defs", lambda: [])
+
+    round_token = state_mod._current_round_id.set("round_model_guidance")
+    inbox_token = _workbench_agent_inbox.set(inbox)
+    try:
+        task = asyncio.create_task(
+            agent_mod._run_main_agent("回答问题", [], None, 0, "db.sqlite3")
+        )
+        await asyncio.wait_for(model_started.wait(), timeout=1)
+        await inbox.put_guidance("改成新答案", client_request_id="guide_during_model")
+        release_model.set()
+        assert await asyncio.wait_for(task, timeout=2) == "新答案"
+    finally:
+        _workbench_agent_inbox.reset(inbox_token)
+        state_mod._current_round_id.reset(round_token)
+        await inbox.close()
+
+    assert len(model_calls) == 2
+
+
+async def test_chat_run_interrupt_cleans_pending_inbox_with_run_id(tmp_path):
+    from webui.workbench_chat_runs import ChatRunManager
+
+    db_path = tmp_path / "workbench.db"
+    manager = ChatRunManager(retention_seconds=0)
+    manager.configure(str(db_path))
+    ready = asyncio.Event()
+
+    async def runner(run):
+        await run.inbox.put_guidance("中断前引导", client_request_id="interrupt-guide")
+        run.inbox.collect_guidance_nowait()
+        await run.inbox.put(
+            "tool_result",
+            {"tool_call_id": "call_interrupt", "tool_name": "Read", "result": "ready"},
+            batch_id="batch_interrupt",
+            dedupe_key="tool-result:call_interrupt",
+        )
+        ready.set()
+        await asyncio.Event().wait()
+
+    run, _ = manager.start_or_get("chat_interrupt", {"type": "ack"}, runner)
+    await asyncio.wait_for(ready.wait(), timeout=1)
+    assert manager.interrupt("chat_interrupt") is True
+    await asyncio.wait_for(run.done.wait(), timeout=1)
+
+    with sqlite3.connect(db_path) as conn:
+        pending_rows = conn.execute(
+            "SELECT status, run_id, termination_reason FROM workbench_agent_inbox "
+            "ORDER BY created_at"
+        ).fetchall()
+        terminal = conn.execute(
+            "SELECT run_id, termination_reason FROM workbench_agent_run_events "
+            "WHERE event_type='run_terminated'"
+        ).fetchone()
+    assert pending_rows == [
+        ("cancelled", run.run_id, "user_interrupted"),
+        ("cancelled", run.run_id, "user_interrupted"),
+    ]
+    assert terminal == (run.run_id, "user_interrupted")
+
+
+def test_workbench_composer_switches_stop_button_to_guidance_when_typed():
+    from pathlib import Path
+
+    source = Path("src/workbench-webui/workbench-chat.jsx").read_text(encoding="utf-8")
+    assert "var hasRuntimeGuidance = running && !!draft.trim();" in source
+    assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in source
+    assert 'wbcT("workbenchChat.guidance", "Guide")' in source
+    assert "model.sendGuidance(chatId, text" in source
+    assert 'err.code === "chat_not_running"' in source
+    assert "runtimeEngine.deferSend(chatId, { message: text }, model)" in source
+    assert "terminal event wakes the deferred send" in source
+
+
+def test_runtime_guidance_marker_is_not_sent_as_an_upstream_message_field():
+    from cyrene.call_llm import _strip_internal_fields
+
+    assert _strip_internal_fields({
+        "role": "user",
+        "content": "guide",
+        "runtime_guidance": True,
+    }) == {"role": "user", "content": "guide"}
+
+
+def test_main_prompt_prefers_inbox_wakeup_over_fixed_time_waits():
+    from cyrene.agent.prompts import _MAIN_AGENT_PROMPT
+
+    assert "Prefer event-driven completion over elapsed-time waiting" in _MAIN_AGENT_PROMPT
+    assert "inbox result automatically wakes you" in _MAIN_AGENT_PROMPT
+    assert "Never use Bash `sleep`" not in _MAIN_AGENT_PROMPT
+
+
+def test_learned_skills_use_progressive_disclosure_without_auto_router():
+    from pathlib import Path
+    from cyrene.agent.prompts import _MAIN_AGENT_PROMPT
+
+    source = Path("src/cyrene/agent/agent.py").read_text(encoding="utf-8")
+    assert "try_route_and_execute_skill" not in source
+    assert "Progressive disclosure" in _MAIN_AGENT_PROMPT
+    assert "call `GetLearnedSkill` only for a plausibly relevant" in _MAIN_AGENT_PROMPT
+
+
+def test_subagent_monitoring_has_no_fixed_two_second_completion_sleep():
+    from pathlib import Path
+
+    agent_source = Path("src/cyrene/agent/agent.py").read_text(encoding="utf-8")
+    guidance_source = Path("src/cyrene/agent/guidance.py").read_text(encoding="utf-8")
+    assert "await asyncio.sleep(2)" not in agent_source
+    assert "await asyncio.sleep(2)" not in guidance_source
+
+
+def test_workbench_has_localized_model_fallback_progress_message():
+    from pathlib import Path
+
+    source = Path("src/workbench-webui/workbench-i18n.jsx").read_text(encoding="utf-8")
+    assert '"phase.modelFallback": "Primary model unavailable' in source
+    assert '"phase.modelFallback": "主模型不可用，正在切换备用模型' in source

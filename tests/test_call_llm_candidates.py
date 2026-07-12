@@ -7,6 +7,7 @@ prepended (that duplicate 401'd on every call when its key was empty).
 """
 import json
 import socket
+import sqlite3
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -323,3 +324,161 @@ async def test_call_llm_returns_empty_when_no_model_configured(monkeypatch):
         publish_events=False, record_usage=False,
     )
     assert result == ""
+
+
+def test_last_success_affinity_prioritizes_candidate_and_exact_endpoint():
+    cl._last_success_cache = {
+        "primary": {
+            "candidate_id": "backup",
+            "model": "backup-model",
+            "base_url": "https://backup.example/v1",
+            "endpoint": "https://backup.example/v1/chat/completions-alt",
+        }
+    }
+    candidates = [
+        {
+            "id": "main", "model": "main-model", "base_url": "https://main.example/v1",
+            "endpoints": ["https://main.example/v1/chat/completions"],
+        },
+        {
+            "id": "backup", "model": "backup-model", "base_url": "https://backup.example/v1",
+            "endpoints": [
+                "https://backup.example/v1/chat/completions",
+                "https://backup.example/v1/chat/completions-alt",
+            ],
+        },
+    ]
+
+    ordered = cl._prioritize_last_success(candidates, "primary")
+
+    assert [item["id"] for item in ordered] == ["backup", "main"]
+    assert ordered[0]["endpoints"][0].endswith("chat/completions-alt")
+    assert ordered[0]["_configured_rank"] == 1
+
+
+def test_successful_endpoint_affinity_is_persisted_only_when_changed(monkeypatch):
+    writes = []
+    cl._last_success_cache = {}
+    monkeypatch.setattr(cl, "set_setting", lambda key, value: writes.append((key, value)))
+    candidate = {
+        "id": "main", "model": "model", "base_url": "https://model.example/v1"
+    }
+
+    cl._remember_success("primary", candidate, "https://model.example/v1/chat/completions")
+    cl._remember_success("primary", candidate, "https://model.example/v1/chat/completions")
+
+    assert len(writes) == 1
+    assert writes[0][0] == "llm_last_success_endpoints"
+    assert writes[0][1]["primary"]["candidate_id"] == "main"
+
+
+async def test_call_llm_reuses_http_client_within_event_loop(monkeypatch):
+    created = 0
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {},
+            }
+
+    class FakeClient:
+        async def post(self, _endpoint, json=None, headers=None):
+            return FakeResponse()
+
+    def factory(*_args, **_kwargs):
+        nonlocal created
+        created += 1
+        return FakeClient()
+
+    monkeypatch.setattr(cl.httpx, "AsyncClient", factory)
+    candidate = {
+        "id": "main", "model": "model", "base_url": "https://model.example/v1",
+        "api_key": "", "endpoints": ["https://model.example/v1/chat/completions"],
+    }
+    for _ in range(2):
+        result = await cl.call_llm(
+            [{"role": "user", "content": "hi"}], candidates=[candidate],
+            publish_events=False, record_usage=False,
+        )
+        assert result["content"] == "ok"
+
+    assert created == 1
+
+
+async def test_primary_failure_publishes_fallback_ui_event(monkeypatch):
+    published = []
+
+    class FakeResponse:
+        def __init__(self, status_code, model, endpoint):
+            self.status_code = status_code
+            self._model = model
+            self.request = httpx.Request("POST", endpoint)
+
+        def json(self):
+            return {
+                "choices": [{"message": {"role": "assistant", "content": "backup"}}],
+                "usage": {},
+            }
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError(
+                "failed", request=self.request,
+                response=httpx.Response(self.status_code, request=self.request),
+            )
+
+    class FakeClient:
+        async def post(self, endpoint, json=None, headers=None):
+            return FakeResponse(400 if json["model"] == "main" else 200, json["model"], endpoint)
+
+    async def capture(**kwargs):
+        published.append(kwargs)
+
+    monkeypatch.setattr(cl.httpx, "AsyncClient", lambda *_args, **_kwargs: FakeClient())
+    monkeypatch.setattr(cl, "_publish_model_fallback_event", capture)
+    candidates = [
+        {"id": "main", "model": "main", "api_key": "", "endpoints": ["https://main/v1/chat/completions"]},
+        {"id": "backup", "model": "backup", "api_key": "", "endpoints": ["https://backup/v1/chat/completions"]},
+    ]
+
+    result = await cl.call_llm(
+        [{"role": "user", "content": "hi"}], candidates=candidates,
+        publish_events=False, record_usage=False, session_id="chat_1", round_id="round_1",
+    )
+
+    assert result["content"] == "backup"
+    assert published == [{
+        "session_id": "chat_1", "round_id": "round_1",
+        "failed_model": "main", "fallback_model": "backup",
+    }]
+
+
+async def test_actionable_llm_latency_event_is_persisted(tmp_path):
+    from cyrene.db import record_llm_latency
+
+    db_path = tmp_path / "latency.db"
+    await record_llm_latency(
+        str(db_path), call_id="llm_1", session_id="chat_1", round_id="round_1",
+        caller="main_agent", phase="phase2", model_type="primary",
+        candidate_id="main", model="model", endpoint="https://model/v1/chat/completions",
+        candidate_rank=0, endpoint_rank=0, attempt=1, outcome="success", status_code=200,
+        queue_wait_ms=4.0, pre_attempt_wait_ms=4.0, request_ms=900.0,
+        response_headers_ms=120.0, ttft_ms=300.0,
+        first_token_after_headers_ms=180.0, generation_ms=600.0,
+        retry_backoff_ms=0.0, total_call_ms=904.0, prompt_tokens=100,
+        completion_tokens=60, output_tokens_per_second=100.0,
+        fallback_used=False, connection_pool_key="loop:1:timeout:120",
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT call_id, request_ms, response_headers_ms, ttft_ms, "
+            "first_token_after_headers_ms, generation_ms, "
+            "output_tokens_per_second, connection_pool_key FROM llm_latency_events"
+        ).fetchone()
+    assert row == (
+        "llm_1", 900.0, 120.0, 300.0, 180.0, 600.0, 100.0,
+        "loop:1:timeout:120",
+    )

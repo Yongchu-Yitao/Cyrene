@@ -196,17 +196,17 @@
     return (
       <div className="wbp-page">
         <div className="wbp-inner">
-          <div className="wbp-hero">
+          <div className={"wbp-hero" + (editing ? " is-editing" : "")}>
             {!editing && (
               <button type="button" className="wbp-edit-fab" title={t("profile.edit")} onClick={beginEdit}>
                 <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l3 3-8 8H4v-3z" /></svg>
               </button>
             )}
             <div className="wbp-hero-avatar">
-              <WorkbenchAvatar user={previewUser} size={84} />
+              <WorkbenchAvatar user={previewUser} size={editing ? 96 : 84} />
               {editing && (
-                <button type="button" className="wbp-cam" title={t("profile.avatarImage")} onClick={function () { setAvatarMode("image"); fileRef.current && fileRef.current.click(); }}>
-                  <svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 6h3l1.2-1.6h3.6L15 6h0v8H3z" /><circle cx="9" cy="10" r="2.4" /></svg>
+                <button type="button" className="wbp-cam" aria-label={t("profile.upload")} title={t("profile.upload")} onClick={function () { setAvatarMode("image"); fileRef.current && fileRef.current.click(); }}>
+                  <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 6h3l1.2-1.6h3.6L15 6h0v8H3z" /><circle cx="9" cy="10" r="2.4" /></svg>
                 </button>
               )}
             </div>
@@ -218,21 +218,45 @@
               </>
             ) : (
               <div className="wbp-edit">
-                <input className="wbp-input" value={name} maxLength={60} placeholder={t("profile.namePlaceholder")} onChange={function (e) { setName(e.target.value); }} />
-                <input className="wbp-input" value={bio} maxLength={120} placeholder={t("profile.bioPlaceholder")} onChange={function (e) { setBio(e.target.value); }} />
-                <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={function (e) { onPickImage(e.target.files && e.target.files[0]); e.target.value = ""; }} />
-                <div className="wbp-seg">
-                  <button type="button" className={avatarMode === "image" ? "active" : ""} onClick={function () { setAvatarMode("image"); if (!avatarData) fileRef.current && fileRef.current.click(); }}>{t("profile.avatarImage")}</button>
-                  <button type="button" className={avatarMode === "emoji" ? "active" : ""} onClick={function () { setAvatarMode("emoji"); }}>{t("profile.avatarEmoji")}</button>
-                  <button type="button" className={avatarMode === "letter" ? "active" : ""} onClick={function () { setAvatarMode("letter"); }}>{t("profile.avatarLetter")}</button>
+                <div className="wbp-edit-section">
+                  <div className="wbp-edit-section-title">{t("profile.basicInfo")}</div>
+                  <div className="wbp-form-fields">
+                    <label className="wbp-field">
+                      <span>{t("profile.namePlaceholder")}</span>
+                      <input className="wbp-input" value={name} maxLength={60} onChange={function (e) { setName(e.target.value); }} />
+                    </label>
+                    <label className="wbp-field">
+                      <span>{t("profile.bioPlaceholder")}</span>
+                      <input className="wbp-input" value={bio} maxLength={120} onChange={function (e) { setBio(e.target.value); }} />
+                    </label>
+                  </div>
                 </div>
-                {avatarMode === "image" && <button type="button" className="wbp-upload" onClick={function () { fileRef.current && fileRef.current.click(); }}>{t("profile.upload")}</button>}
-                {avatarMode === "emoji" && (
-                  <div className="wbp-picks">{WBP_EMOJI.map(function (em) { return <button type="button" key={em} className={"wbp-emoji" + (emoji === em ? " active" : "")} onClick={function () { setEmoji(em); }}>{em}</button>; })}</div>
-                )}
-                {avatarMode === "letter" && (
-                  <div className="wbp-picks">{WBP_COLORS.map(function (c) { return <button type="button" key={c} className={"wbp-swatch" + (color === c ? " active" : "")} style={{ background: c }} onClick={function () { setColor(c); }} aria-label={c}></button>; })}</div>
-                )}
+                <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={function (e) { onPickImage(e.target.files && e.target.files[0]); e.target.value = ""; }} />
+                <div className="wbp-edit-section wbp-avatar-editor">
+                  <div className="wbp-edit-section-head">
+                    <div className="wbp-edit-section-title">{t("profile.avatarStyle")}</div>
+                    <div className="wbp-edit-section-hint">{t("profile.avatarHint")}</div>
+                  </div>
+                  <div className="wbp-seg" role="group" aria-label={t("profile.avatarStyle")}>
+                    <button type="button" aria-pressed={avatarMode === "image"} className={avatarMode === "image" ? "active" : ""} onClick={function () { setAvatarMode("image"); if (!avatarData) fileRef.current && fileRef.current.click(); }}>{t("profile.avatarImage")}</button>
+                    <button type="button" aria-pressed={avatarMode === "emoji"} className={avatarMode === "emoji" ? "active" : ""} onClick={function () { setAvatarMode("emoji"); }}>{t("profile.avatarEmoji")}</button>
+                    <button type="button" aria-pressed={avatarMode === "letter"} className={avatarMode === "letter" ? "active" : ""} onClick={function () { setAvatarMode("letter"); }}>{t("profile.avatarLetter")}</button>
+                  </div>
+                  <div className="wbp-avatar-options">
+                    {avatarMode === "image" && (
+                      <button type="button" className="wbp-upload" onClick={function () { fileRef.current && fileRef.current.click(); }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>
+                        {t("profile.upload")}
+                      </button>
+                    )}
+                    {avatarMode === "emoji" && (
+                      <div className="wbp-picks">{WBP_EMOJI.map(function (em) { return <button type="button" key={em} aria-pressed={emoji === em} aria-label={t("profile.avatarEmoji") + " " + em} className={"wbp-emoji" + (emoji === em ? " active" : "")} onClick={function () { setEmoji(em); }}>{em}</button>; })}</div>
+                    )}
+                    {avatarMode === "letter" && (
+                      <div className="wbp-picks">{WBP_COLORS.map(function (c, idx) { return <button type="button" key={c} aria-pressed={color === c} className={"wbp-swatch" + (color === c ? " active" : "")} style={{ background: c }} onClick={function () { setColor(c); }} aria-label={t("profile.avatarLetter") + " " + (idx + 1)}></button>; })}</div>
+                    )}
+                  </div>
+                </div>
                 {err ? <div className="wbp-err">{err}</div> : null}
                 <div className="wbp-edit-actions">
                   <button type="button" className="wbp-btn" onClick={function () { setEditing(false); }}>{t("profile.cancel")}</button>

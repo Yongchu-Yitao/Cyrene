@@ -9,7 +9,11 @@ TOOL_DEF = {
     "type": "function",
     "function": {
         "name": TOOL_NAME,
-        "description": "Wait for the current browser page to satisfy a condition after SPA navigation or async rendering.",
+        "description": (
+            "Last-resort conditional wait for a specific selector, text, or URL after SPA rendering. "
+            "Do not use it to delay for a fixed amount of time; prefer an immediate browser_snapshot "
+            "or browser_network_log, and rely on the Workbench inbox to wake the agent for tool results."
+        ),
         "parameters": {
             "type": "object",
             "properties": {

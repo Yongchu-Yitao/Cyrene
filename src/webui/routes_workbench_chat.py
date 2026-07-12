@@ -471,6 +471,137 @@ def _public_message(message: dict[str, Any]) -> dict[str, Any]:
     return message
 
 
+def _merge_chat_messages_chronologically(
+    chat: dict[str, Any], additions: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Insert new transcript entries at their actual event time.
+
+    Guidance can be persisted while an agent run is still active.  The assistant
+    messages that happened before that guidance are discovered only when the run
+    is checkpointed/finalized, so blindly appending them groups every user entry
+    at the top.  Insert each newly discovered entry before the first later
+    timestamp while preserving the existing order for legacy timestamp-less
+    records.
+    """
+    messages = chat.setdefault("messages", [])
+    known_ids = {
+        str(item.get("id") or ""): index
+        for index, item in enumerate(messages)
+        if isinstance(item, dict) and str(item.get("id") or "")
+    }
+    known_intermediate_keys = {
+        key: index
+        for index, item in enumerate(messages)
+        if isinstance(item, dict) and bool(item.get("intermediate"))
+        if (key := _live_segment_dedupe_key(item))
+    }
+    for item in additions:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "")
+        if item_id and item_id in known_ids:
+            index = known_ids[item_id]
+            messages[index] = {**messages[index], **item}
+            continue
+        intermediate_key = _live_segment_dedupe_key(item) if bool(item.get("intermediate")) else ""
+        if intermediate_key and intermediate_key in known_intermediate_keys:
+            index = known_intermediate_keys[intermediate_key]
+            messages[index] = {**messages[index], **item, "id": messages[index].get("id") or item_id}
+            continue
+        created_at = str(item.get("createdAt") or item.get("created_at") or "")
+        insert_at = len(messages)
+        if created_at:
+            for index, current in enumerate(messages):
+                if not isinstance(current, dict):
+                    continue
+                current_at = str(current.get("createdAt") or current.get("created_at") or "")
+                if current_at and current_at > created_at:
+                    insert_at = index
+                    break
+        messages.insert(insert_at, item)
+        if item_id:
+            known_ids[item_id] = insert_at
+        if intermediate_key:
+            known_intermediate_keys[intermediate_key] = insert_at
+        # Insertion shifts every later cached index.
+        known_ids = {
+            str(existing.get("id") or ""): index
+            for index, existing in enumerate(messages)
+            if isinstance(existing, dict) and str(existing.get("id") or "")
+        }
+        known_intermediate_keys = {
+            key: index
+            for index, existing in enumerate(messages)
+            if isinstance(existing, dict) and bool(existing.get("intermediate"))
+            if (key := _live_segment_dedupe_key(existing))
+        }
+    return messages
+
+
+def _persist_live_public_message(chat_id: str, message: dict[str, Any]) -> None:
+    """Checkpoint an already-visible intermediate reply immediately."""
+    if not isinstance(message, dict) or not str(message.get("id") or "").strip():
+        return
+    payload = _read_chats_store()
+    chat = _find_chat(payload, str(chat_id or ""))
+    if not chat:
+        return
+    entry = dict(message)
+    entry["intermediate"] = True
+    _merge_chat_messages_chronologically(chat, [entry])
+    chat["updatedAt"] = str(entry.get("createdAt") or chat.get("updatedAt") or _utc_now_iso())
+    _write_chats_store(payload)
+
+
+def _pending_question_message(
+    pending: dict[str, Any],
+    *,
+    trace: list[dict[str, Any]] | None = None,
+    usage: dict[str, int] | None = None,
+    files: list[dict[str, Any]] | None = None,
+    model: str = "",
+) -> dict[str, Any]:
+    """Create the durable transcript entry for an ask/permission tool prompt."""
+    question_id = str(pending.get("id") or "")
+    entry: dict[str, Any] = {
+        "id": f"msg_question_{question_id}" if question_id else _short_id("msg"),
+        "role": "assistant",
+        "content": str(pending.get("text") or ""),
+        "createdAt": _utc_now_iso(),
+        "model": model,
+        "questionPrompt": True,
+        "questionId": question_id,
+        "questionKind": str(pending.get("kind") or ""),
+    }
+    if trace:
+        entry["trace"] = trace
+    if usage and any(usage.values()):
+        entry["usage"] = usage
+    if files:
+        entry["attachments"] = files
+    return entry
+
+
+def _remove_retry_replaced_messages(
+    chat: dict[str, Any], after_id: str, replaced_ids: set[str]
+) -> None:
+    """Remove only the transcript tail that existed when retry began."""
+    messages = chat.setdefault("messages", [])
+    cut = next(
+        (
+            index for index, item in enumerate(messages)
+            if str(item.get("id") or "") == str(after_id or "")
+        ),
+        -1,
+    )
+    if cut < 0:
+        return
+    messages[cut + 1:] = [
+        item for item in messages[cut + 1:]
+        if str(item.get("id") or "") not in replaced_ids
+    ]
+
+
 def _public_chat_full(chat: dict[str, Any]) -> dict[str, Any]:
     payload = _public_chat_light(chat)
     payload["messages"] = [_public_message(m) for m in (chat.get("messages") or [])]
@@ -1232,16 +1363,20 @@ def _extract_exchange_segments(
             trace, usage, files, seen_file_urls = [], _exchange_usage(), [], set()
             continue
 
-        # A mid-run turn that both says something AND does real work: surface the
-        # prose as its own reply block (carrying the tools that ran before it),
-        # then start a fresh tool card for the tools this turn requests. Guarded
-        # to genuinely mid-run turns — the final turn's content is the caller's
-        # reply_text, and control-only batches (quit/use_tools) aren't preambles —
-        # so the final answer is never duplicated.
-        if (
-            (idx != last_assistant_idx or include_open_tool_preamble)
-            and str(message.get("content") or "").strip()
+        # Every completed, non-final assistant turn with visible prose belongs in
+        # the transcript. This includes plain-text guidance acknowledgements as
+        # well as tool preambles. The live scanner may additionally expose the
+        # currently-open last turn only when it carries real tools; a text-only
+        # last turn is the final answer and must stay with the caller.
+        is_completed_mid_turn = idx != last_assistant_idx
+        is_open_tool_preamble = (
+            include_open_tool_preamble
+            and idx == last_assistant_idx
             and _has_traceable_tools(message)
+        )
+        if (
+            (is_completed_mid_turn or is_open_tool_preamble)
+            and str(message.get("content") or "").strip()
         ):
             _accumulate_usage(message, usage)
             segments.append(_make_reply_segment(
@@ -1543,6 +1678,7 @@ async def _summarize_chat_to_brief(chat: dict[str, Any], project: dict[str, Any]
 
 def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     configure_store(db_path)
+    _CHAT_RUN_MANAGER.configure(db_path)
     # Heavyweight helpers (store access, attachments, agent entrypoints) live in
     # webui.routes; import lazily at call time to avoid a circular import.
 
@@ -1725,7 +1861,11 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         )
         result = await compact_session_if_needed(
             chat_id,
-            ctx_limit=ctx_limit_for_model(model_name),
+            # Explicit compaction must always have a usable budget even when an
+            # OpenAI-compatible custom model has no family heuristic/configured
+            # context size. 128K is the conservative default used by the core
+            # chat models and is safer than passing 0 (which disables budgeting).
+            ctx_limit=ctx_limit_for_model(model_name) or 128_000,
             force=True,
         )
         return {"ok": True, **result}
@@ -1819,6 +1959,73 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             media_type="application/x-ndjson",
             headers={"Cache-Control": "no-cache"},
         )
+
+    @router.post("/api/workbench/chats/{chat_id}/guidance")
+    async def api_workbench_chat_guidance(
+        chat_id: str, body_model: api_models.ChatGuidanceBody
+    ):
+        """Steer the currently running Workbench conversation.
+
+        Guidance is queued in the run-scoped inbox.  A tool waiter consumes it
+        immediately; otherwise the agent picks it up at the next model/tool
+        boundary.  It never starts a second conversation run.
+        """
+        body = api_models.body_dict(body_model)
+        message = str(body.get("message") or "").strip()
+        client_request_id = str(body.get("clientRequestId") or "").strip()
+        if not message:
+            return JSONResponse(
+                {"error": "guidance message is empty", "code": "guidance_empty"},
+                status_code=422,
+            )
+        run = _CHAT_RUN_MANAGER.get(chat_id)
+        if run is None or run.status != "running":
+            return JSONResponse(
+                {"error": "chat has no running reply", "code": "chat_not_running"},
+                status_code=409,
+            )
+        payload = _read_chats_store()
+        chat = _find_chat(payload, chat_id)
+        if not chat:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+
+        event = await run.inbox.put_guidance(
+            message, client_request_id=client_request_id
+        )
+        if event.get("duplicate"):
+            return {
+                "queued": True, "duplicate": True, "eventId": event["event_id"],
+                "runId": run.run_id,
+            }
+
+        now = _utc_now_iso()
+        user_entry = {
+            "id": _short_id("msg"),
+            "role": "user",
+            "content": message,
+            "createdAt": now,
+            "guidance": True,
+            "guidanceEventId": event["event_id"],
+            "runId": run.run_id,
+        }
+        if client_request_id:
+            user_entry["clientRequestId"] = client_request_id
+        chat.setdefault("messages", []).append(user_entry)
+        chat["updatedAt"] = now
+        _write_chats_store(payload)
+        await run.publish({
+            "type": "guidance_received",
+            "eventId": event["event_id"],
+            "runId": run.run_id,
+            "userMessage": _public_message(user_entry),
+            "message": "Guidance queued for the running agent.",
+        })
+        return {
+            "queued": True,
+            "eventId": event["event_id"],
+            "runId": run.run_id,
+            "userMessage": _public_message(user_entry),
+        }
 
     @router.patch("/api/workbench/chats/{chat_id}")
     async def api_workbench_update_chat(
@@ -1928,6 +2135,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         messages = chat.setdefault("messages", [])
         user_entry: dict[str, Any]
         truncate_after_id = ""
+        retry_replaced_message_ids: set[str] = set()
         retry_state_backup: tuple[Any, bytes | None] | None = None
         if retry:
             # Regenerate the last exchange transactionally. Keep the public
@@ -1942,6 +2150,11 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 return JSONResponse({"error": "nothing to retry"}, status_code=400)
             user_entry = messages[last_user_index]
             truncate_after_id = str(user_entry.get("id") or "")
+            retry_replaced_message_ids = {
+                str(item.get("id") or "")
+                for item in messages[last_user_index + 1:]
+                if isinstance(item, dict) and str(item.get("id") or "")
+            }
             message = str(user_entry.get("content") or "").strip()
             command = ""
             normalized = R._workbench_normalize_attachments(user_entry.get("agentAttachments") or [])
@@ -2045,15 +2258,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             if files:
                 assistant_entry["attachments"] = files
             saved_messages = [*intermediate_entries, assistant_entry]
-            existing_ids = {
-                str(item.get("id") or "")
-                for item in fresh_chat.setdefault("messages", [])
-                if isinstance(item, dict)
-            }
-            fresh_chat["messages"].extend([
-                item for item in saved_messages
-                if str(item.get("id") or "") not in existing_ids
-            ])
+            _merge_chat_messages_chronologically(fresh_chat, saved_messages)
             fresh_chat["status"] = "idle"
             fresh_chat.pop("pendingQuestion", None)
             fresh_chat["updatedAt"] = assistant_entry["createdAt"]
@@ -2104,16 +2309,11 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         def _commit_retry_cut(target_chat: dict[str, Any]) -> None:
             if not retry or not truncate_after_id:
                 return
-            target_messages = target_chat.setdefault("messages", [])
-            cut = next(
-                (
-                    index for index, item in enumerate(target_messages)
-                    if str(item.get("id") or "") == truncate_after_id
-                ),
-                -1,
+            # Delete only the stale tail captured when retry began. Guidance or
+            # proactive entries added during the new run must survive.
+            _remove_retry_replaced_messages(
+                target_chat, truncate_after_id, retry_replaced_message_ids
             )
-            if cut >= 0:
-                del target_messages[cut + 1:]
 
         def _settle_status() -> None:
             fresh = _read_chats_store()
@@ -2122,20 +2322,41 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 fresh_chat["status"] = "idle"
                 _write_chats_store(fresh)
 
-        def _stash_chat_pending(pending: dict[str, Any] | None) -> None:
+        def _stash_chat_pending(pending: dict[str, Any] | None) -> list[dict[str, Any]]:
             """Persist a paused run's pending question on the chat record so the
             transcript shows an answer prompt (not the raw awaiting-user sentinel)."""
             fresh = _read_chats_store()
             fresh_chat = _find_chat(fresh, chat_id)
             if not fresh_chat:
-                return
+                return []
+            saved_messages: list[dict[str, Any]] = []
             fresh_chat["status"] = "idle"
             if pending:
                 fresh_chat["pendingQuestion"] = pending
+                intermediate_entries, trace, usage, files = _extract_exchange_segments(
+                    _session_state_messages(chat_id),
+                    state_ids_before,
+                    include_open_tool_preamble=True,
+                )
+                model_name = str(fresh_chat.get("model") or "")
+                for entry in intermediate_entries:
+                    entry["model"] = model_name
+                question_entry = _pending_question_message(
+                    pending,
+                    trace=trace,
+                    usage=usage,
+                    files=files,
+                    model=model_name,
+                )
+                saved_messages = [*intermediate_entries, question_entry]
+                _merge_chat_messages_chronologically(
+                    fresh_chat, saved_messages
+                )
             else:
                 fresh_chat.pop("pendingQuestion", None)
             fresh_chat["updatedAt"] = _utc_now_iso()
             _write_chats_store(fresh)
+            return [_public_message(item) for item in saved_messages]
 
         async def run_non_streaming(run: ChatRun) -> None:
             try:
@@ -2146,6 +2367,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 _settle_status()
                 run.outcome = {"kind": "error", "exc": exc}
                 return
+            run.status = "finishing"
             if reply == R._AWAITING_USER_SENTINEL:
                 if retry:
                     fresh = _read_chats_store()
@@ -2154,8 +2376,9 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                         _commit_retry_cut(fresh_chat)
                         _write_chats_store(fresh)
                 pending = R._workbench_pending_question_for(chat_id)
-                _stash_chat_pending(pending)
+                awaiting_messages = _stash_chat_pending(pending)
                 run.outcome = {"kind": "awaiting", "pending": pending}
+                run.outcome["assistantMessages"] = awaiting_messages
                 return
             finalized = _finalize(reply)
             run.outcome = {
@@ -2191,8 +2414,10 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                     "ok": True,
                     "awaitingUser": True,
                     "pendingQuestion": pending,
+                    "assistantMessages": outcome.get("assistantMessages") or [],
                     "userMessage": _public_message(user_entry),
                     "retry": retry,
+                    "retryReplacedMessageIds": sorted(retry_replaced_message_ids),
                 }
             finalized = outcome.get("payload")
             if not isinstance(finalized, dict):
@@ -2234,6 +2459,10 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                         "message": _workbench_chat_run_error_message(exc, lang),
                     })
                     return
+                # The agent has returned and can no longer absorb new guidance.
+                # Keep the run available for stream finalization/replay, but make
+                # the guidance endpoint reject this narrow terminal window.
+                run.status = "finishing"
                 live_segments_stop.set()
                 await live_segments_task
                 if reply == R._AWAITING_USER_SENTINEL:
@@ -2246,12 +2475,14 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                             _commit_retry_cut(fresh_chat)
                             _write_chats_store(fresh)
                     pending = R._workbench_pending_question_for(chat_id)
-                    _stash_chat_pending(pending)
+                    awaiting_messages = _stash_chat_pending(pending)
                     run.outcome = {"kind": "awaiting", "pending": pending}
                     await run.publish({
                         "type": "awaiting_user",
                         "pending_question": pending,
+                        "assistantMessages": awaiting_messages,
                         "retry": retry,
+                        "retryReplacedMessageIds": sorted(retry_replaced_message_ids),
                         "truncateAfterMessageId": truncate_after_id,
                     })
                     return
@@ -2265,6 +2496,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                     "type": "saved",
                     **finalized,
                     "retry": retry,
+                    "retryReplacedMessageIds": sorted(retry_replaced_message_ids),
                     "truncateAfterMessageId": truncate_after_id,
                 }
                 run.outcome = {"kind": "reply", "payload": saved_event}
@@ -2516,6 +2748,14 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             return JSONResponse({"error": "project not found"}, status_code=404)
         workspace_dir = R._workbench_resolve_workspace_dir(project)
         now = _utc_now_iso()
+        answer_entry: dict[str, Any] = {
+            "id": _short_id("msg"),
+            "role": "user",
+            "content": answer_text,
+            "createdAt": now,
+            "answerToQuestionId": question_id,
+        }
+        _merge_chat_messages_chronologically(chat, [answer_entry])
         _mark_user_activity(chat, now)
         _write_chats_store(payload)
         state_ids_before_resume: set[str] = set()
@@ -2539,8 +2779,33 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
 
         if reply == R._AWAITING_USER_SENTINEL:
             new_pending = R._workbench_pending_question_for(chat_id)
-            _stash_chat_pending_for(chat_id, new_pending)
-            return {"ok": True, "awaitingUser": True, "pendingQuestion": new_pending}
+            intermediate_entries, trace, usage, files = _extract_exchange_segments(
+                _session_state_messages(chat_id),
+                state_ids_before_resume,
+                include_open_tool_preamble=True,
+            )
+            _stash_chat_pending_for(
+                chat_id,
+                new_pending,
+                additions=[
+                    *intermediate_entries,
+                    *([
+                        _pending_question_message(
+                            new_pending,
+                            trace=trace,
+                            usage=usage,
+                            files=files,
+                            model=str(chat.get("model") or ""),
+                        )
+                    ] if new_pending else []),
+                ],
+            )
+            return {
+                "ok": True,
+                "awaitingUser": True,
+                "pendingQuestion": new_pending,
+                "userMessage": _public_message(answer_entry),
+            }
 
         intermediate_entries, trace, usage, files = _extract_exchange_segments(
             _session_state_messages(chat_id), state_ids_before_resume
@@ -2566,7 +2831,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         if files:
             assistant_entry["attachments"] = files
         saved_messages = [*intermediate_entries, assistant_entry]
-        fresh_chat.setdefault("messages", []).extend(saved_messages)
+        _merge_chat_messages_chronologically(fresh_chat, saved_messages)
         fresh_chat["status"] = "idle"
         fresh_chat.pop("pendingQuestion", None)
         fresh_chat["updatedAt"] = assistant_entry["createdAt"]
@@ -2587,12 +2852,18 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         return {
             "ok": True,
             "awaitingUser": False,
+            "userMessage": _public_message(answer_entry),
             "assistantMessage": _public_message(assistant_entry),
             "assistantMessages": [_public_message(item) for item in saved_messages],
         }
 
 
-def _stash_chat_pending_for(chat_id: str, pending: dict[str, Any] | None) -> None:
+def _stash_chat_pending_for(
+    chat_id: str,
+    pending: dict[str, Any] | None,
+    *,
+    additions: list[dict[str, Any]] | None = None,
+) -> None:
     """Module-level twin of the send handler's ``_stash_chat_pending`` (which is a
     closure): persist / clear a chat's pending question by id."""
     payload = _read_chats_store()
@@ -2604,6 +2875,8 @@ def _stash_chat_pending_for(chat_id: str, pending: dict[str, Any] | None) -> Non
         chat["pendingQuestion"] = pending
     else:
         chat.pop("pendingQuestion", None)
+    if additions:
+        _merge_chat_messages_chronologically(chat, additions)
     chat["updatedAt"] = _utc_now_iso()
     _write_chats_store(payload)
 

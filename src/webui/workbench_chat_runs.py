@@ -22,11 +22,11 @@ the conversation path:
   ``intermediate_message`` / ``reply_start`` / ``reply_delta`` / ``reply_done``
   / ``awaiting_user`` / ``saved`` / ``error``) and then join the live stream.
 
-Unlike the goal loop, a chat run is a single bounded exchange, so there is no
-SQLite projection: the *result* is made durable by the finalize callback
-(``workbench_chats.json``), and the in-memory run object only needs to survive
-client churn for the lifetime of that one exchange (plus a short retention
-window so a late reconnect can still replay the terminal events).
+Unlike the goal loop, the model-run checkpoint and replay buffer remain
+in-memory for this single bounded exchange. The *result* is made durable by the
+finalize callback (``workbench_chats.json``). Run-scoped inbox events are stored
+in SQLite, however, so accepted guidance is session-isolated, idempotent, and
+recoverable if the process stops before the agent applies it.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ import asyncio
 import json
 import logging
 from typing import Any, AsyncGenerator, Awaitable, Callable
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -73,18 +74,27 @@ def _ndjson_line(payload: dict[str, Any]) -> str:
 class ChatRun:
     """One in-flight conversation exchange and its replayable event buffer."""
 
-    def __init__(self, chat_id: str, ack_event: dict[str, Any], *, max_buffer: int = _MAX_BUFFER_EVENTS) -> None:
+    def __init__(self, chat_id: str, ack_event: dict[str, Any], *, max_buffer: int = _MAX_BUFFER_EVENTS, db_path: str = "") -> None:
+        from cyrene.workbench_inbox import WorkbenchAgentInbox
+
         self.chat_id = str(chat_id)
+        self.run_id = f"run_{uuid4().hex}"
+        self.inbox = WorkbenchAgentInbox(
+            self.chat_id, db_path=db_path, run_id=self.run_id
+        )
         self.max_buffer = int(max_buffer)
         self.seq = 1
         # Event 1 is always the ack so a fresh attach (cursor 0) replays the
         # whole exchange from the top.
-        self.events: list[dict[str, Any]] = [{"_seq": 1, **dict(ack_event)}]
+        self.events: list[dict[str, Any]] = [
+            {"_seq": 1, "runId": self.run_id, **dict(ack_event)}
+        ]
         self.subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
         self.done = asyncio.Event()
         self.task: asyncio.Task[Any] | None = None
         self.saw_reply_events = False
         self.status = "running"
+        self.termination_reason = ""
         # Result for non-streaming callers, set by the runner:
         #   {"kind": "reply", "payload": {...}}    — assistant reply persisted
         #   {"kind": "awaiting", "pending": {...}} — paused for an answer
@@ -98,8 +108,14 @@ class ChatRun:
         ``reply_*`` / ``intermediate_message`` events are captured) and directly
         by the runner for terminal events. Awaitable but never blocks.
         """
+        if str(event.get("type") or "") == "intermediate_message" and isinstance(event.get("message"), dict):
+            try:
+                from webui.routes_workbench_chat import _persist_live_public_message
+                _persist_live_public_message(self.chat_id, event["message"])
+            except Exception:
+                logger.exception("Failed to checkpoint intermediate chat message for %s", self.chat_id)
         self.seq += 1
-        stored = {"_seq": self.seq, **dict(event)}
+        stored = {"_seq": self.seq, "runId": self.run_id, **dict(event)}
         self.events.append(stored)
         if len(self.events) > self.max_buffer:
             # Keep the ack (events[0]); drop the oldest events after it.
@@ -130,6 +146,11 @@ class ChatRunManager:
         self._retention_seconds = float(retention_seconds)
         self._shutdown_grace_seconds = float(shutdown_grace_seconds)
         self._cleanup_tasks: set[asyncio.Task[Any]] = set()
+        self._db_path = ""
+
+    def configure(self, db_path: str) -> None:
+        """Configure durable inbox storage before chat routes start runs."""
+        self._db_path = str(db_path or "")
 
     def get(self, chat_id: str) -> ChatRun | None:
         run = self.runs.get(str(chat_id))
@@ -143,6 +164,7 @@ class ChatRunManager:
         if run is None:
             return False
         run.status = "cancelled"
+        run.termination_reason = "user_interrupted"
         run.outcome = {"kind": "interrupted"}
         if run.task is not None and not run.task.done():
             run.task.cancel()
@@ -184,7 +206,7 @@ class ChatRunManager:
         if existing is not None:
             return existing, False
 
-        run = ChatRun(chat_id, ack_event, max_buffer=self._max_buffer)
+        run = ChatRun(chat_id, ack_event, max_buffer=self._max_buffer, db_path=self._db_path)
         self.runs[chat_id] = run
 
         if stream:
@@ -194,14 +216,23 @@ class ChatRunManager:
             # used). Other request-scoped ContextVars (attachment map, etc.) ride
             # along because start_or_get is called synchronously from the handler.
             from cyrene.agent.state import _reply_stream_writer
+            from cyrene.workbench_inbox import _workbench_agent_inbox
 
             token = _reply_stream_writer.set(run.publish)
+            inbox_token = _workbench_agent_inbox.set(run.inbox)
             try:
                 run.task = asyncio.create_task(self._drive(run, runner))
             finally:
+                _workbench_agent_inbox.reset(inbox_token)
                 _reply_stream_writer.reset(token)
         else:
-            run.task = asyncio.create_task(self._drive(run, runner))
+            from cyrene.workbench_inbox import _workbench_agent_inbox
+
+            inbox_token = _workbench_agent_inbox.set(run.inbox)
+            try:
+                run.task = asyncio.create_task(self._drive(run, runner))
+            finally:
+                _workbench_agent_inbox.reset(inbox_token)
         return run, True
 
     async def _drive(self, run: ChatRun, runner: Runner) -> None:
@@ -209,12 +240,29 @@ class ChatRunManager:
             await runner(run)
         except asyncio.CancelledError:
             run.status = "cancelled"
+            if not run.termination_reason:
+                run.termination_reason = "cancelled"
             raise
         except Exception:
             logger.exception("Chat run driver crashed for %s", run.chat_id)
             run.status = "error"
+            run.termination_reason = "driver_error"
         finally:
-            run.status = "done" if run.status == "running" else run.status
+            outcome_kind = str((run.outcome or {}).get("kind") or "")
+            # Close the guidance admission window before the first await in
+            # finalization. This prevents an error-path guidance request from
+            # being accepted while inbox cleanup is already underway.
+            if run.status == "running":
+                run.status = "error" if outcome_kind == "error" else "finishing"
+            if not run.termination_reason:
+                if run.status == "error" or outcome_kind == "error":
+                    run.termination_reason = "agent_error"
+                elif outcome_kind == "awaiting":
+                    run.termination_reason = "awaiting_user"
+                else:
+                    run.termination_reason = "completed"
+            await run.inbox.close(termination_reason=run.termination_reason)
+            run.status = "done" if run.status in {"running", "finishing"} else run.status
             run.done.set()
             # Nudge attached streams so they re-check ``done`` immediately rather
             # than waiting out the poll timeout.
@@ -313,6 +361,10 @@ class ChatRunManager:
         if tasks:
             _done, pending = await asyncio.wait(tasks, timeout=self._shutdown_grace_seconds)
             for task in pending:
+                for run in self.runs.values():
+                    if run.task is task:
+                        run.termination_reason = "shutdown_timeout"
+                        break
                 task.cancel()
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)

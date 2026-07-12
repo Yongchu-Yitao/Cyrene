@@ -21,7 +21,7 @@ from cyrene.agent.guidance import (
     _strip_visible_dsml_tool_blocks,
     _tool_result_fallback_text,
 )
-from cyrene.agent.deep_reflection import create_deep_reflection_record, has_deep_reflection_record, project_history_for_llm
+from cyrene.agent.deep_reflection import create_deep_reflection_record, project_history_for_llm
 from cyrene.agent.message import (
     _apply_assistant_meta,
     _assistant_entry_from_response,
@@ -58,7 +58,12 @@ from cyrene.agent.state import (
 )
 from cyrene.llm import _assistant_text, _truncate
 from cyrene.context_trace import attach_context, context_block
-from cyrene.tools import _execute_tool, get_active_tool_defs
+from cyrene.tools import (
+    _execute_tool,
+    get_active_tool_defs,
+    get_tool_execution_metadata,
+)
+from cyrene.workbench_inbox import current_workbench_inbox
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +255,56 @@ async def _run_main_agent(
     system_initiated = bool(
         isinstance(assistant_meta, dict) and assistant_meta.get("system_initiated")
     )
+    runtime_inbox = current_workbench_inbox()
+    if runtime_inbox is not None:
+        runtime_inbox.round_id = round_id
+
+    async def _inject_runtime_guidance(
+        msgs: list[dict[str, Any]],
+        events: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        """Inject queued Workbench steering at a safe model/tool boundary."""
+        if runtime_inbox is None:
+            return False
+        events = runtime_inbox.collect_guidance_nowait() if events is None else events
+        if not events:
+            return False
+        texts = [
+            str((event.get("payload") or {}).get("text") or "").strip()
+            for event in events
+        ]
+        texts = [text for text in texts if text]
+        if not texts:
+            return False
+        content = (
+            "[Workbench runtime guidance]\n"
+            "The user sent this while the current task was running. Treat the "
+            "latest guidance as authoritative for all work not already completed.\n\n"
+            + "\n\n".join(texts)
+        )
+        entry: dict[str, Any] = {
+            "role": "user",
+            "content": content,
+            "message_id": f"guidance_{uuid4().hex}",
+            "runtime_guidance": True,
+        }
+        if round_id:
+            entry["round_id"] = round_id
+        msgs.append(attach_context(entry, context_block(
+            f"runtime.guidance.{entry['message_id']}",
+            "user",
+            source="cyrene.workbench_inbox",
+            reason="user guidance delivered while the Workbench chat run was active",
+            content=content,
+        )))
+        await _publish_runtime_event({
+            "type": "guidance_applied",
+            "round_id": round_id,
+            "count": len(texts),
+            "detail": "The running agent applied new user guidance.",
+        })
+        runtime_inbox.acknowledge(events)
+        return True
 
     async def _save(msgs):
         saved_ephemeral = "\n\n".join(
@@ -461,31 +516,6 @@ async def _run_main_agent(
             saved = _economy_compact_messages(saved, round_id)
         return saved
 
-    if has_deep_reflection_record(history):
-        routed = None
-    else:
-        try:
-            from cyrene import behavior_learning as _behavior_learning
-            routed = await _behavior_learning.try_route_and_execute_skill(
-                user_message=user_message, visible_user_entry=dict(user_entry),
-                llm_user_entry=dict(llm_user_entry), history=history,
-                bot=bot, chat_id=chat_id, db_path=db_path,
-                effective_system=effective_system, client_request_id=client_request_id, round_id=round_id,
-                lang=lang,
-            )
-        except Exception:
-            logger.warning("Learned skill routing failed; falling back to main agent loop", exc_info=True)
-            routed = None
-    if routed is not None:
-        await _publish_runtime_event({
-            "type": "phase_transition", "from": "skill_router", "to": "learned_skill",
-            "detail": f"Matched learned skill {routed['skill']['name']} ({routed['skill']['skill_type']})",
-            "detail_key": "phase.learnedSkill",
-            "detail_params": {"name": routed['skill']['name'], "type": routed['skill']['skill_type']},
-        })
-        await _save(_session_messages_to_save(routed["messages"]))
-        return str(routed["final_text"] or "Done.")
-
     # Phase 1: lightweight decision. Wire the SAME full array as Phase 2 so the
     # two phases share DeepSeek's tool-sensitive prefix cache even on the first
     # ordinary round. Deep-research's first round keeps its tiny ask_user-only set
@@ -493,7 +523,27 @@ async def _run_main_agent(
     phase1_wire_tools = (
         phase1_tools if _deep_research_first_round.get() else wire_tool_defs
     )
+    phase1_runtime_guidance_entries: list[dict[str, Any]] = []
     response = await _call_llm(_pin_tail(project_history_for_llm(phase1_messages)), tools=phase1_wire_tools)
+    if runtime_inbox is not None:
+        phase1_guidance = runtime_inbox.collect_guidance_nowait()
+        if phase1_guidance:
+            phase1_messages.append(_assistant_entry_from_response(response, round_id))
+            for tc in (response.get("tool_calls") or []):
+                phase1_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": "Decision deferred because new user guidance arrived.",
+                    **({"round_id": round_id} if round_id else {}),
+                })
+            await _inject_runtime_guidance(phase1_messages, phase1_guidance)
+            phase1_runtime_guidance_entries = [
+                message for message in phase1_messages if message.get("runtime_guidance")
+            ]
+            response = await _call_llm(
+                _pin_tail(project_history_for_llm(phase1_messages)),
+                tools=phase1_wire_tools,
+            )
     tool_calls = response.get("tool_calls") or []
     phase1_allowed = {_tool_def_name(tool_def) for tool_def in phase1_tools}
     invalid_phase1_tools = [
@@ -525,7 +575,7 @@ async def _run_main_agent(
         ]
         response = await _call_llm(_pin_tail(project_history_for_llm(retry_messages)), tools=phase1_wire_tools)
     tool_calls = response.get("tool_calls") or []
-    messages = [*run_prefix, llm_user_entry]
+    messages = [*run_prefix, llm_user_entry, *phase1_runtime_guidance_entries]
     assistant_entry = _assistant_entry_from_response(response, round_id)
     _materialize_quit_reply_for_history(response, assistant_entry)
     messages.append(assistant_entry)
@@ -576,9 +626,10 @@ async def _run_main_agent(
             event["detail_key"] = "phase.useTools"
             event["detail_params"] = {"task": user_message[:120]}
         await _publish_runtime_event(event)
-        messages = [*run_prefix, dict(llm_user_entry)]
+        messages = [*run_prefix, dict(llm_user_entry), *phase1_runtime_guidance_entries]
 
         for _ in range(_get_max_tool_rounds()):
+            await _inject_runtime_guidance(messages)
             response = await _call_llm(_pin_tail(project_history_for_llm(messages)), tools=wire_tool_defs)
             entry: dict = {"role": "assistant", "content": response.get("content") or ""}
             if response.get("reasoning_content"):
@@ -596,6 +647,24 @@ async def _run_main_agent(
             tool_names = [str(t.get("function", {}).get("name") or "") for t in tcs]
             done_via_quit = bool(tcs) and all(name == "quit" for name in tool_names)
             if done_via_quit or not tcs:
+                # Guidance may have arrived while this model call was in flight.
+                # Do not finalize an answer that the user has already superseded.
+                if runtime_inbox is not None:
+                    pending_guidance = runtime_inbox.collect_guidance_nowait()
+                    if pending_guidance:
+                        if done_via_quit:
+                            for tc in tcs:
+                                tool_entry = {
+                                    "role": "tool",
+                                    "tool_call_id": tc["id"],
+                                    "content": "Completion deferred because new user guidance arrived.",
+                                }
+                                if round_id:
+                                    tool_entry["round_id"] = round_id
+                                messages.append(tool_entry)
+                        await _inject_runtime_guidance(messages, pending_guidance)
+                        await _save(_session_messages_to_save(messages))
+                        continue
                 if done_via_quit:
                     await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
                 if _streaming_reply_requested():
@@ -645,9 +714,51 @@ async def _run_main_agent(
             spawned = False
             quit_requested = False
             reflection_requested = False
+            guidance_supersedes_batch = bool(
+                runtime_inbox is not None and runtime_inbox.has_guidance_nowait()
+            )
             pending_reflection_tool_calls: list[tuple[dict[str, Any], dict[str, Any]]] = []
+            inbox_batch_args: dict[str, dict[str, Any]] = {}
+            tool_batch_id = f"batch_{uuid4().hex}"
+            if runtime_inbox is not None and not guidance_supersedes_batch:
+                inbox_calls: list[tuple[Any, ...]] = []
+                for pending_call in tcs:
+                    pending_name = str(pending_call.get("function", {}).get("name") or "")
+                    if pending_name in {"use_tools", "quit", "DeepReflect"}:
+                        continue
+                    if system_initiated and pending_name == "ask_user":
+                        continue
+                    try:
+                        pending_args = json.loads(
+                            pending_call["function"].get("arguments") or "{}"
+                        )
+                    except (KeyError, TypeError, json.JSONDecodeError):
+                        continue
+                    inbox_batch_args[pending_call["id"]] = pending_args
+                    inbox_calls.append((
+                        pending_call["id"],
+                        pending_name,
+                        lambda pending_name=pending_name, pending_args=dict(pending_args): _execute_tool(
+                            pending_name, pending_args, bot, chat_id, db_path, None
+                        ),
+                        get_tool_execution_metadata(pending_name, pending_args),
+                    ))
+                if inbox_calls:
+                    runtime_inbox.submit_tool_batch(
+                        inbox_calls, batch_id=tool_batch_id
+                    )
             for index, t in enumerate(tcs):
                 tool_name = t.get("function", {}).get("name")
+                if guidance_supersedes_batch and t["id"] not in inbox_batch_args:
+                    skipped_tool_entry: dict[str, Any] = {
+                        "role": "tool",
+                        "tool_call_id": t["id"],
+                        "content": "Skipped before execution because new user guidance superseded this tool-call batch.",
+                    }
+                    if round_id:
+                        skipped_tool_entry["round_id"] = round_id
+                    messages.append(skipped_tool_entry)
+                    continue
                 if awaiting_user:
                     skipped_tool_entry: dict[str, Any] = {
                         "role": "tool", "tool_call_id": t["id"],
@@ -685,7 +796,9 @@ async def _run_main_agent(
                     messages.append(skipped_tool_entry)
                     continue
                 try:
-                    args = json.loads(t["function"].get("arguments") or "{}")
+                    args = inbox_batch_args.get(t["id"])
+                    if args is None:
+                        args = json.loads(t["function"].get("arguments") or "{}")
                     if system_initiated and tool_name == "ask_user":
                         result = (
                             "Tool unavailable: proactive system-initiated rounds "
@@ -704,7 +817,23 @@ async def _run_main_agent(
                         reflection_requested = True
                         result = "Deep reflection complete. A reflection record will be added to the visible transcript."
                     else:
-                        result = await _execute_tool(tool_name, args, bot, chat_id, db_path, None)
+                        if runtime_inbox is None:
+                            result = await _execute_tool(tool_name, args, bot, chat_id, db_path, None)
+                        else:
+                            if t["id"] not in inbox_batch_args:
+                                runtime_inbox.submit_tool(
+                                    t["id"],
+                                    str(tool_name or ""),
+                                    lambda tool_name=tool_name, args=dict(args): _execute_tool(
+                                        tool_name, args, bot, chat_id, db_path, None
+                                    ),
+                                    batch_id=tool_batch_id,
+                                    metadata=get_tool_execution_metadata(
+                                        str(tool_name or ""), args
+                                    ),
+                                )
+                            result = await runtime_inbox.wait_for_tool_result(t["id"])
+                            guidance_supersedes_batch = runtime_inbox.has_guidance_nowait()
                 except Exception as e:
                     result = f"Tool failed: {e}"
                 truncated_result = _truncate(result)
@@ -725,6 +854,7 @@ async def _run_main_agent(
                     awaiting_user = True
                 if tool_name == "spawn_subagent":
                     spawned = True
+            await _inject_runtime_guidance(messages)
             if pending_reflection_tool_calls:
                 _ensure_message_identity(messages)
                 pending_reflection_records: list[dict[str, Any]] = []
@@ -822,8 +952,6 @@ async def _run_main_agent(
                     # Cancel running subagents immediately and mark them done so
                     # the summary phase can start right away.
                     await _cancel_subagent_tasks(round_id=round_id)
-                else:
-                    await asyncio.sleep(2)
                 await _publish_runtime_event({
                     "type": "phase_transition", "from": "subagent_monitoring", "to": "synthesis",
                     "detail": "All subagents done, starting summary subagent",

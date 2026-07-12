@@ -124,6 +124,7 @@ var WorkbenchChatModel = (function () {
       else if (type === "reply_done" && handlers.onReplyDone) handlers.onReplyDone(event.response || "");
       else if (type === "saved" && handlers.onSaved) handlers.onSaved(event);
       else if (type === "awaiting_user" && handlers.onAwaitingUser) handlers.onAwaitingUser(event);
+      else if (type === "guidance_received" && handlers.onGuidanceReceived) handlers.onGuidanceReceived(event);
       else if (type === "interrupted" && handlers.onInterrupted) handlers.onInterrupted(event);
       else if (type === "error" && handlers.onError) handlers.onError(new Error(event.message || wbcT("settings.failed", "Failed")));
     }
@@ -174,6 +175,14 @@ var WorkbenchChatModel = (function () {
     });
   }
 
+  function sendGuidance(chatId, message, clientRequestId) {
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/guidance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: message || "", clientRequestId: clientRequestId || "" }),
+    });
+  }
+
   // Answer a paused chat run's permission / clarification question → resume.
   // Resolves to { awaitingUser, assistantMessage?, pendingQuestion? }.
   function answerChat(chatId, questionId, answerText, options) {
@@ -212,6 +221,7 @@ var WorkbenchChatModel = (function () {
     interrupt: interrupt,
     uploadFiles: uploadFiles,
     sendMessage: sendMessage,
+    sendGuidance: sendGuidance,
     reconnectRun: reconnectRun,
     answerChat: answerChat,
     forkChat: forkChat,
@@ -253,6 +263,48 @@ function wbcFormatTime(value) {
   } catch (e) {
     return "";
   }
+}
+
+function wbcMergeChronologicalMessages(messages, additions) {
+  // Runtime segments are discovered independently from persisted guidance.
+  // Merge them by event time so steering stays where it happened instead of
+  // forcing every user message above all assistant output.
+  var merged = Array.isArray(messages) ? messages.slice() : [];
+  var known = new Set();
+  merged.forEach(function (item) {
+    var id = String(item && item.id || "");
+    if (id) known.add(id);
+  });
+  (additions || []).forEach(function (item) {
+    if (!item) return;
+    var id = String(item.id || "");
+    if (id && known.has(id)) return;
+    var at = String(item.createdAt || item.created_at || "");
+    var index = merged.length;
+    if (at) {
+      for (var i = 0; i < merged.length; i++) {
+        var currentAt = String(merged[i] && (merged[i].createdAt || merged[i].created_at) || "");
+        if (currentAt && currentAt > at) { index = i; break; }
+      }
+    }
+    merged.splice(index, 0, item);
+    if (id) known.add(id);
+  });
+  return merged;
+}
+
+function wbcRuntimeSegmentMessages(runtime) {
+  var segments = runtime && Array.isArray(runtime.segments) ? runtime.segments : [];
+  return segments.map(function (segment) {
+    var message = segment && segment.message ? segment.message : {};
+    return {
+      ...message,
+      id: String(message.id || segment.id || ""),
+      role: "assistant",
+      trace: Array.isArray(segment.progress) ? segment.progress : (message.trace || []),
+      runtimeSegment: true,
+    };
+  });
 }
 
 function wbcSubagentStatusText(status) {
@@ -564,6 +616,7 @@ function wbcCommandMeta(id) {
 var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
   var runtimes = {};            // chatId -> { chatId, text, progress, startedAt, lastEventAt, replying }
   var aborts = {};              // chatId -> AbortController
+  var deferredSends = {};       // chatId -> terminal-race guidance promoted to the next normal turn
   var subscribers = new Set();
   var hooks = null;             // live transcript hooks from the mounted page
 
@@ -633,6 +686,19 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     if (!chatId) return;
     if (runtimes[chatId] && model && model.interrupt) model.interrupt(chatId);
     abort(chatId);
+  }
+
+  function deferSend(chatId, input, model) {
+    if (!chatId || !model) return null;
+    var previous = deferredSends[chatId];
+    var nextInput = input || {};
+    if (previous && previous.input) {
+      var previousText = String(previous.input.message || "").trim();
+      var nextText = String(nextInput.message || "").trim();
+      nextInput = { ...nextInput, message: [previousText, nextText].filter(Boolean).join("\n\n") };
+    }
+    deferredSends[chatId] = { input: nextInput, model: model };
+    return true;
   }
 
   // The mounted page registers transcript hooks so a streaming run patches its
@@ -727,11 +793,20 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
       onIntermediateMessage: function (event) {
         appendIntermediate(chatId, event && event.message);
       },
+      onGuidanceReceived: function (event) {
+        if (event && event.userMessage) fire("onUserMessage", chatId, event.userMessage);
+        update(chatId, function (cur) {
+          return cur ? { ...cur, lastEventAt: Date.now() } : null;
+        });
+      },
       onSaved: function (event) {
         if (event.retry) {
           // Commit the transcript replacement only after the regenerated reply
           // is durable. A failed retry therefore leaves the old reply visible.
-          fire("onRetryTruncate", chatId, String(event.truncateAfterMessageId || ""));
+          fire("onRetryTruncate", chatId, {
+            afterId: String(event.truncateAfterMessageId || ""),
+            replacedIds: Array.isArray(event.retryReplacedMessageIds) ? event.retryReplacedMessageIds : [],
+          });
         }
         var savedMessages = Array.isArray(event.assistantMessages) && event.assistantMessages.length
           ? event.assistantMessages
@@ -743,8 +818,13 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
       onAwaitingUser: function (event) {
         // The run paused for a permission / clarification answer.
         if (event.retry) {
-          fire("onRetryTruncate", chatId, String(event.truncateAfterMessageId || ""));
+          fire("onRetryTruncate", chatId, {
+            afterId: String(event.truncateAfterMessageId || ""),
+            replacedIds: Array.isArray(event.retryReplacedMessageIds) ? event.retryReplacedMessageIds : [],
+          });
         }
+        var awaitingMessages = Array.isArray(event.assistantMessages) ? event.assistantMessages : [];
+        if (awaitingMessages.length) fire("onAssistantSaved", chatId, awaitingMessages);
         fire("onAwaitingUser", chatId, event.pending_question || null);
         update(chatId, null);
         fire("onSettled", chatId);
@@ -776,6 +856,16 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
         // transport failure) — drop the runtime and let the page re-pull.
         update(chatId, null);
         fire("onResync", chatId);
+      }
+      // A guidance POST can race the server's finishing window: the UI still
+      // has a live stream, but the agent has already returned and correctly
+      // rejects new steering. Promote that text to a normal follow-up exactly
+      // when this stream closes. No timer/polling is involved—the stream's
+      // terminal event wakes the deferred send.
+      var deferred = deferredSends[chatId];
+      if (deferred) {
+        delete deferredSends[chatId];
+        start(chatId, deferred.input, deferred.model);
       }
     });
   }
@@ -829,6 +919,13 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
         text: String(event.agent_id || wbcT("workbenchChat.subagents", "Subagents")),
         preview: wbcSubagentStatusText(event.status),
       };
+    } else if (
+      (event.type === "guidance_acknowledged" || event.type === "chat_message")
+      && event.message
+      && event.message.intermediate
+    ) {
+      appendIntermediate(chatId, event.message);
+      return;
     } else if (event.type === "assistant_message" && event.intermediate && event.message) {
       appendIntermediate(chatId, event.message);
       return;
@@ -844,7 +941,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
   return {
     subscribe: subscribe, snapshot: snapshot, get: get, isRunning: isRunning,
     update: update, clear: clear, abort: abort, interrupt: interrupt,
-    start: start, reconnect: reconnect, setHooks: setHooks,
+    start: start, reconnect: reconnect, deferSend: deferSend, setHooks: setHooks,
   };
 })();
 window.WorkbenchChatRuntimes = WorkbenchChatRuntimes;
@@ -1294,11 +1391,22 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
           return { ...prev, messages: (prev.messages || []).concat([userMessage]) };
         });
       },
-      onRetryTruncate: function (chatId, afterId) {
+      onRetryTruncate: function (chatId, truncateInfo) {
         // Regenerating: drop everything after the replayed user message.
         setActiveChat(function (prev) {
           if (!prev || prev.id !== chatId) return prev;
           var list = prev.messages || [];
+          var afterId = typeof truncateInfo === "string" ? truncateInfo : String(truncateInfo && truncateInfo.afterId || "");
+          var hasExplicitReplacedIds = !!(truncateInfo && Array.isArray(truncateInfo.replacedIds));
+          var replacedIds = new Set(
+            hasExplicitReplacedIds ? truncateInfo.replacedIds.map(String) : []
+          );
+          if (hasExplicitReplacedIds) {
+            return {
+              ...prev,
+              messages: list.filter(function (item) { return !replacedIds.has(String(item && item.id || "")); }),
+            };
+          }
           var cut = -1;
           for (var i = 0; i < list.length; i++) {
             if (String(list[i].id) === afterId) { cut = i; break; }
@@ -1318,7 +1426,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
             knownIds.add(id);
             return true;
           });
-          return { ...prev, status: "idle", messages: current.concat(additions) };
+          return { ...prev, status: "idle", messages: wbcMergeChronologicalMessages(current, additions) };
         });
       },
       onAwaitingUser: function (chatId, pendingQuestion) {
@@ -1377,6 +1485,22 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     runtimeEngine.interrupt(activeChatIdRef.current, model);
   }
 
+  function handleGuidance(message) {
+    var chatId = activeChatIdRef.current;
+    var text = String(message || "").trim();
+    if (!chatId || !text || !runtimeEngine.isRunning(chatId)) return Promise.resolve(null);
+    setError("");
+    return model.sendGuidance(chatId, text, "guide_" + Date.now()).catch(function (err) {
+      if (err && err.code === "chat_not_running") {
+        runtimeEngine.deferSend(chatId, { message: text }, model);
+        return { deferred: true };
+      }
+      setErrorKind("message");
+      setError(wbcErrorText(err));
+      throw err;
+    });
+  }
+
   // Answer the pending permission / clarification question → resume the round.
   // The server returns the continued reply (append it) or a follow-up question
   // (swap the prompt). Optimistically clears the prompt while resuming.
@@ -1384,9 +1508,22 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     var chatId = activeChatId;
     if (!chatId || !questionId || !optionText) return;
     setError("");
+    var optimisticAnswer = {
+      id: "answer_pending_" + Date.now(),
+      role: "user",
+      content: optionText,
+      createdAt: new Date().toISOString(),
+      answerToQuestionId: questionId,
+      optimistic: true,
+    };
     setActiveChat(function (prev) {
       if (!prev || prev.id !== chatId) return prev;
-      return { ...prev, pendingQuestion: null, status: "running" };
+      return {
+        ...prev,
+        pendingQuestion: null,
+        status: "running",
+        messages: wbcMergeChronologicalMessages(prev.messages || [], [optimisticAnswer]),
+      };
     });
     // Drive a live runtime for the resume so the thread streams the same feedback
     // as a normal send: the "Thinking..." card renders immediately and SSE tool
@@ -1396,26 +1533,12 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: true });
     model.answerChat(chatId, questionId, optionText, { mode: resumeMode || undefined }).then(function (res) {
       runtimeEngine.update(chatId, null);
-      setActiveChat(function (prev) {
-        if (!prev || prev.id !== chatId) return prev;
-        if (res && res.awaitingUser) {
-          return { ...prev, status: "idle", pendingQuestion: res.pendingQuestion || null };
-        }
-        var msgs = prev.messages || [];
-        var savedMessages = res && Array.isArray(res.assistantMessages) && res.assistantMessages.length
-          ? res.assistantMessages
-          : (res && res.assistantMessage ? [res.assistantMessage] : []);
-        if (savedMessages.length) {
-          var knownIds = new Set(msgs.map(function (message) { return String(message.id || ""); }));
-          msgs = msgs.concat(savedMessages.filter(function (message) {
-            var id = String((message && message.id) || "");
-            if (!id || knownIds.has(id)) return false;
-            knownIds.add(id);
-            return true;
-          }));
-        }
-        return { ...prev, status: "idle", pendingQuestion: null, activePlan: null, messages: msgs };
+      // Pull the durable transcript: it now contains the question, this answer,
+      // every pre-question tool/intermediate block, and the continued reply.
+      return model.getChat(chatId).then(function (chat) {
+        if (activeChatIdRef.current === chatId) setActiveChat(chat);
       });
+    }).then(function () {
       refreshChats();
     }).catch(function (err) {
       runtimeEngine.update(chatId, null);
@@ -1593,6 +1716,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
         onRetry={errorKind === "message" ? handleRetryMessage : retryLoad}
         running={activeRunning}
         onSend={handleSend}
+        onGuidance={handleGuidance}
         onInterrupt={handleInterrupt}
         onAnswer={handleAnswer}
         onRetryMessage={handleRetryMessage}
@@ -1747,10 +1871,11 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, onSend, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, sideVisible, onToggleSide }) {
+function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, sideVisible, onToggleSide }) {
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
-  var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
+  var durableMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
+  var messages = wbcMergeChronologicalMessages(durableMessages, wbcRuntimeSegmentMessages(runtime));
   var isLegacy = !!(chat && chat.legacy);
   var lastAssistantId = "";
   var lastUserId = "";
@@ -1827,12 +1952,22 @@ function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, o
           var canRetryAssistant = !isLegacy && !running && String(msg.id || "") === lastAssistantId;
           var canRetryUser = !isLegacy && !running && msg.role === "user" && String(msg.id || "") === lastUserId;
           var canEdit = !isLegacy && !running && msg.role === "user" && !!onEditMessage;
+          var isActiveQuestion = !!(
+            msg.questionPrompt
+            && chat.pendingQuestion
+            && String(chat.pendingQuestion.id || "") === String(msg.questionId || "")
+          );
+          if (isActiveQuestion) {
+            return <WbcQuestionPrompt key={msg.id} pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} trace={msg.trace} />;
+          }
           return msg.role === "user"
             ? <WbcUserMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onEditMessage={onEditMessage} canEdit={canEdit} onRetryMessage={canRetryUser ? onRetryMessage : null} />
             : <WbcAssistantMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onRetryMessage={canRetryAssistant ? onRetryMessage : null} />;
         })}
         {runtime && <WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} />}
-        {chat && chat.pendingQuestion && chat.pendingQuestion.id && !runtime && (
+        {chat && chat.pendingQuestion && chat.pendingQuestion.id && !runtime && !messages.some(function (msg) {
+          return msg.questionPrompt && String(msg.questionId || "") === String(chat.pendingQuestion.id || "");
+        }) && (
           <WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} />
         )}
       </div>
@@ -1843,6 +1978,7 @@ function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, o
         error={error}
         errorKind={errorKind}
         onSend={onSend}
+        onGuidance={onGuidance}
         onInterrupt={onInterrupt}
       />
     </main>
@@ -1852,7 +1988,7 @@ function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, o
 // A paused chat run awaiting the user's answer to a permission elevation or a
 // clarification (ask_user). Renders the question + option buttons inline at the
 // bottom of the thread; each answer resumes the same round server-side.
-function WbcQuestionPrompt({ pending, onAnswer, busy }) {
+function WbcQuestionPrompt({ pending, onAnswer, busy, trace }) {
   var pq = pending || {};
   var options = Array.isArray(pq.options) ? pq.options : [];
   var kind = String(pq.kind || "");
@@ -1868,6 +2004,7 @@ function WbcQuestionPrompt({ pending, onAnswer, busy }) {
   }
   return (
     <div className="wbc-question">
+      {trace && trace.length > 0 && <WbcTraceCard trace={trace} />}
       <div className="wbc-question-head">
         <span className="wbc-question-ico">{WBC_ICONS.alert}</span>
         <b>{isPermission ? wbcT("workbenchChat.permissionTitle", "Authorization needed") : wbcT("workbenchChat.questionTitle", "Confirmation needed")}</b>
@@ -2319,7 +2456,6 @@ function WbcHeartbeat({ startedAt, lastEventAt }) {
 }
 
 function WbcLiveMessage({ runtime, onOpenFile }) {
-  var completedSegments = Array.isArray(runtime.segments) ? runtime.segments : [];
   var progressEntries = Array.isArray(runtime.progress) ? runtime.progress : [];
   // Re-parse the streaming markdown only when the text actually changed — not on
   // every heartbeat / progress-driven re-render of this card.
@@ -2328,32 +2464,6 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
   }, [runtime.text]);
   return (
     <React.Fragment>
-      {completedSegments.map(function (segment) {
-        var segmentTrace = Array.isArray(segment.progress) ? segment.progress : [];
-        var segmentMsg = segment.message || {};
-        var segmentFiles = Array.isArray(segmentMsg.attachments) ? segmentMsg.attachments : [];
-        // Tool-delivered replies (send_file etc.) carry unique content +
-        // attachments; render them as full assistant messages so the reply
-        // text and files stay visible during streaming.  State-checkpoint
-        // segments carry the same content as the ongoing streaming reply;
-        // render only the tool trace to avoid text duplication.
-        if (!segmentTrace.length && !segmentFiles.length) return null;
-        if (segmentFiles.length > 0) {
-          return (
-            <WbcAssistantMessage
-              key={segment.id}
-              msg={{ ...segmentMsg, trace: segmentTrace }}
-              onOpenFile={onOpenFile}
-            />
-          );
-        }
-        return (
-          <WbcTraceCard
-            key={segment.id}
-            trace={segmentTrace}
-          />
-        );
-      })}
       <div className="wbc-msg assistant">
         <WbcHeartbeat startedAt={runtime.startedAt} lastEventAt={runtime.lastEventAt} />
         {(progressEntries.length > 0 || !runtime.text) && (
@@ -2438,7 +2548,7 @@ function wbcSaveWorkspaceOverride(key, path, ns) {
   } catch (e) {}
 }
 
-function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind }) {
+function WbcComposer({ chat, project, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind }) {
   var model = window.WorkbenchChatModel;
   var chatId = chat ? chat.id : "";
   var projectId = (project && project.id) || "";
@@ -2578,8 +2688,13 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespa
   }
 
   function submit() {
-    if (running) return;
     var text = draft.trim();
+    if (running) {
+      if (!text || !onGuidance) return;
+      setDraft("");
+      onGuidance(text).catch(function () { setDraft(text); });
+      return;
+    }
     if (!text && attachments.length === 0) return;
     var payload = { message: text, attachments: attachments, mode: mode, command: command };
     // Optimistically clear on send; restored in the running-transition effect
@@ -2599,7 +2714,6 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespa
     if (sc && sc.matches(event, "composer-send")) {
       if (event.nativeEvent && event.nativeEvent.isComposing) return; // IME guard
       event.preventDefault();
-      if (running) return;
       submit();
       return;
     }
@@ -2612,7 +2726,6 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespa
     if (!sc && event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
       if (event.nativeEvent && event.nativeEvent.isComposing) return; // IME guard
       event.preventDefault();
-      if (running) return;
       submit();
       return;
     }
@@ -2714,6 +2827,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespa
         window.WorkbenchAPI.toastError(err, wbcT("workbenchChat.pickDirFailed", "Failed to open directory picker: "));
       });
   }
+  var hasRuntimeGuidance = running && !!draft.trim();
   var sendDisabled = running ? false : (!draft.trim() && attachments.length === 0);
   var isLegacy = !!(chat && chat.legacy);
 
@@ -2768,7 +2882,7 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespa
           rows={2}
           onChange={function (e) { setDraft(e.target.value); syncHeight(); }}
           onKeyDown={onKeyDown}
-          placeholder={running ? wbcT("workbenchChat.placeholderRunning", "Keep typing while the agent replies. Stop it before sending.") : wbcT("workbenchChat.placeholder", "Message Cyrene... (Enter to send, Shift+Enter for a new line)")}
+          placeholder={running ? wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent...") : wbcT("workbenchChat.placeholder", "Message Cyrene... (Enter to send, Shift+Enter for a new line)")}
         />
         <div className="wbc-context-chips">
           {personaOn && (
@@ -2859,13 +2973,17 @@ function WbcComposer({ chat, project, running, onSend, onInterrupt, draftNamespa
           {modelName ? <span className="wbc-model-label" title={wbcT("workbenchChat.currentModel", "Current model")}>{modelName}</span> : null}
           <button
             type="button"
-            className={"wbc-send" + (running ? " stop" : "")}
-            onClick={running ? onInterrupt : submit}
+            className={"wbc-send" + (running && !hasRuntimeGuidance ? " stop" : "")}
+            onClick={running && !hasRuntimeGuidance ? onInterrupt : submit}
             disabled={sendDisabled}
-            title={running ? wbcT("workbenchChat.stop", "Stop") : wbcT("workbenchChat.send", "Send")}
+            title={running
+              ? (hasRuntimeGuidance ? wbcT("workbenchChat.sendGuidance", "Send guidance") : wbcT("workbenchChat.stop", "Stop"))
+              : wbcT("workbenchChat.send", "Send")}
           >
-            {running ? WBC_ICONS.stop : WBC_ICONS.send}
-            <span>{running ? wbcT("workbenchChat.stop", "Stop") : wbcT("workbenchChat.send", "Send")}</span>
+            {running && !hasRuntimeGuidance ? WBC_ICONS.stop : WBC_ICONS.send}
+            <span>{running
+              ? (hasRuntimeGuidance ? wbcT("workbenchChat.guidance", "Guide") : wbcT("workbenchChat.stop", "Stop"))
+              : wbcT("workbenchChat.send", "Send")}</span>
           </button>
         </div>
       </div>

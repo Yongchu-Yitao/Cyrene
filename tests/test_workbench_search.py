@@ -501,7 +501,7 @@ def test_workbench_chat_persists_intermediate_messages_between_tool_cards(
                 "role": "assistant",
                 "content": "先汇报阶段结果，我继续处理。",
                 "message_id": "mid_1",
-                "created_at": "2026-06-21T01:00:00+00:00",
+                    "created_at": chat_mod._utc_now_iso(),
                 "intermediate_reply": True,
             },
             {
@@ -624,3 +624,8 @@ def test_workbench_chat_answer_resumes_in_project_workspace(
             (search_env["data_dir"].parent / "workspace").resolve()
         ),
     }
+    payload = response.json()
+    assert payload["userMessage"]["content"] == "continue"
+    stored = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]["messages"]
+    assert [message["content"] for message in stored[-2:]] == ["continue", "continued"]
+    assert stored[-2]["answerToQuestionId"] == "question_1"

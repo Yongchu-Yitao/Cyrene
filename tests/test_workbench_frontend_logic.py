@@ -291,7 +291,7 @@ def test_workbench_chat_delete_detaches_local_fork_markers():
     assert "setActiveChat(function (prev) { return detachDeletedForkSource(prev); })" in handler
 
 
-def test_workbench_chat_allows_drafting_but_not_sending_while_running():
+def test_workbench_chat_switches_stop_to_guidance_while_running():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
@@ -309,10 +309,11 @@ def test_workbench_chat_allows_drafting_but_not_sending_while_running():
     )[0]
 
     assert "disabled={running}" not in textarea
-    assert "if (running) return;" in keydown
-    assert "onClick={running ? onInterrupt : submit}" in composer
+    assert "if (running) return;" not in keydown
+    assert "var hasRuntimeGuidance = running && !!draft.trim();" in composer
+    assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
     assert "if (running) { onInterrupt(); return; }" not in composer
-    assert "Agent 正在回复，可先输入；停止后才能发送。" in (
+    assert "输入内容以引导正在运行的 Agent" in (
         root / "src" / "workbench-webui" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
     assert "workbench-chat.js?v=0.6.4" in index
@@ -390,7 +391,8 @@ def test_workbench_chat_splits_live_tools_around_intermediate_messages():
     assert "existingIndex >= 0" in append_block
     assert "segments: segments.concat" in source
     assert "progress: Array.isArray(message.trace) ? message.trace" in source
-    assert "completedSegments.map" in source
+    assert "wbcRuntimeSegmentMessages(runtime)" in source
+    assert "wbcMergeChronologicalMessages(durableMessages" in source
     assert "<WbcAssistantMessage" in source
     assert "event.assistantMessages" in source
     assert 'event.type === "assistant_message" && event.intermediate && event.message' in source
@@ -478,8 +480,11 @@ def test_workbench_chat_tool_trace_preserves_i18n_metadata():
     live_message = chat.split("function WbcLiveMessage(", 1)[1].split(
         "var WBC_DRAFT_PREFIX", 1
     )[0]
+    segment_adapter = chat.split("function wbcRuntimeSegmentMessages(", 1)[1].split(
+        "function wbcSubagentStatusText", 1
+    )[0]
     assert "var progressEntries = Array.isArray(runtime.progress) ? runtime.progress : [];" in live_message
-    assert "var segmentTrace = Array.isArray(segment.progress) ? segment.progress : [];" in live_message
+    assert "trace: Array.isArray(segment.progress) ? segment.progress" in segment_adapter
     assert "return { tool: entry.text, preview: entry.preview };" not in live_message
     assert 'wbcT(entry.detailKey, toolKey, entry.detailParams)' in chat
     assert '"update_plan_progress"].indexOf(toolName)' in chat
@@ -682,6 +687,28 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
     assert "workbench.css?v=0.6.5" in index
+
+
+def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+
+    collapsed_prefix = (
+        ".workbench-grid.rail-collapsed "
+        ".workbench-project-rail:not(:hover):not(:focus-within) "
+    )
+    project_list_rule = styles.split(collapsed_prefix + ".workbench-project-list {", 1)[1].split("}", 1)[0]
+    project_card_rule = styles.split(collapsed_prefix + ".workbench-project-card {", 1)[1].split("}", 1)[0]
+    nav_rule = styles.split(collapsed_prefix + ".workbench-nav-button {", 1)[1].split("}", 1)[0]
+    account_rule = styles.split(collapsed_prefix + ".workbench-account {", 1)[1].split("}", 1)[0]
+
+    # These offsets are relative to the rail's left edge, so entering the
+    # non-hover state cannot center icons against the still-animating width.
+    assert "align-items: flex-start;" in project_list_rule
+    assert "margin-left: 10px;" in project_card_rule
+    assert "margin: 0 0 0 10px;" in nav_rule
+    assert "justify-content: flex-start;" in account_rule
+    assert "padding: 13px 0 13px 14px;" in account_rule
 
 
 def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():

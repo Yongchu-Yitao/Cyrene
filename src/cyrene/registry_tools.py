@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 import logging
+import re
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -130,9 +132,131 @@ AGENT_TOOL_GROUPS: dict[str, set[str]] = {
 
 TOOL_DEFS: list[dict[str, Any]] = []
 TOOL_HANDLERS: dict[str, Any] = {}
+TOOL_METADATA: dict[str, dict[str, Any]] = {}
+
+_READ_ONLY_TOOLS = {
+    "Read", "AnalyzeAttachment", "Glob", "Grep", "RecallMemory",
+    "RecallConversation", "search_project_memory", "ListKnowledgeDocuments",
+    "SearchKnowledge", "ListShells", "WebFetch", "WebSearch", "query_round",
+    "CheckClaudeCode", "ListSkills", "GetLearnedSkill", "list_tasks",
+    "list_entities", "query_entities", "browser_user_events", "GitStatus",
+    "GitDiff", "GitLog", "SearchSymbol", "FindReferences", "GetFileSymbols",
+    "LintCode", "CodeReview", "browser_snapshot", "browser_network_log",
+    "browser_tab_list",
+}
+
+_REQUIRES_ORDER_TOOLS = {
+    "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click",
+    "browser_click_ref", "browser_click_text", "browser_click_at", "browser_type",
+    "browser_type_ref", "browser_wait", "browser_network_log", "browser_tab_list",
+    "browser_tab_new", "browser_tab_select", "browser_tab_close", "browser_scroll",
+    "browser_user_events", "browser_request_takeover",
+}
+
+_RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
+    "Read": ("fs:{path}",),
+    "Write": ("fs:{path}",),
+    "Edit": ("fs:{path}",),
+    "AnalyzeAttachment": ("fs:{path}",),
+    "Grep": ("fs:{path}",),
+    "GetFileSymbols": ("fs:{path}",),
+    "LintCode": ("fs:{path}",),
+    "FormatCode": ("fs:{path}",),
+    "CodeReview": ("fs:{path}",),
+    "Glob": ("fs:workspace",),
+    "SearchSymbol": ("code-index:workspace",),
+    "FindReferences": ("code-index:workspace",),
+    "WebFetch": ("network:web",),
+    "WebSearch": ("network:web",),
+    "RecallMemory": ("memory:short-term",),
+    "RecallConversation": ("memory:conversations",),
+    "search_project_memory": ("memory:project",),
+    "ListKnowledgeDocuments": ("knowledge:project",),
+    "SearchKnowledge": ("knowledge:project",),
+    "list_tasks": ("db:scheduled-tasks",),
+    "list_entities": ("db:entities",),
+    "query_entities": ("db:entities",),
+    "ListSkills": ("skills:installed",),
+    "GetLearnedSkill": ("skills:learned",),
+    "GitStatus": ("git:workspace",),
+    "GitDiff": ("git:workspace",),
+    "GitLog": ("git:workspace",),
+    "ListShells": ("shell:registry",),
+    "SendShell": ("shell:{shell_id}",),
+    "CloseShell": ("shell:{shell_id}",),
+}
+for _browser_tool_name in _REQUIRES_ORDER_TOOLS:
+    if _browser_tool_name.startswith("browser_"):
+        _RESOURCE_KEY_TEMPLATES[_browser_tool_name] = ("browser:active-tab",)
+
+_RESOURCE_PARALLEL_WRITES = {"Write", "Edit", "FormatCode", "CloseShell"}
+_RESOURCE_FIELD_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-def register_tool(tool_def: dict[str, Any], handler: Any | None = None) -> None:
+def _default_tool_metadata(name: str) -> dict[str, Any]:
+    read_only = name in _READ_ONLY_TOOLS
+    resource_keys = _RESOURCE_KEY_TEMPLATES.get(name, (f"tool:{name}",))
+    return {
+        "read_only": read_only,
+        "resource_keys": tuple(resource_keys),
+        "requires_order": (
+            name in _REQUIRES_ORDER_TOOLS
+            or (not read_only and name not in _RESOURCE_PARALLEL_WRITES)
+        ),
+    }
+
+
+def _normalize_resource_key(key: str) -> str:
+    value = str(key or "").strip()
+    if not value.startswith("fs:"):
+        return value
+    raw_path = value[3:].strip()
+    if not raw_path or raw_path == "workspace":
+        return "fs:workspace"
+    try:
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            from cyrene.agent.state import active_workspace_dir
+
+            path = active_workspace_dir() / path
+        return f"fs:{path.resolve()}"
+    except Exception:
+        return f"fs:{raw_path}"
+
+
+def get_tool_execution_metadata(
+    name: str,
+    arguments: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve internal scheduling metadata without exposing it to the model API."""
+    tool_name = str(name or "")
+    metadata = dict(TOOL_METADATA.get(tool_name) or _default_tool_metadata(tool_name))
+    args = dict(arguments or {})
+    resolved_keys: list[str] = []
+    for template in metadata.get("resource_keys") or ():
+        rendered = str(template)
+        missing = False
+        for field in _RESOURCE_FIELD_RE.findall(rendered):
+            raw = args.get(field)
+            if raw in (None, ""):
+                missing = True
+                break
+            rendered = rendered.replace("{" + field + "}", str(raw))
+        resolved_keys.append(
+            _normalize_resource_key(rendered if not missing else f"tool:{tool_name}")
+        )
+    return {
+        "read_only": bool(metadata.get("read_only")),
+        "resource_keys": tuple(dict.fromkeys(key for key in resolved_keys if key)),
+        "requires_order": bool(metadata.get("requires_order")),
+    }
+
+
+def register_tool(
+    tool_def: dict[str, Any],
+    handler: Any | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     """Register or replace one tool definition and optionally its handler."""
     name = str((tool_def.get("function") or {}).get("name") or "").strip()
     if not name:
@@ -146,19 +270,35 @@ def register_tool(tool_def: dict[str, Any], handler: Any | None = None) -> None:
         TOOL_DEFS.append(tool_def)
     if handler is not None:
         TOOL_HANDLERS[name] = handler
+    TOOL_METADATA[name] = {
+        **_default_tool_metadata(name),
+        **dict(metadata or {}),
+    }
 
 
-def register_tools(tool_defs: list[dict[str, Any]], tool_handlers: dict[str, Any]) -> None:
+def register_tools(
+    tool_defs: list[dict[str, Any]],
+    tool_handlers: dict[str, Any],
+    tool_metadata: dict[str, dict[str, Any]] | None = None,
+) -> None:
     """Register a batch of tool definitions and handlers."""
     for tool_def in tool_defs:
         name = str((tool_def.get("function") or {}).get("name") or "").strip()
-        register_tool(tool_def, tool_handlers.get(name))
+        register_tool(
+            tool_def,
+            tool_handlers.get(name),
+            (tool_metadata or {}).get(name),
+        )
 
 
 def _load_native_tools() -> None:
     for module_name in _NATIVE_TOOL_MODULES:
         module = importlib.import_module(module_name)
-        register_tool(module.TOOL_DEF, module.handler)
+        register_tool(
+            module.TOOL_DEF,
+            module.handler,
+            getattr(module, "TOOL_METADATA", None),
+        )
 
 
 def _register_map_tools() -> None:
@@ -177,6 +317,9 @@ def _initialize_registry() -> None:
     _load_native_tools()
     _register_map_tools()
     _register_code_tools()
+    for tool_def in TOOL_DEFS:
+        name = str((tool_def.get("function") or {}).get("name") or "")
+        TOOL_METADATA.setdefault(name, _default_tool_metadata(name))
 
 
 def get_tool_names() -> list[str]:

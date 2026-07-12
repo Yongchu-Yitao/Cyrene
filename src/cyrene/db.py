@@ -166,6 +166,44 @@ CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON token_usage(created_at)
 CREATE INDEX IF NOT EXISTS idx_token_usage_model ON token_usage(model);
 CREATE INDEX IF NOT EXISTS idx_token_usage_round_id ON token_usage(round_id);
 
+CREATE TABLE IF NOT EXISTS llm_latency_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    call_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    round_id TEXT NOT NULL DEFAULT '',
+    caller TEXT NOT NULL DEFAULT '',
+    phase TEXT NOT NULL DEFAULT '',
+    model_type TEXT NOT NULL DEFAULT 'primary',
+    candidate_id TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    endpoint TEXT NOT NULL DEFAULT '',
+    candidate_rank INTEGER NOT NULL DEFAULT 0,
+    endpoint_rank INTEGER NOT NULL DEFAULT 0,
+    attempt INTEGER NOT NULL DEFAULT 1,
+    outcome TEXT NOT NULL,
+    status_code INTEGER NOT NULL DEFAULT 0,
+    error_type TEXT NOT NULL DEFAULT '',
+    queue_wait_ms REAL NOT NULL DEFAULT 0,
+    pre_attempt_wait_ms REAL NOT NULL DEFAULT 0,
+    request_ms REAL NOT NULL DEFAULT 0,
+    response_headers_ms REAL,
+    ttft_ms REAL,
+    first_token_after_headers_ms REAL,
+    generation_ms REAL,
+    retry_backoff_ms REAL NOT NULL DEFAULT 0,
+    total_call_ms REAL NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens_per_second REAL,
+    fallback_used INTEGER NOT NULL DEFAULT 0,
+    client_pool_reused INTEGER NOT NULL DEFAULT 0,
+    connection_pool_key TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_llm_latency_created_at ON llm_latency_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_latency_call_id ON llm_latency_events(call_id);
+CREATE INDEX IF NOT EXISTS idx_llm_latency_endpoint ON llm_latency_events(endpoint);
+
 CREATE TABLE IF NOT EXISTS entities (
     id                  TEXT PRIMARY KEY,
     type                TEXT NOT NULL,
@@ -836,6 +874,86 @@ async def record_token_usage(
             (now, model, round_id, session_id, caller,
              prompt_tokens, completion_tokens, total_tokens,
              cache_hit_tokens, cache_miss_tokens, duration_ms, cost),
+        )
+        await db.commit()
+
+
+async def record_llm_latency(
+    db_path: str,
+    **event,
+) -> None:
+    """Persist one endpoint attempt with optimization-oriented latency spans."""
+    now = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS llm_latency_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, call_id TEXT NOT NULL,
+                created_at TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '',
+                round_id TEXT NOT NULL DEFAULT '', caller TEXT NOT NULL DEFAULT '',
+                phase TEXT NOT NULL DEFAULT '', model_type TEXT NOT NULL DEFAULT 'primary',
+                candidate_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
+                endpoint TEXT NOT NULL DEFAULT '', candidate_rank INTEGER NOT NULL DEFAULT 0,
+                endpoint_rank INTEGER NOT NULL DEFAULT 0, attempt INTEGER NOT NULL DEFAULT 1,
+                outcome TEXT NOT NULL, status_code INTEGER NOT NULL DEFAULT 0,
+                error_type TEXT NOT NULL DEFAULT '', queue_wait_ms REAL NOT NULL DEFAULT 0,
+                pre_attempt_wait_ms REAL NOT NULL DEFAULT 0,
+                request_ms REAL NOT NULL DEFAULT 0, response_headers_ms REAL,
+                ttft_ms REAL, first_token_after_headers_ms REAL, generation_ms REAL,
+                retry_backoff_ms REAL NOT NULL DEFAULT 0, total_call_ms REAL NOT NULL DEFAULT 0,
+                prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens_per_second REAL, fallback_used INTEGER NOT NULL DEFAULT 0,
+                client_pool_reused INTEGER NOT NULL DEFAULT 0,
+                connection_pool_key TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        cursor = await db.execute("PRAGMA table_info(llm_latency_events)")
+        columns = {str(row[1]) for row in await cursor.fetchall()}
+        migrations = {
+            "pre_attempt_wait_ms": "REAL NOT NULL DEFAULT 0",
+            "response_headers_ms": "REAL",
+            "first_token_after_headers_ms": "REAL",
+            "client_pool_reused": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, definition in migrations.items():
+            if name not in columns:
+                await db.execute(
+                    f"ALTER TABLE llm_latency_events ADD COLUMN {name} {definition}"
+                )
+        await db.execute(
+            """
+            INSERT INTO llm_latency_events
+            (call_id, created_at, session_id, round_id, caller, phase, model_type,
+             candidate_id, model, endpoint, candidate_rank, endpoint_rank, attempt,
+             outcome, status_code, error_type, queue_wait_ms, pre_attempt_wait_ms,
+             request_ms, response_headers_ms, ttft_ms, first_token_after_headers_ms,
+             generation_ms, retry_backoff_ms, total_call_ms, prompt_tokens,
+             completion_tokens, output_tokens_per_second, fallback_used,
+             client_pool_reused, connection_pool_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(event.get("call_id") or ""), now,
+                str(event.get("session_id") or ""), str(event.get("round_id") or ""),
+                str(event.get("caller") or ""), str(event.get("phase") or ""),
+                str(event.get("model_type") or "primary"),
+                str(event.get("candidate_id") or ""), str(event.get("model") or ""),
+                str(event.get("endpoint") or ""), int(event.get("candidate_rank") or 0),
+                int(event.get("endpoint_rank") or 0), int(event.get("attempt") or 1),
+                str(event.get("outcome") or "unknown"), int(event.get("status_code") or 0),
+                str(event.get("error_type") or ""), float(event.get("queue_wait_ms") or 0),
+                float(event.get("pre_attempt_wait_ms") or event.get("queue_wait_ms") or 0),
+                float(event.get("request_ms") or 0), event.get("response_headers_ms"),
+                event.get("ttft_ms"), event.get("first_token_after_headers_ms"),
+                event.get("generation_ms"), float(event.get("retry_backoff_ms") or 0),
+                float(event.get("total_call_ms") or 0), int(event.get("prompt_tokens") or 0),
+                int(event.get("completion_tokens") or 0), event.get("output_tokens_per_second"),
+                1 if event.get("fallback_used") else 0,
+                1 if event.get("client_pool_reused") else 0,
+                str(event.get("connection_pool_key") or ""),
+            ),
         )
         await db.commit()
 

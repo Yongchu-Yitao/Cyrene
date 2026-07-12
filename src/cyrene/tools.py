@@ -17,18 +17,20 @@ for _name, _value in vars(_legacy).items():
     if not _name.startswith("__"):
         globals()[_name] = _value
 
-from cyrene.registry_tools import (  # noqa: F401
+from cyrene.registry_tools import (  # noqa: E402, F401
     AGENT_TOOL_GROUPS,
     TOOL_DEFS,
     TOOL_HANDLERS,
+    TOOL_METADATA,
     get_active_tool_defs,
     get_active_tool_defs_for_actor,
     get_tool_names,
+    get_tool_execution_metadata,
     is_tool_allowed_for_actor,
     register_tool,
     register_tools,
 )
-from cyrene.tool_executor import _execute_tool  # noqa: F401
+from cyrene.tool_executor import _execute_tool  # noqa: E402, F401
 
 _TOOL_IMPL_MODULES = {
     _handler.__module__: import_module(_handler.__module__)

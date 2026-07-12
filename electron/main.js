@@ -2158,7 +2158,10 @@ async function createMainWindow(shellOverride) {
   };
   if (useInsetTitleBar) {
     windowOptions.titleBarStyle = 'hidden';
-    windowOptions.trafficLightPosition = { x: 12, y: 19 };
+    // Electron's macOS traffic-light image renders slightly below its nominal
+    // 14px bounds. Place it 1px above geometric center in the 58px workbench
+    // topbar so its visible center aligns with the brand mark and wordmark.
+    windowOptions.trafficLightPosition = { x: 12, y: 21 };
   }
   mainWindow = new BrowserWindow(windowOptions);
 

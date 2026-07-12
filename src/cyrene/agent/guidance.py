@@ -184,11 +184,15 @@ async def _insert_guidance_reply(
 ) -> None:
     from cyrene.agent.message import _ensure_message_identity
 
+    from datetime import datetime, timezone
+
     assistant_entry: dict[str, Any] = {
         "role": "assistant",
         "content": content,
         "round_id": target_round_id,
         "in_reply_to_guidance_id": guidance_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "intermediate_reply": True,
     }
     if round_title:
         assistant_entry["round_title"] = round_title
@@ -236,6 +240,13 @@ async def _insert_guidance_reply(
         "round_id": target_round_id,
         "client_request_id": client_request_id,
         "guidance_id": guidance_id,
+        "message": {
+            "id": assistant_entry.get("message_id", ""),
+            "role": "assistant",
+            "content": assistant_entry["content"],
+            "createdAt": assistant_entry["created_at"],
+            "intermediate": True,
+        },
     })
 
 
@@ -248,11 +259,15 @@ async def _insert_guidance_ack(
 ) -> None:
     from cyrene.agent.message import _ensure_message_identity
 
+    from datetime import datetime, timezone
+
     assistant_entry: dict[str, Any] = {
         "role": "assistant",
         "content": content,
         "round_id": target_round_id,
         "guidance_ack_for_guidance_id": guidance_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "intermediate_reply": True,
     }
     if round_title:
         assistant_entry["round_title"] = round_title
@@ -288,6 +303,13 @@ async def _insert_guidance_ack(
         "client_request_id": client_request_id,
         "guidance_id": guidance_id,
         "ack_text": assistant_entry["content"],
+        "message": {
+            "id": assistant_entry.get("message_id", ""),
+            "role": "assistant",
+            "content": assistant_entry["content"],
+            "createdAt": assistant_entry["created_at"],
+            "intermediate": True,
+        },
     })
 
 
@@ -381,7 +403,6 @@ async def _wait_for_subagent_round(round_id: str, bot: Any, chat_id: int, db_pat
     if interrupted:
         return True, ""
 
-    await asyncio.sleep(2)
     return False, await _sub_collect(round_id=round_id)
 
 
