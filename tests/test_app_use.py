@@ -262,8 +262,35 @@ def test_electron_main_wires_app_rpc_and_quick_chat_origin():
 
 
 def test_platform_provider_scripts_exist():
+    import json
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1] / "electron"
     assert (root / "app-use-macos.jxa").is_file()
     assert (root / "app-use-windows.ps1").is_file()
+    package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    extra_resources = package["build"]["extraResources"]
+    assert {
+        "from": "app-use-macos.jxa",
+        "to": "app-use/app-use-macos.jxa",
+    } in extra_resources
+    assert {
+        "from": "app-use-windows.ps1",
+        "to": "app-use/app-use-windows.ps1",
+    } in extra_resources
+    # osascript and PowerShell cannot execute scripts from Electron's ASAR FS.
+    assert "app-use-macos.jxa" not in package["build"]["files"]
+    assert "app-use-windows.ps1" not in package["build"]["files"]
+
+
+def test_agent_never_bypasses_an_unavailable_app_use_provider():
+    from pathlib import Path
+
+    prompts = (Path(__file__).resolve().parents[1] / "src" / "cyrene" / "agent" / "prompts.py").read_text(
+        encoding="utf-8"
+    )
+    rule = (
+        "never bypass it with Bash, osascript, PowerShell, direct file edits, "
+        "or another tool that imitates the requested App Use action"
+    )
+    assert prompts.count(rule) == 2

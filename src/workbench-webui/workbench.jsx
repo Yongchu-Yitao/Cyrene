@@ -5237,6 +5237,21 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
   function onFilePick(event) {
     addFiles(event.target.files);
   }
+  function onPaste(event) {
+    if (running || controller.busy) return;
+    var clipboard = event && (event.clipboardData || (event.nativeEvent && event.nativeEvent.clipboardData));
+    if (!clipboard) return;
+    var files = Array.prototype.slice.call(clipboard.files || []).filter(function (file) { return !!file; });
+    // Some WebViews expose pasted files only through DataTransferItemList.
+    if (!files.length) {
+      files = Array.prototype.slice.call(clipboard.items || []).map(function (item) {
+        return item && item.kind === "file" ? item.getAsFile() : null;
+      }).filter(function (file) { return !!file; });
+    }
+    if (!files.length) return; // Preserve the browser's normal text paste.
+    event.preventDefault();
+    addFiles(files);
+  }
   useWorkbenchEffect(function () {
     function onDroppedFiles(event) {
       var files = event && event.detail && event.detail.files;
@@ -5305,6 +5320,7 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
           value={draft}
           onChange={function (event) { setDraft(event.target.value); syncHeight(); }}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           placeholder={composerPlaceholder(status)}
           rows={2}
           disabled={disabled}

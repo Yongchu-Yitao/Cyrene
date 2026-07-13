@@ -1,7 +1,55 @@
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const test = require('node:test');
 
-const { AppUseManager, CAPABILITIES, SAFARI_CAPABILITIES } = require('./app-use');
+const {
+  AppUseManager,
+  CAPABILITIES,
+  resolveProviderScriptPath,
+  SAFARI_CAPABILITIES,
+} = require('./app-use');
+
+test('packaged provider resolves from external resources instead of app.asar', () => {
+  const resourcesPath = path.join('/Applications', 'Cyrene.app', 'Contents', 'Resources');
+  const expected = path.join(resourcesPath, 'app-use', 'app-use-macos.jxa');
+  const resolved = resolveProviderScriptPath({
+    platform: 'darwin',
+    baseDir: path.join(resourcesPath, 'app.asar'),
+    resourcesPath,
+    existsSync: (candidate) => candidate === expected || candidate.endsWith('app.asar/app-use-macos.jxa'),
+  });
+  assert.equal(resolved, expected);
+  assert.equal(resolved.includes('app.asar'), false);
+});
+
+test('Windows packaged provider uses the same external resource layout', () => {
+  const resourcesPath = path.join('C:', 'Cyrene', 'resources');
+  const expected = path.join(resourcesPath, 'app-use', 'app-use-windows.ps1');
+  assert.equal(resolveProviderScriptPath({
+    platform: 'win32',
+    baseDir: path.join(resourcesPath, 'app.asar'),
+    resourcesPath,
+    existsSync: (candidate) => candidate === expected,
+  }), expected);
+});
+
+test('missing provider returns a non-retryable actionable error before launching a command', () => {
+  assert.throws(
+    () => resolveProviderScriptPath({
+      platform: 'darwin',
+      baseDir: '/Applications/Cyrene.app/Contents/Resources/app.asar',
+      resourcesPath: '/Applications/Cyrene.app/Contents/Resources',
+      existsSync: () => false,
+    }),
+    (error) => {
+      assert.equal(error.code, 'provider_unavailable');
+      assert.equal(error.extra.retryable, false);
+      assert.match(error.extra.remediation, /rebuild or reinstall/i);
+      assert.match(error.extra.remediation, /do not substitute shell automation/i);
+      return true;
+    },
+  );
+});
 
 class FakeProvider {
   constructor() {

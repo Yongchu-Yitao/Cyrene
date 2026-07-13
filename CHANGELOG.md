@@ -6,6 +6,8 @@
 
 ### App Use 桌面控制
 
+- 修复 0.6.7 安装包中的 App Use provider 无法启动：macOS JXA 与 Windows PowerShell 脚本改由 electron-builder `extraResources` 放到真实文件系统，运行时优先从 `Resources/app-use/` 解析，不再把 `app.asar` 虚拟路径交给外部解释器。
+- provider 资源缺失时改为返回不可重试的 `provider_unavailable` 结构化错误及明确的更新/重装建议；Agent 不再用 Bash、osascript、PowerShell 或直接编辑文件绕过用户要求的 App Use 操作。
 - macOS 和 Windows 新增窗口内坐标操作：单击、双击、右键、悬停、拖拽、滑动和定点滚动；默认使用连接窗口的逻辑坐标，并校验所有目标点均位于窗口边界内，也支持显式屏幕坐标。
 - macOS 通过 Quartz `CGEvent`、Windows 通过 `SendInput` 注入真实鼠标事件，支持移动时长、双击间隔、滚轮方向与幅度，并回报实际指针位置和可验证状态。
 - 新增原子 `key_sequence`，可在一次前台会话内组合快捷键、文本输入、单键和暂停，避免多次调用之间焦点丢失。
@@ -16,6 +18,7 @@
 
 ### Workbench 聊天体验
 
+- 主 Workbench 任务输入框与 Workbench Chat/Quick Chat 输入框支持直接粘贴剪贴板中的文件或图片作为附件；兼容仅通过 `DataTransferItemList` 暴露文件的 WebView，并保持普通文本粘贴的浏览器默认行为。
 - 新用户消息在请求发出时立即以 optimistic 状态插入消息流，确保它显示在实时思考与工具轨迹之前；服务端确认后原位替换为持久化消息，失败时正确回滚。
 - Quick Chat 与主 Workbench Chat 共用确认语义，只有服务端接受消息后才通知主窗口，减少重复消息和跨窗口顺序错乱。
 - 运行中的用户指导同样即时显示并唤醒 Agent，持久化完成后返回确认；失败时移除临时消息，同时取消前端超时限制，避免长任务期间指导请求被过早判定失败。
@@ -32,6 +35,8 @@
 
 ### 测试
 
+- 新增打包资源路径回归测试，覆盖 macOS/Windows 外置 provider 解析、拒绝 `app.asar` 脚本路径、资源缺失诊断和 Agent 禁止 shell 回退规则。
+- 新增 Workbench 两类输入框的剪贴板文件粘贴回归测试，覆盖 `clipboard.files`、`clipboard.items` 回退、普通文本保留与附件上传入口。
 - 新增轻量项目查询和聊天创建性能回归测试，确保请求不会退回完整项目修复路径。
 - 新增 Workbench optimistic 消息排序、附件保留、服务端确认、运行中指导、完成轨迹状态和新聊天免重复拉取测试。
 - 新增收件箱在指导持久化阻塞时仍可立即唤醒 Agent 的并发回归测试，并覆盖事件去重与确认时序。

@@ -1635,3 +1635,18 @@ def test_packaged_electron_preserves_explicit_runtime_path_overrides():
     assert "process.env.CYRENE_USER_DATA_DIR || getCyreneUserDataDir()" in source
     assert "process.env.CYRENE_CACHE_DIR || getCyreneCacheDir()" in source
     assert "process.env.CYRENE_TEMP_DIR || getCyreneTempDir()" in source
+
+
+def test_workbench_composers_upload_files_pasted_from_clipboard():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    task = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+
+    for source in (chat, task):
+        assert "onPaste={onPaste}" in source
+        assert "clipboard.files" in source
+        assert "clipboard.items" in source
+        assert 'item.kind === "file" ? item.getAsFile() : null' in source
+        assert "if (!files.length) return; // Preserve the browser's normal text paste." in source
+        assert "event.preventDefault();" in source
+        assert "addFiles(files);" in source

@@ -47,6 +47,14 @@
       {
         "from": "../build/tray-mac@2x.png",
         "to": "build/tray-mac@2x.png"
+      },
+      {
+        "from": "app-use-macos.jxa",
+        "to": "app-use/app-use-macos.jxa"
+      },
+      {
+        "from": "app-use-windows.ps1",
+        "to": "app-use/app-use-windows.ps1"
       }
     ],
     "mac": {
@@ -89,8 +97,6 @@
       "main.js",
       "preload.js",
       "app-use.js",
-      "app-use-macos.jxa",
-      "app-use-windows.ps1",
       "package.json"
     ]
   },

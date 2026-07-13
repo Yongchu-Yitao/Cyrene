@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 
@@ -136,24 +137,74 @@ function runCommand(command, args, { timeout = 15000, maxBuffer = 12 * 1024 * 10
   });
 }
 
+const PROVIDER_SCRIPT_NAMES = Object.freeze({
+  darwin: 'app-use-macos.jxa',
+  win32: 'app-use-windows.ps1',
+});
+
+function isAsarPath(candidate) {
+  return String(candidate || '').split(/[\\/]+/).some((part) => part.toLowerCase().endsWith('.asar'));
+}
+
+function resolveProviderScriptPath({
+  platform = process.platform,
+  baseDir = __dirname,
+  resourcesPath = process.resourcesPath || '',
+  existsSync = fs.existsSync,
+} = {}) {
+  const scriptName = PROVIDER_SCRIPT_NAMES[platform];
+  if (!scriptName) {
+    throw new AppUseError('unsupported_platform', `App Use is not implemented for ${platform}.`);
+  }
+
+  // External executables such as osascript and PowerShell cannot read a file
+  // through Electron's app.asar virtual filesystem. Packaged providers must
+  // therefore live in extraResources; source/dev runs keep using baseDir.
+  const candidates = [
+    resourcesPath ? path.join(resourcesPath, 'app-use', scriptName) : '',
+    baseDir ? path.join(baseDir, scriptName) : '',
+  ].filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
+  const scriptPath = candidates.find((candidate) => !isAsarPath(candidate) && existsSync(candidate));
+  if (scriptPath) return scriptPath;
+
+  throw new AppUseError(
+    'provider_unavailable',
+    `The ${platform} App Use provider is missing from this Cyrene installation. Update or reinstall Cyrene before retrying App Use.`,
+    {
+      retryable: false,
+      remediation: 'Rebuild or reinstall Cyrene with the App Use provider resources. Do not substitute shell automation for the requested App Use action.',
+      expected_paths: candidates,
+    },
+  );
+}
+
 class CommandPlatformProvider {
-  constructor({ platform = process.platform, baseDir = __dirname } = {}) {
+  constructor({
+    platform = process.platform,
+    baseDir = __dirname,
+    resourcesPath = process.resourcesPath || '',
+    existsSync = fs.existsSync,
+  } = {}) {
     this.platform = platform;
     this.baseDir = baseDir;
+    this.resourcesPath = resourcesPath;
+    this.existsSync = existsSync;
   }
 
   async request(operation, payload = {}, timeout = 15000) {
     const request = { operation, ...payload };
     let result;
     if (this.platform === 'darwin') {
+      const scriptPath = resolveProviderScriptPath(this);
       result = await runCommand('osascript', [
-        '-l', 'JavaScript', path.join(this.baseDir, 'app-use-macos.jxa'), JSON.stringify(request),
+        '-l', 'JavaScript', scriptPath, JSON.stringify(request),
       ], { timeout });
     } else if (this.platform === 'win32') {
+      const scriptPath = resolveProviderScriptPath(this);
       const encoded = Buffer.from(JSON.stringify(request), 'utf8').toString('base64');
       result = await runCommand('powershell.exe', [
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', path.join(this.baseDir, 'app-use-windows.ps1'),
+        '-File', scriptPath,
         '-PayloadBase64', encoded,
       ], { timeout });
     } else {
@@ -692,5 +743,6 @@ module.exports = {
   capabilitiesForTarget,
   CommandPlatformProvider,
   MANIFEST_VERSION,
+  resolveProviderScriptPath,
   targetIdentity,
 };
