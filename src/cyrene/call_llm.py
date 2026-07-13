@@ -957,7 +957,14 @@ async def call_llm(
         resolved[0],
     )
     failed_primary_model = ""
-    if available and int(available[0].get("_configured_rank") or 0) > 0:
+    if any(
+        int(candidate.get("_configured_rank") or 0) == 0
+        for candidate in skipped_cooling
+    ):
+        # A configured primary skipped by the cooldown has a real, recent
+        # failure behind it. Merely promoting the last successful endpoint is
+        # affinity routing, not a failure and must not produce a fallback UI
+        # notice (or fallback telemetry).
         failed_primary_model = str(configured_primary.get("model") or "")
     fallback_notice_sent = False
     attempt_number = 0
@@ -1068,7 +1075,10 @@ async def call_llm(
                                     "request_ms": request_ms,
                                     "retry_backoff_ms": retry_backoff_ms,
                                     "total_call_ms": (_time.monotonic() - _t0) * 1000,
-                                    "fallback_used": int(candidate.get("_configured_rank") or 0) > 0,
+                                    "fallback_used": bool(
+                                        failed_primary_model
+                                        and int(candidate.get("_configured_rank") or 0) > 0
+                                    ),
                                     "client_pool_reused": client_pool_reused,
                                     "connection_pool_key": connection_pool_key,
                                     })
@@ -1112,7 +1122,10 @@ async def call_llm(
                                     "request_ms": request_ms,
                                     "retry_backoff_ms": retry_backoff_ms,
                                     "total_call_ms": (_time.monotonic() - _t0) * 1000,
-                                    "fallback_used": int(candidate.get("_configured_rank") or 0) > 0,
+                                    "fallback_used": bool(
+                                        failed_primary_model
+                                        and int(candidate.get("_configured_rank") or 0) > 0
+                                    ),
                                     "client_pool_reused": client_pool_reused,
                                     "connection_pool_key": connection_pool_key,
                                     })
@@ -1192,7 +1205,10 @@ async def call_llm(
                             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
                             "completion_tokens": completion_tokens,
                             "output_tokens_per_second": tokens_per_second,
-                            "fallback_used": int(candidate.get("_configured_rank") or 0) > 0,
+                            "fallback_used": bool(
+                                failed_primary_model
+                                and int(candidate.get("_configured_rank") or 0) > 0
+                            ),
                             "client_pool_reused": client_pool_reused,
                             "connection_pool_key": connection_pool_key,
                             })
@@ -1249,7 +1265,7 @@ async def call_llm(
                     failed_this_call.append(
                         f"{_candidate_label(candidate)}: {_format_httpx_error(candidate_error)}"
                     )
-                    if not failed_primary_model:
+                    if int(candidate.get("_configured_rank") or 0) == 0:
                         failed_primary_model = model
                     continue
 
@@ -1257,7 +1273,7 @@ async def call_llm(
                 last_error = exc
                 _set_candidate_cooldown(_candidate_key(candidate))
                 failed_this_call.append(f"{_candidate_label(candidate)}: {exc.__class__.__name__}: {exc}")
-                if not failed_primary_model:
+                if int(candidate.get("_configured_rank") or 0) == 0:
                     failed_primary_model = str(candidate.get("model") or "")
                 if model_type == "vision" and _looks_like_vision_capability_error(exc):
                     continue

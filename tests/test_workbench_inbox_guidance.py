@@ -3,6 +3,19 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import threading
+
+
+async def _wait_for_query(db_path, query, expected, *, timeout=1.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(query).fetchall()
+        if rows == expected:
+            return rows
+        if asyncio.get_running_loop().time() >= deadline:
+            return rows
+        await asyncio.sleep(0.01)
 
 
 async def test_tool_result_returns_through_session_inbox_while_guidance_is_retained(tmp_path):
@@ -29,15 +42,93 @@ async def test_tool_result_returns_through_session_inbox_while_guidance_is_retai
     assert [event["payload"]["text"] for event in retained] == ["先检查后端"]
     inbox.acknowledge(retained)
 
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT event_type, status, session_id, round_id FROM workbench_agent_inbox ORDER BY created_at"
-        ).fetchall()
-    assert rows == [
+    expected_rows = [
         ("guidance", "completed", "chat_1", "round_1"),
         ("tool_result", "completed", "chat_1", "round_1"),
     ]
+    rows = await _wait_for_query(
+        db_path,
+        "SELECT event_type, status, session_id, round_id "
+        "FROM workbench_agent_inbox ORDER BY created_at",
+        expected_rows,
+    )
+    assert rows == expected_rows
     assert guidance["event_id"].startswith("evt_")
+    await inbox.close()
+
+
+async def test_tool_result_is_delivered_when_persistence_fails(tmp_path, monkeypatch):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_persist_failure", str(tmp_path / "workbench.db"))
+    original_persist = inbox._persist
+
+    def fail_only_tool_results(event):
+        if event.get("type") == "tool_result":
+            return None
+        return original_persist(event)
+
+    monkeypatch.setattr(inbox, "_persist", fail_only_tool_results)
+
+    async def completed_tool() -> str:
+        return "completed before persistence failed"
+
+    inbox.submit_tool("call_persist_failure", "RecallMemory", completed_tool)
+    result = await asyncio.wait_for(
+        inbox.wait_for_tool_result("call_persist_failure"), timeout=1
+    )
+    assert result == "completed before persistence failed"
+    await inbox.close()
+
+
+async def test_tool_result_wakes_agent_before_blocked_persistence_finishes(
+    tmp_path, monkeypatch
+):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_blocked_persist", str(tmp_path / "workbench.db"))
+    original_persist = inbox._persist
+    persistence_started = threading.Event()
+    release_persistence = threading.Event()
+
+    def block_only_tool_results(event):
+        if event.get("type") == "tool_result":
+            persistence_started.set()
+            release_persistence.wait()
+        return original_persist(event)
+
+    monkeypatch.setattr(inbox, "_persist", block_only_tool_results)
+
+    async def completed_tool() -> str:
+        return "result delivered before SQLite"
+
+    inbox.submit_tool("call_blocked_persist", "RecallMemory", completed_tool)
+    try:
+        result = await asyncio.wait_for(
+            inbox.wait_for_tool_result("call_blocked_persist"), timeout=1
+        )
+        assert result == "result delivered before SQLite"
+        assert await asyncio.to_thread(persistence_started.wait, 1)
+        assert not release_persistence.is_set()
+    finally:
+        release_persistence.set()
+        await inbox.close()
+
+
+async def test_duplicate_durable_tool_result_is_still_delivered_in_memory(tmp_path, monkeypatch):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_duplicate_result", str(tmp_path / "workbench.db"))
+    monkeypatch.setattr(inbox, "_persist", lambda _event: False)
+    monkeypatch.setattr(inbox, "_existing_event_id", lambda _key: "existing_result")
+
+    async def completed_tool() -> str:
+        return "deliver duplicate"
+
+    inbox.submit_tool("call_duplicate", "ListSkills", completed_tool)
+    assert await asyncio.wait_for(
+        inbox.wait_for_tool_result("call_duplicate"), timeout=1
+    ) == "deliver duplicate"
     await inbox.close()
 
 
@@ -107,15 +198,17 @@ async def test_graceful_close_cancels_unconsumed_events_with_run_reason(tmp_path
 
     await inbox.close(termination_reason="user_interrupted")
 
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT event_type, status, run_id, batch_id, termination_reason "
-            "FROM workbench_agent_inbox ORDER BY created_at"
-        ).fetchall()
-    assert rows == [
+    expected_rows = [
         ("guidance", "cancelled", "run_close", "", "user_interrupted"),
         ("tool_result", "cancelled", "run_close", "batch_orphan", "user_interrupted"),
     ]
+    rows = await _wait_for_query(
+        db_path,
+        "SELECT event_type, status, run_id, batch_id, termination_reason "
+        "FROM workbench_agent_inbox ORDER BY created_at",
+        expected_rows,
+    )
+    assert rows == expected_rows
 
 
 async def test_tool_lifecycle_telemetry_records_batch_queue_and_durations(tmp_path):
@@ -135,13 +228,19 @@ async def test_tool_lifecycle_telemetry_records_batch_queue_and_durations(tmp_pa
     assert await inbox.wait_for_tool_result("call_trace") == "ok"
     await inbox.close(termination_reason="completed")
 
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT event_type, run_id, batch_id, tool_call_id, tool_name, "
-            "queue_length, duration_ms, termination_reason, tool_execution_ms, "
-            "result_wait_ms, result_queue_delay_ms, tool_queue_wait_ms, agent_wait_ms "
-            "FROM workbench_agent_run_events ORDER BY created_at, rowid"
-        ).fetchall()
+    query = (
+        "SELECT event_type, run_id, batch_id, tool_call_id, tool_name, "
+        "queue_length, duration_ms, termination_reason, tool_execution_ms, "
+        "result_wait_ms, result_queue_delay_ms, tool_queue_wait_ms, agent_wait_ms "
+        "FROM workbench_agent_run_events ORDER BY created_at, rowid"
+    )
+    deadline = asyncio.get_running_loop().time() + 1
+    while True:
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(query).fetchall()
+        if len(rows) >= 5 or asyncio.get_running_loop().time() >= deadline:
+            break
+        await asyncio.sleep(0.01)
     assert [row[0] for row in rows] == [
         "tool_submitted",
         "tool_started",
@@ -797,19 +896,28 @@ async def test_chat_run_interrupt_cleans_pending_inbox_with_run_id(tmp_path):
     assert manager.interrupt("chat_interrupt") is True
     await asyncio.wait_for(run.done.wait(), timeout=1)
 
-    with sqlite3.connect(db_path) as conn:
-        pending_rows = conn.execute(
-            "SELECT status, run_id, termination_reason FROM workbench_agent_inbox "
-            "ORDER BY created_at"
-        ).fetchall()
-        terminal = conn.execute(
-            "SELECT run_id, termination_reason FROM workbench_agent_run_events "
-            "WHERE event_type='run_terminated'"
-        ).fetchone()
-    assert pending_rows == [
+    expected_rows = [
         ("cancelled", run.run_id, "user_interrupted"),
         ("cancelled", run.run_id, "user_interrupted"),
     ]
+    deadline = asyncio.get_running_loop().time() + 1
+    while True:
+        with sqlite3.connect(db_path) as conn:
+            pending_rows = conn.execute(
+                "SELECT status, run_id, termination_reason FROM workbench_agent_inbox "
+                "ORDER BY created_at"
+            ).fetchall()
+            terminal = conn.execute(
+                "SELECT run_id, termination_reason FROM workbench_agent_run_events "
+                "WHERE event_type='run_terminated'"
+            ).fetchone()
+        if (
+            pending_rows == expected_rows
+            and terminal == (run.run_id, "user_interrupted")
+        ) or asyncio.get_running_loop().time() >= deadline:
+            break
+        await asyncio.sleep(0.01)
+    assert pending_rows == expected_rows
     assert terminal == (run.run_id, "user_interrupted")
 
 

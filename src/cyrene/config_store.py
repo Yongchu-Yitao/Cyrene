@@ -94,6 +94,7 @@ _DEFAULT_ENABLED_TOOLS: dict[str, bool] = {
     "ask_user": True, "PromptClaudeCode": True,
     "send_telegram": False, "query_round": True,
     "CheckClaudeCode": True, "StartClaudeCode": True,
+    "app_use": True,
 }
 
 _DEFAULT_SETTINGS: dict = {

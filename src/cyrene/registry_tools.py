@@ -61,6 +61,7 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.get_learned_skill",  # GetLearnedSkill
     "cyrene.tool_impl.run_learned_skill",  # RunLearnedSkill
     "cyrene.tool_impl.send_wechat_file",  # send_wechat_file
+    "cyrene.tool_impl.app_use",  # app_use
     "cyrene.tool_impl.browser_navigate",  # browser_navigate
     "cyrene.tool_impl.browser_snapshot",  # browser_snapshot
     "cyrene.tool_impl.browser_screenshot",  # browser_screenshot
@@ -105,6 +106,7 @@ _MAIN_ONLY_TOOLS = {
     "update_task_plan",
     "spawn_subagent",
     "query_round",
+    "app_use",
     "browser_navigate",
     "browser_snapshot",
     "browser_screenshot",
@@ -188,6 +190,7 @@ _RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
 for _browser_tool_name in _REQUIRES_ORDER_TOOLS:
     if _browser_tool_name.startswith("browser_"):
         _RESOURCE_KEY_TEMPLATES[_browser_tool_name] = ("browser:active-tab",)
+_RESOURCE_KEY_TEMPLATES["app_use"] = ("desktop:app-use",)
 
 _RESOURCE_PARALLEL_WRITES = {"Write", "Edit", "FormatCode", "CloseShell"}
 _RESOURCE_FIELD_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")

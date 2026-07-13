@@ -455,6 +455,57 @@ async def test_primary_failure_publishes_fallback_ui_event(monkeypatch):
     }]
 
 
+async def test_last_success_affinity_does_not_publish_fallback_ui_event(monkeypatch):
+    published = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"role": "assistant", "content": "direct"}}],
+                "usage": {},
+            }
+
+    class FakeClient:
+        async def post(self, endpoint, json=None, headers=None):
+            assert json["model"] == "backup"
+            return FakeResponse()
+
+    async def capture(**kwargs):
+        published.append(kwargs)
+
+    candidates = [
+        {
+            "id": "main", "model": "main", "base_url": "https://main/v1",
+            "api_key": "", "endpoints": ["https://main/v1/chat/completions"],
+        },
+        {
+            "id": "backup", "model": "backup", "base_url": "https://backup/v1",
+            "api_key": "", "endpoints": ["https://backup/v1/chat/completions"],
+        },
+    ]
+    cl._last_success_cache = {
+        "primary": {
+            "candidate_id": "backup", "model": "backup",
+            "base_url": "https://backup/v1",
+            "endpoint": "https://backup/v1/chat/completions",
+        }
+    }
+    monkeypatch.setattr(cl, "_resolve_candidates", lambda _model_type: candidates)
+    monkeypatch.setattr(cl, "_get_http_client", lambda _timeout: (FakeClient(), "test", True))
+    monkeypatch.setattr(cl, "_publish_model_fallback_event", capture)
+
+    result = await cl.call_llm(
+        [{"role": "user", "content": "hi"}],
+        publish_events=False, record_usage=False, session_id="chat_1", round_id="round_1",
+    )
+
+    assert result["content"] == "direct"
+    assert result["model"] == "backup"
+    assert published == []
+
+
 async def test_actionable_llm_latency_event_is_persisted(tmp_path):
     from cyrene.db import record_llm_latency
 
