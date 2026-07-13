@@ -448,6 +448,9 @@ def test_tool_result_is_error_detection():
     assert _tool_result_is_error("Error: nope")
     assert _tool_result_is_error("Tool failed: boom")
     assert _tool_result_is_error("Failed to connect")
+    assert _tool_result_is_error('{"status":"error","type":"provider_error"}')
+    assert _tool_result_is_error('{"status":"uncertain","summary":"not verified"}')
+    assert not _tool_result_is_error('{"status":"success"}')
     assert not _tool_result_is_error('{"exit_code": 0}')
     assert not _tool_result_is_error('{"exit_code": 1, "stderr": "x"}')  # non-zero bash exit is not flagged
     assert not _tool_result_is_error("")

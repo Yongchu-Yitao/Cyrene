@@ -11398,10 +11398,18 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* ---- composer ---- */
 
 /* Inline permission / clarification prompt at the bottom of the chat thread. */
-.wbc-question {
+.wbc-question-group {
   align-self: stretch;
   max-width: 760px;
   margin: 4px auto 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.wbc-question-group > .wbc-trace {
+  max-width: none;
+}
+.wbc-question {
   padding: 14px 16px;
   background: var(--wb-main-bg, #fff);
   border: 1px solid var(--wb-line);

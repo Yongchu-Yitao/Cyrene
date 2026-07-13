@@ -1,6 +1,6 @@
 {
   "name": "cyrene",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "license": "Apache-2.0",
   "description": "Cyrene AI Agent — self-evolving AI companion",
   "author": {
@@ -88,6 +88,9 @@
     "files": [
       "main.js",
       "preload.js",
+      "app-use.js",
+      "app-use-macos.jxa",
+      "app-use-windows.ps1",
       "package.json"
     ]
   },

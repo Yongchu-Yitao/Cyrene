@@ -1,0 +1,407 @@
+ObjC.import('AppKit');
+
+function safe(fn, fallback) {
+  try {
+    const value = fn();
+    return value === undefined || value === null ? fallback : value;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function fail(type, message) {
+  const error = new Error(message);
+  error.errorType = type;
+  throw error;
+}
+
+function cleanValue(value) {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (Array.isArray(value)) return value.slice(0, 20).map(cleanValue);
+  return safe(() => String(value), '');
+}
+
+function systemEvents() {
+  const app = Application('System Events');
+  app.includeStandardAdditions = true;
+  return app;
+}
+
+function visibleProcesses(se) {
+  return se.applicationProcesses().filter((proc) => !Boolean(safe(() => proc.backgroundOnly(), true)));
+}
+
+function windowIdentifier(win, index) {
+  const nativeId = safe(() => win.id(), '');
+  return nativeId === '' ? `index:${index}` : String(nativeId);
+}
+
+function windowBounds(win) {
+  const position = safe(() => win.position(), null);
+  const size = safe(() => win.size(), null);
+  if (!Array.isArray(position) || !Array.isArray(size)) return null;
+  return {
+    x: Number(position[0] || 0),
+    y: Number(position[1] || 0),
+    width: Number(size[0] || 0),
+    height: Number(size[1] || 0),
+  };
+}
+
+function listTargets(payload) {
+  const se = systemEvents();
+  const frontmostPid = Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier);
+  const excludePid = Number(payload.excludePid || 0);
+  const excludedApplicationIds = new Set((payload.excludeApplicationIds || []).map((value) => String(value).toLowerCase()));
+  const excludedAppNames = new Set((payload.excludeAppNames || []).map((value) => String(value).toLowerCase()));
+  const targets = [];
+  for (const proc of visibleProcesses(se)) {
+    const pid = Number(safe(() => proc.unixId(), 0));
+    if (!pid || pid === excludePid) continue;
+    const appName = String(safe(() => proc.name(), ''));
+    const bundleId = String(safe(() => proc.bundleIdentifier(), ''));
+    if (excludedApplicationIds.has(bundleId.toLowerCase()) || excludedAppNames.has(appName.toLowerCase())) continue;
+    const windows = proc.windows();
+    for (let index = 0; index < windows.length; index += 1) {
+      const win = windows[index];
+      const title = String(safe(() => win.name(), ''));
+      const role = String(safe(() => win.role(), ''));
+      if (role && role !== 'AXWindow' && role !== 'window') continue;
+      targets.push({
+        platform: 'darwin',
+        pid,
+        processStartTime: '',
+        appName,
+        applicationId: bundleId,
+        windowId: windowIdentifier(win, index),
+        windowIndex: index,
+        windowTitle: title,
+        foreground: pid === frontmostPid,
+        minimized: Boolean(safe(() => win.attributes.byName('AXMinimized').value(), false)),
+        bounds: windowBounds(win),
+      });
+    }
+  }
+  return { ok: true, targets };
+}
+
+function resolveTarget(target) {
+  const se = systemEvents();
+  const pid = Number(target.pid || 0);
+  const processes = visibleProcesses(se);
+  const proc = processes.find((candidate) => Number(safe(() => candidate.unixId(), 0)) === pid);
+  if (!proc) throw new Error('Target application process is no longer available.');
+  const windows = proc.windows();
+  let windowIndex = Number.isInteger(Number(target.windowIndex)) ? Number(target.windowIndex) : -1;
+  let win = null;
+  for (let index = 0; index < windows.length; index += 1) {
+    if (windowIdentifier(windows[index], index) === String(target.windowId || '')) {
+      win = windows[index];
+      windowIndex = index;
+      break;
+    }
+  }
+  if (!win && windowIndex >= 0 && windowIndex < windows.length) win = windows[windowIndex];
+  if (!win) throw new Error('Target application window is no longer available.');
+  return { se, proc, win, windowIndex };
+}
+
+function directChildren(element) {
+  return safe(() => element.uiElements(), []);
+}
+
+function resolveElement(win, nativeRef) {
+  const parts = String(nativeRef || '').split('/').filter(Boolean);
+  let element = win;
+  for (const part of parts.slice(1)) {
+    const match = /^e(\d+)$/.exec(part);
+    if (!match) throw new Error(`Invalid native element path: ${nativeRef}`);
+    const children = directChildren(element);
+    const index = Number(match[1]);
+    if (index < 0 || index >= children.length) throw new Error(`Element path is stale: ${nativeRef}`);
+    element = children[index];
+  }
+  return element;
+}
+
+function actionNames(element) {
+  return safe(
+    () => element.actions().map((action) => String(safe(() => action.name(), ''))).filter(Boolean),
+    [],
+  );
+}
+
+function semanticActions(nativeActions, role, settable) {
+  const actions = [];
+  if (nativeActions.some((name) => ['AXPress', 'AXConfirm', 'AXPick'].includes(name))) actions.push('press');
+  if (
+    /ScrollArea|ScrollBar|Slider|Stepper/i.test(role)
+    && (nativeActions.includes('AXIncrement') || nativeActions.includes('AXDecrement'))
+  ) actions.push('scroll');
+  if (/CheckBox|Switch|DisclosureTriangle/i.test(role) && actions.includes('press')) actions.push('toggle');
+  if (/RadioButton|Row|MenuItem|Tab|ListItem/i.test(role) && actions.includes('press')) actions.push('select');
+  if (settable && /TextField|TextArea|ComboBox|SearchField/i.test(role)) actions.push('set_value');
+  return [...new Set(actions)];
+}
+
+function nodeFor(element, nativeRef) {
+  // A single properties() Apple Event is dramatically faster for Safari than
+  // requesting every accessibility property independently.
+  const properties = safe(() => element.properties(), {});
+  const role = String(properties.role || '');
+  const nativeActions = actionNames(element);
+  const settable = /TextField|TextArea|ComboBox|SearchField/i.test(role)
+    && Boolean(safe(() => element.attributes.byName('AXValue').settable(), false));
+  const position = properties.position || null;
+  const size = properties.size || null;
+  let bounds = null;
+  if (Array.isArray(position) && Array.isArray(size)) {
+    bounds = {
+      x: Number(position[0] || 0), y: Number(position[1] || 0),
+      width: Number(size[0] || 0), height: Number(size[1] || 0),
+    };
+  }
+  return {
+    nativeRef,
+    role: role.replace(/^AX/, ''),
+    subrole: String(properties.subrole || '').replace(/^AX/, ''),
+    name: String(properties.name || properties.title || ''),
+    description: String(properties.accessibilityDescription || properties.description || properties.roleDescription || ''),
+    help: String(properties.help || ''),
+    value: cleanValue(properties.value),
+    enabled: properties.enabled === null || properties.enabled === undefined ? true : Boolean(properties.enabled),
+    focused: Boolean(properties.focused),
+    selected: Boolean(properties.selected),
+    bounds,
+    actions: semanticActions(nativeActions, role, settable),
+    nativeActions,
+  };
+}
+
+function safariTab(target) {
+  if (String(target.applicationId || '') !== 'com.apple.Safari') fail('unsupported_action', 'This browser capability is only available for Safari.');
+  const safari = Application('Safari');
+  if (!safari.running()) fail('stale_session', 'Safari is no longer running.');
+  const windows = safari.windows();
+  const index = Math.max(0, Number(target.windowIndex || 0));
+  if (index >= windows.length) fail('stale_session', 'The connected Safari window is no longer available.');
+  return { safari, window: windows[index], tab: windows[index].currentTab };
+}
+
+function safariState(target) {
+  const resolved = safariTab(target);
+  return {
+    url: String(safe(() => resolved.tab.url(), '')),
+    title: String(safe(() => resolved.tab.name(), '')),
+    loading: Boolean(safe(() => resolved.tab.loading(), false)),
+    foreground: Boolean(safe(() => resolved.safari.frontmost(), false)),
+    windowIndex: Math.max(0, Number(target.windowIndex || 0)),
+  };
+}
+
+function normalizeUrl(value) {
+  const url = String(value || '').trim();
+  if (!url) fail('invalid_arguments', 'navigate requires a non-empty URL.');
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) return `https://${url}`;
+  return url;
+}
+
+function performSafari(target, capability, parameters) {
+  const resolved = safariTab(target);
+  if (capability === 'browser_state') {
+    const state = safariState(target);
+    return { ok: true, verified: true, skipSnapshot: true, summary: `Safari is at ${state.url || '(empty URL)'}.`, verification: state, diagnostics: { method: 'Safari Apple Events', backgroundSafe: true }, nextValidActions: ['call:navigate', 'call:reload', 'call:visual_describe', 'disconnect'] };
+  }
+  if (capability === 'navigate') {
+    const requestedUrl = normalizeUrl(parameters.url);
+    resolved.tab.url = requestedUrl;
+    delaySeconds(0.15);
+    const state = safariState(target);
+    const accepted = state.url === requestedUrl || state.url.startsWith(`${requestedUrl}/`) || requestedUrl.startsWith(`${state.url}/`);
+    if (!accepted) fail('verification_failed', `Safari did not accept the requested URL. Current URL: ${state.url || '(empty)'}.`);
+    return { ok: true, verified: true, skipSnapshot: true, summary: `Navigated Safari to ${requestedUrl}.`, verification: state, diagnostics: { method: 'Safari currentTab.url', backgroundSafe: true, requestedUrl }, nextValidActions: ['call:browser_state', 'call:visual_describe', 'call:reload', 'disconnect'] };
+  }
+  if (capability === 'reload') resolved.tab.url = String(safe(() => resolved.tab.url(), ''));
+  else fail('unsupported_action', `Unsupported Safari capability: ${capability}`);
+  delaySeconds(0.15);
+  return { ok: true, verified: true, skipSnapshot: true, summary: `Performed Safari ${capability}.`, verification: safariState(target), diagnostics: { method: 'Safari Apple Events', backgroundSafe: true }, nextValidActions: ['call:browser_state', 'call:visual_describe', 'call:navigate', 'disconnect'] };
+}
+
+function delaySeconds(seconds) {
+  $.NSThread.sleepForTimeInterval(Number(seconds || 0));
+}
+
+function snapshotFrom(root, rootPath, options) {
+  const maxNodes = Math.max(1, Math.min(200, Number(options.maxNodes || 80)));
+  const maxDepth = Math.max(1, Math.min(16, Number(options.maxDepth || 8)));
+  const nodes = [];
+  let truncated = false;
+  function visit(element, nativeRef, depth) {
+    if (nodes.length >= maxNodes) {
+      truncated = true;
+      return;
+    }
+    nodes.push(nodeFor(element, nativeRef));
+    if (depth >= maxDepth) return;
+    const children = directChildren(element);
+    for (let index = 0; index < children.length; index += 1) {
+      visit(children[index], `${nativeRef}/e${index}`, depth + 1);
+      if (nodes.length >= maxNodes) break;
+    }
+  }
+  visit(root, rootPath, 0);
+  return { ok: true, nodes, truncated };
+}
+
+function snapshot(payload, inspectOnly) {
+  const resolved = resolveTarget(payload.target || {});
+  const options = payload.options || {};
+  const rootPath = String(payload.nativeRef || options.nativeRef || `w${resolved.windowIndex}`);
+  const root = rootPath === `w${resolved.windowIndex}` ? resolved.win : resolveElement(resolved.win, rootPath);
+  if (inspectOnly) {
+    options.maxNodes = Number(options.maxNodes || 40);
+    options.maxDepth = Number(options.maxDepth || 3);
+  }
+  return snapshotFrom(root, rootPath, options);
+}
+
+function performNativeAction(element, preferred) {
+  const actions = safe(() => element.actions(), []);
+  for (const actionName of preferred) {
+    const action = actions.find((candidate) => String(safe(() => candidate.name(), '')) === actionName);
+    if (action) {
+      action.perform();
+      return actionName;
+    }
+  }
+  fail('unsupported_action', `Element does not support any of: ${preferred.join(', ')}.`);
+}
+
+function editableInfo(element) {
+  const role = String(safe(() => element.role(), ''));
+  const settable = Boolean(safe(() => element.attributes.byName('AXValue').settable(), false));
+  return { role, settable, editable: settable && /TextField|TextArea|ComboBox|SearchField/i.test(role) };
+}
+
+function valuesEqual(left, right) {
+  return String(cleanValue(left)) === String(cleanValue(right));
+}
+
+function focusTarget(target) {
+  const resolved = resolveTarget(target || {});
+  resolved.proc.frontmost = true;
+  safe(() => performNativeAction(resolved.win, ['AXRaise']), null);
+  return { ok: true, summary: `Focused ${safe(() => resolved.proc.name(), 'application')}.` };
+}
+
+function keyInfo(keys) {
+  const lowered = (Array.isArray(keys) ? keys : []).map((key) => String(key).toLowerCase());
+  const using = [];
+  if (lowered.includes('command') || lowered.includes('meta')) using.push('command down');
+  if (lowered.includes('control') || lowered.includes('ctrl')) using.push('control down');
+  if (lowered.includes('option') || lowered.includes('alt')) using.push('option down');
+  if (lowered.includes('shift')) using.push('shift down');
+  const modifiers = new Set(['command', 'meta', 'control', 'ctrl', 'option', 'alt', 'shift']);
+  const nonModifiers = lowered.filter((item) => !modifiers.has(item));
+  if (nonModifiers.length !== 1) fail('invalid_arguments', 'key_chord requires exactly one non-modifier key. Use an app-native capability for multi-step text or navigation.');
+  const key = nonModifiers[0];
+  return { key, using };
+}
+
+function sendKeyChord(se, keys) {
+  const info = keyInfo(keys);
+  const keyCodes = {
+    enter: 36, return: 36, tab: 48, space: 49, backspace: 51, delete: 51,
+    escape: 53, esc: 53, left: 123, right: 124, down: 125, up: 126,
+  };
+  if (Object.prototype.hasOwnProperty.call(keyCodes, info.key)) {
+    se.keyCode(keyCodes[info.key], info.using.length ? { using: info.using } : {});
+  } else if (info.key) {
+    se.keystroke(info.key, info.using.length ? { using: info.using } : {});
+  } else {
+    throw new Error('No non-modifier key was provided.');
+  }
+}
+
+function perform(payload) {
+  const capability = String(payload.capability || '');
+  const parameters = payload.parameters || {};
+  if (['browser_state', 'navigate', 'reload'].includes(capability)) {
+    return performSafari(payload.target || {}, capability, parameters);
+  }
+  const resolved = resolveTarget(payload.target || {});
+  const element = payload.nativeRef ? resolveElement(resolved.win, payload.nativeRef) : resolved.win;
+  if (capability === 'press' || capability === 'select') {
+    const action = performNativeAction(element, ['AXPress', 'AXConfirm', 'AXPick']);
+    return { ok: true, verified: true, summary: `Performed ${action}.`, diagnostics: { nativeAction: action } };
+  }
+  if (capability === 'toggle') {
+    const action = performNativeAction(element, ['AXPress', 'AXToggle']);
+    return { ok: true, verified: true, summary: `Performed ${action}.`, diagnostics: { nativeAction: action } };
+  }
+  if (capability === 'set_value') {
+    const info = editableInfo(element);
+    if (!info.editable) fail('unsupported_action', `Element role ${info.role || '(unknown)'} is not a writable text control.`);
+    const before = cleanValue(safe(() => element.value(), ''));
+    const expected = parameters.value === undefined ? '' : parameters.value;
+    element.value = expected;
+    const after = cleanValue(safe(() => element.value(), ''));
+    if (!valuesEqual(after, expected)) fail('verification_failed', 'The accessibility value did not change to the requested value.');
+    return { ok: true, verified: true, summary: 'Set and verified the element value.', diagnostics: { method: 'AXValue', role: info.role, before, after } };
+  }
+  if (capability === 'type_text') {
+    const info = editableInfo(element);
+    if (!info.editable) fail('unsupported_action', `Element role ${info.role || '(unknown)'} is not a writable text control; keyboard injection into a WebArea or Group is unsupported.`);
+    const before = String(cleanValue(safe(() => element.value(), '')));
+    const text = String(parameters.text || '');
+    const expected = parameters.replace === true ? text : `${before}${text}`;
+    element.value = expected;
+    const after = String(cleanValue(safe(() => element.value(), '')));
+    if (after !== expected) fail('verification_failed', 'Text input could not be verified through the accessibility value.');
+    return { ok: true, verified: true, summary: 'Wrote and verified text through the accessibility value.', diagnostics: { method: 'AXValue', role: info.role, before, after, backgroundSafe: true } };
+  }
+  if (capability === 'key_chord') {
+    sendKeyChord(resolved.se, parameters.keys || []);
+    return { ok: true, verified: false, uncertain: true, summary: 'Sent the keyboard shortcut, but its application effect could not be verified.', diagnostics: { method: 'System Events', foregroundRequired: true } };
+  }
+  if (capability === 'scroll') {
+    const direction = String(parameters.direction || 'down').toLowerCase();
+    const amount = Math.max(1, Math.min(20, Number(parameters.amount || 3)));
+    const actionName = direction === 'up' || direction === 'left' ? 'AXDecrement' : 'AXIncrement';
+    const actions = safe(() => element.actions(), []);
+    const action = actions.find((candidate) => String(safe(() => candidate.name(), '')) === actionName);
+    if (action) {
+      for (let index = 0; index < amount; index += 1) action.perform();
+    } else {
+      const code = direction === 'up' ? 126 : direction === 'left' ? 123 : direction === 'right' ? 124 : 125;
+      for (let index = 0; index < amount; index += 1) resolved.se.keyCode(code);
+    }
+    return { ok: true, summary: `Scrolled ${direction}.` };
+  }
+  throw new Error(`Unsupported macOS capability: ${capability}`);
+}
+
+function dispatch(payload) {
+  switch (String(payload.operation || '')) {
+    case 'list_targets': return listTargets(payload);
+    case 'snapshot': return snapshot(payload, false);
+    case 'inspect': return snapshot(payload, true);
+    case 'perform': return perform(payload);
+    case 'focus': return focusTarget(payload.target || {});
+    default: return { ok: false, errorType: 'invalid_arguments', error: `Unknown operation: ${payload.operation}` };
+  }
+}
+
+function run(argv) {
+  try {
+    const payload = JSON.parse(String((argv && argv[0]) || '{}'));
+    return JSON.stringify(dispatch(payload));
+  } catch (error) {
+    return JSON.stringify({
+      ok: false,
+      errorType: String(error.errorType || (/not authorized|assistive|accessibility|辅助访问|-25211/i.test(String(error)) ? 'permission_required' : 'provider_error')),
+      error: String((error && error.message) || error),
+    });
+  }
+}

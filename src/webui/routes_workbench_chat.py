@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import shutil
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1048,6 +1049,12 @@ def _tool_result_is_error(result: str) -> bool:
     text = str(result or "").strip().lower()
     if not text:
         return False
+    try:
+        parsed = json.loads(str(result or ""))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        return str(parsed.get("status") or "").strip().lower() in {"error", "failed", "failure", "uncertain"}
     return text.startswith(("error", "tool failed", "failed to", "failed:"))
 
 
@@ -1694,22 +1701,29 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
 
     @router.get("/api/workbench/chats")
     async def api_workbench_list_chats(project: str = ""):
-        payload = _read_chats_store()
+        started = time.monotonic()
+        # SQLite busy waits and JSON decoding are synchronous. Keep them off the
+        # uvicorn event loop so one contended read cannot freeze every Workbench
+        # request (the client otherwise reaches its 30s timeout as a group).
+        payload = await asyncio.to_thread(_read_chats_store)
         if _prune_orphaned_fork_metadata(payload):
-            _write_chats_store(payload)
-        data_key = _project_data_key(project) if project else ""
+            await asyncio.to_thread(_write_chats_store, payload)
+        data_key = await asyncio.to_thread(_project_data_key, project) if project else ""
         chats = [
             _public_chat_light(chat)
             for chat in payload.get("chats", [])
             if not project or str(chat.get("projectId") or "") == project
         ]
         if project and data_key == "default":
-            legacy = _legacy_chats(project)
+            legacy = await asyncio.to_thread(_legacy_chats, project)
             legacy.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
             chats.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
             chats = chats + legacy
         else:
             chats.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
+        elapsed_ms = (time.monotonic() - started) * 1000
+        if elapsed_ms >= 1000:
+            logger.warning("Slow Workbench chat list load [project=%s duration_ms=%.1f]", project, elapsed_ms)
         return {"chats": chats}
 
     @router.get("/api/workbench/quick-chat/targets")
@@ -1797,20 +1811,32 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
 
     @router.get("/api/workbench/chats/{chat_id}")
     async def api_workbench_get_chat(chat_id: str):
+        started = time.monotonic()
         if chat_id.startswith("legacy:"):
             _prefix, project_id, _session_id = (chat_id.split(":", 2) + ["", ""])[:3]
-            if not project_id or _project_data_key(project_id) != "default":
+            data_key = await asyncio.to_thread(_project_data_key, project_id) if project_id else ""
+            if not project_id or data_key != "default":
                 return JSONResponse({"error": "chat not found"}, status_code=404)
-            legacy = _legacy_chats(project_id, full_id=chat_id)
+            legacy = await asyncio.to_thread(_legacy_chats, project_id, full_id=chat_id)
             if not legacy:
                 return JSONResponse({"error": "chat not found"}, status_code=404)
+            elapsed_ms = (time.monotonic() - started) * 1000
+            if elapsed_ms >= 1000:
+                logger.warning(
+                    "Slow legacy Workbench chat detail load [chat_id=%s duration_ms=%.1f]",
+                    chat_id,
+                    elapsed_ms,
+                )
             return {"chat": legacy[0]}
-        payload = _read_chats_store()
+        payload = await asyncio.to_thread(_read_chats_store)
         if _prune_orphaned_fork_metadata(payload):
-            _write_chats_store(payload)
+            await asyncio.to_thread(_write_chats_store, payload)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        elapsed_ms = (time.monotonic() - started) * 1000
+        if elapsed_ms >= 1000:
+            logger.warning("Slow Workbench chat detail load [chat_id=%s duration_ms=%.1f]", chat_id, elapsed_ms)
         return {"chat": _public_chat_full(chat)}
 
     @router.get("/api/workbench/chats/{chat_id}/subagents")

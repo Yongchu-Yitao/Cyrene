@@ -38,17 +38,17 @@ var WorkbenchChatModel = (function () {
     }).then(function (payload) { return payload.chat; });
   }
 
-  function getChat(chatId) {
-    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId))
+  function getChat(chatId, options) {
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId), options)
       .then(function (payload) { return payload.chat; });
   }
 
-  function getSubagents(chatId, roundId) {
+  function getSubagents(chatId, roundId, options) {
     if (!chatId || String(chatId).indexOf("legacy:") === 0) {
       return Promise.resolve({ rounds: [], activeRoundId: "", agents: [], messages: [] });
     }
     var query = roundId ? ("?round_id=" + encodeURIComponent(roundId)) : "";
-    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/subagents" + query);
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/subagents" + query, options);
   }
 
   function renameChat(chatId, title) {
@@ -962,6 +962,8 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   var activeChatIdRef = useWbcRef("");
   var [activeChat, setActiveChat] = useWbcState(null);
   var [loading, setLoading] = useWbcState(true);
+  var [chatLoading, setChatLoading] = useWbcState(false);
+  var [loadRevision, setLoadRevision] = useWbcState(0);
   var projectIdRef = useWbcRef(projectId);
 
   useWbcEffect(function () {
@@ -1095,7 +1097,9 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     }
   }, [chats]);
 
-  // Load the full transcript when the selection changes.
+  // Load the full transcript when the selection changes. The transcript and
+  // subagent history are deliberately independent: auxiliary history must not
+  // prevent an otherwise healthy conversation from rendering.
   useWbcEffect(function () {
     // Do not keep rendering the previous transcript while the newly selected
     // chat is being fetched. This matters especially when the previous chat is
@@ -1103,23 +1107,46 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     // every chat the user clicks during the request.
     setActiveChat(null);
     if (!activeChatId) {
+      setChatLoading(false);
       setSubagentData({ rounds: [], activeRoundId: "", agents: [], messages: [] });
       return;
     }
-    var cancelled = false;
+    var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var requestOptions = controller ? { signal: controller.signal } : {};
     setError("");
     setErrorKind("load");
+    setChatLoading(true);
     setSubagentLoading(true);
-    Promise.all([model.getChat(activeChatId), model.getSubagents(activeChatId)])
-      .then(function (results) {
-        if (cancelled) return;
-        setActiveChat(results[0]);
-        setSubagentData(results[1]);
+    model.getChat(activeChatId, requestOptions)
+      .then(function (chat) {
+        if (activeChatIdRef.current === activeChatId) setActiveChat(chat);
       })
-      .catch(function (err) { if (!cancelled) setError(wbcErrorText(err)); })
-      .finally(function () { if (!cancelled) setSubagentLoading(false); });
-    return function () { cancelled = true; };
-  }, [activeChatId]);
+      .catch(function (err) {
+        if (err && err.name === "AbortError") return;
+        if (activeChatIdRef.current === activeChatId) {
+          setError(wbcT("workbenchChat.error.transcriptPrefix", "Conversation details: {error}", { error: wbcErrorText(err) }));
+        }
+      })
+      .finally(function () {
+        if (activeChatIdRef.current === activeChatId) setChatLoading(false);
+      });
+    model.getSubagents(activeChatId, "", requestOptions)
+      .then(function (payload) {
+        if (activeChatIdRef.current === activeChatId) setSubagentData(payload);
+      })
+      .catch(function (err) {
+        if (err && err.name === "AbortError") return;
+        // Subagent history is auxiliary. Keep the transcript usable and retain
+        // a precise diagnostic without turning this into a chat-load failure.
+        console.warn("Workbench subagent history load failed", activeChatId, err);
+      })
+      .finally(function () {
+        if (activeChatIdRef.current === activeChatId) setSubagentLoading(false);
+      });
+    return function () {
+      if (controller) controller.abort();
+    };
+  }, [activeChatId, loadRevision]);
 
   // Viewer / content tabs belong to one conversation — reset on switch.
   useWbcEffect(function () {
@@ -1358,22 +1385,23 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     if (!projectId) return;
     setError("");
     setErrorKind("load");
-    setLoading(true);
+    setChatLoading(true);
     refreshChats(activeChatId)
       .then(function (list) {
         var chatId = activeChatId || (list[0] && list[0].id) || "";
         if (!chatId) {
           setActiveChat(null);
+          setChatLoading(false);
           return null;
         }
-        return model.getChat(chatId).then(function (chat) {
-          setActiveChat(chat);
-          setActiveChatId(chat.id);
-          return chat;
-        });
+        setActiveChatId(chatId);
+        setLoadRevision(function (value) { return value + 1; });
+        return null;
       })
-      .catch(function (err) { setError(wbcErrorText(err)); })
-      .finally(function () { setLoading(false); });
+      .catch(function (err) {
+        setChatLoading(false);
+        setError(wbcT("workbenchChat.error.listPrefix", "Chat list: {error}", { error: wbcErrorText(err) }));
+      });
   }
 
   // Register transcript hooks with the streaming engine so a run patches THIS
@@ -1694,6 +1722,9 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   var visibleChat = activeChat && String(activeChat.id || "") === String(activeChatId || "")
     ? activeChat
     : null;
+  var selectedChatSummary = chats.find(function (item) {
+    return String(item.id || "") === String(activeChatId || "");
+  }) || null;
 
   return (
     <div className={"wbc-page" + (sideVisible ? "" : " wbc-side-hidden")}>
@@ -1710,6 +1741,8 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
       <WbcMain
         project={project}
         chat={visibleChat}
+        chatSummary={selectedChatSummary}
+        loading={chatLoading}
         runtime={activeRuntime}
         error={error}
         errorKind={errorKind}
@@ -1731,7 +1764,9 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
       />
       <WbcSide
         project={project}
-        chat={visibleChat}
+        chat={visibleChat || selectedChatSummary}
+        chatLoading={chatLoading}
+        chatDetailed={!!visibleChat}
         chats={chats}
         activeChatId={activeChatId}
         onSelectChat={function (id) { setActiveChatId(id); }}
@@ -1871,7 +1906,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, sideVisible, onToggleSide }) {
+function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, sideVisible, onToggleSide }) {
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var durableMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
@@ -1912,10 +1947,10 @@ function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, o
 
   return (
     <main className="wbc-main">
-      {chat ? (
+      {(chat || chatSummary) ? (
         <WbcHeader
           project={project}
-          chat={chat}
+          chat={chat || chatSummary}
           running={running}
           onRename={onRename}
           onDelete={onDelete}
@@ -1941,7 +1976,13 @@ function WbcMain({ project, chat, runtime, error, errorKind, onRetry, running, o
       )}
       {error && <WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} />}
       <div className="wbc-thread" ref={scrollRef} onScroll={onScroll}>
-        {messages.length === 0 && !runtime && (
+        {loading && !chat && (
+          <div className="wbc-empty-thread wbc-loading-thread" role="status">
+            <span className="wbc-spinner" aria-hidden="true"></span>
+            <b>{wbcT("workbenchChat.loadingConversation", "Loading conversation…")}</b>
+          </div>
+        )}
+        {messages.length === 0 && !runtime && !loading && !error && (
           <div className="wbc-empty-thread">
             <div className="wbc-empty-icon">{WBC_ICONS.chat}</div>
             <b>{wbcT("workbenchChat.emptyTitle", "Start a new chat")}</b>
@@ -2003,48 +2044,50 @@ function WbcQuestionPrompt({ pending, onAnswer, busy, trace }) {
     onAnswer(pq.id, t);
   }
   return (
-    <div className="wbc-question">
+    <div className="wbc-question-group">
       {trace && trace.length > 0 && <WbcTraceCard trace={trace} />}
-      <div className="wbc-question-head">
-        <span className="wbc-question-ico">{WBC_ICONS.alert}</span>
-        <b>{isPermission ? wbcT("workbenchChat.permissionTitle", "Authorization needed") : wbcT("workbenchChat.questionTitle", "Confirmation needed")}</b>
-      </div>
-      <p className="wbc-question-text">{pq.text || wbcT("workbenchChat.questionFallback", "Agent needs your confirmation to continue.")}</p>
-      {isPermission ? (
-        // Authorization: binary confirm / reject. Labels are 确认/拒绝 but the
-        // value sent is the backend-recognized option (options[0]=allow, last=deny).
-        <div className="wbc-question-options">
-          <button type="button" className="wbc-question-opt primary" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options[0] || "确认"); }}>{wbcT("workbenchChat.approve", "Confirm")}</button>
-          <button type="button" className="wbc-question-opt" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options.length ? options[options.length - 1] : "拒绝"); }}>{wbcT("workbenchChat.reject", "Reject")}</button>
+      <div className="wbc-question">
+        <div className="wbc-question-head">
+          <span className="wbc-question-ico">{WBC_ICONS.alert}</span>
+          <b>{isPermission ? wbcT("workbenchChat.permissionTitle", "Authorization needed") : wbcT("workbenchChat.questionTitle", "Confirmation needed")}</b>
         </div>
-      ) : (
-        <React.Fragment>
-          {isPlanConfirmation && options.length > 0 ? (
-            <div className="wbc-question-options">
-              <button type="button" className="wbc-question-opt primary" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options[0], "auto"); }}>
-                {options[0] || wbcT("workbenchChat.approveAuto", "Confirm and continue in Auto")}
-              </button>
-              <button type="button" className="wbc-question-opt" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options.length ? options[options.length - 1] : "拒绝"); }}>
-                {options.length ? options[options.length - 1] : wbcT("workbenchChat.reject", "Reject")}
-              </button>
-            </div>
-          ) : options.length > 0 && (
-            <div className="wbc-question-options">
-              {options.map(function (opt, i) {
-                return <button key={i} type="button" className={"wbc-question-opt" + (i === 0 ? " primary" : "")} disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, opt); }}>{opt}</button>;
-              })}
-            </div>
-          )}
-          {pq.allowCustom && (
-            <div className="wbc-question-custom">
-              <input type="text" value={customText} placeholder={wbcT("workbenchChat.customAnswer", "Or enter a custom reply...")} disabled={busy}
-                onChange={function (e) { setCustomText(e.target.value); }}
-                onKeyDown={function (e) { if (e.key === "Enter") { e.preventDefault(); submitCustom(); } }} />
-              <button type="button" className="wbc-question-send" disabled={busy || !String(customText).trim()} onClick={submitCustom}>{WBC_ICONS.send}</button>
-            </div>
-          )}
-        </React.Fragment>
-      )}
+        <p className="wbc-question-text">{pq.text || wbcT("workbenchChat.questionFallback", "Agent needs your confirmation to continue.")}</p>
+        {isPermission ? (
+          // Authorization: binary confirm / reject. Labels are 确认/拒绝 but the
+          // value sent is the backend-recognized option (options[0]=allow, last=deny).
+          <div className="wbc-question-options">
+            <button type="button" className="wbc-question-opt primary" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options[0] || "确认"); }}>{wbcT("workbenchChat.approve", "Confirm")}</button>
+            <button type="button" className="wbc-question-opt" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options.length ? options[options.length - 1] : "拒绝"); }}>{wbcT("workbenchChat.reject", "Reject")}</button>
+          </div>
+        ) : (
+          <React.Fragment>
+            {isPlanConfirmation && options.length > 0 ? (
+              <div className="wbc-question-options">
+                <button type="button" className="wbc-question-opt primary" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options[0], "auto"); }}>
+                  {options[0] || wbcT("workbenchChat.approveAuto", "Confirm and continue in Auto")}
+                </button>
+                <button type="button" className="wbc-question-opt" disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, options.length ? options[options.length - 1] : "拒绝"); }}>
+                  {options.length ? options[options.length - 1] : wbcT("workbenchChat.reject", "Reject")}
+                </button>
+              </div>
+            ) : options.length > 0 && (
+              <div className="wbc-question-options">
+                {options.map(function (opt, i) {
+                  return <button key={i} type="button" className={"wbc-question-opt" + (i === 0 ? " primary" : "")} disabled={busy} onClick={function () { if (!busy && onAnswer) onAnswer(pq.id, opt); }}>{opt}</button>;
+                })}
+              </div>
+            )}
+            {pq.allowCustom && (
+              <div className="wbc-question-custom">
+                <input type="text" value={customText} placeholder={wbcT("workbenchChat.customAnswer", "Or enter a custom reply...")} disabled={busy}
+                  onChange={function (e) { setCustomText(e.target.value); }}
+                  onKeyDown={function (e) { if (e.key === "Enter") { e.preventDefault(); submitCustom(); } }} />
+                <button type="button" className="wbc-question-send" disabled={busy || !String(customText).trim()} onClick={submitCustom}>{WBC_ICONS.send}</button>
+              </div>
+            )}
+          </React.Fragment>
+        )}
+      </div>
     </div>
   );
 }
@@ -3225,6 +3268,8 @@ function WbcBranchTab({ chats, activeChatId, onSelectChat }) {
 function WbcSide({
   project,
   chat,
+  chatLoading,
+  chatDetailed,
   chats,
   activeChatId,
   onSelectChat,
@@ -3294,7 +3339,7 @@ function WbcSide({
         </button>
       </div>
       <div className={"wbc-side-body" + (flush ? " flush" : "")}>
-        {activeTab === "overview" && <WbcOverviewTab chat={chat} runtime={runtime} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} onCompact={onCompact} compactBusy={compactBusy} />}
+        {activeTab === "overview" && <WbcOverviewTab chat={chat} loading={chatLoading} detailed={chatDetailed} runtime={runtime} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} onCompact={onCompact} compactBusy={compactBusy} />}
         {activeTab === "plan" && <WbcPlanTab plan={pendingPlan} />}
         {activeTab === "subagents" && (
           <WbcSubagentsTab
@@ -4248,14 +4293,20 @@ function WbcContextUsage({ chat, running }) {
   );
 }
 
-function WbcOverviewTab({ chat, runtime, onRename, onDelete, onToTask, toTaskBusy, onCompact, compactBusy }) {
+function WbcOverviewTab({ chat, loading, detailed, runtime, onRename, onDelete, onToTask, toTaskBusy, onCompact, compactBusy }) {
   if (!chat) {
-    return <p className="workbench-muted">{wbcT("workbenchChat.noMessages", "Select or create a chat.")}</p>;
+    return <p className="workbench-muted">{loading
+      ? wbcT("workbenchChat.loadingConversation", "Loading conversation…")
+      : wbcT("workbenchChat.noMessages", "Select or create a chat.")}</p>;
   }
   var usage = chat.usage || {};
   var convertedTitle = chat.convertedSessionId ? String(chat.convertedTaskTitle || "").trim() : "";
   return (
     <div className="workbench-side-stack">
+      {loading && <p className="workbench-muted wbc-side-loading" role="status">
+        <span className="wbc-spinner" aria-hidden="true"></span>
+        {wbcT("workbenchChat.loadingConversation", "Loading conversation…")}
+      </p>}
       <section className="workbench-side-section">
         <h3>{wbcT("chat.runSummary", "Run summary")}</h3>
         <WbcUsageRing usage={usage} />
@@ -4268,8 +4319,8 @@ function WbcOverviewTab({ chat, runtime, onRename, onDelete, onToTask, toTaskBus
         <div className="wb-kv"><span>{wbcT("chat.runId", "Session ID")}</span><b className="wbc-kv-mono">{chat.id}</b></div>
         <div className="wb-kv"><span>{wbcT("workbenchChat.createdAt", "Created")}</span><b>{wbcFormatTime(chat.createdAt) || "—"}</b></div>
       </section>
-      <WbcContextUsage chat={chat} running={!!runtime} />
-      <section className="workbench-side-section">
+      {detailed && <WbcContextUsage chat={chat} running={!!runtime} />}
+      {detailed && <section className="workbench-side-section">
         <h3>{wbcT("workbenchChat.quickActions", "Quick actions")}</h3>
         <div className="wbc-quick-actions">
           <button type="button" onClick={function () {
@@ -4288,7 +4339,7 @@ function WbcOverviewTab({ chat, runtime, onRename, onDelete, onToTask, toTaskBus
         {convertedTitle && (
           <p className="wbc-converted-note">{wbcT("workbenchChat.convertedNote", "Converted to task")}：<b>{convertedTitle}</b></p>
         )}
-      </section>
+      </section>}
     </div>
   );
 }

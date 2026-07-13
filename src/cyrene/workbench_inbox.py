@@ -58,6 +58,11 @@ class WorkbenchAgentInbox:
         self._guidance_signal = asyncio.Event()
         self._guidance_pending_count = 0
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._persistence_tasks: set[asyncio.Task[Any]] = set()
+        self._tool_results_persisting: set[str] = set()
+        self._tool_results_completed_early: set[str] = set()
+        self._termination_reason = ""
+        self._telemetry_tail: asyncio.Task[Any] | None = None
         self._result_queued_at: dict[str, float] = {}
         self._tool_submitted_at: dict[str, float] = {}
         self._closed = False
@@ -335,6 +340,86 @@ class WorkbenchAgentInbox:
     def _enqueue_nowait(self, event: dict[str, Any]) -> None:
         self._queue.put_nowait(self._queue_item(event))
 
+    def _complete_tool_result(self, event_id: str) -> None:
+        """Acknowledge a result without racing its background INSERT."""
+        if event_id in self._tool_results_persisting:
+            self._tool_results_completed_early.add(event_id)
+            return
+        self._complete(event_id)
+
+    def _schedule_tool_result_persistence(self, event: dict[str, Any]) -> None:
+        """Persist a live result without putting SQLite in the wakeup path."""
+        event_id = str(event["event_id"])
+        self._tool_results_persisting.add(event_id)
+
+        async def persist() -> None:
+            durable_event_id = event_id
+            try:
+                persisted = await asyncio.to_thread(self._persist, event)
+                if persisted is False:
+                    durable_event_id = await asyncio.to_thread(
+                        self._existing_event_id, str(event.get("dedupe_key") or "")
+                    ) or event_id
+                    logger.info(
+                        "Workbench tool result already persisted; live result was still delivered "
+                        "[session_id=%s event_id=%s durable_event_id=%s]",
+                        self.session_id,
+                        event_id,
+                        durable_event_id,
+                    )
+                elif persisted is None:
+                    logger.warning(
+                        "Workbench tool-result persistence failed after live delivery "
+                        "[session_id=%s event_id=%s]",
+                        self.session_id,
+                        event_id,
+                    )
+                if event_id in self._tool_results_completed_early and persisted is not None:
+                    await asyncio.to_thread(self._complete, durable_event_id)
+                elif self._closed and persisted is not None:
+                    await asyncio.to_thread(
+                        self._cancel_event,
+                        durable_event_id,
+                        self._termination_reason or "completed",
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Workbench tool-result persistence failed after live delivery "
+                    "[session_id=%s event_id=%s]",
+                    self.session_id,
+                    event_id,
+                )
+            finally:
+                self._tool_results_persisting.discard(event_id)
+                self._tool_results_completed_early.discard(event_id)
+
+        task = asyncio.create_task(persist())
+        self._persistence_tasks.add(task)
+        task.add_done_callback(self._persistence_tasks.discard)
+
+    def _record_event_background(self, event_type: str, **kwargs: Any) -> None:
+        """Write ordered handoff telemetry without blocking inbox consumption."""
+        previous = self._telemetry_tail
+
+        async def record() -> None:
+            if previous is not None:
+                await asyncio.gather(previous, return_exceptions=True)
+            await asyncio.to_thread(self._record_event, event_type, **kwargs)
+
+        task = asyncio.create_task(record())
+        self._telemetry_tail = task
+        self._persistence_tasks.add(task)
+        task.add_done_callback(self._persistence_tasks.discard)
+
+    def _run_persistence_background(
+        self, operation: Callable[..., Any], *args: Any
+    ) -> None:
+        task = asyncio.create_task(asyncio.to_thread(operation, *args))
+        self._persistence_tasks.add(task)
+        task.add_done_callback(self._persistence_tasks.discard)
+
     async def put(
         self,
         event_type: str,
@@ -359,6 +444,14 @@ class WorkbenchAgentInbox:
             "dedupe_key": str(dedupe_key or ""),
             "created_at": _now(),
         }
+        if event_type == "tool_result":
+            # The live agent must be woken before any optional durability work.
+            # A slow or unavailable SQLite connection can no longer strand an
+            # already-completed tool call between execution and inbox delivery.
+            self._enqueue_nowait(event)
+            self._schedule_tool_result_persistence(event)
+            return event
+
         persisted = self._persist(event)
         if persisted is False:
             # A duplicate dedupe key is already represented in the queue/log.
@@ -427,7 +520,7 @@ class WorkbenchAgentInbox:
                 dedupe_key=f"tool-result:{tool_call_id}"
             )
             self._result_queued_at[tool_call_id] = time.perf_counter()
-            self._record_event(
+            self._record_event_background(
                 "tool_result_queued", batch_id=batch_id,
                 tool_call_id=tool_call_id, tool_name=tool_name,
                 duration_ms=duration_ms, tool_execution_ms=duration_ms,
@@ -447,7 +540,7 @@ class WorkbenchAgentInbox:
             dedupe_key=f"tool-result:{tool_call_id}"
         )
         self._result_queued_at[tool_call_id] = time.perf_counter()
-        self._record_event(
+        self._record_event_background(
             "tool_result_queued", batch_id=batch_id,
             tool_call_id=tool_call_id, tool_name=tool_name,
             duration_ms=duration_ms, tool_execution_ms=duration_ms,
@@ -551,7 +644,7 @@ class WorkbenchAgentInbox:
             dedupe_key=f"tool-result:{call.tool_call_id}",
         )
         self._result_queued_at[call.tool_call_id] = time.perf_counter()
-        self._record_event(
+        self._record_event_background(
             "tool_result_queued", batch_id=batch_id,
             tool_call_id=call.tool_call_id, tool_name=call.tool_name,
             duration_ms=0.0,
@@ -685,12 +778,12 @@ class WorkbenchAgentInbox:
                 continue
             payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
             if event_type == "tool_result" and str(payload.get("tool_call_id") or "") == tool_call_id:
-                self._complete(event["event_id"])
+                self._complete_tool_result(str(event["event_id"]))
                 queued_at = self._result_queued_at.pop(tool_call_id, None)
                 queue_delay_ms = (
                     (time.perf_counter() - queued_at) * 1000 if queued_at is not None else None
                 )
-                self._record_event(
+                self._record_event_background(
                     "tool_result_consumed",
                     batch_id=str(event.get("batch_id") or ""),
                     tool_call_id=tool_call_id,
@@ -775,9 +868,24 @@ class WorkbenchAgentInbox:
         except Exception:
             logger.exception("Failed to clean pending Workbench inbox events")
 
+    def _cancel_event(self, event_id: str, termination_reason: str) -> None:
+        if not self.db_path:
+            return
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE workbench_agent_inbox SET status='cancelled', completed_at=?, "
+                    "termination_reason=? WHERE event_id=? AND session_id=? "
+                    "AND status IN ('queued','claimed')",
+                    (_now(), termination_reason, str(event_id), self.session_id),
+                )
+        except Exception:
+            logger.exception("Failed to clean Workbench inbox event %s", event_id)
+
     async def close(self, *, termination_reason: str = "completed") -> None:
         if self._closed:
             return
+        self._termination_reason = str(termination_reason or "completed")
         tasks = list(self._tasks)
         for task in tasks:
             if not task.done():
@@ -792,7 +900,7 @@ class WorkbenchAgentInbox:
                 task.cancel()
         self._tasks.clear()
         self._closed = True
-        self._cancel_pending(str(termination_reason or "completed"))
+        self._run_persistence_background(self._cancel_pending, self._termination_reason)
         while True:
             try:
                 self._queue.get_nowait()
@@ -802,8 +910,8 @@ class WorkbenchAgentInbox:
         self._pending_tool_results.clear()
         self._guidance_pending_count = 0
         self._guidance_signal.clear()
-        self._record_event(
-            "run_terminated", termination_reason=str(termination_reason or "completed")
+        self._record_event_background(
+            "run_terminated", termination_reason=self._termination_reason
         )
 
 

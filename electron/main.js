@@ -20,6 +20,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
+const { AppUseManager } = require('./app-use');
 
 const APP_NAME = 'Cyrene';
 const TEMP_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -108,6 +109,7 @@ let isQuitting = false;
 let launchHidden = process.argv.includes('--hidden');
 let tray = null;
 let browserTabManager = null;
+let appUseManager = null;
 let electronRpcServer = null;
 let electronRpcPort = null;
 const BROWSER_USER_EVENT_CONSOLE_PREFIX = '__CYRENE_BROWSER_USER_EVENT__';
@@ -1143,6 +1145,45 @@ function getBrowserTabManager() {
   return browserTabManager;
 }
 
+function getAppUseManager() {
+  if (!appUseManager) {
+    appUseManager = new AppUseManager({
+      ownPid: process.pid,
+      ownApplicationIds: ['com.cyrene.app'],
+      ownAppNames: [APP_NAME],
+      captureTarget: captureAppUseTarget,
+      isHostForeground: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()),
+      focusHost: async () => { await revealMainWindow(); },
+    });
+    appUseManager.start();
+  }
+  return appUseManager;
+}
+
+async function captureAppUseTarget(target) {
+  const sources = await desktopCapturer.getSources({
+    types: ['window'],
+    thumbnailSize: { width: 1920, height: 1200 },
+    fetchWindowIcons: false,
+  });
+  const nativeId = String((target && target.windowId) || '');
+  const title = String((target && target.windowTitle) || '');
+  const source = sources.find((candidate) => {
+    const parts = String(candidate.id || '').split(':');
+    return parts[0] === 'window' && parts[1] === nativeId;
+  }) || sources.find((candidate) => title && String(candidate.name || '') === title);
+  if (!source || source.thumbnail.isEmpty()) {
+    throw new Error('The connected application window could not be captured.');
+  }
+  const size = source.thumbnail.getSize();
+  return {
+    imageBase64: source.thumbnail.toPNG().toString('base64'),
+    mimeType: 'image/png',
+    width: size.width,
+    height: size.height,
+  };
+}
+
 async function handleBrowserRpc(method, args) {
   const manager = getBrowserTabManager();
   switch (method) {
@@ -1200,13 +1241,18 @@ async function handleBrowserRpc(method, args) {
   }
 }
 
+async function handleAppUseRpc(method, args) {
+  return getAppUseManager().handle(method, args || {});
+}
+
 function startElectronRpcServer() {
   if (electronRpcServer && electronRpcPort) return Promise.resolve(electronRpcPort);
   const MAX_RETRIES = 3;
   function attempt(retriesLeft) {
     return new Promise((resolve, reject) => {
       const server = http.createServer((req, res) => {
-        if (req.method !== 'POST' || req.url !== '/browser/rpc') {
+        const rpcPath = String(req.url || '');
+        if (req.method !== 'POST' || !['/browser/rpc', '/app/rpc'].includes(rpcPath)) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: 'not_found' }));
           return;
@@ -1224,7 +1270,9 @@ function startElectronRpcServer() {
         req.on('end', async () => {
           try {
             const payload = JSON.parse(body || '{}');
-            const result = await handleBrowserRpc(String(payload.method || ''), payload.args || {});
+            const result = rpcPath === '/app/rpc'
+              ? await handleAppUseRpc(String(payload.method || ''), payload.args || {})
+              : await handleBrowserRpc(String(payload.method || ''), payload.args || {});
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result || { ok: true }));
           } catch (err) {
@@ -2088,6 +2136,7 @@ async function createQuickChatWindow() {
 async function openQuickChat() {
   if (quickChatOpenPromise) return quickChatOpenPromise;
   quickChatOpenPromise = (async () => {
+    await getAppUseManager().captureQuickChatOrigin().catch(() => {});
     const context = await captureQuickChatScreenshot();
     const window = await createQuickChatWindow();
     if (!window || window.isDestroyed()) return context;
@@ -2345,6 +2394,7 @@ if (!gotSingleInstanceLock) {
       console.error('[electron] Failed to start Electron RPC server:', err);
       appendErrorLog(`[electron] Failed to start Electron RPC server: ${err && err.stack ? err.stack : err}\n`);
     }
+    getAppUseManager();
     const desktopSettings = readDesktopSettings();
     applyLaunchAtLogin(desktopSettings.launchAtLogin);
     // Only claim the global shortcut when the user has enabled quick chat.
@@ -2491,6 +2541,7 @@ if (!gotSingleInstanceLock) {
     isQuitting = true;
     destroyTray();
     globalShortcut.unregisterAll();
+    if (appUseManager) appUseManager.stop();
     killPython();
   });
 
