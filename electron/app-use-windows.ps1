@@ -13,6 +13,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 public static class CyreneWindowApi {
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -24,6 +25,31 @@ public static class CyreneWindowApi {
     [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT point);
+    [DllImport("user32.dll", SetLastError=true)] public static extern uint SendInput(uint count, INPUT[] inputs, int size);
+    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+    [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT {
+        public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo;
+    }
+    [StructLayout(LayoutKind.Explicit)] public struct INPUTUNION { [FieldOffset(0)] public MOUSEINPUT mi; }
+    [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public INPUTUNION U; }
+    public static void Mouse(uint flags, uint data = 0) {
+        var input = new INPUT { type = 0, U = new INPUTUNION { mi = new MOUSEINPUT { dwFlags = flags, mouseData = data } } };
+        if (SendInput(1, new [] { input }, Marshal.SizeOf(typeof(INPUT))) != 1) throw new InvalidOperationException("SendInput did not inject the mouse event.");
+    }
+    public static POINT Cursor() { POINT point; if (!GetCursorPos(out point)) throw new InvalidOperationException("GetCursorPos failed."); return point; }
+    public static void Move(int fromX, int fromY, int toX, int toY, int durationMs, bool drag) {
+        int steps = Math.Max(1, Math.Min(120, (int)Math.Ceiling(Math.Max(0, durationMs) / 16.0)));
+        for (int i = 1; i <= steps; i++) {
+            double ratio = i / (double)steps;
+            int x = (int)Math.Round(fromX + ((toX - fromX) * ratio));
+            int y = (int)Math.Round(fromY + ((toY - fromY) * ratio));
+            SetCursorPos(x, y);
+            if (drag) Mouse(0x0001);
+            if (durationMs > 0) Thread.Sleep(Math.Max(1, durationMs / steps));
+        }
+    }
     public static IntPtr[] VisibleTopLevelWindows() {
         var result = new List<IntPtr>();
         EnumWindows((hWnd, lParam) => {
@@ -45,6 +71,75 @@ public static class CyreneWindowApi {
     }
 }
 "@
+
+function Finite-Number($Value, [string]$Name) {
+    $number = 0.0
+    if (-not [double]::TryParse([string]$Value, [ref]$number) -or [double]::IsNaN($number) -or [double]::IsInfinity($number)) { throw "$Name must be a finite number." }
+    return $number
+}
+
+function Screen-Point($Target, $Parameters, [string]$XName, [string]$YName) {
+    $bounds = $Target.bounds
+    $left = Finite-Number $bounds.x 'target.bounds.x'
+    $top = Finite-Number $bounds.y 'target.bounds.y'
+    $width = Finite-Number $bounds.width 'target.bounds.width'
+    $height = Finite-Number $bounds.height 'target.bounds.height'
+    $x = Finite-Number $Parameters.$XName $XName
+    $y = Finite-Number $Parameters.$YName $YName
+    $space = if ($Parameters.coordinate_space) { ([string]$Parameters.coordinate_space).ToLowerInvariant() } else { 'window' }
+    if ($space -eq 'window') { $x += $left; $y += $top }
+    elseif ($space -ne 'screen') { throw 'coordinate_space must be window or screen.' }
+    if ($x -lt $left -or $y -lt $top -or $x -gt ($left + $width) -or $y -gt ($top + $height)) { throw 'Point is outside the connected window bounds.' }
+    return @{ x = [int][Math]::Round($x); y = [int][Math]::Round($y) }
+}
+
+function Mouse-Click($Point, [bool]$Right, [int]$Count, [int]$IntervalMs) {
+    [void][CyreneWindowApi]::SetCursorPos($Point.x, $Point.y)
+    $down = if ($Right) { [uint32]0x0008 } else { [uint32]0x0002 }
+    $up = if ($Right) { [uint32]0x0010 } else { [uint32]0x0004 }
+    for ($index = 0; $index -lt $Count; $index += 1) {
+        [CyreneWindowApi]::Mouse($down, 0); Start-Sleep -Milliseconds 25; [CyreneWindowApi]::Mouse($up, 0)
+        if ($index + 1 -lt $Count) { Start-Sleep -Milliseconds ([Math]::Max(40, [Math]::Min(500, $IntervalMs))) }
+    }
+}
+
+function Perform-CoordinateAction($Target, [string]$Capability, $Parameters) {
+    if ($Capability -in @('click_at', 'double_click', 'right_click', 'hover_at', 'scroll_at')) {
+        $point = Screen-Point $Target $Parameters 'x' 'y'
+        $before = [CyreneWindowApi]::Cursor()
+        if ($Capability -eq 'click_at') { Mouse-Click $point $false 1 0 }
+        elseif ($Capability -eq 'double_click') { Mouse-Click $point $false 2 $(if ($Parameters.interval_ms) { [int]$Parameters.interval_ms } else { 100 }) }
+        elseif ($Capability -eq 'right_click') { Mouse-Click $point $true 1 0 }
+        elseif ($Capability -eq 'hover_at') { [CyreneWindowApi]::Move($before.X, $before.Y, $point.x, $point.y, $(if ($Parameters.duration_ms) { [int]$Parameters.duration_ms } else { 0 }), $false) }
+        else {
+            [void][CyreneWindowApi]::SetCursorPos($point.x, $point.y)
+            $direction = if ($Parameters.direction) { ([string]$Parameters.direction).ToLowerInvariant() } else { 'down' }
+            if ($direction -notin @('up', 'down', 'left', 'right')) { throw 'direction must be up, down, left, or right.' }
+            $amount = [Math]::Max(1, [Math]::Min(20, $(if ($Parameters.amount) { [int]$Parameters.amount } else { 3 })))
+            $delta = [int32]$(if ($direction -in @('up', 'left')) { 120 * $amount } else { -120 * $amount })
+            $data = [BitConverter]::ToUInt32([BitConverter]::GetBytes($delta), 0)
+            [CyreneWindowApi]::Mouse($(if ($direction -in @('left', 'right')) { [uint32]0x1000 } else { [uint32]0x0800 }), $data)
+        }
+        $actual = [CyreneWindowApi]::Cursor()
+        $verified = [Math]::Abs($actual.X - $point.x) -le 2 -and [Math]::Abs($actual.Y - $point.y) -le 2
+        return @{ ok = $true; verified = $verified; uncertain = -not $verified; skipSnapshot = $true; visualChangeExpected = ($Capability -ne 'hover_at'); summary = "Performed $Capability at ($($point.x), $($point.y))."; diagnostics = @{ method = 'SendInput'; point = $point; actualPointer = @{ x = $actual.X; y = $actual.Y }; pointerVerified = $verified; foregroundRequired = $true } }
+    }
+    $from = if ($Capability -eq 'drag') { Screen-Point $Target $Parameters 'from_x' 'from_y' } else { Screen-Point $Target $Parameters 'x' 'y' }
+    if ($Capability -eq 'drag') { $to = Screen-Point $Target $Parameters 'to_x' 'to_y' }
+    else {
+        $direction = ([string]$Parameters.direction).ToLowerInvariant()
+        if ($direction -notin @('up', 'down', 'left', 'right')) { throw 'direction must be up, down, left, or right.' }
+        $distance = [Math]::Max(1, [Math]::Min(2000, $(if ($Parameters.distance) { [double]$Parameters.distance } else { 240 })))
+        $toParams = [pscustomobject]@{ coordinate_space = 'screen'; to_x = $from.x; to_y = $from.y }
+        if ($direction -eq 'up') { $toParams.to_y -= $distance } elseif ($direction -eq 'down') { $toParams.to_y += $distance } elseif ($direction -eq 'left') { $toParams.to_x -= $distance } else { $toParams.to_x += $distance }
+        $to = Screen-Point $Target $toParams 'to_x' 'to_y'
+    }
+    [void][CyreneWindowApi]::SetCursorPos($from.x, $from.y); [CyreneWindowApi]::Mouse([uint32]0x0002, 0)
+    [CyreneWindowApi]::Move($from.x, $from.y, $to.x, $to.y, $(if ($Parameters.duration_ms) { [int]$Parameters.duration_ms } else { 350 }), $true)
+    [CyreneWindowApi]::Mouse([uint32]0x0004, 0)
+    $actual = [CyreneWindowApi]::Cursor(); $verified = [Math]::Abs($actual.X - $to.x) -le 2 -and [Math]::Abs($actual.Y - $to.y) -le 2
+    return @{ ok = $true; verified = $verified; uncertain = -not $verified; skipSnapshot = $true; visualChangeExpected = $true; summary = "Performed $Capability gesture."; diagnostics = @{ method = 'SendInput'; from = $from; to = $to; actualPointer = @{ x = $actual.X; y = $actual.Y }; pointerVerified = $verified; foregroundRequired = $true } }
+}
 
 function Result([hashtable]$Value) {
     $Value | ConvertTo-Json -Depth 12 -Compress
@@ -200,7 +295,9 @@ function Focus-Target($Target) {
     $handle = Target-Handle $Target
     [void][CyreneWindowApi]::ShowWindowAsync($handle, 9)
     [void][CyreneWindowApi]::SetForegroundWindow($handle)
-    return @{ ok = $true; summary = "Focused $($Target.appName)." }
+    Start-Sleep -Milliseconds 60
+    $foreground = [CyreneWindowApi]::GetForegroundWindow().ToInt64()
+    return @{ ok = $true; verified = ($foreground -eq $handle.ToInt64()); summary = "Focused $($Target.appName)."; diagnostics = @{ foregroundWindow = $foreground } }
 }
 
 function Escape-SendKeys([string]$Text) {
@@ -215,8 +312,9 @@ function Send-KeyChord($Keys) {
     if ($lowered -contains 'shift') { $prefix += '+' }
     if ($lowered -contains 'command' -or $lowered -contains 'meta') { $prefix += '^' }
     $modifiers = @('control', 'ctrl', 'alt', 'option', 'shift', 'command', 'meta')
-    $key = $lowered | Where-Object { $modifiers -notcontains $_ } | Select-Object -First 1
-    if (-not $key) { throw 'No non-modifier key was provided.' }
+    $nonModifiers = @($lowered | Where-Object { $modifiers -notcontains $_ })
+    if ($nonModifiers.Count -ne 1) { throw 'key_chord requires exactly one non-modifier key.' }
+    $key = $nonModifiers[0]
     $special = @{
         enter = '{ENTER}'; return = '{ENTER}'; tab = '{TAB}'; escape = '{ESC}'; esc = '{ESC}'
         backspace = '{BACKSPACE}'; delete = '{DELETE}'; up = '{UP}'; down = '{DOWN}'
@@ -226,11 +324,51 @@ function Send-KeyChord($Keys) {
     [System.Windows.Forms.SendKeys]::SendWait($prefix + $encoded)
 }
 
+function Get-TextPattern($Element) {
+    $pattern = Try-Pattern $Element ([System.Windows.Automation.TextPattern]::Pattern)
+    if ($null -eq $pattern) { throw 'Element does not support TextPattern text selection.' }
+    return $pattern
+}
+
+function Set-TextSelectionRange($Element, [int]$Start, [int]$End) {
+    $pattern = Get-TextPattern $Element
+    $document = $pattern.DocumentRange
+    $text = [string]$document.GetText(-1)
+    if ($Start -lt 0 -or $End -lt $Start -or $End -gt $text.Length) { throw "Selection range must satisfy 0 <= start <= end <= $($text.Length)." }
+    $startRange = $document.Clone(); $startRange.MoveEndpointByRange([System.Windows.Automation.Text.TextPatternRangeEndpoint]::End, $startRange, [System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start)
+    [void]$startRange.Move([System.Windows.Automation.Text.TextUnit]::Character, $Start)
+    $endRange = $document.Clone(); $endRange.MoveEndpointByRange([System.Windows.Automation.Text.TextPatternRangeEndpoint]::End, $endRange, [System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start)
+    [void]$endRange.Move([System.Windows.Automation.Text.TextUnit]::Character, $End)
+    $selection = $document.Clone()
+    $selection.MoveEndpointByRange([System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start, $startRange, [System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start)
+    $selection.MoveEndpointByRange([System.Windows.Automation.Text.TextPatternRangeEndpoint]::End, $endRange, [System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start)
+    $selection.Select()
+    $observed = @($pattern.GetSelection() | ForEach-Object { $_.GetText(-1) }) -join ''
+    $expected = $text.Substring($Start, $End - $Start)
+    return @{ start = $Start; end = $End; expected = $expected; observed = $observed; verified = ($observed -eq $expected) }
+}
+
+function Perform-KeySequence($Steps) {
+    $items = @($Steps)
+    if ($items.Count -lt 1 -or $items.Count -gt 64) { throw 'key_sequence requires between 1 and 64 steps.' }
+    foreach ($step in $items) {
+        $type = ([string]$step.type).ToLowerInvariant()
+        if ($type -eq 'shortcut') { Send-KeyChord $step.keys }
+        elseif ($type -eq 'text') { [System.Windows.Forms.SendKeys]::SendWait((Escape-SendKeys ([string]$step.text))) }
+        elseif ($type -eq 'key') { Send-KeyChord @([string]$step.key) }
+        elseif ($type -eq 'pause') { Start-Sleep -Milliseconds ([Math]::Max(0, [Math]::Min(5000, [int]$step.ms))) }
+        else { throw "Unsupported key_sequence step type: $type" }
+    }
+    return @{ ok = $true; verified = $false; uncertain = $true; skipSnapshot = $true; visualChangeExpected = $true; summary = 'Executed the atomic keyboard sequence.'; diagnostics = @{ method = 'SendKeys'; stepCount = $items.Count; foregroundRequired = $true } }
+}
+
 function Perform-Action($Payload) {
     $root = Get-Root $Payload.target
     $element = if ($Payload.nativeRef) { Resolve-Element $root ([string]$Payload.nativeRef) } else { $root }
     $capability = [string]$Payload.capability
     $parameters = $Payload.parameters
+    if ($capability -in @('click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at')) { return Perform-CoordinateAction $Payload.target $capability $parameters }
+    if ($capability -eq 'key_sequence') { return Perform-KeySequence $parameters.steps }
     if ($capability -eq 'press') {
         $pattern = Try-Pattern $element ([System.Windows.Automation.InvokePattern]::Pattern)
         if ($null -eq $pattern) {
@@ -297,6 +435,22 @@ function Perform-Action($Payload) {
         $after = [string]$pattern.Current.Value
         if ($after -ne $expected) { throw 'Text input could not be verified through UI Automation.' }
         return @{ ok = $true; verified = $true; summary = 'Wrote and verified text through UI Automation.'; diagnostics = @{ method = 'ValuePattern'; before = $before; after = $after; backgroundSafe = $true } }
+    }
+    if ($capability -eq 'set_selection_range') {
+        $selection = Set-TextSelectionRange $element ([int]$parameters.start) ([int]$parameters.end)
+        return @{ ok = $true; verified = $selection.verified; uncertain = -not $selection.verified; skipSnapshot = $true; summary = $(if ($selection.verified) { 'Selected and verified the requested text range.' } else { 'Selected the requested text range, but verification differed.' }); diagnostics = @{ method = 'TextPatternRange.Select'; start = $selection.start; end = $selection.end; expected = $selection.expected; observed = $selection.observed; foregroundRequired = $true } }
+    }
+    if ($capability -eq 'select_text') {
+        $pattern = Get-TextPattern $element
+        $value = [string]$pattern.DocumentRange.GetText(-1)
+        $needle = [string]$parameters.text
+        if ([string]::IsNullOrEmpty($needle)) { throw 'select_text requires non-empty text.' }
+        $comparison = if ($parameters.case_sensitive -eq $true) { [StringComparison]::Ordinal } else { [StringComparison]::OrdinalIgnoreCase }
+        $occurrence = [Math]::Max(1, $(if ($parameters.occurrence) { [int]$parameters.occurrence } else { 1 }))
+        $start = -1; $cursor = 0
+        for ($index = 0; $index -lt $occurrence; $index += 1) { $start = $value.IndexOf($needle, $cursor, $comparison); if ($start -lt 0) { throw "Could not find occurrence $occurrence of the requested text." }; $cursor = $start + $needle.Length }
+        $selection = Set-TextSelectionRange $element $start ($start + $needle.Length)
+        return @{ ok = $true; verified = $selection.verified; uncertain = -not $selection.verified; skipSnapshot = $true; summary = $(if ($selection.verified) { 'Selected and verified the requested text.' } else { 'Selected the requested text, but verification differed.' }); diagnostics = @{ method = 'TextPatternRange.Select'; start = $selection.start; end = $selection.end; expected = $selection.expected; observed = $selection.observed; foregroundRequired = $true } }
     }
     if ($capability -eq 'key_chord') {
         Send-KeyChord $parameters.keys

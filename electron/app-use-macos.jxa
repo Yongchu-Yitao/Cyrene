@@ -1,4 +1,5 @@
 ObjC.import('AppKit');
+ObjC.import('CoreGraphics');
 
 function safe(fn, fallback) {
   try {
@@ -232,6 +233,153 @@ function delaySeconds(seconds) {
   $.NSThread.sleepForTimeInterval(Number(seconds || 0));
 }
 
+function finiteNumber(value, name) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) fail('invalid_arguments', `${name} must be a finite number.`);
+  return number;
+}
+
+function screenPoint(target, parameters, xName, yName) {
+  const bounds = target.bounds || {};
+  const width = finiteNumber(bounds.width, 'target.bounds.width');
+  const height = finiteNumber(bounds.height, 'target.bounds.height');
+  const space = String(parameters.coordinate_space || 'window').toLowerCase();
+  let x = finiteNumber(parameters[xName], xName);
+  let y = finiteNumber(parameters[yName], yName);
+  if (space === 'window') {
+    if (x < 0 || y < 0 || x > width || y > height) fail('invalid_arguments', `${xName}/${yName} must be inside the connected window.`);
+    x += finiteNumber(bounds.x, 'target.bounds.x');
+    y += finiteNumber(bounds.y, 'target.bounds.y');
+  } else if (space !== 'screen') {
+    fail('invalid_arguments', 'coordinate_space must be window or screen.');
+  }
+  const left = finiteNumber(bounds.x, 'target.bounds.x');
+  const top = finiteNumber(bounds.y, 'target.bounds.y');
+  if (x < left || y < top || x > left + width || y > top + height) {
+    fail('invalid_arguments', 'Screen point is outside the connected window bounds.');
+  }
+  return { x, y };
+}
+
+function cursorPoint() {
+  const point = $.CGEventGetLocation($.CGEventCreate(null));
+  return { x: Number(point.x), y: Number(point.y) };
+}
+
+function postMouse(type, point, button, clickState) {
+  const event = $.CGEventCreateMouseEvent(null, type, point, button);
+  if (!event) fail('provider_error', 'Could not create a Quartz mouse event.');
+  if (clickState) $.CGEventSetIntegerValueField(event, $.kCGMouseEventClickState, clickState);
+  $.CGEventPost($.kCGHIDEventTap, event);
+}
+
+function movePointer(from, to, durationMs, drag) {
+  const duration = Math.max(0, Math.min(5000, Number(durationMs || 0)));
+  const steps = Math.max(1, Math.min(120, Math.ceil(duration / 16)));
+  for (let index = 1; index <= steps; index += 1) {
+    const ratio = index / steps;
+    const point = { x: from.x + ((to.x - from.x) * ratio), y: from.y + ((to.y - from.y) * ratio) };
+    postMouse(drag ? $.kCGEventLeftMouseDragged : $.kCGEventMouseMoved, point, $.kCGMouseButtonLeft, 0);
+    if (duration) delaySeconds(duration / steps / 1000);
+  }
+}
+
+function mouseClick(point, button, count, intervalMs) {
+  const right = Number(button) === Number($.kCGMouseButtonRight);
+  const down = right ? $.kCGEventRightMouseDown : $.kCGEventLeftMouseDown;
+  const up = right ? $.kCGEventRightMouseUp : $.kCGEventLeftMouseUp;
+  postMouse($.kCGEventMouseMoved, point, button, 0);
+  for (let index = 1; index <= count; index += 1) {
+    postMouse(down, point, button, index);
+    delaySeconds(0.025);
+    postMouse(up, point, button, index);
+    if (index < count) delaySeconds(Math.max(40, Math.min(500, Number(intervalMs || 100))) / 1000);
+  }
+}
+
+function selectedText(element) {
+  return String(cleanValue(safe(() => element.attributes.byName('AXSelectedText').value(), '')));
+}
+
+function selectionRangeFromParameters(element, parameters) {
+  const info = editableInfo(element);
+  if (!info.editable) fail('unsupported_action', `Element role ${info.role || '(unknown)'} does not support text selection.`);
+  const value = String(cleanValue(safe(() => element.value(), '')));
+  const start = Math.trunc(finiteNumber(parameters.start, 'start'));
+  const end = Math.trunc(finiteNumber(parameters.end, 'end'));
+  if (start < 0 || end < start || end > value.length) fail('invalid_arguments', `Selection range must satisfy 0 <= start <= end <= ${value.length}.`);
+  return { value, start, end, expected: value.slice(start, end), info };
+}
+
+function setSelectionWithKeyboard(resolved, element, range) {
+  element.focused = true;
+  if (!Boolean(safe(() => element.focused(), false))) fail('focus_required', 'The editable element did not receive focus.');
+  resolved.se.keystroke('a', { using: ['command down'] });
+  resolved.se.keyCode(123);
+  for (let index = 0; index < range.start; index += 1) resolved.se.keyCode(124);
+  for (let index = range.start; index < range.end; index += 1) resolved.se.keyCode(124, { using: ['shift down'] });
+  const observed = selectedText(element);
+  return { observed, verified: observed === range.expected };
+}
+
+function performCoordinateAction(target, capability, parameters) {
+  if (capability === 'click_at' || capability === 'double_click' || capability === 'right_click' || capability === 'hover_at' || capability === 'scroll_at') {
+    const point = screenPoint(target, parameters, 'x', 'y');
+    if (capability === 'click_at') mouseClick(point, $.kCGMouseButtonLeft, 1, 0);
+    else if (capability === 'double_click') mouseClick(point, $.kCGMouseButtonLeft, 2, parameters.interval_ms);
+    else if (capability === 'right_click') mouseClick(point, $.kCGMouseButtonRight, 1, 0);
+    else if (capability === 'hover_at') movePointer(cursorPoint(), point, parameters.duration_ms, false);
+    else {
+      movePointer(cursorPoint(), point, 0, false);
+      const direction = String(parameters.direction || 'down').toLowerCase();
+      if (!['up', 'down', 'left', 'right'].includes(direction)) fail('invalid_arguments', 'direction must be up, down, left, or right.');
+      const amount = Math.max(1, Math.min(20, Math.trunc(Number(parameters.amount || 3))));
+      const vertical = direction === 'up' ? amount : direction === 'down' ? -amount : 0;
+      const horizontal = direction === 'left' ? amount : direction === 'right' ? -amount : 0;
+      const event = $.CGEventCreateScrollWheelEvent(null, $.kCGScrollEventUnitLine, 2, vertical, horizontal);
+      $.CGEventPost($.kCGHIDEventTap, event);
+    }
+    const actual = cursorPoint();
+    const pointerVerified = Math.abs(actual.x - point.x) <= 2 && Math.abs(actual.y - point.y) <= 2;
+    return { ok: true, verified: pointerVerified, uncertain: !pointerVerified, skipSnapshot: true, visualChangeExpected: capability !== 'hover_at', summary: `Performed ${capability} at (${Math.round(point.x)}, ${Math.round(point.y)}).`, diagnostics: { method: 'Quartz CGEvent', point, actualPointer: actual, pointerVerified, foregroundRequired: true } };
+  }
+  let from;
+  let to;
+  if (capability === 'drag') {
+    from = screenPoint(target, parameters, 'from_x', 'from_y');
+    to = screenPoint(target, parameters, 'to_x', 'to_y');
+  } else {
+    from = screenPoint(target, parameters, 'x', 'y');
+    const direction = String(parameters.direction || '').toLowerCase();
+    if (!['up', 'down', 'left', 'right'].includes(direction)) fail('invalid_arguments', 'direction must be up, down, left, or right.');
+    const distance = Math.max(1, Math.min(2000, Number(parameters.distance || 240)));
+    const delta = { up: [0, -distance], down: [0, distance], left: [-distance, 0], right: [distance, 0] }[direction];
+    const screenParameters = { coordinate_space: 'screen', to_x: from.x + delta[0], to_y: from.y + delta[1] };
+    to = screenPoint(target, screenParameters, 'to_x', 'to_y');
+  }
+  movePointer(cursorPoint(), from, 0, false);
+  postMouse($.kCGEventLeftMouseDown, from, $.kCGMouseButtonLeft, 1);
+  movePointer(from, to, parameters.duration_ms || 350, true);
+  postMouse($.kCGEventLeftMouseUp, to, $.kCGMouseButtonLeft, 1);
+  const actual = cursorPoint();
+  const pointerVerified = Math.abs(actual.x - to.x) <= 2 && Math.abs(actual.y - to.y) <= 2;
+  return { ok: true, verified: pointerVerified, uncertain: !pointerVerified, skipSnapshot: true, visualChangeExpected: true, summary: `Performed ${capability} gesture.`, diagnostics: { method: 'Quartz CGEvent', from, to, actualPointer: actual, pointerVerified, foregroundRequired: true } };
+}
+
+function performKeySequence(resolved, parameters) {
+  const steps = Array.isArray(parameters.steps) ? parameters.steps : [];
+  if (!steps.length || steps.length > 64) fail('invalid_arguments', 'key_sequence requires between 1 and 64 steps.');
+  for (const step of steps) {
+    const type = String((step && step.type) || '').toLowerCase();
+    if (type === 'shortcut') sendKeyChord(resolved.se, step.keys || []);
+    else if (type === 'text') resolved.se.keystroke(String(step.text || ''));
+    else if (type === 'key') sendKeyChord(resolved.se, [String(step.key || '')]);
+    else if (type === 'pause') delaySeconds(Math.max(0, Math.min(5000, Number(step.ms || 0))) / 1000);
+    else fail('invalid_arguments', `Unsupported key_sequence step type: ${type || '(empty)'}.`);
+  }
+  return { ok: true, verified: false, uncertain: true, skipSnapshot: true, visualChangeExpected: true, summary: 'Executed the atomic keyboard sequence.', diagnostics: { method: 'System Events', stepCount: steps.length, foregroundRequired: true } };
+}
+
 function snapshotFrom(root, rootPath, options) {
   const maxNodes = Math.max(1, Math.min(200, Number(options.maxNodes || 80)));
   const maxDepth = Math.max(1, Math.min(16, Number(options.maxDepth || 8)));
@@ -292,7 +440,9 @@ function focusTarget(target) {
   const resolved = resolveTarget(target || {});
   resolved.proc.frontmost = true;
   safe(() => performNativeAction(resolved.win, ['AXRaise']), null);
-  return { ok: true, summary: `Focused ${safe(() => resolved.proc.name(), 'application')}.` };
+  delaySeconds(0.06);
+  const foregroundPid = Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier);
+  return { ok: true, verified: foregroundPid === Number(target.pid || 0), summary: `Focused ${safe(() => resolved.proc.name(), 'application')}.`, diagnostics: { foregroundPid } };
 }
 
 function keyInfo(keys) {
@@ -331,6 +481,10 @@ function perform(payload) {
     return performSafari(payload.target || {}, capability, parameters);
   }
   const resolved = resolveTarget(payload.target || {});
+  if (['click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at'].includes(capability)) {
+    return performCoordinateAction(payload.target || {}, capability, parameters);
+  }
+  if (capability === 'key_sequence') return performKeySequence(resolved, parameters);
   const element = payload.nativeRef ? resolveElement(resolved.win, payload.nativeRef) : resolved.win;
   if (capability === 'press' || capability === 'select') {
     const action = performNativeAction(element, ['AXPress', 'AXConfirm', 'AXPick']);
@@ -361,6 +515,29 @@ function perform(payload) {
     if (after !== expected) fail('verification_failed', 'Text input could not be verified through the accessibility value.');
     return { ok: true, verified: true, summary: 'Wrote and verified text through the accessibility value.', diagnostics: { method: 'AXValue', role: info.role, before, after, backgroundSafe: true } };
   }
+  if (capability === 'set_selection_range') {
+    const range = selectionRangeFromParameters(element, parameters);
+    const result = setSelectionWithKeyboard(resolved, element, range);
+    return { ok: true, verified: result.verified, uncertain: !result.verified, skipSnapshot: true, summary: result.verified ? 'Selected and verified the requested text range.' : 'Selected the requested text range, but the accessibility API did not expose verification.', diagnostics: { method: 'AX focus and keyboard range', start: range.start, end: range.end, expected: range.expected, observed: result.observed, foregroundRequired: true } };
+  }
+  if (capability === 'select_text') {
+    const value = String(cleanValue(safe(() => element.value(), '')));
+    const needle = String(parameters.text || '');
+    if (!needle) fail('invalid_arguments', 'select_text requires non-empty text.');
+    const source = parameters.case_sensitive === true ? value : value.toLowerCase();
+    const wanted = parameters.case_sensitive === true ? needle : needle.toLowerCase();
+    const occurrence = Math.max(1, Math.trunc(Number(parameters.occurrence || 1)));
+    let start = -1;
+    let cursor = 0;
+    for (let index = 0; index < occurrence; index += 1) {
+      start = source.indexOf(wanted, cursor);
+      if (start < 0) fail('text_not_found', `Could not find occurrence ${occurrence} of the requested text.`);
+      cursor = start + wanted.length;
+    }
+    const range = selectionRangeFromParameters(element, { start, end: start + needle.length });
+    const result = setSelectionWithKeyboard(resolved, element, range);
+    return { ok: true, verified: result.verified, uncertain: !result.verified, skipSnapshot: true, summary: result.verified ? 'Selected and verified the requested text.' : 'Selected the requested text, but the accessibility API did not expose verification.', diagnostics: { method: 'AX focus and keyboard range', start: range.start, end: range.end, expected: range.expected, observed: result.observed, foregroundRequired: true } };
+  }
   if (capability === 'key_chord') {
     sendKeyChord(resolved.se, parameters.keys || []);
     return { ok: true, verified: false, uncertain: true, summary: 'Sent the keyboard shortcut, but its application effect could not be verified.', diagnostics: { method: 'System Events', foregroundRequired: true } };
@@ -374,8 +551,7 @@ function perform(payload) {
     if (action) {
       for (let index = 0; index < amount; index += 1) action.perform();
     } else {
-      const code = direction === 'up' ? 126 : direction === 'left' ? 123 : direction === 'right' ? 124 : 125;
-      for (let index = 0; index < amount; index += 1) resolved.se.keyCode(code);
+      fail('unsupported_action', 'This element does not expose semantic scrolling. Use scroll_at for a focused coordinate wheel action.');
     }
     return { ok: true, summary: `Scrolled ${direction}.` };
   }

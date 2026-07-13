@@ -121,6 +121,21 @@ function quickChatDedupAppend(prev, additions) {
   return add.length ? prev.concat(add) : prev;
 }
 
+function quickChatConfirmUserMessage(prev, confirmation) {
+  var userMessage = confirmation && confirmation.userMessage;
+  if (!userMessage) return prev;
+  var optimisticId = String(confirmation.optimisticId || "");
+  if (optimisticId) {
+    for (var i = 0; i < prev.length; i++) {
+      if (String(prev[i] && prev[i].id || "") !== optimisticId) continue;
+      var confirmed = prev.slice();
+      confirmed[i] = { ...userMessage, optimistic: false };
+      return confirmed;
+    }
+  }
+  return quickChatDedupAppend(prev, [userMessage]);
+}
+
 function QuickChatApp() {
   var model = window.WorkbenchChatModel;
   // Shared singleton run-manager: owns the send stream and folds live SSE
@@ -241,8 +256,14 @@ function QuickChatApp() {
     runtimeEngine.setHooks({
       onUserMessage: function (chatId, userMessage) {
         if (chatId !== activeChatIdRef.current) return;
-        notifySent(activeProjectIdRef.current, chatId);
         setMessages(function (prev) { return quickChatDedupAppend(prev, [userMessage]); });
+      },
+      onUserMessageConfirmed: function (chatId, confirmation) {
+        if (chatId !== activeChatIdRef.current) return;
+        // Tell the main window only after the server accepted the turn; the
+        // optimistic message itself is solely a local ordering/latency fix.
+        notifySent(activeProjectIdRef.current, chatId);
+        setMessages(function (prev) { return quickChatConfirmUserMessage(prev, confirmation); });
       },
       onAssistantSaved: function (chatId, assistantMessages) {
         if (chatId !== activeChatIdRef.current) return;

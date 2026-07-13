@@ -1695,8 +1695,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
 
     def _project_data_key(project_id: str) -> str:
         R = _routes()
-        store = R._read_workbench_store()
-        project = R._workbench_find_project(store, project_id)
+        project = R._workbench_find_project_lightweight(project_id)
         return R._workbench_project_data_key(project) if project else project_id
 
     @router.get("/api/workbench/chats")
@@ -1795,18 +1794,31 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
 
     @router.post("/api/workbench/chats")
     async def api_workbench_create_chat(body_model: api_models.ChatCreateBody):
+        started = time.monotonic()
         body = api_models.body_dict(body_model)
         project_id = str(body.get("project") or body.get("projectId") or "").strip()
         if not project_id:
             return JSONResponse({"error": "project is required"}, status_code=400)
         R = _routes()
-        store = R._read_workbench_store()
-        if not R._workbench_find_project(store, project_id):
+        project = await asyncio.to_thread(R._workbench_find_project_lightweight, project_id)
+        if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
-        payload = _read_chats_store()
-        chat = _new_chat(project_id, str(body.get("title") or ""), R._get_model())
-        payload.setdefault("chats", []).insert(0, chat)
-        _write_chats_store(payload)
+
+        def create_and_persist() -> dict[str, Any]:
+            payload = _read_chats_store()
+            chat = _new_chat(project_id, str(body.get("title") or ""), R._get_model())
+            payload.setdefault("chats", []).insert(0, chat)
+            _write_chats_store(payload)
+            return chat
+
+        chat = await asyncio.to_thread(create_and_persist)
+        elapsed_ms = (time.monotonic() - started) * 1000
+        if elapsed_ms >= 250:
+            logger.warning(
+                "Slow Workbench chat creation [project=%s duration_ms=%.1f]",
+                project_id,
+                elapsed_ms,
+            )
         return {"ok": True, "chat": _public_chat_full(chat)}
 
     @router.get("/api/workbench/chats/{chat_id}")

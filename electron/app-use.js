@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const path = require('path');
 const { execFile } = require('child_process');
 
-const MANIFEST_VERSION = 'app-use-semantic-v1';
+const MANIFEST_VERSION = 'app-use-semantic-v2';
 const DEFAULT_SESSION_TTL_MS = 5 * 60 * 1000;
 
 const CAPABILITIES = Object.freeze([
@@ -15,7 +15,17 @@ const CAPABILITIES = Object.freeze([
   { name: 'toggle', description: 'Toggle a checkbox, switch, or expandable control.', arguments: { ref: 'string' }, background: 'safe_when_supported' },
   { name: 'scroll', description: 'Scroll an accessible container or the target window.', arguments: { ref: 'string?', direction: 'up|down|left|right', amount: 'integer?' }, background: 'safe_when_supported' },
   { name: 'type_text', description: 'Write text to a semantically editable element and verify its value. This works in the background only when the accessibility provider exposes a writable value.', arguments: { ref: 'string', text: 'string', replace: 'boolean?' }, background: 'safe_when_supported' },
+  { name: 'select_text', description: 'Select an exact text occurrence inside an editable text control.', arguments: { ref: 'string', text: 'string', occurrence: 'integer?', case_sensitive: 'boolean?' }, background: 'requires_focus' },
+  { name: 'set_selection_range', description: 'Set the selected character range in an editable text control using zero-based start and exclusive end offsets.', arguments: { ref: 'string', start: 'integer', end: 'integer' }, background: 'requires_focus' },
+  { name: 'click_at', description: 'Click a point inside the connected window. Coordinates are window-relative by default.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?' }, background: 'requires_focus' },
+  { name: 'double_click', description: 'Double-click a point inside the connected window.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', interval_ms: 'integer?' }, background: 'requires_focus' },
+  { name: 'right_click', description: 'Right-click a point inside the connected window.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?' }, background: 'requires_focus' },
+  { name: 'hover_at', description: 'Move the pointer to a point inside the connected window.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', duration_ms: 'integer?' }, background: 'requires_focus' },
+  { name: 'drag', description: 'Drag from one point to another inside the connected window.', arguments: { from_x: 'number', from_y: 'number', to_x: 'number', to_y: 'number', coordinate_space: 'window|screen?', duration_ms: 'integer?' }, background: 'requires_focus' },
+  { name: 'swipe', description: 'Drag from a starting point in one direction inside the connected window.', arguments: { x: 'number', y: 'number', direction: 'up|down|left|right', distance: 'number?', coordinate_space: 'window|screen?', duration_ms: 'integer?' }, background: 'requires_focus' },
+  { name: 'scroll_at', description: 'Send vertical or horizontal wheel scrolling at a point inside the connected window.', arguments: { x: 'number', y: 'number', direction: 'up|down|left|right', amount: 'integer?', coordinate_space: 'window|screen?' }, background: 'requires_focus' },
   { name: 'key_chord', description: 'Send a key or keyboard shortcut to the target window.', arguments: { keys: 'string[]' }, background: 'requires_focus' },
+  { name: 'key_sequence', description: 'Atomically execute shortcut, text, key, and pause steps during one temporary-focus interval.', arguments: { steps: '{type:shortcut|text|key|pause,keys?:string[],text?:string,key?:string,ms?:integer}[]' }, background: 'requires_focus' },
   { name: 'wait', description: 'Wait for an element or property condition, then return a fresh semantic snapshot.', arguments: { ref: 'string?', property: 'string?', equals: 'any?', contains: 'string?', exists: 'boolean?', timeout_ms: 'integer?' }, background: 'safe' },
   { name: 'visual_describe', description: 'Capture the connected window and return a text description through Cyrene\'s configured vision model.', arguments: { prompt: 'string?' }, background: 'safe' },
   { name: 'focus_window', description: 'Bring the connected target window to the foreground.', arguments: {}, background: 'changes_focus' },
@@ -45,6 +55,17 @@ class AppUseError extends Error {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function captureFingerprint(capture) {
+  const encoded = String((capture && capture.imageBase64) || '');
+  const suppliedPixelHash = String((capture && capture.pixelHash) || '');
+  if (!encoded && !suppliedPixelHash) return null;
+  return {
+    sha256: suppliedPixelHash || crypto.createHash('sha256').update(Buffer.from(encoded, 'base64')).digest('hex'),
+    width: Number(capture.width || 0),
+    height: Number(capture.height || 0),
+  };
 }
 
 function clampInteger(value, fallback, min, max) {
@@ -451,8 +472,11 @@ class AppUseManager {
       session.previousFocusTarget = null;
       session.previousFocusWasHost = true;
     }
-    await this.provider.focusTarget(session.target);
-    return { ok: true };
+    const result = await this.provider.focusTarget(session.target);
+    if (result && result.verified === false) {
+      throw new AppUseError('focus_failed', `Could not focus ${session.target.appName || 'the target application'}.`);
+    }
+    return result || { ok: true };
   }
 
   async _restoreFocus(session) {
@@ -474,7 +498,14 @@ class AppUseManager {
     }
     if (capability === 'restore_previous_focus') return this._restoreFocus(session);
 
-    const needsFocus = capability === 'key_chord';
+    const focusCapabilities = new Set([
+      'select_text', 'set_selection_range', 'click_at', 'double_click', 'right_click',
+      'hover_at', 'drag', 'swipe', 'scroll_at', 'key_chord', 'key_sequence',
+    ]);
+    const visualCapabilities = new Set([
+      'click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at', 'key_sequence',
+    ]);
+    const needsFocus = focusCapabilities.has(capability);
     let focusedTemporarily = false;
     if (needsFocus && session.focusPolicy === 'never') {
       throw new AppUseError('focus_required', `${capability} requires the target window to be focused.`);
@@ -483,19 +514,50 @@ class AppUseManager {
       await this._focusSessionTarget(session);
       focusedTemporarily = true;
       await delay(100);
+    } else if (needsFocus && session.focusPolicy === 'always') {
+      await this._focusSessionTarget(session);
+      await delay(100);
     }
-    const refFree = ['key_chord', 'browser_state', 'navigate', 'reload'];
+    const refFree = [
+      'click_at', 'double_click', 'right_click', 'hover_at', 'drag', 'swipe', 'scroll_at',
+      'key_chord', 'key_sequence', 'browser_state', 'navigate', 'reload',
+    ];
     const needsRef = !refFree.includes(capability) && capability !== 'scroll';
     const nativeRef = this._nativeRef(session, parameters.ref, needsRef);
     let result;
     let restoreResult = null;
+    let beforeVisual = null;
+    let afterVisual = null;
+    if (visualCapabilities.has(capability) && typeof this.captureTarget === 'function') {
+      beforeVisual = captureFingerprint(await this.captureTarget(session.target).catch(() => null));
+    }
     try {
       result = await this.provider.perform(session.target, capability, nativeRef, parameters);
+      if (visualCapabilities.has(capability) && typeof this.captureTarget === 'function') {
+        await delay(120);
+        afterVisual = captureFingerprint(await this.captureTarget(session.target).catch(() => null));
+      }
     } finally {
       if (focusedTemporarily && parameters.restore_focus !== false) {
         restoreResult = await this._restoreFocus(session).catch((error) => ({
           status: 'error', message: String(error && error.message ? error.message : error),
         }));
+      }
+    }
+    const visualVerification = beforeVisual && afterVisual ? {
+      available: true,
+      changed: beforeVisual.sha256 !== afterVisual.sha256,
+      before_sha256: beforeVisual.sha256,
+      after_sha256: afterVisual.sha256,
+      width: afterVisual.width,
+      height: afterVisual.height,
+    } : { available: false, changed: null };
+    if (result.visualChangeExpected === true) {
+      if (visualVerification.available && visualVerification.changed) {
+        result.verified = true;
+        result.uncertain = false;
+      } else {
+        result.uncertain = true;
       }
     }
     let verification = result.verification || null;
@@ -510,6 +572,7 @@ class AppUseManager {
       session_id: session.sessionId,
       focused_temporarily: focusedTemporarily,
       diagnostics: result.diagnostics || null,
+      visual_verification: visualCapabilities.has(capability) ? visualVerification : null,
       focus_restore: restoreResult,
       verification,
       next_valid_actions: result.nextValidActions || ['call:wait', 'call:snapshot', 'disconnect'],
@@ -572,6 +635,14 @@ class AppUseManager {
         mime_type: String(capture.mimeType || 'image/png'),
         width: Number(capture.width || 0),
         height: Number(capture.height || 0),
+        coordinate_mapping: {
+          input_space: 'window',
+          logical_width: Number((session.target.bounds && session.target.bounds.width) || 0),
+          logical_height: Number((session.target.bounds && session.target.bounds.height) || 0),
+          captured_width: Number(capture.width || 0),
+          captured_height: Number(capture.height || 0),
+          note: 'Scale captured-image coordinates into window-relative logical coordinates before pointer actions.',
+        },
         prompt: String(parameters.prompt || ''),
       };
     }

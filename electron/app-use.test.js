@@ -106,6 +106,10 @@ test('connect discloses runtime capabilities without changing the gateway', asyn
   assert.deepEqual(connected.capabilities, CAPABILITIES);
   assert.ok(connected.capabilities.some((item) => item.name === 'snapshot'));
   assert.ok(connected.capabilities.some((item) => item.name === 'key_chord'));
+  assert.ok(connected.capabilities.some((item) => item.name === 'click_at'));
+  assert.ok(connected.capabilities.some((item) => item.name === 'drag'));
+  assert.ok(connected.capabilities.some((item) => item.name === 'select_text'));
+  assert.ok(connected.capabilities.some((item) => item.name === 'key_sequence'));
   assert.ok(connected.capabilities.some((item) => item.name === 'visual_describe'));
 });
 
@@ -305,6 +309,81 @@ test('provider unverifiable actions are never reported as success', async () => 
     session_id: connected.session_id, capability: 'press', parameters: { ref: save.ref },
   });
   assert.equal(result.status, 'uncertain');
+});
+
+test('coordinate actions focus once, restore, and report screenshot differences', async () => {
+  const provider = new FakeProvider();
+  provider.perform = async (target, capability, nativeRef, parameters) => ({
+    ok: true, verified: true, skipSnapshot: true, visualChangeExpected: true,
+    summary: `${capability} injected`, diagnostics: { parameters },
+  });
+  let captureCount = 0;
+  const manager = new AppUseManager({
+    provider,
+    ownPid: 999,
+    captureTarget: async () => ({
+      imageBase64: Buffer.from(`frame-${captureCount += 1}`).toString('base64'), width: 800, height: 600,
+    }),
+  });
+  const listed = await manager.handle('list_targets', {});
+  const connected = await manager.handle('connect', {
+    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
+    parameters: {},
+  });
+  const result = await manager.handle('call', {
+    session_id: connected.session_id,
+    capability: 'click_at',
+    parameters: { x: 20, y: 30 },
+  });
+  assert.equal(result.status, 'success');
+  assert.equal(result.visual_verification.available, true);
+  assert.equal(result.visual_verification.changed, true);
+  assert.deepEqual(provider.focused, ['200', '100']);
+});
+
+test('coordinate action with no visual change is uncertain', async () => {
+  const provider = new FakeProvider();
+  provider.perform = async () => ({
+    ok: true, verified: true, skipSnapshot: true, visualChangeExpected: true, summary: 'injected',
+  });
+  const manager = new AppUseManager({
+    provider,
+    ownPid: 999,
+    captureTarget: async () => ({ imageBase64: Buffer.from('same-frame').toString('base64'), width: 800, height: 600 }),
+  });
+  const listed = await manager.handle('list_targets', {});
+  const connected = await manager.handle('connect', {
+    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
+    parameters: {},
+  });
+  const result = await manager.handle('call', {
+    session_id: connected.session_id, capability: 'right_click', parameters: { x: 20, y: 30 },
+  });
+  assert.equal(result.status, 'uncertain');
+  assert.equal(result.visual_verification.changed, false);
+});
+
+test('selection and atomic key sequence each use one temporary focus interval', async () => {
+  const { manager, provider, connected } = await connectedManager();
+  const snapshot = await manager.handle('call', {
+    session_id: connected.session_id, capability: 'snapshot', parameters: {},
+  });
+  const body = snapshot.nodes.find((node) => node.name === 'Body');
+  const selection = await manager.handle('call', {
+    session_id: connected.session_id,
+    capability: 'set_selection_range',
+    parameters: { ref: body.ref, start: 0, end: 2 },
+  });
+  assert.equal(selection.status, 'success');
+  assert.deepEqual(provider.focused, ['200', '100']);
+  provider.focused.length = 0;
+  const sequence = await manager.handle('call', {
+    session_id: connected.session_id,
+    capability: 'key_sequence',
+    parameters: { steps: [{ type: 'shortcut', keys: ['command', 'l'] }, { type: 'text', text: 'example.com' }, { type: 'key', key: 'return' }] },
+  });
+  assert.equal(sequence.focused_temporarily, true);
+  assert.deepEqual(provider.focused, ['200', '100']);
 });
 
 test('wait observes a later semantic value', async () => {

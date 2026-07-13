@@ -3,6 +3,17 @@ import subprocess
 from pathlib import Path
 
 
+def test_new_workbench_chat_reuses_create_response_without_refetching():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'var skipNextHydrationChatIdRef = useWbcRef("");' in source
+    assert "skipNextHydrationChatIdRef.current = chat.id;" in source
+    assert "skipNextHydrationChatIdRef.current === activeChatId" in source
+
+
 def _run_workbench_model_js(expression: str):
     root = Path(__file__).resolve().parent.parent
     model_path = root / "src" / "workbench-webui" / "workbench-model.jsx"
@@ -29,6 +40,28 @@ global.document = {{ documentElement: {{ dataset: {{}} }} }};
 global.React = {{ useState: () => [0, () => {{}}], useEffect: () => {{}} }};
 eval(fs.readFileSync({json.dumps(str(i18n_path))}, "utf8"));
 window.WorkbenchI18n.setLang("zh");
+const result = ({expression});
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
+def _run_workbench_runtime_js(expression: str):
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    runtime_source = source.split(
+        "var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {", 1
+    )[1].split("// Page", 1)[0]
+    runtime_source = (
+        "var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {"
+        + runtime_source
+    )
+    script = f"""
+global.window = {{ __sseHandlers: {{ add: () => {{}} }} }};
+eval({json.dumps(runtime_source)});
 const result = ({expression});
 process.stdout.write(JSON.stringify(result));
 """
@@ -267,6 +300,82 @@ def test_workbench_chat_supports_parallel_conversation_runtimes():
     assert "workbenchChat.lockedByOther" not in i18n
 
 
+def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    quick_source = (
+        root / "src" / "workbench-webui" / "workbench-quick-chat.jsx"
+    ).read_text(encoding="utf-8")
+
+    start_block = source.split("function start(chatId, input, model)", 1)[1].split(
+        "function reconnect(chatId, model)", 1
+    )[0]
+    ack_block = source.split("onAck: function (event) {", 1)[1].split(
+        "onReplyStart:", 1
+    )[0]
+
+    assert 'id: optimisticId' in start_block
+    assert 'role: "user"' in start_block
+    assert "attachments: Array.isArray(input.attachments)" in start_block
+    assert start_block.index('fire("onUserMessage"') < start_block.index("update(chatId")
+    assert "optimisticUserMessageId" in start_block
+    assert 'fire("onUserMessageConfirmed"' in ack_block
+    assert "optimisticId" in ack_block
+    assert "onUserMessageConfirmed: function" in source
+    assert "onUserMessageConfirmed: function" in quick_source
+    assert "quickChatConfirmUserMessage" in quick_source
+
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  const events = [];
+  const userMessages = [];
+  const confirmations = [];
+  let handlers = null;
+  WorkbenchChatRuntimes.setHooks({
+    onUserMessage: (_chatId, message) => {
+      events.push("user");
+      userMessages.push(message);
+    },
+    onUserMessageConfirmed: (_chatId, confirmation) => {
+      events.push("confirmed");
+      confirmations.push(confirmation);
+    }
+  });
+  WorkbenchChatRuntimes.subscribe(() => events.push("runtime"));
+  WorkbenchChatRuntimes.start(
+    "chat-1",
+    { message: "hello", attachments: [{ id: "file-1" }] },
+    {
+      sendMessage: (_chatId, _input, nextHandlers) => {
+        handlers = nextHandlers;
+        return new Promise(() => {});
+      }
+    }
+  );
+  const beforeAck = events.slice();
+  handlers.onAck({
+    userMessage: { id: "msg-1", role: "user", content: "hello" }
+  });
+  return {
+    beforeAck,
+    optimistic: userMessages[0],
+    confirmation: confirmations[0]
+  };
+})()
+"""
+    )
+
+    assert result["beforeAck"] == ["user", "runtime"]
+    assert result["optimistic"]["content"] == "hello"
+    assert result["optimistic"]["attachments"] == [{"id": "file-1"}]
+    assert result["optimistic"]["optimistic"] is True
+    assert result["confirmation"]["optimisticId"] == result["optimistic"]["id"]
+    assert result["confirmation"]["userMessage"]["id"] == "msg-1"
+
+
 def test_workbench_chat_reveals_browser_tab_from_live_browser_events():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
@@ -316,8 +425,32 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "输入内容以引导正在运行的 Agent" in (
         root / "src" / "workbench-webui" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
-    assert "workbench-chat.js?v=0.6.6" in index
-    assert "workbench-i18n.js?v=0.6.6" in index
+    assert "workbench-chat.js?v=0.6.7" in index
+    assert "workbench-i18n.js?v=0.6.7" in index
+
+
+def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    guidance_model = source.split("function sendGuidance", 1)[1].split(
+        "function answerChat", 1
+    )[0]
+    guidance_handler = source.split("function handleGuidance", 1)[1].split(
+        "function handleAnswer", 1
+    )[0]
+    trace_card = source.split("function WbcTraceCard", 1)[1].split(
+        "function WbcAssistantMessage", 1
+    )[0]
+
+    assert "timeout: 0" in guidance_model
+    assert 'id: "guidance_pending_" + clientRequestId' in guidance_handler
+    assert "optimistic: true" in guidance_handler
+    assert "response.userMessage" in guidance_handler
+    assert "item.clientRequestId" in guidance_handler
+    assert 'status: "completed"' in source
+    assert 'entry.status !== "completed"' in trace_card
 
 
 def test_workbench_chat_does_not_render_previous_transcript_during_switch():
@@ -690,7 +823,7 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
     assert "padding-inline: 8px;" in compact_tabs[0]
     assert "padding-inline: 2px;" in compact_tabs[1]
     assert "font-size: calc(12px * var(--wb-ui-font-scale, 1));" in compact_tabs[1]
-    assert "workbench.css?v=0.6.6" in index
+    assert "workbench.css?v=0.6.7" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -712,7 +845,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.6.6" in index
+    assert "workbench.css?v=0.6.7" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -754,7 +887,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=0.6.6" in index
+    assert "settings-overlay.js?v=0.6.7" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -891,7 +1024,7 @@ def test_workbench_context_picker_contains_long_workspace_paths():
     assert "text-overflow: ellipsis;" in text_rule
     assert "white-space: nowrap;" in text_rule
     assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=0.6.6" in index
+    assert "workbench-chat.js?v=0.6.7" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -907,7 +1040,7 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=0.6.6" in index
+    assert "workbench-model.js?v=0.6.7" in index
     assert "workbench.js?v=0.6.7" in index
 
 
@@ -981,7 +1114,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.models || p.primary_candidates || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=0.6.6" in index
+    assert "settings-overlay.js?v=0.6.7" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -1347,7 +1480,7 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=0.6.6" in index
+    assert "compiled/workbench-shortcuts.js?v=0.6.7" in index
 
 
 def test_workbench_about_related_actions_only_click_right_button():

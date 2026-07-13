@@ -115,6 +115,43 @@ async def test_tool_result_wakes_agent_before_blocked_persistence_finishes(
         await inbox.close()
 
 
+async def test_guidance_wakes_agent_before_blocked_persistence_finishes(
+    tmp_path, monkeypatch
+):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_guidance_persist", str(tmp_path / "workbench.db"))
+    original_persist = inbox._persist
+    persistence_started = threading.Event()
+    release_persistence = threading.Event()
+
+    def block_only_guidance(event):
+        if event.get("type") == "guidance":
+            persistence_started.set()
+            release_persistence.wait()
+        return original_persist(event)
+
+    monkeypatch.setattr(inbox, "_persist", block_only_guidance)
+    try:
+        put_task = asyncio.create_task(
+            inbox.put_guidance(
+                "立即改变方向", client_request_id="guide_blocked_persist"
+            )
+        )
+        assert await asyncio.to_thread(persistence_started.wait, 1)
+        guidance = inbox.collect_guidance_nowait()
+        assert [item["payload"]["text"] for item in guidance] == ["立即改变方向"]
+        assert not put_task.done()
+        inbox.acknowledge(guidance)
+        assert not release_persistence.is_set()
+        release_persistence.set()
+        event = await asyncio.wait_for(put_task, timeout=1)
+        assert event["event_id"] == guidance[0]["event_id"]
+    finally:
+        release_persistence.set()
+        await inbox.close()
+
+
 async def test_duplicate_durable_tool_result_is_still_delivered_in_memory(tmp_path, monkeypatch):
     from cyrene.workbench_inbox import WorkbenchAgentInbox
 
@@ -929,6 +966,13 @@ def test_workbench_composer_switches_stop_button_to_guidance_when_typed():
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in source
     assert 'wbcT("workbenchChat.guidance", "Guide")' in source
     assert "model.sendGuidance(chatId, text" in source
+    assert "timeout: 0" in source.split("function sendGuidance", 1)[1].split(
+        "function answerChat", 1
+    )[0]
+    assert 'id: "guidance_pending_" + clientRequestId' in source
+    assert "optimistic: true" in source
+    assert "wbcMergeChronologicalMessages(prev.messages || [], [optimisticMessage])" in source
+    assert 'entry.status !== "completed"' in source
     assert 'err.code === "chat_not_running"' in source
     assert "runtimeEngine.deferSend(chatId, { message: text }, model)" in source
     assert "terminal event wakes the deferred send" in source

@@ -2310,6 +2310,33 @@ def _read_workbench_store() -> dict[str, Any]:
             raise
 
 
+def _workbench_find_project_lightweight(project_id: str) -> dict[str, Any] | None:
+    """Look up one project without running read-time repair/backfill work.
+
+    Chat creation and chat-list scoping only need stable project metadata. The
+    normal ``_read_workbench_store`` path also enforces task invariants and
+    scans project workspaces for historical file artifacts; doing that work for
+    a foreign-key check makes a tiny chat request scale with every task and file.
+    """
+    target_id = str(project_id or "").strip()
+    if not target_id:
+        return None
+    with _WORKBENCH_STORE_LOCK:
+        if not _workbench_store_uses_sqlite():
+            raw = read_json_safe(_WORKBENCH_STORE)
+            if not isinstance(raw, dict) or not isinstance(raw.get("projects"), list):
+                raw = _workbench_default_project()
+        else:
+            raw = read_document(
+                _db_path or str(DB_PATH),
+                "projects",
+                _workbench_default_project,
+                legacy_path=_WORKBENCH_STORE,
+            )
+        project = _workbench_find_project(raw, target_id)
+        return dict(project) if isinstance(project, dict) else None
+
+
 def _write_workbench_store(
     payload: dict[str, Any],
     *,

@@ -180,6 +180,9 @@ var WorkbenchChatModel = (function () {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: message || "", clientRequestId: clientRequestId || "" }),
+      // Guidance is optimistically visible and idempotent. Do not turn a slow
+      // durable acknowledgement into a false failure after the agent accepted it.
+      timeout: 0,
     });
   }
 
@@ -279,6 +282,17 @@ function wbcMergeChronologicalMessages(messages, additions) {
     if (!item) return;
     var id = String(item.id || "");
     if (id && known.has(id)) return;
+    var clientRequestId = String(item.clientRequestId || "");
+    if (clientRequestId) {
+      for (var requestIndex = 0; requestIndex < merged.length; requestIndex++) {
+        if (String(merged[requestIndex] && merged[requestIndex].clientRequestId || "") !== clientRequestId) continue;
+        var previousId = String(merged[requestIndex] && merged[requestIndex].id || "");
+        merged[requestIndex] = { ...merged[requestIndex], ...item, optimistic: false };
+        if (previousId) known.delete(previousId);
+        if (id) known.add(id);
+        return;
+      }
+    }
     var at = String(item.createdAt || item.created_at || "");
     var index = merged.length;
     if (at) {
@@ -779,7 +793,13 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     return {
       onAck: function (event) {
         if (event.retry) return;
-        if (event.userMessage) fire("onUserMessage", chatId, event.userMessage);
+        if (event.userMessage) {
+          var runtime = get(chatId);
+          fire("onUserMessageConfirmed", chatId, {
+            optimisticId: String(runtime && runtime.optimisticUserMessageId || ""),
+            userMessage: event.userMessage,
+          });
+        }
       },
       onReplyStart: function () {
         update(chatId, function (cur) { return cur ? { ...cur, replying: true, lastEventAt: Date.now() } : null; });
@@ -875,9 +895,36 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
   // deterministic; returns the send promise otherwise.
   function start(chatId, input, model) {
     if (!chatId || runtimes[chatId]) return null;
+    input = input || {};
     var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
     if (ac) aborts[chatId] = ac;
-    update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false });
+    var startedAt = Date.now();
+    var optimisticUserMessage = null;
+    if (!input.retry) {
+      var optimisticId = "user_pending_" + startedAt + "_" + Math.random().toString(36).slice(2, 9);
+      optimisticUserMessage = {
+        id: optimisticId,
+        role: "user",
+        content: String(input.message || ""),
+        attachments: Array.isArray(input.attachments) ? input.attachments.slice() : [],
+        createdAt: new Date(startedAt).toISOString(),
+        optimistic: true,
+      };
+      // Publish the user's turn before the runtime. React can batch both state
+      // changes into one paint, but this ordering guarantees the transcript is
+      // already populated when the live thinking card becomes visible.
+      fire("onUserMessage", chatId, optimisticUserMessage);
+    }
+    update(chatId, {
+      chatId: chatId,
+      text: "",
+      progress: [],
+      segments: [],
+      startedAt: startedAt,
+      lastEventAt: startedAt,
+      replying: false,
+      optimisticUserMessageId: optimisticUserMessage ? optimisticUserMessage.id : "",
+    });
     return ownStream(
       chatId,
       model.sendMessage(chatId, input, streamHandlers(chatId), ac ? ac.signal : undefined),
@@ -910,7 +957,9 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
       if (["use_tools", "quit", "send_message", "update_plan_progress"].indexOf(toolName) >= 0) return;
       var args = event.args || {};
       var preview = Object.values(args).filter(Boolean).map(String).join(", ").slice(0, 60);
-      entry = { kind: "tool", text: toolName || wbcT("settings.tools", "Tools"), preview: preview };
+      // tool_call is emitted by the executor after the handler returns and
+      // already carries its result. It is a completion event, not a start event.
+      entry = { kind: "tool", text: toolName || wbcT("settings.tools", "Tools"), preview: preview, status: "completed" };
     } else if (event.type === "phase_transition" && (event.detail || event.detail_key)) {
       entry = { kind: "phase", text: event.detail ? String(event.detail).slice(0, 80) : "", detailKey: event.detail_key || "", detailParams: event.detail_params || {}, preview: "" };
     } else if (event.type === "subagent_update") {
@@ -965,6 +1014,9 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   var [chatLoading, setChatLoading] = useWbcState(false);
   var [loadRevision, setLoadRevision] = useWbcState(0);
   var projectIdRef = useWbcRef(projectId);
+  // POST /chats and /fork already return the complete conversation. Mark the
+  // adopted id so the selection effect does not clear it and fetch it again.
+  var skipNextHydrationChatIdRef = useWbcRef("");
 
   useWbcEffect(function () {
     chatsRef.current = chats;
@@ -1101,6 +1153,13 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   // subagent history are deliberately independent: auxiliary history must not
   // prevent an otherwise healthy conversation from rendering.
   useWbcEffect(function () {
+    if (activeChatId && skipNextHydrationChatIdRef.current === activeChatId) {
+      skipNextHydrationChatIdRef.current = "";
+      setChatLoading(false);
+      setSubagentLoading(false);
+      setSubagentData({ rounds: [], activeRoundId: "", agents: [], messages: [] });
+      return;
+    }
     // Do not keep rendering the previous transcript while the newly selected
     // chat is being fetched. This matters especially when the previous chat is
     // streaming: its latest user message would otherwise appear to belong to
@@ -1375,6 +1434,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
         }));
       } catch (e) {}
       setChats(function (prev) { return [chat].concat(prev); });
+      skipNextHydrationChatIdRef.current = chat.id;
       setActiveChatId(chat.id);
       setActiveChat(chat);
       return chat.id;
@@ -1415,8 +1475,25 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
       onUserMessage: function (chatId, userMessage) {
         setActiveChat(function (prev) {
           if (!prev || prev.id !== chatId) return prev;
-          if ((prev.messages || []).some(function (item) { return item.id === userMessage.id; })) return prev;
-          return { ...prev, messages: (prev.messages || []).concat([userMessage]) };
+          return { ...prev, messages: wbcMergeChronologicalMessages(prev.messages || [], [userMessage]) };
+        });
+      },
+      onUserMessageConfirmed: function (chatId, confirmation) {
+        setActiveChat(function (prev) {
+          if (!prev || prev.id !== chatId) return prev;
+          var userMessage = confirmation && confirmation.userMessage;
+          if (!userMessage) return prev;
+          var optimisticId = String(confirmation.optimisticId || "");
+          var messages = prev.messages || [];
+          if (optimisticId) {
+            for (var i = 0; i < messages.length; i++) {
+              if (String(messages[i] && messages[i].id || "") !== optimisticId) continue;
+              var confirmed = messages.slice();
+              confirmed[i] = { ...userMessage, optimistic: false };
+              return { ...prev, messages: confirmed };
+            }
+          }
+          return { ...prev, messages: wbcMergeChronologicalMessages(messages, [userMessage]) };
         });
       },
       onRetryTruncate: function (chatId, truncateInfo) {
@@ -1517,8 +1594,39 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     var chatId = activeChatIdRef.current;
     var text = String(message || "").trim();
     if (!chatId || !text || !runtimeEngine.isRunning(chatId)) return Promise.resolve(null);
+    var clientRequestId = "guide_" + Date.now();
+    var optimisticMessage = {
+      id: "guidance_pending_" + clientRequestId,
+      role: "user",
+      content: text,
+      createdAt: new Date().toISOString(),
+      guidance: true,
+      optimistic: true,
+      clientRequestId: clientRequestId,
+    };
     setError("");
-    return model.sendGuidance(chatId, text, "guide_" + Date.now()).catch(function (err) {
+    setActiveChat(function (prev) {
+      if (!prev || prev.id !== chatId) return prev;
+      return { ...prev, messages: wbcMergeChronologicalMessages(prev.messages || [], [optimisticMessage]) };
+    });
+    return model.sendGuidance(chatId, text, clientRequestId).then(function (response) {
+      if (response && response.userMessage) {
+        setActiveChat(function (prev) {
+          if (!prev || prev.id !== chatId) return prev;
+          return { ...prev, messages: wbcMergeChronologicalMessages(prev.messages || [], [response.userMessage]) };
+        });
+      }
+      return response;
+    }).catch(function (err) {
+      setActiveChat(function (prev) {
+        if (!prev || prev.id !== chatId) return prev;
+        return {
+          ...prev,
+          messages: (prev.messages || []).filter(function (item) {
+            return String(item && item.clientRequestId || "") !== clientRequestId;
+          }),
+        };
+      });
       if (err && err.code === "chat_not_running") {
         runtimeEngine.deferSend(chatId, { message: text }, model);
         return { deferred: true };
@@ -1591,6 +1699,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     setError("");
     model.forkChat(activeChat.id, messageId, newContent).then(function (newChat) {
       setChats(function (prev) { return [newChat].concat(prev); });
+      skipNextHydrationChatIdRef.current = newChat.id;
       setActiveChatId(newChat.id);
       setActiveChat(newChat);
       // Replay the edited user message (already the last entry in the forked
@@ -1603,6 +1712,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   function handleCreateChat() {
     model.createChat(projectId).then(function (chat) {
       setChats(function (prev) { return [chat].concat(prev); });
+      skipNextHydrationChatIdRef.current = chat.id;
       setActiveChatId(chat.id);
       setActiveChat(chat);
     }).catch(function (err) { setError(wbcErrorText(err)); });
@@ -2385,7 +2495,7 @@ function WbcTraceCard({ trace, live, label }) {
       {entries.length > 0 && (
         <ul className="wbc-trace-list">
           {entries.map(function (entry, i) {
-            var isLast = live && i === entries.length - 1;
+            var isLast = live && i === entries.length - 1 && entry.status !== "completed";
             var failed = !!entry.failed;
             return (
               <li key={i} className={failed ? "failed" : (isLast ? "active" : "done")}>

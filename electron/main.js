@@ -1178,6 +1178,7 @@ async function captureAppUseTarget(target) {
   const size = source.thumbnail.getSize();
   return {
     imageBase64: source.thumbnail.toPNG().toString('base64'),
+    pixelHash: require('crypto').createHash('sha256').update(source.thumbnail.toBitmap()).digest('hex'),
     mimeType: 'image/png',
     width: size.width,
     height: size.height,

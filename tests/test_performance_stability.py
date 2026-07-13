@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 import threading
 
@@ -75,6 +76,32 @@ def test_workbench_schema_cache_reinitializes_deleted_database(monkeypatch, tmp_
             "SELECT name FROM sqlite_master WHERE type='table' AND name='workbench_state'"
         ).fetchone()
     assert row is not None
+
+
+def test_lightweight_project_lookup_skips_workspace_repairs(monkeypatch, tmp_path):
+    from webui import routes
+
+    store_path = tmp_path / "workbench_projects.json"
+    store_path.write_text(
+        json.dumps({"projects": [{"id": "project-fast", "dataKey": "fast"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "_CONFIGURED_WORKBENCH_STORE", None)
+    monkeypatch.setattr(
+        routes,
+        "_workbench_ensure_invariants",
+        lambda _payload: (_ for _ in ()).throw(AssertionError("heavy repair path ran")),
+    )
+    monkeypatch.setattr(
+        routes,
+        "_workbench_workspace_file_snapshot",
+        lambda _root: (_ for _ in ()).throw(AssertionError("workspace scan ran")),
+    )
+
+    project = routes._workbench_find_project_lightweight("project-fast")
+
+    assert project == {"id": "project-fast", "dataKey": "fast"}
 
 
 def test_web_app_uses_single_lifespan_manager(tmp_path):

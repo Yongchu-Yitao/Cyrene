@@ -59,8 +59,10 @@ class WorkbenchAgentInbox:
         self._guidance_pending_count = 0
         self._tasks: set[asyncio.Task[Any]] = set()
         self._persistence_tasks: set[asyncio.Task[Any]] = set()
-        self._tool_results_persisting: set[str] = set()
-        self._tool_results_completed_early: set[str] = set()
+        self._live_events_persisting: set[str] = set()
+        self._live_events_completed_early: set[str] = set()
+        self._live_events_claimed_early: set[str] = set()
+        self._live_dedupe_events: dict[str, dict[str, Any]] = {}
         self._termination_reason = ""
         self._telemetry_tail: asyncio.Task[Any] | None = None
         self._result_queued_at: dict[str, float] = {}
@@ -314,7 +316,7 @@ class WorkbenchAgentInbox:
                     (self.run_id, self.session_id),
                 )
             for row in rows:
-                self._enqueue_nowait({
+                event = {
                     "event_id": str(row[0]),
                     "session_id": self.session_id,
                     "round_id": str(row[1] or ""),
@@ -323,7 +325,11 @@ class WorkbenchAgentInbox:
                     "dedupe_key": str(row[3] or ""),
                     "payload": json.loads(str(row[4]) or "{}"),
                     "created_at": str(row[5] or ""),
-                })
+                }
+                dedupe_key = str(event.get("dedupe_key") or "")
+                if dedupe_key:
+                    self._live_dedupe_events[dedupe_key] = event
+                self._enqueue_nowait(event)
             if rows:
                 self._guidance_pending_count += len(rows)
                 self._guidance_signal.set()
@@ -340,17 +346,27 @@ class WorkbenchAgentInbox:
     def _enqueue_nowait(self, event: dict[str, Any]) -> None:
         self._queue.put_nowait(self._queue_item(event))
 
-    def _complete_tool_result(self, event_id: str) -> None:
-        """Acknowledge a result without racing its background INSERT."""
-        if event_id in self._tool_results_persisting:
-            self._tool_results_completed_early.add(event_id)
+    def _complete_live_event(self, event_id: str) -> None:
+        """Acknowledge a live event without racing its background INSERT."""
+        if event_id in self._live_events_persisting:
+            self._live_events_completed_early.add(event_id)
             return
         self._complete(event_id)
 
-    def _schedule_tool_result_persistence(self, event: dict[str, Any]) -> None:
-        """Persist a live result without putting SQLite in the wakeup path."""
+    def _claim_live_event(self, event_id: str) -> None:
+        """Claim guidance without waiting for its background INSERT."""
+        if event_id in self._live_events_persisting:
+            self._live_events_claimed_early.add(event_id)
+            return
+        self._claim(event_id)
+
+    def _schedule_live_event_persistence(
+        self, event: dict[str, Any]
+    ) -> asyncio.Task[Any]:
+        """Persist a live inbox event without putting SQLite in its wakeup path."""
         event_id = str(event["event_id"])
-        self._tool_results_persisting.add(event_id)
+        event_type = str(event.get("type") or "event")
+        self._live_events_persisting.add(event_id)
 
         async def persist() -> None:
             durable_event_id = event_id
@@ -361,20 +377,22 @@ class WorkbenchAgentInbox:
                         self._existing_event_id, str(event.get("dedupe_key") or "")
                     ) or event_id
                     logger.info(
-                        "Workbench tool result already persisted; live result was still delivered "
-                        "[session_id=%s event_id=%s durable_event_id=%s]",
+                        "Workbench inbox event already persisted; live event was still delivered "
+                        "[session_id=%s event_type=%s event_id=%s durable_event_id=%s]",
                         self.session_id,
+                        event_type,
                         event_id,
                         durable_event_id,
                     )
                 elif persisted is None:
                     logger.warning(
-                        "Workbench tool-result persistence failed after live delivery "
-                        "[session_id=%s event_id=%s]",
+                        "Workbench inbox persistence failed after live delivery "
+                        "[session_id=%s event_type=%s event_id=%s]",
                         self.session_id,
+                        event_type,
                         event_id,
                     )
-                if event_id in self._tool_results_completed_early and persisted is not None:
+                if event_id in self._live_events_completed_early and persisted is not None:
                     await asyncio.to_thread(self._complete, durable_event_id)
                 elif self._closed and persisted is not None:
                     await asyncio.to_thread(
@@ -382,22 +400,27 @@ class WorkbenchAgentInbox:
                         durable_event_id,
                         self._termination_reason or "completed",
                     )
+                elif event_id in self._live_events_claimed_early and persisted is not None:
+                    await asyncio.to_thread(self._claim, durable_event_id)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception(
-                    "Workbench tool-result persistence failed after live delivery "
-                    "[session_id=%s event_id=%s]",
+                    "Workbench inbox persistence failed after live delivery "
+                    "[session_id=%s event_type=%s event_id=%s]",
                     self.session_id,
+                    event_type,
                     event_id,
                 )
             finally:
-                self._tool_results_persisting.discard(event_id)
-                self._tool_results_completed_early.discard(event_id)
+                self._live_events_persisting.discard(event_id)
+                self._live_events_completed_early.discard(event_id)
+                self._live_events_claimed_early.discard(event_id)
 
         task = asyncio.create_task(persist())
         self._persistence_tasks.add(task)
         task.add_done_callback(self._persistence_tasks.discard)
+        return task
 
     def _record_event_background(self, event_type: str, **kwargs: Any) -> None:
         """Write ordered handoff telemetry without blocking inbox consumption."""
@@ -432,6 +455,10 @@ class WorkbenchAgentInbox:
     ) -> dict[str, Any]:
         if self._closed:
             raise RuntimeError("Workbench agent inbox is closed")
+        dedupe_key = str(dedupe_key or "")
+        if dedupe_key and dedupe_key in self._live_dedupe_events:
+            existing = self._live_dedupe_events[dedupe_key]
+            return {**existing, "duplicate": True}
         event = {
             "event_id": f"evt_{uuid4().hex}",
             "session_id": self.session_id,
@@ -441,15 +468,24 @@ class WorkbenchAgentInbox:
             "type": str(event_type),
             "payload": dict(payload or {}),
             "priority": int(priority),
-            "dedupe_key": str(dedupe_key or ""),
+            "dedupe_key": dedupe_key,
             "created_at": _now(),
         }
-        if event_type == "tool_result":
-            # The live agent must be woken before any optional durability work.
+        if event_type in {"tool_result", "guidance"}:
+            # The live agent must be woken before optional durability work.
             # A slow or unavailable SQLite connection can no longer strand an
-            # already-completed tool call between execution and inbox delivery.
+            # already-completed tool call or user guidance before inbox delivery.
+            if dedupe_key:
+                self._live_dedupe_events[dedupe_key] = event
+            if event_type == "guidance":
+                self._guidance_pending_count += 1
+                self._guidance_signal.set()
             self._enqueue_nowait(event)
-            self._schedule_tool_result_persistence(event)
+            persistence_task = self._schedule_live_event_persistence(event)
+            if event_type == "guidance":
+                # The agent is already awake, but do not acknowledge acceptance
+                # to the HTTP caller until the recoverable copy is durable.
+                await persistence_task
             return event
 
         persisted = self._persist(event)
@@ -771,14 +807,14 @@ class WorkbenchAgentInbox:
             event_type = str(event.get("type") or "")
             if event_type == "guidance":
                 self._guidance.append(event)
-                self._claim(event["event_id"])
-                self._record_event(
+                self._claim_live_event(str(event["event_id"]))
+                self._record_event_background(
                     "guidance_claimed", payload={"event_id": event["event_id"]}
                 )
                 continue
             payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
             if event_type == "tool_result" and str(payload.get("tool_call_id") or "") == tool_call_id:
-                self._complete_tool_result(str(event["event_id"]))
+                self._complete_live_event(str(event["event_id"]))
                 queued_at = self._result_queued_at.pop(tool_call_id, None)
                 queue_delay_ms = (
                     (time.perf_counter() - queued_at) * 1000 if queued_at is not None else None
@@ -815,8 +851,8 @@ class WorkbenchAgentInbox:
                 break
             if str(event.get("type") or "") == "guidance":
                 self._guidance.append(event)
-                self._claim(event["event_id"])
-                self._record_event(
+                self._claim_live_event(str(event["event_id"]))
+                self._record_event_background(
                     "guidance_claimed", payload={"event_id": event["event_id"]}
                 )
             else:
@@ -834,8 +870,8 @@ class WorkbenchAgentInbox:
                 break
             if str(event.get("type") or "") == "guidance":
                 self._guidance.append(event)
-                self._claim(event["event_id"])
-                self._record_event(
+                self._claim_live_event(str(event["event_id"]))
+                self._record_event_background(
                     "guidance_claimed", payload={"event_id": event["event_id"]}
                 )
             else:
@@ -845,10 +881,10 @@ class WorkbenchAgentInbox:
 
     def acknowledge(self, events: list[dict[str, Any]]) -> None:
         for event in events:
-            self._complete(str(event.get("event_id") or ""))
+            self._complete_live_event(str(event.get("event_id") or ""))
             if str(event.get("type") or "") == "guidance":
                 self._guidance_pending_count = max(0, self._guidance_pending_count - 1)
-                self._record_event(
+                self._record_event_background(
                     "guidance_applied", payload={"event_id": event.get("event_id", "")}
                 )
         if self._guidance_pending_count == 0:

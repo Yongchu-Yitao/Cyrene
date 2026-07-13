@@ -129,6 +129,29 @@ def _write_chat(fork_env, chat_id, messages, **extra):
     return chat
 
 
+def test_create_chat_skips_full_project_repair(client, fork_env, monkeypatch):
+    routes_mod = fork_env["routes_mod"]
+    monkeypatch.setattr(
+        routes_mod,
+        "_read_workbench_store",
+        lambda: (_ for _ in ()).throw(AssertionError("full project repair path ran")),
+    )
+    monkeypatch.setattr(
+        routes_mod,
+        "_workbench_workspace_file_snapshot",
+        lambda _root: (_ for _ in ()).throw(AssertionError("workspace scan ran")),
+    )
+
+    response = client.post(
+        "/api/workbench/chats",
+        json={"project": "project_1", "title": "Fast chat"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["chat"]["projectId"] == "project_1"
+    assert response.json()["chat"]["title"] == "Fast chat"
+
+
 def _write_chats(fork_env, chats):
     """Write multiple chats into the workbench chats store."""
     from cyrene import io_utils
