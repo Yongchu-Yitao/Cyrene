@@ -56,6 +56,7 @@ def test_workbench_new_session_memory_moves_to_volatile_tail(monkeypatch, tmp_pa
     monkeypatch.setattr(memory, "STORE_DIR", tmp_path)
     monkeypatch.setattr(memory, "_STORE_DB_PATH", "")
     monkeypatch.setattr(memory, "_CONFIGURED_STORE_DIR", None)
+    monkeypatch.setattr(memory, "_resolve_workspace_id", lambda workspace_id: str(workspace_id))
 
     project = {"id": "project-test", "name": "Test"}
     session = {"id": "session-test", "title": "测试任务"}

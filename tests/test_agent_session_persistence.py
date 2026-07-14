@@ -6,8 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.modules.setdefault("PIL", MagicMock())
-sys.modules["PIL"].Image = MagicMock()
 sys.modules.setdefault("pypdf", MagicMock())
 
 from cyrene import agent

@@ -400,7 +400,8 @@ var WorkbenchModel = (function () {
   }
 
   // Persist the active project (and optionally session) to the server store so
-  // the selection survives page refresh. Returns a normalized store snapshot.
+  // the selection survives page refresh. The endpoint intentionally returns a
+  // tiny acknowledgement rather than retransmitting the multi-megabyte store.
   function setActiveProject(projectId, sessionId) {
     var body = {};
     if (projectId != null) body.projectId = projectId;
@@ -409,7 +410,7 @@ var WorkbenchModel = (function () {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    }).then(normalizeStore);
+    });
   }
 
   // Stop the active agent run for a session (best-effort, per-session interrupt).

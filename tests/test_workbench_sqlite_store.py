@@ -4,7 +4,7 @@ import json
 import multiprocessing
 from pathlib import Path
 
-from cyrene.workbench_store import read_document, write_document
+from cyrene.workbench_store import patch_document_fields, read_document, write_document
 
 
 def _append_worker(db_path: str, barrier, item_id: str) -> None:
@@ -78,6 +78,34 @@ def test_sqlite_is_authoritative_after_one_time_json_import(tmp_path: Path) -> N
         legacy_path=legacy,
     )
     assert persisted["chats"][0]["title"] == "Imported"
+
+
+def test_patch_document_fields_preserves_unrelated_state_and_updates_export(tmp_path: Path) -> None:
+    db_path = tmp_path / "cyrene.db"
+    export_path = tmp_path / "workbench_projects.json"
+    original = {
+        "projects": [{"id": "project_1", "sessions": [{"id": "session_1"}]}],
+        "activeProjectId": "project_old",
+        "activeSessionId": "session_old",
+        "unrelated": {"keep": True},
+    }
+    write_document(db_path, "projects", original, lambda: {"projects": []})
+
+    changed = patch_document_fields(
+        db_path,
+        "projects",
+        {"activeProjectId": "project_1", "activeSessionId": ""},
+        lambda: {"projects": []},
+        export_path=export_path,
+    )
+
+    assert changed == {"activeProjectId": "project_1", "activeSessionId": ""}
+    persisted = read_document(db_path, "projects", lambda: {"projects": []})
+    assert persisted["projects"] == original["projects"]
+    assert persisted["unrelated"] == {"keep": True}
+    assert persisted["activeProjectId"] == "project_1"
+    assert persisted["activeSessionId"] == ""
+    assert json.loads(export_path.read_text(encoding="utf-8"))["activeSessionId"] == ""
 
 
 def test_concurrent_process_appends_are_merged_without_lost_updates(tmp_path: Path) -> None:

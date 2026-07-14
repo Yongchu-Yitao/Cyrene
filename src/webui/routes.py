@@ -119,7 +119,7 @@ from cyrene.shells import set_cc_since
 from cyrene.short_term import load_entries
 from cyrene.soul import get_default_soul_content, read_soul, get_soul_path
 from cyrene.version import get_version_label
-from cyrene.workbench_store import read_document, write_document
+from cyrene.workbench_store import patch_document_fields, read_document, write_document
 from cyrene.workbench_task_context import (
     build_main_context as _workbench_task_build_main_context,
     build_volatile_context as _workbench_task_build_volatile_context,
@@ -2359,6 +2359,34 @@ def _write_workbench_store(
         payload.update(merged)
         if hasattr(payload, "_workbench_base"):
             payload._workbench_base = getattr(merged, "_workbench_base", dict(merged))
+
+
+def _persist_workbench_selection(project_id: str | None, session_id: str | None) -> dict[str, Any]:
+    """Persist only the active selection, without task/workspace invariant scans."""
+    fields: dict[str, Any] = {}
+    if project_id is not None:
+        fields["activeProjectId"] = str(project_id).strip()
+    if session_id is not None:
+        fields["activeSessionId"] = str(session_id).strip()
+    if not fields:
+        return {}
+
+    with _WORKBENCH_STORE_LOCK:
+        if not _workbench_store_uses_sqlite():
+            payload = read_json_safe(_WORKBENCH_STORE)
+            if not isinstance(payload, dict) or not isinstance(payload.get("projects"), list):
+                payload = _workbench_default_project()
+            payload.update(fields)
+            atomic_write_json(_WORKBENCH_STORE, payload)
+            return fields
+        return patch_document_fields(
+            _db_path or str(DB_PATH),
+            "projects",
+            fields,
+            _workbench_default_project,
+            legacy_path=_WORKBENCH_STORE,
+            export_path=_WORKBENCH_STORE,
+        )
 
 
 def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
@@ -9577,15 +9605,12 @@ def register_routes(app, bot: Any, db_path: str) -> None:
 
     @router.patch("/api/workbench/activate")
     async def api_workbench_activate(body: api_models.WorkbenchActivateBody):
-        payload = _read_workbench_store()
-        pid = str(body.projectId or "").strip()
-        if pid:
-            payload["activeProjectId"] = pid
-        sid = str(body.sessionId or "").strip()
-        if sid:
-            payload["activeSessionId"] = sid
-        _write_workbench_store(payload)
-        return {"ok": True, **payload}
+        selection = await asyncio.to_thread(
+            _persist_workbench_selection,
+            body.projectId,
+            body.sessionId,
+        )
+        return {"ok": True, **selection}
 
     @router.post("/api/projects")
     async def api_workbench_create_project(body_model: api_models.ProjectCreateBody):

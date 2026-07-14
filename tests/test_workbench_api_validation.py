@@ -82,6 +82,29 @@ def test_session_patch_accepts_existing_statuses(monkeypatch, tmp_path):
     assert response.json()["session"]["status"] == "waiting_for_approval"
 
 
+def test_activate_returns_small_selection_payload_without_heavy_store_read(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+
+    from webui import routes
+
+    monkeypatch.setattr(
+        routes,
+        "_read_workbench_store",
+        lambda: (_ for _ in ()).throw(AssertionError("heavy store read must not run")),
+    )
+    response = client.patch(
+        "/api/workbench/activate",
+        json={"projectId": "project_1", "sessionId": ""},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "activeProjectId": "project_1",
+        "activeSessionId": "",
+    }
+
+
 def test_unstarted_session_cannot_be_paused(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
 

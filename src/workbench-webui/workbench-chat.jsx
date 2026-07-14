@@ -236,6 +236,13 @@ var WorkbenchChatModel = (function () {
 // Small helpers
 // ---------------------------------------------------------------------------
 
+function wbcChatCache() {
+  if (!window.__workbenchChatCache) {
+    window.__workbenchChatCache = { lists: {}, details: {}, subagents: {} };
+  }
+  return window.__workbenchChatCache;
+}
+
 function wbcRenderMarkdown(text) {
   var source = String(text == null ? "" : text);
   try {
@@ -1005,8 +1012,10 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   var isActive = active !== false;
   var model = window.WorkbenchChatModel;
   var projectId = project ? project.id : "";
+  var chatCache = wbcChatCache();
   var [chats, setChats] = useWbcState([]);
   var chatsRef = useWbcRef([]);
+  var chatsProjectIdRef = useWbcRef("");
   var [activeChatId, setActiveChatId] = useWbcState("");
   var activeChatIdRef = useWbcRef("");
   var [activeChat, setActiveChat] = useWbcState(null);
@@ -1020,7 +1029,24 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
 
   useWbcEffect(function () {
     chatsRef.current = chats;
+    if (
+      projectId
+      && chatsProjectIdRef.current === projectId
+      && Array.isArray(chats)
+      && chats.every(function (chat) { return String((chat && chat.projectId) || "") === String(projectId); })
+    ) {
+      chatCache.lists[projectId] = chats;
+    }
   }, [chats]);
+  useWbcEffect(function () {
+    if (
+      activeChat
+      && activeChat.id
+      && String(activeChat.projectId || "") === String(projectId)
+    ) {
+      chatCache.details[activeChat.id] = activeChat;
+    }
+  }, [activeChat]);
   useWbcEffect(function () {
     activeChatIdRef.current = activeChatId;
     // Remember the open conversation per project so switching to another module
@@ -1100,6 +1126,8 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     return model.listChats(requestedProjectId).then(function (list) {
       // A background run may finish after the user has switched projects.
       if (projectIdRef.current !== requestedProjectId) return list;
+      chatCache.lists[requestedProjectId] = list;
+      chatsProjectIdRef.current = requestedProjectId;
       setChats(list);
       var targetId = selectId || activeChatIdRef.current;
       var exists = list.some(function (c) { return c.id === targetId; });
@@ -1111,31 +1139,52 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
 
   // Initial load + project switch.
   useWbcEffect(function () {
-    setLoading(true);
+    var requestedProjectId = projectId;
+    var cachedList = Array.isArray(chatCache.lists[requestedProjectId])
+      ? chatCache.lists[requestedProjectId]
+      : null;
+    setLoading(!cachedList);
     setError("");
     setErrorKind("load");
-    setActiveChat(null);
-    setActiveChatId("");
     if (!projectId) { setChats([]); setLoading(false); return; }
-    model.listChats(projectId)
+    var pending = window.__workbenchPendingSelection;
+    var pendingChatId = pending && pending.type === "chat" ? (pending.chatId || pending.id) : "";
+    var remembered = (window.__workbenchLastChat || {})[projectId];
+    function selectFrom(list) {
+      var targetId = pendingChatId && list.some(function (c) { return c.id === pendingChatId; })
+        ? pendingChatId
+        : (remembered && list.some(function (c) { return c.id === remembered; })
+          ? remembered
+          : (list[0] ? list[0].id : ""));
+      if (targetId === pendingChatId) pendingChatIdRef.current = pendingChatId;
+      setActiveChatId(targetId);
+      setActiveChat(targetId && chatCache.details[targetId] ? chatCache.details[targetId] : null);
+      return targetId;
+    }
+    if (cachedList) {
+      chatsProjectIdRef.current = requestedProjectId;
+      setChats(cachedList);
+      selectFrom(cachedList);
+    } else {
+      chatsProjectIdRef.current = "";
+      setChats([]);
+      setActiveChat(null);
+      setActiveChatId("");
+    }
+    model.listChats(requestedProjectId)
       .then(function (list) {
+        if (projectIdRef.current !== requestedProjectId) return;
+        chatCache.lists[requestedProjectId] = list;
+        chatsProjectIdRef.current = requestedProjectId;
         setChats(list);
-        var pending = window.__workbenchPendingSelection;
-        var pendingChatId = pending && pending.type === "chat" ? (pending.chatId || pending.id) : "";
-        if (pendingChatId && list.some(function (c) { return c.id === pendingChatId; })) {
-          pendingChatIdRef.current = pendingChatId;
-        } else {
-          // Restore the conversation last open for this project (e.g. a chat the
-          // user left mid-run); fall back to the most-recent one.
-          var remembered = (window.__workbenchLastChat || {})[projectId];
-          var restoreId = remembered && list.some(function (c) { return c.id === remembered; })
-            ? remembered
-            : (list[0] ? list[0].id : "");
-          setActiveChatId(restoreId);
-        }
+        selectFrom(list);
       })
-      .catch(function (err) { setError(wbcErrorText(err)); })
-      .finally(function () { setLoading(false); });
+      .catch(function (err) {
+        if (projectIdRef.current === requestedProjectId && !cachedList) setError(wbcErrorText(err));
+      })
+      .finally(function () {
+        if (projectIdRef.current === requestedProjectId) setLoading(false);
+      });
   }, [projectId]);
 
   // Apply a chat id requested by global search once the chat list is available.
@@ -1160,11 +1209,10 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
       setSubagentData({ rounds: [], activeRoundId: "", agents: [], messages: [] });
       return;
     }
-    // Do not keep rendering the previous transcript while the newly selected
-    // chat is being fetched. This matters especially when the previous chat is
-    // streaming: its latest user message would otherwise appear to belong to
-    // every chat the user clicks during the request.
-    setActiveChat(null);
+    var cachedChat = activeChatId ? (chatCache.details[activeChatId] || null) : null;
+    // Never show a transcript from a different conversation. A cache hit is
+    // safe because it is keyed by the exact target id; a miss clears first.
+    if (!cachedChat) setActiveChat(null);
     if (!activeChatId) {
       setChatLoading(false);
       setSubagentData({ rounds: [], activeRoundId: "", agents: [], messages: [] });
@@ -1172,12 +1220,19 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     }
     var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
     var requestOptions = controller ? { signal: controller.signal } : {};
+    var cachedSubagents = chatCache.subagents[activeChatId] || null;
+    // Switching back to a recently viewed project paints its cached transcript
+    // immediately. The requests below still refresh it in the background.
+    setActiveChat(cachedChat);
+    if (cachedSubagents) setSubagentData(cachedSubagents);
+    else setSubagentData({ rounds: [], activeRoundId: "", agents: [], messages: [] });
     setError("");
     setErrorKind("load");
-    setChatLoading(true);
-    setSubagentLoading(true);
+    setChatLoading(!cachedChat);
+    setSubagentLoading(!cachedSubagents);
     model.getChat(activeChatId, requestOptions)
       .then(function (chat) {
+        chatCache.details[activeChatId] = chat;
         if (activeChatIdRef.current === activeChatId) setActiveChat(chat);
       })
       .catch(function (err) {
@@ -1191,6 +1246,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
       });
     model.getSubagents(activeChatId, "", requestOptions)
       .then(function (payload) {
+        chatCache.subagents[activeChatId] = payload;
         if (activeChatIdRef.current === activeChatId) setSubagentData(payload);
       })
       .catch(function (err) {

@@ -393,6 +393,50 @@ def write_document(
         )
 
 
+def patch_document_fields(
+    db_path: str | Path,
+    key: str,
+    fields: dict[str, Any],
+    default_factory: Callable[[], dict[str, Any]],
+    *,
+    legacy_path: Path | None = None,
+    export_path: Path | None = None,
+) -> dict[str, Any]:
+    """Atomically update a few top-level fields without a read/repair cycle.
+
+    Selection-like state changes should not have to load a document through a
+    domain layer that may perform expensive invariant repair or workspace
+    scanning.  Read the latest committed row inside the write transaction so a
+    concurrent document writer is preserved, then patch only the requested
+    scalar fields.
+    """
+    updates = _plain(fields)
+    with _DOCUMENT_WRITE_LOCK:
+        conn = _connect(db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            current = _load_row(conn, key)
+            if current is None:
+                current = _initial_value(default_factory, legacy_path)
+            if not isinstance(current, dict):
+                raise TypeError(f"Workbench document {key} is not an object")
+            current.update(updates)
+            _write_row(conn, key, current)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        if export_path is not None:
+            try:
+                _export_current_document(db_path, key, export_path)
+            except Exception:
+                logger.exception("Failed to export Workbench document %s to %s", key, export_path)
+    return {name: _plain(current.get(name)) for name in updates}
+
+
 def _export_current_document(db_path: str | Path, key: str, export_path: Path) -> None:
     conn = _connect(db_path)
     try:

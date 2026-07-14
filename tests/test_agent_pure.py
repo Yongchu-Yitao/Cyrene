@@ -8,14 +8,8 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-
-# Patch missing PIL dependency before any cyrene import
-sys.modules.setdefault("PIL", MagicMock())
-sys.modules["PIL"].__version__ = "0"
-sys.modules["PIL"].Image = MagicMock()
 
 
 # ===========================================================================
