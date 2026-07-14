@@ -2,7 +2,7 @@ name: Build & Release
 
 on:
   push:
-    tags: ["v*", "!v0.6.8"]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       ui_mode:
