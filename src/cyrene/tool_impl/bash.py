@@ -136,8 +136,25 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
         await proc.wait()
     except ValueError:
         raise
+    except asyncio.CancelledError:
+        if proc.returncode is None:
+            proc.kill()
+        reads.cancel()
+        try:
+            await reads
+        except (asyncio.CancelledError, Exception):
+            pass
+        await proc.wait()
+        raise
     except Exception:
-        proc.kill()
+        if proc.returncode is None:
+            proc.kill()
+        reads.cancel()
+        try:
+            await reads
+        except (asyncio.CancelledError, Exception):
+            pass
+        await proc.wait()
         raise
 
     payload = {

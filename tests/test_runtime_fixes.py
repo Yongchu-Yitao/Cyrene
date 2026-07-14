@@ -186,6 +186,47 @@ async def test_execute_tool_awaits_event_publish(monkeypatch):
     tools.TOOL_HANDLERS.pop("__test_tool__", None)
 
 
+async def test_execute_tool_timeout_becomes_a_structured_tool_result(monkeypatch):
+    from cyrene import debug
+    from cyrene import tool_executor
+
+    async def never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    async def fake_publish_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setitem(tool_executor.TOOL_HANDLERS, "__timeout_tool__", never_returns)
+    monkeypatch.setattr(tool_executor, "_tool_timeout_seconds", lambda *_args: 0.01)
+    monkeypatch.setattr(debug, "publish_event", fake_publish_event)
+
+    result = await tool_executor._execute_tool(
+        "__timeout_tool__", {}, None, 0, "", None
+    )
+
+    assert result == "Tool failed: __timeout_tool__ timed out after 0.01 seconds."
+
+
+def test_filesystem_tools_offload_blocking_io_and_bound_scans():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "src" / "cyrene" / "tool_impl"
+    read_source = (root / "read.py").read_text(encoding="utf-8")
+    write_source = (root / "write.py").read_text(encoding="utf-8")
+    edit_source = (root / "edit.py").read_text(encoding="utf-8")
+    glob_source = (root / "glob.py").read_text(encoding="utf-8")
+    grep_source = (root / "grep.py").read_text(encoding="utf-8")
+
+    assert "await asyncio.to_thread(path.read_text" in read_source
+    assert "await asyncio.to_thread(write_file)" in write_source
+    assert "await asyncio.to_thread(edit_file)" in edit_source
+    assert "await asyncio.to_thread(scan)" in glob_source
+    assert "await asyncio.to_thread(scan)" in grep_source
+    assert "_MAX_CANDIDATES" in glob_source
+    assert "_MAX_CANDIDATES" in grep_source
+    assert "_MAX_FILE_BYTES" in grep_source
+
+
 async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkeypatch):
     from cyrene.agent import agent as _agent_core
     from cyrene.agent import state as _agent_state

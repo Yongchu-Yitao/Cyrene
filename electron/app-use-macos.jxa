@@ -50,12 +50,52 @@ function windowBounds(win) {
   };
 }
 
+function windowServerWindows() {
+  return safe(() => {
+    const reference = $.CGWindowListCopyWindowInfo(
+      $.kCGWindowListOptionAll,
+      $.kCGNullWindowID,
+    );
+    const rows = ObjC.deepUnwrap(ObjC.castRefToObject(reference));
+    return Array.isArray(rows) ? rows.filter((row) => (
+      Number(row.kCGWindowNumber || 0) > 0
+      && Number(row.kCGWindowOwnerPID || 0) > 0
+      && Number(row.kCGWindowLayer || 0) === 0
+    )) : [];
+  }, []);
+}
+
+function windowServerIdentifier(pid, title, bounds, rows, claimed) {
+  if (!bounds) return '';
+  const candidates = rows.filter((row) => (
+    Number(row.kCGWindowOwnerPID || 0) === Number(pid || 0)
+    && !claimed.has(Number(row.kCGWindowNumber || 0))
+  ));
+  const scored = candidates.map((row) => {
+    const candidateBounds = row.kCGWindowBounds || {};
+    const distance = Math.abs(Number(candidateBounds.X || 0) - Number(bounds.x || 0))
+      + Math.abs(Number(candidateBounds.Y || 0) - Number(bounds.y || 0))
+      + Math.abs(Number(candidateBounds.Width || 0) - Number(bounds.width || 0))
+      + Math.abs(Number(candidateBounds.Height || 0) - Number(bounds.height || 0));
+    const candidateTitle = String(row.kCGWindowName || '');
+    const titlePenalty = title && candidateTitle && candidateTitle !== title ? 100000 : 0;
+    return { row, score: distance + titlePenalty, distance };
+  }).sort((left, right) => left.score - right.score);
+  const match = scored.find((item) => item.distance <= 8);
+  if (!match) return '';
+  const identifier = Number(match.row.kCGWindowNumber || 0);
+  claimed.add(identifier);
+  return String(identifier);
+}
+
 function listTargets(payload) {
   const se = systemEvents();
   const frontmostPid = Number($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier);
   const excludePid = Number(payload.excludePid || 0);
   const excludedApplicationIds = new Set((payload.excludeApplicationIds || []).map((value) => String(value).toLowerCase()));
   const excludedAppNames = new Set((payload.excludeAppNames || []).map((value) => String(value).toLowerCase()));
+  const serverWindows = windowServerWindows();
+  const claimedServerWindows = new Set();
   const targets = [];
   for (const proc of visibleProcesses(se)) {
     const pid = Number(safe(() => proc.unixId(), 0));
@@ -69,18 +109,25 @@ function listTargets(payload) {
       const title = String(safe(() => win.name(), ''));
       const role = String(safe(() => win.role(), ''));
       if (role && role !== 'AXWindow' && role !== 'window') continue;
+      const bounds = windowBounds(win);
+      const serverIdentifier = windowServerIdentifier(
+        pid, title, bounds, serverWindows, claimedServerWindows,
+      );
       targets.push({
         platform: 'darwin',
         pid,
         processStartTime: '',
         appName,
         applicationId: bundleId,
-        windowId: windowIdentifier(win, index),
+        // AX window ids are commonly absent on macOS.  Keep the WindowServer
+        // number when available because process-directed mouse events need it
+        // to route the NSEvent into the correct background NSWindow.
+        windowId: serverIdentifier || windowIdentifier(win, index),
         windowIndex: index,
         windowTitle: title,
         foreground: pid === frontmostPid,
         minimized: Boolean(safe(() => win.attributes.byName('AXMinimized').value(), false)),
-        bounds: windowBounds(win),
+        bounds,
       });
     }
   }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from cyrene import tool_legacy as _legacy
@@ -45,15 +46,18 @@ async def _tool_edit(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
     new_string = str(args["new_string"])
     replace_all = bool(args.get("replace_all", False))
 
-    content = path.read_text(encoding="utf-8")
-    occurrences = content.count(old_string)
-    if occurrences == 0:
-        raise ValueError("old_string not found")
-    if occurrences > 1 and not replace_all:
-        raise ValueError("old_string matched multiple times; set replace_all=true")
+    def edit_file() -> int:
+        content = path.read_text(encoding="utf-8")
+        occurrences = content.count(old_string)
+        if occurrences == 0:
+            raise ValueError("old_string not found")
+        if occurrences > 1 and not replace_all:
+            raise ValueError("old_string matched multiple times; set replace_all=true")
+        updated = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
+        path.write_text(updated, encoding="utf-8")
+        return occurrences
 
-    updated = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
-    path.write_text(updated, encoding="utf-8")
+    occurrences = await asyncio.to_thread(edit_file)
     replaced = occurrences if replace_all else 1
     return f"Edited {path}. Replacements: {replaced}"
 

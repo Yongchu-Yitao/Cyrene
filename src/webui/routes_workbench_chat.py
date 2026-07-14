@@ -48,6 +48,17 @@ _STORE_DB_PATH = ""
 _CONFIGURED_CHATS_STORE = None
 _CHAT_RUN_MANAGER = ChatRunManager()
 
+
+def _settle_chat_running_status(chat_id: str) -> None:
+    """Repair a stale persisted running flag after a run disappears."""
+    payload = _read_chats_store()
+    chat = _find_chat(payload, str(chat_id))
+    if chat and chat.get("status") == "running":
+        chat["status"] = "idle"
+        chat.pop("pendingQuestion", None)
+        chat["updatedAt"] = _utc_now_iso()
+        _write_chats_store(payload)
+
 # Internal control tools that say nothing useful in a progress trace.
 _TRACE_SKIP_TOOLS = {"use_tools", "quit", "send_message", "update_plan_progress"}
 _USAGE_KEYS = (
@@ -1437,11 +1448,15 @@ async def _publish_live_exchange_segments_once(
     all prose after completion.
     """
     published_ids.update(_published_intermediate_message_ids(run))
-    intermediate_entries, _trace, _usage, _files = _extract_exchange_segments(
-        _session_state_messages(chat_id),
-        state_ids_before,
-        include_open_tool_preamble=True,
-    )
+
+    def extract() -> tuple[list[dict[str, Any]], list[Any], dict[str, Any], list[Any]]:
+        return _extract_exchange_segments(
+            _session_state_messages(chat_id),
+            state_ids_before,
+            include_open_tool_preamble=True,
+        )
+
+    intermediate_entries, _trace, _usage, _files = await asyncio.to_thread(extract)
     for entry in intermediate_entries:
         mid = str(entry.get("id") or "").strip()
         key = _live_segment_dedupe_key(entry)
@@ -1736,7 +1751,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         registry (not the persisted status, which can be stale after a crash).
         """
         R = _routes()
-        store = R._read_workbench_store()
+        store = await asyncio.to_thread(R._read_workbench_store)
         projects = store.get("projects", []) or []
         # The default project is identified by its data key, not its name — the
         # name follows the workspace directory and need not be "Cyrene".
@@ -1751,7 +1766,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         query = str(q or "").strip().lower()
         limit = max(1, min(int(limit or 40), 200))
 
-        payload = _read_chats_store()
+        payload = await asyncio.to_thread(_read_chats_store)
         targets: list[dict[str, Any]] = []
         for chat in payload.get("chats", []):
             chat_id = str(chat.get("id") or "")
@@ -1855,10 +1870,10 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
     async def api_workbench_chat_subagents(chat_id: str, round_id: str = ""):
         if chat_id.startswith("legacy:"):
             return {"rounds": [], "activeRoundId": "", "agents": [], "messages": []}
-        payload = _read_chats_store()
+        payload = await asyncio.to_thread(_read_chats_store)
         if not _find_chat(payload, chat_id):
             return JSONResponse({"error": "chat not found"}, status_code=404)
-        return _workbench_subagent_payload(chat_id, round_id)
+        return await asyncio.to_thread(_workbench_subagent_payload, chat_id, round_id)
 
     @router.get("/api/workbench/chats/{chat_id}/context")
     async def api_workbench_chat_context(chat_id: str):
@@ -1870,13 +1885,13 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             if not session_id:
                 return JSONResponse({"error": "chat not found"}, status_code=404)
             model_name = str(getattr(config, "OPENAI_MODEL", "") or "")
-            return _chat_context_payload(session_id, model_name)
-        payload = _read_chats_store()
+            return await asyncio.to_thread(_chat_context_payload, session_id, model_name)
+        payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
         model_name = str(chat.get("model") or getattr(config, "OPENAI_MODEL", "") or "")
-        return _chat_context_payload(chat_id, model_name)
+        return await asyncio.to_thread(_chat_context_payload, chat_id, model_name)
 
     @router.post("/api/workbench/chats/{chat_id}/compact")
     async def api_workbench_chat_compact(chat_id: str):
@@ -1890,7 +1905,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 {"error": "legacy chat context is read-only"},
                 status_code=403,
             )
-        payload = _read_chats_store()
+        payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
@@ -1988,6 +2003,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         """Reconnect to an existing streamed run without submitting a message."""
         run = _CHAT_RUN_MANAGER.get(chat_id)
         if run is None:
+            await asyncio.to_thread(_settle_chat_running_status, chat_id)
             return JSONResponse(
                 {"error": "chat has no running reply", "code": "chat_run_not_found"},
                 status_code=404,
@@ -2022,7 +2038,16 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 {"error": "chat has no running reply", "code": "chat_not_running"},
                 status_code=409,
             )
-        payload = _read_chats_store()
+        # Durable inbox setup happens off the HTTP event loop. Guidance must
+        # wait for it before accepting an event, otherwise a just-started run
+        # can race schema initialization.
+        await run.ready.wait()
+        if run.status != "running":
+            return JSONResponse(
+                {"error": "chat has no running reply", "code": "chat_not_running"},
+                status_code=409,
+            )
+        payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
@@ -2050,7 +2075,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             user_entry["clientRequestId"] = client_request_id
         chat.setdefault("messages", []).append(user_entry)
         chat["updatedAt"] = now
-        _write_chats_store(payload)
+        await asyncio.to_thread(_write_chats_store, payload)
         await run.publish({
             "type": "guidance_received",
             "eventId": event["event_id"],
@@ -2072,14 +2097,14 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         body = api_models.body_dict(body_model)
         if chat_id.startswith("legacy:"):
             return JSONResponse({"error": "legacy chat metadata is read-only"}, status_code=403)
-        payload = _read_chats_store()
+        payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
         if "title" in body:
             chat["title"] = str(body.get("title") or "").strip()[:60] or chat.get("title")
         chat["updatedAt"] = _utc_now_iso()
-        _write_chats_store(payload)
+        await asyncio.to_thread(_write_chats_store, payload)
         return {"ok": True, "chat": _public_chat_full(chat)}
 
     @router.delete("/api/workbench/chats/{chat_id}")
@@ -2093,7 +2118,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             if status_code != 200:
                 return JSONResponse(payload, status_code=status_code)
             return {"ok": True}
-        payload = _read_chats_store()
+        payload = await asyncio.to_thread(_read_chats_store)
         chats = payload.get("chats", [])
         next_chats = [chat for chat in chats if str(chat.get("id") or "") != chat_id]
         if len(next_chats) == len(chats):
@@ -2102,7 +2127,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             if str(chat.get("forkedFromChatId") or "") == chat_id:
                 _clear_fork_metadata(chat)
         payload["chats"] = next_chats
-        _write_chats_store(payload)
+        await asyncio.to_thread(_write_chats_store, payload)
         try:
             _CHAT_RUN_MANAGER.interrupt(chat_id)
             interrupt_active_run(session_id=chat_id)
@@ -2151,12 +2176,12 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         if _bgt:
             return JSONResponse(_bgt, status_code=403)
 
-        payload = _read_chats_store()
+        payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
         project_id = str(chat.get("projectId") or "")
-        project_store = R._read_workbench_store()
+        project_store = await asyncio.to_thread(R._read_workbench_store)
         project = R._workbench_find_project(project_store, project_id)
         if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
@@ -2203,11 +2228,11 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 from cyrene.agent.state import _session_state_file
 
                 state_path = _session_state_file(chat_id)
-                retry_state_backup = (
-                    state_path,
-                    state_path.read_bytes() if state_path.exists() else None,
+                previous_state = await asyncio.to_thread(
+                    lambda: state_path.read_bytes() if state_path.exists() else None
                 )
-                _truncate_state_for_retry(chat_id)
+                retry_state_backup = (state_path, previous_state)
+                await asyncio.to_thread(_truncate_state_for_retry, chat_id)
         else:
             user_entry = {
                 "id": _short_id("msg"),
@@ -2227,7 +2252,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         chat["status"] = "running"
         chat["model"] = R._get_model()
         _mark_user_activity(chat, now)
-        _write_chats_store(payload)
+        await asyncio.to_thread(_write_chats_store, payload)
 
         agent_message = message
         if normalized:
@@ -2250,7 +2275,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         # _extract_exchange_segments can identify new messages by ID rather
         # than by positional index (which would break after session compaction).
         state_ids_before: set[str] = set()
-        for m in _session_state_messages(chat_id):
+        for m in await asyncio.to_thread(_session_state_messages, chat_id):
             mid = str(m.get("message_id") or m.get("id") or "").strip()
             if mid:
                 state_ids_before.add(mid)
@@ -2315,7 +2340,6 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             except Exception:
                 logger.exception("Failed to archive workbench conversation %s", chat_id)
             if not command and not retry:
-                R.schedule_capture(project_id, message, str(reply_text or ""))
                 append_notification(
                     title="Agent 回复完成",
                     body=f"Agent 在「{fresh_chat.get('title') or '新对话'}」中回复了你。",
@@ -2330,6 +2354,14 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 "assistantMessage": assistant_entry,
                 "assistantMessages": saved_messages,
             }
+
+        async def _finalize_async(reply_text: str) -> dict[str, Any]:
+            finalized = await asyncio.to_thread(_finalize, reply_text)
+            if finalized and not command and not retry:
+                # schedule_capture needs the running event loop, unlike the
+                # storage/archive work intentionally performed above in a thread.
+                R.schedule_capture(project_id, message, str(reply_text or ""))
+            return finalized
 
         def _restore_retry_state() -> None:
             if retry_state_backup is None:
@@ -2401,24 +2433,26 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 reply = await _run()
             except Exception as exc:
                 logger.exception("Workbench chat run failed for %s", chat_id)
-                _restore_retry_state()
-                _settle_status()
+                await asyncio.to_thread(_restore_retry_state)
+                await asyncio.to_thread(_settle_status)
                 run.outcome = {"kind": "error", "exc": exc}
                 return
             run.status = "finishing"
             if reply == R._AWAITING_USER_SENTINEL:
                 if retry:
-                    fresh = _read_chats_store()
-                    fresh_chat = _find_chat(fresh, chat_id)
-                    if fresh_chat:
-                        _commit_retry_cut(fresh_chat)
-                        _write_chats_store(fresh)
-                pending = R._workbench_pending_question_for(chat_id)
-                awaiting_messages = _stash_chat_pending(pending)
+                    def commit_retry() -> None:
+                        fresh = _read_chats_store()
+                        fresh_chat = _find_chat(fresh, chat_id)
+                        if fresh_chat:
+                            _commit_retry_cut(fresh_chat)
+                            _write_chats_store(fresh)
+                    await asyncio.to_thread(commit_retry)
+                pending = await asyncio.to_thread(R._workbench_pending_question_for, chat_id)
+                awaiting_messages = await asyncio.to_thread(_stash_chat_pending, pending)
                 run.outcome = {"kind": "awaiting", "pending": pending}
                 run.outcome["assistantMessages"] = awaiting_messages
                 return
-            finalized = _finalize(reply)
+            finalized = await _finalize_async(reply)
             run.outcome = {
                 "kind": "reply",
                 "payload": finalized,
@@ -2484,12 +2518,12 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 try:
                     reply = await _run()
                 except asyncio.CancelledError:
-                    _restore_retry_state()
+                    await asyncio.to_thread(_restore_retry_state)
                     raise
                 except Exception as exc:
                     logger.exception("Workbench chat streaming run failed for %s", chat_id)
-                    _restore_retry_state()
-                    _settle_status()
+                    await asyncio.to_thread(_restore_retry_state)
+                    await asyncio.to_thread(_settle_status)
                     run.outcome = {"kind": "error", "exc": exc}
                     await run.publish({
                         "type": "error",
@@ -2507,13 +2541,15 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                     # Run paused for a permission / clarification answer — surface
                     # the question instead of streaming the sentinel as a reply.
                     if retry:
-                        fresh = _read_chats_store()
-                        fresh_chat = _find_chat(fresh, chat_id)
-                        if fresh_chat:
-                            _commit_retry_cut(fresh_chat)
-                            _write_chats_store(fresh)
-                    pending = R._workbench_pending_question_for(chat_id)
-                    awaiting_messages = _stash_chat_pending(pending)
+                        def commit_stream_retry() -> None:
+                            fresh = _read_chats_store()
+                            fresh_chat = _find_chat(fresh, chat_id)
+                            if fresh_chat:
+                                _commit_retry_cut(fresh_chat)
+                                _write_chats_store(fresh)
+                        await asyncio.to_thread(commit_stream_retry)
+                    pending = await asyncio.to_thread(R._workbench_pending_question_for, chat_id)
+                    awaiting_messages = await asyncio.to_thread(_stash_chat_pending, pending)
                     run.outcome = {"kind": "awaiting", "pending": pending}
                     await run.publish({
                         "type": "awaiting_user",
@@ -2529,7 +2565,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                     for chunk in R._reply_stream_chunks(reply):
                         await run.publish({"type": "reply_delta", "delta": chunk})
                     await run.publish({"type": "reply_done", "response": reply})
-                finalized = _finalize(reply)
+                finalized = await _finalize_async(reply)
                 saved_event = {
                     "type": "saved",
                     **finalized,
@@ -2548,7 +2584,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                         raise
                     except Exception:
                         logger.debug("Workbench chat live segment publisher failed for %s", chat_id, exc_info=True)
-                _settle_status()
+                await asyncio.to_thread(_settle_status)
 
         run, _is_new = _CHAT_RUN_MANAGER.start_or_get(
             chat_id,
@@ -2588,7 +2624,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         if chat_id.startswith("legacy:"):
             return JSONResponse({"error": "legacy chats cannot be forked"}, status_code=403)
 
-        payload = _read_chats_store()
+        payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
@@ -2649,28 +2685,31 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         new_chat["updatedAt"] = now
 
         payload.setdefault("chats", []).insert(0, new_chat)
-        _write_chats_store(payload)
+        await asyncio.to_thread(_write_chats_store, payload)
 
         # Seed the forked session's raw state from the source, truncated at the
         # same user-message boundary so the replay send appends the edited turn.
         new_chat_id = str(new_chat.get("id") or "")
         src_state = _session_state_file(chat_id)
         new_state = _session_state_file(new_chat_id)
-        new_state.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            if src_state.exists():
-                shutil.copyfile(src_state, new_state)
-                truncated = _truncate_state_file_at_user_ordinal(new_state, user_ordinal)
-                if not truncated:
-                    logger.warning(
-                        "Fork state truncation missed user ordinal %d for %s (source %s) — "
-                        "state may have been compacted; replay will use the existing prefix.",
-                        user_ordinal, new_chat_id, chat_id,
-                    )
-            else:
-                atomic_write_json(new_state, {"messages": []})
-        except Exception:
-            logger.exception("Failed to seed fork state for %s", new_chat_id)
+        def seed_fork_state() -> None:
+            new_state.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                if src_state.exists():
+                    shutil.copyfile(src_state, new_state)
+                    truncated = _truncate_state_file_at_user_ordinal(new_state, user_ordinal)
+                    if not truncated:
+                        logger.warning(
+                            "Fork state truncation missed user ordinal %d for %s (source %s) — "
+                            "state may have been compacted; replay will use the existing prefix.",
+                            user_ordinal, new_chat_id, chat_id,
+                        )
+                else:
+                    atomic_write_json(new_state, {"messages": []})
+            except Exception:
+                logger.exception("Failed to seed fork state for %s", new_chat_id)
+
+        await asyncio.to_thread(seed_fork_state)
 
         return {"ok": True, "chat": _public_chat_full(new_chat)}
 
@@ -2680,12 +2719,12 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
     ):
         """Promote a conversation into a task session of its project (开始执行)."""
         body = api_models.body_dict(body_model)
-        payload = _read_chats_store()
+        payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
         R = _routes()
-        store = R._read_workbench_store()
+        store = await asyncio.to_thread(R._read_workbench_store)
         project = R._workbench_find_project(store, str(chat.get("projectId") or ""))
         if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
@@ -2734,15 +2773,16 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         project["updatedAt"] = session["createdAt"]
         store["activeProjectId"] = project.get("id")
         store["activeSessionId"] = session["id"]
-        R._write_workbench_store(store)
+        await asyncio.to_thread(R._write_workbench_store, store)
 
         # Keep the original conversation and link it to the task, so it's clearly
         # preserved (never consumed) and reachable from both sides.
         chat["convertedSessionId"] = session["id"]
         chat["convertedTaskTitle"] = title
         chat["convertedAt"] = session["createdAt"]
-        _write_chats_store(payload)
-        append_notification(
+        await asyncio.to_thread(_write_chats_store, payload)
+        await asyncio.to_thread(
+            append_notification,
             title="对话已转为任务",
             body=f"对话「{chat.get('title') or '新对话'}」已创建任务「{title}」。",
             tab="comment",
@@ -2770,7 +2810,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             mode = "default"
         if not question_id or not answer_text:
             return JSONResponse({"error": "question_id and answer are required"}, status_code=400)
-        payload = _read_chats_store()
+        payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
@@ -2780,7 +2820,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
 
         R = _routes()
         project_id = str(chat.get("projectId") or "")
-        project_store = R._read_workbench_store()
+        project_store = await asyncio.to_thread(R._read_workbench_store)
         project = R._workbench_find_project(project_store, project_id)
         if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
@@ -2795,9 +2835,9 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         }
         _merge_chat_messages_chronologically(chat, [answer_entry])
         _mark_user_activity(chat, now)
-        _write_chats_store(payload)
+        await asyncio.to_thread(_write_chats_store, payload)
         state_ids_before_resume: set[str] = set()
-        for m in _session_state_messages(chat_id):
+        for m in await asyncio.to_thread(_session_state_messages, chat_id):
             mid = str(m.get("message_id") or m.get("id") or "").strip()
             if mid:
                 state_ids_before_resume.add(mid)
@@ -2816,27 +2856,30 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             return JSONResponse({"error": "answer resume failed", "detail": str(exc)}, status_code=502)
 
         if reply == R._AWAITING_USER_SENTINEL:
-            new_pending = R._workbench_pending_question_for(chat_id)
-            intermediate_entries, trace, usage, files = _extract_exchange_segments(
-                _session_state_messages(chat_id),
-                state_ids_before_resume,
-                include_open_tool_preamble=True,
-            )
-            _stash_chat_pending_for(
-                chat_id,
-                new_pending,
-                additions=[
-                    *intermediate_entries,
-                    *([
-                        _pending_question_message(
-                            new_pending,
-                            trace=trace,
-                            usage=usage,
-                            files=files,
-                            model=str(chat.get("model") or ""),
-                        )
-                    ] if new_pending else []),
-                ],
+            new_pending = await asyncio.to_thread(R._workbench_pending_question_for, chat_id)
+
+            def extract_pending() -> tuple[list[dict[str, Any]], list[Any], dict[str, Any], list[Any]]:
+                return _extract_exchange_segments(
+                    _session_state_messages(chat_id),
+                    state_ids_before_resume,
+                    include_open_tool_preamble=True,
+                )
+
+            intermediate_entries, trace, usage, files = await asyncio.to_thread(extract_pending)
+            additions = [
+                *intermediate_entries,
+                *([
+                    _pending_question_message(
+                        new_pending,
+                        trace=trace,
+                        usage=usage,
+                        files=files,
+                        model=str(chat.get("model") or ""),
+                    )
+                ] if new_pending else []),
+            ]
+            await asyncio.to_thread(
+                _stash_chat_pending_for, chat_id, new_pending, additions=additions
             )
             return {
                 "ok": True,
@@ -2845,10 +2888,13 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 "userMessage": _public_message(answer_entry),
             }
 
-        intermediate_entries, trace, usage, files = _extract_exchange_segments(
-            _session_state_messages(chat_id), state_ids_before_resume
-        )
-        fresh = _read_chats_store()
+        def extract_answer() -> tuple[list[dict[str, Any]], list[Any], dict[str, Any], list[Any]]:
+            return _extract_exchange_segments(
+                _session_state_messages(chat_id), state_ids_before_resume
+            )
+
+        intermediate_entries, trace, usage, files = await asyncio.to_thread(extract_answer)
+        fresh = await asyncio.to_thread(_read_chats_store)
         fresh_chat = _find_chat(fresh, chat_id)
         if not fresh_chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
@@ -2873,10 +2919,11 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         fresh_chat["status"] = "idle"
         fresh_chat.pop("pendingQuestion", None)
         fresh_chat["updatedAt"] = assistant_entry["createdAt"]
-        _write_chats_store(fresh)
-        complete_chat_plan(chat_id)
+        await asyncio.to_thread(_write_chats_store, fresh)
+        await asyncio.to_thread(complete_chat_plan, chat_id)
         try:
-            archive_session_exchange(
+            await asyncio.to_thread(
+                archive_session_exchange,
                 chat_id,
                 answer_text,
                 str(reply or ""),
@@ -2925,11 +2972,11 @@ async def remove_project_chats(project_id: str) -> int:
     project_id = str(project_id or "").strip()
     if not project_id:
         return 0
-    payload = _read_chats_store()
+    payload = await asyncio.to_thread(_read_chats_store)
     doomed = [chat for chat in payload.get("chats", []) if str(chat.get("projectId") or "") == project_id]
     if doomed:
         payload["chats"] = [chat for chat in payload.get("chats", []) if str(chat.get("projectId") or "") != project_id]
-        _write_chats_store(payload)
+        await asyncio.to_thread(_write_chats_store, payload)
     for chat in doomed:
         try:
             await clear_session_id(session_id=str(chat.get("id") or ""))

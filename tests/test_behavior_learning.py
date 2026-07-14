@@ -81,6 +81,27 @@ async def _record_web_search_turn(bl, *, session_id: str, round_id: str, user_me
     return context["turn_id"]
 
 
+async def _record_repeated_read_turn(bl, *, round_id: str, user_message: str, suffix: str):
+    context = await bl.begin_turn(
+        session_id="session-repeated-read",
+        round_id=round_id,
+        user_message=user_message,
+        history=[],
+        session_title="Repeated read test",
+    )
+    await bl.record_action("read_file", {"path": f"src/{suffix}.py"}, "main_agent", round_id, 5, result="a", success=True)
+    await bl.record_action("read_file", {"path": f"tests/test_{suffix}.py"}, "main_agent", round_id, 5, result="b", success=True)
+    await bl.record_action("search_web", {"query": f"documentation {suffix}"}, "main_agent", round_id, 5, result="c", success=True)
+    await bl.complete_turn(
+        turn_id=context["turn_id"],
+        assistant_response="done",
+        session_title="Repeated read test",
+        round_title=round_id,
+    )
+    bl.clear_turn_context(context)
+    return context["turn_id"]
+
+
 async def test_behavior_learning_promotes_to_active_skill(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
 
@@ -97,22 +118,99 @@ async def test_behavior_learning_promotes_to_active_skill(tmp_path, monkeypatch)
     skills = await bl.list_learned_skills()
 
     assert stats["processed_turns"] == 5
-    assert stats["merged_patterns"] == 4
-    assert len(patterns) == 1
-    assert patterns[0]["description"] == "edit_resource / code_change / source_code_file / workspace_file"
-    assert patterns[0]["prototype_fingerprint"]["action_sequence"][0]["subtype"] == "read_file"
+    assert stats["candidates_created"] == 1
+    assert stats["candidates_awaiting_user"] == 1
+    assert stats["candidates_auto_learned"] == 1
+    assert patterns == []
+    candidates = await bl.list_skill_candidates()
+    assert len(candidates) == 1
+    assert candidates[0]["occurrence_count"] == 5
+    assert candidates[0]["status"] == "auto_learned"
     assert len(skills) == 1
     assert skills[0]["status"] == "active"
     assert skills[0]["skill_type"] == "parameterized"
-    assert skills[0]["steps"][0]["implementation_kind"] == "script"
-    assert Path(skills[0]["steps"][0]["implementation_reference"]["script_path"]).exists()
-    assert len(skills[0]["steps"][0]["implementation_reference"]["original_steps"]) == 3
+    assert skills[0]["steps"][0]["implementation_kind"] == "tool_call"
+    assert skills[0]["script"]["format"] == "cyrene.parameterized-tool-script"
+    assert skills[0]["script"]["steps"] == skills[0]["steps"]
+    assert any(item["parameter_name"].startswith("param_path") for item in skills[0]["input_schema"])
     assert skills[0]["actual_usage_count"] == 0
-    assert skills[0]["shadow_validation_count"] == skills[0]["run_statistics"]["shadow_success"]
-    # Shadow validation backfills every eligible historical turn before activation,
-    # so the counter reflects total successful dry runs, not the promotion threshold.
-    assert skills[0]["run_statistics"]["shadow_success"] == 4
+    assert skills[0]["shadow_validation_count"] == 0
 
+
+async def test_second_occurrence_script_parameterizes_repeated_tool_calls(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    message = "读取实现和测试，再查询对应文档"
+    await _record_repeated_read_turn(bl, round_id="repeat-1", user_message=message, suffix="alpha")
+    await _record_repeated_read_turn(bl, round_id="repeat-2", user_message=message, suffix="beta")
+
+    await bl.process_unprocessed_turns(force=True)
+    candidate = (await bl.list_skill_candidates())[0]
+    script = candidate["script"]
+
+    assert candidate["status"] == "awaiting_user"
+    assert script["format"] == "cyrene.parameterized-tool-script"
+    assert script["steps"][0]["implementation_reference"]["tool_name"] == "read_file"
+    repeated_items = script["steps"][0]["implementation_reference"]["args_template"]["_items"]
+    assert len(repeated_items) == 2
+    assert all("{{param_path" in item["path"] for item in repeated_items)
+    assert any(item["required"] for item in script["parameters"])
+
+
+async def test_defer_auto_learns_on_third_and_dismiss_blocks_auto_learning(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    defer_message = "重复流程等待第三次"
+    for index in range(2):
+        await _record_code_fix_turn(bl, session_id="defer", round_id=f"defer-{index}", user_message=defer_message)
+    await bl.process_unprocessed_turns(force=True)
+    deferred = (await bl.list_skill_candidates())[0]
+    assert (await bl.decide_skill_candidate(deferred["id"], "defer"))["status"] == "waiting_third"
+    await _record_code_fix_turn(bl, session_id="defer", round_id="defer-3", user_message=defer_message)
+    await bl.process_unprocessed_turns(force=True)
+    assert (await bl.list_skill_candidates())[0]["status"] == "auto_learned"
+    assert len(await bl.list_learned_skills()) == 1
+
+    dismiss_message = "这个重复流程不要学习"
+    for index in range(2):
+        await _record_repeated_read_turn(bl, round_id=f"dismiss-{index}", user_message=dismiss_message, suffix=f"dismiss{index}")
+    await bl.process_unprocessed_turns(force=True)
+    dismissed = next(item for item in await bl.list_skill_candidates() if item["status"] == "awaiting_user")
+    assert (await bl.decide_skill_candidate(dismissed["id"], "dismiss"))["status"] == "dismissed"
+    await _record_repeated_read_turn(bl, round_id="dismiss-3", user_message=dismiss_message, suffix="dismiss3")
+    await bl.process_unprocessed_turns(force=True)
+    dismissed = next(item for item in await bl.list_skill_candidates() if item["id"] == dismissed["id"])
+    assert dismissed["status"] == "dismissed"
+    assert len(await bl.list_learned_skills()) == 1
+
+
+async def test_legacy_python_wrapper_is_migrated_to_declarative_script(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    message = "迁移旧技能脚本"
+    for index in range(3):
+        await _record_code_fix_turn(bl, session_id="migration", round_id=f"migration-{index}", user_message=message)
+    await bl.process_unprocessed_turns(force=True)
+    skill = (await bl.list_learned_skills())[0]
+    original_steps = skill["steps"]
+    wrapper = [{
+        "enabled": True,
+        "implementation_kind": "script",
+        "implementation_reference": {
+            "language": "python",
+            "script_path": str(tmp_path / "legacy.py"),
+            "original_steps": original_steps,
+        },
+    }]
+    async with bl._conn() as conn:
+        await conn.execute(
+            "UPDATE learned_skills SET steps_json = ?, script_json = '{}' WHERE skill_id = ?",
+            (bl._json_dumps(wrapper), skill["id"]),
+        )
+        await conn.commit()
+
+    assert await bl._migrate_generated_skill_scripts() == 1
+    migrated = await bl.get_learned_skill(skill["id"])
+    assert migrated["steps"] == original_steps
+    assert migrated["script"]["format"] == "cyrene.parameterized-tool-script"
+    assert migrated["script"]["risk"]["requires_runtime_approval"] is True
 
 async def test_behavior_learning_sanitizes_legacy_scheduler_prompts(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
@@ -138,7 +236,8 @@ async def test_behavior_learning_sanitizes_legacy_scheduler_prompts(tmp_path, mo
     stats = await bl.process_unprocessed_turns(force=True)
 
     assert stats["processed_turns"] == 1
-    assert len(await bl.list_patterns()) == 1
+    assert await bl.list_patterns() == []
+    assert await bl.list_skill_candidates() == []
     assert await bl.list_learned_skills() == []
     chain = (await bl.list_tool_chains())[0]
     assert chain["user_message"] == "Scheduled proactive check-in"
@@ -188,6 +287,9 @@ async def test_behavior_learning_manual_edit_and_rollback(tmp_path, monkeypatch)
         )
 
     await bl.process_unprocessed_turns(force=True)
+    candidate = (await bl.list_skill_candidates())[0]
+    decision = await bl.decide_skill_candidate(candidate["id"], "learn_now")
+    assert decision["ok"] is True
     skills = await bl.list_learned_skills()
     skill = skills[0]
     updated = await bl.update_learned_skill(
@@ -198,6 +300,8 @@ async def test_behavior_learning_manual_edit_and_rollback(tmp_path, monkeypatch)
 
     assert updated is not None
     assert updated["description"] == "manual edit description"
+    assert updated["script"]["description"] == "manual edit description"
+    assert updated["script"]["version"] == 2
     assert updated["version"] == 2
 
     rollback = await bl.rollback_learned_skill(skill["id"], 1)
@@ -207,34 +311,26 @@ async def test_behavior_learning_manual_edit_and_rollback(tmp_path, monkeypatch)
     assert restored is not None
     assert restored["version"] == 3
     assert restored["description"] != "manual edit description"
+    assert restored["script"]["description"] == restored["description"]
+    assert restored["script"]["version"] == 3
 
 
-async def test_manual_pattern_learning_creates_skill(tmp_path, monkeypatch):
+async def test_manual_turn_learning_creates_skill(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
 
-    await _record_code_fix_turn(
+    turn_id = await _record_code_fix_turn(
         bl,
         session_id="session-manual-pattern",
         round_id="round-manual-pattern-1",
         user_message="请检查 src/app.py 并修复导出逻辑，然后给我总结",
     )
 
-    await bl.process_unprocessed_turns(force=True)
-    patterns = await bl.list_patterns()
+    result = await bl.learn_from_turn(turn_id)
+    assert result["processed_turns"] == 1
+    assert result["skills_created"] == 1
     learned = await bl.list_learned_skills()
-    assert patterns
-    assert len(learned) == 0
-
-    result = await bl.learn_skill_from_pattern(patterns[0]["id"])
-    assert result["ok"] is True
-    assert result["created"] is True
-    assert result["skill"] is not None
-    assert result["skill"]["pattern_id"] == patterns[0]["id"]
-
-    second = await bl.learn_skill_from_pattern(patterns[0]["id"])
-    assert second["ok"] is True
-    assert second["created"] is False
-    assert second["skill_id"] == result["skill_id"]
+    assert len(learned) == 1
+    assert learned[0]["script"]["format"] == "cyrene.parameterized-tool-script"
 
 
 async def test_learning_agent_does_not_auto_learn_from_one_turn(tmp_path, monkeypatch):
@@ -267,48 +363,24 @@ async def test_learning_agent_does_not_auto_learn_from_one_turn(tmp_path, monkey
     chains = await bl.list_tool_chains()
 
     assert stats["processed_turns"] == 1
-    assert stats["learning_reviews"] == 1
+    assert stats["learning_reviews"] == 0
     assert stats["agent_created_skills"] == 0
     assert skills == []
-    assert chains[0]["review"]["decision"] == "promote"
-    assert chains[0]["review"]["proposed_skill"]["_decision"]["raw_decision"] == "parameterize"
+    assert (await bl.list_skill_candidates())[0]["status"] == "observing"
 
     # An explicit user action may promote this single-turn workflow, while
     # background automatic learning must wait for repeated evidence.
     manual_stats = await bl.learn_from_turn(turn_id)
     skills = await bl.list_learned_skills()
     assert manual_stats["processed_turns"] == 1
-    assert manual_stats["agent_created_skills"] == 1
+    assert manual_stats["skills_created"] == 1
     assert len(skills) == 1
     assert skills[0]["skill_type"] == "parameterized"
 
 
-async def test_learning_agent_duplicate_decision_does_not_create_second_skill(tmp_path, monkeypatch):
+async def test_second_occurrence_waits_and_third_auto_learns_once(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
 
-    async def reviewer(prompt: str, *, caller: str = "behavior_learning"):
-        if caller == "project_skill_learning_agent":
-            if '"skills": []' not in prompt:
-                return {
-                    "decision": "duplicate",
-                    "confidence": 0.95,
-                    "rationale": "Existing skill already covers this workflow.",
-                    "target_skill_id": "existing-skill-from-prompt",
-                    "proposed_skill": {},
-                }
-            return {
-                "decision": "parameterize",
-                "confidence": 0.9,
-                "rationale": "First occurrence should become a project-local skill.",
-                "proposed_skill": {
-                    "name": "修复并验证导出逻辑",
-                    "description": "读取文件、修改导出逻辑并运行测试。",
-                    "skill_type": "parameterized",
-                },
-            }
-        return {}
-
-    monkeypatch.setattr(bl, "_call_llm_json", reviewer)
     await _record_code_fix_turn(
         bl,
         session_id="session-agent-duplicate",
@@ -317,7 +389,7 @@ async def test_learning_agent_duplicate_decision_does_not_create_second_skill(tm
     )
     first_stats = await bl.process_unprocessed_turns(force=True)
     first_skills = await bl.list_learned_skills()
-    assert first_stats["agent_created_skills"] == 0
+    assert first_stats["candidates_created"] == 1
     assert first_skills == []
 
     await _record_code_fix_turn(
@@ -329,8 +401,9 @@ async def test_learning_agent_duplicate_decision_does_not_create_second_skill(tm
     second_stats = await bl.process_unprocessed_turns(force=True)
     second_skills = await bl.list_learned_skills()
 
-    assert second_stats["agent_created_skills"] == 1
-    assert len(second_skills) == 1
+    assert second_stats["candidates_awaiting_user"] == 1
+    assert second_skills == []
+    assert (await bl.list_skill_candidates())[0]["status"] == "awaiting_user"
 
     await _record_code_fix_turn(
         bl,
@@ -342,10 +415,9 @@ async def test_learning_agent_duplicate_decision_does_not_create_second_skill(tm
     third_skills = await bl.list_learned_skills()
     chains = await bl.list_tool_chains()
 
-    assert third_stats["learning_duplicates"] == 1
-    assert third_stats["agent_created_skills"] == 0
+    assert third_stats["candidates_auto_learned"] == 1
     assert len(third_skills) == 1
-    assert chains[0]["review"]["decision"] == "duplicate"
+    assert (await bl.list_skill_candidates())[0]["status"] == "auto_learned"
 
 
 async def test_browser_user_events_feed_learning_agent_and_are_queryable(tmp_path, monkeypatch):
@@ -405,7 +477,7 @@ async def test_browser_user_events_feed_learning_agent_and_are_queryable(tmp_pat
         limit=10,
     )
 
-    assert stats["learning_reviews"] == 1
+    assert stats["learning_reviews"] == 0
     assert chains[0]["source"] == "user_browser"
     assert chains[0]["summary"]["browser_user_steps"] == 2
     assert [step["tool"] for step in chains[0]["chain"]] == ["browser.user.click", "browser.user.input"]
@@ -416,11 +488,8 @@ async def test_browser_user_events_feed_learning_agent_and_are_queryable(tmp_pat
     assert [event["tool"] for event in events] == ["browser.user.click", "browser.user.input"]
     assert events[0]["purpose"] == "activate button 'Apply filters'"
     assert events[1]["value_preview"] == "openai"
-    assert prompts
-    assert "clicked button 'Apply filters'" in prompts[-1]
-    assert "entered 'openai' into input 'q'" in prompts[-1]
-    assert "browser.user.click" in prompts[-1]
-    assert "https://example.test/search" in prompts[-1]
+    assert prompts == []
+    assert await bl.list_skill_candidates() == []
 
 
 async def test_duplicate_skill_hard_veto_reuses_existing_cross_pattern(tmp_path, monkeypatch):
@@ -562,8 +631,8 @@ async def test_list_learned_skills_separates_shadow_validation_from_actual_usage
     skills = await bl.list_learned_skills()
 
     assert len(skills) == 1
-    assert skills[0]["run_statistics"]["total_runs"] > 0
-    assert skills[0]["shadow_validation_count"] > 0
+    assert skills[0]["run_statistics"]["total_runs"] == 0
+    assert skills[0]["shadow_validation_count"] == 0
     assert skills[0]["actual_usage_count"] == 0
 
 
@@ -583,7 +652,8 @@ async def test_single_tool_repetition_records_pattern_but_does_not_create_skill(
     skills = await bl.list_learned_skills()
 
     assert stats["processed_turns"] == 3
-    assert patterns
+    assert patterns == []
+    assert await bl.list_skill_candidates() == []
     assert skills == []
     assert stats["agent_created_skills"] == 0
 
@@ -615,7 +685,7 @@ async def test_single_tool_cannot_be_auto_learned_even_if_agent_promotes_it(tmp_
     assert stats["processed_turns"] == 1
     assert stats["agent_created_skills"] == 0
     assert await bl.list_learned_skills() == []
-    assert (await bl.list_tool_chains())[0]["review"]["decision"] == "skip"
+    assert await bl.list_skill_candidates() == []
 
 
 async def test_legacy_single_tool_skill_is_hidden_from_learning_surfaces(tmp_path, monkeypatch):
@@ -661,63 +731,32 @@ async def test_similar_candidate_search_compares_purpose_and_tool_chain_within_p
 
     monkeypatch.setattr(bl, "_project_scope_for_session", project_scope)
 
+    message = "导出逻辑坏了，请读文件、改代码并跑测试"
+    for index in range(2):
+        await _record_code_fix_turn(
+            bl,
+            session_id=f"project-a-session-{index}",
+            round_id=f"project-a-{index}",
+            user_message=message,
+        )
     await _record_code_fix_turn(
         bl,
-        session_id="project-a-session-seed",
-        round_id="seed-code-fix",
-        user_message="导出逻辑坏了，请读文件、改代码并跑测试",
-    )
-    await bl.process_unprocessed_turns(force=True, project_id="project-a")
-    seed_pattern = (await bl.list_patterns(project_id="project-a"))[0]
-    created = await bl.learn_skill_from_pattern(seed_pattern["id"], "project-a")
-    assert created["ok"] is True
-
-    await _record_web_search_turn(
-        bl,
-        session_id="project-a-session-weather",
-        round_id="weather-search",
-        user_message="帮我查一下上海今天的天气",
-    )
-    await bl.process_unprocessed_turns(force=True, project_id="project-a")
-    weather_pattern = next(
-        item for item in await bl.list_patterns(project_id="project-a")
-        if item["id"] != seed_pattern["id"]
+        session_id="project-b-session-1",
+        round_id="project-b-1",
+        user_message=message,
     )
 
-    await _record_code_fix_turn(
-        bl,
-        session_id="project-b-session-seed",
-        round_id="other-project-code-fix",
-        user_message="导出逻辑坏了，请读文件、改代码并跑测试",
-    )
+    await bl.process_unprocessed_turns(force=True, project_id="project-a")
     await bl.process_unprocessed_turns(force=True, project_id="project-b")
-    other_project_pattern = (await bl.list_patterns(project_id="project-b"))[0]
+    project_a = await bl.list_skill_candidates("project-a")
+    project_b = await bl.list_skill_candidates("project-b")
 
-    new_turn_id = await _record_code_fix_turn(
-        bl,
-        session_id="project-a-session-new",
-        round_id="new-code-fix",
-        user_message="帮我检查 src/app.py 的导出问题，修完后执行测试确认",
-    )
-    new_fp = await bl.build_turn_fingerprint(new_turn_id)
-    similar = await bl._learning_similar_candidates(
-        project_id="project-a",
-        current_pattern_id="new-unmerged-candidate",
-        fingerprint=new_fp,
-        limit=10,
-    )
-
-    pattern_hits = {item["pattern_id"]: item for item in similar["patterns"]}
-    skill_hits = {item["pattern_id"]: item for item in similar["skills"]}
-
-    assert seed_pattern["id"] in pattern_hits
-    assert pattern_hits[seed_pattern["id"]]["similarity"] >= 0.85
-    assert pattern_hits[seed_pattern["id"]]["breakdown"]["action_sequence"] == 1.0
-    assert created["skill_id"] in {item["skill_id"] for item in similar["skills"]}
-    assert skill_hits[seed_pattern["id"]]["similarity"] >= 0.85
-
-    assert weather_pattern["id"] not in pattern_hits
-    assert other_project_pattern["id"] not in pattern_hits
+    assert len(project_a) == 1
+    assert project_a[0]["occurrence_count"] == 2
+    assert project_a[0]["status"] == "awaiting_user"
+    assert len(project_b) == 1
+    assert project_b[0]["occurrence_count"] == 1
+    assert project_b[0]["status"] == "observing"
 
 
 async def test_behavior_learning_patch_application_and_vocabulary_snapshot(tmp_path, monkeypatch):
@@ -732,6 +771,8 @@ async def test_behavior_learning_patch_application_and_vocabulary_snapshot(tmp_p
         )
 
     await bl.process_unprocessed_turns(force=True)
+    candidate = (await bl.list_skill_candidates())[0]
+    await bl.decide_skill_candidate(candidate["id"], "learn_now")
     skills = await bl.list_learned_skills()
     skill = skills[0]
 
@@ -748,7 +789,7 @@ async def test_behavior_learning_patch_application_and_vocabulary_snapshot(tmp_p
     result = await bl.list_learned_skill_patches(skill["id"])
     assert result[0]["status"] == "applied"
     assert vocabulary["vocabulary_version"] == 1
-    assert any(item["label_type"] == "intent_type" for item in vocabulary["unknown_labels"])
+    assert vocabulary["unknown_labels"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -941,6 +982,47 @@ async def test_safe_skill_still_executes(tmp_path, monkeypatch):
     assert result["final_text"] == "Done."
 
     bl.clear_turn_context(context)
+
+
+async def test_parameterized_runner_applies_typed_defaults(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    from cyrene.tool_impl import run_learned_skill as runner
+
+    skill = _make_skill_with_steps([{
+        "enabled": True,
+        "implementation_kind": "tool_call",
+        "implementation_reference": {
+            "tool_name": "read_file",
+            "args_template": {"path": "{{input_path}}", "limit": "{{line_limit}}"},
+        },
+    }])
+    skill["input_schema"] = [
+        {"parameter_name": "input_path", "type": "path", "required": False, "default_value": "src/app.py"},
+        {"parameter_name": "line_limit", "type": "number", "required": False, "default_value": 20},
+    ]
+    monkeypatch.setattr(bl, "get_learned_skill_by_name", AsyncMock(return_value=skill))
+    execute = AsyncMock(return_value="file content")
+    monkeypatch.setattr(runner, "_execute_tool", execute)
+    monkeypatch.setattr(bl, "record_manual_skill_run", AsyncMock())
+
+    result = await runner._tool_run_learned_skill(
+        {"name": skill["name"], "params": {}}, MagicMock(), 1, str(tmp_path / "db.sqlite"), None,
+    )
+
+    assert runner.json.loads(result)["ok"] is True
+    called_args = execute.await_args.args[1]
+    assert called_args == {"path": "src/app.py", "limit": 20}
+
+
+def test_parameterized_runner_detects_unsafe_legacy_wrapper():
+    from cyrene.tool_impl import run_learned_skill as runner
+
+    wrapper = {
+        "enabled": True,
+        "implementation_kind": "script",
+        "implementation_reference": {"original_steps": [_make_step("Bash")]},
+    }
+    assert runner._has_unsafe_step([wrapper]) is True
 
 
 async def test_skill_risk_level_inferred_on_creation(tmp_path, monkeypatch):

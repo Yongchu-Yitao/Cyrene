@@ -19,6 +19,7 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +41,11 @@ _MISSING = object()
 T = TypeVar("T")
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY: set[str] = set()
+# A Workbench document is merged with the latest committed value before every
+# write.  Serializing those read/merge/write/export cycles inside this process
+# both reduces SQLite writer contention and preserves commit/export ordering.
+# Cross-process contention is still handled by SQLite's busy timeout.
+_DOCUMENT_WRITE_LOCK = threading.RLock()
 _COUNTER_FIELDS = {
     "mention_count",
     "planRevision",
@@ -71,12 +77,20 @@ def ensure_schema(db_path: str | Path) -> None:
     with _SCHEMA_LOCK:
         if cache_key in _SCHEMA_READY and path.exists():
             return
-        with sqlite3.connect(path, timeout=30) as conn:
-            conn.execute("PRAGMA busy_timeout = 30000")
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA synchronous = NORMAL")
-            conn.execute(_SCHEMA)
-            conn.commit()
+        for attempt, delay in enumerate((0.0, 0.05, 0.1, 0.2, 0.4, 0.8)):
+            if delay:
+                time.sleep(delay)
+            try:
+                with sqlite3.connect(path, timeout=5) as conn:
+                    conn.execute("PRAGMA busy_timeout = 5000")
+                    conn.execute("PRAGMA journal_mode = WAL")
+                    conn.execute("PRAGMA synchronous = NORMAL")
+                    conn.execute(_SCHEMA)
+                    conn.commit()
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or attempt == 5:
+                    raise
         _SCHEMA_READY.add(cache_key)
 
 
@@ -317,7 +331,7 @@ def _three_way_merge(base: Any, local: Any, remote: Any, path: tuple[str, ...] =
     return _plain(local)
 
 
-def write_document(
+def _write_document_locked(
     db_path: str | Path,
     key: str,
     value: T,
@@ -354,6 +368,29 @@ def write_document(
         except Exception:
             logger.exception("Failed to export Workbench document %s to %s", key, export_path)
     return _tracked(merged, key)
+
+
+def write_document(
+    db_path: str | Path,
+    key: str,
+    value: T,
+    default_factory: Callable[[], T],
+    *,
+    legacy_path: Path | None = None,
+    export_path: Path | None = None,
+    base_value: Any | None = None,
+) -> T:
+    """Merge and commit one document without racing another local writer."""
+    with _DOCUMENT_WRITE_LOCK:
+        return _write_document_locked(
+            db_path,
+            key,
+            value,
+            default_factory,
+            legacy_path=legacy_path,
+            export_path=export_path,
+            base_value=base_value,
+        )
 
 
 def _export_current_document(db_path: str | Path, key: str, export_path: Path) -> None:

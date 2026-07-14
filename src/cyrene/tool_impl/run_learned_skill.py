@@ -30,16 +30,56 @@ def _has_unsafe_step(steps: list[dict[str, Any]]) -> bool:
         if not step.get("enabled", True):
             continue
         ref = step.get("implementation_reference") or {}
+        if str(step.get("implementation_kind") or "") == "script":
+            if _has_unsafe_step(ref.get("original_steps") or []):
+                return True
+            continue
         tool_name = str(ref.get("tool_name") or "")
         if tool_name in _HIGH_RISK_TOOLS or tool_name in _AUTO_REPLAY_BLOCKED_TOOLS:
             return True
     return False
 
 
+def _validate_params(schema: list[dict[str, Any]], params: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for item in schema:
+        name = str(item.get("parameter_name") or item.get("name") or "").strip()
+        if not name:
+            continue
+        value = params.get(name)
+        if bool(item.get("required")) and (value is None or value == ""):
+            errors.append(f"missing required parameter: {name}")
+            continue
+        if value is None:
+            continue
+        kind = str(item.get("type") or "text")
+        if kind.startswith("list") and not isinstance(value, list):
+            errors.append(f"parameter {name} must be a list")
+        elif kind == "boolean" and not isinstance(value, bool):
+            errors.append(f"parameter {name} must be a boolean")
+        elif kind == "number" and not isinstance(value, (int, float)):
+            errors.append(f"parameter {name} must be a number")
+        elif kind in {"text", "string", "path", "url", "date"} and not isinstance(value, str):
+            errors.append(f"parameter {name} must be a string")
+    return errors
+
+
+def _params_with_defaults(schema: list[dict[str, Any]], params: dict[str, Any]) -> dict[str, Any]:
+    resolved = dict(params)
+    for item in schema:
+        name = str(item.get("parameter_name") or item.get("name") or "").strip()
+        if name and name not in resolved and "default_value" in item:
+            resolved[name] = item.get("default_value")
+    return resolved
+
+
 def _resolve_value_template(value: Any, params: dict[str, Any]) -> Any:
     if isinstance(value, str):
         if "{{" not in value:
             return value
+        full = _re.fullmatch(r"\{\{(.+?)\}\}", value)
+        if full and full.group(1) in params:
+            return params[full.group(1)]
         def _replacer(m: _re.Match) -> str:
             key = m.group(1)
             return str(params.get(key, m.group(0)))
@@ -91,6 +131,16 @@ async def _tool_run_learned_skill(args: dict[str, Any], bot: Any, chat_id: int, 
         if skill is None:
             return json.dumps({"ok": False, "error": f"no active learned skill named '{name}'"}, ensure_ascii=False)
 
+        schema = skill.get("input_schema") or []
+        params = _params_with_defaults(schema, params)
+        param_errors = _validate_params(schema, params)
+        if param_errors:
+            await _bl.record_manual_skill_run(
+                skill["skill_id"], int(skill["version"]),
+                execution_status="fallback",
+            )
+            return json.dumps({"ok": False, "error": "; ".join(param_errors)}, ensure_ascii=False)
+
         if _has_unsafe_step(skill["steps"]):
             await _bl.record_manual_skill_run(
                 skill["skill_id"], int(skill["version"]),
@@ -127,6 +177,8 @@ async def _tool_run_learned_skill(args: dict[str, Any], bot: Any, chat_id: int, 
                     step_result = await _execute_one(tool_name, resolved_args, bot, chat_id, db_path, notify_state)
                     all_ok = all_ok and step_result["ok"]
                     results.append(step_result)
+                if not all_ok:
+                    break
         finally:
             _skip_action_recording.reset(_rec_token)
 

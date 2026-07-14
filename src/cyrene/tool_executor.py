@@ -18,6 +18,7 @@ _skip_action_recording: ContextVar[bool] = ContextVar("_skip_action_recording", 
 logger = logging.getLogger(__name__)
 
 _pending_action_record_tasks: set[asyncio.Task[Any]] = set()
+_pending_timed_out_tool_tasks: set[asyncio.Task[Any]] = set()
 
 
 def _record_action_background(*args: Any, **kwargs: Any) -> None:
@@ -41,9 +42,26 @@ def _record_action_background(*args: Any, **kwargs: Any) -> None:
 
 
 async def shutdown_background_tasks() -> None:
-    """Flush behavior telemetry before the event loop closes."""
+    """Flush telemetry and timed-out tool cleanup before the loop closes."""
     await drain_or_cancel(_pending_action_record_tasks, grace_seconds=2.0)
     _pending_action_record_tasks.clear()
+    await drain_or_cancel(_pending_timed_out_tool_tasks, grace_seconds=0.5)
+    _pending_timed_out_tool_tasks.clear()
+
+
+async def flush_behavior_action_tasks(grace_seconds: float = 2.0) -> None:
+    """Wait for action telemetry already queued by the current agent turn."""
+    pending = [task for task in list(_pending_action_record_tasks) if not task.done()]
+    if not pending:
+        return
+    done, still_pending = await asyncio.wait(pending, timeout=max(0.0, grace_seconds))
+    for task in done:
+        try:
+            task.result()
+        except Exception:
+            logger.debug("behavior action telemetry task failed during flush", exc_info=True)
+    if still_pending:
+        logger.warning("Timed out waiting for %d behavior telemetry tasks", len(still_pending))
 
 _BROWSER_TOOL_NAMES = {
     "browser_navigate",
@@ -59,6 +77,58 @@ _BROWSER_TOOL_NAMES = {
     "browser_network_log",
     "browser_request_takeover",
 }
+
+_DEFAULT_TOOL_TIMEOUT_SECONDS = 180.0
+_TOOL_TIMEOUT_SECONDS = {
+    "Read": 30.0,
+    "Write": 30.0,
+    "Edit": 30.0,
+    "Glob": 30.0,
+    "Grep": 30.0,
+    "app_use": 60.0,
+}
+
+
+def _tool_timeout_seconds(name: str, arguments: dict[str, Any]) -> float:
+    """Return a hard wall-clock budget for every tool invocation."""
+    if name == "Bash":
+        try:
+            requested = max(1.0, float(arguments.get("timeout_ms", 120000)) / 1000)
+        except (TypeError, ValueError):
+            requested = 120.0
+        # Allow a small cleanup margin beyond Bash's own command deadline.
+        return min(requested + 10.0, 310.0)
+    if name == "browser_request_takeover":
+        return 900.0
+    return _TOOL_TIMEOUT_SECONDS.get(name, _DEFAULT_TOOL_TIMEOUT_SECONDS)
+
+
+async def _run_with_tool_timeout(
+    name: str,
+    arguments: dict[str, Any],
+    awaitable: Any,
+) -> Any:
+    timeout = _tool_timeout_seconds(name, arguments)
+    task = asyncio.ensure_future(awaitable)
+    try:
+        done, _pending = await asyncio.wait({task}, timeout=timeout)
+    except asyncio.CancelledError:
+        task.cancel()
+        raise
+    if done:
+        return await task
+
+    # Do not let a connector that suppresses cancellation hold the agent loop
+    # beyond its wall-clock budget. Keep ownership of the task so shutdown can
+    # make one last bounded drain attempt.
+    task.cancel()
+    track_task(
+        task,
+        _pending_timed_out_tool_tasks,
+        logger=logger,
+        label=f"timed-out tool {name}",
+    )
+    return f"Tool failed: {name} timed out after {timeout:g} seconds."
 
 
 def _is_system_initiated_round() -> bool:
@@ -137,7 +207,9 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
         _t0 = time.monotonic()
         try:
             manager = _get_mcp_mgr()
-            result = await manager.execute_tool(name, arguments)
+            result = await _run_with_tool_timeout(
+                name, arguments, manager.execute_tool(name, arguments)
+            )
             if _debug.VERBOSE:
                 _debug.log_tool_call(_caller_type.get(), name, redact_value(arguments), redact_text(result), (time.monotonic() - _t0) * 1000)
             await _debug.publish_event({
@@ -145,6 +217,7 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
                 "result": redact_text(str(result)),
                 "round_id": _current_round_id.get(),
             }, session_id=_current_session_id.get())
+            tool_success = not str(result).lower().startswith("tool failed:")
             _record_action_background(
                 name,
                 redact_value(arguments),
@@ -152,8 +225,8 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
                 _current_round_id.get(),
                 (time.monotonic() - _t0) * 1000,
                 result=redact_text(result),
-                success=True,
-                error="",
+                success=tool_success,
+                error="" if tool_success else redact_text(str(result)),
             )
             return result
         except ValueError:
@@ -173,7 +246,11 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
 
     _t0 = time.monotonic()
     try:
-        result = await handler(arguments, bot, chat_id, db_path, notify_state)
+        result = await _run_with_tool_timeout(
+            name,
+            arguments,
+            handler(arguments, bot, chat_id, db_path, notify_state),
+        )
     except Exception as e:
         from cyrene import debug
         from cyrene.agent.state import _caller_type, _current_round_id, _current_session_id

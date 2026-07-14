@@ -1,6 +1,6 @@
 {
   "name": "cyrene",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "license": "Apache-2.0",
   "description": "Cyrene AI Agent — self-evolving AI companion",
   "author": {
@@ -10,13 +10,17 @@
   "homepage": "https://github.com/ikerrrrrrrrrrr/Cyrene",
   "main": "main.js",
   "scripts": {
+    "prestart": "node build-app-use-macos.js",
     "start": "electron .",
+    "predev": "node build-app-use-macos.js",
     "dev": "ELECTRON_DEV=1 electron .",
+    "build:app-use-macos": "node build-app-use-macos.js",
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux"
   },
   "build": {
+    "beforePack": "build-app-use-macos.js",
     "appId": "com.cyrene.app",
     "productName": "Cyrene",
     "directories": {
@@ -51,6 +55,10 @@
       {
         "from": "app-use-macos.jxa",
         "to": "app-use/app-use-macos.jxa"
+      },
+      {
+        "from": "app-use-macos-hit-test",
+        "to": "app-use/app-use-macos-hit-test"
       },
       {
         "from": "app-use-windows.ps1",

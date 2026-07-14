@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from cyrene import tool_legacy as _legacy
@@ -41,8 +42,11 @@ async def _tool_write(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: 
             "Not written: proactive system-initiated rounds may only create "
             f"new files, and this path already exists: {path}"
         )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(args.get("content", "")), encoding="utf-8")
+    def write_file() -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(args.get("content", "")), encoding="utf-8")
+
+    await asyncio.to_thread(write_file)
     return f"Wrote {path}"
 
 

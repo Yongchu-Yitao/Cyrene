@@ -864,6 +864,10 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   padding: 0 0 0 14px;
 }
 
+.workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-rail-head-actions {
+  margin-left: 0;
+}
+
 .workbench-grid.rail-collapsed .workbench-project-rail:not(:hover):not(:focus-within) .workbench-add-btn {
   width: 36px;
   height: 36px;
@@ -918,6 +922,7 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
   display: flex;
   align-items: center;
   gap: 4px;
+  margin-left: auto;
   min-width: 0;
 }
 
@@ -996,6 +1001,7 @@ body.wb-col-resizing {
 }
 
 .workbench-rail-head {
+  position: relative;
   height: 54px;
   padding: 0 12px;
   display: flex;
@@ -1033,6 +1039,14 @@ body.wb-col-resizing {
 .workbench-add-btn > span:last-child {
   flex: 0 0 auto;
   white-space: nowrap;
+}
+
+.wb-rail-title {
+  position: absolute;
+  top: 50%;
+  left: 39px;
+  margin: 0;
+  transform: translate(-50%, -50%);
 }
 
 .workbench-add-btn span:first-child {
@@ -4578,19 +4592,109 @@ html[data-theme="dark"] .wb-composer-disclaimer {
 
 @media (max-width: 1040px) {
   .workbench-grid {
-    --wb-rail-w: 68px;
+    --wb-rail-w: 64px;
+    --wb-rail-w-open: 250px;
     grid-template-columns: var(--wb-rail-w) 210px minmax(0, 1fr);
   }
 
-  .workbench-project-meta,
-  .workbench-global-nav,
-  .workbench-account > div,
+  .workbench-project-rail,
+  .workbench-grid.rail-collapsed .workbench-project-rail {
+    position: relative;
+    z-index: 60;
+    width: 64px;
+    overflow: hidden;
+    transition: width 170ms ease, box-shadow 170ms ease;
+  }
+
+  .workbench-project-rail:hover,
+  .workbench-project-rail:focus-within,
+  .workbench-grid.rail-collapsed .workbench-project-rail:hover,
+  .workbench-grid.rail-collapsed .workbench-project-rail:focus-within {
+    width: var(--wb-rail-w-open);
+    box-shadow: 18px 0 50px rgba(20, 28, 45, 0.16);
+  }
+
+  .workbench-project-rail:hover .workbench-rail-head,
+  .workbench-project-rail:focus-within .workbench-rail-head {
+    justify-content: space-between;
+    padding: 0 12px;
+  }
+
+  .workbench-project-rail:not(:hover):not(:focus-within) .wb-rail-title,
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-rail-collapse-btn,
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-add-btn > span:last-child,
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-project-meta,
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-project-menu-btn,
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-nav-button > span:last-child,
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-account-meta,
   .workbench-right-panel {
     display: none;
   }
 
-  .workbench-project-card {
-    grid-template-columns: 34px;
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-rail-head {
+    justify-content: flex-start;
+    padding: 0 0 0 14px;
+  }
+
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-rail-head-actions {
+    margin-left: 0;
+  }
+
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-add-btn {
+    width: 36px;
+    height: 36px;
+    min-height: 36px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 9px;
+  }
+
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-project-list {
+    padding: 4px 0 12px;
+    align-items: flex-start;
+    overflow-x: hidden;
+  }
+
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-project-card {
+    width: 44px;
+    min-height: 44px;
+    margin-left: 10px;
+    transform: none;
+  }
+
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-project-main {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 5px 0;
+  }
+
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-global-nav {
+    display: grid;
+    margin: auto 0 0;
+    padding: 12px 0;
+    justify-items: start;
+  }
+
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-nav-button {
+    width: 44px;
+    margin-left: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+  }
+
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-account {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 13px 0 13px 14px;
+  }
+
+  .workbench-project-rail:not(:hover):not(:focus-within) .workbench-project-card {
     justify-content: center;
   }
 
@@ -8872,6 +8976,43 @@ html[data-theme="light"] .wb-tool-list .mono {
   border-right: 1px solid var(--wb-line);
   background: var(--wb-task-rail-bg, color-mix(in srgb, var(--wb-card-bg) 72%, var(--wb-surface)));
 }
+.wb-learning-nav-head {
+  flex: 0 0 auto;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  padding: 0 2px;
+}
+.wb-learning-nav-head button {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  justify-content: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-muted);
+  padding: 0;
+  cursor: pointer;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+.wb-learning-nav-head button:hover {
+  background: transparent;
+  color: var(--wb-accent);
+}
+.wb-learning-nav-head > b {
+  color: var(--wb-text);
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-weight: 740;
+  white-space: nowrap;
+}
 .wb-learning-side-section {
   min-height: 0;
   display: flex;
@@ -8885,6 +9026,11 @@ html[data-theme="light"] .wb-tool-list .mono {
 .wb-learning-side-section.skills {
   flex: 0 0 auto;
   max-height: 38%;
+}
+.wb-learning-side-section.candidates {
+  flex: 0 0 auto;
+  max-height: 46%;
+  border-color: color-mix(in srgb, var(--wb-accent) 34%, var(--wb-line));
 }
 .wb-learning-side-section.sessions {
   flex: 1 1 auto;
@@ -8918,6 +9064,75 @@ html[data-theme="light"] .wb-tool-list .mono {
 }
 .wb-learning-skill-list::-webkit-scrollbar {
   display: none;
+}
+.wb-learning-candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+.wb-learning-candidate-card {
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 25%, var(--wb-line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-card-bg) 92%, var(--wb-accent) 8%);
+  padding: 10px;
+}
+.wb-learning-candidate-copy b,
+.wb-learning-candidate-copy p,
+.wb-learning-candidate-copy small {
+  display: block;
+}
+.wb-learning-candidate-copy b {
+  color: var(--wb-text);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+}
+.wb-learning-candidate-copy p {
+  margin: 5px 0;
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.4;
+}
+.wb-learning-candidate-copy small {
+  color: var(--wb-faint);
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+}
+.wb-learning-candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+.wb-learning-candidate-actions button {
+  border: 1px solid var(--wb-line);
+  border-radius: 6px;
+  background: var(--wb-card-bg);
+  color: var(--wb-text);
+  padding: 5px 8px;
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  cursor: pointer;
+}
+.wb-learning-candidate-actions button:first-child {
+  border-color: color-mix(in srgb, var(--wb-accent) 46%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-accent) 12%, var(--wb-card-bg));
+  color: var(--wb-accent);
+}
+.wb-learning-candidate-actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.wb-learning-script-json {
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-main-bg) 90%, black 10%);
+  color: var(--wb-text);
+  padding: 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .wb-learning-skill-mini {
   width: 100%;
@@ -9088,7 +9303,7 @@ html[data-theme="light"] .wb-tool-list .mono {
   gap: 18px;
   padding: 26px 30px 18px;
   border-bottom: 1px solid var(--wb-line);
-  max-width: 720px;
+  max-width: 860px;
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;
@@ -9149,16 +9364,39 @@ html[data-theme="light"] .wb-tool-list .mono {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  max-width: 720px;
+  max-width: 860px;
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--wb-faint) 38%, transparent) transparent;
+}
+.wb-learning-content::-webkit-scrollbar,
+.wb-mem-replay-panel .wb-mem-detail-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.wb-learning-content::-webkit-scrollbar-track,
+.wb-mem-replay-panel .wb-mem-detail-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.wb-learning-content::-webkit-scrollbar-thumb,
+.wb-mem-replay-panel .wb-mem-detail-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-faint) 32%, transparent);
+}
+.wb-learning-content::-webkit-scrollbar-thumb:hover,
+.wb-mem-replay-panel .wb-mem-detail-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--wb-muted) 50%, transparent);
+}
+.wb-mem-replay-panel .wb-mem-detail-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--wb-faint) 38%, transparent) transparent;
 }
 .wb-learning-review-pill {
   border: 1px solid var(--wb-line);
   border-radius: 8px;
-  background: var(--wb-card-bg);
-  padding: 13px 15px;
+  background: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-card-bg));
+  padding: 10px 13px;
 }
 .wb-learning-review-pill b {
   display: inline-block;
@@ -9174,7 +9412,7 @@ html[data-theme="light"] .wb-tool-list .mono {
 .wb-learning-review-pill.skip span { color: var(--wb-faint); }
 .wb-learning-review-pill.active span { color: var(--wb-mem-green); }
 .wb-learning-review-pill p {
-  margin: 8px 0 0;
+  margin: 5px 0 0;
   color: var(--wb-muted);
   font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
   line-height: 1.45;
@@ -10023,8 +10261,58 @@ html[data-theme="light"] .wb-tool-list .mono {
   .wb-mem-rail { flex-basis: 240px; width: 240px; }
   .wb-mem-detail { flex-basis: 312px; width: 312px; }
 }
+@media (max-width: 1080px) {
+  .wb-learning-layout { grid-template-columns: 260px minmax(0, 1fr); }
+  .wb-learning-session-list { padding: 12px; }
+  .wb-learning-hero { padding: 20px 22px 16px; }
+  .wb-learning-content { padding: 16px 22px 22px; }
+  .wb-learning-step { grid-template-columns: 30px 38px minmax(0, 1fr) 20px; gap: 8px; }
+}
 @media (max-width: 980px) {
   .wb-mem-detail { display: none; }
+}
+@media (min-width: 761px) and (max-width: 980px) {
+  .wb-mem-page.learning-active .wb-learning-layout {
+    grid-template-columns: 220px minmax(280px, 1fr);
+  }
+  .wb-mem-page.learning-active > .wb-mem-detail {
+    display: flex;
+    flex: 0 0 280px;
+    width: 280px;
+  }
+  .wb-mem-page.learning-active .wb-learning-session-list {
+    padding: 10px;
+  }
+  .wb-mem-page.learning-active .wb-learning-hero,
+  .wb-mem-page.learning-active .wb-learning-content {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+}
+@media (max-width: 760px) {
+  .wb-mem-page.learning-active > .wb-mem-detail { display: none; }
+  .wb-mem-page.learning-active > .wb-mem-learning-main { border-right: none; }
+  .wb-learning-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(220px, 38%) minmax(0, 1fr);
+  }
+  .wb-learning-session-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    overflow-y: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--wb-line);
+  }
+  .wb-learning-nav-head,
+  .wb-learning-side-section.candidates,
+  .wb-learning-side-section.sessions { grid-column: 1 / -1; }
+  .wb-learning-side-section.skills { max-height: 180px; }
+  .wb-learning-side-section.sessions { min-height: 190px; }
+  .wb-learning-hero { padding: 16px; }
+  .wb-learning-content { padding: 14px 16px 20px; }
+  .wb-learning-step { grid-template-columns: 28px 34px minmax(0, 1fr) 18px; padding: 8px; }
+  .wb-learning-step-params span { max-width: 100%; }
 }
 
 /* ===================================================================

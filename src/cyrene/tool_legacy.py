@@ -2927,7 +2927,7 @@ TOOL_DEFS = [
                     "params": {
                         "type": "object",
                         "description": "Optional parameter values to substitute into the skill's argument templates.",
-                        "additionalProperties": {"type": "string"},
+                        "additionalProperties": True,
                     },
                 },
                 "required": ["name"],

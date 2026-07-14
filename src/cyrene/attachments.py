@@ -344,15 +344,25 @@ async def _vision_analysis(path: Path, prompt: str = "") -> dict[str, Any]:
     return await run_vision_chat(content, content_prompt=content_prompt)
 
 
-async def run_vision_chat(content: list[dict[str, Any]], content_prompt: str = "") -> dict[str, Any]:
+async def run_vision_chat(
+    content: list[dict[str, Any]],
+    content_prompt: str = "",
+    *,
+    max_tokens: int | None = None,
+    timeout: float = 120.0,
+    record_latency: bool = False,
+) -> dict[str, Any]:
     """Run a vision-capable LLM call with image content."""
     result = await call_llm(
         [{"role": "user", "content": content}],
         model_type="vision",
+        max_tokens=max_tokens,
+        timeout=timeout,
         thinking="disabled",
         caller="vision",
         publish_events=False,
         record_usage=False,
+        record_latency=record_latency,
     )
     vision_text = _assistant_text(result) or ""
     return {

@@ -5,33 +5,52 @@ const { execFile } = require('child_process');
 
 const MANIFEST_VERSION = 'app-use-semantic-v2';
 const DEFAULT_SESSION_TTL_MS = 5 * 60 * 1000;
+const SEMANTIC_TREE_CAPABILITIES = new Set([
+  'snapshot', 'inspect', 'find', 'press', 'set_value', 'select', 'toggle', 'scroll',
+  'type_text', 'select_text', 'set_selection_range', 'wait',
+]);
 
 const CAPABILITIES = Object.freeze([
   { name: 'snapshot', description: 'Read a compact semantic accessibility snapshot of the target window.', arguments: { scope_ref: 'string?', max_nodes: 'integer?', max_depth: 'integer?' }, background: 'safe' },
   { name: 'inspect', description: 'Read detailed properties and nearby descendants for one element ref.', arguments: { ref: 'string' }, background: 'safe' },
-  { name: 'find', description: 'Find elements in the semantic tree by role, name, value, or state.', arguments: { role: 'string?', name: 'string?', contains: 'string?', enabled: 'boolean?', max_results: 'integer?' }, background: 'safe' },
+  { name: 'find', description: 'Find elements in the semantic tree by role, subrole, name, value, action, native action, automation id, class name, or state.', arguments: { role: 'string?', subrole: 'string?', name: 'string?', contains: 'string?', action: 'string?', native_action: 'string?', automation_id: 'string?', class_name: 'string?', enabled: 'boolean?', max_results: 'integer?' }, background: 'safe' },
   { name: 'press', description: 'Invoke the native default action of a button, menu item, link, or similar control.', arguments: { ref: 'string' }, background: 'safe_when_supported' },
   { name: 'set_value', description: 'Set the value of an editable control through the accessibility API.', arguments: { ref: 'string', value: 'string' }, background: 'safe_when_supported' },
   { name: 'select', description: 'Select a list item, menu item, tab, or option through its native action.', arguments: { ref: 'string' }, background: 'safe_when_supported' },
   { name: 'toggle', description: 'Toggle a checkbox, switch, or expandable control.', arguments: { ref: 'string' }, background: 'safe_when_supported' },
   { name: 'scroll', description: 'Scroll an accessible container or the target window.', arguments: { ref: 'string?', direction: 'up|down|left|right', amount: 'integer?' }, background: 'safe_when_supported' },
   { name: 'type_text', description: 'Write text to a semantically editable element and verify its value. This works in the background only when the accessibility provider exposes a writable value.', arguments: { ref: 'string', text: 'string', replace: 'boolean?' }, background: 'safe_when_supported' },
-  { name: 'select_text', description: 'Select an exact text occurrence inside an editable text control.', arguments: { ref: 'string', text: 'string', occurrence: 'integer?', case_sensitive: 'boolean?' }, background: 'requires_focus' },
-  { name: 'set_selection_range', description: 'Set the selected character range in an editable text control using zero-based start and exclusive end offsets.', arguments: { ref: 'string', start: 'integer', end: 'integer' }, background: 'requires_focus' },
-  { name: 'click_at', description: 'Click a point inside the connected window. Coordinates are window-relative by default.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?' }, background: 'requires_focus' },
-  { name: 'double_click', description: 'Double-click a point inside the connected window.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', interval_ms: 'integer?' }, background: 'requires_focus' },
-  { name: 'right_click', description: 'Right-click a point inside the connected window.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?' }, background: 'requires_focus' },
-  { name: 'hover_at', description: 'Move the pointer to a point inside the connected window.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', duration_ms: 'integer?' }, background: 'requires_focus' },
-  { name: 'drag', description: 'Drag from one point to another inside the connected window.', arguments: { from_x: 'number', from_y: 'number', to_x: 'number', to_y: 'number', coordinate_space: 'window|screen?', duration_ms: 'integer?' }, background: 'requires_focus' },
-  { name: 'swipe', description: 'Drag from a starting point in one direction inside the connected window.', arguments: { x: 'number', y: 'number', direction: 'up|down|left|right', distance: 'number?', coordinate_space: 'window|screen?', duration_ms: 'integer?' }, background: 'requires_focus' },
-  { name: 'scroll_at', description: 'Send vertical or horizontal wheel scrolling at a point inside the connected window.', arguments: { x: 'number', y: 'number', direction: 'up|down|left|right', amount: 'integer?', coordinate_space: 'window|screen?' }, background: 'requires_focus' },
-  { name: 'key_chord', description: 'Send a key or keyboard shortcut to the target window.', arguments: { keys: 'string[]' }, background: 'requires_focus' },
-  { name: 'key_sequence', description: 'Atomically execute shortcut, text, key, and pause steps during one temporary-focus interval.', arguments: { steps: '{type:shortcut|text|key|pause,keys?:string[],text?:string,key?:string,ms?:integer}[]' }, background: 'requires_focus' },
+  { name: 'select_text', description: 'Select an exact text occurrence using focus-dependent input; allow_foreground_input=true is required.', arguments: { ref: 'string', text: 'string', occurrence: 'integer?', case_sensitive: 'boolean?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
+  { name: 'set_selection_range', description: 'Set a selected character range using focus-dependent input; allow_foreground_input=true is required.', arguments: { ref: 'string', start: 'integer', end: 'integer', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
+  { name: 'click_at', description: 'Click a point with the real OS pointer. Coordinates are window-relative by default and allow_foreground_input=true is required.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
+  { name: 'virtual_click_at', description: 'Use a coordinate to activate a background control while showing Cyrene\'s virtual pointer. It tries AX/UIA first; on macOS it can fall back to CGEventPostToPid, which routes the click only to the target process without moving the real cursor or changing foreground.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', preferred_actions: 'string[]?', pointer_duration_ms: 'integer?', verify_effect: 'boolean?', pid_event_fallback: 'boolean?' }, background: 'safe_when_supported' },
+  { name: 'double_click', description: 'Double-click with the real OS pointer; allow_foreground_input=true is required.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', interval_ms: 'integer?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
+  { name: 'right_click', description: 'Right-click with the real OS pointer; allow_foreground_input=true is required.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
+  { name: 'hover_at', description: 'Move the real OS pointer; allow_foreground_input=true is required. This is unavailable in a background-only session.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', duration_ms: 'integer?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
+  { name: 'drag', description: 'Drag with the real OS pointer; allow_foreground_input=true is required.', arguments: { from_x: 'number', from_y: 'number', to_x: 'number', to_y: 'number', coordinate_space: 'window|screen?', duration_ms: 'integer?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
+  { name: 'swipe', description: 'Swipe with the real OS pointer; allow_foreground_input=true is required.', arguments: { x: 'number', y: 'number', direction: 'up|down|left|right', distance: 'number?', coordinate_space: 'window|screen?', duration_ms: 'integer?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
+  { name: 'scroll_at', description: 'Send a real OS wheel event at a point; allow_foreground_input=true is required.', arguments: { x: 'number', y: 'number', direction: 'up|down|left|right', amount: 'integer?', coordinate_space: 'window|screen?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
+  { name: 'key_chord', description: 'Send a focus-dependent key or shortcut; allow_foreground_input=true is required.', arguments: { keys: 'string[]', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
+  { name: 'key_sequence', description: 'Execute focus-dependent keyboard steps; allow_foreground_input=true is required.', arguments: { steps: '{type:shortcut|text|key|pause,keys?:string[],text?:string,key?:string,ms?:integer}[]', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
   { name: 'wait', description: 'Wait for an element or property condition, then return a fresh semantic snapshot.', arguments: { ref: 'string?', property: 'string?', equals: 'any?', contains: 'string?', exists: 'boolean?', timeout_ms: 'integer?' }, background: 'safe' },
   { name: 'visual_describe', description: 'Capture the connected window and return a text description through Cyrene\'s configured vision model.', arguments: { prompt: 'string?' }, background: 'safe' },
   { name: 'focus_window', description: 'Bring the connected target window to the foreground.', arguments: {}, background: 'changes_focus' },
   { name: 'restore_previous_focus', description: 'Restore the window that was foreground before this App Use session focused its target.', arguments: {}, background: 'changes_focus' },
 ]);
+
+const DARWIN_MENU_CAPABILITY = Object.freeze({
+  name: 'menu_command',
+  description: 'Invoke a macOS application menu item through AXPress without sending a keyboard event or moving the real cursor. Match by menu item name, shortcut, or both.',
+  arguments: { name: 'string?', shortcut: 'string[]?', verify_effect: 'boolean?' },
+  background: 'safe_when_supported',
+});
+
+const DARWIN_PID_TYPE_CAPABILITY = Object.freeze({
+  name: 'virtual_type_at',
+  description: 'Best-effort delivery of a coordinate click and Unicode text directly to a target macOS process with CGEventPostToPid. It does not move the real cursor, use the foreground keyboard, or focus the application. Event delivery never proves text insertion; use visual_type for exact verification.',
+  arguments: { x: 'number', y: 'number', text: 'string', coordinate_space: 'window|screen?', pointer_duration_ms: 'integer?', verify_effect: 'boolean?' },
+  background: 'best_effort_without_foreground',
+});
 
 const SAFARI_CAPABILITIES = Object.freeze([
   { name: 'browser_state', description: 'Read the current Safari tab URL and title without focusing its window.', arguments: {}, background: 'safe' },
@@ -40,9 +59,11 @@ const SAFARI_CAPABILITIES = Object.freeze([
 ]);
 
 function capabilitiesForTarget(target) {
+  const platformCapabilities = String(target.platform || process.platform) === 'darwin'
+    ? [DARWIN_MENU_CAPABILITY, DARWIN_PID_TYPE_CAPABILITY] : [];
   return String(target.applicationId || '') === 'com.apple.Safari'
-    ? [...SAFARI_CAPABILITIES, ...CAPABILITIES]
-    : [...CAPABILITIES];
+    ? [...SAFARI_CAPABILITIES, ...platformCapabilities, ...CAPABILITIES]
+    : [...platformCapabilities, ...CAPABILITIES];
 }
 
 class AppUseError extends Error {
@@ -73,6 +94,24 @@ function clampInteger(value, fallback, min, max) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, parsed));
+}
+
+function validateCapabilityParameters(capability, parameters) {
+  if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) {
+    throw new AppUseError('invalid_arguments', `${capability} parameters must be an object.`);
+  }
+  const descriptor = CAPABILITIES.concat(SAFARI_CAPABILITIES, [DARWIN_MENU_CAPABILITY, DARWIN_PID_TYPE_CAPABILITY]).find((item) => item.name === capability);
+  if (!descriptor) return;
+  const accepted = new Set(Object.keys(descriptor.arguments || {}));
+  if (descriptor.background === 'requires_focus') accepted.add('restore_focus');
+  const unknown = Object.keys(parameters).filter((key) => !accepted.has(key)).sort();
+  if (unknown.length) {
+    throw new AppUseError(
+      'invalid_arguments',
+      `${capability} does not accept: ${unknown.join(', ')}.`,
+      { accepted_arguments: [...accepted].sort() },
+    );
+  }
 }
 
 function targetIdentity(target) {
@@ -141,6 +180,7 @@ const PROVIDER_SCRIPT_NAMES = Object.freeze({
   darwin: 'app-use-macos.jxa',
   win32: 'app-use-windows.ps1',
 });
+const DARWIN_HIT_TEST_HELPER_NAME = 'app-use-macos-hit-test';
 
 function isAsarPath(candidate) {
   return String(candidate || '').split(/[\\/]+/).some((part) => part.toLowerCase().endsWith('.asar'));
@@ -178,6 +218,30 @@ function resolveProviderScriptPath({
   );
 }
 
+function resolveDarwinHitTestHelperPath({
+  platform = process.platform,
+  baseDir = __dirname,
+  resourcesPath = process.resourcesPath || '',
+  existsSync = fs.existsSync,
+} = {}) {
+  if (platform !== 'darwin') return '';
+  const candidates = [
+    resourcesPath ? path.join(resourcesPath, 'app-use', DARWIN_HIT_TEST_HELPER_NAME) : '',
+    baseDir ? path.join(baseDir, DARWIN_HIT_TEST_HELPER_NAME) : '',
+  ].filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
+  const helperPath = candidates.find((candidate) => !isAsarPath(candidate) && existsSync(candidate));
+  if (helperPath) return helperPath;
+  throw new AppUseError(
+    'provider_unavailable',
+    'The macOS background coordinate hit-test helper is missing from this Cyrene installation.',
+    {
+      retryable: false,
+      remediation: 'Rebuild or reinstall Cyrene with the native App Use hit-test helper. Do not substitute a real OS pointer event.',
+      expected_paths: candidates,
+    },
+  );
+}
+
 class CommandPlatformProvider {
   constructor({
     platform = process.platform,
@@ -194,21 +258,35 @@ class CommandPlatformProvider {
   async request(operation, payload = {}, timeout = 15000) {
     const request = { operation, ...payload };
     let result;
-    if (this.platform === 'darwin') {
-      const scriptPath = resolveProviderScriptPath(this);
-      result = await runCommand('osascript', [
-        '-l', 'JavaScript', scriptPath, JSON.stringify(request),
-      ], { timeout });
-    } else if (this.platform === 'win32') {
-      const scriptPath = resolveProviderScriptPath(this);
-      const encoded = Buffer.from(JSON.stringify(request), 'utf8').toString('base64');
-      result = await runCommand('powershell.exe', [
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', scriptPath,
-        '-PayloadBase64', encoded,
-      ], { timeout });
-    } else {
-      throw new AppUseError('unsupported_platform', `App Use is not implemented for ${this.platform}.`);
+    try {
+      if (this.platform === 'darwin') {
+        const scriptPath = resolveProviderScriptPath(this);
+        result = await runCommand('osascript', [
+          '-l', 'JavaScript', scriptPath, JSON.stringify(request),
+        ], { timeout });
+      } else if (this.platform === 'win32') {
+        const scriptPath = resolveProviderScriptPath(this);
+        const encoded = Buffer.from(JSON.stringify(request), 'utf8').toString('base64');
+        result = await runCommand('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+          '-File', scriptPath,
+          '-PayloadBase64', encoded,
+        ], { timeout });
+      } else {
+        throw new AppUseError('unsupported_platform', `App Use is not implemented for ${this.platform}.`);
+      }
+    } catch (error) {
+      if (error instanceof AppUseError && error.code === 'timeout' && ['snapshot', 'inspect'].includes(operation)) {
+        throw new AppUseError(
+          'accessibility_tree_timeout',
+          `The target application's accessibility tree exceeded the ${timeout} ms snapshot budget. This does not imply that the window must be foreground or that all accessibility actions are unavailable.`,
+          {
+            retryable: true,
+            remediation: 'Use direct coordinate virtual_click_at or retry with a smaller max_nodes/max_depth scope. Do not focus the window or substitute a real OS pointer event.',
+          },
+        );
+      }
+      throw error;
     }
     if (!result || result.ok === false) {
       throw new AppUseError(
@@ -226,7 +304,72 @@ class CommandPlatformProvider {
   }
 
   async snapshot(target, options = {}) {
-    return this.request('snapshot', { target, options });
+    const timeout = clampInteger(options.timeoutMs, 15000, 250, 15000);
+    const providerOptions = { ...options };
+    delete providerOptions.timeoutMs;
+    return this.request('snapshot', { target, options: providerOptions }, timeout);
+  }
+
+  async hitTest(target, point, preferredActions = [], perform = false) {
+    try {
+      const payload = { target, point, preferredActions, perform: perform === true };
+      if (this.platform === 'darwin') {
+        const helperPath = resolveDarwinHitTestHelperPath(this);
+        const result = await runCommand(helperPath, [JSON.stringify(payload)], { timeout: 5000 });
+        if (!result || result.ok === false) {
+          throw new AppUseError(
+            String((result && result.errorType) || 'provider_error'),
+            String((result && result.error) || 'macOS coordinate hit-test failed.'),
+          );
+        }
+        return result;
+      }
+      return await this.request('hit_test', payload, 5000);
+    } catch (error) {
+      if (error instanceof AppUseError && error.code === 'timeout') {
+        throw new AppUseError(
+          'accessibility_hit_test_timeout',
+          'The target application did not answer the coordinate accessibility hit-test within 5000 ms.',
+          {
+            retryable: true,
+            remediation: 'Retry once with a fresh target connection. Do not focus the window or substitute a real OS pointer event.',
+          },
+        );
+      }
+      throw error;
+    }
+  }
+
+  async menuCommand(target, parameters = {}, perform = false) {
+    if (this.platform !== 'darwin') {
+      throw new AppUseError('unsupported_platform', 'Background menu commands are currently available only on macOS.');
+    }
+    const helperPath = resolveDarwinHitTestHelperPath(this);
+    const result = await runCommand(helperPath, [JSON.stringify({
+      operation: 'menu_command', target, name: parameters.name || '',
+      shortcut: Array.isArray(parameters.shortcut) ? parameters.shortcut : [], perform: perform === true,
+    })], { timeout: 5000 });
+    if (!result || result.ok === false) {
+      throw new AppUseError(
+        String((result && result.errorType) || 'provider_error'),
+        String((result && result.error) || 'macOS background menu command failed.'),
+      );
+    }
+    return result;
+  }
+
+  async enableAccessibility(target) {
+    if (this.platform !== 'darwin') return { ok: true, enabled: false, supported: false };
+    const helperPath = resolveDarwinHitTestHelperPath(this);
+    return runCommand(helperPath, [JSON.stringify({ operation: 'enable_accessibility', target })], { timeout: 5000 });
+  }
+
+  async pidEvent(target, operation, point, parameters = {}, perform = false) {
+    if (this.platform !== 'darwin') throw new AppUseError('unsupported_platform', 'Targeted PID events are currently available only on macOS.');
+    const helperPath = resolveDarwinHitTestHelperPath(this);
+    return runCommand(helperPath, [JSON.stringify({
+      operation, target, point, text: String(parameters.text || ''), perform: perform === true,
+    })], { timeout: 5000 });
   }
 
   async inspect(target, nativeRef, options = {}) {
@@ -249,6 +392,7 @@ class AppUseManager {
     ownApplicationIds = ['com.cyrene.app'],
     ownAppNames = ['Cyrene'],
     captureTarget = null,
+    showVirtualPointer = null,
     isHostForeground = null,
     focusHost = null,
     sessionTtlMs = DEFAULT_SESSION_TTL_MS,
@@ -259,6 +403,7 @@ class AppUseManager {
     this.ownApplicationIds = new Set(ownApplicationIds.map((value) => String(value).toLowerCase()));
     this.ownAppNames = new Set(ownAppNames.map((value) => String(value).toLowerCase()));
     this.captureTarget = captureTarget;
+    this.showVirtualPointer = showVirtualPointer;
     this.isHostForeground = isHostForeground;
     this.focusHost = focusHost;
     this.sessionTtlMs = sessionTtlMs;
@@ -369,6 +514,18 @@ class AppUseManager {
     const focusPolicy = ['never', 'when_required', 'always'].includes(parameters.focus_policy)
       ? parameters.focus_policy
       : 'when_required';
+    let accessibilityActivation = null;
+    if (String(target.platform || process.platform) === 'darwin' && typeof this.provider.enableAccessibility === 'function') {
+      accessibilityActivation = await this.provider.enableAccessibility(target).catch((error) => ({
+        ok: false, error: String(error && error.message ? error.message : error),
+      }));
+      if (accessibilityActivation && accessibilityActivation.foregroundAffected === true) {
+        throw new AppUseError('foreground_interference_detected', 'Enabling the target accessibility tree changed the foreground application.');
+      }
+    }
+    const runtimeCapabilities = capabilitiesForTarget(target).filter(
+      (capability) => focusPolicy !== 'never' || !['requires_focus', 'changes_focus'].includes(capability.background),
+    );
     const sessionId = `app_session_${crypto.randomUUID()}`;
     const session = {
       sessionId,
@@ -382,9 +539,35 @@ class AppUseManager {
       pathToRef: new Map(),
       previousFocusTarget: null,
       previousFocusWasHost: false,
-      capabilities: capabilitiesForTarget(target),
+      capabilities: runtimeCapabilities,
     };
     this.sessions.set(sessionId, session);
+    let semanticProfile = {
+      status: 'unknown',
+      reason: 'semantic_probe_not_completed',
+      probe_timeout_ms: 2000,
+    };
+    try {
+      const probe = await this._snapshot(session, {
+        max_nodes: 12,
+        max_depth: 3,
+        _probe_timeout_ms: 2000,
+      });
+      semanticProfile = probe.semantic_profile;
+    } catch (error) {
+      const reason = error && error.code ? String(error.code) : 'semantic_probe_failed';
+      semanticProfile = reason === 'accessibility_tree_timeout' || reason === 'timeout'
+        ? { status: 'unavailable', reason: 'semantic_probe_timeout', probe_timeout_ms: 2000 }
+        : { status: 'unknown', reason, probe_timeout_ms: 2000 };
+    }
+    if (semanticProfile.status === 'unavailable') {
+      session.capabilities = session.capabilities.filter(
+        (capability) => !SEMANTIC_TREE_CAPABILITIES.has(capability.name),
+      );
+      session.refs.clear();
+      session.pathToRef.clear();
+    }
+    session.semanticProfile = semanticProfile;
     if (focusPolicy === 'always') await this._focusSessionTarget(session);
     return {
       status: 'success',
@@ -393,7 +576,11 @@ class AppUseManager {
       focus_policy: focusPolicy,
       manifest_version: MANIFEST_VERSION,
       capabilities: session.capabilities,
-      next_valid_actions: ['call:snapshot', 'call:find', 'status', 'disconnect'],
+      accessibility_activation: accessibilityActivation,
+      semantic_profile: semanticProfile,
+      next_valid_actions: semanticProfile.status === 'unavailable'
+        ? ['call:visual_describe', 'status', 'disconnect']
+        : ['call:snapshot', 'call:find', 'status', 'disconnect'],
     };
   }
 
@@ -454,7 +641,23 @@ class AppUseManager {
     const labeled = actionable.filter((node) => String(node.name || node.description || '').trim());
     const ratio = actionable.length ? labeled.length / actionable.length : 1;
     const canvasCount = nodes.filter((node) => /canvas|image|unknown/i.test(String(node.role || '')) && !(node.name || node.description)).length;
-    const grade = canvasCount > 0 && actionable.length === 0 ? 'insufficient' : ratio < 0.6 ? 'partial' : 'full';
+    const windowBounds = session.target.bounds || {};
+    const windowArea = Number(windowBounds.width) * Number(windowBounds.height);
+    const containerOnly = nodes.length === 0 || nodes.every((node) => {
+      const role = String(node.role || '').toLowerCase();
+      if (!/^(application|window|group|pane|hostingview|unknown)$/.test(role)) return false;
+      if ((node.actions || []).length > 0) return false;
+      if ((node.nativeActions || []).some((action) => String(action).toLowerCase() !== 'axraise')) return false;
+      if (String(node.value || '').trim()) return false;
+      const bounds = node.bounds || {};
+      const nodeArea = Number(bounds.width) * Number(bounds.height);
+      return !(windowArea > 0 && Number.isFinite(nodeArea)) || nodeArea / windowArea >= 0.9;
+    });
+    const semanticProfile = containerOnly
+      ? { status: 'unavailable', reason: 'container_only_tree' }
+      : { status: 'available', reason: 'meaningful_nodes_exposed' };
+    const grade = containerOnly || (canvasCount > 0 && actionable.length === 0)
+      ? 'insufficient' : ratio < 0.6 ? 'partial' : 'full';
     return {
       status: 'success',
       session_id: session.sessionId,
@@ -467,6 +670,7 @@ class AppUseManager {
         labeled_actionable_ratio: Number(ratio.toFixed(2)),
         unlabeled_visual_regions: canvasCount,
       },
+      semantic_profile: semanticProfile,
       nodes,
       truncated: providerResult.truncated === true,
     };
@@ -477,6 +681,9 @@ class AppUseManager {
       maxNodes: clampInteger(parameters.max_nodes, 80, 1, 200),
       maxDepth: clampInteger(parameters.max_depth, 8, 1, 16),
     };
+    if (parameters._probe_timeout_ms) {
+      options.timeoutMs = clampInteger(parameters._probe_timeout_ms, 2000, 250, 5000);
+    }
     if (parameters.scope_ref) options.nativeRef = this._nativeRef(session, parameters.scope_ref);
     const result = await this.provider.snapshot(session.target, options);
     return this._mapNodes(session, result, { prune: !options.nativeRef });
@@ -497,20 +704,330 @@ class AppUseManager {
       max_depth: parameters.max_depth || 8,
     });
     const role = String(parameters.role || '').toLowerCase();
+    const subrole = String(parameters.subrole || '').toLowerCase();
     const name = String(parameters.name || '').toLowerCase();
     const contains = String(parameters.contains || '').toLowerCase();
+    const action = String(parameters.action || '').toLowerCase();
+    const nativeAction = String(parameters.native_action || '').toLowerCase();
+    const automationId = String(parameters.automation_id || '').toLowerCase();
+    const className = String(parameters.class_name || '').toLowerCase();
     const maxResults = clampInteger(parameters.max_results, 20, 1, 100);
     const nodes = snapshot.nodes.filter((node) => {
       if (role && !String(node.role || '').toLowerCase().includes(role)) return false;
+      if (subrole && !String(node.subrole || '').toLowerCase().includes(subrole)) return false;
       if (name && String(node.name || '').toLowerCase() !== name) return false;
+      if (action && !(node.actions || []).some((value) => String(value).toLowerCase() === action)) return false;
+      if (nativeAction && !(node.nativeActions || []).some((value) => String(value).toLowerCase() === nativeAction)) return false;
+      if (automationId && String(node.automationId || '').toLowerCase() !== automationId) return false;
+      if (className && String(node.className || '').toLowerCase() !== className) return false;
       if (parameters.enabled !== undefined && Boolean(node.enabled) !== Boolean(parameters.enabled)) return false;
       if (contains) {
-        const haystack = `${node.name || ''} ${node.description || ''} ${node.value || ''}`.toLowerCase();
+        const haystack = [
+          node.role, node.subrole, node.name, node.description, node.help, node.value,
+          node.automationId, node.className, ...(node.actions || []), ...(node.nativeActions || []),
+        ].map((value) => String(value || '')).join(' ').toLowerCase();
         if (!haystack.includes(contains)) return false;
       }
       return true;
     }).slice(0, maxResults);
     return { ...snapshot, nodes, matched: nodes.length, total_nodes: snapshot.nodes.length };
+  }
+
+  _coordinatePoint(session, parameters = {}) {
+    const bounds = session.target.bounds || {};
+    const left = Number(bounds.x);
+    const top = Number(bounds.y);
+    const width = Number(bounds.width);
+    const height = Number(bounds.height);
+    let x = Number(parameters.x);
+    let y = Number(parameters.y);
+    if (![left, top, width, height, x, y].every(Number.isFinite) || width <= 0 || height <= 0) {
+      throw new AppUseError('invalid_arguments', 'virtual_click_at requires finite coordinates and valid target window bounds.');
+    }
+    const coordinateSpace = String(parameters.coordinate_space || 'window').toLowerCase();
+    if (coordinateSpace === 'window') {
+      x += left;
+      y += top;
+    } else if (coordinateSpace !== 'screen') {
+      throw new AppUseError('invalid_arguments', 'coordinate_space must be window or screen.');
+    }
+    if (x < left || y < top || x >= left + width || y >= top + height) {
+      throw new AppUseError('invalid_arguments', 'The virtual pointer coordinate is outside the connected window.');
+    }
+    return { screen: { x, y }, window: { x: x - left, y: y - top } };
+  }
+
+  async _virtualClickAt(session, parameters = {}) {
+    const point = this._coordinatePoint(session, parameters);
+    const pointerDurationMs = clampInteger(parameters.pointer_duration_ms, 1200, 100, 10000);
+    const requestedActions = Array.isArray(parameters.preferred_actions)
+      ? parameters.preferred_actions.map((value) => String(value || '').toLowerCase())
+      : ['press', 'select', 'toggle'];
+    const allowedActions = requestedActions.filter((value) => ['press', 'select', 'toggle'].includes(value));
+    if (!allowedActions.length) {
+      throw new AppUseError('invalid_arguments', 'preferred_actions must contain press, select, or toggle.');
+    }
+    if (typeof this.provider.hitTest !== 'function') {
+      throw new AppUseError(
+        'provider_unavailable',
+        'The desktop accessibility provider does not support direct coordinate hit-testing.',
+        { retryable: false, next_valid_actions: ['call:find', 'disconnect'] },
+      );
+    }
+    const verifyEffect = parameters.verify_effect !== false;
+    const beforeVisual = verifyEffect && typeof this.captureTarget === 'function'
+      ? captureFingerprint(await this.captureTarget(session.target).catch(() => null))
+      : null;
+    const probe = await this.provider.hitTest(session.target, point.screen, allowedActions, false);
+    const bounds = (probe && probe.bounds) || {};
+    const windowBounds = session.target.bounds || {};
+    const targetArea = Number(bounds.width) * Number(bounds.height);
+    const windowArea = Number(windowBounds.width) * Number(windowBounds.height);
+    const coverage = windowArea > 0 && Number.isFinite(targetArea) ? targetArea / windowArea : 0;
+    const broadContainer = /^(?:ax)?(?:group|webarea|window|scrollarea|application)$/i.test(String((probe && probe.role) || ''));
+    const degenerateAxTarget = Boolean(
+      probe && probe.found === true && broadContainer && coverage >= 0.65,
+    );
+    if (!probe || probe.found !== true || !probe.action || degenerateAxTarget) {
+      if (parameters.pid_event_fallback !== false && typeof this.provider.pidEvent === 'function') {
+        const fallbackResult = await this._pidEventAt(session, 'pid_click_at', point, parameters);
+        if (degenerateAxTarget) {
+          fallbackResult.diagnostics = {
+            ...(fallbackResult.diagnostics || {}),
+            ax_candidate_rejected: {
+              reason: 'degenerate_window_container',
+              role: String(probe.role || ''),
+              name: String(probe.name || ''),
+              bounds: probe.bounds || null,
+              window_coverage: coverage,
+            },
+          };
+        }
+        return fallbackResult;
+      }
+      throw new AppUseError(
+        'unsupported_background_interaction',
+        'No background-accessible press, select, or toggle action exists at this coordinate; no OS mouse event was sent.',
+        {
+          session_id: session.sessionId,
+          virtual_pointer: { ...point, displayed: false },
+          input_mode: 'background_accessibility',
+          real_cursor_moved: false,
+          focus_requested: false,
+          diagnostics: (probe && probe.diagnostics) || null,
+          next_valid_actions: ['call:find', 'disconnect'],
+        },
+      );
+    }
+    if (typeof this.showVirtualPointer === 'function') {
+      await this.showVirtualPointer({
+        x: point.screen.x,
+        y: point.screen.y,
+        durationMs: pointerDurationMs,
+        target: publicTarget(session.target, session.target.targetId),
+      }).catch(() => {});
+    }
+    const result = await this.provider.hitTest(session.target, point.screen, [probe.action], true);
+    if (!result || result.found !== true || result.performed !== true) {
+      throw new AppUseError(
+        'background_activation_failed',
+        'The accessible element changed or rejected its action before background activation completed; no OS mouse event was sent.',
+        {
+          session_id: session.sessionId,
+          virtual_pointer: { ...point, displayed: typeof this.showVirtualPointer === 'function' },
+          input_mode: 'background_accessibility',
+          real_cursor_moved: false,
+          focus_requested: false,
+          diagnostics: (result && result.diagnostics) || null,
+          next_valid_actions: ['call:virtual_click_at', 'call:find', 'disconnect'],
+        },
+      );
+    }
+    let afterVisual = null;
+    if (beforeVisual && typeof this.captureTarget === 'function') {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await delay(120);
+        afterVisual = captureFingerprint(await this.captureTarget(session.target).catch(() => null));
+        if (afterVisual && beforeVisual.sha256 !== afterVisual.sha256) break;
+      }
+    }
+    const effectVerification = beforeVisual && afterVisual ? {
+      available: true,
+      changed: beforeVisual.sha256 !== afterVisual.sha256,
+      before_sha256: beforeVisual.sha256,
+      after_sha256: afterVisual.sha256,
+      method: 'window_capture_diff',
+    } : { available: false, changed: null, method: null };
+    const effectUnverified = effectVerification.available && effectVerification.changed !== true;
+    const executedAction = {
+      capability: 'virtual_click_at',
+      input_mode: 'background_accessibility',
+      semantic_action: String(result.action || probe.action || ''),
+      native_action: String(result.nativeAction || probe.nativeAction || ''),
+      point,
+    };
+    return {
+      status: effectUnverified || result.verified === false ? 'uncertain' : 'success',
+      summary: `Virtual pointer activated the background control with ${result.action}.`,
+      session_id: session.sessionId,
+      virtual_pointer: { ...point, displayed: typeof this.showVirtualPointer === 'function' },
+      input_mode: 'background_accessibility',
+      real_cursor_moved: false,
+      focus_requested: false,
+      diagnostics: result.diagnostics || null,
+      verification: {
+        status: effectUnverified || result.verified === false ? 'uncertain' : 'success',
+        method: String((result.diagnostics && result.diagnostics.method) || 'direct_accessibility_hit_test'),
+        native_action: String(result.nativeAction || ''),
+        action_accepted: result.performed === true,
+        effect_verified: effectVerification.changed,
+        effect_verification: effectVerification,
+      },
+      requested_action: {
+        capability: 'virtual_click_at',
+        preferred_actions: allowedActions,
+        point,
+      },
+      executed_action: executedAction,
+      next_valid_actions: result.nextValidActions || ['call:wait', 'call:snapshot', 'disconnect'],
+      virtual_target: {
+        role: String(result.role || probe.role || ''),
+        name: String(result.name || probe.name || ''),
+        bounds: result.bounds || probe.bounds || null,
+        action: String(result.action || probe.action || ''),
+        native_action: String(result.nativeAction || probe.nativeAction || ''),
+      },
+    };
+  }
+
+  async _pidEventAt(session, operation, pointOrParameters = {}, parameters = {}) {
+    const point = pointOrParameters.screen ? pointOrParameters : this._coordinatePoint(session, pointOrParameters);
+    const effectiveParameters = pointOrParameters.screen ? parameters : pointOrParameters;
+    if (operation === 'pid_type_at' && typeof effectiveParameters.text !== 'string') {
+      throw new AppUseError('invalid_arguments', 'virtual_type_at requires text as a string.');
+    }
+    const pointerDurationMs = clampInteger(effectiveParameters.pointer_duration_ms, 1200, 100, 10000);
+    const beforeVisual = effectiveParameters.verify_effect !== false && typeof this.captureTarget === 'function'
+      ? captureFingerprint(await this.captureTarget(session.target).catch(() => null)) : null;
+    if (typeof this.showVirtualPointer === 'function') {
+      await this.showVirtualPointer({
+        x: point.screen.x, y: point.screen.y, durationMs: pointerDurationMs,
+        target: publicTarget(session.target, session.target.targetId),
+      }).catch(() => {});
+    }
+    const result = await this.provider.pidEvent(session.target, operation, point.screen, effectiveParameters, true);
+    if (!result || result.performed !== true) {
+      throw new AppUseError('background_activation_failed', 'The target process rejected the directed background event.');
+    }
+    if (result.realCursorMoved === true || result.foregroundAffected === true) {
+      throw new AppUseError('foreground_interference_detected', 'The directed event violated the background-only cursor/focus invariant.', {
+        action_may_have_run: true, diagnostics: result.diagnostics || null,
+      });
+    }
+    let afterVisual = null;
+    if (beforeVisual && typeof this.captureTarget === 'function') {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await delay(120);
+        afterVisual = captureFingerprint(await this.captureTarget(session.target).catch(() => null));
+        if (afterVisual && beforeVisual.sha256 !== afterVisual.sha256) break;
+      }
+    }
+    const capability = operation === 'pid_type_at' ? 'virtual_type_at' : 'virtual_click_at';
+    const visualChanged = beforeVisual && afterVisual ? beforeVisual.sha256 !== afterVisual.sha256 : null;
+    // A full-window diff is not proof that a PID-directed event affected the
+    // intended control: Electron apps often repaint timers, banners, and
+    // cursors independently. High-level workflows must verify the requested
+    // target state (for typing, the exact text) before reporting success.
+    const effectVerified = null;
+    return {
+      status: 'uncertain',
+      summary: operation === 'pid_type_at'
+        ? 'Delivered a targeted background click and Unicode text event to the application process.'
+        : 'Delivered a targeted background click event to the application process.',
+      session_id: session.sessionId,
+      virtual_pointer: { ...point, displayed: typeof this.showVirtualPointer === 'function' },
+      input_mode: 'background_pid_event', real_cursor_moved: false, focus_requested: false,
+      foreground_input_used: false, foreground_affected: false,
+      requested_action: { capability, point, text: operation === 'pid_type_at' ? String(effectiveParameters.text || '') : undefined },
+      executed_action: {
+        capability, input_mode: 'background_pid_event', native_action: 'CGEventPostToPid', point,
+        text_length: operation === 'pid_type_at' ? String(effectiveParameters.text || '').length : undefined,
+      },
+      verification: {
+        status: 'uncertain', event_delivered: result.verified === true,
+        real_cursor_moved: false, foreground_affected: false, effect_verified: effectVerified,
+        visual_changed: visualChanged,
+        method: 'CGEventPostToPid invariants',
+      },
+      diagnostics: result.diagnostics || null,
+      next_valid_actions: [
+        'call:measure_coordinates',
+        'call:visual_describe',
+        ...(session.semanticProfile && session.semanticProfile.status === 'unavailable' ? [] : ['call:snapshot']),
+        'disconnect',
+      ],
+    };
+  }
+
+  async _menuCommand(session, parameters = {}) {
+    const name = String(parameters.name || '').trim();
+    const shortcut = Array.isArray(parameters.shortcut) ? parameters.shortcut.map((item) => String(item)) : [];
+    if (!name && !shortcut.length) {
+      throw new AppUseError('invalid_arguments', 'menu_command requires a menu item name or shortcut.');
+    }
+    if (typeof this.provider.menuCommand !== 'function') {
+      throw new AppUseError('provider_unavailable', 'The desktop accessibility provider does not support background menu commands.');
+    }
+    const verifyEffect = parameters.verify_effect !== false;
+    const beforeVisual = verifyEffect && typeof this.captureTarget === 'function'
+      ? captureFingerprint(await this.captureTarget(session.target).catch(() => null)) : null;
+    const probe = await this.provider.menuCommand(session.target, { name, shortcut }, false);
+    if (!probe || probe.found !== true) {
+      throw new AppUseError('unsupported_background_interaction', 'No matching background-accessible application menu item was found.', {
+        diagnostics: (probe && probe.diagnostics) || null,
+        real_cursor_moved: false, focus_requested: false,
+        next_valid_actions: ['call:find', 'disconnect'],
+      });
+    }
+    const result = await this.provider.menuCommand(session.target, { name, shortcut }, true);
+    if (!result || result.performed !== true) {
+      throw new AppUseError('background_activation_failed', 'The application menu item rejected its AXPress action.', {
+        diagnostics: (result && result.diagnostics) || null,
+      });
+    }
+    if (result.foregroundAffected === true) {
+      throw new AppUseError('foreground_interference_detected', 'The menu action changed the foreground application and was not background-safe.', {
+        action_may_have_run: true, diagnostics: result.diagnostics || null,
+      });
+    }
+    let afterVisual = null;
+    if (beforeVisual && typeof this.captureTarget === 'function') {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await delay(120);
+        afterVisual = captureFingerprint(await this.captureTarget(session.target).catch(() => null));
+        if (afterVisual && beforeVisual.sha256 !== afterVisual.sha256) break;
+      }
+    }
+    const effectVerified = beforeVisual && afterVisual ? beforeVisual.sha256 !== afterVisual.sha256 : null;
+    const executedAction = {
+      capability: 'menu_command', input_mode: 'background_accessibility', semantic_action: 'press',
+      native_action: String(result.nativeAction || 'AXPress'), target: { role: result.role || 'MenuItem', name: result.name || '' },
+    };
+    return {
+      status: effectVerified === false ? 'uncertain' : 'success',
+      summary: `Executed background menu AXPress on ${result.name || name || shortcut.join('+')}.`,
+      session_id: session.sessionId,
+      input_mode: 'background_accessibility', real_cursor_moved: false, focus_requested: false,
+      foreground_input_used: false, foreground_affected: false,
+      requested_action: { capability: 'menu_command', name, shortcut },
+      executed_action: executedAction,
+      verification: {
+        status: effectVerified === false ? 'uncertain' : 'success', action_accepted: true,
+        effect_verified: effectVerified, method: effectVerified === null ? 'AXPress acceptance' : 'window_capture_diff',
+      },
+      diagnostics: result.diagnostics || null,
+      next_valid_actions: ['call:wait', 'call:snapshot', 'disconnect'],
+    };
   }
 
   async _focusSessionTarget(session) {
@@ -558,6 +1075,13 @@ class AppUseManager {
     ]);
     const needsFocus = focusCapabilities.has(capability);
     let focusedTemporarily = false;
+    if (needsFocus && parameters.allow_foreground_input !== true) {
+      throw new AppUseError(
+        'foreground_input_not_allowed',
+        `${capability} uses the real OS pointer or focus-dependent input. Pass allow_foreground_input=true only when the user explicitly permits foreground interference.`,
+        { next_valid_actions: ['call:virtual_click_at', 'call:find', 'call:snapshot', 'disconnect'] },
+      );
+    }
     if (needsFocus && session.focusPolicy === 'never') {
       throw new AppUseError('focus_required', `${capability} requires the target window to be focused.`);
     }
@@ -669,10 +1193,14 @@ class AppUseManager {
     if (!session.capabilities.some((item) => item.name === name)) {
       throw new AppUseError('unsupported_capability', `Unknown App Use capability: ${name || '(empty)'}.`);
     }
+    validateCapabilityParameters(name, parameters);
     if (name === 'snapshot') return this._snapshot(session, parameters);
     if (name === 'inspect') return this._inspect(session, parameters);
     if (name === 'find') return this._find(session, parameters);
     if (name === 'wait') return this._wait(session, parameters);
+    if (name === 'virtual_click_at') return this._virtualClickAt(session, parameters);
+    if (name === 'virtual_type_at') return this._pidEventAt(session, 'pid_type_at', parameters);
+    if (name === 'menu_command') return this._menuCommand(session, parameters);
     if (name === 'visual_describe') {
       if (typeof this.captureTarget !== 'function') {
         throw new AppUseError('unsupported_capability', 'Window capture is unavailable in this desktop host.');
@@ -739,10 +1267,13 @@ module.exports = {
   AppUseError,
   AppUseManager,
   CAPABILITIES,
+  DARWIN_MENU_CAPABILITY,
+  DARWIN_PID_TYPE_CAPABILITY,
   SAFARI_CAPABILITIES,
   capabilitiesForTarget,
   CommandPlatformProvider,
   MANIFEST_VERSION,
   resolveProviderScriptPath,
+  resolveDarwinHitTestHelperPath,
   targetIdentity,
 };

@@ -13,7 +13,13 @@ TOOL_DEF = {
             "Discover and control macOS or Windows desktop application windows through one cache-stable gateway. "
             "Start with operation='list_targets', then operation='connect'. Connect returns the runtime capabilities "
             "for that window. Invoke a disclosed capability with operation='call'. The target may be foreground or background. "
-            "Prefer semantic snapshots and element refs; reconnect when a session or ref becomes stale."
+            "When the user names a visible target to activate, the first App Use call after connect must be measure_coordinates; do not preflight with visual_describe, snapshot, or find. Pass its window_point unchanged to virtual_click_at, then verify with a fresh capture. visual_click is only a fallback when explicit measurement fails, not a substitute for the required first measurement. Connect may report semantic_profile.status='unavailable'; in that case semantic tree capabilities are removed and snapshot/find/press/select/toggle must not be attempted. Only after coordinate localization or activation fails may an available semantic tree or menu command be used. Use visual_click for a described "
+            "target: it shows a virtual pointer and uses a direct application-scoped coordinate AX/UIA hit-test without a full-tree "
+            "scan, moving the real cursor, or requesting focus. It is not an OS mouse event and requires an accessible control at the point. Semantic actions are "
+            "the first fallback, followed on macOS by background menu AXPress; foreground pointer or keyboard fallback must be explicitly allowed. "
+            "Fallback configuration is not evidence that a fallback ran: describe only executed_action from the result. "
+            "For a visible text input that is absent from the AX tree on macOS, use visual_type so capture-coordinate mapping, PID-targeted input, and exact-text verification stay in one operation. Use low-level virtual_type_at only when coordinates already come directly from current tool evidence. If visual_type returns unsupported_background_text_input with isolation_required=true, do not retry or ask to take over the user's foreground; report that a separate desktop/VM worker must be configured. "
+            "Reconnect when a session or ref becomes stale."
         ),
         "parameters": {
             "type": "object",
@@ -41,6 +47,7 @@ TOOL_DEF = {
                 },
             },
             "required": ["operation"],
+            "additionalProperties": False,
         },
     },
 }

@@ -7905,10 +7905,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 browser_title=str(body.get("browserTitle") or body.get("title") or ""),
                 target=body.get("target") if isinstance(body.get("target"), dict) else {},
             )
-            try:
-                asyncio.create_task(_behavior_learning.process_unprocessed_turns())
-            except Exception:
-                pass
             return {"ok": True}
         except Exception as exc:
             logger.debug("failed to record browser user event", exc_info=True)
@@ -8299,24 +8295,27 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if raw_project and raw_project != project_id:
             project_ids.append(raw_project)
         if compact:
-            status, learned_skills, tool_chains = await asyncio.gather(
+            status, learned_skills, tool_chains, candidates = await asyncio.gather(
                 _build_status(),
                 _pattern.list_learned_skills(project_id),
                 _pattern.list_tool_chains(project_ids),
+                _pattern.list_skill_candidates(project_id),
             )
             patterns = []
         else:
-            status, patterns, learned_skills, tool_chains = await asyncio.gather(
+            status, patterns, learned_skills, tool_chains, candidates = await asyncio.gather(
                 _build_status(),
                 _pattern.list_patterns("all", project_id),
                 _pattern.list_learned_skills(project_id),
                 _pattern.list_tool_chains(project_ids),
+                _pattern.list_skill_candidates(project_id),
             )
         return {
             "phase": status.get("phase", ""),
             "state": status.get("state", ""),
             "patterns": patterns,
             "learned_skills": learned_skills,
+            "skill_candidates": candidates,
             "tool_chains": _learning_enrich_tool_chains(tool_chains),
             # Claude Code transcript analysis is intentionally not part of the
             # aggregate learning payload.  It is an expensive, unrelated
@@ -8338,6 +8337,23 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     async def api_tool_chains(project: str = "", limit: int = 80):
         from cyrene import pattern as _pattern
         return {"tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(_learning_project_ids(project), limit))}
+
+    @router.get("/api/skill-candidates")
+    async def api_skill_candidates(project: str = "", status: str = "all"):
+        from cyrene import pattern as _pattern
+        return {"candidates": await _pattern.list_skill_candidates(_learning_project_id(project), status)}
+
+    @router.post("/api/skill-candidates/{candidate_id}/decision")
+    async def api_skill_candidate_decision(candidate_id: str, request: Request):
+        from cyrene import pattern as _pattern
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        result = await _pattern.decide_skill_candidate(candidate_id, str((payload or {}).get("decision") or ""))
+        if not result.get("ok"):
+            return JSONResponse(result, status_code=400)
+        return result
 
     @router.get("/api/learned-skills/{skill_id}")
     async def api_learned_skill_detail(skill_id: str):
@@ -8457,6 +8473,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             "stats": stats,
             "patterns": await _pattern.list_patterns("all", project_id),
             "learned_skills": await _pattern.list_learned_skills(project_id),
+            "skill_candidates": await _pattern.list_skill_candidates(project_id),
             "tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(project_ids)),
         }
 
@@ -8473,6 +8490,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             **result,
             "patterns": await _pattern.list_patterns("all", project_id),
             "learned_skills": await _pattern.list_learned_skills(project_id),
+            "skill_candidates": await _pattern.list_skill_candidates(project_id),
             "tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(project_ids)),
         }
 
@@ -8488,6 +8506,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             "result": result,
             "patterns": await _pattern.list_patterns("all", project_id),
             "learned_skills": await _pattern.list_learned_skills(project_id),
+            "skill_candidates": await _pattern.list_skill_candidates(project_id),
             "tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(project_ids)),
         }
 

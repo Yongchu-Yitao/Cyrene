@@ -110,6 +110,8 @@ let launchHidden = process.argv.includes('--hidden');
 let tray = null;
 let browserTabManager = null;
 let appUseManager = null;
+let appUsePointerWindow = null;
+let appUsePointerHideTimer = null;
 let electronRpcServer = null;
 let electronRpcPort = null;
 const BROWSER_USER_EVENT_CONSOLE_PREFIX = '__CYRENE_BROWSER_USER_EVENT__';
@@ -1152,12 +1154,58 @@ function getAppUseManager() {
       ownApplicationIds: ['com.cyrene.app'],
       ownAppNames: [APP_NAME],
       captureTarget: captureAppUseTarget,
+      showVirtualPointer: showAppUseVirtualPointer,
       isHostForeground: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()),
       focusHost: async () => { await revealMainWindow(); },
     });
     appUseManager.start();
   }
   return appUseManager;
+}
+
+async function showAppUseVirtualPointer({ x = 0, y = 0, durationMs = 1200 } = {}) {
+  if (!app.isReady()) return;
+  if (!appUsePointerWindow || appUsePointerWindow.isDestroyed()) {
+    appUsePointerWindow = new BrowserWindow({
+      width: 24,
+      height: 24,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      closable: false,
+      focusable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      hasShadow: false,
+      show: false,
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+    appUsePointerWindow.setIgnoreMouseEvents(true, { forward: true });
+    appUsePointerWindow.setAlwaysOnTop(true, 'floating');
+    if (isMac) appUsePointerWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    const pointerHtml = `<!doctype html><meta charset="utf-8"><style>
+      html,body{margin:0;width:24px;height:24px;overflow:hidden;background:transparent}
+      .p{position:absolute;left:4px;top:4px;box-sizing:border-box;width:16px;height:16px;
+        border:2px solid rgba(255,255,255,.96);border-radius:50%;background:#2684ff;
+        box-shadow:0 0 0 1px rgba(22,93,200,.85),0 3px 9px rgba(0,0,0,.38)}
+    </style><div class="p"></div>`;
+    await appUsePointerWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(pointerHtml)}`);
+  }
+  const pointerX = Math.round(Number(x) || 0) - 12;
+  const pointerY = Math.round(Number(y) || 0) - 12;
+  appUsePointerWindow.setPosition(pointerX, pointerY, false);
+  appUsePointerWindow.showInactive();
+  if (appUsePointerHideTimer) clearTimeout(appUsePointerHideTimer);
+  appUsePointerHideTimer = setTimeout(() => {
+    if (appUsePointerWindow && !appUsePointerWindow.isDestroyed()) appUsePointerWindow.hide();
+  }, Math.max(100, Math.min(10000, Number(durationMs) || 1200)));
 }
 
 async function captureAppUseTarget(target) {
@@ -2543,6 +2591,10 @@ if (!gotSingleInstanceLock) {
     destroyTray();
     globalShortcut.unregisterAll();
     if (appUseManager) appUseManager.stop();
+    if (appUsePointerHideTimer) clearTimeout(appUsePointerHideTimer);
+    appUsePointerHideTimer = null;
+    if (appUsePointerWindow && !appUsePointerWindow.isDestroyed()) appUsePointerWindow.destroy();
+    appUsePointerWindow = null;
     killPython();
   });
 

@@ -294,6 +294,7 @@
 
   function learningSnapshot(data) {
     var skills = (data && data.learned_skills) || [];
+    var candidates = (data && data.skill_candidates) || [];
     var patterns = (data && data.patterns) || [];
     var chains = ((data && data.tool_chains) || []).filter(function (chain) {
       var summary = (chain && chain.summary) || {};
@@ -301,6 +302,7 @@
     });
     return {
       skills: skills,
+      candidates: candidates,
       patterns: patterns,
       chains: chains,
       activeSkills: skills.filter(function (s) { return s.status === "active"; }).length,
@@ -355,6 +357,31 @@
     if (decision === "parameterize") return t ? t("memory.learning.review.parameterize", "Parameterize") : "Parameterize";
     if (decision === "skip") return t ? t("memory.learning.review.skip", "Skip") : "Skip";
     return t ? t("memory.learning.pending", "Pending") : "Pending";
+  }
+  function candidateForTurn(candidates, turnId) {
+    return (candidates || []).find(function (candidate) {
+      return (candidate.turn_ids || []).indexOf(turnId) >= 0;
+    }) || null;
+  }
+  function candidateStatusText(candidate, t) {
+    if (!candidate) return t("memory.learning.noRepeatYet", "No repeat detected");
+    if (candidate.status === "observing") return t("memory.learning.observedOnce", "Observed once");
+    if (candidate.status === "awaiting_user") return t("memory.learning.awaitingDecision", "Seen twice · awaiting your decision");
+    if (candidate.status === "waiting_third") return t("memory.learning.waitingThird", "Seen twice · will learn on the third");
+    if (candidate.status === "auto_learned") return t("memory.learning.autoLearnedThird", "Learned automatically on the third occurrence");
+    if (candidate.status === "accepted") return t("memory.learning.userLearned", "Learned after user approval");
+    if (candidate.status === "dismissed") return t("memory.learning.ignoredWorkflow", "Ignored");
+    return candidate.status || t("memory.learning.pending", "Pending");
+  }
+  function candidateNextStepText(candidate, t) {
+    if (!candidate) return "";
+    if (candidate.status === "observing") return t("memory.learning.observedNext", "If the same workflow appears again, you will be asked whether to save it.");
+    if (candidate.status === "awaiting_user") return t("memory.learning.awaitingNext", "Choose Learn now, Learn on third, or Ignore from the candidate card.");
+    if (candidate.status === "waiting_third") return t("memory.learning.waitingThirdNext", "The next matching run will be saved automatically as a parameterized skill.");
+    if (candidate.status === "auto_learned") return t("memory.learning.autoLearnedNext", "A parameterized skill has been generated and is ready to use.");
+    if (candidate.status === "accepted") return t("memory.learning.userLearnedNext", "This workflow has been saved as a parameterized skill.");
+    if (candidate.status === "dismissed") return t("memory.learning.ignoredNext", "This workflow is excluded from automatic learning.");
+    return candidate.description || "";
   }
   function learningSessions(chains) {
     var byId = {};
@@ -526,6 +553,7 @@
     var chain = props.chain;
     var summary = (chain && chain.summary) || {};
     var review = (chain && chain.review) || {};
+    var chainCandidate = candidateForTurn((learning.data && learning.data.skill_candidates) || [], chain && chain.turn_id);
     var screenshots = detailScreenshots(chain);
     var boundedShotIndex = Math.min(shotIndex, Math.max(0, screenshots.length - 1));
     var screenshot = screenshots[boundedShotIndex] || detailScreenshot(chain);
@@ -612,6 +640,12 @@
                   h("div", { className: "wb-mem-skill-review-rationale" }, srcReview.rationale)) : null);
             })(),
             (function () {
+              var declarativeScript = skill.script || {};
+              if (declarativeScript.format) {
+                return h("div", { className: "wb-replay-section" },
+                  h("h3", null, t("memory.learning.parameterizedScript", "Parameterized tool script")),
+                  h("pre", { className: "wb-learning-script-json" }, JSON.stringify(declarativeScript, null, 2)));
+              }
               var scriptStep = null;
               for (var i = 0; i < skillSteps.length; i++) {
                 if (skillSteps[i].implementation_kind === "script") {
@@ -688,15 +722,15 @@
             h("div", null, h("span", null, t("memory.learning.confidence", "Confidence")), h("b", null, String(Math.round((review.confidence || 0) * 100) / 100))))),
         h("div", { className: "wb-replay-duplicates" },
           h("b", null, t("memory.learning.duplicateCheck", "Repeat behavior check")),
-          h("p", null, review.decision ? reviewText(review, t) + " · " + (review.rationale || t("memory.learning.reviewed", "The project-local learning agent reviewed this chain.")) : t("memory.learning.pendingReview", "Waiting for the project-local learning agent."))),
-        h("div", { className: "wb-replay-section" },
-          h("h3", null, t("memory.learning.learningSuggestion", "Learning suggestion")),
-          h("p", null, review.rationale || t("memory.learning.suggestionFallback", "The project-local learning agent decides whether this chain should become a reusable skill."))),
+          h("p", null, candidateStatusText(chainCandidate, t))),
+        chainCandidate ? h("div", { className: "wb-replay-section" },
+          h("h3", null, t("memory.learning.nextStep", "Next step")),
+          h("p", null, candidateNextStepText(chainCandidate, t))) : null,
         learning.error && h("div", { className: "wb-mem-error inline" }, learningErrorText(learning.error, t)),
         learning.note && h("div", { className: "wb-mem-skill-note" }, learning.note)),
       hasChains ? h("div", { className: "wb-mem-skill-delete-bottom" },
         h("button", { type: "button", className: "wb-learning-primary", disabled: !!learning.busy, onClick: function () { var id = chain && (chain.turn_id || chain.id); learning.runAction("learn", id); } },
-          learning.busy ? t("memory.learning.learning", "Learning...") : t("memory.learning.learnAsSkill", "Learn as Skill ✨"))) : null);
+          learning.busy ? t("memory.learning.learning", "Learning...") : t("memory.learning.learnAsSkill", "Save as skill"))) : null);
   }
 
   function SkillLearningMain(props) {
@@ -707,6 +741,7 @@
     var busy = learning.busy;
     var sessions = learningSessions(snap.chains);
     var learnedSkills = snap.skills.filter(function (s) { return s.status === "active" || s.status === "shadow"; });
+    var pendingCandidates = snap.candidates.filter(function (candidate) { return candidate.status === "awaiting_user"; });
     var shownSkills = learnedSkills.slice(0, 8);
     var activeSessionId = props.sessionId || (sessions[0] && sessions[0].id) || "";
     var activeSession = sessions.find(function (session) { return session.id === activeSessionId; }) || sessions[0] || null;
@@ -715,6 +750,7 @@
     var activeSteps = (activeChain && activeChain.chain) || [];
     var activeSummary = (activeChain && activeChain.summary) || {};
     var activeReview = (activeChain && activeChain.review) || {};
+    var activeCandidate = candidateForTurn(snap.candidates, activeChain && activeChain.turn_id);
     var activeSkill = props.skill || null;
     var activeSkillSteps = Array.isArray(activeSkill && activeSkill.steps) ? activeSkill.steps : [];
     var activeSkillTrigger = (activeSkill && activeSkill.trigger) || {};
@@ -729,6 +765,26 @@
     return h("div", { className: "wb-mem-main wb-mem-learning-main" },
       h("div", { className: "wb-learning-layout" },
         h("aside", { className: "wb-learning-session-list" },
+          h("div", { className: "wb-learning-nav-head" },
+            h("button", { type: "button", onClick: props.onExit, title: t("memory.learning.backToMemory", "Back to memory"), "aria-label": t("memory.learning.backToMemory", "Back to memory") },
+              svg({ width: 17, height: 17, strokeWidth: 2 }, h("path", { d: "m15 18-6-6 6-6" }))),
+            h("b", null, t("memory.learning.title", "Skill learning"))),
+          pendingCandidates.length ? h("section", { className: "wb-learning-side-section candidates" },
+            h("div", { className: "wb-learning-side-head" },
+              h("b", null, t("memory.learning.pendingCandidates", "Ready for your decision")),
+              h("span", null, String(pendingCandidates.length))),
+            h("div", { className: "wb-learning-candidate-list" }, pendingCandidates.map(function (candidate) {
+              var parameterCount = (((candidate.script || {}).parameters) || []).length;
+              return h("div", { key: candidate.id, className: "wb-learning-candidate-card" },
+                h("div", { className: "wb-learning-candidate-copy" },
+                  h("b", null, candidate.name || t("memory.learning.repeatedWorkflow", "Repeated workflow")),
+                  h("p", null, candidate.description || t("memory.learning.secondOccurrence", "Seen twice. Learn now, wait for the third occurrence, or ignore it.")),
+                  h("small", null, t("memory.learning.candidateMeta", "{count} occurrences · {params} parameters", { count: candidate.occurrence_count || 2, params: parameterCount }))),
+                h("div", { className: "wb-learning-candidate-actions" },
+                  h("button", { type: "button", disabled: !!busy, onClick: function () { learning.decideCandidate(candidate.id, "learn_now"); } }, t("memory.learning.learnNow", "Learn now")),
+                  h("button", { type: "button", disabled: !!busy, onClick: function () { learning.decideCandidate(candidate.id, "defer"); } }, t("memory.learning.deferUntilThird", "Decide on third")),
+                  h("button", { type: "button", disabled: !!busy, onClick: function () { learning.decideCandidate(candidate.id, "dismiss"); } }, t("memory.learning.dismissCandidate", "Ignore"))));
+            }))) : null,
           h("section", { className: "wb-learning-side-section skills" },
             h("div", { className: "wb-learning-side-head" },
               h("b", null, t("memory.learning.autoLearnedSkills", "Auto-learned skills")),
@@ -762,7 +818,7 @@
                   return h("button", { key: chain.id, type: "button", className: "wb-learning-chain-card" + (detailKind === "chain" && activeChain && activeChain.id === chain.id ? " active" : ""), onClick: function () { onSelectChain(chain.id); } },
                     h("div", null,
                       h("b", null, shortDateTime(chain.updated_at || chain.created_at) + "  " + chainTitle(chain, t)),
-                      h("small", null, t("memory.learning.roundMeta", "{steps} steps · {review}", { steps: summary.total_steps || 0, review: chain.review ? reviewText(chain.review, t) : t("memory.learning.pending", "Pending") }))),
+                      h("small", null, t("memory.learning.roundMeta", "{steps} steps · {review}", { steps: summary.total_steps || 0, review: candidateStatusText(candidateForTurn(snap.candidates, chain.turn_id), t) }))),
                     h("span", null, String(index + 1)));
                 }) : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noToolChains", "No tool-call rounds in this session."))))),
           h("section", { className: "wb-learning-detail" },
@@ -800,10 +856,10 @@
                   h("b", null, shortDateTime(activeSkillSourceChain.updated_at || activeSkillSourceChain.created_at) + "  " + chainTitle(activeSkillSourceChain, t)),
                   h("small", null, chainSubtitle(activeSkillSourceChain, t)))) : null)
               : activeChain ? h("div", { className: "wb-learning-content" },
-              h("div", { className: "wb-learning-review-pill " + ((activeReview && activeReview.decision) || "pending") },
-                h("b", null, t("memory.learning.agentDecision", "Learning agent decision")),
-                h("span", null, reviewText(activeReview, t)),
-                h("p", null, (activeReview && activeReview.rationale) || t("memory.learning.decisionFallback", "The project-local learning agent will review the full chain and decide."))),
+              activeCandidate ? h("div", { className: "wb-learning-review-pill " + activeCandidate.status },
+                h("b", null, t("memory.learning.learningState", "Learning state")),
+                h("span", null, candidateStatusText(activeCandidate, t)),
+                h("p", null, candidateNextStepText(activeCandidate, t))) : null,
               h("section", { className: "wb-learning-section" },
                 h("h3", null, t("memory.learning.stepTitle", "Tool-chain execution steps ({count} steps)", { count: activeSummary.total_steps || activeSteps.length || 0 })),
                 activeSteps.length ? h("div", { className: "wb-learning-step-list" }, activeSteps.map(function (step, index) {
@@ -877,7 +933,7 @@
       setLearningLoading(true); setLearningError("");
       return fetch("/api/evolution?project=" + encodeURIComponent(learningProject) + "&compact=1").then(jsonOrThrow)
         .then(function (p) { setLearningData(p || {}); return p; })
-        .catch(function (e) { setLearningError(e.message || String(e)); setLearningData({ learned_skills: [], patterns: [], tool_chains: [] }); })
+        .catch(function (e) { setLearningError(e.message || String(e)); setLearningData({ learned_skills: [], skill_candidates: [], patterns: [], tool_chains: [] }); })
         .finally(function () { setLearningLoading(false); });
     }
     function runLearningAction(kind, turnId) {
@@ -889,13 +945,14 @@
           var stats = payload.stats || payload.result || {};
           setLearningData({
             learned_skills: payload.learned_skills || [],
+            skill_candidates: payload.skill_candidates || [],
             patterns: payload.patterns || [],
             tool_chains: payload.tool_chains || [],
             scripts: payload.scripts || [],
           });
-          setLearningNote(t("memory.learning.processedNote", "Processed {turns} rounds, reviewed {reviews} chains, created {skills} skills.", {
+          setLearningNote(t("memory.learning.processedNote", "Processed {turns} rounds, {candidates} candidates await a decision, created {skills} skills.", {
             turns: stats.processed_turns || 0,
-            reviews: stats.learning_reviews || 0,
+            candidates: stats.candidates_awaiting_user || 0,
             skills: stats.skills_created || 0,
           }));
         })
@@ -910,6 +967,7 @@
         .then(function (payload) {
           setLearningData({
             learned_skills: payload.learned_skills || [],
+            skill_candidates: payload.skill_candidates || [],
             patterns: payload.patterns || [],
             tool_chains: payload.tool_chains || [],
             scripts: payload.scripts || [],
@@ -922,6 +980,30 @@
           setLearningNote(payload.created
             ? t("memory.learning.patternCreatedNote", "Created a skill from this behavior pattern.")
             : t("memory.learning.patternExistingNote", "This behavior pattern already has a skill; switched to that skill."));
+        })
+        .catch(function (e) { setLearningError(e.message || String(e)); })
+        .finally(function () { setLearningBusy(""); });
+    }
+    function decideSkillCandidate(candidateId, decision) {
+      if (!candidateId) return Promise.resolve();
+      setLearningBusy("candidate:" + candidateId); setLearningNote(""); setLearningError("");
+      return fetch("/api/skill-candidates/" + encodeURIComponent(candidateId) + "/decision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: decision }),
+      }).then(jsonOrThrow)
+        .then(function (payload) {
+          if (payload.skill_id) {
+            setSelectedLearningKind("skill");
+            setSelectedLearningDetailKind("skill");
+            setSelectedLearningSkillId(payload.skill_id);
+          }
+          setLearningNote(decision === "learn_now"
+            ? t("memory.learning.candidateLearned", "The parameterized skill is ready.")
+            : decision === "defer"
+              ? t("memory.learning.candidateDeferred", "It will be learned automatically if it happens a third time.")
+              : t("memory.learning.candidateDismissed", "This workflow will not be learned automatically."));
+          return loadLearning();
         })
         .catch(function (e) { setLearningError(e.message || String(e)); })
         .finally(function () { setLearningBusy(""); });
@@ -1242,6 +1324,7 @@
       load: loadLearning,
       runAction: runLearningAction,
       learnPatternAsSkill: learnPatternAsSkill,
+      decideCandidate: decideSkillCandidate,
     };
 
     var main = activePanel === "learning" ? h(SkillLearningMain, {
@@ -1263,6 +1346,7 @@
         setSelectedLearningChainId(chainId || "");
       },
       onSelectSkill: selectLearningSkill,
+      onExit: function () { setActivePanel(""); },
     }) : h("div", { className: "wb-mem-main" },
       h("div", { className: "wb-mem-toolbar" },
         h("div", { className: "wb-mem-searchbox" },
@@ -1285,8 +1369,8 @@
               : h("div", { className: "wb-mem-list" }, visible.map(card))),
         h("div", { className: "wb-mem-count" }, "共 " + visible.length + " 条记忆")));
 
-    return h("section", { className: "wb-mem-page" },
-      rail,
+    return h("section", { className: "wb-mem-page" + (activePanel === "learning" ? " learning-active" : "") },
+      activePanel === "learning" ? null : rail,
       main,
       activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, detailKind: selectedLearningDetailKind, chain: selectedLearningChain, skill: selectedLearningSkill, pattern: selectedLearningPattern, onDeleteSkill: handleDeleteLearnedSkill }) : h(DetailPanel, {
         memory: selected, related: related, busy: busy,

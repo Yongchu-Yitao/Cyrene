@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from cyrene import tool_legacy as _legacy
@@ -31,7 +32,7 @@ async def _tool_read(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
             return elev
         # 已放行（完全访问 / 审核 agent 批准）：full-access 已置位，重新解析即成功
         path = _resolve_tool_path(str(args["path"]))
-    return _truncate(path.read_text(encoding="utf-8"))
+    return _truncate(await asyncio.to_thread(path.read_text, encoding="utf-8"))
 
 
 handler = _tool_read

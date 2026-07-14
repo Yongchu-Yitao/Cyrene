@@ -75,3 +75,4 @@ gaia_*.json
 
 # Scripts and tools
 scripts/
+finetune/

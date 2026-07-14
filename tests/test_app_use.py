@@ -1,9 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def clear_app_use_runtime_session_state():
+    from cyrene import app_use
+
+    app_use._SESSION_SEMANTIC_STATUS.clear()
+    app_use._SESSION_MEASUREMENTS.clear()
+    app_use._SESSION_FOCUS_READY.clear()
+    yield
+    app_use._SESSION_SEMANTIC_STATUS.clear()
+    app_use._SESSION_MEASUREMENTS.clear()
+    app_use._SESSION_FOCUS_READY.clear()
 
 
 def test_app_use_is_one_stable_main_only_tool():
@@ -144,9 +158,11 @@ async def test_visual_describe_converts_window_capture_to_text(monkeypatch):
             "height": 600,
         }
 
-    async def fake_vision(content, content_prompt=""):
+    async def fake_vision(content, content_prompt="", **kwargs):
         assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
         assert content_prompt == "Explain the chart"
+        assert kwargs["timeout"] == 60.0
+        assert kwargs["record_latency"] is True
         return {"vision_text": "A rising line chart.", "vision_model": "vision-test"}
 
     monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
@@ -161,6 +177,539 @@ async def test_visual_describe_converts_window_capture_to_text(monkeypatch):
     assert result["visual_observation"] == "A rising line chart."
     assert result["vision_model"] == "vision-test"
     assert "image_base64" not in result
+
+
+@pytest.mark.asyncio
+async def test_visual_describe_reports_capture_success_separately_from_vision_timeout(monkeypatch):
+    from cyrene import app_use
+
+    async def fake_rpc(_operation, _arguments, **_kwargs):
+        return {
+            "status": "success",
+            "session_id": "session-1",
+            "image_base64": "aW1hZ2U=",
+            "mime_type": "image/png",
+            "width": 800,
+            "height": 600,
+        }
+
+    async def fake_analysis(*_args, **_kwargs):
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    monkeypatch.setattr(app_use, "_analyze_capture", fake_analysis)
+    result = await app_use.execute_app_use({
+        "operation": "call",
+        "session_id": "session-1",
+        "capability": "visual_describe",
+        "parameters": {},
+    })
+    assert result["status"] == "error"
+    assert result["type"] == "vision_timeout"
+    assert result["capture_succeeded"] is True
+    assert result["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_connect_discloses_python_visual_click_workflow(monkeypatch):
+    from cyrene import app_use
+
+    async def fake_rpc(_operation, _arguments, **_kwargs):
+        return {
+            "status": "success",
+            "session_id": "session-1",
+            "capabilities": [{"name": "focus_window"}, {"name": "click_at"}, {"name": "snapshot"}],
+        }
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    result = await app_use.execute_app_use({"operation": "connect", "target_id": "target-1"})
+    names = [item["name"] for item in result["capabilities"]]
+    assert names == ["measure_coordinates", "focus_window", "click_at", "visual_click", "visual_type", "snapshot"]
+    visual_click = result["capabilities"][3]
+    assert visual_click["background"] == "requires_focus"
+    assert "allow_foreground_fallback" in visual_click["arguments"]
+    assert result["capabilities"][4]["background"] == "safe_when_supported"
+    assert result["interaction_priority"][0] == "measure_coordinates_required_first"
+    assert result["required_first_activation_action"] == "call:measure_coordinates"
+    assert result["next_valid_actions"][0] == "call:measure_coordinates"
+
+
+@pytest.mark.asyncio
+async def test_connect_hides_semantic_fallback_actions_when_tree_is_unavailable(monkeypatch):
+    from cyrene import app_use
+
+    async def fake_rpc(_operation, _arguments, **_kwargs):
+        return {
+            "status": "success",
+            "session_id": "session-container-only",
+            "capabilities": [
+                {"name": "focus_window"},
+                {"name": "click_at"},
+                {"name": "virtual_click_at"},
+                {"name": "visual_describe"},
+            ],
+            "semantic_profile": {
+                "status": "unavailable",
+                "reason": "container_only_tree",
+            },
+        }
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    result = await app_use.execute_app_use({"operation": "connect", "target_id": "target-1"})
+    assert result["semantic_profile"]["status"] == "unavailable"
+    assert "call:snapshot" not in result["next_valid_actions"]
+    assert "call:find" not in result["next_valid_actions"]
+    assert result["next_valid_actions"][:3] == [
+        "call:measure_coordinates", "call:focus_window", "call:click_at",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_connect_mechanically_requires_measurement_before_any_other_call(monkeypatch):
+    from cyrene import app_use
+
+    calls = []
+
+    async def fake_rpc(operation, arguments, **_kwargs):
+        calls.append((operation, arguments))
+        return {
+            "status": "success", "session_id": "session-gated",
+            "capabilities": [
+                {"name": "focus_window"}, {"name": "click_at"},
+                {"name": "visual_describe"}, {"name": "virtual_click_at"},
+            ],
+        }
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    app_use._SESSION_MEASUREMENTS.pop("session-gated", None)
+    connected = await app_use.execute_app_use({"operation": "connect", "target_id": "target-1"})
+    assert connected["status"] == "success"
+    blocked = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-gated", "capability": "visual_describe",
+        "parameters": {},
+    })
+    assert blocked["status"] == "error"
+    assert blocked["type"] == "coordinate_measurement_required"
+    assert blocked["next_valid_actions"] == ["call:measure_coordinates", "disconnect"]
+    assert [operation for operation, _ in calls] == ["connect"]
+
+
+@pytest.mark.asyncio
+async def test_virtual_click_must_reuse_latest_measured_point(monkeypatch):
+    from cyrene import app_use
+
+    calls = []
+
+    async def fake_rpc(operation, arguments, **_kwargs):
+        calls.append((operation, arguments))
+        return {"status": "uncertain", "session_id": "session-measured"}
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    app_use._SESSION_MEASUREMENTS["session-measured"] = {
+        "window_point": {"x": 120.25, "y": 88.5},
+        "screen_point": {"x": 420.25, "y": 288.5},
+    }
+    blocked = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-measured", "capability": "virtual_click_at",
+        "parameters": {"x": 140, "y": 90},
+    })
+    assert blocked["type"] == "measured_coordinate_mismatch"
+    assert calls == []
+    allowed = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-measured", "capability": "virtual_click_at",
+        "parameters": {"x": 120.25, "y": 88.5},
+    })
+    assert allowed["status"] == "uncertain"
+    assert calls[-1][1]["capability"] == "virtual_click_at"
+
+
+@pytest.mark.asyncio
+async def test_real_coordinate_click_requires_focus_and_reuses_measured_point(monkeypatch):
+    from cyrene import app_use
+
+    calls = []
+
+    async def fake_rpc(operation, arguments, **_kwargs):
+        calls.append((operation, arguments))
+        capability = arguments.get("capability")
+        if capability == "focus_window":
+            return {"status": "success", "summary": "focused"}
+        if capability == "click_at":
+            return {"status": "success", "focused_temporarily": True, "focus_restore": {"status": "success"}}
+        raise AssertionError(capability)
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    app_use._SESSION_MEASUREMENTS["session-real"] = {
+        "window_point": {"x": 204.5, "y": 295.25},
+        "screen_point": {"x": 888.5, "y": -670.75},
+    }
+    blocked = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-real", "capability": "click_at",
+        "parameters": {"x": 204.5, "y": 295.25, "allow_foreground_input": True},
+    })
+    assert blocked["type"] == "focus_window_required"
+    assert calls == []
+    focused = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-real", "capability": "focus_window", "parameters": {},
+    })
+    assert focused["status"] == "success"
+    clicked = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-real", "capability": "click_at",
+        "parameters": {"x": 204.5, "y": 295.25, "allow_foreground_input": True},
+    })
+    assert clicked["status"] == "success"
+    assert clicked["focus_restore"]["status"] == "success"
+    assert [arguments["capability"] for _, arguments in calls] == ["focus_window", "click_at"]
+
+
+@pytest.mark.asyncio
+async def test_visual_activation_requires_measurement_for_the_same_target(monkeypatch):
+    from cyrene import app_use
+
+    calls = []
+
+    async def fake_rpc(operation, arguments, **_kwargs):
+        calls.append((operation, arguments))
+        return {"status": "success"}
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    app_use._SESSION_MEASUREMENTS["session-target"] = {
+        "target": "Messages app icon",
+        "window_point": {"x": 120, "y": 88},
+    }
+    blocked = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-target", "capability": "visual_click",
+        "parameters": {"target": "Maps app icon"},
+    })
+    assert blocked["status"] == "error"
+    assert blocked["type"] == "measured_target_mismatch"
+    assert blocked["next_valid_actions"] == ["call:measure_coordinates", "disconnect"]
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_measure_coordinates_returns_all_coordinate_spaces_without_input(monkeypatch):
+    from cyrene import app_use
+
+    calls = []
+
+    async def fake_rpc(operation, arguments, **_kwargs):
+        calls.append((operation, arguments))
+        assert arguments["capability"] == "visual_describe"
+        return {
+            "status": "success", "session_id": "session-1", "image_base64": "aW1hZ2U=",
+            "mime_type": "image/png", "width": 543, "height": 1200,
+            "target": {"bounds": {"x": 664, "y": -823, "width": 326, "height": 720}},
+            "coordinate_mapping": {"logical_width": 326, "logical_height": 720},
+        }
+
+    async def fake_analysis(*_args, **kwargs):
+        assert "max_tokens" not in kwargs
+        return ('{"found":true,"confidence":0.97,"x":364,"y":230,"bbox":[330,196,68,68],"label":"Messages"}', "vision-test")
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    monkeypatch.setattr(app_use, "_analyze_capture", fake_analysis)
+    result = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-1", "capability": "measure_coordinates",
+        "parameters": {"target": "Messages app icon"},
+    })
+    assert result["status"] == "success"
+    assert result["captured_point"] == {"x": 364.0, "y": 230.0}
+    assert result["window_point"]["x"] == pytest.approx(218.5267, rel=1e-4)
+    assert result["window_point"]["y"] == 138.0
+    assert result["screen_point"]["x"] == pytest.approx(882.5267, rel=1e-4)
+    assert result["screen_point"]["y"] == -685.0
+    assert result["window_bbox"]["width"] == pytest.approx(40.8287, rel=1e-4)
+    assert result["input_sent"] is False
+    assert result["executed_action"] is None
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_visual_click_never_attempts_semantic_fallback_for_unavailable_tree(monkeypatch):
+    from cyrene import app_use
+
+    calls = []
+
+    async def fake_rpc(operation, arguments, **_kwargs):
+        calls.append((operation, arguments))
+        assert arguments["capability"] == "visual_describe"
+        return {
+            "status": "success", "session_id": "session-no-tree", "image_base64": "aW1hZ2U=",
+            "mime_type": "image/png", "width": 100, "height": 100,
+            "coordinate_mapping": {"logical_width": 100, "logical_height": 100},
+        }
+
+    async def fake_analysis(*_args, **_kwargs):
+        return ('{"found":false,"confidence":0}', "vision-test")
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    monkeypatch.setattr(app_use, "_analyze_capture", fake_analysis)
+    monkeypatch.setitem(app_use._SESSION_SEMANTIC_STATUS, "session-no-tree", "unavailable")
+    result = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-no-tree", "capability": "visual_click",
+        "parameters": {"target": "Messages", "max_attempts": 1, "fallback": ["semantic_press"]},
+    })
+    assert result["status"] == "uncertain"
+    assert result["requested_action"]["fallback_order"] == []
+    assert result["next_valid_actions"] == ["disconnect"]
+    assert [arguments["capability"] for _, arguments in calls] == ["visual_describe"]
+
+
+@pytest.mark.asyncio
+async def test_visual_type_owns_coordinate_mapping_and_requires_exact_text_verification(monkeypatch):
+    from cyrene import app_use
+
+    calls = []
+    analyses = iter([
+        ('{"found":true,"confidence":0.94,"x":600,"y":900,"label":"composer"}', "vision-locate"),
+        ('{"exact_text_present":true,"observed_text":"hello Claude"}', "vision-verify"),
+    ])
+
+    async def fake_rpc(operation, arguments, **_kwargs):
+        calls.append((operation, arguments))
+        capability = arguments.get("capability")
+        if capability == "visual_describe":
+            return {
+                "status": "success", "session_id": "session-1", "image_base64": "aW1hZ2U=",
+                "mime_type": "image/png", "width": 1800, "height": 1200,
+                "coordinate_mapping": {"logical_width": 1200, "logical_height": 800},
+            }
+        if capability == "virtual_type_at":
+            assert arguments["parameters"]["x"] == 400
+            assert arguments["parameters"]["y"] == 600
+            assert arguments["parameters"]["text"] == "hello Claude"
+            assert arguments["parameters"]["verify_effect"] is False
+            return {
+                "status": "uncertain", "session_id": "session-1",
+                "executed_action": {"capability": "virtual_type_at", "input_mode": "background_pid_event"},
+                "verification": {"event_delivered": True, "effect_verified": None},
+            }
+        raise AssertionError(f"unexpected RPC call: {operation} {arguments}")
+
+    async def fake_analysis(*_args, **_kwargs):
+        return next(analyses)
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    monkeypatch.setattr(app_use, "_analyze_capture", fake_analysis)
+    result = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-1", "capability": "visual_type",
+        "parameters": {"target": "bottom composer", "text": "hello Claude"},
+    })
+    assert result["status"] == "success"
+    assert result["captured_point"] == {"x": 600.0, "y": 900.0}
+    assert result["window_point"] == {"x": 400.0, "y": 600.0}
+    assert result["verification"]["exact_text_present"] is True
+    assert result["verification"]["event_delivered"] is True
+    assert [item[1]["capability"] for item in calls] == ["visual_describe", "virtual_type_at", "visual_describe"]
+
+
+@pytest.mark.asyncio
+async def test_visual_type_rejected_input_requires_isolated_desktop_not_foreground(monkeypatch):
+    from cyrene import app_use
+
+    analyses = iter([
+        ('{"found":true,"confidence":0.9,"x":600,"y":900}', "vision-locate"),
+        ('{"exact_text_present":false,"observed_text":"placeholder"}', "vision-verify"),
+    ])
+
+    async def fake_rpc(_operation, arguments, **_kwargs):
+        if arguments.get("capability") == "virtual_type_at":
+            return {
+                "status": "uncertain", "session_id": "session-1",
+                "executed_action": {"capability": "virtual_type_at", "input_mode": "background_pid_event"},
+                "verification": {"event_delivered": True},
+                "next_valid_actions": ["call:visual_describe", "disconnect"],
+            }
+        return {
+            "status": "success", "session_id": "session-1", "image_base64": "aW1hZ2U=",
+            "mime_type": "image/png", "width": 1800, "height": 1200,
+            "coordinate_mapping": {"logical_width": 1200, "logical_height": 800},
+        }
+
+    async def fake_analysis(*_args, **_kwargs):
+        return next(analyses)
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    monkeypatch.setattr(app_use, "_analyze_capture", fake_analysis)
+    result = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-1", "capability": "visual_type",
+        "parameters": {"target": "composer", "text": "hello"},
+    })
+    assert result["status"] == "error"
+    assert result["type"] == "unsupported_background_text_input"
+    assert result["isolation_required"] is True
+    assert result["foreground_fallback_allowed"] is False
+    assert result["next_valid_actions"] == ["disconnect"]
+
+
+@pytest.mark.asyncio
+async def test_visual_click_scales_capture_coordinates_and_uses_foreground_quartz_click(monkeypatch):
+    from cyrene import app_use
+    from cyrene import attachments
+
+    calls = []
+
+    async def fake_rpc(operation, arguments, **_kwargs):
+        calls.append((operation, arguments))
+        capability = arguments.get("capability")
+        if capability == "visual_describe":
+            return {
+                "status": "success",
+                "session_id": "session-1",
+                "target": {"platform": "darwin"},
+                "image_base64": "aW1hZ2U=",
+                "mime_type": "image/png",
+                "width": 400,
+                "height": 300,
+                "coordinate_mapping": {
+                    "logical_width": 800,
+                    "logical_height": 600,
+                    "captured_width": 400,
+                    "captured_height": 300,
+                },
+            }
+        if capability == "focus_window":
+            return {"status": "success", "session_id": "session-1"}
+        if capability == "click_at":
+            point = arguments["parameters"]
+            assert point["x"] == 200
+            assert point["y"] == 100
+            assert point["allow_foreground_input"] is True
+            return {
+                "status": "success",
+                "session_id": "session-1",
+                "diagnostics": {"method": "Quartz CGEvent"},
+                "focus_restore": {"status": "success"},
+            }
+        raise AssertionError(f"unexpected RPC call: {operation} {arguments}")
+
+    async def fake_vision(_content, content_prompt="", **kwargs):
+        assert "untrusted UI data" in content_prompt
+        assert kwargs["max_tokens"] is None
+        assert kwargs["timeout"] == 60.0
+        return {
+            "vision_text": '{"found":true,"confidence":0.96,"x":100,"y":50,"bbox":[90,40,20,20],"label":"Close"}',
+            "vision_model": "vision-test",
+        }
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    monkeypatch.setattr(attachments, "run_vision_chat", fake_vision)
+    result = await app_use.execute_app_use({
+        "operation": "call",
+        "session_id": "session-1",
+        "capability": "visual_click",
+        "parameters": {"target": "close button"},
+    })
+    assert result["status"] == "success"
+    assert result["method"] == "visual_coordinate_to_foreground_quartz_click"
+    assert result["foreground_input_used"] is True
+    assert result["fallback_used"] is False
+    assert result["attempts"][1]["window_point"] == {"x": 200, "y": 100}
+    assert [item[1]["capability"] for item in calls] == ["visual_describe", "focus_window", "click_at"]
+
+
+@pytest.mark.asyncio
+async def test_visual_click_semantic_fallback_stays_in_background(monkeypatch):
+    from cyrene import app_use
+    from cyrene import attachments
+
+    async def fake_rpc(_operation, arguments, **_kwargs):
+        capability = arguments.get("capability")
+        if capability == "visual_describe":
+            return {
+                "status": "success",
+                "session_id": "session-1",
+                "target": {"platform": "darwin"},
+                "image_base64": "aW1hZ2U=",
+                "mime_type": "image/png",
+                "width": 400,
+                "height": 300,
+                "coordinate_mapping": {"logical_width": 400, "logical_height": 300},
+            }
+        if capability == "find":
+            return {"status": "success", "nodes": [{"ref": "e9", "name": "Close", "actions": ["press"]}]}
+        if capability == "press":
+            return {"status": "success", "session_id": "session-1", "summary": "pressed"}
+        raise AssertionError(f"unexpected capability: {capability}")
+
+    async def fake_vision(_content, content_prompt="", **_kwargs):
+        return {"vision_text": '{"found":false,"confidence":0}', "vision_model": "vision-test"}
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    monkeypatch.setattr(attachments, "run_vision_chat", fake_vision)
+    result = await app_use.execute_app_use({
+        "operation": "call",
+        "session_id": "session-1",
+        "capability": "visual_click",
+        "parameters": {"target": "close button", "max_attempts": 1},
+    })
+    assert result["status"] == "success"
+    assert result["method"] == "semantic_press_fallback"
+    assert result["foreground_input_used"] is False
+    assert result["fallback_used"] is True
+
+
+@pytest.mark.asyncio
+async def test_visual_click_rejects_keyboard_configuration_when_no_matching_fallback():
+    from cyrene import app_use
+
+    result = await app_use.execute_app_use({
+        "operation": "call",
+        "session_id": "session-1",
+        "capability": "visual_click",
+        "parameters": {
+            "target": "new tab",
+            "fallback": ["semantic_press"],
+            "keyboard_shortcut": ["command", "t"],
+        },
+    })
+    assert result["status"] == "error"
+    assert result["type"] == "invalid_arguments"
+    assert "menu_command or keyboard" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_visual_click_attributes_background_axpress_not_configured_keyboard(monkeypatch):
+    from cyrene import app_use
+    from cyrene import attachments
+
+    async def fake_rpc(_operation, arguments, **_kwargs):
+        capability = arguments.get("capability")
+        if capability == "visual_describe":
+            return {
+                "status": "success", "session_id": "session-1", "target": {"platform": "darwin"},
+                "image_base64": "aW1hZ2U=", "mime_type": "image/png", "width": 100, "height": 100,
+                "coordinate_mapping": {"logical_width": 100, "logical_height": 100},
+            }
+        if capability == "focus_window":
+            return {"status": "success", "session_id": "session-1"}
+        if capability == "click_at":
+            return {
+                "status": "success", "session_id": "session-1",
+                "diagnostics": {"method": "Quartz CGEvent"},
+                "focus_restore": {"status": "success"},
+            }
+        raise AssertionError(capability)
+
+    async def fake_vision(_content, content_prompt="", **_kwargs):
+        return {"vision_text": '{"found":true,"confidence":1,"x":50,"y":20,"label":"plus"}', "vision_model": "test"}
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    monkeypatch.setattr(attachments, "run_vision_chat", fake_vision)
+    result = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-1", "capability": "visual_click",
+        "parameters": {
+            "target": "new tab", "fallback": ["menu_command", "keyboard"],
+            "allow_foreground_fallback": True, "keyboard_shortcut": ["command", "t"],
+        },
+    })
+    assert result["status"] == "success"
+    assert result["executed_action"]["capability"] == "click_at"
+    assert result["executed_action"]["native_action"] == "Quartz CGEvent"
+    assert result["foreground_input_used"] is True
+    assert result["fallback_used"] is False
+    assert result["unused_fallback_configuration"]["keyboard_shortcut"] == ["command", "t"]
 
 
 @pytest.mark.asyncio
@@ -294,3 +843,6 @@ def test_agent_never_bypasses_an_unavailable_app_use_provider():
         "or another tool that imitates the requested App Use action"
     )
     assert prompts.count(rule) == 2
+    assert prompts.count("your first App Use call after connect MUST be `measure_coordinates`") == 1
+    assert prompts.count("the next App Use call MUST be `measure_coordinates`") == 1
+    assert prompts.count("semantic_profile.status=\"unavailable\"") == 2

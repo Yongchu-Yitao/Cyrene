@@ -1,17 +1,20 @@
-"""Behavior-tree learning, pattern mining, and learned skill execution.
+"""Behavior telemetry, repeat detection, and learned skill execution.
 
-This module implements the full behavior-learning pipeline:
+The primary learning path is intentionally small:
 
-- SQLite-backed behavior tree persistence
-- behavior fingerprint generation + vocabulary normalization
-- cross-session pattern mining and merging
-- learned skill generation, versioning, shadow validation, and routing
-- skill run logging, replay tests, and patch proposal scaffolding
+- persist successful project-local tool chains;
+- observe the first occurrence, ask on the second, auto-learn on the third;
+- store reusable workflows as declarative parameterized tool scripts;
+- execute scripts through the central tool dispatcher with risk guards.
+
+Legacy fingerprint, version, replay, and migration helpers remain for existing
+databases and public compatibility APIs, but are not on the automatic path.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -55,6 +58,8 @@ _ROUTER_JUDGE_THRESHOLD = 0.75
 _PATTERN_STRONG_THRESHOLD = 0.85
 _PATTERN_MEDIUM_THRESHOLD = 0.70
 _MAX_PATTERN_EXAMPLES = 8
+_CANDIDATE_USER_DECISION_COUNT = 2
+_CANDIDATE_AUTO_LEARN_COUNT = 3
 _SCRIPT_EXECUTION_TIMEOUT_SECONDS = 30.0
 _INTERNAL_PROACTIVE_PROMPT_PREFIX = "This is a scheduler-initiated proactive check-in."
 _SCHEDULED_CHECK_IN_LABEL = "Scheduled proactive check-in"
@@ -219,6 +224,7 @@ CREATE TABLE IF NOT EXISTS learned_skills (
     input_schema_json TEXT NOT NULL DEFAULT '[]',
     parameter_extractor_json TEXT NOT NULL DEFAULT '{}',
     steps_json TEXT NOT NULL DEFAULT '[]',
+    script_json TEXT NOT NULL DEFAULT '{}',
     guards_json TEXT NOT NULL DEFAULT '{}',
     fallback_policy_json TEXT NOT NULL DEFAULT '{}',
     tests_json TEXT NOT NULL DEFAULT '[]',
@@ -350,6 +356,38 @@ CREATE TABLE IF NOT EXISTS behavior_learning_agent_reviews (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_behavior_learning_agent_reviews_turn
     ON behavior_learning_agent_reviews(turn_id);
+
+CREATE TABLE IF NOT EXISTS behavior_skill_candidates (
+    candidate_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL DEFAULT '',
+    project_key TEXT NOT NULL DEFAULT '',
+    bucket_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'observing',
+    occurrence_count INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    script_json TEXT NOT NULL DEFAULT '{}',
+    risk_level TEXT NOT NULL DEFAULT 'none',
+    linked_skill_id TEXT NOT NULL DEFAULT '',
+    user_decision TEXT NOT NULL DEFAULT '',
+    last_evaluated_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_behavior_skill_candidates_project
+    ON behavior_skill_candidates(project_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_behavior_skill_candidates_bucket
+    ON behavior_skill_candidates(project_id, bucket_key, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS behavior_skill_candidate_turns (
+    candidate_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL UNIQUE,
+    occurrence_index INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (candidate_id, turn_id),
+    FOREIGN KEY (candidate_id) REFERENCES behavior_skill_candidates(candidate_id),
+    FOREIGN KEY (turn_id) REFERENCES behavior_turns(turn_id)
+);
 """
 
 _PROJECT_INDEXES = """
@@ -363,6 +401,8 @@ CREATE INDEX IF NOT EXISTS idx_behavior_browser_user_events_project
     ON behavior_browser_user_events(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_behavior_learning_agent_reviews_project
     ON behavior_learning_agent_reviews(project_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_behavior_skill_candidate_turns_candidate
+    ON behavior_skill_candidate_turns(candidate_id, occurrence_index);
 """
 
 _CORE_DOMAINS = {
@@ -491,7 +531,16 @@ _TRIVIAL_SKILL_TOOLS: frozenset[str] = frozenset({
     "browser.user.key",
     "browser.user.mousemove",
     "browser.user.mouseMove",
+    "GetLearnedSkill",
+    "RunLearnedSkill",
 })
+
+_INTERNAL_LEARNING_MESSAGE_PREFIXES = (
+    "[Internal permission decision received.",
+    "This is a scheduler-initiated proactive check-in.",
+    "你正在持续执行模式中完成一个有界工作片段。",
+    "You are completing one bounded work packet",
+)
 
 _MIN_SKILL_CHAIN_STEPS = 2
 
@@ -930,6 +979,30 @@ def _should_parameterize_arg(key: str, observed_values: list[Any]) -> bool:
     return True
 
 
+def _should_expose_stable_arg(key: str, value: Any) -> bool:
+    """Expose reusable inputs even when the first observations used one value."""
+    normalized = _safe_slug(key)
+    return normalized in {
+        "path", "file_path", "filepath", "directory", "cwd",
+        "query", "url", "uri", "command", "pattern", "glob",
+    } and value not in (None, "")
+
+
+def _parameter_type_for_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return "number"
+    if isinstance(value, list):
+        return "list"
+    family = _arg_value_family(value)
+    if family == "file_path":
+        return "path"
+    if family == "url":
+        return "url"
+    return "text"
+
+
 def _looks_like_weather_request(user_message: str, action_sequence: list[dict[str, Any]] | None = None) -> bool:
     text = str(user_message or "")
     lowered = text.lower()
@@ -1084,6 +1157,7 @@ async def _ensure_tables() -> None:
             "learned_skills": [
                 ("project_id", "TEXT NOT NULL DEFAULT ''"),
                 ("project_key", "TEXT NOT NULL DEFAULT ''"),
+                ("script_json", "TEXT NOT NULL DEFAULT '{}'"),
             ],
             "behavior_turn_tool_chains": [
                 ("project_id", "TEXT NOT NULL DEFAULT ''"),
@@ -1152,7 +1226,7 @@ async def init(data_dir: Path, workspace_dir: Path) -> None:
     _DB_FILE.parent.mkdir(parents=True, exist_ok=True)
     await _ensure_tables()
     await _seed_core_vocabulary()
-    await _refresh_generated_skill_names_with_llm()
+    await _migrate_generated_skill_scripts()
     _INIT_DONE = True
 
 
@@ -1676,7 +1750,7 @@ async def record_action(
                 ),
             )
             await conn.execute(
-                "UPDATE behavior_turns SET updated_at = ? WHERE turn_id = ?",
+                "UPDATE behavior_turns SET updated_at = ?, processed_status = 0 WHERE turn_id = ?",
                 (now, turn_id),
             )
             await conn.execute(
@@ -1684,7 +1758,6 @@ async def record_action(
                 (now, session_id),
             )
             await conn.commit()
-        await _rebuild_tool_chain_for_turn(turn_id)
     except Exception:
         # Behaviour-learning is fire-and-forget telemetry: a write failure here
         # (e.g. a transient "database is locked") must never propagate and turn
@@ -1757,9 +1830,10 @@ async def record_browser_user_event(
                 (now, turn_id),
             )
             await conn.commit()
-        await _rebuild_tool_chain_for_turn(turn_id)
     except Exception:
         logger.debug("browser user event learning write failed (ignored)", exc_info=True)
+    if str(event_kind or "").strip().lower() == "control_stop":
+        await _rebuild_tool_chain_for_turn(turn_id)
 
 
 async def list_recent_browser_user_events(
@@ -1862,6 +1936,14 @@ async def complete_turn(
     session_title: str = "",
     round_title: str = "",
 ) -> None:
+    # Tool telemetry is intentionally fire-and-forget during execution.  The
+    # finalization barrier guarantees learning sees the complete turn.
+    try:
+        from cyrene.tool_executor import flush_behavior_action_tasks
+
+        await flush_behavior_action_tasks()
+    except Exception:
+        logger.debug("failed to flush behavior action telemetry", exc_info=True)
     now = _now_iso()
     outcome = await _classify_turn_outcome(turn_id)
     async with _conn() as conn:
@@ -1896,6 +1978,7 @@ async def complete_turn(
                 (now, _truncate_text(session_title, 240), row["session_id"]),
             )
         await conn.commit()
+    await _rebuild_tool_chain_for_turn(turn_id)
 
 
 async def _alias_lookup(label_type: str, label: str) -> str:
@@ -3188,7 +3271,11 @@ async def _derive_parameter_templates(turn_ids: list[str]) -> tuple[list[dict[st
         if group:
             compressed_group: list[dict[str, Any]] = []
             for item in group:
-                signature = (str(item.get("action_type") or ""), str(item.get("action_subtype") or ""))
+                signature = (
+                    str(item.get("tool_name") or ""),
+                    str(item.get("action_type") or ""),
+                    str(item.get("action_subtype") or ""),
+                )
                 if compressed_group and compressed_group[-1].get("_agg_signature") == signature:
                     # Same tool repeated — aggregate args instead of discarding
                     existing = compressed_group[-1]
@@ -3200,17 +3287,28 @@ async def _derive_parameter_templates(turn_ids: list[str]) -> tuple[list[dict[st
             action_groups.append(compressed_group)
     if not action_groups:
         return [], []
-    grouped_by_signature: dict[tuple[tuple[str, str], ...], list[list[dict[str, Any]]]] = defaultdict(list)
+    grouped_by_signature: dict[tuple[tuple[str, str, str], ...], list[list[dict[str, Any]]]] = defaultdict(list)
     for group in action_groups:
         signature = tuple(
-            (str(item.get("action_type") or ""), str(item.get("action_subtype") or ""))
+            (
+                str(item.get("tool_name") or ""),
+                str(item.get("action_type") or ""),
+                str(item.get("action_subtype") or ""),
+            )
             for item in group
         )
         grouped_by_signature[signature].append(group)
-    template_group = max(
+    matching_groups = max(
         grouped_by_signature.values(),
         key=lambda groups: (len(groups), -len(groups[0]), -sum(len(g) for g in groups)),
-    )[0]
+    )
+    # Keep every observed repeated call when counts differ across occurrences;
+    # the structural signature intentionally compresses those calls into one
+    # step, so choose the richest representative for its `_items` template.
+    template_group = max(
+        matching_groups,
+        key=lambda group: sum(len(item.get("_items") or [item.get("args") or {}]) for item in group),
+    )
     steps: list[dict[str, Any]] = []
     schema: dict[str, dict[str, Any]] = {}
     schema_reuse: dict[tuple[str, str, tuple[str, ...]], str] = {}
@@ -3218,8 +3316,40 @@ async def _derive_parameter_templates(turn_ids: list[str]) -> tuple[list[dict[st
     for step_index, template in enumerate(template_group):
         items = template.get("_items")
         if items:
-            # Aggregated step — multiple arg sets for the same tool, use as-is
-            args_template: dict[str, Any] = {"_items": list(items)}
+            # Aggregated repeated calls remain one declarative step, but each
+            # varying argument is parameterized across observed occurrences.
+            item_templates = _clone_json_value(list(items))
+            for item_index, item_args in enumerate(item_templates):
+                if not isinstance(item_args, dict):
+                    continue
+                for key, value in list(item_args.items()):
+                    observed_values: list[Any] = []
+                    for group in action_groups:
+                        if step_index >= len(group):
+                            continue
+                        observed_items = group[step_index].get("_items") or [group[step_index].get("args") or {}]
+                        if item_index < len(observed_items) and isinstance(observed_items[item_index], dict):
+                            observed_values.append(observed_items[item_index].get(key))
+                    values = {json.dumps(item, ensure_ascii=False) for item in observed_values}
+                    varies = len(values) > 1
+                    if not ((varies and _should_parameterize_arg(key, observed_values)) or _should_expose_stable_arg(key, value)):
+                        continue
+                    examples = [str(_json_loads(item, item)) for item in sorted(values)][:6]
+                    param_type = _parameter_type_for_value(value)
+                    param_name = f"param_{_safe_slug(key)}_{item_index + 1}_{param_index}"
+                    param_index += 1
+                    schema[param_name] = {
+                        "parameter_name": param_name,
+                        "type": param_type,
+                        "required": varies,
+                        "default_value": _clone_json_value(value),
+                        "default_strategy": "use_first_observed",
+                        "validation_rule": "",
+                        "examples": examples,
+                        "aliases": [key],
+                    }
+                    item_args[key] = f"{{{{{param_name}}}}}"
+            args_template = {"_items": item_templates}
         else:
             args_template = dict(template.get("args") or {})
             for key, value in list(args_template.items()):
@@ -3229,14 +3359,15 @@ async def _derive_parameter_templates(turn_ids: list[str]) -> tuple[list[dict[st
                     if step_index < len(group)
                 ]
                 values = {json.dumps(item, ensure_ascii=False) for item in observed_values}
-                if len(values) > 1 and _should_parameterize_arg(key, observed_values):
+                varies = len(values) > 1
+                if (varies and _should_parameterize_arg(key, observed_values)) or _should_expose_stable_arg(key, value):
                     examples = []
                     for item in sorted(values):
                         try:
                             examples.append(str(json.loads(item)))
                         except Exception:
                             examples.append(str(item))
-                    param_type = "path" if _arg_value_family(value) == "file_path" else ("url" if _arg_value_family(value) == "url" else "text")
+                    param_type = _parameter_type_for_value(value)
                     reuse_key = (_safe_slug(key), param_type, tuple(examples[:6]))
                     param_name = schema_reuse.get(reuse_key, "")
                     if not param_name:
@@ -3246,8 +3377,8 @@ async def _derive_parameter_templates(turn_ids: list[str]) -> tuple[list[dict[st
                         schema[param_name] = {
                             "parameter_name": param_name,
                             "type": param_type,
-                            "required": True,
-                            "default_value": str(value) if value is not None else "",
+                            "required": varies,
+                            "default_value": _clone_json_value(value),
                             "default_strategy": "use_first_observed",
                             "validation_rule": "",
                             "examples": examples[:6],
@@ -3552,6 +3683,56 @@ def _attach_generated_script_to_definition(definition: dict[str, Any], skill_id:
     if isinstance(definition.get("guards"), dict):
         definition["guards"]["risk_level"] = inferred_risk
     return definition
+
+
+async def _migrate_generated_skill_scripts() -> int:
+    """Unwrap legacy generated Python scripts into declarative tool steps."""
+    async with _conn() as conn:
+        cursor = await conn.execute("SELECT * FROM learned_skills")
+        rows = await cursor.fetchall()
+        migrated = 0
+        for row in rows:
+            definition = _skill_row_to_definition(row)
+            steps = definition.get("steps") or []
+            if len(steps) != 1 or str(steps[0].get("implementation_kind") or "") != "script":
+                continue
+            reference = steps[0].get("implementation_reference") or {}
+            original_steps = reference.get("original_steps") or []
+            if not _has_skillworthy_steps(original_steps):
+                continue
+            script = {
+                "format": "cyrene.parameterized-tool-script",
+                "version": int(definition.get("version") or 1),
+                "name": definition.get("name") or "",
+                "description": definition.get("description") or "",
+                "parameters": definition.get("input_schema") or [],
+                "steps": original_steps,
+                "execution": {"stop_on_failure": True, "record_run": True, "suppress_relearning": True},
+                "risk": {
+                    "level": _infer_skill_risk_level(original_steps),
+                    "requires_runtime_approval": _infer_skill_risk_level(original_steps) == "high",
+                },
+                "source_turn_ids": (definition.get("created_from") or {}).get("turn_list") or [],
+            }
+            await conn.execute(
+                """
+                UPDATE learned_skills
+                SET steps_json = ?, script_json = ?, risk_level = ?, guards_json = ?, updated_at = ?
+                WHERE skill_id = ?
+                """,
+                (
+                    _json_dumps(original_steps),
+                    _json_dumps(script),
+                    str(script["risk"]["level"]),
+                    _json_dumps({**(definition.get("guards") or {}), "risk_level": str(script["risk"]["level"])}),
+                    _now_iso(),
+                    definition["skill_id"],
+                ),
+            )
+            migrated += 1
+        if migrated:
+            await conn.commit()
+    return migrated
 
 
 async def _execute_script_step(reference: dict[str, Any], params: dict[str, Any]) -> tuple[str, bool, str]:
@@ -3893,6 +4074,7 @@ def _skill_row_to_definition(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any
         "input_schema": _json_loads(data["input_schema_json"], []),
         "parameter_extractor": _json_loads(data["parameter_extractor_json"], {}),
         "steps": _json_loads(data["steps_json"], []),
+        "script": _json_loads(data.get("script_json"), {}),
         "guards": _json_loads(data["guards_json"], {}),
         "fallback_policy": _json_loads(data["fallback_policy_json"], {}),
         "tests": _json_loads(data["tests_json"], []),
@@ -4004,7 +4186,20 @@ async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
             return duplicate_skill_id
         definition["name"] = await _unique_skill_name(conn, str(definition.get("name") or "学习技能"))
         skill_id = _new_id("learned_skill")
-        definition = _attach_generated_script_to_definition(definition, skill_id)
+        definition["script"] = {
+            "format": "cyrene.parameterized-tool-script",
+            "version": 1,
+            "name": definition["name"],
+            "description": definition["description"],
+            "parameters": definition["input_schema"],
+            "steps": definition["steps"],
+            "execution": {"stop_on_failure": True, "record_run": True, "suppress_relearning": True},
+            "risk": {
+                "level": definition["risk_level"],
+                "requires_runtime_approval": definition["risk_level"] == "high",
+            },
+            "source_turn_ids": definition["created_from"]["turn_list"],
+        }
         now = _now_iso()
         replay_ids = await _insert_replay_tests(conn, skill_id, definition["created_from"]["turn_list"], definition["trigger"])
         definition["tests"] = replay_ids
@@ -4012,9 +4207,9 @@ async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
             """
             INSERT INTO learned_skills
             (skill_id, project_id, project_key, name, description, current_version, status, skill_type, risk_level, requires_llm,
-             trigger_json, input_schema_json, parameter_extractor_json, steps_json, guards_json, fallback_policy_json,
+             trigger_json, input_schema_json, parameter_extractor_json, steps_json, script_json, guards_json, fallback_policy_json,
              tests_json, editable_fields_json, created_from_json, run_statistics_json, pattern_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 skill_id,
@@ -4030,6 +4225,7 @@ async def _create_skill(pattern_id: str, *, force: bool = False) -> str | None:
                 _json_dumps(definition["input_schema"]),
                 _json_dumps(definition["parameter_extractor"]),
                 _json_dumps(definition["steps"]),
+                _json_dumps(definition["script"]),
                 _json_dumps(definition["guards"]),
                 _json_dumps(definition["fallback_policy"]),
                 _json_dumps(definition["tests"]),
@@ -4252,7 +4448,17 @@ async def _update_skill_to_type(skill_id: str, target_type: str, reason: str) ->
         next_version = int(row["current_version"]) + 1
         pattern_id = current["pattern_id"]
         definition = await _skill_definition_from_pattern(pattern_id, target_type)
-        definition = _attach_generated_script_to_definition(definition, skill_id)
+        definition["script"] = {
+            "format": "cyrene.parameterized-tool-script",
+            "version": next_version,
+            "name": definition["name"],
+            "description": definition["description"],
+            "parameters": definition["input_schema"],
+            "steps": definition["steps"],
+            "execution": {"stop_on_failure": True, "record_run": True, "suppress_relearning": True},
+            "risk": {"level": definition["risk_level"], "requires_runtime_approval": definition["risk_level"] == "high"},
+            "source_turn_ids": definition["created_from"]["turn_list"],
+        }
         definition["status"] = "shadow"
         definition["tests"] = current["tests"]
         # Validation counters apply to one executable definition.  Carrying
@@ -4273,7 +4479,7 @@ async def _update_skill_to_type(skill_id: str, target_type: str, reason: str) ->
             UPDATE learned_skills
             SET name = ?, description = ?, current_version = ?, status = 'shadow', skill_type = ?,
                 risk_level = ?, requires_llm = ?, trigger_json = ?, input_schema_json = ?,
-                parameter_extractor_json = ?, steps_json = ?, guards_json = ?, fallback_policy_json = ?,
+                parameter_extractor_json = ?, steps_json = ?, script_json = ?, guards_json = ?, fallback_policy_json = ?,
                 tests_json = ?, editable_fields_json = ?, created_from_json = ?,
                 run_statistics_json = ?, updated_at = ?
             WHERE skill_id = ?
@@ -4289,6 +4495,7 @@ async def _update_skill_to_type(skill_id: str, target_type: str, reason: str) ->
                 _json_dumps(definition["input_schema"]),
                 _json_dumps(definition["parameter_extractor"]),
                 _json_dumps(definition["steps"]),
+                _json_dumps(definition["script"]),
                 _json_dumps(definition["guards"]),
                 _json_dumps(definition["fallback_policy"]),
                 _json_dumps(definition["tests"]),
@@ -4402,6 +4609,14 @@ async def delete_learned_skill(skill_id: str) -> bool:
         await conn.execute("DELETE FROM learned_skill_patches WHERE skill_id = ?", (skill_id,))
         await conn.execute("DELETE FROM learned_skill_runs WHERE skill_id = ?", (skill_id,))
         await conn.execute("DELETE FROM learned_skill_versions WHERE skill_id = ?", (skill_id,))
+        await conn.execute(
+            """
+            UPDATE behavior_skill_candidates
+            SET status = 'dismissed', linked_skill_id = '', user_decision = 'skill_deleted', updated_at = ?
+            WHERE linked_skill_id = ?
+            """,
+            (_now_iso(), skill_id),
+        )
         await conn.execute("DELETE FROM learned_skills WHERE skill_id = ?", (skill_id,))
         await conn.commit()
     return True
@@ -4615,6 +4830,7 @@ async def list_learned_skills(project_id: str = "") -> list[dict[str, Any]]:
                 "trigger": trigger,
                 "input_schema": definition["input_schema"],
                 "steps": definition["steps"],
+                "script": definition.get("script") or {},
                 "run_statistics": stats,
                 "shadow_validation_count": shadow_validation_count,
                 "actual_usage_count": actual_usage_count,
@@ -5294,12 +5510,31 @@ async def _persist_skill_version(
             current_row["run_statistics_json"], _default_skill_stats()
         ),
     }
+    script = _clone_json_value(persisted.get("script") or {})
+    if str(script.get("format") or "") != "cyrene.parameterized-tool-script":
+        script = {
+            "format": "cyrene.parameterized-tool-script",
+            "execution": {"stop_on_failure": True, "record_run": True, "suppress_relearning": True},
+            "source_turn_ids": (persisted.get("created_from") or {}).get("turn_list") or [],
+        }
+    script.update({
+        "version": next_version,
+        "name": str(persisted.get("name") or ""),
+        "description": str(persisted.get("description") or ""),
+        "parameters": persisted.get("input_schema") or [],
+        "steps": persisted.get("steps") or [],
+        "risk": {
+            "level": str(persisted.get("risk_level") or "none"),
+            "requires_runtime_approval": str(persisted.get("risk_level") or "none") == "high",
+        },
+    })
+    persisted["script"] = script
     await conn.execute(
         """
         UPDATE learned_skills
         SET name = ?, description = ?, current_version = ?, status = ?, skill_type = ?, risk_level = ?,
             requires_llm = ?, trigger_json = ?, input_schema_json = ?, parameter_extractor_json = ?,
-            steps_json = ?, guards_json = ?, fallback_policy_json = ?, tests_json = ?, editable_fields_json = ?,
+            steps_json = ?, script_json = ?, guards_json = ?, fallback_policy_json = ?, tests_json = ?, editable_fields_json = ?,
             created_from_json = ?, run_statistics_json = ?, updated_at = ?
         WHERE skill_id = ?
         """,
@@ -5315,6 +5550,7 @@ async def _persist_skill_version(
             _json_dumps(persisted.get("input_schema") or []),
             _json_dumps(persisted.get("parameter_extractor") or {}),
             _json_dumps(persisted.get("steps") or []),
+            _json_dumps(script),
             _json_dumps(persisted.get("guards") or {}),
             _json_dumps(persisted.get("fallback_policy") or {}),
             _json_dumps(persisted.get("tests") or []),
@@ -6346,6 +6582,397 @@ def _normalize_learning_decision(raw_decision: Any) -> str:
     return "skip"
 
 
+def _candidate_bucket_key(chain: list[dict[str, Any]]) -> str:
+    """Return a cheap structural bucket for potentially repeated workflows."""
+    runs: list[dict[str, Any]] = []
+    for item in chain:
+        tool = str(item.get("tool") or "")
+        if not tool or tool in _INTERNAL_TOOLS or tool in _TRIVIAL_SKILL_TOOLS:
+            continue
+        args = item.get("args") if isinstance(item.get("args"), dict) else {}
+        shape = {
+            "tool": tool,
+            "keys": sorted(str(key) for key in args.keys()),
+            "families": {str(key): _arg_value_family(value) for key, value in sorted(args.items())},
+        }
+        if runs and runs[-1]["tool"] == tool and runs[-1]["keys"] == shape["keys"]:
+            runs[-1]["repeated"] = True
+        else:
+            shape["repeated"] = False
+            runs.append(shape)
+    payload = _json_dumps(runs)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+async def _candidate_evidence_for_turn(turn_id: str) -> dict[str, Any] | None:
+    async with _conn() as conn:
+        cursor = await conn.execute("SELECT * FROM behavior_turns WHERE turn_id = ?", (turn_id,))
+        row = await cursor.fetchone()
+    if row is None or str(row["outcome_status"] or "") != "success":
+        return None
+    turn = dict(row)
+    metadata = _json_loads(turn.get("metadata_json"), {})
+    message = str(turn.get("user_message") or "").strip()
+    if bool(metadata.get("system_initiated")) or any(message.startswith(prefix) for prefix in _INTERNAL_LEARNING_MESSAGE_PREFIXES):
+        return None
+    chain_record = await _load_tool_chain_for_turn(turn_id)
+    meaningful = [
+        item for item in (chain_record.get("chain") or [])
+        if str(item.get("source") or "") == "agent"
+        and str(item.get("tool") or "")
+        and str(item.get("tool") or "") not in _INTERNAL_TOOLS
+        and str(item.get("tool") or "") not in _TRIVIAL_SKILL_TOOLS
+        and bool(item.get("success", True))
+    ]
+    tools = [str(item.get("tool") or "") for item in meaningful]
+    if len(meaningful) < _MIN_SKILL_CHAIN_STEPS or len(set(tools)) < _MIN_SKILL_CHAIN_STEPS:
+        return None
+    return {
+        "turn_id": turn_id,
+        "project_id": str(turn.get("project_id") or ""),
+        "project_key": str(turn.get("project_key") or ""),
+        "user_message": message,
+        "context_summary": str(turn.get("context_summary") or ""),
+        "chain": meaningful,
+        "bucket_key": _candidate_bucket_key(meaningful),
+    }
+
+
+async def _candidate_turn_examples(candidate_id: str) -> list[dict[str, Any]]:
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            """
+            SELECT t.turn_id, t.user_message, t.context_summary
+            FROM behavior_skill_candidate_turns ct
+            JOIN behavior_turns t ON t.turn_id = ct.turn_id
+            WHERE ct.candidate_id = ?
+            ORDER BY ct.occurrence_index ASC
+            """,
+            (candidate_id,),
+        )
+        rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def _candidate_matches(candidate_id: str, evidence: dict[str, Any]) -> bool:
+    examples = await _candidate_turn_examples(candidate_id)
+    incoming = _normalize_whitespace(str(evidence.get("user_message") or "")).lower()
+    if incoming and any(_normalize_whitespace(str(item.get("user_message") or "")).lower() == incoming for item in examples):
+        return True
+    prompt = f"""Decide whether a completed agent workflow belongs to the same reusable user workflow as the examples.
+
+Return JSON only:
+{{"same_workflow": true|false, "confidence": 0-1, "reason": "short reason"}}
+
+Existing examples:
+{json.dumps([item.get('user_message') for item in examples[:4]], ensure_ascii=False, indent=2)}
+
+New user request:
+{evidence.get('user_message', '')}
+
+New tool chain:
+{json.dumps([{"tool": item.get("tool"), "args": item.get("args") or {}} for item in evidence.get("chain") or []], ensure_ascii=False, indent=2)[:8000]}
+
+Require the same user goal, not merely the same tools.
+"""
+    result = await _call_llm_json(prompt, caller="skill_candidate_matcher")
+    return bool(result.get("same_workflow")) and float(result.get("confidence") or 0) >= 0.65
+
+
+def _candidate_fallback_name(message: str) -> str:
+    text = _normalize_whitespace(message)
+    text = re.sub(r"\[[^\]]+\]", "", text).strip()
+    return _sanitize_skill_name(text[:24] or "重复工具流程")
+
+
+async def _build_candidate_script(candidate_id: str) -> dict[str, Any]:
+    examples = await _candidate_turn_examples(candidate_id)
+    turn_ids = [str(item.get("turn_id") or "") for item in examples]
+    steps, input_schema = await _derive_parameter_templates(turn_ids)
+    messages = [str(item.get("user_message") or "") for item in examples[:5]]
+    prompt = f"""Name one reusable parameterized tool workflow.
+Return JSON only: {{"name": "short Chinese name", "description": "one Chinese sentence"}}.
+Do not mention internal tool names.
+
+User requests:
+{json.dumps(messages, ensure_ascii=False, indent=2)}
+"""
+    identity = await _call_llm_json(prompt, caller="skill_candidate_synthesizer")
+    name = _sanitize_skill_name(str(identity.get("name") or _candidate_fallback_name(messages[0] if messages else "")))
+    description = _sanitize_skill_description(str(identity.get("description") or (messages[0] if messages else "重复工具调用生成的参数化流程。")))
+    risk_level = _infer_skill_risk_level(steps)
+    return {
+        "format": "cyrene.parameterized-tool-script",
+        "version": 1,
+        "name": name,
+        "description": description,
+        "parameters": input_schema,
+        "steps": steps,
+        "execution": {
+            "stop_on_failure": True,
+            "record_run": True,
+            "suppress_relearning": True,
+        },
+        "risk": {
+            "level": risk_level,
+            "requires_runtime_approval": risk_level == "high",
+        },
+        "source_turn_ids": turn_ids[:_MAX_PATTERN_EXAMPLES],
+    }
+
+
+async def _refresh_candidate_script(candidate_id: str) -> dict[str, Any]:
+    script = await _build_candidate_script(candidate_id)
+    async with _conn() as conn:
+        await conn.execute(
+            """
+            UPDATE behavior_skill_candidates
+            SET name = ?, description = ?, script_json = ?, risk_level = ?,
+                last_evaluated_count = occurrence_count, updated_at = ?
+            WHERE candidate_id = ?
+            """,
+            (
+                script["name"],
+                script["description"],
+                _json_dumps(script),
+                str((script.get("risk") or {}).get("level") or "none"),
+                _now_iso(),
+                candidate_id,
+            ),
+        )
+        await conn.commit()
+    return script
+
+
+async def _create_skill_from_candidate(candidate_id: str, *, auto: bool) -> str | None:
+    async with _conn() as conn:
+        cursor = await conn.execute("SELECT * FROM behavior_skill_candidates WHERE candidate_id = ?", (candidate_id,))
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    candidate = dict(row)
+    if str(candidate.get("linked_skill_id") or ""):
+        return str(candidate["linked_skill_id"])
+    script = _json_loads(candidate.get("script_json"), {})
+    if not script:
+        script = await _refresh_candidate_script(candidate_id)
+    steps = script.get("steps") or []
+    if not _has_skillworthy_steps(steps):
+        return None
+    now = _now_iso()
+    skill_id = _new_id("learned_skill")
+    examples = await _candidate_turn_examples(candidate_id)
+    async with _conn() as conn:
+        name = await _unique_skill_name(conn, str(script.get("name") or candidate.get("name") or "重复工具流程"))
+        definition = {
+            "skill_id": skill_id,
+            "project_id": str(candidate.get("project_id") or ""),
+            "project_key": str(candidate.get("project_key") or ""),
+            "name": name,
+            "description": str(script.get("description") or candidate.get("description") or ""),
+            "version": 1,
+            "status": "active",
+            "skill_type": "parameterized" if script.get("parameters") else "workflow",
+            "risk_level": str((script.get("risk") or {}).get("level") or "none"),
+            "requires_llm": False,
+            "trigger": {"positive_examples": [item.get("user_message") for item in examples]},
+            "input_schema": script.get("parameters") or [],
+            "parameter_extractor": {"mode": "agent_provided", "llm_fallback": False},
+            "steps": steps,
+            "script": script,
+            "guards": {"risk_level": str((script.get("risk") or {}).get("level") or "none")},
+            "fallback_policy": {"on_step_failure": "fallback_to_agent", "on_missing_args": "fallback_to_agent"},
+            "tests": [],
+            "editable_fields": ["name", "description", "input_schema", "steps", "guards"],
+            "created_from": {"candidate_id": candidate_id, "turn_list": script.get("source_turn_ids") or []},
+            "run_statistics": _default_skill_stats(),
+            "pattern_id": "",
+            "created_at": now,
+            "updated_at": now,
+        }
+        await conn.execute(
+            """
+            INSERT INTO learned_skills
+            (skill_id, project_id, project_key, name, description, current_version, status, skill_type, risk_level, requires_llm,
+             trigger_json, input_schema_json, parameter_extractor_json, steps_json, script_json, guards_json, fallback_policy_json,
+             tests_json, editable_fields_json, created_from_json, run_statistics_json, pattern_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, 'active', ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, '', ?, ?)
+            """,
+            (
+                skill_id, definition["project_id"], definition["project_key"], name, definition["description"],
+                definition["skill_type"], definition["risk_level"], _json_dumps(definition["trigger"]),
+                _json_dumps(definition["input_schema"]), _json_dumps(definition["parameter_extractor"]),
+                _json_dumps(steps), _json_dumps(script), _json_dumps(definition["guards"]),
+                _json_dumps(definition["fallback_policy"]), _json_dumps(definition["editable_fields"]),
+                _json_dumps(definition["created_from"]), _json_dumps(definition["run_statistics"]), now, now,
+            ),
+        )
+        await _save_skill_version(
+            conn=conn, skill_id=skill_id, version=1, parent_version=None, definition=definition,
+            change_type="auto_candidate" if auto else "user_candidate",
+            change_summary="Automatically learned on the third occurrence." if auto else "User accepted on the second occurrence.",
+        )
+        await conn.execute(
+            """
+            UPDATE behavior_skill_candidates
+            SET status = ?, linked_skill_id = ?, user_decision = ?, updated_at = ?
+            WHERE candidate_id = ?
+            """,
+            ("auto_learned" if auto else "accepted", skill_id, "auto" if auto else "learn_now", now, candidate_id),
+        )
+        await conn.commit()
+    return skill_id
+
+
+async def _record_candidate_occurrence(evidence: dict[str, Any]) -> dict[str, Any]:
+    async with _conn() as conn:
+        cursor = await conn.execute(
+            """
+            SELECT c.*
+            FROM behavior_skill_candidates c
+            WHERE c.project_id = ? AND c.bucket_key = ?
+            ORDER BY c.updated_at DESC
+            """,
+            (evidence["project_id"], evidence["bucket_key"]),
+        )
+        possible = [dict(row) for row in await cursor.fetchall()]
+    matched: dict[str, Any] | None = None
+    for candidate in possible:
+        if await _candidate_matches(str(candidate["candidate_id"]), evidence):
+            matched = candidate
+            break
+    now = _now_iso()
+    if matched is None:
+        candidate_id = _new_id("candidate")
+        async with _conn() as conn:
+            await conn.execute(
+                """
+                INSERT INTO behavior_skill_candidates
+                (candidate_id, project_id, project_key, bucket_key, status, occurrence_count,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'observing', 1, ?, ?)
+                """,
+                (candidate_id, evidence["project_id"], evidence["project_key"], evidence["bucket_key"], now, now),
+            )
+            await conn.execute(
+                """
+                INSERT INTO behavior_skill_candidate_turns
+                (candidate_id, turn_id, occurrence_index, created_at)
+                VALUES (?, ?, 1, ?)
+                """,
+                (candidate_id, evidence["turn_id"], now),
+            )
+            await conn.commit()
+        return {"candidate_id": candidate_id, "occurrence_count": 1, "status": "observing", "created": True}
+    candidate_id = str(matched["candidate_id"])
+    async with _conn() as conn:
+        cursor = await conn.execute("SELECT 1 FROM behavior_skill_candidate_turns WHERE turn_id = ?", (evidence["turn_id"],))
+        if await cursor.fetchone() is not None:
+            return {"candidate_id": candidate_id, "occurrence_count": int(matched["occurrence_count"]), "status": str(matched["status"]), "created": False}
+        count = int(matched["occurrence_count"] or 0) + 1
+        await conn.execute(
+            "INSERT INTO behavior_skill_candidate_turns (candidate_id, turn_id, occurrence_index, created_at) VALUES (?, ?, ?, ?)",
+            (candidate_id, evidence["turn_id"], count, now),
+        )
+        next_status = str(matched["status"] or "observing")
+        if count == _CANDIDATE_USER_DECISION_COUNT and next_status == "observing":
+            next_status = "awaiting_user"
+        await conn.execute(
+            "UPDATE behavior_skill_candidates SET occurrence_count = ?, status = ?, updated_at = ? WHERE candidate_id = ?",
+            (count, next_status, now, candidate_id),
+        )
+        await conn.commit()
+    if count == _CANDIDATE_USER_DECISION_COUNT:
+        await _refresh_candidate_script(candidate_id)
+    if count >= _CANDIDATE_AUTO_LEARN_COUNT and str(matched.get("status") or "") not in {"dismissed", "accepted", "auto_learned"}:
+        await _refresh_candidate_script(candidate_id)
+        skill_id = await _create_skill_from_candidate(candidate_id, auto=True)
+        return {
+            "candidate_id": candidate_id,
+            "occurrence_count": count,
+            "status": "auto_learned",
+            "skill_id": skill_id,
+            "created": False,
+            "auto_created": bool(skill_id),
+        }
+    return {"candidate_id": candidate_id, "occurrence_count": count, "status": next_status, "created": False}
+
+
+async def list_skill_candidates(project_id: str = "", status: str = "all") -> list[dict[str, Any]]:
+    async with _conn() as conn:
+        pid = str(project_id or "").strip()
+        clauses: list[str] = []
+        params: list[Any] = []
+        if pid:
+            clauses.append("project_id = ?")
+            params.append(pid)
+        if status != "all":
+            clauses.append("status = ?")
+            params.append(status)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        cursor = await conn.execute(f"SELECT * FROM behavior_skill_candidates{where} ORDER BY updated_at DESC", tuple(params))
+        rows = await cursor.fetchall()
+        candidate_ids = [str(row["candidate_id"]) for row in rows]
+        turn_ids_by_candidate: dict[str, list[str]] = defaultdict(list)
+        if candidate_ids:
+            placeholders = ",".join("?" for _ in candidate_ids)
+            cursor = await conn.execute(
+                f"""
+                SELECT candidate_id, turn_id
+                FROM behavior_skill_candidate_turns
+                WHERE candidate_id IN ({placeholders})
+                ORDER BY occurrence_index ASC
+                """,
+                tuple(candidate_ids),
+            )
+            for turn_row in await cursor.fetchall():
+                turn_ids_by_candidate[str(turn_row["candidate_id"])].append(str(turn_row["turn_id"]))
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        result.append({
+            "id": str(item.get("candidate_id") or ""),
+            "candidate_id": str(item.get("candidate_id") or ""),
+            "project_id": str(item.get("project_id") or ""),
+            "status": str(item.get("status") or ""),
+            "occurrence_count": int(item.get("occurrence_count") or 0),
+            "name": str(item.get("name") or ""),
+            "description": str(item.get("description") or ""),
+            "script": _json_loads(item.get("script_json"), {}),
+            "risk_level": str(item.get("risk_level") or "none"),
+            "linked_skill_id": str(item.get("linked_skill_id") or ""),
+            "user_decision": str(item.get("user_decision") or ""),
+            "turn_ids": turn_ids_by_candidate.get(str(item.get("candidate_id") or ""), []),
+            "created_at": str(item.get("created_at") or ""),
+            "updated_at": str(item.get("updated_at") or ""),
+        })
+    return result
+
+
+async def decide_skill_candidate(candidate_id: str, decision: str) -> dict[str, Any]:
+    normalized = str(decision or "").strip().lower()
+    if normalized not in {"learn_now", "defer", "dismiss"}:
+        return {"ok": False, "error": "decision must be learn_now, defer, or dismiss"}
+    async with _conn() as conn:
+        cursor = await conn.execute("SELECT * FROM behavior_skill_candidates WHERE candidate_id = ?", (candidate_id,))
+        row = await cursor.fetchone()
+    if row is None:
+        return {"ok": False, "error": "candidate not found"}
+    if normalized == "learn_now":
+        if not _json_loads(dict(row).get("script_json"), {}):
+            await _refresh_candidate_script(candidate_id)
+        skill_id = await _create_skill_from_candidate(candidate_id, auto=False)
+        return {"ok": bool(skill_id), "candidate_id": candidate_id, "skill_id": skill_id or "", "status": "accepted"}
+    next_status = "waiting_third" if normalized == "defer" else "dismissed"
+    async with _conn() as conn:
+        await conn.execute(
+            "UPDATE behavior_skill_candidates SET status = ?, user_decision = ?, updated_at = ? WHERE candidate_id = ?",
+            (next_status, normalized, _now_iso(), candidate_id),
+        )
+        await conn.commit()
+    return {"ok": True, "candidate_id": candidate_id, "status": next_status}
+
+
 def _target_type_from_review(review: dict[str, Any], stats: dict[str, Any], prototype: dict[str, Any]) -> str:
     proposed = review.get("proposed_skill") if isinstance(review.get("proposed_skill"), dict) else {}
     target_type = str(proposed.get("skill_type") or "").strip()
@@ -6620,6 +7247,9 @@ Tool chain:
 def _fresh_learning_stats() -> dict[str, int]:
     return {
         "processed_turns": 0,
+        "candidates_created": 0,
+        "candidates_awaiting_user": 0,
+        "candidates_auto_learned": 0,
         "merged_patterns": 0,
         "new_patterns": 0,
         "skills_created": 0,
@@ -6685,10 +7315,10 @@ async def _process_single_turn(
     update_reason: str = "",
     allow_single_evidence: bool = False,
 ) -> bool:
-    """Run the fingerprint→merge→review→promote pipeline on one turn, mutating *stats* in place.
+    """Record one completed turn in the three-occurrence candidate state machine.
 
-    Returns True if a fingerprint was found and processing ran; False otherwise.
-    Always marks the turn as processed via DB so it is not re-scanned.
+    Returns True once the turn has been scanned, including turns that are not
+    reusable multi-tool evidence. Always marks the turn as processed.
 
     NOTE: Caller MUST hold ``_get_process_lock()`` to prevent concurrent
     processing of the same turn by the background tick or other callers.
@@ -6711,91 +7341,35 @@ async def _process_single_turn(
             )
             await conn.commit()
 
-    fingerprint = await build_turn_fingerprint(turn_id)
-    if not fingerprint:
+    # The simplified learner records only real, successful multi-tool chains.
+    # Structural bucketing is cheap; semantic comparison happens only when a
+    # structurally similar chain is seen again.
+    await _rebuild_tool_chain_for_turn(turn_id)
+    evidence = await _candidate_evidence_for_turn(turn_id)
+    if not evidence:
         async with _conn() as conn:
             await conn.execute(
                 "UPDATE behavior_turns SET processed_status = 1, updated_at = ? WHERE turn_id = ?",
                 (_now_iso(), turn_id),
             )
             await conn.commit()
-        return False
+        return True
 
-    scope = await _project_scope_for_turn(turn_id)
-    before_skills = {item["id"]: item for item in await list_learned_skills(scope["project_id"])}
-    pattern_id, merged = await _merge_turn_into_pattern(turn_id, fingerprint)
-    review = await _learning_agent_review_turn(turn_id, fingerprint, pattern_id)
-    stats["learning_reviews"] += 1
-
-    review_decision = str(review.get("decision") or "")
-    target_pattern_id = str(review.get("target_pattern_id") or "") or pattern_id
-
-    if review_decision == "merge":
-        if target_pattern_id != pattern_id and await _merge_pattern_into(target_pattern_id, pattern_id):
-            stats["candidate_merges"] += 1
-            pattern_id = target_pattern_id
-        else:
-            stats["learning_skipped"] += 1
-    elif review_decision == "duplicate":
-        target_skill_id = str(review.get("target_skill_id") or "")
-        target_skill = await get_learned_skill(target_skill_id) if target_skill_id else None
-        if target_skill is not None and str(target_skill.get("pattern_id") or "") == pattern_id:
-            review_decision = "promote"
-        else:
-            stats["learning_duplicates"] += 1
-    elif review_decision == "skip":
-        stats["learning_skipped"] += 1
-
-    tracked_created = False
-    if review_decision == "promote":
-        if target_pattern_id != pattern_id:
-            target_summary = await _pattern_summary_for_learning(target_pattern_id)
-            if target_summary.get("project_id") == scope["project_id"]:
-                pattern_id = target_pattern_id
-        # Automatic learning must still satisfy the evidence threshold inside
-        # _create_skill.  ``force=True`` is reserved for the explicit
-        # user-facing “Learn as Skill” action; otherwise one completed turn
-        # can be promoted directly from an optimistic model decision.
-        skill_id = await _create_skill(pattern_id, force=allow_single_evidence)
-        if skill_id:
-            tracked_created = skill_id not in before_skills
-            stats["agent_created_skills"] += 1 if tracked_created else 0
-            stats["candidate_promotions"] += 1
-            if tracked_created:
+    candidate_result = await _record_candidate_occurrence(evidence)
+    if candidate_result.get("created"):
+        stats["candidates_created"] += 1
+    if str(candidate_result.get("status") or "") == "awaiting_user":
+        stats["candidates_awaiting_user"] += 1
+    if bool(candidate_result.get("auto_created")):
+        stats["candidates_auto_learned"] += 1
+        if candidate_result.get("skill_id"):
+            stats["skills_created"] += 1
+    if allow_single_evidence:
+        candidate_id = str(candidate_result.get("candidate_id") or "")
+        if candidate_id:
+            decision_result = await decide_skill_candidate(candidate_id, "learn_now")
+            if decision_result.get("skill_id"):
                 stats["skills_created"] += 1
-            # Upgrade skill type first (may set status to "shadow"), then
-            # activate — the learning agent's review is authoritative, so we
-            # skip the shadow-validation pipeline entirely.
-            pattern_summary = await _pattern_summary_for_learning(pattern_id)
-            target_type = _target_type_from_review(
-                review,
-                {
-                    "effective_count": pattern_summary.get("effective_count") or 0,
-                    "frequency": pattern_summary.get("frequency") or 0,
-                },
-                pattern_summary.get("prototype_fingerprint") or {},
-            )
-            upgraded = False
-            if target_type in _SKILL_TYPE_ORDER and target_type != "draft":
-                upgraded = await _update_skill_to_type(
-                    skill_id,
-                    target_type,
-                    update_reason or "Project skill learning agent selected this reusable workflow.",
-                )
-            if upgraded:
-                await _backfill_shadow_validation(skill_id, exclude_turn_id=turn_id)
-            else:
-                current_skill = await get_learned_skill(skill_id)
-                if current_skill is not None and str(current_skill.get("status") or "") == "draft":
-                    await _activate_skill(skill_id, "Learning agent promoted this pattern to active skill.")
-
-    if merged:
-        stats["merged_patterns"] += 1
-    else:
-        stats["new_patterns"] += 1
-    await _validate_shadow_skills_for_turn(turn_id, fingerprint)
-    stats["shadow_checks"] += 1
-
     async with _conn() as conn:
         await conn.execute(
             "UPDATE behavior_turns SET processed_status = 1, updated_at = ? WHERE turn_id = ?",
@@ -6839,6 +7413,8 @@ async def rebuild_learning_state(*, reprocess_all_turns: bool = True, project_id
     pid = str(project_id or "").strip()
     async with _conn() as conn:
         if pid:
+            cursor = await conn.execute("SELECT candidate_id FROM behavior_skill_candidates WHERE project_id = ?", (pid,))
+            candidate_ids = [str(row["candidate_id"]) for row in await cursor.fetchall()]
             cursor = await conn.execute("SELECT skill_id FROM learned_skills WHERE project_id = ?", (pid,))
             skill_ids = [str(row["skill_id"]) for row in await cursor.fetchall()]
             cursor = await conn.execute("SELECT pattern_id FROM behavior_patterns WHERE project_id = ?", (pid,))
@@ -6850,12 +7426,17 @@ async def rebuild_learning_state(*, reprocess_all_turns: bool = True, project_id
                 await conn.execute("DELETE FROM learned_skill_versions WHERE skill_id = ?", (skill_id,))
             for pattern_id in pattern_ids:
                 await conn.execute("DELETE FROM behavior_pattern_turns WHERE pattern_id = ?", (pattern_id,))
+            for candidate_id in candidate_ids:
+                await conn.execute("DELETE FROM behavior_skill_candidate_turns WHERE candidate_id = ?", (candidate_id,))
+            await conn.execute("DELETE FROM behavior_skill_candidates WHERE project_id = ?", (pid,))
             await conn.execute("DELETE FROM learned_skills WHERE project_id = ?", (pid,))
             await conn.execute("DELETE FROM behavior_patterns WHERE project_id = ?", (pid,))
             await conn.execute("DELETE FROM behavior_learning_agent_reviews WHERE project_id = ?", (pid,))
             if reprocess_all_turns:
                 await conn.execute("UPDATE behavior_turns SET processed_status = 0, linked_skill_id = '' WHERE project_id = ?", (pid,))
         else:
+            await conn.execute("DELETE FROM behavior_skill_candidate_turns")
+            await conn.execute("DELETE FROM behavior_skill_candidates")
             await conn.execute("DELETE FROM behavior_pattern_turns")
             await conn.execute("DELETE FROM behavior_patterns")
             await conn.execute("DELETE FROM behavior_fingerprints")
@@ -6876,6 +7457,7 @@ async def rebuild_learning_state(*, reprocess_all_turns: bool = True, project_id
         **stats,
         "patterns": await list_patterns("all", pid),
         "learned_skills": learned,
+        "skill_candidates": await list_skill_candidates(pid),
     }
 
 
@@ -6883,6 +7465,8 @@ async def run_learned_skill(skill_id: str, param_overrides: dict[str, Any] | Non
     skill = await get_learned_skill(skill_id)
     if skill is None:
         return f"Learned skill '{skill_id}' not found."
+    if str(skill.get("risk_level") or "none") == "high" or _has_auto_replay_blocked_step(skill.get("steps") or []):
+        return f"Learned skill '{skill_id}' requires normal agent execution and fresh runtime approval."
     from cyrene.tools import _execute_tool
 
     context_summary = ""

@@ -88,17 +88,45 @@ var WorkbenchAPI = (function () {
       if (external) external.removeEventListener("abort", onExternalAbort);
     }
 
-    return fetch(url, init).then(function (resp) {
-      done();
-      return resp;
-    }, function (err) {
-      done();
+    function normalizeAbort(err) {
       if (err && err.name === "AbortError" && timedOut) {
         var e = new Error(apiT("workbenchApi.error.timeout", "Request timed out ({s}s)", { s: Math.round(timeoutMs / 1000) }));
         e.name = "TimeoutError";
         e.isTimeout = true;
-        throw e;
+        return e;
       }
+      return err;
+    }
+
+    return fetch(url, init).then(function (resp) {
+      // fetch() resolves when headers arrive. Keep the deadline active until
+      // the response body is actually consumed; otherwise response.json() can
+      // hang forever while the UI remains in its loading state.
+      try {
+        resp.__workbenchRequestDone = done;
+        resp.__workbenchNormalizeAbort = normalizeAbort;
+      } catch (e) {}
+      ["json", "text", "blob", "arrayBuffer", "formData"].forEach(function (name) {
+        if (typeof resp[name] !== "function") return;
+        var original = resp[name].bind(resp);
+        try {
+          resp[name] = function () {
+            return original.apply(null, arguments).then(function (value) {
+              done();
+              return value;
+            }, function (err) {
+              done();
+              throw normalizeAbort(err);
+            });
+          };
+        } catch (e) {}
+      });
+      if (!resp.body) done();
+      return resp;
+    }, function (err) {
+      done();
+      var normalized = normalizeAbort(err);
+      if (normalized !== err) throw normalized;
       // User-abort (AbortError) or a network error — propagate untouched so the
       // caller's cancel handling still sees a genuine AbortError.
       throw err;
@@ -114,7 +142,13 @@ var WorkbenchAPI = (function () {
     var withToast = opts.toast !== false; // default: surface failures to the user
     var prefix = opts.toastPrefix || "";
     return wbFetch(url, opts).then(function (response) {
-      return response.json().catch(function () { return {}; }).then(function (payload) {
+      return response.json().catch(function (err) {
+        if (typeof response.__workbenchNormalizeAbort === "function") {
+          err = response.__workbenchNormalizeAbort(err);
+        }
+        if (err && (err.name === "AbortError" || err.isTimeout)) throw err;
+        return {};
+      }).then(function (payload) {
         if (!response.ok) {
           var error = new Error((payload && (payload.error || payload.detail)) || ("HTTP " + response.status));
           error.status = response.status;
@@ -123,6 +157,12 @@ var WorkbenchAPI = (function () {
           throw error;
         }
         return payload;
+      }).then(function (payload) {
+        if (typeof response.__workbenchRequestDone === "function") response.__workbenchRequestDone();
+        return payload;
+      }, function (err) {
+        if (typeof response.__workbenchRequestDone === "function") response.__workbenchRequestDone();
+        throw err;
       });
     }).catch(function (err) {
       if (err && err.name === "AbortError") throw err; // silent user-cancel

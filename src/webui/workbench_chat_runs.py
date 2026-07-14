@@ -91,6 +91,7 @@ class ChatRun:
         ]
         self.subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
         self.done = asyncio.Event()
+        self.ready = asyncio.Event()
         self.task: asyncio.Task[Any] | None = None
         self.saw_reply_events = False
         self.status = "running"
@@ -111,7 +112,9 @@ class ChatRun:
         if str(event.get("type") or "") == "intermediate_message" and isinstance(event.get("message"), dict):
             try:
                 from webui.routes_workbench_chat import _persist_live_public_message
-                _persist_live_public_message(self.chat_id, event["message"])
+                await asyncio.to_thread(
+                    _persist_live_public_message, self.chat_id, event["message"]
+                )
             except Exception:
                 logger.exception("Failed to checkpoint intermediate chat message for %s", self.chat_id)
         self.seq += 1
@@ -206,7 +209,9 @@ class ChatRunManager:
         if existing is not None:
             return existing, False
 
-        run = ChatRun(chat_id, ack_event, max_buffer=self._max_buffer, db_path=self._db_path)
+        # Do not open SQLite while handling the HTTP request.  The driver
+        # attaches storage from a worker thread before invoking the runner.
+        run = ChatRun(chat_id, ack_event, max_buffer=self._max_buffer, db_path="")
         self.runs[chat_id] = run
 
         if stream:
@@ -237,17 +242,36 @@ class ChatRunManager:
 
     async def _drive(self, run: ChatRun, runner: Runner) -> None:
         try:
+            if self._db_path:
+                await asyncio.to_thread(run.inbox.configure_storage, self._db_path)
+            run.ready.set()
             await runner(run)
         except asyncio.CancelledError:
             run.status = "cancelled"
             if not run.termination_reason:
                 run.termination_reason = "cancelled"
             raise
-        except Exception:
+        except Exception as exc:
             logger.exception("Chat run driver crashed for %s", run.chat_id)
             run.status = "error"
             run.termination_reason = "driver_error"
+            run.outcome = {"kind": "error", "exc": exc}
+            try:
+                await run.publish({
+                    "type": "error",
+                    "error": "chat_run_driver_failed",
+                    "message": "The agent run stopped unexpectedly. Please retry.",
+                })
+            except Exception:
+                logger.exception("Failed to publish chat driver error for %s", run.chat_id)
+            try:
+                from webui.routes_workbench_chat import _settle_chat_running_status
+
+                await asyncio.to_thread(_settle_chat_running_status, run.chat_id)
+            except Exception:
+                logger.exception("Failed to settle crashed chat %s", run.chat_id)
         finally:
+            run.ready.set()
             outcome_kind = str((run.outcome or {}).get("kind") or "")
             # Close the guidance admission window before the first await in
             # finalization. This prevents an error-path guidance request from
@@ -261,7 +285,12 @@ class ChatRunManager:
                     run.termination_reason = "awaiting_user"
                 else:
                     run.termination_reason = "completed"
-            await run.inbox.close(termination_reason=run.termination_reason)
+            try:
+                await run.inbox.close(termination_reason=run.termination_reason)
+            except Exception:
+                # Cleanup must never prevent ``done`` from waking streams and
+                # non-streaming callers.
+                logger.exception("Failed to close chat inbox for %s", run.chat_id)
             run.status = "done" if run.status in {"running", "finishing"} else run.status
             run.done.set()
             # Nudge attached streams so they re-check ``done`` immediately rather

@@ -43,6 +43,14 @@ async def list_tool_chains(project_id: str | list[str] = "", limit: int = 80) ->
     return await _behavior.list_tool_chains(project_id, limit)
 
 
+async def list_skill_candidates(project_id: str = "", status: str = "all") -> list[dict[str, Any]]:
+    return await _behavior.list_skill_candidates(project_id, status)
+
+
+async def decide_skill_candidate(candidate_id: str, decision: str) -> dict[str, Any]:
+    return await _behavior.decide_skill_candidate(candidate_id, decision)
+
+
 async def get_learned_skill(skill_id: str) -> dict[str, Any] | None:
     return await _behavior.get_learned_skill(skill_id)
 

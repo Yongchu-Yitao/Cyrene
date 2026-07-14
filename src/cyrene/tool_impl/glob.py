@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
 from cyrene import tool_legacy as _legacy
 
 TOOL_NAME = 'Glob'
 TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL_NAME)
+
+_IGNORED_PARTS = {".git", ".hg", ".svn", ".venv", "node_modules", "__pycache__"}
+_SCAN_SECONDS = 20.0
+_MAX_CANDIDATES = 50_000
 
 
 async def _tool_glob(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
@@ -17,7 +23,24 @@ async def _tool_glob(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
     from cyrene.agent.state import active_workspace_dir
     pattern = str(args["pattern"])
     workspace = active_workspace_dir()
-    matches = sorted(str(path.relative_to(workspace)) for path in workspace.glob(pattern))
+    def scan() -> list[str]:
+        matches: list[str] = []
+        deadline = time.monotonic() + _SCAN_SECONDS
+        for index, path in enumerate(workspace.glob(pattern), start=1):
+            if index > _MAX_CANDIDATES or time.monotonic() >= deadline:
+                break
+            try:
+                relative = path.relative_to(workspace)
+            except ValueError:
+                continue
+            if any(part in _IGNORED_PARTS for part in relative.parts):
+                continue
+            matches.append(str(relative))
+            if len(matches) >= 200:
+                break
+        return sorted(matches)
+
+    matches = await asyncio.to_thread(scan)
     return "\n".join(matches[:200]) if matches else "No matches."
 
 

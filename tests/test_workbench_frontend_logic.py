@@ -425,8 +425,8 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "输入内容以引导正在运行的 Agent" in (
         root / "src" / "workbench-webui" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
-    assert "workbench-chat.js?v=0.6.7" in index
-    assert "workbench-i18n.js?v=0.6.7" in index
+    assert "workbench-chat.js?v=0.6.8" in index
+    assert "workbench-i18n.js?v=0.6.8" in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -823,7 +823,7 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
     assert "padding-inline: 8px;" in compact_tabs[0]
     assert "padding-inline: 2px;" in compact_tabs[1]
     assert "font-size: calc(12px * var(--wb-ui-font-scale, 1));" in compact_tabs[1]
-    assert "workbench.css?v=0.6.7" in index
+    assert "workbench.css?v=0.6.8" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -831,10 +831,10 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
     index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
 
-    nav_rule = styles.rsplit(".workbench-nav-button {", 1)[1].split("}", 1)[0]
+    nav_rule = styles.split("\n.workbench-nav-button {", 1)[1].split("}", 1)[0]
     nav_label_rule = styles.split(".workbench-nav-button > span:last-child {", 1)[1].split("}", 1)[0]
-    global_nav_rule = styles.rsplit(".workbench-global-nav {", 1)[1].split("}", 1)[0]
-    account_rule = styles.rsplit(".workbench-account {", 1)[1].split("}", 1)[0]
+    global_nav_rule = styles.split("\n.workbench-global-nav {", 1)[1].split("}", 1)[0]
+    account_rule = styles.split("\n.workbench-account {", 1)[1].split("}", 1)[0]
     account_meta_rule = styles.rsplit(".workbench-account-meta {", 1)[1].split("}", 1)[0]
 
     assert ".workbench-project-rail:focus-within" in styles
@@ -845,7 +845,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.6.7" in index
+    assert "workbench.css?v=0.6.8" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -860,6 +860,7 @@ def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
     project_card_rule = styles.split(collapsed_prefix + ".workbench-project-card {", 1)[1].split("}", 1)[0]
     nav_rule = styles.split(collapsed_prefix + ".workbench-nav-button {", 1)[1].split("}", 1)[0]
     account_rule = styles.split(collapsed_prefix + ".workbench-account {", 1)[1].split("}", 1)[0]
+    head_actions_rule = styles.split(collapsed_prefix + ".workbench-rail-head-actions {", 1)[1].split("}", 1)[0]
 
     # These offsets are relative to the rail's left edge, so entering the
     # non-hover state cannot center icons against the still-animating width.
@@ -868,6 +869,36 @@ def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
     assert "margin: 0 0 0 10px;" in nav_rule
     assert "justify-content: flex-start;" in account_rule
     assert "padding: 13px 0 13px 14px;" in account_rule
+    assert "margin-left: 0;" in head_actions_rule
+
+
+def test_workbench_narrow_window_forces_project_rail_into_stable_icon_strip():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+
+    title_rule = styles.split("\n.wb-rail-title {", 1)[1].split("}", 1)[0]
+    actions_rule = styles.split("\n.workbench-rail-head-actions {", 1)[1].split("}", 1)[0]
+    assert "position: absolute;" in title_rule
+    assert "left: 39px;" in title_rule
+    assert "transform: translate(-50%, -50%);" in title_rule
+    assert "margin-left: auto;" in actions_rule
+    compact = styles.split("@media (max-width: 1040px)", 1)[1].split("/* ── Light-mode", 1)[0]
+    assert "--wb-rail-w: 64px;" in compact
+    assert "--wb-rail-w-open: 250px;" in compact
+    assert ".workbench-add-btn > span:last-child" in compact
+    assert ".workbench-project-menu-btn" in compact
+    assert "width: 44px;" in compact
+    assert "overflow-x: hidden;" in compact
+    assert ".workbench-global-nav" in compact
+    assert "display: grid;" in compact
+    assert ".workbench-project-rail:hover" in compact
+    assert "width: var(--wb-rail-w-open);" in compact
+    assert "box-shadow: 18px 0 50px" in compact
+    hover_head = compact.split(".workbench-project-rail:hover .workbench-rail-head", 1)[1].split("}", 1)[0]
+    assert "justify-content: space-between;" in hover_head
+    assert "padding: 0 12px;" in hover_head
+    compact_actions = compact.split(".workbench-project-rail:not(:hover):not(:focus-within) .workbench-rail-head-actions", 1)[1].split("}", 1)[0]
+    assert "margin-left: 0;" in compact_actions
 
 
 def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
@@ -887,7 +918,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=0.6.7" in index
+    assert "settings-overlay.js?v=0.6.8" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -947,7 +978,9 @@ def test_electron_browser_user_events_are_recorded_for_learning():
     assert "browser:set-context" in main
     assert '"/api/browser/user-event"' in routes
     assert "record_browser_user_event" in routes
-    assert "process_unprocessed_turns" in routes
+    # Browser telemetry is persisted here; completed agent turns own the
+    # learning barrier so an event cannot race an incomplete tool chain.
+    assert "process_unprocessed_turns" not in routes
     assert "bridge.setContext({ sessionId: sessionId, roundId: rid })" in view
 
 
@@ -1024,7 +1057,7 @@ def test_workbench_context_picker_contains_long_workspace_paths():
     assert "text-overflow: ellipsis;" in text_rule
     assert "white-space: nowrap;" in text_rule
     assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=0.6.7" in index
+    assert "workbench-chat.js?v=0.6.8" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -1040,8 +1073,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=0.6.7" in index
-    assert "workbench.js?v=0.6.7" in index
+    assert "workbench-model.js?v=0.6.8" in index
+    assert "workbench.js?v=0.6.8" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -1062,6 +1095,51 @@ def test_workbench_plan_conflict_does_not_apply_client_fallback():
     assert 'err.code === "stale_plan_revision"' in source
     assert "rethrowPlanConflict(err);" in source
     assert "error.code = (payload && payload.code)" in api
+
+
+def test_workbench_api_timeout_covers_response_body_consumption():
+    root = Path(__file__).resolve().parent.parent
+    api = (root / "src" / "workbench-webui" / "workbench-api.jsx").read_text(encoding="utf-8")
+
+    assert "Keep the deadline active until" in api
+    assert "resp.__workbenchRequestDone = done" in api
+    assert "resp.__workbenchNormalizeAbort = normalizeAbort" in api
+    assert 'err.name === "AbortError" || err.isTimeout' in api
+
+
+def test_workbench_api_json_times_out_when_body_stalls_after_headers():
+    root = Path(__file__).resolve().parent.parent
+    api_path = root / "src" / "workbench-webui" / "workbench-api.jsx"
+    script = f"""
+const fs = require("fs");
+global.window = {{}};
+global.fetch = function (_url, init) {{
+  return Promise.resolve({{
+    ok: true,
+    status: 200,
+    body: {{}},
+    json: function () {{
+      return new Promise(function (_resolve, reject) {{
+        init.signal.addEventListener("abort", function () {{
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        }});
+      }});
+    }}
+  }});
+}};
+eval(fs.readFileSync({json.dumps(str(api_path))}, "utf8"));
+window.WorkbenchAPI.json("/slow-body", {{ timeout: 10, toast: false }}).then(
+  function () {{ process.stdout.write("unexpected success"); process.exit(1); }},
+  function (err) {{ process.stdout.write(JSON.stringify({{ name: err.name, isTimeout: err.isTimeout }})); }}
+);
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True, timeout=2
+    )
+
+    assert json.loads(completed.stdout) == {"name": "TimeoutError", "isTimeout": True}
 
 
 def test_workbench_init_plan_failure_shows_details_and_restart():
@@ -1114,7 +1192,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.models || p.primary_candidates || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=0.6.7" in index
+    assert "settings-overlay.js?v=0.6.8" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -1480,7 +1558,7 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=0.6.7" in index
+    assert "compiled/workbench-shortcuts.js?v=0.6.8" in index
 
 
 def test_workbench_about_related_actions_only_click_right_button():
@@ -1558,6 +1636,35 @@ def test_workbench_memory_history_tab_renders_events_not_hardcoded():
     assert "m.history" in source
     assert "historyEvents" in source
     assert "action_label" in source
+
+
+def test_workbench_skill_learning_uses_actionable_candidate_status_only():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    translations = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    assert 'activeCandidate ? h("div", { className: "wb-learning-review-pill "' in source
+    assert "candidateNextStepText(activeCandidate, t)" in source
+    assert 'activePanel === "learning" ? null : rail' in source
+    assert 'onExit: function () { setActivePanel(""); }' in source
+    assert "不是可复用的多工具流程" not in translations
+    assert '"memory.learning.noRepeatYet": "尚未发现重复"' in translations
+
+
+def test_workbench_skill_learning_has_small_screen_progressive_disclosure():
+    root = Path(__file__).resolve().parent.parent
+    css = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+
+    compact_three_column = css.split("@media (min-width: 761px) and (max-width: 980px)", 1)[1].split("@media", 1)[0]
+    assert ".wb-mem-page.learning-active > .wb-mem-detail" in compact_three_column
+    assert "display: flex;" in compact_three_column
+    assert "grid-template-columns: 220px minmax(280px, 1fr);" in compact_three_column
+    narrow_block = css.split("@media (max-width: 760px)", 1)[1].split("@media", 1)[0]
+    assert ".wb-mem-page.learning-active > .wb-mem-detail { display: none; }" in narrow_block
+    assert "@media (max-width: 1500px)" not in css
+    assert "@media (max-width: 1080px)" in css
+    assert "@media (max-width: 760px)" in css
+    assert "grid-template-rows: minmax(220px, 38%) minmax(0, 1fr);" in css
 
 
 def test_workbench_memory_related_uses_tag_and_content_matching_not_category_only():

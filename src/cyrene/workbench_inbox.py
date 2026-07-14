@@ -75,8 +75,8 @@ class WorkbenchAgentInbox:
     def _connect(self) -> sqlite3.Connection:
         path = Path(self.db_path).expanduser().resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(path), timeout=30)
-        conn.execute("PRAGMA busy_timeout = 30000")
+        conn = sqlite3.connect(str(path), timeout=5)
+        conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA journal_mode = WAL")
         return conn
 
@@ -157,6 +157,21 @@ class WorkbenchAgentInbox:
                 "CREATE INDEX IF NOT EXISTS idx_workbench_agent_run_events_run "
                 "ON workbench_agent_run_events(session_id, run_id, created_at)"
             )
+
+    def configure_storage(self, db_path: str) -> None:
+        """Attach durable storage and recover events from a worker thread.
+
+        ``ChatRunManager`` deliberately constructs an inbox without a database
+        path on the HTTP event loop, then calls this method through
+        ``asyncio.to_thread`` before the agent starts.  Direct callers keep the
+        existing eager-construction behavior.
+        """
+        if self.db_path:
+            return
+        self.db_path = str(db_path or "")
+        if self.db_path:
+            self._ensure_schema()
+            self._recover_pending_guidance()
 
     def _queue_length(self) -> int:
         return self._queue.qsize() + len(self._guidance) + len(self._pending_tool_results)
@@ -514,7 +529,7 @@ class WorkbenchAgentInbox:
             dedupe_key=f"guidance:{client_request_id}" if client_request_id else "",
         )
         if not event.get("duplicate"):
-            self._record_event(
+            self._record_event_background(
                 "guidance_queued",
                 payload={"event_id": event["event_id"], "client_request_id": client_request_id},
             )
@@ -530,7 +545,7 @@ class WorkbenchAgentInbox:
     ) -> None:
         started = time.perf_counter()
         submitted_at = self._tool_submitted_at.pop(tool_call_id, started)
-        self._record_event(
+        self._record_event_background(
             "tool_started", batch_id=batch_id, tool_call_id=tool_call_id,
             tool_name=tool_name,
             tool_queue_wait_ms=(started - submitted_at) * 1000,
@@ -596,7 +611,7 @@ class WorkbenchAgentInbox:
             raise RuntimeError("Workbench agent inbox is closed")
         batch_id = str(batch_id or f"batch_{uuid4().hex}")
         self._tool_submitted_at[tool_call_id] = time.perf_counter()
-        self._record_event(
+        self._record_event_background(
             "tool_submitted", batch_id=batch_id, tool_call_id=tool_call_id,
             tool_name=tool_name, payload=dict(metadata or {}),
         )
@@ -702,7 +717,7 @@ class WorkbenchAgentInbox:
         normalized = [self._normalize_batch_call(call) for call in calls]
         for call in normalized:
             self._tool_submitted_at[call.tool_call_id] = time.perf_counter()
-            self._record_event(
+            self._record_event_background(
                 "tool_submitted", batch_id=batch_id,
                 tool_call_id=call.tool_call_id, tool_name=call.tool_name,
                 payload={
@@ -934,6 +949,10 @@ class WorkbenchAgentInbox:
             # such tool prevent the Workbench chat run from settling forever.
             for task in pending:
                 task.cancel()
+            if pending:
+                cancelled, _still_pending = await asyncio.wait(pending, timeout=0.1)
+                if cancelled:
+                    await asyncio.gather(*cancelled, return_exceptions=True)
         self._tasks.clear()
         self._closed = True
         self._run_persistence_background(self._cancel_pending, self._termination_reason)
@@ -949,6 +968,18 @@ class WorkbenchAgentInbox:
         self._record_event_background(
             "run_terminated", termination_reason=self._termination_reason
         )
+        persistence = [
+            task for task in self._persistence_tasks
+            if task is not asyncio.current_task() and not task.done()
+        ]
+        if persistence:
+            done, pending = await asyncio.wait(persistence, timeout=2.0)
+            if done:
+                await asyncio.gather(*done, return_exceptions=True)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
 
 _workbench_agent_inbox: ContextVar[WorkbenchAgentInbox | None] = ContextVar(

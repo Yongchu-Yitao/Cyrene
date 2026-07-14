@@ -291,6 +291,84 @@ function Get-Snapshot($Payload, [bool]$InspectOnly) {
     return @{ ok = $true; nodes = @($nodes); truncated = $truncated }
 }
 
+function Invoke-BackgroundAction($Element, [string]$Action) {
+    if ($Action -eq 'press') {
+        $invoke = Try-Pattern $Element ([System.Windows.Automation.InvokePattern]::Pattern)
+        if ($null -ne $invoke) { $invoke.Invoke(); return 'Invoke' }
+        $legacy = Try-Pattern $Element ([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+        if ($null -ne $legacy) { $legacy.DoDefaultAction(); return 'LegacyIAccessible.DefaultAction' }
+    }
+    elseif ($Action -eq 'toggle') {
+        $toggle = Try-Pattern $Element ([System.Windows.Automation.TogglePattern]::Pattern)
+        if ($null -ne $toggle) { $toggle.Toggle(); return 'Toggle' }
+        $expand = Try-Pattern $Element ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+        if ($null -ne $expand) {
+            if ($expand.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) { $expand.Expand() } else { $expand.Collapse() }
+            return 'ExpandCollapse'
+        }
+    }
+    elseif ($Action -eq 'select') {
+        $selection = Try-Pattern $Element ([System.Windows.Automation.SelectionItemPattern]::Pattern)
+        if ($null -ne $selection) { $selection.Select(); return 'SelectionItem' }
+        $invoke = Try-Pattern $Element ([System.Windows.Automation.InvokePattern]::Pattern)
+        if ($null -ne $invoke) { $invoke.Invoke(); return 'Invoke' }
+    }
+    return $null
+}
+
+function Hit-Test($Payload) {
+    $target = $Payload.target
+    $point = Screen-Point $target ([pscustomobject]@{ coordinate_space = 'screen'; x = $Payload.point.x; y = $Payload.point.y }) 'x' 'y'
+    $preferred = @($Payload.preferredActions | ForEach-Object { ([string]$_).ToLowerInvariant() } | Where-Object { $_ -in @('press', 'select', 'toggle') })
+    if ($preferred.Count -eq 0) { throw 'preferredActions must contain press, select, or toggle.' }
+    $root = Get-Root $target
+    $queue = [System.Collections.Generic.Queue[object]]::new()
+    $queue.Enqueue(@($root, 0))
+    $visited = 0
+    $best = $null
+    $bestArea = [double]::PositiveInfinity
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    while ($queue.Count -gt 0 -and $visited -lt 80 -and $timer.ElapsedMilliseconds -lt 2500) {
+        $entry = $queue.Dequeue(); $element = $entry[0]; $depth = [int]$entry[1]
+        $visited += 1
+        try {
+            $node = Get-Node $element ''
+            $bounds = $node.bounds
+            $contains = $depth -eq 0 -or (
+                $bounds.width -gt 0 -and $bounds.height -gt 0 -and
+                $point.x -ge $bounds.x -and $point.y -ge $bounds.y -and
+                $point.x -lt ($bounds.x + $bounds.width) -and $point.y -lt ($bounds.y + $bounds.height)
+            )
+            if (-not $contains) { continue }
+            foreach ($action in $preferred) {
+                if ($node.actions -contains $action) {
+                    $area = [double]$bounds.width * [double]$bounds.height
+                    if ($area -lt $bestArea) { $best = @{ element = $element; node = $node; action = $action; depth = $depth }; $bestArea = $area }
+                    break
+                }
+            }
+            if ($depth -lt 12) {
+                foreach ($child in @(Get-Children $element)) { $queue.Enqueue(@($child, $depth + 1)) }
+            }
+        } catch {}
+    }
+    if ($null -eq $best) {
+        return @{ ok = $true; found = $false; diagnostics = @{ method = 'UIAutomation coordinate-pruned traversal'; point = $point; visited = $visited; treeScanUsed = $false; reason = 'no_supported_action' } }
+    }
+    $performed = $false; $nativeAction = [string]$best.node.nativeActions[0]
+    if ($Payload.perform -eq $true) {
+        $nativeAction = Invoke-BackgroundAction $best.element $best.action
+        if ([string]::IsNullOrWhiteSpace($nativeAction)) { return @{ ok = $true; found = $false; performed = $false; diagnostics = @{ method = 'UIAutomation'; reason = 'element_changed_or_action_unsupported'; point = $point } } }
+        $performed = $true
+    }
+    return @{
+        ok = $true; found = $true; performed = $performed; verified = $performed
+        action = $best.action; nativeAction = $nativeAction; role = $best.node.role; name = $best.node.name; bounds = $best.node.bounds
+        diagnostics = @{ method = $(if ($performed) { 'UIAutomation pattern action' } else { 'UIAutomation coordinate-pruned traversal' }); point = $point; visited = $visited; depth = $best.depth; backgroundSafe = $true; treeScanUsed = $false }
+        nextValidActions = @('call:wait', 'call:snapshot', 'disconnect')
+    }
+}
+
 function Focus-Target($Target) {
     $handle = Target-Handle $Target
     [void][CyreneWindowApi]::ShowWindowAsync($handle, 9)
@@ -466,6 +544,7 @@ try {
         'list_targets' { Result (Get-Targets $payload) }
         'snapshot' { Result (Get-Snapshot $payload $false) }
         'inspect' { Result (Get-Snapshot $payload $true) }
+        'hit_test' { Result (Hit-Test $payload) }
         'perform' { Result (Perform-Action $payload) }
         'focus' { Result (Focus-Target $payload.target) }
         default { Fail 'invalid_arguments' "Unknown operation: $($payload.operation)" }
