@@ -1009,6 +1009,8 @@ def test_workbench_chat_tool_trace_preserves_i18n_metadata():
     )[0]
     assert "if (!runtime.text) return null;" in live_message
     assert "function wbcRuntimeTimelineMessages(runtime)" in chat
+    assert "function wbcTraceDedupeKey(trace)" in chat
+    assert "activityTraceKeys.has(messageTraceKey)" in chat
     assert "runtimeActivity: activity" in chat
     assert "trace: hasLiveActivities ? []" in segment_adapter
     assert "Array.isArray(segment.progress) ? segment.progress" in segment_adapter
@@ -1049,9 +1051,9 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert "useWbcState(false)" in activity_card
     assert "useWbcState(0)" in activity_card
     assert 'setLockedHeight(cardRef.current.getBoundingClientRect().height)' in chat
-    assert 'var [lockedTraceCount, setLockedTraceCount] = useWbcState(0);' in chat
-    assert 'entries.length !== lockedTraceCount' in chat
     assert 'setLockedHeight(0);' in chat
+    assert 'else if (showReasoning)' in activity_card
+    assert "lockedTraceCount" not in activity_card
     assert 'style={lockedHeight ? { height: lockedHeight + "px" } : null}' in chat
     assert 'setShowReasoning(function (visible) { return !visible; });' in chat
     assert 'var hasReasoning = !!String(item.reasoning || "").trim();' in activity_card

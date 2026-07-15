@@ -376,6 +376,18 @@ function wbcRuntimeTimelineMessages(runtime) {
   return items;
 }
 
+function wbcTraceDedupeKey(trace) {
+  if (!Array.isArray(trace) || !trace.length) return "";
+  return JSON.stringify(trace.map(function (entry) {
+    var item = entry || {};
+    return [
+      String(item.tool || item.text || ""),
+      String(item.preview || ""),
+      String(item.kind || ""),
+    ];
+  }));
+}
+
 function wbcCurrentModel(chat, project, runtime, liveData) {
   var activeModel = String(runtime && runtime.activeModel || "").trim();
   if (activeModel) return activeModel;
@@ -2366,6 +2378,15 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   var durableMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   var runtimeTimeline = wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime));
   var messages = wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
+  var activityTraceKeys = new Set();
+  messages.forEach(function (message) {
+    if (!message || !(message.activityCard || message.runtimeActivity)) return;
+    var trace = message.runtimeActivity
+      ? message.runtimeActivity.progress
+      : message.trace;
+    var key = wbcTraceDedupeKey(trace);
+    if (key) activityTraceKeys.add(key);
+  });
   var isLegacy = !!(chat && chat.legacy);
   var lastAssistantId = "";
   var lastUserId = "";
@@ -2479,9 +2500,13 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
           if (isActiveQuestion) {
             return <WbcQuestionPrompt key={msg.id} pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} trace={msg.trace} />;
           }
+          var messageTraceKey = wbcTraceDedupeKey(msg.trace);
+          var visibleMessage = messageTraceKey && activityTraceKeys.has(messageTraceKey)
+            ? { ...msg, trace: [] }
+            : msg;
           return msg.role === "user"
-            ? <WbcUserMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onEditMessage={onEditMessage} canEdit={canEdit} onRetryMessage={canRetryUser ? onRetryMessage : null} />
-            : <WbcAssistantMessage key={msg.id} msg={msg} onOpenFile={onOpenFile} onRetryMessage={canRetryAssistant ? onRetryMessage : null} />;
+            ? <WbcUserMessage key={msg.id} msg={visibleMessage} onOpenFile={onOpenFile} onEditMessage={onEditMessage} canEdit={canEdit} onRetryMessage={canRetryUser ? onRetryMessage : null} />
+            : <WbcAssistantMessage key={msg.id} msg={visibleMessage} onOpenFile={onOpenFile} onRetryMessage={canRetryAssistant ? onRetryMessage : null} />;
         })}
         {runtime && <WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} />}
         {chat && chat.pendingQuestion && chat.pendingQuestion.id && !runtime && !messages.some(function (msg) {
@@ -3016,7 +3041,6 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
   var hasReasoning = !!String(item.reasoning || "").trim();
   var [showReasoning, setShowReasoning] = useWbcState(false);
   var [lockedHeight, setLockedHeight] = useWbcState(0);
-  var [lockedTraceCount, setLockedTraceCount] = useWbcState(0);
   var cardRef = useWbcRef(null);
   var reasoningRef = useWbcRef(null);
   function toggleReasoning() {
@@ -3024,12 +3048,11 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
     if (typeof window.getSelection === "function" && String(window.getSelection() || "")) return;
     if (!showReasoning && !lockedHeight && cardRef.current) {
       setLockedHeight(cardRef.current.getBoundingClientRect().height);
-      setLockedTraceCount(entries.length);
-    } else if (showReasoning && entries.length !== lockedTraceCount) {
-      // The card may finish more tools while its reasoning side is visible.
-      // The old compact lock would leave no room for the updated tool list.
+    } else if (showReasoning) {
+      // The lock exists only to keep the reasoning side the same size as the
+      // tool side. Returning to tools must always restore natural layout: the
+      // same number of rows can still change height after wrapping or resize.
       setLockedHeight(0);
-      setLockedTraceCount(entries.length);
     }
     setShowReasoning(function (visible) { return !visible; });
   }

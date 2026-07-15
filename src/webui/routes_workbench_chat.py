@@ -561,6 +561,10 @@ def _persist_live_public_message(chat_id: str, message: dict[str, Any]) -> None:
         return
     entry = dict(message)
     entry["intermediate"] = True
+    # Tool activity is owned by the separately timestamped activity card. Keep
+    # the stream event unchanged for reconnect fallback, but never checkpoint a
+    # second non-interactive copy on the visible message itself.
+    entry.pop("trace", None)
     _merge_chat_messages_chronologically(chat, [entry])
     chat["updatedAt"] = str(entry.get("createdAt") or chat.get("updatedAt") or _utc_now_iso())
     _write_chats_store(payload)
@@ -1473,6 +1477,20 @@ def _extract_exchange_timeline(
             timeline.append(pending)
         pending = None
 
+    def append_visible_message(message: dict[str, Any], idx: int) -> None:
+        entry = _make_reply_segment(
+            message,
+            [],
+            _exchange_usage(),
+            [],
+            fallback_id=_segment_fallback_id(message, idx),
+        )
+        # A provisional live checkpoint may already carry the legacy trace.
+        # Explicitly overwrite it during finalization; omitting this key would
+        # preserve the stale list when entries are merged by message id.
+        entry["trace"] = []
+        timeline.append(entry)
+
     def start_activity(message: dict[str, Any], idx: int) -> dict[str, Any]:
         mid = str(message.get("message_id") or message.get("id") or "").strip()
         fallback = _segment_fallback_id(message, idx)
@@ -1506,13 +1524,7 @@ def _extract_exchange_timeline(
 
         if bool(message.get("intermediate_reply")):
             flush_activity()
-            timeline.append(_make_reply_segment(
-                message,
-                [],
-                _exchange_usage(),
-                [],
-                fallback_id=_segment_fallback_id(message, idx),
-            ))
+            append_visible_message(message, idx)
             continue
 
         _accumulate_attachments(message, files, seen_file_urls)
@@ -1546,13 +1558,7 @@ def _extract_exchange_timeline(
             and str(message.get("content") or "").strip()
         ):
             flush_activity()
-            timeline.append(_make_reply_segment(
-                message,
-                [],
-                _exchange_usage(),
-                [],
-                fallback_id=_segment_fallback_id(message, idx),
-            ))
+            append_visible_message(message, idx)
 
     flush_activity()
     if not usage["total_tokens"]:

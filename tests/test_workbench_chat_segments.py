@@ -81,6 +81,7 @@ def test_durable_timeline_keeps_cards_and_messages_in_event_order():
         "list_skills",
         "read_file",
     ]
+    assert timeline[1]["trace"] == []
     assert timeline[2]["reasoning"] == "final thought"
     assert timeline[0]["createdAt"] < timeline[1]["createdAt"] < timeline[2]["createdAt"]
 
@@ -179,7 +180,7 @@ def test_retry_cut_preserves_guidance_added_during_regeneration():
     assert [message["id"] for message in chat["messages"]] == ["u1", "g_new"]
 
 
-def test_live_intermediate_checkpoint_is_updated_not_duplicated(monkeypatch):
+def test_live_intermediate_checkpoint_does_not_keep_activity_trace(monkeypatch):
     from webui import routes_workbench_chat as chat_mod
 
     store = {
@@ -196,19 +197,22 @@ def test_live_intermediate_checkpoint_is_updated_not_duplicated(monkeypatch):
         "role": "assistant",
         "content": "checking",
         "createdAt": "2026-01-01T00:00:01+00:00",
+        "trace": [{"tool": "Bash"}],
     })
+    assert "trace" not in store["chats"][0]["messages"][1]
+
     chat_mod._merge_chat_messages_chronologically(store["chats"][0], [{
         "id": "a1",
         "role": "assistant",
         "content": "checking",
         "createdAt": "2026-01-01T00:00:01+00:00",
         "intermediate": True,
-        "trace": [{"tool": "Bash"}],
+        "trace": [],
     }])
 
     messages = store["chats"][0]["messages"]
     assert [message["id"] for message in messages] == ["u1", "a1"]
-    assert messages[1]["trace"] == [{"tool": "Bash"}]
+    assert messages[1]["trace"] == []
 
 
 def _asst_tool(mid, name, call_id, args="{}", content=""):
