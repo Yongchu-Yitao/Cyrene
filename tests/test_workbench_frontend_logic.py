@@ -1080,6 +1080,8 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert "overflow: hidden;" in detail_css
     detail_text_css = css.split(".wbc-thinking-detail-text {", 1)[1].split("}", 1)[0]
     assert "overflow-y: auto;" in detail_text_css
+    assert "margin-right: -8px;" in detail_text_css
+    assert "padding-right: 8px;" in detail_text_css
     assert "查看思考详情" in i18n
 
 
