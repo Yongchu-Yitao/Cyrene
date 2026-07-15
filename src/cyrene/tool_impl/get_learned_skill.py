@@ -39,7 +39,13 @@ async def _tool_get_learned_skill(args: dict[str, Any], _bot: Any, _chat_id: int
                     {
                         "step_id": s.get("step_id"),
                         "description": s.get("description"),
+                        "implementation_kind": s.get("implementation_kind"),
                         "tool_name": (s.get("implementation_reference") or {}).get("tool_name"),
+                        "script_language": (s.get("implementation_reference") or {}).get("language"),
+                        "script_path": (s.get("implementation_reference") or {}).get("script_path"),
+                        "requires_runtime_approval": bool(
+                            (s.get("implementation_reference") or {}).get("requires_runtime_approval")
+                        ),
                         "failure_policy": s.get("failure_policy"),
                     }
                     for s in skill["steps"]

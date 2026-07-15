@@ -21,7 +21,7 @@ def _fixed_ctx_limit(monkeypatch, value):
     ``_chat_context_payload`` resolves the limit lazily via
     ``config_store.ctx_limit_for_model``; patch it there.
     """
-    monkeypatch.setattr(config_store, "ctx_limit_for_model", lambda _model: value)
+    monkeypatch.setattr(config_store, "effective_ctx_limit_for_model", lambda _model: value)
 
 
 def _sample_messages():
@@ -80,6 +80,8 @@ def test_context_payload_ratio_and_segments(monkeypatch):
     assert payload["ratio"] == payload["ctxUsed"] / 1_000_000
     assert payload["compactTriggerRatio"] == 0.6
     assert payload["messageCount"] == 6
+    assert payload["model"] == "deepseek-v4-flash"
+    assert payload["usage"]["total_tokens"] == 0
 
     keys = [seg["key"] for seg in payload["segments"]]
     assert keys == list(rwc._CONTEXT_SEGMENT_KEYS)
@@ -93,13 +95,13 @@ def test_context_payload_ratio_and_segments(monkeypatch):
     }
 
 
-def test_context_payload_unknown_model_has_null_ratio(monkeypatch):
+def test_context_payload_unknown_model_uses_smallest_known_window(monkeypatch):
     monkeypatch.setattr(rwc, "_session_state_messages", lambda _id: _sample_messages())
-    _fixed_ctx_limit(monkeypatch, 0)
+    monkeypatch.setattr(config_store, "effective_ctx_limit_for_model", lambda _model: 200_000)
     payload = rwc._chat_context_payload("chat_x", "some-unlisted-model")
-    assert payload["ctxLimit"] == 0
-    assert payload["ratio"] is None
-    assert payload["ctxUsed"] > 0  # breakdown still available without a window
+    assert payload["ctxLimit"] == 200_000
+    assert payload["ratio"] == payload["ctxUsed"] / 200_000
+    assert payload["ctxUsed"] > 0
 
 
 def test_context_payload_empty_state(monkeypatch):
@@ -110,3 +112,28 @@ def test_context_payload_empty_state(monkeypatch):
     assert payload["ratio"] == 0.0
     assert all(seg["tokens"] == 0 for seg in payload["segments"])
     assert payload["compaction"]["active"] is False
+
+
+def test_context_payload_uses_actual_model_and_live_usage(monkeypatch):
+    messages = _sample_messages()
+    messages[-2]["usage"] = {
+        "model": "mimo-v2.5",
+        "prompt_tokens": 120,
+        "completion_tokens": 30,
+        "total_tokens": 150,
+    }
+    monkeypatch.setattr(rwc, "_session_state_messages", lambda _id: messages)
+    seen_models = []
+    monkeypatch.setattr(
+        config_store,
+        "effective_ctx_limit_for_model",
+        lambda model: seen_models.append(model) or 1_000_000,
+    )
+
+    payload = rwc._chat_context_payload("chat_x", "google/gemma-4-12b-qat")
+
+    assert seen_models == ["mimo-v2.5"]
+    assert payload["model"] == "mimo-v2.5"
+    assert payload["usage"]["prompt_tokens"] == 120
+    assert payload["usage"]["completion_tokens"] == 30
+    assert payload["usage"]["total_tokens"] == 150

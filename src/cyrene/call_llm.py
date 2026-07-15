@@ -24,6 +24,7 @@ from cyrene.config import (
     _strip_wrapping_quotes,
 )
 from cyrene.context_trace import strip_context_metadata, summarize_context_trace
+from cyrene.config_store import effective_ctx_limit_for_model
 from cyrene.settings_store import (
     get as get_setting,
     get_models,
@@ -173,6 +174,13 @@ _secondary_in_flight: int = 0
 _CANDIDATE_COOLDOWN_SECONDS = 120.0
 _candidate_cooldowns: dict[tuple[str, str], float] = {}
 
+# A Workbench round can call the LLM several times (decision, tool rounds,
+# wrap-up) while the configured primary remains in cooldown.  Remember the
+# model transition already surfaced for that round so one outage produces one
+# user-facing notice instead of one notice per internal LLM call.
+_MAX_FALLBACK_NOTICE_KEYS = 4096
+_published_fallback_notices: dict[tuple[str, str, str, str], None] = {}
+
 # httpx 连接超时与读超时分开：对不可达主机快速失败，而不是吃满整个调用超时。
 _CONNECT_TIMEOUT_SECONDS = 5.0
 
@@ -202,6 +210,35 @@ def _set_candidate_cooldown(key: tuple[str, str]) -> None:
 
 def _clear_candidate_cooldown(key: tuple[str, str]) -> None:
     _candidate_cooldowns.pop(key, None)
+
+
+def _claim_model_fallback_notice(
+    *,
+    session_id: str,
+    round_id: str,
+    failed_model: str,
+    fallback_model: str,
+) -> bool:
+    """Claim one fallback notice per model transition in a runtime round."""
+    session = str(session_id or "").strip()
+    round_key = str(round_id or "").strip()
+    if not session or not round_key:
+        # Calls outside a round keep the historical per-call notification
+        # behavior because there is no reliable lifecycle boundary to use.
+        return True
+
+    key = (
+        session,
+        round_key,
+        str(failed_model or "").strip(),
+        str(fallback_model or "").strip(),
+    )
+    if key in _published_fallback_notices:
+        return False
+    _published_fallback_notices[key] = None
+    while len(_published_fallback_notices) > _MAX_FALLBACK_NOTICE_KEYS:
+        _published_fallback_notices.pop(next(iter(_published_fallback_notices)))
+    return True
 
 # ---------------------------------------------------------------------------
 # Helpers moved from agent.py / attachments.py
@@ -501,6 +538,24 @@ def _message_token_estimate(message: dict[str, Any]) -> int:
     return total
 
 
+def _request_token_estimate(messages: list[dict], tools: list | None = None) -> int:
+    """Conservative input-token estimate used for per-candidate context gates."""
+    total = sum(_message_token_estimate(message) for message in messages)
+    if tools:
+        total += _approx_token_count(
+            json.dumps(tools, ensure_ascii=False, sort_keys=True, default=str)
+        )
+    return total
+
+
+def _candidate_ctx_limit(candidate: dict[str, Any]) -> int:
+    """Resolve the candidate's configured window, falling back only if unset."""
+    explicit = int(candidate.get("ctx_limit") or 0)
+    if explicit > 0:
+        return explicit
+    return effective_ctx_limit_for_model(str(candidate.get("model") or ""))
+
+
 def _build_payload(
     messages: list[dict],
     tools: list | None,
@@ -534,13 +589,11 @@ def _build_payload(
     elif thinking == "enabled":
         payload["thinking"] = {"type": "enabled"}
     elif thinking == "disabled":
-        # DeepSeek V4 defaults to thinking mode when the field is omitted.
-        # Send an explicit opt-out so small deterministic calls do not spend
-        # their whole output budget on reasoning and return an empty answer.
-        # Other OpenAI-compatible providers may reject this extension, so keep
-        # the field provider/model-specific just like the automatic opt-in.
+        # Keep DeepSeek thinking enabled even for callers that request the
+        # legacy "disabled" mode. Other OpenAI-compatible providers may reject
+        # this extension, so keep it provider/model-specific.
         if "deepseek" in model.lower():
-            payload["thinking"] = {"type": "disabled"}
+            payload["thinking"] = {"type": "enabled"}
     return payload
 
 
@@ -935,6 +988,39 @@ async def call_llm(
             for index, candidate in enumerate(resolved)
         ]
 
+    # Context capacity belongs to the candidate that will receive the request,
+    # not only to the configured primary.  Reject undersized candidates locally
+    # and continue down the chain without cooling them: they are healthy, merely
+    # incompatible with this request.  Automatic compaction follows the active
+    # model's configured window; this gate separately protects every fallback
+    # candidate from receiving a request beyond its own capacity.
+    request_tokens = _request_token_estimate(messages, tools)
+    output_reserve = max(int(max_tokens or 0), 0)
+    required_tokens = request_tokens + output_reserve
+    context_rejected: list[dict[str, Any]] = []
+    context_eligible: list[dict[str, Any]] = []
+    for candidate in resolved:
+        limit = _candidate_ctx_limit(candidate)
+        if limit > 0 and required_tokens > limit:
+            context_rejected.append(candidate)
+            logger.warning(
+                "call_llm skipped candidate beyond context window "
+                "[caller=%s phase=%s model=%s required=%d limit=%d]",
+                caller, phase, candidate.get("model"), required_tokens, limit,
+            )
+        else:
+            context_eligible.append(candidate)
+    if not context_eligible:
+        limits = ", ".join(
+            f"{candidate.get('model')}={_candidate_ctx_limit(candidate)}"
+            for candidate in context_rejected
+        )
+        raise ValueError(
+            f"LLM request requires about {required_tokens} tokens, exceeding all "
+            f"candidate context windows ({limits})"
+        )
+    resolved = context_eligible
+
     # ctx_limit check for secondary model: if messages exceed the limit,
     # skip secondary and fall through to primary candidates
     if resolved and resolved[0].get("id") == "secondary":
@@ -952,19 +1038,25 @@ async def call_llm(
         available = resolved
         skipped_cooling = []
     failed_this_call: list[str] = []
-    configured_primary = next(
+    rejected_primary = next(
+        (
+            candidate for candidate in context_rejected
+            if int(candidate.get("_configured_rank") or 0) == 0
+        ),
+        None,
+    )
+    configured_primary = rejected_primary or next(
         (candidate for candidate in resolved if int(candidate.get("_configured_rank") or 0) == 0),
         resolved[0],
     )
     failed_primary_model = ""
     if any(
         int(candidate.get("_configured_rank") or 0) == 0
-        for candidate in skipped_cooling
+        for candidate in [*skipped_cooling, *context_rejected]
     ):
-        # A configured primary skipped by the cooldown has a real, recent
-        # failure behind it. Merely promoting the last successful endpoint is
-        # affinity routing, not a failure and must not produce a fallback UI
-        # notice (or fallback telemetry).
+        # Cooldown means the configured primary recently failed; a context
+        # rejection means it cannot accept this request.  Both are genuine
+        # fallback reasons. Merely promoting a last-success affinity is not.
         failed_primary_model = str(configured_primary.get("model") or "")
     fallback_notice_sent = False
     attempt_number = 0
@@ -992,12 +1084,19 @@ async def call_llm(
                     and not fallback_notice_sent
                     and model_type == "primary"
                 ):
-                    await _publish_model_fallback_event(
+                    fallback_model = str(candidate.get("model") or "")
+                    if _claim_model_fallback_notice(
                         session_id=session_id,
                         round_id=round_id,
                         failed_model=failed_primary_model,
-                        fallback_model=str(candidate.get("model") or ""),
-                    )
+                        fallback_model=fallback_model,
+                    ):
+                        await _publish_model_fallback_event(
+                            session_id=session_id,
+                            round_id=round_id,
+                            failed_model=failed_primary_model,
+                            fallback_model=fallback_model,
+                        )
                     fallback_notice_sent = True
                 if is_secondary and max_conc > 0:
                     _secondary_in_flight += 1
@@ -1451,6 +1550,7 @@ async def _handle_stream(
     tool_call_fragments: dict[int, dict[str, Any]] = {}
     usage: dict[str, Any] = {}
     started = False
+    reasoning_started = False
     dsml_filter = _DsmlStreamFilter()
     request_started = _time.monotonic()
 
@@ -1491,7 +1591,12 @@ async def _handle_stream(
                 delta = choice.get("delta") or {}
                 rc = delta.get("reasoning_content")
                 if isinstance(rc, str) and rc.strip():
+                    if stream_callback and not reasoning_started:
+                        await stream_callback({"type": "reasoning_start"})
+                        reasoning_started = True
                     reasoning_parts.append(rc)
+                    if stream_callback:
+                        await stream_callback({"type": "reasoning_delta", "delta": rc})
                 _accumulate_tool_call_deltas(delta.get("tool_calls"), tool_call_fragments)
                 text = _extract_stream_delta_text(delta)
                 if not text:
@@ -1499,6 +1604,12 @@ async def _handle_stream(
                 accumulated.append(text)
                 await _forward(dsml_filter.feed(text))
     await _forward(dsml_filter.flush())
+
+    if reasoning_started and stream_callback:
+        await stream_callback({
+            "type": "reasoning_done",
+            "response": "".join(reasoning_parts),
+        })
 
     full_text = "".join(accumulated)
     if not started and stream_callback:

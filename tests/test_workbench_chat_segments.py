@@ -19,12 +19,29 @@ from cyrene.agent.message import _apply_assistant_meta, _assistant_entry_from_re
 from webui.workbench_chat_runs import ChatRun
 from webui.routes_workbench_chat import (
     _extract_exchange_segments,
+    _last_exchange_model,
     _merge_chat_messages_chronologically,
     _pending_question_message,
     _publish_live_exchange_segments_once,
     _remove_retry_replaced_messages,
     _tool_result_is_error,
 )
+
+
+def test_exchange_model_comes_from_actual_fallback_response():
+    messages = [
+        {"role": "assistant", "message_id": "old", "usage": {"model": "primary"}},
+        {
+            "role": "assistant",
+            "message_id": "new",
+            "content": "fallback answer",
+            "usage": {"model": "backup", "prompt_tokens": 10, "completion_tokens": 2},
+        },
+    ]
+
+    assert _last_exchange_model(messages, {"old"}) == "backup"
+    segments, _trace, _usage, _files = _extract_exchange_segments(messages, {"old"})
+    assert segments == []  # final answer is persisted by the caller
 
 
 def test_late_discovered_assistant_message_is_inserted_before_guidance():

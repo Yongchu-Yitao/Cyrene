@@ -263,7 +263,7 @@ async def _test_llm_connection(api_key: str, base_url: str, model: str) -> str:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": "Reply with OK."}],
-        "max_tokens": 16,
+        "max_tokens": 48,
     }
     transport = httpx.AsyncHTTPTransport(retries=1)
     async with httpx.AsyncClient(transport=transport, timeout=30.0) as client:
@@ -301,7 +301,7 @@ async def _test_llm_vision_capability(api_key: str, base_url: str, model: str) -
                 {"type": "image_url", "image_url": {"url": _VISION_CAPABILITY_TEST_IMAGE}},
             ],
         }],
-        "max_tokens": 16,
+        "max_tokens": 48,
     }
     try:
         transport = httpx.AsyncHTTPTransport(retries=1)

@@ -69,7 +69,7 @@ async def review_elevation(
         response = await _state._call_llm(
             messages,
             tools=_REVIEW_TOOL_DEFS,
-            max_tokens=600,
+            max_tokens=1800,
             secondary=True,
             thinking="disabled",
         )

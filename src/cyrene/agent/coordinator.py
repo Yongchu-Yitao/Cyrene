@@ -523,7 +523,7 @@ async def _run_chat_agent(
                     "skills.learned",
                     "skills",
                     source="cyrene.behavior_learning.build_learned_skill_block",
-                    reason="auto-detected learned patterns visible to the agent",
+                    reason="learned reusable workflows visible to the agent",
                     transforms=["concat_into_system"],
                     content=learned_skill_block,
                 ))

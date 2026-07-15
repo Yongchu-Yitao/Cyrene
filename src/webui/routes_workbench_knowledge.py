@@ -69,6 +69,14 @@ def _resolve_workspace_id(workspace_id: str | None) -> str:
     try:
         from webui import routes as R
 
+        # The Workbench sends the canonical project id on the normal path.
+        # Resolve that without running the full project invariant/backfill scan,
+        # which can be much more expensive than the tiny knowledge query itself.
+        project = R._workbench_find_project_lightweight(raw)
+        if project:
+            return R._workbench_project_memory_key(project)
+
+        # Compatibility path for older clients that still send dataKey.
         payload = R._read_workbench_store()
         project = R._workbench_find_project(payload, raw)
         if project is None:
@@ -319,23 +327,25 @@ def register_workbench_knowledge_routes(router: APIRouter) -> None:
         """
         try:
             db_path = await _ensure_kb_db(workspace)
-            documents = await store.list_documents(
-                db_path,
-                q=q,
-                kind=kind,
-                status=status,
-                tag=tag,
-                source=source,
-                limit=limit,
-                offset=max(0, offset),
-            )
-            total = await store.count_documents(
-                db_path,
-                q=q,
-                kind=kind,
-                status=status,
-                tag=tag,
-                source=source,
+            documents, total = await asyncio.gather(
+                store.list_documents(
+                    db_path,
+                    q=q,
+                    kind=kind,
+                    status=status,
+                    tag=tag,
+                    source=source,
+                    limit=limit,
+                    offset=max(0, offset),
+                ),
+                store.count_documents(
+                    db_path,
+                    q=q,
+                    kind=kind,
+                    status=status,
+                    tag=tag,
+                    source=source,
+                ),
             )
             return {
                 "documents": documents,

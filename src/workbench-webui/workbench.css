@@ -8051,8 +8051,11 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 /* ── calendar rail (column 2) ──────────────────────────────────────── */
 .wb-sched-rail {
-  flex: 0 0 246px;
-  width: 246px;
+  flex: 0 1 246px;
+  width: min(246px, 100%);
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   border-right: 1px solid var(--wb-line);
   display: flex;
   flex-direction: column;
@@ -8074,12 +8077,26 @@ html[data-theme="light"] .wb-tool-list .mono {
 .wb-sched-rail-back:hover { background: var(--wb-control-hover-bg); color: var(--wb-text); border-color: var(--wb-line-2); }
 
 /* mini month */
-.wb-sched-mini { padding: 0 12px 8px; }
+.wb-sched-mini {
+  width: 100%;
+  min-width: 0;
+  padding: 0 12px 8px;
+  box-sizing: border-box;
+}
 .wb-sched-mini-head {
   display: flex; align-items: center; justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
   padding: 4px 4px 8px;
 }
-.wb-sched-mini-head b { font-size: calc(12px * var(--wb-ui-font-scale, 1)); font-weight: 680; }
+.wb-sched-mini-head b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+}
 .wb-sched-mini-nav { display: flex; gap: 2px; }
 .wb-sched-mini-nav button {
   width: 24px; height: 24px; border: none; background: none; cursor: pointer;
@@ -8087,14 +8104,23 @@ html[data-theme="light"] .wb-tool-list .mono {
 }
 .wb-sched-mini-nav button:hover { background: var(--wb-control-hover-bg); color: var(--wb-text); }
 .wb-sched-mini-grid {
-  display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px;
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1px;
 }
 .wb-sched-mini-dow {
+  min-width: 0;
+  overflow: hidden;
   text-align: center; font-size: calc(10px * var(--wb-ui-font-scale, 1)); color: var(--wb-faint);
   padding: 2px 0 4px;
 }
 .wb-sched-mini-cell {
   position: relative;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
   aspect-ratio: 1 / 1;
   border: none; background: none; cursor: pointer;
   color: var(--wb-text); font-size: calc(11px * var(--wb-ui-font-scale, 1)); border-radius: 7px;
@@ -8433,7 +8459,7 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 /* responsive: collapse the detail panel on narrow widths */
 @media (max-width: 1240px) {
-  .wb-sched-rail { flex-basis: 220px; width: 220px; }
+  .wb-sched-rail { flex-basis: 220px; width: min(220px, 100%); }
   .wb-sched-detail { flex-basis: 300px; width: 300px; }
 }
 @media (max-width: 980px) {
@@ -9524,42 +9550,6 @@ html[data-theme="light"] .wb-tool-list .mono {
 }
 .wb-learning-step i.ok { color: #20b15a; }
 .wb-learning-step i.fail { color: #d94949; }
-.wb-learning-source-card {
-  width: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  border: 1px solid var(--wb-line);
-  border-radius: 8px;
-  background: var(--wb-card-bg);
-  color: inherit;
-  padding: 12px 14px;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 130ms ease, background 130ms ease;
-}
-.wb-learning-source-card:hover {
-  background: var(--wb-row-hover-bg);
-  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-line));
-}
-.wb-learning-source-card b,
-.wb-learning-source-card small {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wb-learning-source-card b {
-  color: var(--wb-text);
-  font-size: calc(13px * var(--wb-ui-font-scale, 1));
-  font-weight: 720;
-}
-.wb-learning-source-card small {
-  color: var(--wb-faint);
-  font-size: calc(12px * var(--wb-ui-font-scale, 1));
-}
 .wb-learning-answer {
   min-height: 96px;
   border: 1px solid var(--wb-line);
@@ -10015,17 +10005,6 @@ html[data-theme="light"] .wb-tool-list .mono {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.wb-mem-skill-detail-box.analysis {
-  grid-template-columns: 1fr;
-}
-.wb-mem-skill-review-rationale {
-  margin-top: 6px;
-  color: var(--wb-text);
-  font-size: calc(12px * var(--wb-ui-font-scale, 1));
-  line-height: 1.55;
-  overflow-wrap: break-word;
-}
-.wb-mem-skill-review-rationale:empty { display: none; }
 .wb-mem-skill-examples {
   display: flex;
   flex-direction: column;
@@ -10120,9 +10099,6 @@ html[data-theme="light"] .wb-tool-list .mono {
 .wb-mem-skill-overview > div:first-child,
 .wb-mem-skill-overview > div:nth-child(2) {
   background: color-mix(in srgb, var(--wb-card-bg) 94%, var(--wb-accent) 6%);
-}
-.wb-mem-skill-analysis-metrics > div {
-  min-height: 68px;
 }
 .wb-mem-script-file {
   width: 100%;
@@ -11554,6 +11530,43 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   max-width: 720px;
 }
 
+.wbc-live-activities {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wbc-trace.live.wbc-trace-interactive {
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.wbc-trace.live.wbc-trace-interactive:hover,
+.wbc-trace.live.wbc-trace-interactive:focus-visible {
+  border-color: color-mix(in srgb, var(--wb-green) 48%, transparent);
+  background: color-mix(in srgb, var(--wb-green) 9%, var(--wb-card-bg));
+}
+
+.wbc-trace.live.wbc-trace-interactive:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-green) 40%, transparent);
+  outline-offset: 2px;
+}
+
+.wbc-trace.live.wbc-trace-locked {
+  overflow: hidden;
+}
+
+.wbc-trace-view {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.wbc-trace.wbc-trace-locked .wbc-trace-view {
+  height: 100%;
+}
+
 .wbc-trace-head {
   display: flex;
   align-items: center;
@@ -11580,6 +11593,8 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   display: flex;
   flex-direction: column;
   gap: 5px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .wbc-trace-list li {
@@ -11622,6 +11637,38 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 .wbc-trace-text small {
   color: var(--wb-faint);
   font-family: inherit;
+}
+
+.wbc-thinking-detail {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+}
+
+.wbc-thinking-detail .wb-spinner.small {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  border-width: 2px;
+  color: var(--wb-green);
+}
+
+.wbc-thinking-detail-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
 }
 
 /* ---- live heartbeat (elapsed + stall hint) ---- */

@@ -1,9 +1,9 @@
-"""Built-in token pricing for common language models.
+"""Configured and built-in token pricing for common language models.
 
-Prices use the provider's direct API standard rate per one million tokens.
-All built-in and unmarked user prices use CNY. Overseas providers are converted
-from their official USD price using the fixed rate below. A leading ``$`` still
-allows an explicit USD override. User-configured prices always take precedence.
+Actual cost tracking follows the model that served the response. An explicit
+saved price wins, then the built-in catalog is used, and an unknown unpriced
+model records zero. All built-in and unmarked user prices use CNY. A leading
+``$`` allows a USD override.
 
 The catalog is intentionally conservative: a model is only matched when its
 identifier contains a complete alias, so short or unknown names do not inherit
@@ -158,14 +158,20 @@ def configured_user_price(model: str) -> Pricing | None:
     return None
 
 
-def effective_price(model: str, user_price_str: str = "") -> Pricing | None:
-    """Resolve explicit user price, saved user price, then built-in price."""
+def effective_price(model: str, user_price_str: str = "") -> Pricing:
+    """Resolve explicit/saved pricing, then built-in pricing, else zero.
+
+    The lookup always uses the actual response model. A provider-specific saved
+    override therefore remains authoritative while known unpriced models still
+    receive the catalog rate.
+    """
     built_in = lookup_price(model)
     default_currency = str((built_in or {}).get("currency", "CNY"))
     return (
         parse_user_price(user_price_str, default_currency=default_currency)
         or configured_user_price(model)
         or built_in
+        or {"input": 0.0, "output": 0.0, "currency": default_currency}
     )
 
 

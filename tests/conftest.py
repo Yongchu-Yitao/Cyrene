@@ -78,6 +78,7 @@ def _reset_agent_global_state():
     #     failing candidate must not make a later test silently skip it.
     from cyrene import call_llm as _call_llm_mod
     _call_llm_mod._candidate_cooldowns.clear()
+    _call_llm_mod._published_fallback_notices.clear()
     _call_llm_mod._last_success_cache = {}
     _call_llm_mod._http_clients.clear()
     # Model-candidate tests use fake endpoints; never persist those into the

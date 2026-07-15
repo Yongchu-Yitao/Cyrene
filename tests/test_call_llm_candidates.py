@@ -24,11 +24,13 @@ import cyrene.call_llm as cl
 @pytest.fixture(autouse=True)
 def _clean_cooldowns():
     cl._candidate_cooldowns.clear()
+    cl._published_fallback_notices.clear()
     yield
     cl._candidate_cooldowns.clear()
+    cl._published_fallback_notices.clear()
 
 
-def test_deepseek_disabled_thinking_is_explicit():
+def test_deepseek_legacy_disabled_request_keeps_thinking_enabled():
     payload = cl._build_payload(
         [{"role": "user", "content": "ping"}],
         tools=None,
@@ -38,7 +40,7 @@ def test_deepseek_disabled_thinking_is_explicit():
         thinking="disabled",
     )
 
-    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["thinking"] == {"type": "enabled"}
 
 
 def test_generic_model_does_not_receive_deepseek_thinking_extension():
@@ -453,6 +455,126 @@ async def test_primary_failure_publishes_fallback_ui_event(monkeypatch):
         "session_id": "chat_1", "round_id": "round_1",
         "failed_model": "main", "fallback_model": "backup",
     }]
+
+
+async def test_fallback_ui_event_is_deduplicated_across_calls_in_same_round(monkeypatch):
+    published = []
+
+    class FakeResponse:
+        def __init__(self, status_code, model, endpoint):
+            self.status_code = status_code
+            self._model = model
+            self.request = httpx.Request("POST", endpoint)
+
+        def json(self):
+            return {
+                "choices": [{"message": {"role": "assistant", "content": self._model}}],
+                "usage": {},
+            }
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError(
+                "failed", request=self.request,
+                response=httpx.Response(self.status_code, request=self.request),
+            )
+
+    class FakeClient:
+        async def post(self, endpoint, json=None, headers=None):
+            return FakeResponse(400 if json["model"] == "main" else 200, json["model"], endpoint)
+
+    async def capture(**kwargs):
+        published.append(kwargs)
+
+    monkeypatch.setattr(cl.httpx, "AsyncClient", lambda *_args, **_kwargs: FakeClient())
+    monkeypatch.setattr(cl, "_publish_model_fallback_event", capture)
+    candidates = [
+        {"id": "main", "model": "main", "api_key": "", "endpoints": ["https://main/v1/chat/completions"]},
+        {"id": "backup", "model": "backup", "api_key": "", "endpoints": ["https://backup/v1/chat/completions"]},
+    ]
+
+    for _ in range(2):
+        result = await cl.call_llm(
+            [{"role": "user", "content": "hi"}], candidates=candidates,
+            publish_events=False, record_usage=False,
+            session_id="chat_same", round_id="round_same",
+        )
+        assert result["content"] == "backup"
+
+    assert published == [{
+        "session_id": "chat_same", "round_id": "round_same",
+        "failed_model": "main", "fallback_model": "backup",
+    }]
+
+    await cl.call_llm(
+        [{"role": "user", "content": "next"}], candidates=candidates,
+        publish_events=False, record_usage=False,
+        session_id="chat_same", round_id="round_next",
+    )
+    assert len(published) == 2
+
+
+async def test_oversized_primary_is_skipped_for_larger_fallback(monkeypatch):
+    published = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"role": "assistant", "content": "fits"}}],
+                "usage": {"prompt_tokens": 500, "completion_tokens": 1, "total_tokens": 501},
+            }
+
+    class FakeClient:
+        async def post(self, endpoint, json=None, headers=None):
+            assert json["model"] == "large"
+            return FakeResponse()
+
+    async def capture(**kwargs):
+        published.append(kwargs)
+
+    monkeypatch.setattr(cl.httpx, "AsyncClient", lambda *_args, **_kwargs: FakeClient())
+    monkeypatch.setattr(cl, "_request_token_estimate", lambda _messages, _tools=None: 500)
+    monkeypatch.setattr(cl, "_publish_model_fallback_event", capture)
+    candidates = [
+        {
+            "id": "small", "model": "small", "ctx_limit": 100,
+            "api_key": "", "endpoints": ["https://small/v1/chat/completions"],
+        },
+        {
+            "id": "large", "model": "large", "ctx_limit": 1_000,
+            "api_key": "", "endpoints": ["https://large/v1/chat/completions"],
+        },
+    ]
+
+    result = await cl.call_llm(
+        [{"role": "user", "content": "hi"}], candidates=candidates,
+        publish_events=False, record_usage=False, session_id="chat_ctx", round_id="round_ctx",
+    )
+
+    assert result["content"] == "fits"
+    assert result["model"] == "large"
+    assert not cl._candidate_cooling(cl._candidate_key(candidates[0]))
+    assert published == [{
+        "session_id": "chat_ctx", "round_id": "round_ctx",
+        "failed_model": "small", "fallback_model": "large",
+    }]
+
+
+async def test_all_candidates_over_context_raise_without_cooldown(monkeypatch):
+    monkeypatch.setattr(cl, "_request_token_estimate", lambda _messages, _tools=None: 500)
+    candidates = [{
+        "id": "small", "model": "small", "ctx_limit": 100,
+        "api_key": "", "endpoints": ["https://small/v1/chat/completions"],
+    }]
+
+    with pytest.raises(ValueError, match="exceeding all candidate context windows"):
+        await cl.call_llm(
+            [{"role": "user", "content": "hi"}], candidates=candidates,
+            publish_events=False, record_usage=False,
+        )
+
+    assert not cl._candidate_cooling(cl._candidate_key(candidates[0]))
 
 
 async def test_last_success_affinity_does_not_publish_fallback_ui_event(monkeypatch):

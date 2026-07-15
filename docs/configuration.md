@@ -111,7 +111,7 @@ Browser-specific settings are documented in [browser-live-view.md](browser-live-
 
 ## Model Pricing
 
-Cyrene tracks token usage and estimates costs for known models. The built-in table is approximate; update it in the Settings UI if your provider's pricing changes.
+Cyrene tracks token usage and estimates cost for the model that served each response. An explicit saved price wins; otherwise Cyrene uses the built-in price for known models, and records zero only when the model has no configured or built-in price.
 
 | Model | Input (per 1M tokens) | Output (per 1M tokens) |
 |---|---|---|

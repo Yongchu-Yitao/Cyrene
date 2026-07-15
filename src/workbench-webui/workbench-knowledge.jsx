@@ -9,6 +9,9 @@
   var useEffect = React.useEffect;
   var useMemo = React.useMemo;
   var useRef = React.useRef;
+
+  var knowledgePageCache = window.__workbenchKnowledgePageCache || { lists: {}, pending: {} };
+  window.__workbenchKnowledgePageCache = knowledgePageCache;
   var KB_PAGE_SIZE = 80;
 
   // ── helpers ──────────────────────────────────────────────────────────
@@ -616,7 +619,10 @@
   function WorkbenchKnowledgePage(props) {
     var project = props && props.project;
     var active = !props || props.active !== false;
-    var workspace = (project && (project.dataKey || project.id)) || "default";
+    // Knowledge is stored under the canonical project id. Sending that id also
+    // lets the backend avoid its compatibility lookup through the full project
+    // document on the common path.
+    var workspace = (project && (project.id || project.dataKey)) || "default";
 
     var docsState = useState([]); var documents = docsState[0]; var setDocuments = docsState[1];
     var loadState = useState(true); var loading = loadState[0]; var setLoading = loadState[1];
@@ -640,6 +646,7 @@
     var busyState = useState(false); var busy = busyState[0]; var setBusy = busyState[1];
     var totalDocsState = useState(0); var totalDocs = totalDocsState[0]; var setTotalDocs = totalDocsState[1];
     var fileRef = useRef(null);
+    var workspaceRef = useRef(workspace); workspaceRef.current = workspace;
     var knowledgeFileDropActive = useWorkbenchFileDrop(function (files) {
       if (!busy) handleFiles(files);
     }, !!(active && project));
@@ -661,43 +668,113 @@
       var opts = options || {};
       var append = !!opts.append;
       var offset = Number(opts.offset || 0);
-      if (append) setLoadingMore(true); else setLoading(true);
-      setError("");
-      return client.list({ limit: KB_PAGE_SIZE, offset: offset })
+      var requestedWorkspace = workspace;
+      var pendingKey = requestedWorkspace + "|" + offset;
+      var cached = knowledgePageCache.lists[requestedWorkspace];
+      if (workspaceRef.current === requestedWorkspace) {
+        if (append) setLoadingMore(true);
+        else if (!opts.background) setLoading(true);
+        setError("");
+      }
+      var request = knowledgePageCache.pending[pendingKey];
+      if (!request) {
+        request = client.list({ limit: KB_PAGE_SIZE, offset: offset });
+        knowledgePageCache.pending[pendingKey] = request;
+        request.then(function () {
+          if (knowledgePageCache.pending[pendingKey] === request) delete knowledgePageCache.pending[pendingKey];
+        }, function () {
+          if (knowledgePageCache.pending[pendingKey] === request) delete knowledgePageCache.pending[pendingKey];
+        });
+      }
+      return request
         .then(function (docs) {
           var nextDocs = Array.isArray(docs) ? docs : [];
-          setDocuments(function (prev) { return append ? mergeDocs(prev, nextDocs) : nextDocs; });
-          setTotalDocs(docs._total || 0);
+          var baseDocs = append && cached ? cached.documents : [];
+          var merged = append ? mergeDocs(baseDocs, nextDocs) : nextDocs;
+          var total = docs._total || 0;
+          knowledgePageCache.lists[requestedWorkspace] = {
+            documents: merged,
+            total: total,
+            updatedAt: Date.now(),
+          };
+          if (workspaceRef.current === requestedWorkspace) {
+            setDocuments(merged);
+            setTotalDocs(total);
+          }
+          return merged;
         })
         .catch(function (err) {
-          setError(err.message || String(err));
-          if (!append) { setDocuments([]); setTotalDocs(0); }
+          if (workspaceRef.current === requestedWorkspace) {
+            setError(err.message || String(err));
+            if (!append && !cached) { setDocuments([]); setTotalDocs(0); }
+          }
+          return null;
         })
-        .finally(function () { if (append) setLoadingMore(false); else setLoading(false); });
+        .finally(function () {
+          if (workspaceRef.current !== requestedWorkspace) return;
+          if (append) setLoadingMore(false); else setLoading(false);
+        });
+    }
+
+    function applyPendingKnowledgeSelection() {
+      var pending = window.__workbenchPendingSelection;
+      var pendingDocId = pending && pending.type === "knowledge" ? (pending.docId || pending.id) : "";
+      if (!pendingDocId) return;
+      setTimeout(function () {
+        if (workspaceRef.current !== workspace) return;
+        selectDoc(pendingDocId);
+        window.__workbenchPendingSelection = null;
+      }, 0);
     }
 
     useEffect(function () {
       // Reset selection when switching workspace/project.
+      var cached = knowledgePageCache.lists[workspace];
+      setDocuments(cached ? cached.documents : []);
+      setTotalDocs(cached ? cached.total : 0);
+      setLoading(!cached);
       setSelectedId("");
       setDetail(null);
       setRelated(null);
       setRelatedLoadedId("");
-      loadDocuments().then(function () {
-        // If a search result opened this page, select the requested document.
-        var pending = window.__workbenchPendingSelection;
-        var pendingDocId = pending && pending.type === "knowledge" ? (pending.docId || pending.id) : "";
-        if (pendingDocId) {
-          setTimeout(function () {
-            setSelectedId(pendingDocId);
-            client.detail(pendingDocId, { includeChunks: false })
-              .then(function (full) { setDetail(full); })
-              .catch(function () { setDetail(null); });
-            window.__workbenchPendingSelection = null;
-          }, 0);
-        }
-      });
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [workspace]);
+
+    useEffect(function () {
+      if (!active) return;
+      var cached = knowledgePageCache.lists[workspace];
+      loadDocuments({ background: !!cached }).then(applyPendingKnowledgeSelection);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [workspace, active]);
+
+    // The cached list is shown synchronously, but never treated as fresh enough
+    // to skip validation. Runtime events cover changes made by background Agents.
+    useEffect(function () {
+      if (!active) return undefined;
+      var refreshTimer = null;
+      function refreshSoon() {
+        if (document.hidden) return;
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(function () {
+          refreshTimer = null;
+          loadDocuments({ background: true });
+        }, 250);
+      }
+      function onVisibility() { if (!document.hidden) refreshSoon(); }
+      function onRuntimeEvent(event) {
+        if (!event) return;
+        if (["tool_call", "assistant_message", "chat_message", "session_update", "goal_loop_update"].indexOf(event.type) >= 0) refreshSoon();
+      }
+      window.addEventListener("focus", refreshSoon);
+      document.addEventListener("visibilitychange", onVisibility);
+      if (window.__sseHandlers && window.__sseHandlers.add) window.__sseHandlers.add(onRuntimeEvent);
+      return function () {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        window.removeEventListener("focus", refreshSoon);
+        document.removeEventListener("visibilitychange", onVisibility);
+        if (window.__sseHandlers && window.__sseHandlers.delete) window.__sseHandlers.delete(onRuntimeEvent);
+      };
+    }, [workspace, active]);
 
     // Also listen for live search-navigation events while already mounted.
     useEffect(function () {
@@ -775,6 +852,15 @@
         .then(function (updated) {
           // Patch the list-level doc so the card / group views reflect the
           // change immediately without a full reload.
+          var cached = knowledgePageCache.lists[workspace];
+          if (cached) {
+            knowledgePageCache.lists[workspace] = Object.assign({}, cached, {
+              documents: cached.documents.map(function (d) {
+                return d.id === id ? Object.assign({}, d, { tags: newTags }) : d;
+              }),
+              updatedAt: Date.now(),
+            });
+          }
           setDocuments(function (prev) {
             return prev.map(function (d) { return d.id === id ? Object.assign({}, d, { tags: newTags }) : d; });
           });

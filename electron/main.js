@@ -539,6 +539,19 @@ class BrowserTabManager {
         window.__cyreneBrowserUserCaptureInstalled = true;
         const prefix = ${JSON.stringify(BROWSER_USER_EVENT_CONSOLE_PREFIX)};
         const clean = (value, limit = 240) => String(value == null ? "" : value).replace(/\\s+/g, " ").trim().slice(0, limit);
+        const stableSelector = (el) => {
+          if (!el || !(el instanceof Element)) return "";
+          const escape = (value) => window.CSS && CSS.escape ? CSS.escape(String(value)) : String(value).replace(/[^a-zA-Z0-9_-]/g, "\\\\$&");
+          if (el.id) return "#" + escape(el.id);
+          for (const attr of ["data-testid", "data-test", "name"]) {
+            const value = el.getAttribute && el.getAttribute(attr);
+            if (value) return el.tagName.toLowerCase() + "[" + attr + "=\\\"" + escape(value) + "\\\"]";
+          }
+          const role = el.getAttribute && el.getAttribute("role");
+          const aria = el.getAttribute && el.getAttribute("aria-label");
+          if (role && aria) return "[role=\\\"" + escape(role) + "\\\"][aria-label=\\\"" + escape(aria) + "\\\"]";
+          return "";
+        };
         const describe = (el) => {
           if (!el || !(el instanceof Element)) return {};
           const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
@@ -550,7 +563,10 @@ class BrowserTabManager {
             id: clean(el.id || ""),
             name: clean(el.getAttribute && el.getAttribute("name") || ""),
             role: clean(el.getAttribute && el.getAttribute("role") || ""),
+            ariaLabel: clean(el.getAttribute && el.getAttribute("aria-label") || ""),
+            placeholder: clean(el.getAttribute && el.getAttribute("placeholder") || ""),
             text: clean(el.innerText || el.textContent || el.getAttribute && (el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("placeholder")) || "", 120),
+            selector: clean(stableSelector(el), 240),
             x: rect ? Math.round(rect.left) : null,
             y: rect ? Math.round(rect.top) : null,
             w: rect ? Math.round(rect.width) : null,

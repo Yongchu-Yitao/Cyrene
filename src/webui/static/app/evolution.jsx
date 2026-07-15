@@ -3,7 +3,6 @@ function EvolutionPage({ tab, setTab }) {
   useDataVersion();
   const { t } = useI18n();
   const [workbenchTab, setWorkbenchTab] = useStateSet("learned");
-  const [patterns, setPatterns] = useStateSet([]);
   const [learnedSkills, setLearnedSkills] = useStateSet([]);
   const [ccData, setCcData] = useStateSet(null);
   const [installedSkills, setInstalledSkills] = useStateSet(window.DATA?.skills || []);
@@ -16,7 +15,6 @@ function EvolutionPage({ tab, setTab }) {
   const [learnBusy, setLearnBusy] = useStateSet(false);
   const [learnMessage, setLearnMessage] = useStateSet("");
   const [selectedLearnedSkillId, setSelectedLearnedSkillId] = useStateSet("");
-  const [selectedPatternId, setSelectedPatternId] = useStateSet("");
   const [workbenchBusy, setWorkbenchBusy] = useStateSet(false);
   const [workbenchMessage, setWorkbenchMessage] = useStateSet("");
   const [learnedSkillLoading, setLearnedSkillLoading] = useStateSet(false);
@@ -24,7 +22,6 @@ function EvolutionPage({ tab, setTab }) {
   const [learnedSkillVersions, setLearnedSkillVersions] = useStateSet([]);
   const [learnedSkillPatches, setLearnedSkillPatches] = useStateSet([]);
   const [learnedSkillRuns, setLearnedSkillRuns] = useStateSet([]);
-  const [learnedSkillReplayTests, setLearnedSkillReplayTests] = useStateSet([]);
   const [skillForm, setSkillForm] = useStateSet(emptySkillForm());
 
   const fetchOverview = async () => {
@@ -33,7 +30,6 @@ function EvolutionPage({ tab, setTab }) {
         fetch("/api/evolution").then((r) => r.json()),
         fetch("/api/skills/installed").then((r) => r.json()),
       ]);
-      setPatterns(evRes.patterns || []);
       setLearnedSkills(evRes.learned_skills || []);
       setCcData(evRes.cc_learning || null);
       const skills = skillsRes.skills || [];
@@ -45,11 +41,6 @@ function EvolutionPage({ tab, setTab }) {
         current && (evRes.learned_skills || []).some((skill) => skill.id === current)
           ? current
           : (evRes.learned_skills || [])[0]?.id || ""
-      ));
-      setSelectedPatternId((current) => (
-        current && (evRes.patterns || []).some((pattern) => pattern.id === current)
-          ? current
-          : (evRes.patterns || [])[0]?.id || ""
       ));
     } catch (e) {
       setWorkbenchMessage(t("evolution.loadFailed"));
@@ -77,7 +68,6 @@ function EvolutionPage({ tab, setTab }) {
       setLearnedSkillVersions([]);
       setLearnedSkillPatches([]);
       setLearnedSkillRuns([]);
-      setLearnedSkillReplayTests([]);
       setSkillForm(emptySkillForm());
       return;
     }
@@ -96,19 +86,17 @@ function EvolutionPage({ tab, setTab }) {
   const loadLearnedSkillWorkbench = async (skillId) => {
     setLearnedSkillLoading(true);
     try {
-      const [detailRes, versionsRes, patchesRes, runsRes, testsRes] = await Promise.all([
+      const [detailRes, versionsRes, patchesRes, runsRes] = await Promise.all([
         fetch(`/api/learned-skills/${skillId}`).then((r) => r.json()),
         fetch(`/api/learned-skills/${skillId}/versions`).then((r) => r.json()),
         fetch(`/api/learned-skills/${skillId}/patches`).then((r) => r.json()),
         fetch(`/api/learned-skills/${skillId}/runs?limit=20`).then((r) => r.json()),
-        fetch(`/api/learned-skills/${skillId}/replay-tests`).then((r) => r.json()),
       ]);
       const detail = detailRes.skill || null;
       setLearnedSkillDetail(detail);
       setLearnedSkillVersions(versionsRes.versions || []);
       setLearnedSkillPatches(patchesRes.patches || []);
       setLearnedSkillRuns(runsRes.runs || []);
-      setLearnedSkillReplayTests(testsRes.tests || []);
       setSkillForm(skillFormFromDetail(detail));
     } catch (e) {
       setWorkbenchMessage(t("evolution.loadFailed"));
@@ -128,20 +116,19 @@ function EvolutionPage({ tab, setTab }) {
     setLearnBusy(true);
     setLearnMessage("");
     try {
-      const res = await fetch("/api/patterns/learn", { method: "POST" });
+      const res = await fetch("/api/learning/process", { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
         setLearnMessage(data.error || t("evolution.learnFailed"));
         setLearnBusy(false);
         return;
       }
-      setPatterns(data.patterns || []);
       setLearnedSkills(data.learned_skills || []);
       const stats = data.stats || {};
       setLearnMessage(t("evolution.learnSummary", {
         observed: stats.processed_turns || 0,
         promoted: stats.skills_created || 0,
-        candidates: (stats.merged_patterns || 0) + (stats.new_patterns || 0),
+        candidates: stats.candidates_awaiting_user || 0,
       }));
     } catch (e) {
       setLearnMessage(t("evolution.learnFailed"));
@@ -153,13 +140,12 @@ function EvolutionPage({ tab, setTab }) {
     setLearnBusy(true);
     setLearnMessage("");
     try {
-      const res = await fetch("/api/patterns/rebuild", { method: "POST" });
+      const res = await fetch("/api/learning/rebuild", { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
         setLearnMessage(data.error || t("evolution.learnFailed"));
         return;
       }
-      setPatterns(data.patterns || []);
       setLearnedSkills(data.learned_skills || []);
       const stats = data.result || {};
       setLearnMessage(t("evolution.rebuildSummary", {
@@ -303,29 +289,6 @@ function EvolutionPage({ tab, setTab }) {
     }
   };
 
-  const handleRunReplayTests = async () => {
-    if (!selectedLearnedSkillId) return;
-    setWorkbenchBusy(true);
-    try {
-      const res = await fetch(`/api/learned-skills/${selectedLearnedSkillId}/replay-tests/run`, { method: "POST" });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) {
-        setWorkbenchMessage(t("evolution.replaySummary", {
-          passed: data.result?.passed || 0,
-          total: data.result?.total || 0,
-          rate: Math.round((data.result?.pass_rate || 0) * 100),
-        }));
-        await loadLearnedSkillWorkbench(selectedLearnedSkillId);
-      } else {
-        setWorkbenchMessage(data.error || t("evolution.replayFailed"));
-      }
-    } catch (e) {
-      setWorkbenchMessage(t("evolution.replayFailed"));
-    } finally {
-      setWorkbenchBusy(false);
-    }
-  };
-
   const handleRollbackSkill = async (version) => {
     if (!selectedLearnedSkillId) return;
     setWorkbenchBusy(true);
@@ -399,7 +362,6 @@ function EvolutionPage({ tab, setTab }) {
 
   const workbenchTabs = [
     { id: "learned", label: t("evolution.autoSkills") },
-    { id: "patterns", label: t("evolution.learningHistory") },
   ];
 
   const filteredSkills = installedSkills.filter((skill) => {
@@ -411,7 +373,6 @@ function EvolutionPage({ tab, setTab }) {
     || installedSkills.find((skill) => skill.id === selectedSkillId)
     || filteredSkills[0]
     || null;
-  const selectedPattern = patterns.find((pattern) => pattern.id === selectedPatternId) || patterns[0] || null;
 
   return (
     <div className="evolution-page">
@@ -580,7 +541,7 @@ function EvolutionPage({ tab, setTab }) {
           </div>
         )}
 
-        {tab === "patterns" && (
+        {tab === "learning" && (
           <div className="evolution-workbench">
             <div className="card evolution-workbench-shell">
               <div className="evolution-workbench-shell-top">
@@ -643,7 +604,6 @@ function EvolutionPage({ tab, setTab }) {
                     <div className="evolution-detail-stack">
                       <div className="evolution-detail-head">
                         <div>
-                          <div className="evolution-detail-kicker">{learnedSkillDetail.pattern_id}</div>
                           <div className="evolution-pattern-title">{learnedSkillDetail.name}</div>
                           <div className="evolution-pattern-desc">{learnedSkillDetail.description}</div>
                         </div>
@@ -654,7 +614,6 @@ function EvolutionPage({ tab, setTab }) {
                           {learnedSkillDetail.status !== "deprecated" && (
                             <button className="btn" onClick={() => handleDeprecateLearnedSkill(learnedSkillDetail.skill_id)}>{t("evolution.deprecate")}</button>
                           )}
-                          <button className="btn" onClick={handleRunReplayTests} disabled={workbenchBusy}>{t("evolution.runReplay")}</button>
                           <button className="btn primary" onClick={() => handleRunLearnedSkill(learnedSkillDetail.skill_id)}>{t("evolution.run")}</button>
                         </div>
                       </div>
@@ -663,7 +622,6 @@ function EvolutionPage({ tab, setTab }) {
                         <Stat label={t("evolution.skillType")} value={learnedSkillDetail.skill_type} />
                         <Stat label={t("evolution.version")} value={`v${learnedSkillDetail.version}`} />
                         <Stat label={t("evolution.runCount")} value={String(learnedSkillDetail.run_statistics?.total_runs || 0)} />
-                        <Stat label={t("evolution.shadowStatus")} value={`${learnedSkillDetail.run_statistics?.shadow_success || 0}/${learnedSkillDetail.run_statistics?.shadow_failure || 0}`} />
                       </div>
                       <MiniPanel title={t("evolution.howItWorks")}>
                         <div className="evolution-mini-row compact">
@@ -748,19 +706,6 @@ function EvolutionPage({ tab, setTab }) {
                           ))}
                         </MiniPanel>
 
-                        <MiniPanel title={t("evolution.replayTests")}>
-                          {learnedSkillReplayTests.map((test) => {
-                            const result = safeParseJson(test.last_result, {});
-                            return (
-                              <div key={test.test_id} className="evolution-mini-row compact">
-                                <div>
-                                  <div className="evolution-mini-title">{test.test_type} · {result.ok ? "pass" : "pending/fail"}</div>
-                                  <div className="evolution-mini-sub">{test.turn_id}</div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </MiniPanel>
                       </div>
                     </div>
                   )}
@@ -768,62 +713,6 @@ function EvolutionPage({ tab, setTab }) {
               </div>
             )}
 
-            {workbenchTab === "patterns" && (
-              <div className="evolution-workbench-grid">
-                <div className="card evolution-workbench-side">
-                  <div className="evolution-side-head">
-                    <div className="card-title">{t("evolution.learningHistory")}</div>
-                    <span className="skills-tab-count">{patterns.length}</span>
-                  </div>
-                  <div className="evolution-side-list">
-                    {loading && patterns.length === 0 && (
-                      <div className="evolution-empty-card evolution-empty-stable">{t("skills.loading")}</div>
-                    )}
-                    {patterns.map((pattern) => (
-                      <button key={pattern.id} className={"evolution-side-item " + (selectedPatternId === pattern.id ? "active" : "")} onClick={() => setSelectedPatternId(pattern.id)}>
-                        <div className="evolution-side-item-top">
-                          <span className={"pattern-status " + pattern.status}>{pattern.status}</span>
-                          <span className="evolution-side-item-version">{pattern.frequency}x</span>
-                        </div>
-                        <div className="evolution-side-item-title">{pattern.description || pattern.id}</div>
-                        <div className="evolution-side-item-desc">{t("evolution.patternCardHint", { count: pattern.frequency || 0 })}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="card evolution-workbench-main">
-                  {loading && !selectedPattern ? (
-                    <div className="evolution-empty-card evolution-empty-stable">{t("skills.loading")}</div>
-                  ) : !selectedPattern ? (
-                    <div className="evolution-empty-card evolution-empty-stable">{t("evolution.noPatterns")}</div>
-                  ) : (
-                    <div className="evolution-detail-stack">
-                      <div className="evolution-detail-head">
-                        <div>
-                          <div className="evolution-pattern-title">{selectedPattern.description || selectedPattern.id}</div>
-                          <div className="evolution-pattern-desc">{t("evolution.patternDetailHint")}</div>
-                        </div>
-                      </div>
-                      <div className="evolution-stat-grid">
-                        <Stat label={t("evolution.occurrences")} value={String(selectedPattern.frequency || 0)} />
-                        <Stat label={t("evolution.effectiveCount")} value={String(selectedPattern.effective_count || 0)} />
-                        <Stat label={t("evolution.actionStability")} value={fmtPct(selectedPattern.action_stability || 0)} />
-                        <Stat label={t("evolution.lastSeen")} value={fmtTime(selectedPattern.last_seen_at)} />
-                      </div>
-                      <MiniPanel title={t("evolution.patternSummary")}>
-                        <pre className="code-block evolution-code-block">{prettyJson(selectedPattern.prototype_fingerprint || {})}</pre>
-                      </MiniPanel>
-                      <MiniPanel title={t("evolution.commonSteps")}>
-                        <pre className="code-block evolution-code-block">{prettyJson(selectedPattern.action_sequence || [])}</pre>
-                      </MiniPanel>
-                      <MiniPanel title={t("evolution.automationReadiness")}>
-                        <pre className="code-block evolution-code-block">{prettyJson(selectedPattern.skillability || {})}</pre>
-                      </MiniPanel>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -953,7 +842,7 @@ function StepCard({ step, index }) {
       <div className="evolution-step-top" onClick={() => isComplex && setExpanded(!expanded)}>
         <span className="evolution-step-num">{index + 1}</span>
         <span className="evolution-step-tool">{toolName}</span>
-        {step.description && step.description !== `${toolName} via learned pattern` && (
+        {step.description && step.description !== `${toolName} via learned candidate` && (
           <span className="evolution-step-desc">{step.description}</span>
         )}
         {step.requires_llm && <span className="evolution-step-llm-badge">LLM</span>}

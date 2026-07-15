@@ -138,7 +138,7 @@ async def run_clean_reflection(evidence: dict[str, Any]) -> tuple[dict[str, Any]
                 {"role": "user", "content": serialize_evidence(evidence)},
             ],
             tools=None,
-            max_tokens=1800,
+            max_tokens=5400,
             secondary=True,
             thinking="disabled",
         )

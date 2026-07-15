@@ -64,6 +64,41 @@ def test_explicit_user_price_overrides_built_in(monkeypatch):
     }
 
 
+def test_unset_price_uses_catalog_for_known_model(monkeypatch):
+    monkeypatch.setattr("cyrene.model_prices.configured_user_price", lambda model: None)
+
+    assert effective_price("deepseek-v4-flash") == {
+        "input": 1.0,
+        "cache_hit": 0.02,
+        "output": 2.0,
+        "currency": "CNY",
+    }
+
+
+def test_unset_price_is_zero_for_unknown_model(monkeypatch):
+    monkeypatch.setattr("cyrene.model_prices.configured_user_price", lambda model: None)
+
+    assert effective_price("private-unknown-model") == {
+        "input": 0.0,
+        "output": 0.0,
+        "currency": "CNY",
+    }
+
+
+def test_zero_price_renders_as_exact_zero(monkeypatch):
+    from webui import routes
+
+    monkeypatch.setattr(
+        routes,
+        "_model_pricing",
+        lambda model="": {"input": 0.0, "output": 0.0, "currency": "CNY"},
+    )
+
+    assert routes._calc_spend(
+        {"prompt_tokens": 1000, "completion_tokens": 100}, "free-model"
+    ) == "¥0.00"
+
+
 @pytest.mark.parametrize(
     ("model", "expected_hint"),
     [
@@ -112,3 +147,25 @@ def test_to_usd_preserves_usd_and_converts_cny():
     }
     converted = to_usd({"input": 7.25, "output": 14.5, "currency": "CNY"})
     assert converted == {"input": 1.0, "output": 2.0, "currency": "USD"}
+
+
+def test_session_spend_prices_each_actual_fallback_model(monkeypatch):
+    from webui import routes
+
+    prices = {
+        "primary": {"input": 1.0, "output": 2.0, "currency": "CNY"},
+        "backup": {"input": 10.0, "output": 20.0, "currency": "CNY"},
+    }
+    monkeypatch.setattr(routes, "_model_pricing", lambda model="": prices.get(model))
+    messages = [
+        {
+            "role": "assistant",
+            "usage": {"model": "primary", "prompt_tokens": 1_000_000, "completion_tokens": 0},
+        },
+        {
+            "role": "assistant",
+            "usage": {"model": "backup", "prompt_tokens": 100_000, "completion_tokens": 50_000},
+        },
+    ]
+
+    assert routes._calc_messages_spend(messages) == "¥3.00"

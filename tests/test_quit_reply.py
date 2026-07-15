@@ -150,7 +150,6 @@ async def test_streaming_wrapup_prompt_rejects_placeholder_after_delivery(monkey
 async def test_quit_reply_is_persisted_as_assistant_content(monkeypatch):
     """A direct quit(reply=...) answer must be visible in the next LLM history."""
     from cyrene.agent import agent as agent_core
-    from cyrene import behavior_learning
 
     saved_messages = []
 
@@ -175,7 +174,6 @@ async def test_quit_reply_is_persisted_as_assistant_content(monkeypatch):
     monkeypatch.setattr(agent_core, "get_active_tool_defs", lambda: [])
     monkeypatch.setattr(agent_core, "_save_session_messages", fake_save)
     monkeypatch.setattr(agent_core, "_append_session_message", AsyncMock())
-    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
 
     result = await agent_core._run_main_agent(
         "你在什么时候会找 entities",

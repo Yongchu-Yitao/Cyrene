@@ -532,7 +532,7 @@ async def _normalize_agent_memory_language(content: str) -> str:
             _call_llm(
                 [{"role": "user", "content": prompt}],
                 tools=None,
-                max_tokens=300,
+                max_tokens=900,
                 secondary=True,
                 thinking="disabled",
             ),
@@ -654,7 +654,7 @@ async def _extract_memories_llm(user_text: str, agent_text: str) -> list[dict]:
     }
     token = _caller_type.set("workbench_memory")
     try:
-        resp = await _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=700)
+        resp = await _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=2100)
         data = _parse_json_object(_assistant_text(resp))
     finally:
         _caller_type.reset(token)
@@ -955,7 +955,7 @@ async def _detect_conflicting_memories(new_content: str, candidates: list[dict])
     token = _caller_type.set("workbench_memory")
     try:
         resp = await asyncio.wait_for(
-            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=300, secondary=True, thinking="disabled"),
+            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=900, secondary=True, thinking="disabled"),
             timeout=30,
         )
     except Exception:  # noqa: BLE001

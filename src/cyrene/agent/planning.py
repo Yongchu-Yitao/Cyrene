@@ -151,7 +151,7 @@ async def generate_plan(
     response = await _state._call_llm(
         messages,
         tools=_PLAN_TOOL_DEFS,
-        max_tokens=4000,
+        max_tokens=12000,
         thinking="disabled",
     )
     for tc in (response.get("tool_calls") or []):

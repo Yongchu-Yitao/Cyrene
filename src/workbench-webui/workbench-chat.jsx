@@ -119,6 +119,9 @@ var WorkbenchChatModel = (function () {
       var type = String(event.type || "");
       if (type === "ack" && handlers.onAck) handlers.onAck(event);
       else if (type === "intermediate_message" && handlers.onIntermediateMessage) handlers.onIntermediateMessage(event);
+      else if (type === "reasoning_start" && handlers.onReasoningStart) handlers.onReasoningStart(event);
+      else if (type === "reasoning_delta" && handlers.onReasoningDelta) handlers.onReasoningDelta(event.delta || "");
+      else if (type === "reasoning_done" && handlers.onReasoningDone) handlers.onReasoningDone(event.response || "");
       else if (type === "reply_start" && handlers.onReplyStart) handlers.onReplyStart(event);
       else if (type === "reply_delta" && handlers.onReplyDelta) handlers.onReplyDelta(event.delta || "");
       else if (type === "reply_done" && handlers.onReplyDone) handlers.onReplyDone(event.response || "");
@@ -316,16 +319,36 @@ function wbcMergeChronologicalMessages(messages, additions) {
 
 function wbcRuntimeSegmentMessages(runtime) {
   var segments = runtime && Array.isArray(runtime.segments) ? runtime.segments : [];
+  var hasLiveActivities = !!(runtime && Array.isArray(runtime.activities) && runtime.activities.length);
   return segments.map(function (segment) {
     var message = segment && segment.message ? segment.message : {};
     return {
       ...message,
       id: String(message.id || segment.id || ""),
       role: "assistant",
-      trace: Array.isArray(segment.progress) ? segment.progress : (message.trace || []),
+      // While the run is active, per-LLM activity cards own the live tool trace.
+      // Hiding the segment copy prevents the same calls from appearing twice.
+      trace: hasLiveActivities ? [] : (Array.isArray(segment.progress) ? segment.progress : (message.trace || [])),
       runtimeSegment: true,
     };
   });
+}
+
+function wbcCurrentModel(chat, project, runtime, liveData) {
+  var activeModel = String(runtime && runtime.activeModel || "").trim();
+  if (activeModel) return activeModel;
+  var liveModel = String(liveData && liveData.model || "").trim();
+  if (liveModel) return liveModel;
+  var messages = chat && Array.isArray(chat.messages) ? chat.messages : [];
+  for (var i = messages.length - 1; i >= 0; i--) {
+    var messageModel = String(messages[i] && messages[i].model || "").trim();
+    if (messageModel) return messageModel;
+  }
+  return String(
+    (chat && (chat.lastModel || chat.model))
+    || (project && project.model)
+    || ""
+  ).trim();
 }
 
 function wbcSubagentStatusText(status) {
@@ -635,7 +658,7 @@ function wbcCommandMeta(id) {
 // transcript hooks; when it unmounts the hooks fall away and the run streams on,
 // with the transcript re-pulled from the server on remount.
 var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
-  var runtimes = {};            // chatId -> { chatId, text, progress, startedAt, lastEventAt, replying }
+  var runtimes = {};            // chatId -> { chatId, text, progress, activities, startedAt, lastEventAt, replying }
   var aborts = {};              // chatId -> AbortController
   var deferredSends = {};       // chatId -> terminal-race guidance promoted to the next normal turn
   var subscribers = new Set();
@@ -696,6 +719,36 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
   }
 
   function clear(chatId) { update(chatId, null); }
+
+  function appendActivity(cur, fields) {
+    var activities = Array.isArray(cur.activities) ? cur.activities : [];
+    var nextSeq = Number(cur.activitySeq || 0) + 1;
+    return {
+      ...cur,
+      activitySeq: nextSeq,
+      activities: activities.concat([{
+        id: "activity_" + nextSeq,
+        reasoning: "",
+        reasoningActive: false,
+        awaitingLlmEvent: false,
+        progress: [],
+        createdAt: Date.now(),
+        ...(fields || {}),
+      }]),
+    };
+  }
+
+  function updateLastActivity(cur, updater, createFields) {
+    var activities = Array.isArray(cur.activities) ? cur.activities : [];
+    if (!activities.length) {
+      cur = appendActivity(cur, createFields || {});
+      activities = cur.activities;
+    }
+    var nextActivities = activities.slice();
+    var lastIndex = nextActivities.length - 1;
+    nextActivities[lastIndex] = updater(nextActivities[lastIndex] || {});
+    return { ...cur, activities: nextActivities };
+  }
 
   function abort(chatId) {
     var ac = aborts[chatId];
@@ -810,6 +863,86 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
       },
       onReplyStart: function () {
         update(chatId, function (cur) { return cur ? { ...cur, replying: true, lastEventAt: Date.now() } : null; });
+      },
+      onReasoningStart: function () {
+        update(chatId, function (cur) {
+          if (!cur) return null;
+          var activities = Array.isArray(cur.activities) ? cur.activities : [];
+          var last = activities.length ? activities[activities.length - 1] : null;
+          var lastProgress = last && Array.isArray(last.progress) ? last.progress : [];
+          var completedWithoutActivity = !!(
+            last
+            && last.llmStatus === "completed"
+            && lastProgress.length === 0
+          );
+          var reuseLlmCard = !!(last && (
+            last.llmStatus === "started"
+            || completedWithoutActivity
+          ));
+          var next = reuseLlmCard
+            ? updateLastActivity(cur, function (activity) {
+                var current = String(activity.reasoning || "");
+                var startsContinuousCall = !!(
+                  activity.mergeReasoning
+                  || (activity.llmStatus === "completed" && activity.reasoningStreamSeen)
+                );
+                var prior = "";
+                if (startsContinuousCall) {
+                  prior = current.replace(/\s+$/, "");
+                } else if (activity.fallbackReasoningApplied) {
+                  var fallbackStart = Math.max(0, Math.min(Number(activity.reasoningCallStart || 0), current.length));
+                  prior = current.slice(0, fallbackStart).replace(/\s+$/, "");
+                }
+                var prefix = prior ? prior + "\n\n" : "";
+                return {
+                  ...activity,
+                  reasoning: prefix,
+                  reasoningCallStart: prefix.length,
+                  reasoningActive: true,
+                  reasoningStreamSeen: true,
+                  mergeReasoning: false,
+                  fallbackReasoningApplied: false,
+                };
+              })
+            : appendActivity(cur, {
+                reasoning: "",
+                reasoningCallStart: 0,
+                reasoningActive: true,
+                reasoningStreamSeen: true,
+                awaitingLlmEvent: true,
+              });
+          return { ...next, lastEventAt: Date.now() };
+        });
+      },
+      onReasoningDelta: function (delta) {
+        update(chatId, function (cur) {
+          if (!cur) return null;
+          var next = updateLastActivity(cur, function (activity) {
+            return {
+              ...activity,
+              reasoning: String(activity.reasoning || "") + delta,
+              reasoningActive: true,
+              reasoningStreamSeen: true,
+              awaitingLlmEvent: true,
+            };
+          }, { reasoningActive: true, reasoningStreamSeen: true, awaitingLlmEvent: true });
+          return { ...next, lastEventAt: Date.now() };
+        }, true);
+      },
+      onReasoningDone: function (text) {
+        update(chatId, function (cur) {
+          if (!cur) return null;
+          var next = updateLastActivity(cur, function (activity) {
+            var current = String(activity.reasoning || "");
+            var callStart = Math.max(0, Math.min(Number(activity.reasoningCallStart || 0), current.length));
+            return {
+              ...activity,
+              reasoning: current.slice(0, callStart) + (text || current.slice(callStart)),
+              reasoningActive: false,
+            };
+          }, { reasoning: text || "", reasoningCallStart: 0, awaitingLlmEvent: true });
+          return { ...next, lastEventAt: Date.now() };
+        });
       },
       onReplyDelta: function (delta) {
         update(chatId, function (cur) { return cur ? { ...cur, replying: true, text: cur.text + delta, lastEventAt: Date.now() } : null; }, true);
@@ -926,6 +1059,8 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
       chatId: chatId,
       text: "",
       progress: [],
+      activities: [],
+      activitySeq: 0,
       segments: [],
       startedAt: startedAt,
       lastEventAt: startedAt,
@@ -943,7 +1078,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     if (!chatId || runtimes[chatId] || !model || !model.reconnectRun) return null;
     var ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
     if (ac) aborts[chatId] = ac;
-    update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false, reconnecting: true });
+    update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: false, reconnecting: true });
     return ownStream(
       chatId,
       model.reconnectRun(chatId, streamHandlers(chatId), ac ? ac.signal : undefined),
@@ -958,6 +1093,96 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     if (!event) return;
     var chatId = String(event.session_id || "");
     if (!chatId || !runtimes[chatId]) return;
+    if (event.type === "llm_call") {
+      update(chatId, function (latest) {
+        if (!latest) return null;
+        var eventId = String(event.event_id || "");
+        var eventReasoning = String(event.response && event.response.reasoning_content || "");
+        var eventStatus = String(event.status || "completed").toLowerCase();
+        var activities = Array.isArray(latest.activities) ? latest.activities : [];
+        var duplicate = eventId && activities.some(function (activity) {
+          return String(activity && (activity.llmEventId || activity.llmStartedEventId) || "") === eventId;
+        });
+        var next = latest;
+        if (!duplicate) {
+          var last = activities.length ? activities[activities.length - 1] : null;
+          if (eventStatus === "started") {
+            // The SSE start event and the direct reasoning stream travel over
+            // different connections, so either may arrive first. Reuse the
+            // provisional reasoning card (or a retrying start card) instead of
+            // creating two cards for one LLM call.
+            var lastProgress = last && Array.isArray(last.progress) ? last.progress : [];
+            var continuesPureReasoning = !!(
+              last
+              && last.llmStatus === "completed"
+              && lastProgress.length === 0
+            );
+            if (last && (last.awaitingLlmEvent || last.llmStatus === "started" || continuesPureReasoning || (!last.llmStatus && !last.llmEventId))) {
+              next = updateLastActivity(latest, function (activity) {
+                return {
+                  ...activity,
+                  awaitingLlmEvent: false,
+                  llmStatus: "started",
+                  llmStartedEventId: eventId,
+                  model: String(event.model || ""),
+                  reasoningStreamSeen: activity.awaitingLlmEvent ? activity.reasoningStreamSeen : false,
+                  mergeReasoning: continuesPureReasoning,
+                };
+              });
+            } else {
+              next = appendActivity(latest, {
+                llmStatus: "started",
+                llmStartedEventId: eventId,
+                model: String(event.model || ""),
+                reasoningCallStart: 0,
+                reasoningStreamSeen: false,
+              });
+            }
+          } else if (last && (last.awaitingLlmEvent || last.llmStatus === "started")) {
+            next = updateLastActivity(latest, function (activity) {
+              var current = String(activity.reasoning || "");
+              var reasoning = current;
+              var callStart = Math.max(0, Math.min(Number(activity.reasoningCallStart || 0), current.length));
+              var fallbackApplied = false;
+              if (!activity.reasoningStreamSeen && eventReasoning) {
+                var prior = activity.mergeReasoning ? current.replace(/\s+$/, "") : "";
+                var prefix = prior ? prior + "\n\n" : "";
+                reasoning = prefix + eventReasoning;
+                callStart = prefix.length;
+                fallbackApplied = true;
+              }
+              return {
+                ...activity,
+                awaitingLlmEvent: false,
+                llmStatus: "completed",
+                llmEventId: eventId,
+                model: String(event.model || ""),
+                reasoning: reasoning,
+                reasoningCallStart: callStart,
+                mergeReasoning: false,
+                fallbackReasoningApplied: fallbackApplied,
+              };
+            });
+          } else {
+            next = appendActivity(latest, {
+              llmStatus: "completed",
+              llmEventId: eventId,
+              model: String(event.model || ""),
+              reasoning: eventReasoning,
+              reasoningCallStart: 0,
+              reasoningStreamSeen: false,
+              fallbackReasoningApplied: !!eventReasoning,
+            });
+          }
+        }
+        return {
+          ...next,
+          activeModel: String(event.model || next.activeModel || ""),
+          lastEventAt: Date.now(),
+        };
+      });
+      return;
+    }
     var entry = null;
     if (event.type === "tool_call") {
       var toolName = String(event.tool || "");
@@ -989,7 +1214,15 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     if (!entry) return;
     update(chatId, function (latest) {
       if (!latest) return null;
-      return { ...latest, lastEventAt: Date.now(), progress: latest.progress.concat([entry]).slice(-30) };
+      var next = updateLastActivity(latest, function (activity) {
+        var activityProgress = Array.isArray(activity.progress) ? activity.progress : [];
+        return { ...activity, progress: activityProgress.concat([entry]).slice(-30) };
+      });
+      return {
+        ...next,
+        lastEventAt: Date.now(),
+        progress: latest.progress.concat([entry]).slice(-30),
+      };
     });
   }
   if (window.__sseHandlers && window.__sseHandlers.add) window.__sseHandlers.add(onSseEvent);
@@ -1722,7 +1955,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     // progress folds into it (onSseEvent only fills a runtime that already exists).
     // Without it the resume ran invisibly — an empty thread while the side panel
     // showed a frozen "Replying" — and the composer offered no way to stop it.
-    runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: true });
+    runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: true });
     model.answerChat(chatId, questionId, optionText, { mode: resumeMode || undefined }).then(function (res) {
       runtimeEngine.update(chatId, null);
       // Pull the durable transcript: it now contains the question, this answer,
@@ -2099,7 +2332,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   useWbcEffect(function () {
     var el = scrollRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [messages.length, runtime && runtime.text, runtime && runtime.progress.length, runtime && runtime.segments && runtime.segments.length]);
+  }, [messages.length, runtime && runtime.text, runtime && runtime.progress.length, runtime && runtime.activities && runtime.activities.length, runtime && runtime.segments && runtime.segments.length]);
 
   useWbcEffect(function () {
     stickRef.current = true;
@@ -2181,6 +2414,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
       <WbcComposer
         chat={chat}
         project={project}
+        runtime={runtime}
         running={running}
         error={error}
         errorKind={errorKind}
@@ -2539,37 +2773,70 @@ function WbcAgentFiles({ files, onOpenFile }) {
   );
 }
 
-function WbcTraceCard({ trace, live, label }) {
+function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, onToggle, cardRef, reasoningRef, lockedHeight }) {
   var entries = Array.isArray(trace) ? trace : [];
   if (!entries.length && !live) return null;
+  var interactive = live && typeof onToggle === "function";
+  var activityRunning = live && running !== false;
+  var cardClass = "wbc-trace" + (live ? " live" : "") + (interactive ? " wbc-trace-interactive" : "") + (lockedHeight ? " wbc-trace-locked" : "") + (showReasoning ? " showing-reasoning" : "");
+  var toggleLabel = showReasoning
+    ? wbcT("workbenchChat.showActivity", "Show thinking or tool activity")
+    : wbcT("workbenchChat.showReasoning", "Show live reasoning");
+  function handleKeyDown(event) {
+    if (!interactive || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    onToggle();
+  }
   return (
-    <div className={"wbc-trace" + (live ? " live" : "")}>
-      <div className="wbc-trace-head">
-        {live && entries.length === 0 ? <span className="wb-spinner" /> : (!live ? <span className="wbc-trace-icon">{WBC_ICONS.tool}</span> : null)}
-        <b>{label || (live ? wbcT("workbenchChat.traceIdle", "Thinking...") : wbcT("workbenchChat.traceSummary", "Execution ({count} tool calls)", { count: entries.length }))}</b>
-      </div>
-      {entries.length > 0 && (
-        <ul className="wbc-trace-list">
-          {entries.map(function (entry, i) {
-            var isLast = live && i === entries.length - 1 && entry.status !== "completed";
-            var failed = !!entry.failed;
-            return (
-              <li key={i} className={failed ? "failed" : (isLast ? "active" : "done")}>
-                <span className="wbc-trace-mark">{failed ? WBC_ICONS.x : (isLast ? <span className="wb-spinner small" /> : WBC_ICONS.check)}</span>
-                <span className="wbc-trace-text">
-                  {(function () {
-                    var toolKey = entry.text || entry.tool || "";
-                    var isToolEntry = entry.kind === "tool" || !!entry.tool;
-                    if (isToolEntry) return wbcT("toolName." + toolKey, toolKey);
-                    if (entry.detailKey) return wbcT(entry.detailKey, toolKey, entry.detailParams);
-                    return toolKey;
-                  })()}
-                  {(entry.preview) ? <small>（{entry.preview}）</small> : null}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
+    <div
+      className={cardClass}
+      ref={cardRef}
+      style={lockedHeight ? { height: lockedHeight + "px" } : null}
+      role={interactive ? "button" : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      aria-label={interactive ? toggleLabel : undefined}
+      aria-pressed={interactive ? !!showReasoning : undefined}
+      title={interactive ? toggleLabel : undefined}
+      onClick={interactive ? onToggle : undefined}
+      onKeyDown={interactive ? handleKeyDown : undefined}
+    >
+      {showReasoning ? (
+        <div className="wbc-thinking-detail" aria-live="polite">
+          <span className="wb-spinner small" aria-hidden="true" />
+          <span className="wbc-thinking-detail-text" ref={reasoningRef}>
+            {reasoning || wbcT("workbenchChat.reasoningPending", "Waiting for live reasoning...")}
+          </span>
+        </div>
+      ) : (
+        <div className="wbc-trace-view">
+          <div className="wbc-trace-head">
+            {activityRunning && entries.length === 0 ? <span className="wb-spinner" /> : (!live ? <span className="wbc-trace-icon">{WBC_ICONS.tool}</span> : null)}
+            <b>{label || (live ? wbcT("workbenchChat.traceIdle", "Thinking...") : wbcT("workbenchChat.traceSummary", "Execution ({count} tool calls)", { count: entries.length }))}</b>
+          </div>
+          {entries.length > 0 && (
+            <ul className="wbc-trace-list">
+              {entries.map(function (entry, i) {
+                var isLast = activityRunning && i === entries.length - 1 && entry.status !== "completed";
+                var failed = !!entry.failed;
+                return (
+                  <li key={i} className={failed ? "failed" : (isLast ? "active" : "done")}>
+                    <span className="wbc-trace-mark">{failed ? WBC_ICONS.x : (isLast ? <span className="wb-spinner small" /> : WBC_ICONS.check)}</span>
+                    <span className="wbc-trace-text">
+                      {(function () {
+                        var toolKey = entry.text || entry.tool || "";
+                        var isToolEntry = entry.kind === "tool" || !!entry.tool;
+                        if (isToolEntry) return wbcT("toolName." + toolKey, toolKey);
+                        if (entry.detailKey) return wbcT(entry.detailKey, toolKey, entry.detailParams);
+                        return toolKey;
+                      })()}
+                      {(entry.preview) ? <small>（{entry.preview}）</small> : null}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   );
@@ -2664,8 +2931,53 @@ function WbcHeartbeat({ startedAt, lastEventAt }) {
   );
 }
 
+function WbcLiveActivityCard({ activity, active, hasReplyText }) {
+  var item = activity || {};
+  var entries = Array.isArray(item.progress) ? item.progress : [];
+  var [showReasoning, setShowReasoning] = useWbcState(false);
+  var [lockedHeight, setLockedHeight] = useWbcState(0);
+  var cardRef = useWbcRef(null);
+  var reasoningRef = useWbcRef(null);
+  function toggleReasoning() {
+    if (typeof window.getSelection === "function" && String(window.getSelection() || "")) return;
+    if (!lockedHeight && cardRef.current) {
+      setLockedHeight(cardRef.current.getBoundingClientRect().height);
+    }
+    setShowReasoning(function (visible) { return !visible; });
+  }
+  useWbcEffect(function () {
+    var detail = reasoningRef.current;
+    if (showReasoning && detail) detail.scrollTop = detail.scrollHeight;
+  }, [item.reasoning, showReasoning]);
+
+  var label = entries.length
+    ? (active && !hasReplyText
+      ? wbcT("workbenchChat.toolRunning", "Calling tools...")
+      : wbcT("workbenchChat.traceSummary", "Execution ({count} tool calls)", { count: entries.length }))
+    : (active
+      ? wbcT("workbenchChat.traceIdle", "Thinking...")
+      : wbcT("workbenchChat.traceLabel", "Execution"));
+
+  return (
+    <WbcTraceCard
+      trace={entries}
+      live={true}
+      running={active}
+      reasoning={item.reasoning}
+      showReasoning={showReasoning}
+      onToggle={toggleReasoning}
+      cardRef={cardRef}
+      reasoningRef={reasoningRef}
+      lockedHeight={lockedHeight}
+      label={label}
+    />
+  );
+}
+
 function WbcLiveMessage({ runtime, onOpenFile }) {
-  var progressEntries = Array.isArray(runtime.progress) ? runtime.progress : [];
+  var activities = Array.isArray(runtime.activities) && runtime.activities.length
+    ? runtime.activities
+    : [{ id: "activity_1", reasoning: "", progress: [] }];
   // Re-parse the streaming markdown only when the text actually changed — not on
   // every heartbeat / progress-driven re-render of this card.
   var liveHtml = useWbcMemo(function () {
@@ -2675,13 +2987,18 @@ function WbcLiveMessage({ runtime, onOpenFile }) {
     <React.Fragment>
       <div className="wbc-msg assistant">
         <WbcHeartbeat startedAt={runtime.startedAt} lastEventAt={runtime.lastEventAt} />
-        {(progressEntries.length > 0 || !runtime.text) && (
-          <WbcTraceCard
-            trace={progressEntries}
-            live={true}
-            label={runtime.text ? wbcT("workbenchChat.traceLabel", "Execution") : (progressEntries.length ? wbcT("workbenchChat.toolRunning", "Calling tools...") : wbcT("workbenchChat.traceIdle", "Thinking..."))}
-          />
-        )}
+        <div className="wbc-live-activities">
+          {activities.map(function (activity, index) {
+            return (
+              <WbcLiveActivityCard
+                key={activity.id || index}
+                activity={activity}
+                active={index === activities.length - 1}
+                hasReplyText={!!runtime.text}
+              />
+            );
+          })}
+        </div>
         {runtime.text && (
           <div className="wbc-msg-body markdown">
             <div dangerouslySetInnerHTML={{ __html: liveHtml }} />
@@ -2757,7 +3074,7 @@ function wbcSaveWorkspaceOverride(key, path, ns) {
   } catch (e) {}
 }
 
-function WbcComposer({ chat, project, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind }) {
+function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind }) {
   var model = window.WorkbenchChatModel;
   var chatId = chat ? chat.id : "";
   var projectId = (project && project.id) || "";
@@ -3000,7 +3317,7 @@ function WbcComposer({ chat, project, running, onSend, onGuidance, onInterrupt, 
   // chosen from the composer remains selected when the user switches projects.
   var wsDir = workspaceOverride || projectWorkspacePath || (contextState && contextState.workspace_dir) || "";
   var wsHistory = (contextState && Array.isArray(contextState.workspace_history)) ? contextState.workspace_history : [];
-  var modelName = (chat && chat.model) || (project && project.model) || "";
+  var modelName = wbcCurrentModel(chat, project, runtime, null);
 
   function wbcTogglePersona() {
     window.WorkbenchAPI.fetch(personaOn ? "/api/context/remove-soul" : "/api/context/add-soul", { method: "POST" })
@@ -4378,7 +4695,7 @@ function wbcCtxPct(ratio) {
   return Math.round(p) + "%";
 }
 
-function WbcContextUsage({ chat, running }) {
+function useWbcLiveChatMetrics(chat, running) {
   var [data, setData] = useWbcState(null);
   var chatId = chat ? chat.id : "";
   var updatedAt = chat ? chat.updatedAt : "";
@@ -4390,13 +4707,20 @@ function WbcContextUsage({ chat, running }) {
     function load() {
       fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/context")
         .then(function (r) { return r.json(); })
-        .then(function (payload) { if (!cancelled && payload && !payload.error) setData(payload); })
+        .then(function (payload) {
+          if (!cancelled && payload && !payload.error) setData({ chatId: chatId, payload: payload });
+        })
         .catch(function () {});
     }
     load();
     var timer = running ? setInterval(load, 3500) : null;
     return function () { cancelled = true; if (timer) clearInterval(timer); };
   }, [chatId, updatedAt, contextRevision, running]);
+
+  return data && data.chatId === chatId ? data.payload : null;
+}
+
+function WbcContextUsage({ data }) {
 
   if (!data) return null;
 
@@ -4476,12 +4800,14 @@ function WbcContextUsage({ chat, running }) {
 }
 
 function WbcOverviewTab({ chat, loading, detailed, runtime, onRename, onDelete, onToTask, toTaskBusy, onCompact, compactBusy }) {
+  var liveData = useWbcLiveChatMetrics(chat, !!runtime);
   if (!chat) {
     return <p className="workbench-muted">{loading
       ? wbcT("workbenchChat.loadingConversation", "Loading conversation…")
       : wbcT("workbenchChat.noMessages", "Select or create a chat.")}</p>;
   }
-  var usage = chat.usage || {};
+  var usage = (liveData && liveData.usage) || chat.usage || {};
+  var currentModel = wbcCurrentModel(chat, null, runtime, liveData);
   var convertedTitle = chat.convertedSessionId ? String(chat.convertedTaskTitle || "").trim() : "";
   return (
     <div className="workbench-side-stack">
@@ -4495,13 +4821,13 @@ function WbcOverviewTab({ chat, loading, detailed, runtime, onRename, onDelete, 
       </section>
       <section className="workbench-side-section">
         <h3>{wbcT("workbenchChat.sessionInfo", "Session info")}</h3>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.statusLabel", "Status")}</span><b>{chat.status === "running" ? wbcT("workbenchChat.status.replying", "Replying") : wbcT("workbenchChat.status.idle", "Idle")}</b></div>
+        <div className="wb-kv"><span>{wbcT("workbenchChat.statusLabel", "Status")}</span><b>{runtime || chat.status === "running" ? wbcT("workbenchChat.status.replying", "Replying") : wbcT("workbenchChat.status.idle", "Idle")}</b></div>
         <div className="wb-kv"><span>{wbcT("workbenchChat.messageCount", "Messages")}</span><b>{chat.messageCount != null ? chat.messageCount : (chat.messages || []).length}</b></div>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.model", "Model")}</span><b className="wbc-kv-mono">{chat.model || "—"}</b></div>
+        <div className="wb-kv"><span>{wbcT("workbenchChat.model", "Model")}</span><b className="wbc-kv-mono">{currentModel || "—"}</b></div>
         <div className="wb-kv"><span>{wbcT("chat.runId", "Session ID")}</span><b className="wbc-kv-mono">{chat.id}</b></div>
         <div className="wb-kv"><span>{wbcT("workbenchChat.createdAt", "Created")}</span><b>{wbcFormatTime(chat.createdAt) || "—"}</b></div>
       </section>
-      {detailed && <WbcContextUsage chat={chat} running={!!runtime} />}
+      {detailed && <WbcContextUsage data={liveData} />}
       {detailed && <section className="workbench-side-section">
         <h3>{wbcT("workbenchChat.quickActions", "Quick actions")}</h3>
         <div className="wbc-quick-actions">

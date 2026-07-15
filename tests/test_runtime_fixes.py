@@ -2836,9 +2836,92 @@ async def test_stream_reply_payload_emits_ndjson_events():
     assert events[-1] == {"type": "reply_done", "response": "你好，世界"}
 
 
+async def test_intermediate_agent_calls_stream_only_reasoning_to_workbench(monkeypatch):
+    from cyrene import call_llm as cll
+    from cyrene.agent import state as agent_state
+
+    captured = []
+
+    async def fake_call_llm(messages, **kwargs):
+        assert kwargs["stream"] is True
+        callback = kwargs["stream_callback"]
+        await callback({"type": "reasoning_start"})
+        await callback({"type": "reasoning_delta", "delta": "先检查上下文"})
+        await callback({"type": "reasoning_done", "response": "先检查上下文"})
+        await callback({"type": "reply_start"})
+        await callback({"type": "reply_delta", "delta": "internal tool preamble"})
+        return {"role": "assistant", "content": "internal tool preamble"}
+
+    async def collect(event):
+        captured.append(event)
+
+    monkeypatch.setattr(cll, "call_llm", fake_call_llm)
+    token = agent_state._reply_stream_writer.set(collect)
+    try:
+        result = await agent_state._call_llm(
+            [{"role": "user", "content": "inspect"}],
+            tools=[{"type": "function", "function": {"name": "Read"}}],
+        )
+    finally:
+        agent_state._reply_stream_writer.reset(token)
+
+    assert result["content"] == "internal tool preamble"
+    assert [event["type"] for event in captured] == [
+        "reasoning_start",
+        "reasoning_delta",
+        "reasoning_done",
+    ]
+
+
+async def test_upstream_stream_emits_reasoning_deltas_before_reply():
+    from cyrene.call_llm import _handle_stream
+
+    events = []
+
+    class FakeResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_lines(self):
+            yield 'data: {"choices":[{"delta":{"reasoning_content":"先分析"}}]}'
+            yield 'data: {"choices":[{"delta":{"reasoning_content":"，再回答","content":"完成"}}]}'
+            yield "data: [DONE]"
+
+    class FakeClient:
+        def stream(self, *args, **kwargs):
+            return FakeResponse()
+
+    async def capture(event):
+        events.append(event)
+
+    message = await _handle_stream(
+        FakeClient(),
+        "https://example.test/v1/chat/completions",
+        {"messages": []},
+        {},
+        capture,
+    )
+
+    assert message["reasoning_content"] == "先分析，再回答"
+    assert message["content"] == "完成"
+    assert [event["type"] for event in events] == [
+        "reasoning_start",
+        "reasoning_delta",
+        "reasoning_delta",
+        "reply_start",
+        "reply_delta",
+        "reasoning_done",
+        "reply_done",
+    ]
+
+
 async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
     from cyrene import agent
-    from cyrene import behavior_learning
     from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
@@ -2862,7 +2945,6 @@ async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
     _patch_save_session(monkeypatch, fake_save_session_messages)
     _patch_append_session(monkeypatch, AsyncMock())
     monkeypatch.setattr(_agent_state, "_publish_runtime_event", AsyncMock())
-    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
 
     async def collect(event):
         streamed.append(event)
@@ -2899,7 +2981,6 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
     executed (re-entering the tool loop) instead of being leaked or discarded."""
     from cyrene.agent import agent as _agent_core
     from cyrene.agent import state as _agent_state
-    from cyrene import behavior_learning
 
     state_file = tmp_path / "state.json"
     state_file.write_text(json.dumps({"_session_epoch": _agent_state._session_epoch, "messages": []}), encoding="utf-8")
@@ -2907,7 +2988,6 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
     _patch_data_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(_agent_core, "_get_max_tool_rounds", lambda: 5)
     monkeypatch.setattr(_agent_core, "_publish_runtime_event", AsyncMock())
-    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
 
     saved = {}
     executed = []
@@ -3224,7 +3304,6 @@ async def test_main_inbox_guidance_relays_to_subagents_and_inserts_reply(monkeyp
     from cyrene.agent import coordinator as _agent_coordinator
     from cyrene.agent import guidance as _agent_guidance
     from cyrene.agent import round as _agent_round
-    from cyrene import behavior_learning
     from cyrene import debug
     from cyrene import inbox
     from cyrene import subagent
@@ -3278,7 +3357,6 @@ async def test_main_inbox_guidance_relays_to_subagents_and_inserts_reply(monkeyp
     monkeypatch.setattr(subagent, "build_flow_snapshot", fake_flow_snapshot)
     monkeypatch.setattr(_agent_coordinator, "_run_chat_agent", fail_run_chat_agent)
     monkeypatch.setattr(_agent_guidance, "_generate_guidance_ack", AsyncMock(return_value=ack_text))
-    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
     monkeypatch.setattr(conversations, "archive_exchange", fake_archive_exchange)
     events = []
     monkeypatch.setattr(debug, "publish_event", lambda event: events.append(event) or asyncio.sleep(0))
@@ -3389,13 +3467,13 @@ async def test_main_inbox_guidance_failure_inserts_error_reply(monkeypatch, tmp_
 
 async def test_main_inbox_guidance_continuation_keeps_ack_before_final_reply(monkeypatch, tmp_path):
     from cyrene import agent
+    from cyrene import behavior_learning
     from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
     from cyrene.agent import coordinator as _agent_coordinator
     from cyrene.agent import guidance as _agent_guidance
     from cyrene.agent import round as _agent_round
-    from cyrene import behavior_learning
     from cyrene import debug
     from cyrene import inbox
     import cyrene.conversations as conversations
@@ -3437,7 +3515,6 @@ async def test_main_inbox_guidance_continuation_keeps_ack_before_final_reply(mon
 
     _patch_call_llm(monkeypatch, fake_call_llm)
     monkeypatch.setattr(_agent_guidance, "_generate_guidance_ack", AsyncMock(return_value=ack_text))
-    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
     monkeypatch.setattr(behavior_learning, "begin_turn", AsyncMock(return_value=None))
     monkeypatch.setattr(conversations, "archive_exchange", fake_archive_exchange)
     events = []
@@ -5064,7 +5141,6 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
     # and proceeds to the summary phase (it no longer returns an early "still working
     # in the background" notice — that path was removed).
     from cyrene import agent
-    from cyrene import behavior_learning
     from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
@@ -5117,7 +5193,6 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
     _patch_call_llm(monkeypatch, fake_call_llm)
     _patch_execute_tool(monkeypatch, fake_execute_tool)
     _patch_save_session(monkeypatch, fake_save)
-    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
     monkeypatch.setattr(subagent, "get_snapshot", fake_snapshot)
     monkeypatch.setattr(subagent, "cancel_subagent_tasks", fake_cancel_subagent_tasks)
     monkeypatch.setattr(subagent, "run_summary_subagent", fake_summary)
@@ -5140,7 +5215,6 @@ async def test_run_main_agent_summarizes_and_cancels_subagents_when_monitoring_i
 
 async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_explanation(monkeypatch):
     from cyrene import agent
-    from cyrene import behavior_learning
     from cyrene.agent import state as _agent_state
     from cyrene.agent import session as _agent_session
     from cyrene.agent import agent as _agent_core
@@ -5172,7 +5246,6 @@ async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_expl
 
     _patch_call_llm(monkeypatch, fake_call_llm)
     _patch_save_session(monkeypatch, fake_save)
-    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
 
     result = await agent._run_main_agent("现在先看看多伦多的天气", [], None, 0, "db.sqlite3")
 
@@ -5526,13 +5599,12 @@ def test_resolve_vision_candidates_cross_provider_no_key_not_inherited(monkeypat
 
 async def test_streamed_chat_only_final_reply_persists_usage(monkeypatch, tmp_path):
     """Chat-only streaming should persist the usage from the single phase-1 call."""
-    from cyrene import agent, behavior_learning
+    from cyrene import agent
     from cyrene.agent import state as _agent_state
     from cyrene.agent import agent as _agent_core
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
-    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
 
     async def fake_phase1(messages, tools=None, max_tokens=32000, **kwargs):
         return {"content": "plain phase1 text", "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}}

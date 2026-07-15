@@ -14,7 +14,7 @@ function Topbar({
   const evolutionTabs = [
     { id: "skills", label: t("evolution.skills") },
     { id: "cc", label: t("evolution.ccLearning") },
-    { id: "patterns", label: t("evolution.workbench") },
+    { id: "learning", label: t("evolution.workbench") },
   ];
   const session = activeSession || { title: "—", subagents: [] };
   const runningSubagents = (session.subagents || []).filter((s) => s.status === "running").length;

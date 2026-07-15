@@ -31,10 +31,6 @@ async def record_action(
     )
 
 
-async def list_patterns(status: str = "all", project_id: str = "") -> list[dict[str, Any]]:
-    return await _behavior.list_patterns(status, project_id)
-
-
 async def list_learned_skills(project_id: str = "") -> list[dict[str, Any]]:
     return await _behavior.list_learned_skills(project_id)
 
@@ -67,30 +63,6 @@ async def list_learned_skill_runs(skill_id: str, limit: int = 50) -> list[dict[s
     return await _behavior.list_learned_skill_runs(skill_id, limit)
 
 
-async def list_skill_replay_tests(skill_id: str) -> list[dict[str, Any]]:
-    return await _behavior.list_skill_replay_tests(skill_id)
-
-
-async def vocabulary_snapshot() -> dict[str, Any]:
-    return await _behavior.vocabulary_snapshot()
-
-
-async def create_vocabulary_label(**kwargs) -> dict[str, Any]:
-    return await _behavior.create_vocabulary_label(**kwargs)
-
-
-async def create_vocabulary_alias(**kwargs) -> dict[str, Any]:
-    return await _behavior.create_vocabulary_alias(**kwargs)
-
-
-async def promote_unknown_label(unknown_id: str, *, canonical_label: str = "", alias_label: str = "") -> dict[str, Any]:
-    return await _behavior.promote_unknown_label(unknown_id, canonical_label=canonical_label, alias_label=alias_label)
-
-
-async def dismiss_unknown_label(unknown_id: str) -> bool:
-    return await _behavior.dismiss_unknown_label(unknown_id)
-
-
 async def activate_learned_skill(skill_id: str) -> bool:
     return await _behavior.manual_activate_skill(skill_id)
 
@@ -101,10 +73,6 @@ async def deprecate_learned_skill(skill_id: str) -> bool:
 
 async def run_learned_skill(skill_id: str, param_overrides: dict[str, Any] | None = None) -> str:
     return await _behavior.run_learned_skill(skill_id, param_overrides)
-
-
-async def run_skill_replay_tests(skill_id: str) -> dict[str, Any]:
-    return await _behavior.run_skill_replay_tests(skill_id)
 
 
 async def update_learned_skill(skill_id: str, updates: dict[str, Any], *, reason: str = "Manual skill edit.") -> dict[str, Any] | None:
@@ -141,10 +109,6 @@ async def rebuild_learning_state(*, reprocess_all_turns: bool = True, project_id
 
 async def learn_from_turn(turn_id: str) -> dict[str, Any]:
     return await _behavior.learn_from_turn(turn_id)
-
-
-async def learn_skill_from_pattern(pattern_id: str, project_id: str = "") -> dict[str, Any]:
-    return await _behavior.learn_skill_from_pattern(pattern_id, project_id)
 
 
 async def tick(bot: Any, db_path: str) -> None:

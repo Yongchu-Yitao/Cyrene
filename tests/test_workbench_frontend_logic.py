@@ -73,7 +73,9 @@ def _run_workbench_runtime_js(expression: str):
         + runtime_source
     )
     script = f"""
-global.window = {{ __sseHandlers: {{ add: () => {{}} }} }};
+global.window = {{ __sseHandlers: {{ add: (handler) => {{ global.__wbcSseHandler = handler; }} }} }};
+function wbcT(_key, fallback) {{ return fallback; }}
+function wbcSubagentStatusText(status) {{ return String(status || ""); }}
 eval({json.dumps(runtime_source)});
 const result = ({expression});
 process.stdout.write(JSON.stringify(result));
@@ -170,7 +172,7 @@ def test_workbench_uses_light_project_payload_and_lazy_session_detail():
     assert '"/api/task-sessions/" + encodeURIComponent(sessionId)' in model
     assert "mergeSessionPayload(prev, payload)" in source
     assert "if (session.isSummary) fetchAndMergeSession(session.id)" in source
-    assert "if (nextSession && nextSession.isSummary) fetchAndMergeSession(nextSessionId)" in source
+    assert "if (nextSession && nextSession.isSummary) fetchAndMergeSession(nextSessionId)" not in source
     assert "seq !== sessionLoadSeqRef.current" in source
 
 
@@ -181,10 +183,13 @@ def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
     knowledge = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
 
     assert "mountedPages" in shell
-    assert 'style={{ display: isChat ? "contents" : "none" }}' in shell
-    assert 'style={{ display: isKnowledge ? "contents" : "none" }}' in shell
-    assert 'style={{ display: isSchedule ? "contents" : "none" }}' in shell
-    assert 'style={{ display: isMemory ? "contents" : "none" }}' in shell
+    assert "var WorkbenchStableSurface = React.memo(" in shell
+    assert "return !prev.active && !next.active;" in shell
+    assert "<WorkbenchStableSurface active={isChat}>" in shell
+    assert "<WorkbenchStableSurface active={isKnowledge}>" in shell
+    assert "<WorkbenchStableSurface active={isSchedule}>" in shell
+    assert "<WorkbenchStableSurface active={isMemory}>" in shell
+    assert "<WorkbenchStableSurface active={!isModulePage}>" in shell
     assert "active={!isModulePage}" in shell
     assert "var taskDropEnabled = !!(active && project && session && session.kind !== \"init\")" in shell
     assert "function WorkbenchChatPage({ active, project" in chat
@@ -239,13 +244,14 @@ def test_workbench_memory_skill_learning_selects_tool_chains():
     assert "memory.learning.detailsTitle" in source
     assert "memory.learning.agentAnswer" in source
     assert "memory.learning.sessionSelect" in source
-    assert "/learn-skill" in source
+    assert "/api/learning/process" in source
+    assert "/api/patterns" not in source
     assert "grid-template-columns: 34px 42px minmax(0, 1fr) 22px" in styles
     assert ".wb-detail-shot" in styles
     assert ".wb-detail-files" in styles
     assert "memory.learning.detailsTitle" in i18n
     assert "memory.learning.sessionSelect" in i18n
-    assert "memory.learning.review.parameterize" in i18n
+    assert "memory.learning.review.parameterize" not in i18n
     assert "memory.learning.processedNote" in i18n
     learning_source = source[source.index("function learningSnapshot"):source.index("// ── main page")]
     assert not any("\u4e00" <= ch <= "\u9fff" for ch in learning_source)
@@ -400,6 +406,239 @@ def test_workbench_chat_reveals_browser_tab_from_live_browser_events():
     assert "(browserState && browserState.active) || browserMarkedActive" in source
 
 
+def test_workbench_chat_tracks_actual_model_from_live_llm_events():
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  const model = { sendMessage: () => new Promise(() => {}) };
+  WorkbenchChatRuntimes.start("chat_model", { message: "hello" }, model);
+  global.__wbcSseHandler({
+    type: "llm_call",
+    status: "started",
+    session_id: "chat_model",
+    model: "mimo-v2.5"
+  });
+  return WorkbenchChatRuntimes.snapshot().chat_model.activeModel;
+})()
+"""
+    )
+
+    assert result == "mimo-v2.5"
+
+
+def test_workbench_chat_groups_reasoning_and_tools_by_llm_activity():
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  const model = {
+    sendMessage: (_chatId, _input, handlers) => {
+      global.__wbcStreamHandlers = handlers;
+      return new Promise(() => {});
+    }
+  };
+  WorkbenchChatRuntimes.start("chat_activities", { message: "hello" }, model);
+
+  global.__wbcSseHandler({
+    type: "llm_call",
+    status: "started",
+    event_id: "llm_1_started",
+    session_id: "chat_activities",
+    model: "mimo-v2.5"
+  });
+  global.__wbcStreamHandlers.onReasoningStart();
+  global.__wbcStreamHandlers.onReasoningDelta("first reasoning");
+  global.__wbcStreamHandlers.onReasoningDone("first reasoning");
+  global.__wbcSseHandler({
+    type: "llm_call",
+    status: "completed",
+    event_id: "llm_1",
+    session_id: "chat_activities",
+    model: "mimo-v2.5",
+    response: { reasoning_content: "first reasoning" }
+  });
+  global.__wbcSseHandler({
+    type: "tool_call",
+    session_id: "chat_activities",
+    tool: "read_file",
+    args: { path: "a.md" }
+  });
+
+  global.__wbcSseHandler({
+    type: "llm_call",
+    status: "started",
+    event_id: "llm_2_started",
+    session_id: "chat_activities",
+    model: "mimo-v2.5"
+  });
+  global.__wbcStreamHandlers.onReasoningStart();
+  global.__wbcStreamHandlers.onReasoningDelta("second reasoning");
+  global.__wbcStreamHandlers.onReasoningDone("second reasoning");
+  global.__wbcSseHandler({
+    type: "llm_call",
+    status: "completed",
+    event_id: "llm_2",
+    session_id: "chat_activities",
+    model: "mimo-v2.5",
+    response: { reasoning_content: "second reasoning" }
+  });
+  global.__wbcSseHandler({
+    type: "tool_call",
+    session_id: "chat_activities",
+    tool: "list_skills",
+    args: {}
+  });
+  global.__wbcSseHandler({
+    type: "tool_call",
+    session_id: "chat_activities",
+    tool: "read_file",
+    args: { path: "b.md" }
+  });
+
+  const runtime = WorkbenchChatRuntimes.snapshot().chat_activities;
+  return runtime.activities.map(activity => ({
+    id: activity.id,
+    reasoning: activity.reasoning,
+    tools: activity.progress.map(entry => entry.text)
+  }));
+})()
+"""
+    )
+
+    assert result == [
+        {
+            "id": "activity_1",
+            "reasoning": "first reasoning",
+            "tools": ["read_file"],
+        },
+        {
+            "id": "activity_2",
+            "reasoning": "second reasoning",
+            "tools": ["list_skills", "read_file"],
+        },
+    ]
+
+
+def test_workbench_chat_dedupes_cross_connection_llm_event_race():
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  const model = {
+    sendMessage: (_chatId, _input, handlers) => {
+      global.__wbcStreamHandlers = handlers;
+      return new Promise(() => {});
+    }
+  };
+  WorkbenchChatRuntimes.start("chat_race", { message: "hello" }, model);
+  global.__wbcSseHandler({
+    type: "llm_call",
+    status: "started",
+    event_id: "race_started",
+    session_id: "chat_race",
+    model: "mimo-v2.5"
+  });
+  global.__wbcSseHandler({
+    type: "llm_call",
+    status: "completed",
+    event_id: "race_completed",
+    session_id: "chat_race",
+    model: "mimo-v2.5",
+    response: { reasoning_content: "late reasoning" }
+  });
+  // The direct response stream can be delivered after the SSE completion even
+  // though the server emitted its chunks first. It must reuse the same card.
+  global.__wbcStreamHandlers.onReasoningStart();
+  global.__wbcStreamHandlers.onReasoningDelta("late reasoning");
+  global.__wbcStreamHandlers.onReasoningDone("late reasoning");
+  const activities = WorkbenchChatRuntimes.snapshot().chat_race.activities;
+  return { count: activities.length, reasoning: activities[0].reasoning };
+})()
+"""
+    )
+
+    assert result == {"count": 1, "reasoning": "late reasoning"}
+
+
+def test_workbench_chat_merges_only_fully_continuous_reasoning_calls():
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  const model = {
+    sendMessage: (_chatId, _input, handlers) => {
+      global.__wbcStreamHandlers = handlers;
+      return new Promise(() => {});
+    }
+  };
+  WorkbenchChatRuntimes.start("chat_continuous", { message: "hello" }, model);
+
+  function runReasoningCall(number, reasoning) {
+    global.__wbcSseHandler({
+      type: "llm_call",
+      status: "started",
+      event_id: `continuous_${number}_started`,
+      session_id: "chat_continuous",
+      model: "mimo-v2.5"
+    });
+    global.__wbcStreamHandlers.onReasoningStart();
+    global.__wbcStreamHandlers.onReasoningDelta(reasoning);
+    global.__wbcStreamHandlers.onReasoningDone(reasoning);
+    global.__wbcSseHandler({
+      type: "llm_call",
+      status: "completed",
+      event_id: `continuous_${number}_completed`,
+      session_id: "chat_continuous",
+      model: "mimo-v2.5",
+      response: { reasoning_content: reasoning }
+    });
+  }
+
+  runReasoningCall(1, "first thought");
+  runReasoningCall(2, "second thought");
+  global.__wbcSseHandler({
+    type: "tool_call",
+    session_id: "chat_continuous",
+    tool: "read_file",
+    args: { path: "boundary.md" }
+  });
+  runReasoningCall(3, "thought after tool");
+
+  return WorkbenchChatRuntimes.snapshot().chat_continuous.activities.map(activity => ({
+    reasoning: activity.reasoning,
+    tools: activity.progress.map(entry => entry.text)
+  }));
+})()
+"""
+    )
+
+    assert result == [
+        {
+            "reasoning": "first thought\n\nsecond thought",
+            "tools": ["read_file"],
+        },
+        {
+            "reasoning": "thought after tool",
+            "tools": [],
+        },
+    ]
+
+
+def test_workbench_chat_model_labels_and_run_summary_use_live_data():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    composer = source.split("function WbcComposer(", 1)[1].split(
+        "// Context picker popup", 1
+    )[0]
+    overview = source.split("function WbcOverviewTab", 1)[1].split(
+        "function wbcBlockLabel", 1
+    )[0]
+
+    assert "var modelName = wbcCurrentModel(chat, project, runtime, null);" in composer
+    assert "var liveData = useWbcLiveChatMetrics(chat, !!runtime);" in overview
+    assert "(liveData && liveData.usage) || chat.usage" in overview
+    assert "wbcCurrentModel(chat, null, runtime, liveData)" in overview
+
+
 def test_workbench_chat_delete_detaches_local_fork_markers():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
@@ -438,8 +677,8 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "输入内容以引导正在运行的 Agent" in (
         root / "src" / "workbench-webui" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
-    assert "workbench-chat.js?v=0.6.9" in index
-    assert "workbench-i18n.js?v=0.6.9" in index
+    assert "workbench-chat.js?v=0.6.10" in index
+    assert "workbench-i18n.js?v=0.6.10" in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -655,8 +894,10 @@ def test_workbench_chat_tool_trace_preserves_i18n_metadata():
     segment_adapter = chat.split("function wbcRuntimeSegmentMessages(", 1)[1].split(
         "function wbcSubagentStatusText", 1
     )[0]
-    assert "var progressEntries = Array.isArray(runtime.progress) ? runtime.progress : [];" in live_message
-    assert "trace: Array.isArray(segment.progress) ? segment.progress" in segment_adapter
+    assert "var activities = Array.isArray(runtime.activities)" in live_message
+    assert "activity={activity}" in live_message
+    assert "trace: hasLiveActivities ? []" in segment_adapter
+    assert "Array.isArray(segment.progress) ? segment.progress" in segment_adapter
     assert "return { tool: entry.text, preview: entry.preview };" not in live_message
     assert 'wbcT(entry.detailKey, toolKey, entry.detailParams)' in chat
     assert '"update_plan_progress"].indexOf(toolName)' in chat
@@ -666,6 +907,53 @@ def test_workbench_chat_tool_trace_preserves_i18n_metadata():
     assert "WBC_THINKING_PHRASES" not in chat
     assert "var heartbeatI18n = useWorkbenchI18n();" in chat
     assert "}, [heartbeatLang]);" in chat
+
+
+def test_workbench_live_trace_keeps_each_llm_activity_independent():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    css = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'type === "reasoning_start" && handlers.onReasoningStart' in chat
+    assert 'type === "reasoning_delta" && handlers.onReasoningDelta' in chat
+    assert 'type === "reasoning_done" && handlers.onReasoningDone' in chat
+    assert 'reasoning: String(activity.reasoning || "") + delta' in chat
+    assert "function WbcLiveActivityCard({ activity, active, hasReplyText })" in chat
+    activity_card = chat.split("function WbcLiveActivityCard", 1)[1].split(
+        "function WbcLiveMessage", 1
+    )[0]
+    live_message = chat.split("function WbcLiveMessage", 1)[1].split(
+        "var WBC_DRAFT_PREFIX", 1
+    )[0]
+    assert "useWbcState(false)" in activity_card
+    assert "useWbcState(0)" in activity_card
+    assert 'setLockedHeight(cardRef.current.getBoundingClientRect().height)' in chat
+    assert 'style={lockedHeight ? { height: lockedHeight + "px" } : null}' in chat
+    assert 'setShowReasoning(function (visible) { return !visible; });' in chat
+    assert "activities.map(function (activity, index)" in live_message
+    assert "key={activity.id || index}" in live_message
+    assert "reasoning={item.reasoning}" in activity_card
+    assert "useWbcState(false)" not in live_message
+    assert "useWbcState(0)" not in live_message
+    assert "trace: hasLiveActivities ? []" in chat
+    assert 'className="wb-spinner small" aria-hidden="true"' in chat
+    assert 'className="wbc-thinking-detail-text" ref={reasoningRef}' in chat
+    assert ".wbc-trace.live.wbc-trace-locked" in css
+    assert ".wbc-trace.wbc-trace-locked .wbc-trace-view" in css
+    trace_view_css = css.split(".wbc-trace-view {", 1)[1].split("}", 1)[0]
+    assert "height: 100%;" not in trace_view_css
+    detail_css = css.split(".wbc-thinking-detail {", 1)[1].split("}", 1)[0]
+    assert "overflow: hidden;" in detail_css
+    detail_text_css = css.split(".wbc-thinking-detail-text {", 1)[1].split("}", 1)[0]
+    assert "overflow-y: auto;" in detail_text_css
+    assert "查看实时思考详情" in i18n
 
 
 def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
@@ -836,7 +1124,7 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
     assert "padding-inline: 8px;" in compact_tabs[0]
     assert "padding-inline: 2px;" in compact_tabs[1]
     assert "font-size: calc(12px * var(--wb-ui-font-scale, 1));" in compact_tabs[1]
-    assert "workbench.css?v=0.6.9" in index
+    assert "workbench.css?v=0.6.10" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -858,7 +1146,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.6.9" in index
+    assert "workbench.css?v=0.6.10" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -931,7 +1219,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=0.6.9" in index
+    assert "settings-overlay.js?v=0.6.10" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -1070,7 +1358,7 @@ def test_workbench_context_picker_contains_long_workspace_paths():
     assert "text-overflow: ellipsis;" in text_rule
     assert "white-space: nowrap;" in text_rule
     assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=0.6.9" in index
+    assert "workbench-chat.js?v=0.6.10" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -1086,8 +1374,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=0.6.9" in index
-    assert "workbench.js?v=0.6.9" in index
+    assert "workbench-model.js?v=0.6.10" in index
+    assert "workbench.js?v=0.6.10" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -1205,7 +1493,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.models || p.primary_candidates || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=0.6.9" in index
+    assert "settings-overlay.js?v=0.6.10" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -1571,7 +1859,7 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=0.6.9" in index
+    assert "compiled/workbench-shortcuts.js?v=0.6.10" in index
 
 
 def test_workbench_about_related_actions_only_click_right_button():

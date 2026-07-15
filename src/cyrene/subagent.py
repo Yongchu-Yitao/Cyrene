@@ -990,7 +990,7 @@ async def run_summary_subagent(
     await save_messages(summary_agent_id, messages)
 
     try:
-        response = await _call_llm(messages, tools=None, max_tokens=32000)
+        response = await _call_llm(messages, tools=None, max_tokens=None)
         assistant_entry: dict[str, Any] = {"role": "assistant", "content": response.get("content") or ""}
         if response.get("reasoning_content"):
             assistant_entry["reasoning_content"] = response["reasoning_content"]

@@ -600,13 +600,74 @@ def ctx_limit_for_model(model_name: str) -> int:
         return 128_000
     if "gemini" in ml:
         return 1_000_000
+    if "mimo-v2.5" in ml:
+        return 1_000_000
+    return 0
+
+
+def configured_ctx_limit_for_model(
+    model_name: str,
+    models: list[dict] | None = None,
+) -> int:
+    """Return only the explicitly configured window for one model."""
+    target = str(model_name or "").strip()
+    if not target:
+        return 0
+    configured = get_models() if models is None else models
+    for item in configured or []:
+        if not isinstance(item, dict):
+            continue
+        if target in {
+            str(item.get("model") or "").strip(),
+            str(item.get("name") or "").strip(),
+            str(item.get("id") or "").strip(),
+        }:
+            return _parse_ctx_str(item.get("ctx", ""))
+    return 0
+
+
+def effective_ctx_limit_for_model(
+    model_name: str,
+    models: list[dict] | None = None,
+) -> int:
+    """Resolve one model's context window with a known-model fallback.
+
+    An explicit ``ctx`` always wins. Otherwise a built-in family window for the
+    same model is used. Only an entirely unknown model falls back to the smallest
+    known window among configured candidates, so known models are never reduced
+    by an unrelated backup model.
+    """
+    configured = get_models() if models is None else models
+    explicit = configured_ctx_limit_for_model(model_name, configured)
+    if explicit > 0:
+        return explicit
+    known_for_model = ctx_limit_for_model(model_name)
+    if known_for_model > 0:
+        return known_for_model
+    limits: list[int] = []
+    for item in configured or []:
+        if not isinstance(item, dict):
+            continue
+        candidate_name = str(
+            item.get("model") or item.get("name") or item.get("id") or ""
+        ).strip()
+        if not candidate_name:
+            continue
+        limit = ctx_limit_for_model(candidate_name)
+        if limit > 0:
+            limits.append(limit)
+    if limits:
+        return min(limits)
     return 0
 
 
 def get_current_ctx_limit() -> int:
-    """Context-window size (in tokens) of the active primary model. 0 if unknown."""
+    """Context window for the active model, with fallback only if unset."""
     from cyrene import config
-    return ctx_limit_for_model(str(getattr(config, "OPENAI_MODEL", "") or ""))
+
+    return effective_ctx_limit_for_model(
+        str(getattr(config, "OPENAI_MODEL", "") or "")
+    )
 
 
 def save_vision_models(models: list[dict]) -> None:

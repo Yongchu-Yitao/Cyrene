@@ -126,6 +126,22 @@ function WorkbenchFileDropOverlay({ label, busy }) {
   );
 }
 
+// Keep an already-opened surface mounted so its local UI state (selection,
+// scroll position, drafts, side panels) survives navigation, but stop parent
+// Workbench updates from re-rendering it while hidden. In particular, changing
+// project used to synchronously render every module the user had ever opened,
+// plus the hidden task surface. A hidden surface receives the newest props the
+// next time `active` becomes true; child-owned state updates still work because
+// React.memo only filters parent-driven renders.
+var WorkbenchStableSurface = React.memo(
+  function WorkbenchStableSurface({ active, children }) {
+    return <div style={{ display: active ? "contents" : "none" }}>{children}</div>;
+  },
+  function keepHiddenSurfaceStable(prev, next) {
+    return !prev.active && !next.active;
+  }
+);
+
 // ---------------------------------------------------------------------------
 // Non-blocking feedback: toasts + confirm dialogs that replace window.alert /
 // window.confirm. Native dialogs freeze the page (fatal while a task streams)
@@ -1217,8 +1233,14 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       return next;
     });
     setExpandedStepId("");
-    if (!fullPage) setTaskView("board");
-    if (nextSession && nextSession.isSummary) fetchAndMergeSession(nextSessionId);
+    // A project switch changes the task collection, so return its hidden task
+    // surface to the board as well. This avoids reopening a summary-only first
+    // task when the user later leaves the current module.
+    setTaskView("board");
+    // The project summary already contains everything the task board needs.
+    // Fetching the first task's full detail here made every project switch pay
+    // for an invisible task while the user was on memory/schedule/knowledge.
+    // Task detail remains lazy-loaded by selectSession when it is actually opened.
     window.WorkbenchModel.setActiveProject(project.id, nextSessionId).catch(function () {});
   }
 
@@ -1574,7 +1596,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
             onSettings={function () { setSettingsTab(""); setSettingsOpen(true); }}
           />
           {showChatPage && (
-            <div style={{ display: isChat ? "contents" : "none" }}>
+            <WorkbenchStableSurface active={isChat}>
               {React.createElement(window.WorkbenchChatPage || function () { return <div className="workbench-empty">{t("workbench.chatLoading")}</div>; }, {
                 active: isChat,
                 project: store.activeProject,
@@ -1582,30 +1604,30 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
                 onActiveChatChange: setChatCrumb,
                 onActiveChatIdChange: setActiveChatId,
               })}
-            </div>
+            </WorkbenchStableSurface>
           )}
           {showKnowledgePage && (
-            <div style={{ display: isKnowledge ? "contents" : "none" }}>
+            <WorkbenchStableSurface active={isKnowledge}>
               {React.createElement(window.WorkbenchKnowledgePage || function () { return <div className="workbench-empty">{t("workbench.knowledgeLoading")}</div>; }, {
                 active: isKnowledge,
                 project: store.activeProject,
                 onBack: function () { setFullPage(null); },
                 onNavigate: navigateFromSearch,
               })}
-            </div>
+            </WorkbenchStableSurface>
           )}
           {showSchedulePage && (
-            <div style={{ display: isSchedule ? "contents" : "none" }}>
+            <WorkbenchStableSurface active={isSchedule}>
               {React.createElement(window.WorkbenchSchedulePage || function () { return <div className="workbench-empty">{t("workbench.scheduleLoading")}</div>; }, { active: isSchedule, project: store.activeProject, onBack: function () { setFullPage(null); } })}
-            </div>
+            </WorkbenchStableSurface>
           )}
           {showMemoryPage && (
-            <div style={{ display: isMemory ? "contents" : "none" }}>
+            <WorkbenchStableSurface active={isMemory}>
               {React.createElement(window.WorkbenchMemoryPage || function () { return <div className="workbench-empty">{t("workbench.memoryLoading")}</div>; }, { active: isMemory, project: store.activeProject, onBack: function () { setFullPage(null); } })}
-            </div>
+            </WorkbenchStableSurface>
           )}
           {showWelcomePage && (
-            <div style={{ display: isWelcome ? "contents" : "none" }}>
+            <WorkbenchStableSurface active={isWelcome}>
               {React.createElement(window.WorkbenchWelcomePage || function () { return <div className="workbench-empty">{t("workbench.welcomeLoading")}</div>; }, {
                 active: isWelcome,
                 project: store.activeProject,
@@ -1617,16 +1639,16 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
                 actualTheme: actualTheme,
                 onToggleTheme: onToggleTheme,
               })}
-            </div>
+            </WorkbenchStableSurface>
           )}
           {showProfilePage && (
-            <div style={{ display: isProfile ? "contents" : "none" }}>
+            <WorkbenchStableSurface active={isProfile}>
               {window.WorkbenchProfilePage
                 ? React.createElement(window.WorkbenchProfilePage, { active: isProfile })
                 : <div className="workbench-empty">…</div>}
-            </div>
+            </WorkbenchStableSurface>
           )}
-          <div style={{ display: isModulePage ? "none" : "contents" }}>
+          <WorkbenchStableSurface active={!isModulePage}>
           <>
           {taskView === "board" ? (
             <TaskBoard
@@ -1684,7 +1706,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           </>
           )}
           </>
-          </div>
+          </WorkbenchStableSurface>
         </div>
       )}
       {searchOpen && typeof ReactDOM !== "undefined" && ReactDOM.createPortal(React.createElement(

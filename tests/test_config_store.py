@@ -85,3 +85,46 @@ def test_migration_fixes_incomplete_model_entries(isolated_config_store):
     assert vision[0]["model"] == "gpt-4o-mini"
     assert vision[0]["base_url"] == "https://api.example.com/v1"
     assert vision[0]["api_key"] == "sk-env"
+
+
+def test_unknown_model_context_uses_smallest_known_candidate_window(monkeypatch):
+    from cyrene import config_store
+
+    models = [
+        {"model": "unknown-custom"},
+        {"model": "deepseek-v4-flash", "ctx": "1M"},
+        {"model": "google/gemma-4-12b-qat", "ctx": "200K"},
+    ]
+    monkeypatch.setattr(config_store, "get_models", lambda: models)
+
+    assert config_store.effective_ctx_limit_for_model("unknown-custom") == 200_000
+
+
+def test_explicit_model_context_is_not_reduced_by_fallbacks(monkeypatch):
+    from cyrene import config_store
+
+    models = [
+        {"model": "primary", "ctx": "500K"},
+        {"model": "backup", "ctx": "200K"},
+    ]
+    monkeypatch.setattr(config_store, "get_models", lambda: models)
+
+    assert config_store.effective_ctx_limit_for_model("primary") == 500_000
+
+
+def test_known_model_default_is_not_reduced_by_fallbacks(monkeypatch):
+    from cyrene import config_store
+
+    models = [
+        {"model": "mimo-v2.5", "ctx": ""},
+        {"model": "google/gemma-4-12b-qat", "ctx": "200K"},
+    ]
+    monkeypatch.setattr(config_store, "get_models", lambda: models)
+
+    assert config_store.effective_ctx_limit_for_model("mimo-v2.5") == 1_000_000
+
+
+def test_unknown_context_preserves_zero_without_known_candidates():
+    from cyrene import config_store
+
+    assert config_store.effective_ctx_limit_for_model("custom", []) == 0

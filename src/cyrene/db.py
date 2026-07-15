@@ -812,9 +812,6 @@ async def count_stat_days(db_path: str) -> int:
 # Token usage tracking
 # ---------------------------------------------------------------------------
 
-_DEFAULT_PRICE_PER_1K = (0.007, 0.014)  # fallback per-1k prompt/completion cost in CNY
-
-
 def _estimate_cost(
     model: str,
     prompt_tokens: int,
@@ -826,19 +823,13 @@ def _estimate_cost(
     from cyrene.model_prices import effective_price, estimate_cost
 
     pricing = effective_price(model)
-    if pricing:
-        cost = estimate_cost(
-            pricing,
-            prompt_tokens,
-            completion_tokens,
-            cache_hit_tokens=cache_hit_tokens,
-            cache_miss_tokens=cache_miss_tokens,
-        )
-    else:
-        cost = (
-            (max(prompt_tokens, 0) / 1000.0) * _DEFAULT_PRICE_PER_1K[0]
-            + (max(completion_tokens, 0) / 1000.0) * _DEFAULT_PRICE_PER_1K[1]
-        )
+    cost = estimate_cost(
+        pricing,
+        prompt_tokens,
+        completion_tokens,
+        cache_hit_tokens=cache_hit_tokens,
+        cache_miss_tokens=cache_miss_tokens,
+    )
     return round(cost, 6)
 
 

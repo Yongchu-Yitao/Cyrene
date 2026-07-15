@@ -162,7 +162,7 @@ async def _generate_guidance_ack(
         },
     ]
     try:
-        response = await _call_llm(prompt_messages, tools=None, max_tokens=80, secondary=True)
+        response = await _call_llm(prompt_messages, tools=None, max_tokens=240, secondary=True)
         ack_text = _assistant_text(response).strip()
         return ack_text or _guidance_ack_text()
     except Exception:

@@ -160,7 +160,6 @@ async def test_clean_reflection_falls_back_when_worker_returns_invalid_json(monk
 async def test_deep_reflect_tool_projects_next_llm_call_without_cleaning_saved_transcript(monkeypatch) -> None:
     import cyrene.agent.agent as agent_core
     import cyrene.agent.deep_reflection as deep_reflection
-    import cyrene.behavior_learning as behavior_learning
 
     history = [
         {"role": "user", "message_id": "u_old", "content": "Original hard goal"},
@@ -222,7 +221,6 @@ async def test_deep_reflect_tool_projects_next_llm_call_without_cleaning_saved_t
     monkeypatch.setattr(agent_core, "_publish_runtime_event", AsyncMock())
     monkeypatch.setattr(deep_reflection, "_call_llm", fake_clean_llm)
     monkeypatch.setattr(deep_reflection, "_publish_runtime_event", AsyncMock())
-    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
 
     result = await agent_core._run_main_agent("continue", history, None, 0, "db.sqlite3")
 
@@ -238,7 +236,6 @@ async def test_deep_reflect_tool_projects_next_llm_call_without_cleaning_saved_t
 async def test_deep_reflect_mixed_tool_turn_compresses_same_turn_tool_results(monkeypatch) -> None:
     import cyrene.agent.agent as agent_core
     import cyrene.agent.deep_reflection as deep_reflection
-    import cyrene.behavior_learning as behavior_learning
 
     clean_packet = {
         "schema": "cyrene.deep_reflection.v1",
@@ -290,7 +287,6 @@ async def test_deep_reflect_mixed_tool_turn_compresses_same_turn_tool_results(mo
     monkeypatch.setattr(agent_core, "_publish_runtime_event", AsyncMock())
     monkeypatch.setattr(deep_reflection, "_call_llm", fake_clean_llm)
     monkeypatch.setattr(deep_reflection, "_publish_runtime_event", AsyncMock())
-    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
 
     result = await agent_core._run_main_agent("Fix the issue", [], None, 0, "db.sqlite3")
 
@@ -306,7 +302,6 @@ async def test_deep_reflect_mixed_tool_turn_compresses_same_turn_tool_results(mo
 async def test_deep_reflect_mixed_with_quit_preserves_tool_result_pairing(monkeypatch) -> None:
     import cyrene.agent.agent as agent_core
     import cyrene.agent.deep_reflection as deep_reflection
-    import cyrene.behavior_learning as behavior_learning
 
     clean_packet = {
         "schema": "cyrene.deep_reflection.v1",
@@ -356,7 +351,6 @@ async def test_deep_reflect_mixed_with_quit_preserves_tool_result_pairing(monkey
     monkeypatch.setattr(agent_core, "_publish_runtime_event", AsyncMock())
     monkeypatch.setattr(deep_reflection, "_call_llm", fake_clean_llm)
     monkeypatch.setattr(deep_reflection, "_publish_runtime_event", AsyncMock())
-    monkeypatch.setattr(behavior_learning, "try_route_and_execute_skill", AsyncMock(return_value=None))
 
     result = await agent_core._run_main_agent("Fix the issue", [], None, 0, "db.sqlite3")
 

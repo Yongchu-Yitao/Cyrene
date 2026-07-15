@@ -454,6 +454,7 @@ def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
         "title": chat.get("title"),
         "status": chat.get("status") or "idle",
         "model": chat.get("model") or "",
+        "lastModel": chat.get("lastModel") or "",
         "createdAt": chat.get("createdAt"),
         "updatedAt": chat.get("updatedAt"),
         "preview": _chat_preview(chat),
@@ -1005,12 +1006,21 @@ def _chat_context_payload(state_id: str, model_name: str) -> dict[str, Any]:
     real time as the agent appends turns.
     """
     from cyrene.agent.session import _COMPACT_TRIGGER_RATIO
-    from cyrene.config_store import ctx_limit_for_model
+    from cyrene.config_store import effective_ctx_limit_for_model
 
     messages = _session_state_messages(state_id)
+    actual_model = ""
+    for message in reversed(messages):
+        if not isinstance(message, dict) or str(message.get("role") or "") != "assistant":
+            continue
+        usage = message.get("usage") if isinstance(message.get("usage"), dict) else {}
+        actual_model = str(usage.get("model") or message.get("model") or "").strip()
+        if actual_model:
+            break
+    effective_model = actual_model or model_name
     seg = _context_segment_tokens(messages)
     used = sum(seg.values())
-    limit = ctx_limit_for_model(model_name)
+    limit = effective_ctx_limit_for_model(effective_model)
     compacted_blocks = sum(
         1 for m in messages if isinstance(m, dict) and m.get("compacted_block")
     )
@@ -1019,6 +1029,8 @@ def _chat_context_payload(state_id: str, model_name: str) -> dict[str, Any]:
         for m in messages
     )
     return {
+        "model": effective_model,
+        "usage": _aggregate_usage(messages),
         "ctxLimit": limit,
         "ctxUsed": used,
         "ratio": (used / limit) if limit > 0 else None,
@@ -1243,6 +1255,13 @@ def _make_reply_segment(
         "createdAt": str(message.get("created_at") or message.get("createdAt") or _utc_now_iso()),
         "intermediate": True,
     }
+    model_name = str(
+        (message.get("usage") or {}).get("model")
+        if isinstance(message.get("usage"), dict)
+        else ""
+    ).strip() or str(message.get("model") or "").strip()
+    if model_name:
+        entry["model"] = model_name
     if trace:
         entry["trace"] = trace[:40]
     if any(usage.values()):
@@ -1413,6 +1432,23 @@ def _extract_exchange_segments(
     if not usage["total_tokens"]:
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
     return segments, trace[:40], usage, files[:20]
+
+
+def _last_exchange_model(
+    state_messages: list[dict[str, Any]], state_ids_before: set[str]
+) -> str:
+    """Actual model used by the last new assistant call in an exchange."""
+    for message in reversed(state_messages):
+        if not isinstance(message, dict) or str(message.get("role") or "") != "assistant":
+            continue
+        mid = str(message.get("message_id") or message.get("id") or "").strip()
+        if mid and mid in state_ids_before:
+            continue
+        usage = message.get("usage") if isinstance(message.get("usage"), dict) else {}
+        model_name = str(usage.get("model") or message.get("model") or "").strip()
+        if model_name:
+            return model_name
+    return ""
 
 
 def _published_intermediate_message_ids(run: ChatRun) -> set[str]:
@@ -1682,7 +1718,7 @@ async def _summarize_chat_to_brief(chat: dict[str, Any], project: dict[str, Any]
             R._call_llm(
                 [{"role": "user", "content": prompt}],
                 tools=None,
-                max_tokens=2000,
+                max_tokens=6000,
                 thinking="disabled",
             ),
             timeout=90,
@@ -1898,7 +1934,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         """Let the user explicitly run the normal session compaction flow."""
         from cyrene import config
         from cyrene.agent import compact_session_if_needed
-        from cyrene.config_store import ctx_limit_for_model
+        from cyrene.config_store import effective_ctx_limit_for_model
 
         if chat_id.startswith("legacy:"):
             return JSONResponse(
@@ -1918,7 +1954,10 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             # OpenAI-compatible custom model has no family heuristic/configured
             # context size. 128K is the conservative default used by the core
             # chat models and is safer than passing 0 (which disables budgeting).
-            ctx_limit=ctx_limit_for_model(model_name) or 128_000,
+            ctx_limit=(
+                effective_ctx_limit_for_model(model_name)
+                or 128_000
+            ),
             force=True,
         )
         return {"ok": True, **result}
@@ -2296,17 +2335,19 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
 
         def _finalize(reply_text: str) -> dict[str, Any]:
             """Persist mid-run messages plus the final assistant reply in order."""
+            state_messages = _session_state_messages(chat_id)
             intermediate_entries, trace, usage, files = _extract_exchange_segments(
-                _session_state_messages(chat_id), state_ids_before
+                state_messages, state_ids_before
             )
             fresh = _read_chats_store()
             fresh_chat = _find_chat(fresh, chat_id)
             if not fresh_chat:
                 return {}
             _commit_retry_cut(fresh_chat)
-            model_name = fresh_chat.get("model") or ""
+            configured_model = str(fresh_chat.get("model") or "")
+            model_name = _last_exchange_model(state_messages, state_ids_before) or configured_model
             for entry in intermediate_entries:
-                entry["model"] = model_name
+                entry.setdefault("model", model_name)
             assistant_entry: dict[str, Any] = {
                 "id": _short_id("msg"),
                 "role": "assistant",
@@ -2320,6 +2361,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 assistant_entry["usage"] = usage
             if files:
                 assistant_entry["attachments"] = files
+            fresh_chat["lastModel"] = model_name
             saved_messages = [*intermediate_entries, assistant_entry]
             _merge_chat_messages_chronologically(fresh_chat, saved_messages)
             fresh_chat["status"] = "idle"
@@ -2403,14 +2445,18 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             fresh_chat["status"] = "idle"
             if pending:
                 fresh_chat["pendingQuestion"] = pending
+                state_messages = _session_state_messages(chat_id)
                 intermediate_entries, trace, usage, files = _extract_exchange_segments(
-                    _session_state_messages(chat_id),
+                    state_messages,
                     state_ids_before,
                     include_open_tool_preamble=True,
                 )
-                model_name = str(fresh_chat.get("model") or "")
+                model_name = (
+                    _last_exchange_model(state_messages, state_ids_before)
+                    or str(fresh_chat.get("model") or "")
+                )
                 for entry in intermediate_entries:
-                    entry["model"] = model_name
+                    entry.setdefault("model", model_name)
                 question_entry = _pending_question_message(
                     pending,
                     trace=trace,
@@ -2419,6 +2465,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                     model=model_name,
                 )
                 saved_messages = [*intermediate_entries, question_entry]
+                fresh_chat["lastModel"] = model_name
                 _merge_chat_messages_chronologically(
                     fresh_chat, saved_messages
                 )
@@ -2858,14 +2905,22 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         if reply == R._AWAITING_USER_SENTINEL:
             new_pending = await asyncio.to_thread(R._workbench_pending_question_for, chat_id)
 
+            resume_state_messages = await asyncio.to_thread(_session_state_messages, chat_id)
+
             def extract_pending() -> tuple[list[dict[str, Any]], list[Any], dict[str, Any], list[Any]]:
                 return _extract_exchange_segments(
-                    _session_state_messages(chat_id),
+                    resume_state_messages,
                     state_ids_before_resume,
                     include_open_tool_preamble=True,
                 )
 
             intermediate_entries, trace, usage, files = await asyncio.to_thread(extract_pending)
+            pending_model = (
+                _last_exchange_model(resume_state_messages, state_ids_before_resume)
+                or str(chat.get("model") or "")
+            )
+            for entry in intermediate_entries:
+                entry.setdefault("model", pending_model)
             additions = [
                 *intermediate_entries,
                 *([
@@ -2874,7 +2929,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                         trace=trace,
                         usage=usage,
                         files=files,
-                        model=str(chat.get("model") or ""),
+                        model=pending_model,
                     )
                 ] if new_pending else []),
             ]
@@ -2888,9 +2943,11 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 "userMessage": _public_message(answer_entry),
             }
 
+        answer_state_messages = await asyncio.to_thread(_session_state_messages, chat_id)
+
         def extract_answer() -> tuple[list[dict[str, Any]], list[Any], dict[str, Any], list[Any]]:
             return _extract_exchange_segments(
-                _session_state_messages(chat_id), state_ids_before_resume
+                answer_state_messages, state_ids_before_resume
             )
 
         intermediate_entries, trace, usage, files = await asyncio.to_thread(extract_answer)
@@ -2898,9 +2955,12 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         fresh_chat = _find_chat(fresh, chat_id)
         if not fresh_chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
-        model_name = fresh_chat.get("model") or ""
+        model_name = (
+            _last_exchange_model(answer_state_messages, state_ids_before_resume)
+            or str(fresh_chat.get("model") or "")
+        )
         for entry in intermediate_entries:
-            entry["model"] = model_name
+            entry.setdefault("model", model_name)
         assistant_entry: dict[str, Any] = {
             "id": _short_id("msg"),
             "role": "assistant",
@@ -2916,6 +2976,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             assistant_entry["attachments"] = files
         saved_messages = [*intermediate_entries, assistant_entry]
         _merge_chat_messages_chronologically(fresh_chat, saved_messages)
+        fresh_chat["lastModel"] = model_name
         fresh_chat["status"] = "idle"
         fresh_chat.pop("pendingQuestion", None)
         fresh_chat["updatedAt"] = assistant_entry["createdAt"]

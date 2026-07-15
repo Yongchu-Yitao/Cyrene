@@ -428,7 +428,7 @@ async def _verify_step(
         parsed = await R._workbench_run_explore_agent(
             workspace_root,
             prompt,
-            max_tokens=800,
+            max_tokens=2400,
             timeout=90,
             session_id=str(session.get("id") or ""),
             clean_context=True,
@@ -496,7 +496,7 @@ async def _generate_repair_steps(
         parsed = await R._workbench_run_explore_agent(
             workspace_root,
             prompt,
-            max_tokens=1800,
+            max_tokens=5400,
             timeout=120,
             session_id=str(session.get("id") or ""),
             clean_context=True,

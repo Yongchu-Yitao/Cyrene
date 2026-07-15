@@ -1,67 +1,60 @@
-# Task Board Refinement Design QA
+# Workbench live reasoning spinner QA
 
-- Source visual truth:
-  - `/Users/syw/Library/Containers/com.tencent.qq/Data/Library/Application Support/QQ/nt_qq_a5187743c563bd88b13838b2a26d3126/nt_data/Pic/2026-07/Ori/5054ef1ef00aa6ea63a515cf3567c9ad.png`
-  - `/Users/syw/Library/Application Support/PixPin/Temp/PixPin_2026-07-11_01-15-00.png`
-- Implementation screenshots:
-  - `/tmp/cyrene-board-qa-2/board-dark-final.jpg`
-  - `/tmp/cyrene-board-qa-2/board-hover-final.jpg`
-- Combined comparisons:
-  - `/tmp/cyrene-board-qa-2/comparison-dark-final.jpg`
-  - `/tmp/cyrene-board-qa-2/card-hover-comparison.jpg`
-- Viewport: `1280 × 720`
-- State: dark theme, task board visible, first task card hovered
+**Evidence**
 
-**Full-view comparison evidence**
-
-The implementation uses a blue-grey `#111827` board canvas instead of the previous near-black background. The board retains five status columns, but the header toolbar now contains only sorting and new-task controls. Task cards no longer render an assignee footer.
-
-**Focused region comparison evidence**
-
-The focused card comparison shows the overflow menu aligned with the first title line, matching the supplied compact-card reference. The hover capture shows the first card's top border fully visible with no upward translation into the column's clipping boundary.
+- Source visual truth (spinner missing after the reasoning text scrolled): `/Users/syw/Library/Application Support/PixPin/Temp/PixPin_2026-07-15_12-24-54.png`
+- Actual Cyrene implementation screenshot: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/com.openai.sky.CUAService/Electron Screenshot 2026-07-15 at 12.28.53 PM.jpeg`
+- Focused implementation crop: `/tmp/cyrene-reasoning-spinner-qa/fixed.png`
+- Combined source/fixed comparison: `/tmp/cyrene-reasoning-spinner-qa/source-vs-fixed.png`
+- Viewport: `1152 × 768` for the actual Cyrene render.
+- State: live reasoning detail open, long reasoning text scrolled to the final line.
 
 **Findings**
 
-- No actionable P0, P1, or P2 differences remain for the requested refinements.
-- P3: real task titles and summaries wrap differently from the small reference crop; truncation and hierarchy remain consistent.
+- No remaining P0/P1/P2 findings.
+- The spinner was originally inside the same scrolling container as the reasoning text, so auto-scroll moved it out of view.
+- The card now keeps the existing spinner as a fixed flex sibling and scrolls only `.wbc-thinking-detail-text`.
+
+**Measured result**
+
+- Locked card height: `43.59375px`.
+- Spinner size: `12 × 12px`.
+- Spinner animation: `wb-spin`.
+- Text scroll position: `83px` of `105px`, with a `22px` viewport (fully scrolled to the bottom).
+- Spinner visible after the text reached the bottom: `true`.
 
 **Required fidelity surfaces**
 
-- Fonts and typography: existing Workbench typography is retained; title, summary, status, steps, and time preserve the intended hierarchy.
-- Spacing and layout rhythm: removing the footer shortens cards, releases unused right padding, and aligns the menu within the title grid.
-- Colors and visual tokens: the dark board canvas is blue-grey rather than pure black; semantic stage and status colors are unchanged.
-- Image quality and asset fidelity: no new raster assets were required; existing menu icons are reused.
-- Copy and content: the toolbar exposes only `排序` and `新建任务`; task content remains source-backed.
+- Fonts and typography: existing Workbench font family, size, line height, and reasoning copy behavior are unchanged.
+- Spacing and layout rhythm: the locked card retains its measured `43.59375px` height; the spinner remains in the original left position while text scrolls independently.
+- Colors and visual tokens: the existing green spinner and card tokens are reused.
+- Image quality and asset fidelity: no new raster or vector assets were introduced.
+- Copy and content: live reasoning text and activity labels are unchanged.
 
-**Interaction and runtime checks**
+**Interaction and verification**
 
-- Dark board background computed as `rgb(17, 24, 39)`.
-- Toolbar DOM contains exactly `排序：默认` and `新建任务`.
-- Card assignee/footer elements are absent.
-- Card menu is inside the title row and remains keyboard accessible.
-- Hovered first-card border is visibly intact.
-- Initialization detail receives the same `onBackToBoard` callback and renders `返回看板`.
 - Frontend build completed successfully.
-- `tests/test_workbench_frontend_logic.py`: 68 passed.
-- Browser console errors: none observed during the board capture.
+- `tests/test_workbench_frontend_logic.py`: 86 passed.
+- Regression assertions cover the retained spinner, the fixed outer detail region, and the independently scrollable text region.
+- Actual-app QA confirmed the spinner remains visible and animated when the reasoning text is at the bottom.
 
 **Comparison history**
 
-1. Previous state used a near-black board background, translated cards upward on hover, rendered a Cyrene footer, and showed four toolbar controls.
-2. The background token, hover behavior, card structure, menu alignment, toolbar, and initialization navigation were updated.
-3. Final full-board and hovered-card captures show no remaining P0/P1/P2 issues.
+1. Before fix: auto-scroll applied to the whole reasoning detail row and scrolled the left spinner away.
+2. Fix: moved the scrolling ref and `overflow-y: auto` to the reasoning text span only.
+3. After fix: the spinner stays visible, uses the original `wb-spin` animation, and the card height remains unchanged.
 
 **Implementation checklist**
 
-- [x] Blue-grey dark background.
-- [x] Top hover border remains visible.
-- [x] Initialization detail includes back-to-board.
-- [x] Cyrene footer removed.
-- [x] Menu aligned with title first line.
-- [x] Toolbar reduced to sort and new task.
+- [x] Keep the left spinner visible in reasoning detail.
+- [x] Preserve the existing spinner animation and visual token.
+- [x] Scroll only the live reasoning text.
+- [x] Preserve the locked card height.
+- [x] Add regression assertions.
+- [x] Build, test, and verify in the actual Cyrene UI.
 
 **Follow-up polish**
 
-- None required for this refinement.
+- None required for this regression.
 
 final result: passed

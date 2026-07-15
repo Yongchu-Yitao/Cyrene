@@ -1,11 +1,36 @@
 import sys
+import json
+import re
+import sqlite3
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
-async def _fake_llm_json(_prompt: str, *, caller: str = "behavior_learning"):
+def _prompt_json(prompt: str, marker: str) -> dict:
+    payload = prompt.split(marker, 1)[1].lstrip()
+    value, _ = json.JSONDecoder().raw_decode(payload)
+    return value
+
+
+async def _fake_llm_json(prompt: str, *, caller: str = "behavior_learning"):
+    if caller != "skill_learning_agent":
+        return {}
+    if "Create the short purpose label" in prompt:
+        payload = _prompt_json(prompt, "Execution record:\n")
+        request = re.sub(r"https?://\S+|(?:[A-Za-z]:\\\\|/)[^\s]+", "", str(payload.get("user_request") or ""))
+        purpose = re.sub(r"[。！？!?，,；;：:\s]+", "", request)[:20] or "执行浏览器操作"
+        return {"purpose": purpose}
+    if "Assign one new completed workflow" in prompt:
+        payload = _prompt_json(prompt, "Learning input:\n")
+        incoming = str((payload.get("new_record") or {}).get("purpose") or "")
+        for item in payload.get("existing_candidates") or []:
+            if str(item.get("purpose") or "") == incoming:
+                return {"decision": "existing", "candidate_id": item["candidate_id"], "reason": "same purpose"}
+        return {"decision": "new", "candidate_id": "", "canonical_purpose": incoming, "reason": "new purpose"}
+    if "Synthesize one reusable learned Skill" in prompt:
+        return {"description": "执行已重复出现的工具流程。", "implementation": {"kind": "tool_chain"}}
     return {}
 
 
@@ -102,6 +127,53 @@ async def _record_repeated_read_turn(bl, *, round_id: str, user_message: str, su
     return context["turn_id"]
 
 
+async def test_init_removes_legacy_learning_schema(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    db_path = tmp_path / "behavior-learning.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("ALTER TABLE learned_skills ADD COLUMN pattern_id TEXT NOT NULL DEFAULT ''")
+        conn.execute("ALTER TABLE behavior_turns ADD COLUMN linked_skill_id TEXT NOT NULL DEFAULT ''")
+        conn.execute("ALTER TABLE behavior_skill_candidates ADD COLUMN bucket_key TEXT NOT NULL DEFAULT ''")
+        conn.execute("CREATE INDEX idx_behavior_skill_candidates_bucket ON behavior_skill_candidates(project_id, bucket_key)")
+        for table in (
+            "behavior_fingerprints",
+            "behavior_patterns",
+            "behavior_pattern_turns",
+            "behavior_learning_agent_reviews",
+            "behavior_vocabulary_labels",
+            "behavior_vocabulary_aliases",
+            "behavior_unknown_labels",
+            "behavior_replay_tests",
+        ):
+            conn.execute(f"CREATE TABLE {table} (id TEXT)")
+
+    await bl.init(tmp_path, tmp_path)
+
+    with sqlite3.connect(db_path) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        skill_columns = {row[1] for row in conn.execute("PRAGMA table_info(learned_skills)")}
+        turn_columns = {row[1] for row in conn.execute("PRAGMA table_info(behavior_turns)")}
+        chain_columns = {row[1] for row in conn.execute("PRAGMA table_info(behavior_turn_tool_chains)")}
+        candidate_columns = {row[1] for row in conn.execute("PRAGMA table_info(behavior_skill_candidates)")}
+        assignment_columns = {row[1] for row in conn.execute("PRAGMA table_info(behavior_skill_candidate_turns)")}
+    assert not tables.intersection({
+        "behavior_fingerprints",
+        "behavior_patterns",
+        "behavior_pattern_turns",
+        "behavior_learning_agent_reviews",
+        "behavior_vocabulary_labels",
+        "behavior_vocabulary_aliases",
+        "behavior_unknown_labels",
+        "behavior_replay_tests",
+    })
+    assert "pattern_id" not in skill_columns
+    assert "linked_skill_id" not in turn_columns
+    assert "purpose" in chain_columns
+    assert "purpose" in candidate_columns
+    assert "bucket_key" not in candidate_columns
+    assert "assignment_reason" in assignment_columns
+
+
 async def test_behavior_learning_promotes_to_active_skill(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
 
@@ -114,14 +186,12 @@ async def test_behavior_learning_promotes_to_active_skill(tmp_path, monkeypatch)
         )
 
     stats = await bl.process_unprocessed_turns(force=True)
-    patterns = await bl.list_patterns()
     skills = await bl.list_learned_skills()
 
     assert stats["processed_turns"] == 5
     assert stats["candidates_created"] == 1
     assert stats["candidates_awaiting_user"] == 1
     assert stats["candidates_auto_learned"] == 1
-    assert patterns == []
     candidates = await bl.list_skill_candidates()
     assert len(candidates) == 1
     assert candidates[0]["occurrence_count"] == 5
@@ -134,7 +204,6 @@ async def test_behavior_learning_promotes_to_active_skill(tmp_path, monkeypatch)
     assert skills[0]["script"]["steps"] == skills[0]["steps"]
     assert any(item["parameter_name"].startswith("param_path") for item in skills[0]["input_schema"])
     assert skills[0]["actual_usage_count"] == 0
-    assert skills[0]["shadow_validation_count"] == 0
 
 
 async def test_second_occurrence_script_parameterizes_repeated_tool_calls(tmp_path, monkeypatch):
@@ -182,35 +251,78 @@ async def test_defer_auto_learns_on_third_and_dismiss_blocks_auto_learning(tmp_p
     assert len(await bl.list_learned_skills()) == 1
 
 
-async def test_legacy_python_wrapper_is_migrated_to_declarative_script(tmp_path, monkeypatch):
+async def test_complex_workflow_learning_agent_generates_python_skill(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
-    message = "迁移旧技能脚本"
+
+    async def reviewer(prompt: str, *, caller: str = "behavior_learning"):
+        if "Synthesize one reusable learned Skill" in prompt:
+            return {
+                "description": "读取、修改并验证代码。",
+                "implementation": {
+                    "kind": "python",
+                    "source": (
+                        "import argparse\n"
+                        "import json\n"
+                        "parser = argparse.ArgumentParser()\n"
+                        "parser.add_argument('--params-json', default='{}')\n"
+                        "args = parser.parse_args()\n"
+                        "params = json.loads(args.params_json)\n"
+                        "print(json.dumps({'ok': True, 'params': params}, ensure_ascii=False))\n"
+                    ),
+                },
+            }
+        return await _fake_llm_json(prompt, caller=caller)
+
+    monkeypatch.setattr(bl, "_call_llm_json", reviewer)
+    message = "读取代码修复导出逻辑并运行测试"
     for index in range(3):
-        await _record_code_fix_turn(bl, session_id="migration", round_id=f"migration-{index}", user_message=message)
+        await _record_code_fix_turn(bl, session_id="script", round_id=f"script-{index}", user_message=message)
     await bl.process_unprocessed_turns(force=True)
     skill = (await bl.list_learned_skills())[0]
-    original_steps = skill["steps"]
-    wrapper = [{
-        "enabled": True,
-        "implementation_kind": "script",
-        "implementation_reference": {
-            "language": "python",
-            "script_path": str(tmp_path / "legacy.py"),
-            "original_steps": original_steps,
-        },
-    }]
-    async with bl._conn() as conn:
-        await conn.execute(
-            "UPDATE learned_skills SET steps_json = ?, script_json = '{}' WHERE skill_id = ?",
-            (bl._json_dumps(wrapper), skill["id"]),
-        )
-        await conn.commit()
 
-    assert await bl._migrate_generated_skill_scripts() == 1
-    migrated = await bl.get_learned_skill(skill["id"])
-    assert migrated["steps"] == original_steps
-    assert migrated["script"]["format"] == "cyrene.parameterized-tool-script"
-    assert migrated["script"]["risk"]["requires_runtime_approval"] is True
+    assert skill["skill_type"] == "python_script"
+    assert skill["risk_level"] == "high"
+    assert skill["steps"][0]["implementation_kind"] == "script"
+    reference = skill["steps"][0]["implementation_reference"]
+    assert reference["generated_by"] == "skill_learning_agent"
+    assert reference["requires_runtime_approval"] is True
+    assert Path(reference["script_path"]).read_text(encoding="utf-8").startswith("#!/usr/bin/env python3")
+    assert skill["script"]["implementation"]["source_sha256"] == reference["source_sha256"]
+    assert len(skill["script"]["declarative_steps"]) == 3
+
+
+async def test_learning_agent_shell_script_is_validated_persisted_and_hash_checked(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    implementation = bl._normalize_script_implementation(
+        {
+            "kind": "shell",
+            "source": "printf '%s\\n' \"$CYRENE_SKILL_PARAMS\"",
+        },
+        allow_script=True,
+    )
+    original_steps = [_make_step("read_file"), _make_step("search_file_content")]
+
+    steps, persisted = bl._persist_learning_agent_script(
+        "shell-skill",
+        implementation,
+        original_steps,
+        "输出参数",
+    )
+    output, ok, reason = await bl._execute_script_step(
+        steps[0]["implementation_reference"],
+        {"input": "value"},
+    )
+
+    assert persisted["kind"] == "shell_script"
+    assert Path(persisted["script_path"]).read_text(encoding="utf-8").startswith("#!/bin/sh")
+    assert ok is True
+    assert reason == ""
+    assert json.loads(output) == {"input": "value"}
+
+    Path(persisted["script_path"]).write_text("echo tampered\n", encoding="utf-8")
+    _, ok, reason = await bl._execute_script_step(steps[0]["implementation_reference"], {})
+    assert ok is False
+    assert reason == "script_integrity_error"
 
 async def test_behavior_learning_sanitizes_legacy_scheduler_prompts(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
@@ -236,7 +348,6 @@ async def test_behavior_learning_sanitizes_legacy_scheduler_prompts(tmp_path, mo
     stats = await bl.process_unprocessed_turns(force=True)
 
     assert stats["processed_turns"] == 1
-    assert await bl.list_patterns() == []
     assert await bl.list_skill_candidates() == []
     assert await bl.list_learned_skills() == []
     chain = (await bl.list_tool_chains())[0]
@@ -335,22 +446,6 @@ async def test_manual_turn_learning_creates_skill(tmp_path, monkeypatch):
 
 async def test_learning_agent_does_not_auto_learn_from_one_turn(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
-
-    async def reviewer(prompt: str, *, caller: str = "behavior_learning"):
-        if caller == "project_skill_learning_agent":
-            return {
-                "decision": "parameterize",
-                "confidence": 0.91,
-                "rationale": "Repeated project-local workflow.",
-                "proposed_skill": {
-                    "name": "修复并验证导出逻辑",
-                    "description": "读取文件、修改导出逻辑并运行测试。",
-                    "skill_type": "parameterized",
-                },
-            }
-        return {}
-
-    monkeypatch.setattr(bl, "_call_llm_json", reviewer)
     turn_id = await _record_code_fix_turn(
         bl,
         session_id="session-agent-learn",
@@ -360,11 +455,8 @@ async def test_learning_agent_does_not_auto_learn_from_one_turn(tmp_path, monkey
 
     stats = await bl.process_unprocessed_turns(force=True)
     skills = await bl.list_learned_skills()
-    chains = await bl.list_tool_chains()
 
     assert stats["processed_turns"] == 1
-    assert stats["learning_reviews"] == 0
-    assert stats["agent_created_skills"] == 0
     assert skills == []
     assert (await bl.list_skill_candidates())[0]["status"] == "observing"
 
@@ -413,7 +505,6 @@ async def test_second_occurrence_waits_and_third_auto_learns_once(tmp_path, monk
     )
     third_stats = await bl.process_unprocessed_turns(force=True)
     third_skills = await bl.list_learned_skills()
-    chains = await bl.list_tool_chains()
 
     assert third_stats["candidates_auto_learned"] == 1
     assert len(third_skills) == 1
@@ -425,15 +516,9 @@ async def test_browser_user_events_feed_learning_agent_and_are_queryable(tmp_pat
     prompts: list[str] = []
 
     async def reviewer(prompt: str, *, caller: str = "behavior_learning"):
-        if caller == "project_skill_learning_agent":
+        if caller == "skill_learning_agent":
             prompts.append(prompt)
-            return {
-                "decision": "skip",
-                "confidence": 0.78,
-                "rationale": "Browser operation is visible but not reusable yet.",
-                "proposed_skill": {},
-            }
-        return {}
+        return await _fake_llm_json(prompt, caller=caller)
 
     monkeypatch.setattr(bl, "_call_llm_json", reviewer)
     context = await bl.begin_turn(
@@ -469,7 +554,7 @@ async def test_browser_user_events_feed_learning_agent_and_are_queryable(tmp_pat
     )
     bl.clear_turn_context(context)
 
-    stats = await bl.process_unprocessed_turns(force=True)
+    await bl.process_unprocessed_turns(force=True)
     chains = await bl.list_tool_chains(limit=5)
     events = await bl.list_recent_browser_user_events(
         session_id="session-browser-user",
@@ -477,7 +562,6 @@ async def test_browser_user_events_feed_learning_agent_and_are_queryable(tmp_pat
         limit=10,
     )
 
-    assert stats["learning_reviews"] == 0
     assert chains[0]["source"] == "user_browser"
     assert chains[0]["summary"]["browser_user_steps"] == 2
     assert [step["tool"] for step in chains[0]["chain"]] == ["browser.user.click", "browser.user.input"]
@@ -488,155 +572,35 @@ async def test_browser_user_events_feed_learning_agent_and_are_queryable(tmp_pat
     assert [event["tool"] for event in events] == ["browser.user.click", "browser.user.input"]
     assert events[0]["purpose"] == "activate button 'Apply filters'"
     assert events[1]["value_preview"] == "openai"
-    assert prompts == []
-    assert await bl.list_skill_candidates() == []
+    assert chains[0]["purpose"] == "用户在浏览器里完成筛选后继续"
+    assert len(prompts) == 2
+    candidates = await bl.list_skill_candidates()
+    assert len(candidates) == 1
+    assert candidates[0]["purpose"] == chains[0]["purpose"]
+    assert candidates[0]["status"] == "observing"
 
 
-async def test_duplicate_skill_hard_veto_reuses_existing_cross_pattern(tmp_path, monkeypatch):
+async def test_browser_user_text_without_semantic_target_is_redacted_before_storage(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
-    fp = await bl._heuristic_request_fingerprint(
-        "帮我查一下上海今天的天气并打开来源页面核对",
-        action_sequence=[
-            {
-                "domain": "external_information_query",
-                "type": "query_realtime_info",
-                "subtype": "search_web",
-                "raw_description": "search_web",
-            },
-            {
-                "domain": "external_information_query",
-                "type": "retrieve_external_knowledge",
-                "subtype": "fetch_web_page",
-                "raw_description": "fetch_web_page",
-            },
-        ],
+    await bl.record_browser_user_event(
+        session_id="session-browser-redaction",
+        round_id="round-browser-redaction",
+        event_kind="text",
+        payload={"text": "secret-value-that-must-not-be-stored"},
+        browser_url="https://example.test/login",
+        browser_title="Login",
+        target={},
     )
-    now = bl._now_iso()
-    pattern_ids = ["pattern-weather-a", "pattern-weather-b"]
-    async with bl._conn() as conn:
-        for index, pid in enumerate(pattern_ids, start=1):
-            session_id = f"session-{pid}"
-            turn_id = f"turn-{pid}"
-            round_id = f"round-{pid}"
-            await conn.execute(
-                """
-                INSERT INTO behavior_sessions
-                (session_id, project_id, project_key, session_kind, created_at, updated_at, session_summary, metadata_json)
-                VALUES (?, 'global', 'global', 'test', ?, ?, '', '{}')
-                """,
-                (session_id, now, now),
-            )
-            await conn.execute(
-                """
-                INSERT INTO behavior_turns
-                (turn_id, session_id, project_id, project_key, session_kind, round_id, created_at, updated_at,
-                 user_message, context_summary, agent_response, outcome_status, user_feedback, processed_status,
-                 linked_skill_id, metadata_json)
-                VALUES (?, ?, 'global', 'global', 'test', ?, ?, ?, ?, '', '已核对来源。', 'success', '', 1, '', '{}')
-                """,
-                (turn_id, session_id, round_id, now, now, f"帮我查一下上海今天的天气并打开来源页面核对 {index}"),
-            )
-            actions = [
-                (
-                    f"action-{pid}-1",
-                    0,
-                    "external_information_query",
-                    "query_realtime_info",
-                    "search_web",
-                    {"query": "上海 今天 天气"},
-                    "weather result",
-                ),
-                (
-                    f"action-{pid}-2",
-                    1,
-                    "external_information_query",
-                    "retrieve_external_knowledge",
-                    "fetch_web_page",
-                    {"url": "https://example.test/weather"},
-                    "source page",
-                ),
-            ]
-            for action_id, action_index, action_type, action_subtype, tool_name, args, output in actions:
-                await conn.execute(
-                    """
-                    INSERT INTO behavior_actions
-                    (action_id, turn_id, session_id, round_id, created_at, action_index, action_type, action_subtype,
-                     tool_name, input_summary, output_summary, success, error_summary, requires_llm, risk_level, metadata_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', 0, 'none', ?)
-                    """,
-                    (
-                        action_id,
-                        turn_id,
-                        session_id,
-                        round_id,
-                        now,
-                        action_index,
-                        action_type,
-                        action_subtype,
-                        tool_name,
-                        bl._json_dumps(args),
-                        output,
-                        bl._json_dumps({"raw_args": args, "action_domain": action_type}),
-                    ),
-                )
-            await conn.execute(
-                """
-                INSERT INTO behavior_patterns
-                (pattern_id, project_id, project_key, description, prototype_fingerprint, statistics_json,
-                 skillability_json, status, linked_skill_list, created_at, updated_at)
-                VALUES (?, 'global', 'global', 'weather lookup with source check', ?, ?, ?, 'skill_candidate', '[]', ?, ?)
-                """,
-                (
-                    pid,
-                    bl._json_dumps(fp),
-                    bl._json_dumps({"effective_count": 2, "frequency": 2}),
-                    bl._json_dumps({"draft": True}),
-                    now,
-                    now,
-                ),
-            )
-            await conn.execute(
-                """
-                INSERT INTO behavior_pattern_turns
-                (pattern_id, turn_id, similarity, created_at)
-                VALUES (?, ?, 1.0, ?)
-                """,
-                (pid, turn_id, now),
-            )
-        await conn.commit()
 
-    first = await bl.learn_skill_from_pattern(pattern_ids[0])
-    second = await bl.learn_skill_from_pattern(pattern_ids[1])
-    skills = await bl.list_learned_skills()
+    events = await bl.list_recent_browser_user_events(
+        session_id="session-browser-redaction",
+        round_id="round-browser-redaction",
+    )
 
-    assert first["ok"] is True
-    assert second["ok"] is True
-    assert second["skill_id"] == first["skill_id"]
-    assert second["created"] is False
-    assert len(skills) == 1
+    assert events[0]["payload"]["text"] == "[redacted-unattributed-text]"
+    assert "secret-value" not in json.dumps(events, ensure_ascii=False)
 
-
-async def test_list_learned_skills_separates_shadow_validation_from_actual_usage(tmp_path, monkeypatch):
-    bl = await _init_behavior(tmp_path, monkeypatch)
-
-    for index in range(1, 5):
-        await _record_code_fix_turn(
-            bl,
-            session_id="session-code-usage",
-            round_id=f"code-usage-{index}",
-            user_message="请检查 src/app.py 并修复导出逻辑，然后给我总结",
-        )
-
-    await bl.process_unprocessed_turns(force=True)
-    skills = await bl.list_learned_skills()
-
-    assert len(skills) == 1
-    assert skills[0]["run_statistics"]["total_runs"] == 0
-    assert skills[0]["shadow_validation_count"] == 0
-    assert skills[0]["actual_usage_count"] == 0
-
-
-async def test_single_tool_repetition_records_pattern_but_does_not_create_skill(tmp_path, monkeypatch):
+async def test_single_tool_repetition_does_not_create_candidate_or_skill(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
 
     for index in range(1, 4):
@@ -648,31 +612,16 @@ async def test_single_tool_repetition_records_pattern_but_does_not_create_skill(
         )
 
     stats = await bl.process_unprocessed_turns(force=True)
-    patterns = await bl.list_patterns()
     skills = await bl.list_learned_skills()
 
     assert stats["processed_turns"] == 3
-    assert patterns == []
     assert await bl.list_skill_candidates() == []
     assert skills == []
-    assert stats["agent_created_skills"] == 0
 
 
 async def test_single_tool_cannot_be_auto_learned_even_if_agent_promotes_it(tmp_path, monkeypatch):
     """The model's promotion decision must not bypass the structural guard."""
     bl = await _init_behavior(tmp_path, monkeypatch)
-
-    async def reviewer(prompt: str, *, caller: str = "behavior_learning"):
-        if caller == "project_skill_learning_agent":
-            return {
-                "decision": "promote",
-                "confidence": 0.99,
-                "rationale": "The model incorrectly promoted a one-tool turn.",
-                "proposed_skill": {"skill_type": "workflow"},
-            }
-        return {}
-
-    monkeypatch.setattr(bl, "_call_llm_json", reviewer)
     await _record_web_search_turn(
         bl,
         session_id="session-single-tool-promote",
@@ -683,9 +632,55 @@ async def test_single_tool_cannot_be_auto_learned_even_if_agent_promotes_it(tmp_
     stats = await bl.process_unprocessed_turns(force=True)
 
     assert stats["processed_turns"] == 1
-    assert stats["agent_created_skills"] == 0
     assert await bl.list_learned_skills() == []
     assert await bl.list_skill_candidates() == []
+
+
+async def test_invalid_learning_agent_output_keeps_turn_pending_without_local_match_fallback(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+
+    async def invalid(_prompt: str, *, caller: str = "behavior_learning"):
+        return {}
+
+    monkeypatch.setattr(bl, "_call_llm_json", invalid)
+    turn_id = await _record_code_fix_turn(
+        bl,
+        session_id="invalid-learning-agent",
+        round_id="invalid-learning-agent-1",
+        user_message="修复导出逻辑并运行测试",
+    )
+
+    stats = await bl.process_unprocessed_turns(force=True)
+    async with bl._conn() as conn:
+        cursor = await conn.execute("SELECT processed_status FROM behavior_turns WHERE turn_id = ?", (turn_id,))
+        row = await cursor.fetchone()
+
+    assert stats["processed_turns"] == 0
+    assert int(row["processed_status"]) == 0
+    assert await bl.list_skill_candidates() == []
+
+
+async def test_learning_agent_prompt_chain_redacts_credentials(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    prompt_chain = bl._purpose_chain_for_prompt([
+        {
+            "source": "agent",
+            "tool": "run_shell",
+            "args": {
+                "api_key": "top-secret-key",
+                "command": "curl -H 'Authorization: Bearer private-token' https://example.test?access_token=query-secret",
+                "path": "src/app.py",
+            },
+            "success": True,
+        }
+    ])
+    rendered = json.dumps(prompt_chain, ensure_ascii=False)
+
+    assert "top-secret-key" not in rendered
+    assert "private-token" not in rendered
+    assert "query-secret" not in rendered
+    assert "[redacted]" in rendered
+    assert "src/app.py" in rendered
 
 
 async def test_legacy_single_tool_skill_is_hidden_from_learning_surfaces(tmp_path, monkeypatch):
@@ -700,15 +695,14 @@ async def test_legacy_single_tool_skill_is_hidden_from_learning_surfaces(tmp_pat
              skill_type, risk_level, requires_llm, trigger_json, input_schema_json,
              parameter_extractor_json, steps_json, guards_json, fallback_policy_json,
              tests_json, editable_fields_json, created_from_json, run_statistics_json,
-             pattern_id, created_at, updated_at)
+             created_at, updated_at)
             VALUES (?, 'global', 'global', ?, '', 1, 'active', 'draft', 'none', 0,
-                    '{}', '[]', '{}', ?, '{}', '{}', '[]', '[]', '{}', '{}', ?, ?, ?)
+                    '{}', '[]', '{}', ?, '{}', '{}', '[]', '[]', '{}', '{}', ?, ?)
             """,
             (
                 "legacy-single-tool",
                 "旧的单工具技能",
                 bl._json_dumps([_make_step("search_web")]),
-                "legacy-pattern",
                 now,
                 now,
             ),
@@ -720,7 +714,7 @@ async def test_legacy_single_tool_skill_is_hidden_from_learning_surfaces(tmp_pat
     assert await bl.build_learned_skill_block() == ""
 
 
-async def test_similar_candidate_search_compares_purpose_and_tool_chain_within_project(tmp_path, monkeypatch):
+async def test_purpose_assignment_is_project_scoped(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
 
     def project_scope(session_id: str | None):
@@ -759,7 +753,58 @@ async def test_similar_candidate_search_compares_purpose_and_tool_chain_within_p
     assert project_b[0]["status"] == "observing"
 
 
-async def test_behavior_learning_patch_application_and_vocabulary_snapshot(tmp_path, monkeypatch):
+async def test_assignment_agent_receives_complete_purpose_catalog_in_one_call(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    assignments = []
+
+    async def reviewer(prompt: str, *, caller: str = "behavior_learning"):
+        if "Create the short purpose label" in prompt:
+            payload = _prompt_json(prompt, "Execution record:\n")
+            message = str(payload.get("user_request") or "")
+            if message == "修复导出逻辑":
+                return {"purpose": "修复导出逻辑"}
+            if message == "整理导出文档":
+                return {"purpose": "整理导出文档"}
+            if message == "查询上海天气":
+                return {"purpose": "查询天气"}
+            return {"purpose": "修好导出并验证"}
+        if "Assign one new completed workflow" in prompt:
+            payload = _prompt_json(prompt, "Learning input:\n")
+            assignments.append(payload)
+            incoming = str((payload.get("new_record") or {}).get("purpose") or "")
+            existing = payload.get("existing_candidates") or []
+            if incoming == "修好导出并验证":
+                target = next(item for item in existing if item["purpose"] == "修复导出逻辑")
+                return {"decision": "existing", "candidate_id": target["candidate_id"], "reason": "same reusable goal"}
+            return {"decision": "new", "candidate_id": "", "canonical_purpose": incoming, "reason": "new goal"}
+        return await _fake_llm_json(prompt, caller=caller)
+
+    monkeypatch.setattr(bl, "_call_llm_json", reviewer)
+    await _record_web_search_turn(
+        bl,
+        session_id="catalog-session",
+        round_id="catalog-weather",
+        user_message="查询上海天气",
+    )
+    for index, message in enumerate(("修复导出逻辑", "整理导出文档", "把导出功能修好并测试"), 1):
+        await _record_code_fix_turn(
+            bl,
+            session_id="catalog-session",
+            round_id=f"catalog-{index}",
+            user_message=message,
+        )
+
+    await bl.process_unprocessed_turns(force=True)
+
+    assert len(assignments) == 3
+    assert [item["purpose"] for item in assignments[2]["existing_candidates"]] == ["修复导出逻辑", "整理导出文档"]
+    assert [item["purpose"] for item in assignments[2]["all_historical_purposes"]] == ["查询天气", "修复导出逻辑", "整理导出文档"]
+    candidates = sorted(await bl.list_skill_candidates(), key=lambda item: item["purpose"])
+    assert len(candidates) == 2
+    assert next(item for item in candidates if item["purpose"] == "修复导出逻辑")["occurrence_count"] == 2
+
+
+async def test_behavior_learning_patch_application(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
 
     for index in range(1, 3):
@@ -781,15 +826,11 @@ async def test_behavior_learning_patch_application_and_vocabulary_snapshot(tmp_p
     patch = patches[0]
     applied = await bl.apply_skill_patch(skill["id"], patch["patch_id"])
     refreshed = await bl.get_learned_skill(skill["id"])
-    vocabulary = await bl.vocabulary_snapshot()
-
     assert applied["ok"] is True
     assert refreshed is not None
     assert refreshed["fallback_policy"]["on_missing_args"] == "ask_user"
     result = await bl.list_learned_skill_patches(skill["id"])
     assert result[0]["status"] == "applied"
-    assert vocabulary["vocabulary_version"] == 1
-    assert vocabulary["unknown_labels"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -797,7 +838,7 @@ async def test_behavior_learning_patch_application_and_vocabulary_snapshot(tmp_p
 # ---------------------------------------------------------------------------
 
 def _make_skill_with_steps(steps: list[dict], *, risk_level: str = "none") -> dict:
-    """Build a minimal skill dict for replay testing."""
+    """Build a minimal skill dict for execution testing."""
     return {
         "skill_id": "test-skill-001",
         "name": "Test Skill",
@@ -807,7 +848,7 @@ def _make_skill_with_steps(steps: list[dict], *, risk_level: str = "none") -> di
         "skill_type": "deterministic",
         "risk_level": risk_level,
         "requires_llm": False,
-        "trigger": {"base_fingerprint": {}, "min_match_score": 0.75},
+        "trigger": {"positive_examples": []},
         "input_schema": [],
         "parameter_extractor": {"mode": "hybrid", "llm_fallback": False},
         "steps": steps,
@@ -817,7 +858,6 @@ def _make_skill_with_steps(steps: list[dict], *, risk_level: str = "none") -> di
         "editable_fields": [],
         "created_from": {},
         "run_statistics": {},
-        "pattern_id": "pat-001",
         "created_at": "2026-01-01T00:00:00+00:00",
         "updated_at": "2026-01-01T00:00:00+00:00",
     }
@@ -829,160 +869,6 @@ def _make_step(tool_name: str) -> dict:
         "implementation_kind": "tool_call",
         "implementation_reference": {"tool_name": tool_name, "args_template": {}},
     }
-
-
-async def test_high_risk_skill_blocked_from_replay(tmp_path, monkeypatch):
-    """Skills with high-risk steps must not be auto-replayed (issue #46)."""
-    bl = await _init_behavior(tmp_path, monkeypatch)
-
-    # Patch match_active_skill to return a Bash-containing skill
-    risky_skill = _make_skill_with_steps([_make_step("Bash")], risk_level="high")
-    monkeypatch.setattr(
-        bl,
-        "match_active_skill",
-        AsyncMock(return_value={
-            "skill": risky_skill,
-            "similarity": {"total": 0.92, "hard_fail": False},
-        }),
-    )
-    # Patch extract_skill_parameters to return complete extraction
-    monkeypatch.setattr(
-        bl,
-        "extract_skill_parameters",
-        AsyncMock(return_value={"complete": True, "params": {}, "confidence": 0.92, "missing_required": []}),
-    )
-
-    context = await bl.begin_turn(
-        session_id="session-risk",
-        round_id="round-risk-1",
-        user_message="run the build script",
-        history=[],
-    )
-
-    result = await bl.try_route_and_execute_skill(
-        user_message="run the build script",
-        visible_user_entry={"role": "user", "content": "run the build script"},
-        llm_user_entry={"role": "user", "content": "run the build script"},
-        history=[],
-        bot=MagicMock(),
-        chat_id=1,
-        db_path=str(tmp_path / "test.db"),
-        effective_system="",
-        client_request_id="req-1",
-        round_id="round-risk-1",
-        lang="en",
-    )
-
-    # Must fall back to agent — not execute silently
-    assert result is None, "High-risk skill should not auto-execute (expected None fallback)"
-
-    bl.clear_turn_context(context)
-
-
-async def test_interactive_skill_blocked_from_replay(tmp_path, monkeypatch):
-    """Skills that would pause for user input must fall back to the normal agent loop."""
-    bl = await _init_behavior(tmp_path, monkeypatch)
-
-    interactive_skill = _make_skill_with_steps([_make_step("ask_user")], risk_level="none")
-    monkeypatch.setattr(
-        bl,
-        "match_active_skill",
-        AsyncMock(return_value={
-            "skill": interactive_skill,
-            "similarity": {"total": 0.92, "hard_fail": False},
-        }),
-    )
-    monkeypatch.setattr(
-        bl,
-        "extract_skill_parameters",
-        AsyncMock(return_value={"complete": True, "params": {}, "confidence": 0.92, "missing_required": []}),
-    )
-
-    context = await bl.begin_turn(
-        session_id="session-interactive",
-        round_id="round-interactive-1",
-        user_message="ask me a few setup questions",
-        history=[],
-    )
-
-    result = await bl.try_route_and_execute_skill(
-        user_message="ask me a few setup questions",
-        visible_user_entry={"role": "user", "content": "ask me a few setup questions"},
-        llm_user_entry={"role": "user", "content": "ask me a few setup questions"},
-        history=[],
-        bot=MagicMock(),
-        chat_id=1,
-        db_path=str(tmp_path / "test.db"),
-        effective_system="",
-        client_request_id="req-interactive",
-        round_id="round-interactive-1",
-        lang="en",
-    )
-
-    assert result is None, "Interactive skills should not auto-execute ask_user"
-
-    bl.clear_turn_context(context)
-
-
-async def test_safe_skill_still_executes(tmp_path, monkeypatch):
-    """Skills with only safe (read-only) steps should still auto-execute."""
-    bl = await _init_behavior(tmp_path, monkeypatch)
-
-    # A read_file step is not in _HIGH_RISK_TOOLS
-    safe_skill = _make_skill_with_steps([_make_step("read_file")], risk_level="none")
-    monkeypatch.setattr(
-        bl,
-        "match_active_skill",
-        AsyncMock(return_value={
-            "skill": safe_skill,
-            "similarity": {"total": 0.92, "hard_fail": False},
-        }),
-    )
-    monkeypatch.setattr(
-        bl,
-        "extract_skill_parameters",
-        AsyncMock(return_value={"complete": True, "params": {}, "confidence": 0.92, "missing_required": []}),
-    )
-    # Stub tool execution and LLM reply — patch the module that behavior_learning imports from
-    import cyrene.tools as tools_mod
-    monkeypatch.setattr(tools_mod, "_execute_tool", AsyncMock(return_value="file content"))
-
-    async def _fake_final_reply(_messages, **_kw):
-        return "Done."
-
-    import cyrene.agent.guidance as guidance
-    monkeypatch.setattr(guidance, "_final_user_reply_from_history", _fake_final_reply)
-
-    import cyrene.agent.message as msg_mod
-    monkeypatch.setattr(msg_mod, "_apply_assistant_meta", lambda x: x)
-
-    context = await bl.begin_turn(
-        session_id="session-safe",
-        round_id="round-safe-1",
-        user_message="show me app.py",
-        history=[],
-    )
-
-    result = await bl.try_route_and_execute_skill(
-        user_message="show me app.py",
-        visible_user_entry={"role": "user", "content": "show me app.py"},
-        llm_user_entry={"role": "user", "content": "show me app.py"},
-        history=[],
-        bot=MagicMock(),
-        chat_id=1,
-        db_path=str(tmp_path / "test.db"),
-        effective_system="",
-        client_request_id="req-2",
-        round_id="round-safe-1",
-        lang="en",
-    )
-
-    # Safe skill should proceed (result is not None)
-    assert result is not None, "Safe skill should auto-execute (expected non-None result)"
-    assert result["final_text"] == "Done."
-
-    bl.clear_turn_context(context)
-
 
 async def test_parameterized_runner_applies_typed_defaults(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)

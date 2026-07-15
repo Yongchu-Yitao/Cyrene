@@ -27,6 +27,7 @@ local time's UTC components, so "what you see is when it fires".
 
 from __future__ import annotations
 
+import asyncio
 import math
 import logging
 from datetime import datetime, timedelta, timezone
@@ -67,8 +68,16 @@ def _resolve_workspace_id(workspace_id: str | None) -> str:
     try:
         from webui import routes as R
 
+        raw = str(workspace_id or "").strip()
+        # Canonical ids are the frontend's normal path. A lightweight lookup
+        # avoids project-wide task/file repair work on every calendar request.
+        project = R._workbench_find_project_lightweight(raw)
+        if project:
+            return R._workbench_project_data_key(project)
+
+        # Preserve compatibility with older callers that send dataKey.
         payload = R._read_workbench_store()
-        project = R._workbench_find_project(payload, str(workspace_id or "").strip())
+        project = R._workbench_find_project(payload, raw)
         if project:
             return R._workbench_project_data_key(project)
     except Exception:
@@ -284,24 +293,31 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
                 start_dt, end_dt = end_dt, start_dt
 
             resolved_workspace = _resolve_workspace_id(workspace)
-            tasks = await _all_tasks(resolved_workspace)
+            async def _entities_for_window() -> list[dict]:
+                try:
+                    from cyrene.entities import list_entities
+
+                    return await list_entities(
+                        db_path,
+                        has_due_date=True,
+                        project_id=resolved_workspace,
+                        limit=500,
+                    )
+                except Exception:  # noqa: BLE001
+                    # Entities are optional context; never fail the whole calendar
+                    # because the entity store hiccuped.
+                    return []
+
+            # These are independent SQLite reads. Running them together removes
+            # one full round-trip from the calendar's critical loading path.
+            tasks, entities = await asyncio.gather(
+                cy_db.get_all_tasks(db_path, project_id=resolved_workspace),
+                _entities_for_window(),
+            )
             events: list[dict] = []
             for task in tasks:
                 events.extend(_task_events(task, start_dt, end_dt))
-
-            try:
-                from cyrene.entities import list_entities
-                # Scope entity deadlines (日程) to this project, mirroring the
-                # task scoping above. Agent-created entities (track_entity) carry
-                # the project_id; legacy / auto-extracted ones default to "default".
-                entities = await list_entities(
-                    db_path, has_due_date=True, project_id=resolved_workspace, limit=500
-                )
-                events.extend(_entity_events(entities, start_dt, end_dt))
-            except Exception:  # noqa: BLE001
-                # Entities are optional context; never fail the whole calendar
-                # because the entity store hiccuped.
-                pass
+            events.extend(_entity_events(entities, start_dt, end_dt))
 
             events.sort(key=lambda ev: str(ev.get("start") or ""))
             return {

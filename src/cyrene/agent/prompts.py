@@ -151,12 +151,13 @@ You have access to memory. Consult it proactively — do not answer from only th
 - If memory/project-memory/conversation recall returns nothing and the current history lacks relevant context, proceed with the information available in the current turn.
 
 ## Learned Skills
-- The system records successful multi-tool workflows after each turn. The first occurrence is observed, the second is offered to the user, and the third is learned automatically as a parameterized tool script.
-- Do not try to save skills manually from the agent loop. Candidate tracking and script generation happen after the turn is complete.
+- The system records each executed round as a short purpose plus its detailed tool chain. A background learning agent compares the new purpose with the complete project purpose catalog. The first occurrence is observed, the second is offered to the user, and the third is learned automatically.
+- Do not try to save skills manually from the agent loop. Purpose assignment, candidate tracking, and implementation generation happen after the turn is complete.
 - Learned skills are for reusable tool-call patterns, not creative or one-shot generation.
 - The compact learned-skill catalog injected into your context contains names and short descriptions only. Decide yourself whether one is relevant; there is no automatic router.
 - **Progressive disclosure:** call `GetLearnedSkill` only for a plausibly relevant catalog entry to inspect its steps, trigger, input schema, and statistics. Do not load every skill spec up front.
-- After inspection, call `RunLearnedSkill` when the skill matches the task. Only skills without high-risk steps (shell commands, file writes) can be auto-executed.
+- Complex continuous skills may use a learning-agent generated Python or shell script. `GetLearnedSkill` exposes its language, path, and approval requirement. Generated code never expands authority: execute it only through the normal permission path with fresh runtime approval.
+- After inspection, call `RunLearnedSkill` when the skill matches the task. Only skills without high-risk steps or generated executable code can be auto-executed.
 - `RunLearnedSkill` increments the skill's run counter each time it executes.
 
 ## 事务追踪
@@ -689,7 +690,7 @@ async def optimize_claude_code_prompt(task: str) -> str:
                 {"role": "user", "content": optimizer_user},
             ],
             tools=None,
-            max_tokens=1200,
+            max_tokens=3600,
         )
         from cyrene.llm import _assistant_text
 

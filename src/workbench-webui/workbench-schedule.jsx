@@ -18,6 +18,24 @@
   var useMemo = React.useMemo;
   var useRef = React.useRef;
 
+  var schedulePageCache = window.__workbenchSchedulePageCache || { ranges: {}, pending: {} };
+  window.__workbenchSchedulePageCache = schedulePageCache;
+
+  function fetchScheduleRange(key, API, startISO, endISO) {
+    if (schedulePageCache.pending[key]) return schedulePageCache.pending[key];
+    var request = API.occurrences(startISO, endISO).then(function (events) {
+      schedulePageCache.ranges[key] = { value: events, updatedAt: Date.now() };
+      return events;
+    });
+    schedulePageCache.pending[key] = request;
+    request.then(function () {
+      if (schedulePageCache.pending[key] === request) delete schedulePageCache.pending[key];
+    }, function () {
+      if (schedulePageCache.pending[key] === request) delete schedulePageCache.pending[key];
+    });
+    return request;
+  }
+
   var HOUR_PX = 52;            // height of one hour row on the timeline
   var DAY_PX = HOUR_PX * 24;
   var WEEKDAY_CN = ["日", "一", "二", "三", "四", "五", "六"];
@@ -888,7 +906,11 @@
   // ── main page ────────────────────────────────────────────────────────
   function WorkbenchSchedulePage(props) {
     var project = props && props.project;
-    var workspace = (project && (project.dataKey || project.id)) || "default";
+    var active = !props || props.active !== false;
+    // Send the canonical id. The backend resolves it to the schedule dataKey
+    // through its lightweight project lookup, avoiding a full project-store
+    // repair scan on every calendar request.
+    var workspace = (project && (project.id || project.dataKey)) || "default";
     var API = useMemo(function () { return scheduleApi(workspace); }, [workspace]);
     var today = startOfDay(new Date());
     var viewState = useState("day"); var viewMode = viewState[0], setViewMode = viewState[1];
@@ -918,13 +940,33 @@
       var gs = addDays(startOfDay(first), -pad);
       return { start: gs, end: addDays(gs, 42) };
     }, [viewMode, anchorDate]);
+    var requestKey = workspace + "|" + windowRange.start.getTime() + "|" + windowRange.end.getTime();
+    var requestKeyRef = useRef(requestKey); requestKeyRef.current = requestKey;
 
-    function load() {
-      setLoading(true); setError("");
-      return API.occurrences(windowRange.start.toISOString(), windowRange.end.toISOString())
-        .then(function (evs) { setRawEvents(evs); })
-        .catch(function (e) { setError(e.message || String(e)); setRawEvents([]); })
-        .finally(function () { setLoading(false); });
+    function load(options) {
+      var opts = options || {};
+      var requestedKey = requestKey;
+      var cached = schedulePageCache.ranges[requestedKey];
+      if (!opts.background && requestKeyRef.current === requestedKey) setLoading(true);
+      if (requestKeyRef.current === requestedKey) setError("");
+      return fetchScheduleRange(
+        requestedKey,
+        API,
+        windowRange.start.toISOString(),
+        windowRange.end.toISOString()
+      )
+        .then(function (evs) {
+          if (requestKeyRef.current === requestedKey) setRawEvents(evs);
+          return evs;
+        })
+        .catch(function (e) {
+          if (requestKeyRef.current === requestedKey) {
+            setError(e.message || String(e));
+            if (!cached) setRawEvents([]);
+          }
+          return null;
+        })
+        .finally(function () { if (requestKeyRef.current === requestedKey) setLoading(false); });
     }
     // Apply a schedule search selection once the event list is loaded. We use
     // refs to avoid calling setState inside the rawEvents updater.
@@ -969,18 +1011,57 @@
     }
 
     useEffect(function () {
+      var cached = schedulePageCache.ranges[requestKey];
+      if (cached) {
+        setRawEvents(cached.value);
+        setLoading(false);
+      } else {
+        setRawEvents([]);
+        setLoading(true);
+      }
+
       pendingDateAppliedRef.current = false;
-      load().then(function () {
-        var pending = window.__workbenchPendingSelection;
-        var pendingType = pending && pending.type;
-        if (pendingType === "schedule") {
-          applyPendingDate(pending);
-          pendingTaskIdRef.current = pending.taskId || pending.id || "";
-          pendingEntityIdRef.current = pending.entityId || "";
-        }
-      });
+      var pending = window.__workbenchPendingSelection;
+      var pendingType = pending && pending.type;
+      if (pendingType === "schedule") {
+        applyPendingDate(pending);
+        pendingTaskIdRef.current = pending.taskId || pending.id || "";
+        pendingEntityIdRef.current = pending.entityId || "";
+      }
+
+      if (!active) return;
+      load({ background: !!cached });
       /* eslint-disable-next-line */
-    }, [windowRange.start.getTime(), windowRange.end.getTime(), workspace]);
+    }, [requestKey, active]);
+
+    // The range cache only avoids a blank calendar. Always revalidate on
+    // activation, focus, and Agent runtime changes instead of accepting a TTL.
+    useEffect(function () {
+      if (!active) return undefined;
+      var refreshTimer = null;
+      function refreshSoon() {
+        if (document.hidden) return;
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(function () {
+          refreshTimer = null;
+          load({ background: true });
+        }, 250);
+      }
+      function onVisibility() { if (!document.hidden) refreshSoon(); }
+      function onRuntimeEvent(event) {
+        if (!event) return;
+        if (["tool_call", "assistant_message", "chat_message", "session_update", "goal_loop_update"].indexOf(event.type) >= 0) refreshSoon();
+      }
+      window.addEventListener("focus", refreshSoon);
+      document.addEventListener("visibilitychange", onVisibility);
+      if (window.__sseHandlers && window.__sseHandlers.add) window.__sseHandlers.add(onRuntimeEvent);
+      return function () {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        window.removeEventListener("focus", refreshSoon);
+        document.removeEventListener("visibilitychange", onVisibility);
+        if (window.__sseHandlers && window.__sseHandlers.delete) window.__sseHandlers.delete(onRuntimeEvent);
+      };
+    }, [requestKey, active]);
 
     useEffect(function () {
       applyPendingScheduleSelection();

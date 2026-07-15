@@ -286,13 +286,23 @@ def _llm_phase_name(tools: list | None) -> str:
 async def _call_llm(
     messages: list[dict],
     tools: list | None = None,
-    max_tokens: int | None = 32000,
+    max_tokens: int | None = None,
     *,
     secondary: bool = False,
     thinking: str = "auto",
     response_format: dict | None = None,
 ) -> dict:
     from cyrene.call_llm import call_llm as _unified_call_llm
+
+    # Workbench owns a live stream writer for the duration of an agent run. Use
+    # the upstream streaming transport for intermediate LLM calls as well, but
+    # forward only reasoning events here: their content/tool deltas are internal
+    # turns and must not be mistaken for the final user-facing reply.
+    stream_writer = _reply_stream_writer.get()
+
+    async def _forward_reasoning(event: dict[str, Any]) -> None:
+        if stream_writer is not None and str(event.get("type") or "").startswith("reasoning_"):
+            await stream_writer(event)
 
     return await _unified_call_llm(
         messages,
@@ -301,6 +311,8 @@ async def _call_llm(
         model_type="secondary" if secondary else "primary",
         thinking=thinking,
         response_format=response_format,
+        stream=stream_writer is not None,
+        stream_callback=_forward_reasoning if stream_writer is not None else None,
         caller=_caller_type.get(),
         phase=_llm_phase_name(tools),
         round_id=_current_round_id.get(),
@@ -310,7 +322,7 @@ async def _call_llm(
 
 async def _call_llm_stream(
     messages: list[dict],
-    max_tokens: int | None = 32000,
+    max_tokens: int | None = None,
     *,
     secondary: bool = False,
     tools: list | None = None,

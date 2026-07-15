@@ -66,7 +66,7 @@ External prompt skills packaged as `.md` files, directories, or `.zip` archives 
 
 ### Behavior Learning (Patterns)
 
-The agent records its own tool usage and learns reusable action patterns. Detected patterns can be promoted to learned skills, manually approved via the UI, or automatically replayed in similar situations. State lives in `workspace/patterns/`.
+Each executed round is recorded as a short purpose plus its detailed agent/browser tool chain. A background learning agent compares the new purpose with the complete project purpose catalog and assigns it to an existing candidate or creates a new one. The first occurrence is observed, the second is offered to the user, and the third is learned automatically. Complex non-interactive workflows can be synthesized as approval-gated Python or shell implementations; low-risk declarative workflows remain executable through `RunLearnedSkill`. State lives in the behavior-learning database and generated script directory.
 
 ### Claude Code Bridge
 
@@ -147,7 +147,7 @@ src/
 │   ├── shells.py                    # Persistent shell sessions
 │   ├── browser.py                   # Persistent browser context / screencast
 │   ├── cc_bridge.py / cc_terminal.py # Claude Code integration
-│   ├── behavior_learning.py         # Pattern/skill learning
+│   ├── behavior_learning.py         # Purpose/tool-chain skill learning
 │   ├── skills_registry.py           # Installed skill storage
 │   ├── context_trace.py             # Context provenance tagging
 │   ├── context_debug.py             # Verbose log inspector

@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+import re as _re
 from typing import Any
 
 from cyrene import tool_legacy as _legacy
+from cyrene.behavior_learning import (
+    _AUTO_REPLAY_BLOCKED_TOOLS as _BL_BLOCKED_TOOLS,
+    _HIGH_RISK_TOOLS as _BL_HIGH_RISK_TOOLS,
+)
 from cyrene.tool_legacy import json
 from cyrene.tool_executor import _execute_tool, _skip_action_recording
 
 TOOL_NAME = "RunLearnedSkill"
 TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL_NAME)
-
-import re as _re
-
-from cyrene.behavior_learning import _HIGH_RISK_TOOLS as _BL_HIGH_RISK_TOOLS, _AUTO_REPLAY_BLOCKED_TOOLS as _BL_BLOCKED_TOOLS
 
 # WARNING: When adding a new destructive / interactive tool to tool_legacy.py,
 # add it to the appropriate set below so RunLearnedSkill does not auto-execute it.
@@ -31,9 +32,11 @@ def _has_unsafe_step(steps: list[dict[str, Any]]) -> bool:
             continue
         ref = step.get("implementation_reference") or {}
         if str(step.get("implementation_kind") or "") == "script":
-            if _has_unsafe_step(ref.get("original_steps") or []):
-                return True
-            continue
+            # Learning-agent generated Python/shell is executable code.  It is
+            # retained as the Skill implementation, but this auto-run tool has
+            # no approval token and therefore must always fall back to the
+            # normal agent permission path.
+            return True
         tool_name = str(ref.get("tool_name") or "")
         if tool_name in _HIGH_RISK_TOOLS or tool_name in _AUTO_REPLAY_BLOCKED_TOOLS:
             return True
@@ -153,7 +156,7 @@ async def _tool_run_learned_skill(args: dict[str, Any], bot: Any, chat_id: int, 
 
         results: list[dict[str, Any]] = []
         all_ok = True
-        # Suppress action recording during replay to avoid circular pattern learning
+        # Suppress action recording during execution to avoid circular relearning
         # and inflated telemetry — the skill's steps are already learned.
         _rec_token = _skip_action_recording.set(True)
         try:

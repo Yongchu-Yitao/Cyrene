@@ -104,6 +104,32 @@ def test_lightweight_project_lookup_skips_workspace_repairs(monkeypatch, tmp_pat
     assert project == {"id": "project-fast", "dataKey": "fast"}
 
 
+def test_lightweight_project_store_read_skips_workspace_repairs(monkeypatch, tmp_path):
+    from webui import routes
+
+    payload = {
+        "projects": [
+            {
+                "id": "project-fast",
+                "dataKey": "fast",
+                "sessions": [{"id": "session-fast", "title": "Fast"}],
+            }
+        ],
+        "activeProjectId": "project-fast",
+    }
+    store_path = tmp_path / "workbench_projects.json"
+    store_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
+    monkeypatch.setattr(routes, "_CONFIGURED_WORKBENCH_STORE", None)
+    monkeypatch.setattr(
+        routes,
+        "_workbench_ensure_invariants",
+        lambda _payload: (_ for _ in ()).throw(AssertionError("heavy repair path ran")),
+    )
+
+    assert routes._read_workbench_store_lightweight() == payload
+
+
 def test_web_app_uses_single_lifespan_manager(tmp_path):
     from webui.server import WebBot, create_app
 

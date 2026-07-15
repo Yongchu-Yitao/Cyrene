@@ -621,7 +621,7 @@ async def _distill_pending_compacted_blocks(session_id: str = "") -> None:
                         {"role": "user", "content": _COMPACT_DISTILL_PROMPT + body},
                     ],
                     tools=None,
-                    max_tokens=1500,
+                    max_tokens=4500,
                     secondary=True,
                 )
                 distilled = (_assistant_text(response) or "").strip()

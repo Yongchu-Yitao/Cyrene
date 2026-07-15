@@ -19,8 +19,9 @@ the conversation path:
   is still attached.
 * Each run keeps an **append-only event log / ring buffer** so a reconnecting
   client can replay the events it missed while disconnected (``ack`` /
-  ``intermediate_message`` / ``reply_start`` / ``reply_delta`` / ``reply_done``
-  / ``awaiting_user`` / ``saved`` / ``error``) and then join the live stream.
+  ``intermediate_message`` / ``reasoning_*`` / ``reply_start`` /
+  ``reply_delta`` / ``reply_done`` / ``awaiting_user`` / ``saved`` / ``error``)
+  and then join the live stream.
 
 Unlike the goal loop, the model-run checkpoint and replay buffer remain
 in-memory for this single bounded exchange. The *result* is made durable by the

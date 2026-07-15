@@ -1569,7 +1569,7 @@ async def _workbench_run_explore_agent(
     prompt: str,
     *,
     max_turns: int = 8,
-    max_tokens: int | None = 3000,
+    max_tokens: int | None = 9000,
     timeout: float = 90,
     secondary: bool = False,
     session_id: str = "",
@@ -1919,7 +1919,7 @@ async def _workbench_generate_init_form(
                 "- 多数问题用 text 或 textarea；涉及阶段/选择类的用 single 或 multi 并给出 options；\n"
                 f"- 全部使用{language}，语气友好专业。最后只返回 JSON。"
             )
-            parsed = await _workbench_run_json_generation(prompt, max_tokens=5000, timeout=90)
+            parsed = await _workbench_run_json_generation(prompt, max_tokens=15000, timeout=90)
             generated_form = _workbench_coerce_init_form(parsed, base_form) if parsed else None
             if generated_form:
                 return generated_form
@@ -1971,7 +1971,7 @@ async def _workbench_generate_init_form(
         f"- 全部使用{language}，语气友好专业。最后只返回 JSON。"
     )
 
-    parsed = await _workbench_run_explore_agent(workspace_root, prompt, max_tokens=6000, timeout=120)
+    parsed = await _workbench_run_explore_agent(workspace_root, prompt, max_tokens=18000, timeout=120)
     if not parsed:
         return None
     return _workbench_coerce_init_form(parsed, base_form)
@@ -2165,7 +2165,7 @@ async def _workbench_generate_init_task_plan(
             parsed = await _workbench_run_explore_agent(
                 workspace_root,
                 prompt,
-                max_tokens=4000,
+                max_tokens=12000,
                 timeout=120,
                 secondary=True,
                 raise_on_failure=True,
@@ -2310,6 +2310,34 @@ def _read_workbench_store() -> dict[str, Any]:
             raise
 
 
+def _read_workbench_store_lightweight() -> dict[str, Any]:
+    """Read project/task state without running workspace repair scans.
+
+    Project rails, chat entry, and other list surfaces only need the already
+    persisted metadata.  The full reader also enforces historical invariants
+    and scans project workspaces for artifact backfills; on a populated
+    workspace that made the tiny ``?detail=summary`` response take seconds.
+    Invalid or empty legacy state still falls back to the full repair path.
+    """
+    with _WORKBENCH_STORE_LOCK:
+        if not _workbench_store_uses_sqlite():
+            raw = read_json_safe(_WORKBENCH_STORE)
+        else:
+            raw = read_document(
+                _db_path or str(DB_PATH),
+                "projects",
+                _workbench_default_project,
+                legacy_path=_WORKBENCH_STORE,
+            )
+        if (
+            isinstance(raw, dict)
+            and isinstance(raw.get("projects"), list)
+            and raw["projects"]
+        ):
+            return raw
+    return _read_workbench_store()
+
+
 def _workbench_find_project_lightweight(project_id: str) -> dict[str, Any] | None:
     """Look up one project without running read-time repair/backfill work.
 
@@ -2321,20 +2349,9 @@ def _workbench_find_project_lightweight(project_id: str) -> dict[str, Any] | Non
     target_id = str(project_id or "").strip()
     if not target_id:
         return None
-    with _WORKBENCH_STORE_LOCK:
-        if not _workbench_store_uses_sqlite():
-            raw = read_json_safe(_WORKBENCH_STORE)
-            if not isinstance(raw, dict) or not isinstance(raw.get("projects"), list):
-                raw = _workbench_default_project()
-        else:
-            raw = read_document(
-                _db_path or str(DB_PATH),
-                "projects",
-                _workbench_default_project,
-                legacy_path=_WORKBENCH_STORE,
-            )
-        project = _workbench_find_project(raw, target_id)
-        return dict(project) if isinstance(project, dict) else None
+    raw = _read_workbench_store_lightweight()
+    project = _workbench_find_project(raw, target_id)
+    return dict(project) if isinstance(project, dict) else None
 
 
 def _write_workbench_store(
@@ -3563,7 +3580,7 @@ async def _workbench_generate_plan_steps(
             )
 
     parsed = await _workbench_run_explore_agent(
-        workspace_root, prompt, max_tokens=4000, timeout=120,
+        workspace_root, prompt, max_tokens=12000, timeout=120,
         session_id=str(session.get("id") or ""),
         planning_thread=planning_thread,
         tool_bundle_version=tool_bundle_version,
@@ -3745,7 +3762,7 @@ async def _workbench_generate_acceptance_criteria(
     parsed = await _workbench_run_explore_agent(
         workspace_root,
         prompt,
-        max_tokens=2000,
+        max_tokens=6000,
         timeout=120,
         session_id=str(session.get("id") or ""),
     )
@@ -5300,7 +5317,7 @@ async def _workbench_generate_step_outcome(
     )
     try:
         resp = await asyncio.wait_for(
-            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=300, secondary=True, thinking="disabled"),
+            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=900, secondary=True, thinking="disabled"),
             timeout=20,
         )
     except Exception:
@@ -5584,7 +5601,7 @@ async def _workbench_should_reflect(goal: str, acceptance: list[Any], feedback: 
     )
     try:
         resp = await asyncio.wait_for(
-            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=60, secondary=True, thinking="disabled"),
+            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=180, secondary=True, thinking="disabled"),
             timeout=30,
         )
     except Exception:
@@ -5635,7 +5652,7 @@ async def _workbench_classify_intent(text: str, session: dict[str, Any]) -> str:
     )
     try:
         resp = await asyncio.wait_for(
-            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=60, secondary=True, thinking="disabled"),
+            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=180, secondary=True, thinking="disabled"),
             timeout=20,
         )
     except Exception:
@@ -5688,7 +5705,7 @@ async def _workbench_match_relevant_sessions(
     )
     try:
         resp = await asyncio.wait_for(
-            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=400, secondary=True, thinking="disabled"),
+            _call_llm([{"role": "user", "content": prompt}], tools=None, max_tokens=1200, secondary=True, thinking="disabled"),
             timeout=30,
         )
     except Exception:
@@ -8322,26 +8339,15 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         project_ids = [project_id] if project_id else []
         if raw_project and raw_project != project_id:
             project_ids.append(raw_project)
-        if compact:
-            status, learned_skills, tool_chains, candidates = await asyncio.gather(
-                _build_status(),
-                _pattern.list_learned_skills(project_id),
-                _pattern.list_tool_chains(project_ids),
-                _pattern.list_skill_candidates(project_id),
-            )
-            patterns = []
-        else:
-            status, patterns, learned_skills, tool_chains, candidates = await asyncio.gather(
-                _build_status(),
-                _pattern.list_patterns("all", project_id),
-                _pattern.list_learned_skills(project_id),
-                _pattern.list_tool_chains(project_ids),
-                _pattern.list_skill_candidates(project_id),
-            )
+        status, learned_skills, tool_chains, candidates = await asyncio.gather(
+            _build_status(),
+            _pattern.list_learned_skills(project_id),
+            _pattern.list_tool_chains(project_ids),
+            _pattern.list_skill_candidates(project_id),
+        )
         return {
             "phase": status.get("phase", ""),
             "state": status.get("state", ""),
-            "patterns": patterns,
             "learned_skills": learned_skills,
             "skill_candidates": candidates,
             "tool_chains": _learning_enrich_tool_chains(tool_chains),
@@ -8350,11 +8356,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             # operation and must not delay the skill-learning workbench.
             "cc_learning": None,
         }
-
-    @router.get("/api/patterns")
-    async def api_patterns(status: str = "all", project: str = ""):
-        from cyrene import pattern as _pattern
-        return {"patterns": await _pattern.list_patterns(status, _learning_project_id(project))}
 
     @router.get("/api/learned-skills")
     async def api_learned_skills(project: str = ""):
@@ -8406,11 +8407,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         from cyrene import pattern as _pattern
         return {"runs": await _pattern.list_learned_skill_runs(skill_id, limit)}
 
-    @router.get("/api/learned-skills/{skill_id}/replay-tests")
-    async def api_learned_skill_replay_tests(skill_id: str):
-        from cyrene import pattern as _pattern
-        return {"tests": await _pattern.list_skill_replay_tests(skill_id)}
-
     @router.post("/api/learned-skills/{skill_id}/update")
     async def api_update_learned_skill(skill_id: str, request: Request):
         from cyrene import pattern as _pattern
@@ -8433,12 +8429,6 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         if not result.get("ok"):
             return JSONResponse(result, status_code=404)
         return result
-
-    @router.post("/api/learned-skills/{skill_id}/replay-tests/run")
-    async def api_run_learned_skill_replay_tests(skill_id: str):
-        from cyrene import pattern as _pattern
-        result = await _pattern.run_skill_replay_tests(skill_id)
-        return {"ok": True, "result": result}
 
     @router.post("/api/learned-skills/{skill_id}/patches/{patch_id}/apply")
     async def api_apply_learned_skill_patch(skill_id: str, patch_id: str):
@@ -8481,8 +8471,8 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         ok = not str(result).startswith("Learned skill")
         return {"ok": ok, "result": result}
 
-    @router.post("/api/patterns/learn")
-    async def api_patterns_learn(project: str = "", turn_id: str = ""):
+    @router.post("/api/learning/process")
+    async def api_learning_process(project: str = "", turn_id: str = ""):
         from cyrene import pattern as _pattern
 
         tid = turn_id.strip() if turn_id else ""
@@ -8499,31 +8489,13 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {
             "ok": True,
             "stats": stats,
-            "patterns": await _pattern.list_patterns("all", project_id),
             "learned_skills": await _pattern.list_learned_skills(project_id),
             "skill_candidates": await _pattern.list_skill_candidates(project_id),
             "tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(project_ids)),
         }
 
-    @router.post("/api/patterns/{pattern_id}/learn-skill")
-    async def api_pattern_learn_skill(pattern_id: str, project: str = ""):
-        from cyrene import pattern as _pattern
-
-        project_id = _learning_project_id(project)
-        project_ids = _learning_project_ids(project)
-        result = await _pattern.learn_skill_from_pattern(pattern_id, project_id)
-        if not result.get("ok"):
-            return JSONResponse(result, status_code=400)
-        return {
-            **result,
-            "patterns": await _pattern.list_patterns("all", project_id),
-            "learned_skills": await _pattern.list_learned_skills(project_id),
-            "skill_candidates": await _pattern.list_skill_candidates(project_id),
-            "tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(project_ids)),
-        }
-
-    @router.post("/api/patterns/rebuild")
-    async def api_patterns_rebuild(project: str = ""):
+    @router.post("/api/learning/rebuild")
+    async def api_learning_rebuild(project: str = ""):
         from cyrene import pattern as _pattern
 
         project_id = _learning_project_id(project)
@@ -8532,72 +8504,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         return {
             "ok": True,
             "result": result,
-            "patterns": await _pattern.list_patterns("all", project_id),
             "learned_skills": await _pattern.list_learned_skills(project_id),
             "skill_candidates": await _pattern.list_skill_candidates(project_id),
             "tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(project_ids)),
         }
-
-    @router.get("/api/vocabulary")
-    async def api_vocabulary():
-        from cyrene import pattern as _pattern
-        return await _pattern.vocabulary_snapshot()
-
-    @router.post("/api/vocabulary/labels")
-    async def api_create_vocabulary_label(request: Request):
-        from cyrene import pattern as _pattern
-
-        payload = await request.json()
-        try:
-            result = await _pattern.create_vocabulary_label(
-                label_type=str((payload or {}).get("label_type") or ""),
-                canonical_label=str((payload or {}).get("canonical_label") or ""),
-                domain=str((payload or {}).get("domain") or ""),
-                parent_label=str((payload or {}).get("parent_label") or ""),
-                raw_description=str((payload or {}).get("raw_description") or ""),
-                status=str((payload or {}).get("status") or "active"),
-            )
-        except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return {"ok": True, "label": result}
-
-    @router.post("/api/vocabulary/aliases")
-    async def api_create_vocabulary_alias(request: Request):
-        from cyrene import pattern as _pattern
-
-        payload = await request.json()
-        try:
-            result = await _pattern.create_vocabulary_alias(
-                label_type=str((payload or {}).get("label_type") or ""),
-                canonical_label=str((payload or {}).get("canonical_label") or ""),
-                alias_label=str((payload or {}).get("alias_label") or ""),
-            )
-        except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return {"ok": True, "alias": result}
-
-    @router.post("/api/vocabulary/unknown/{unknown_id}/promote")
-    async def api_promote_unknown_label(unknown_id: str, request: Request):
-        from cyrene import pattern as _pattern
-
-        payload = await request.json()
-        try:
-            result = await _pattern.promote_unknown_label(
-                unknown_id,
-                canonical_label=str((payload or {}).get("canonical_label") or ""),
-                alias_label=str((payload or {}).get("alias_label") or ""),
-            )
-        except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return {"ok": True, "unknown": result}
-
-    @router.post("/api/vocabulary/unknown/{unknown_id}/dismiss")
-    async def api_dismiss_unknown_label(unknown_id: str):
-        from cyrene import pattern as _pattern
-        ok = await _pattern.dismiss_unknown_label(unknown_id)
-        if not ok:
-            return JSONResponse({"error": "unknown label not found"}, status_code=404)
-        return {"ok": True}
 
     # ---- Skills install API ----
 
@@ -9577,9 +9487,10 @@ def register_routes(app, bot: Any, db_path: str) -> None:
 
     @router.get("/api/projects")
     async def api_workbench_projects(detail: str = "full"):
-        payload = _read_workbench_store()
         if str(detail or "").strip().lower() in {"summary", "light", "list"}:
+            payload = await asyncio.to_thread(_read_workbench_store_lightweight)
             return _workbench_lightweight_store(payload)
+        payload = _read_workbench_store()
         return payload
 
     @router.get("/api/workbench/notifications")
@@ -11983,7 +11894,7 @@ def _build_summary(raw_msgs: list[dict]) -> dict:
     usage = _usage_totals(raw_msgs)
     return {
         "tokens": _format_tokens(usage),
-        "spend": _calc_spend(usage),
+        "spend": _calc_messages_spend(raw_msgs),
         "toolCalls": _count_tool_calls(raw_msgs),
         "requests": usage["requests"],
         "total_tokens": usage["total_tokens"],
@@ -12142,7 +12053,14 @@ def _build_current_session() -> dict | None:
     if combined_live_usage.get("requests") is not None:
         live_summary["requests"] = combined_live_usage.get("requests")
         live_summary["tokens"] = _format_tokens(combined_live_usage)
-        live_summary["spend"] = _calc_spend(combined_live_usage)
+        live_summary["spend"] = _calc_messages_spend([
+            *raw_msgs,
+            *[
+                message
+                for info in subagent_registry.values()
+                for message in info.get("messages", [])
+            ],
+        ])
         live_summary["toolCalls"] = live_summary["toolCalls"] + sum(
             _count_tool_calls(info.get("messages", []))
             for info in subagent_registry.values()
@@ -13588,7 +13506,7 @@ async def _build_dashboard(ui_tz=None) -> dict:
         mdl = str(row.get("model") or "").strip().lower()
         pt = int(row.get("prompt_tokens") or 0)
         ct = int(row.get("completion_tokens") or 0)
-        pricing = effective_price(mdl) or {"input": 7.25, "output": 14.5, "currency": "CNY"}
+        pricing = effective_price(mdl)
         cost = estimate_cost(pricing, pt, ct)
         if str(pricing.get("currency") or "CNY").upper() == "USD":
             total_spend_usd += cost
@@ -14184,21 +14102,24 @@ def _fmt_tok(n: int) -> str:
     return str(n)
 
 
-def _model_pricing() -> dict[str, float] | None:
-    """Return token pricing for the active model, or None.
+def _model_pricing(model: str = "") -> dict[str, float] | None:
+    """Return token pricing for an actual response model, or the active model.
 
-    Checks the user-configured price string for the active model first,
-    then falls back to the built-in pricing database.
+    Missing or invalid configured prices use the built-in catalog when known;
+    unknown models resolve to zero.
     """
     from cyrene.model_prices import effective_price
 
-    return effective_price(_get_model())
+    return effective_price(str(model or _get_model()))
 
 
-def _calc_spend(usage: dict[str, int | None] | None) -> str:
+def _calc_spend(
+    usage: dict[str, int | None] | None,
+    model: str = "",
+) -> str:
     if not isinstance(usage, dict):
         return "—"
-    pricing = _model_pricing()
+    pricing = _model_pricing(model)
     if pricing is None:
         return "—"
     prompt_tokens = usage.get("prompt_tokens")
@@ -14221,9 +14142,60 @@ def _calc_spend(usage: dict[str, int | None] | None) -> str:
     else:
         sym = "$"
         threshold = 0.01
+    if cost == 0:
+        return f"{sym}0.00"
     if cost < threshold:
         return f"<{sym}{threshold:.2g}"
     return f"{sym}{cost:.2f}"
+
+
+def _calc_messages_spend(messages: list[dict[str, Any]]) -> str:
+    """Sum usage with each response's actual model price.
+
+    Fallback can change models between calls in one session.  Aggregating all
+    tokens first and applying the configured primary price misprices those
+    mixed-model sessions, so calculate each recorded response independently.
+    """
+    from cyrene.model_prices import CNY_PER_USD, estimate_cost
+
+    totals = {"CNY": 0.0, "USD": 0.0}
+    found = False
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        usage = message.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        model = str(usage.get("model") or message.get("model") or _get_model()).strip()
+        pricing = _model_pricing(model)
+        if pricing is None:
+            continue
+        found = True
+        cost = estimate_cost(
+            pricing,
+            int(usage.get("prompt_tokens") or 0),
+            int(usage.get("completion_tokens") or 0),
+            cache_hit_tokens=int(usage.get("prompt_cache_hit_tokens") or 0),
+            cache_miss_tokens=int(usage.get("prompt_cache_miss_tokens") or 0),
+        )
+        currency = str(pricing.get("currency") or "CNY").upper()
+        totals[currency if currency in totals else "CNY"] += cost
+    if not found:
+        return "—"
+    if totals["CNY"] and totals["USD"]:
+        cost = totals["CNY"] + totals["USD"] * CNY_PER_USD
+        currency = "CNY"
+    elif totals["USD"]:
+        cost = totals["USD"]
+        currency = "USD"
+    else:
+        cost = totals["CNY"]
+        currency = "CNY"
+    symbol = "¥" if currency == "CNY" else "$"
+    threshold = 0.07 if currency == "CNY" else 0.01
+    if cost == 0:
+        return f"{symbol}0.00"
+    return f"<{symbol}{threshold:.2g}" if cost < threshold else f"{symbol}{cost:.2f}"
 
 
 def _calc_current_streak(stats_by_day: dict[str, dict], today: str) -> int:

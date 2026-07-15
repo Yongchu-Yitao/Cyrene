@@ -5897,7 +5897,6 @@ html[data-theme="light"] .canvas-wrap {
 }
 
 .pattern-status.stable,
-.pattern-status.shadow,
 .pattern-status.refined {
   background: color-mix(in srgb, var(--info) 16%, var(--surface-2));
   color: var(--info);

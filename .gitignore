@@ -48,6 +48,7 @@ AGENTS.md
 .codex.lock
 .codex-run
 .pytest_cache
+/.playwright-cli/
 
 # Tests
 tests*

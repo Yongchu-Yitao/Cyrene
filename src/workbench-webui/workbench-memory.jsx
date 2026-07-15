@@ -14,6 +14,56 @@
   var useRef = React.useRef;
   var h = React.createElement;
 
+  // Keep one snapshot per project instead of making project switches share a
+  // single piece of component state. The page remains mounted by the Workbench
+  // shell, so this cache makes a recently visited project paint synchronously
+  // while always revalidating it in the background. The cache is a paint
+  // optimization only; it must never suppress a freshness check.
+  var memoryPageCache = window.__workbenchMemoryPageCache || {
+    payloads: {},
+    pending: {},
+    learningPayloads: {},
+    learningPending: {},
+  };
+  window.__workbenchMemoryPageCache = memoryPageCache;
+
+  function fetchMemoryPayload(workspace, client) {
+    if (memoryPageCache.pending[workspace]) return memoryPageCache.pending[workspace];
+    var request = client.list().then(function (payload) {
+      memoryPageCache.payloads[workspace] = { value: payload, updatedAt: Date.now() };
+      return payload;
+    });
+    memoryPageCache.pending[workspace] = request;
+    request.then(function () {
+      if (memoryPageCache.pending[workspace] === request) delete memoryPageCache.pending[workspace];
+    }, function () {
+      if (memoryPageCache.pending[workspace] === request) delete memoryPageCache.pending[workspace];
+    });
+    return request;
+  }
+
+  function fetchLearningPayload(learningProject) {
+    if (memoryPageCache.learningPending[learningProject]) return memoryPageCache.learningPending[learningProject];
+    var request = fetch("/api/evolution?project=" + encodeURIComponent(learningProject) + "&compact=1").then(jsonOrThrow)
+      .then(function (payload) {
+        memoryPageCache.learningPayloads[learningProject] = { value: payload || {}, updatedAt: Date.now() };
+        return payload;
+      });
+    memoryPageCache.learningPending[learningProject] = request;
+    request.then(function () {
+      if (memoryPageCache.learningPending[learningProject] === request) delete memoryPageCache.learningPending[learningProject];
+    }, function () {
+      if (memoryPageCache.learningPending[learningProject] === request) delete memoryPageCache.learningPending[learningProject];
+    });
+    return request;
+  }
+
+  function cacheLearningPayload(projectId, payload) {
+    var value = payload || {};
+    memoryPageCache.learningPayloads[projectId] = { value: value, updatedAt: Date.now() };
+    return value;
+  }
+
   function useMemoryT() {
     var i18n = window.useWorkbenchI18n
       ? window.useWorkbenchI18n()
@@ -295,7 +345,6 @@
   function learningSnapshot(data) {
     var skills = (data && data.learned_skills) || [];
     var candidates = (data && data.skill_candidates) || [];
-    var patterns = (data && data.patterns) || [];
     var chains = ((data && data.tool_chains) || []).filter(function (chain) {
       var summary = (chain && chain.summary) || {};
       return (summary.total_steps || ((chain && chain.chain) || []).length || 0) > 0;
@@ -303,14 +352,9 @@
     return {
       skills: skills,
       candidates: candidates,
-      patterns: patterns,
       chains: chains,
       activeSkills: skills.filter(function (s) { return s.status === "active"; }).length,
-      shadowSkills: skills.filter(function (s) { return s.status === "shadow"; }).length,
-      candidatePatterns: patterns.filter(function (p) { return p.status === "skill_candidate"; }).length,
-      reviewedChains: chains.filter(function (c) { return c.review && c.review.decision; }).length,
       recentSkills: skills.slice(0, 6),
-      recentPatterns: patterns.slice(0, 5),
     };
   }
   function shortDateTime(value) {
@@ -331,7 +375,7 @@
 
   function chainTitle(chain, t) {
     if (!chain) return t ? t("memory.learning.noRoundSelected", "No round selected") : "No round selected";
-    return chain.round_title || chain.session_title || (chain.user_message ? String(chain.user_message).slice(0, 32) : "") || (t ? t("memory.learning.toolChain", "Tool chain") : "Tool chain");
+    return chain.purpose || chain.round_title || chain.session_title || (chain.user_message ? String(chain.user_message).slice(0, 32) : "") || (t ? t("memory.learning.toolChain", "Tool chain") : "Tool chain");
   }
   function isInternalProactiveChain(chain) {
     var message = String((chain && chain.user_message) || "").trim();
@@ -342,7 +386,7 @@
   }
   function chainTopic(chain, t) {
     if (isInternalProactiveChain(chain)) return t("memory.learning.proactiveTopic", "Scheduled check-in");
-    return chain.user_message || chain.context_summary || t("memory.learning.autoTopic", "Reusable tool chain");
+    return chain.purpose || chain.user_message || chain.context_summary || t("memory.learning.autoTopic", "Reusable tool chain");
   }
   function chainSubtitle(chain, t) {
     if (!chain) return "—";
@@ -350,13 +394,6 @@
     return t
       ? t("memory.learning.chainSubtitle", "{steps} steps · {browserSteps} browser user ops · {time}", { steps: summary.total_steps || 0, browserSteps: summary.browser_user_steps || 0, time: shortDateTime(chain.updated_at || chain.created_at) })
       : (summary.total_steps || 0) + " steps · " + (summary.browser_user_steps || 0) + " browser user ops · " + shortDateTime(chain.updated_at || chain.created_at);
-  }
-  function reviewText(review, t) {
-    var decision = review && review.decision;
-    if (decision === "learn") return t ? t("memory.learning.review.learn", "Learn") : "Learn";
-    if (decision === "parameterize") return t ? t("memory.learning.review.parameterize", "Parameterize") : "Parameterize";
-    if (decision === "skip") return t ? t("memory.learning.review.skip", "Skip") : "Skip";
-    return t ? t("memory.learning.pending", "Pending") : "Pending";
   }
   function candidateForTurn(candidates, turnId) {
     return (candidates || []).find(function (candidate) {
@@ -516,32 +553,6 @@
     var value = String(type || "draft");
     return t ? t("memory.learning.skillType." + value, value) : value;
   }
-  function reviewDecisionMeta(review) {
-    var proposed = (review && review.proposed_skill) || {};
-    return proposed && proposed._decision ? proposed._decision : {};
-  }
-  function chainMatchesSkill(chain, skill) {
-    if (!chain || !skill) return false;
-    var skillId = String(skill.id || "");
-    var patternId = String(skill.pattern_id || "");
-    var meta = reviewDecisionMeta(chain.review);
-    if (skillId && String(meta.target_skill_id || "") === skillId) return true;
-    if (patternId && String(meta.target_pattern_id || "") === patternId) return true;
-    var similarSkills = Array.isArray(meta.similar_skills) ? meta.similar_skills : [];
-    return similarSkills.some(function (item) {
-      return (skillId && String(item.skill_id || item.id || "") === skillId)
-        || (patternId && String(item.pattern_id || "") === patternId);
-    });
-  }
-  function findSkillSourceChain(skill, chains) {
-    if (!skill) return null;
-    var list = chains || [];
-    for (var i = 0; i < list.length; i++) {
-      if (chainMatchesSkill(list[i], skill)) return list[i];
-    }
-    return null;
-  }
-
   function SkillLearningPanel(props) {
     var t = useMemoryT();
     var shotState = useState(0); var shotIndex = shotState[0]; var setShotIndex = shotState[1];
@@ -552,7 +563,6 @@
     var skill = props.skill;
     var chain = props.chain;
     var summary = (chain && chain.summary) || {};
-    var review = (chain && chain.review) || {};
     var chainCandidate = candidateForTurn((learning.data && learning.data.skill_candidates) || [], chain && chain.turn_id);
     var screenshots = detailScreenshots(chain);
     var boundedShotIndex = Math.min(shotIndex, Math.max(0, screenshots.length - 1));
@@ -596,7 +606,6 @@
             h("div", { className: "wb-mem-skill-detail-box" },
               h("div", null, h("span", null, t("memory.learning.skillType", "Type")), h("b", null, skillTypeText(skill.skill_type, t))),
               h("div", null, h("span", null, t("memory.learning.updatedAt", "Updated")), h("b", null, shortDateTime(skill.updated_at))),
-              h("div", null, h("span", null, t("memory.learning.minMatchScore", "Min match")), h("b", null, String(Math.round((skill.min_match_score || 0) * 100) / 100))),
               h("div", null, h("span", null, t("memory.learning.stepCount", "Steps")), h("b", null, String(skillSteps.length)))),
             examples.length ? h("div", { className: "wb-replay-section" },
               h("h3", null, t("memory.learning.triggerExamples", "Trigger examples")),
@@ -614,31 +623,6 @@
                     h("b", null, step.title || translatedToolName(tool, t)),
                     h("p", null, step.intent || step.raw_description || translatedToolName(tool, t))));
               })) : h("div", { className: "wb-mem-empty-soft compact" }, t("memory.learning.noSteps", "No steps"))),
-            (function () {
-              var chainsList = (learning.data && learning.data.tool_chains) || [];
-              var srcChain = findSkillSourceChain(skill, chainsList);
-              if (!srcChain) return null;
-              var srcSummary = (srcChain && srcChain.summary) || {};
-              var srcReview = (srcChain && srcChain.review) || {};
-              var srcTotalSteps = srcSummary.total_steps || 0;
-              var srcBrowserSteps = srcSummary.browser_user_steps || 0;
-              var srcSuccessSteps = srcSummary.success_steps || 0;
-              var srcSuccessRate = srcTotalSteps > 0 ? Math.round((srcSuccessSteps / srcTotalSteps) * 100) : 100;
-              var matchScore = skill.min_match_score || 0;
-              return h("div", { className: "wb-replay-section" },
-                h("h3", null, t("memory.learning.behaviorAnalysis", "Behavior analysis")),
-                h("div", { className: "wb-mem-skill-stats wb-mem-skill-analysis-metrics", "aria-label": t("memory.learning.behaviorAnalysis", "Behavior analysis") },
-                  h("div", null, h("b", null, String(srcTotalSteps)), h("span", null, t("memory.learning.totalSteps", "Total steps"))),
-                  h("div", null, h("b", null, String(srcBrowserSteps)), h("span", null, t("memory.learning.browserOps", "User browser ops"))),
-                  h("div", null, h("b", null, srcSuccessRate + "%"), h("span", null, t("memory.learning.successRate", "Success rate"))),
-                  h("div", null, h("b", null, String(matchScore)), h("span", null, t("memory.learning.confidence", "Confidence")))),
-                srcReview.decision ? h("div", { className: "wb-mem-skill-detail-box analysis" },
-                  h("div", null, h("span", null, t("memory.learning.duplicateCheck", "Repeat behavior check")), h("b", null, srcReview.decision)),
-                  h("div", { className: "wb-mem-skill-review-rationale" }, srcReview.rationale || "")) : null,
-                srcReview.rationale && !srcReview.decision ? h("div", { className: "wb-mem-skill-detail-box analysis" },
-                  h("span", null, t("memory.learning.learningSuggestion", "Learning suggestion")),
-                  h("div", { className: "wb-mem-skill-review-rationale" }, srcReview.rationale)) : null);
-            })(),
             (function () {
               var declarativeScript = skill.script || {};
               if (declarativeScript.format) {
@@ -718,8 +702,7 @@
           h("div", { className: "wb-replay-metrics" },
             h("div", null, h("span", null, t("memory.learning.totalSteps", "Steps")), h("b", null, String(summary.total_steps || 0))),
             h("div", null, h("span", null, t("memory.learning.userOps", "User ops")), h("b", null, String(summary.browser_user_steps || 0))),
-            h("div", null, h("span", null, t("memory.learning.successRate", "Success")), h("b", null, similarity + "%")),
-            h("div", null, h("span", null, t("memory.learning.confidence", "Confidence")), h("b", null, String(Math.round((review.confidence || 0) * 100) / 100))))),
+            h("div", null, h("span", null, t("memory.learning.successRate", "Success")), h("b", null, similarity + "%")))),
         h("div", { className: "wb-replay-duplicates" },
           h("b", null, t("memory.learning.duplicateCheck", "Repeat behavior check")),
           h("p", null, candidateStatusText(chainCandidate, t))),
@@ -740,7 +723,7 @@
     var loading = learning.loading;
     var busy = learning.busy;
     var sessions = learningSessions(snap.chains);
-    var learnedSkills = snap.skills.filter(function (s) { return s.status === "active" || s.status === "shadow"; });
+    var learnedSkills = snap.skills.filter(function (s) { return s.status === "active"; });
     var pendingCandidates = snap.candidates.filter(function (candidate) { return candidate.status === "awaiting_user"; });
     var shownSkills = learnedSkills.slice(0, 8);
     var activeSessionId = props.sessionId || (sessions[0] && sessions[0].id) || "";
@@ -749,13 +732,11 @@
     var activeChain = props.chain && chains.some(function (chain) { return chain.id === props.chain.id; }) ? props.chain : chains[0] || null;
     var activeSteps = (activeChain && activeChain.chain) || [];
     var activeSummary = (activeChain && activeChain.summary) || {};
-    var activeReview = (activeChain && activeChain.review) || {};
     var activeCandidate = candidateForTurn(snap.candidates, activeChain && activeChain.turn_id);
     var activeSkill = props.skill || null;
     var activeSkillSteps = Array.isArray(activeSkill && activeSkill.steps) ? activeSkill.steps : [];
     var activeSkillTrigger = (activeSkill && activeSkill.trigger) || {};
     var activeSkillExamples = Array.isArray(activeSkillTrigger.positive_examples) ? activeSkillTrigger.positive_examples : [];
-    var activeSkillSourceChain = findSkillSourceChain(activeSkill, snap.chains);
     var onSelectChain = props.onSelectChain;
     var onSelectSession = props.onSelectSession;
     var onSelectSkill = props.onSelectSkill;
@@ -777,7 +758,7 @@
               var parameterCount = (((candidate.script || {}).parameters) || []).length;
               return h("div", { key: candidate.id, className: "wb-learning-candidate-card" },
                 h("div", { className: "wb-learning-candidate-copy" },
-                  h("b", null, candidate.name || t("memory.learning.repeatedWorkflow", "Repeated workflow")),
+                  h("b", null, candidate.name || candidate.purpose || t("memory.learning.repeatedWorkflow", "Repeated workflow")),
                   h("p", null, candidate.description || t("memory.learning.secondOccurrence", "Seen twice. Learn now, wait for the third occurrence, or ignore it.")),
                   h("small", null, t("memory.learning.candidateMeta", "{count} occurrences · {params} parameters", { count: candidate.occurrence_count || 2, params: parameterCount }))),
                 h("div", { className: "wb-learning-candidate-actions" },
@@ -826,9 +807,9 @@
               h("div", null,
                 h("h2", null, detailKind === "skill" && activeSkill ? (activeSkill.name || activeSkill.id) : (activeChain ? shortDateTime(activeChain.updated_at || activeChain.created_at) + "  " + chainTitle(activeChain, t) : t("memory.learning.title", "Skill learning"))),
                 h("p", null, detailKind === "skill" && activeSkill ? (activeSkill.description || t("memory.learning.noSkillDescription", "No description yet.")) : (activeChain ? chainSubtitle(activeChain, t) : t("memory.learning.emptyIntro", "Tool-call rounds are recorded separately for each project."))),
-                detailKind === "skill" && activeSkill
-                  ? h("p", { className: "wb-learning-theme" }, t("memory.learning.skillSource", "Source: {source}", { source: activeSkillSourceChain ? chainTitle(activeSkillSourceChain, t) : (activeSkill.pattern_id || activeSkill.id) }))
-                  : activeChain && h("p", { className: "wb-learning-theme" }, t("memory.learning.topic", "Topic: {topic}", { topic: chainTopic(activeChain, t) })))),
+                detailKind !== "skill" && activeChain
+                  ? h("p", { className: "wb-learning-theme" }, t("memory.learning.topic", "Topic: {topic}", { topic: chainTopic(activeChain, t) }))
+                  : null)),
             learning.error && h("div", { className: "wb-mem-error" }, learningErrorText(learning.error, t)),
             learning.note && h("div", { className: "wb-mem-skill-note main" }, learning.note),
             detailKind === "skill" && activeSkill ? h("div", { className: "wb-learning-content" },
@@ -849,12 +830,7 @@
                       h("b", null, step.title || translatedToolName(tool, t)),
                       h("p", null, step.intent || step.raw_description || translatedToolName(tool, t))),
                     h("i", { className: "ok" }, "✓"));
-                })) : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noSteps", "No steps"))),
-              activeSkillSourceChain ? h("section", { className: "wb-learning-section" },
-                h("h3", null, t("memory.learning.sourceRound", "Source round")),
-                h("button", { type: "button", className: "wb-learning-source-card", onClick: function () { onSelectChain(activeSkillSourceChain.id); } },
-                  h("b", null, shortDateTime(activeSkillSourceChain.updated_at || activeSkillSourceChain.created_at) + "  " + chainTitle(activeSkillSourceChain, t)),
-                  h("small", null, chainSubtitle(activeSkillSourceChain, t)))) : null)
+                })) : h("div", { className: "wb-mem-empty-soft" }, t("memory.learning.noSteps", "No steps"))))
               : activeChain ? h("div", { className: "wb-learning-content" },
               activeCandidate ? h("div", { className: "wb-learning-review-pill " + activeCandidate.status },
                 h("b", null, t("memory.learning.learningState", "Learning state")),
@@ -888,11 +864,10 @@
   // ── main page ────────────────────────────────────────────────────────
   function WorkbenchMemoryPage(props) {
     var project = props && props.project;
+    var active = !props || props.active !== false;
     var workspace = (project && (project.id || project.dataKey)) || "default";
-    // Memory storage still uses the workspace/dataKey compatibility key, but
-    // learning records are scoped by the canonical Workbench project id. In
-    // particular, the legacy default project has dataKey="default", which
-    // must not make the learning API include records from other projects.
+    // Both memory and learning use the canonical Workbench project id. The
+    // backend still accepts legacy dataKey values for older clients.
     var learningProject = (project && project.id) || workspace;
     var t = useMemoryT();
 
@@ -913,73 +888,73 @@
     var learningBusyState = useState(""); var learningBusy = learningBusyState[0]; var setLearningBusy = learningBusyState[1];
     var learningErrState = useState(""); var learningError = learningErrState[0]; var setLearningError = learningErrState[1];
     var learningNoteState = useState(""); var learningNote = learningNoteState[0]; var setLearningNote = learningNoteState[1];
-    var learningKindState = useState("skill"); var selectedLearningKind = learningKindState[0]; var setSelectedLearningKind = learningKindState[1];
     var learningDetailKindState = useState("chain"); var selectedLearningDetailKind = learningDetailKindState[0]; var setSelectedLearningDetailKind = learningDetailKindState[1];
     var learningSelState = useState(""); var selectedLearningSkillId = learningSelState[0]; var setSelectedLearningSkillId = learningSelState[1];
-    var learningPatternSelState = useState(""); var selectedLearningPatternId = learningPatternSelState[0]; var setSelectedLearningPatternId = learningPatternSelState[1];
     var learningChainSelState = useState(""); var selectedLearningChainId = learningChainSelState[0]; var setSelectedLearningChainId = learningChainSelState[1];
     var learningSessionSelState = useState(""); var selectedLearningSessionId = learningSessionSelState[0]; var setSelectedLearningSessionId = learningSessionSelState[1];
+    var workspaceRef = useRef(workspace); workspaceRef.current = workspace;
+    var learningProjectRef = useRef(learningProject); learningProjectRef.current = learningProject;
 
     var client = useMemo(function () { return api(workspace); }, [workspace]);
 
-    function load() {
-      setLoading(true); setError("");
-      return client.list()
-        .then(function (p) { setPayload(p); })
-        .catch(function (e) { setError(e.message || String(e)); setPayload({ memories: [], categories: [], sources: [], overview: {} }); })
-        .finally(function () { setLoading(false); });
+    function load(options) {
+      var opts = options || {};
+      var requestedWorkspace = workspace;
+      var cached = memoryPageCache.payloads[requestedWorkspace];
+      if (!opts.background && workspaceRef.current === requestedWorkspace) setLoading(true);
+      if (workspaceRef.current === requestedWorkspace) setError("");
+      return fetchMemoryPayload(requestedWorkspace, client)
+        .then(function (p) {
+          if (workspaceRef.current === requestedWorkspace) setPayload(p);
+          return p;
+        })
+        .catch(function (e) {
+          if (workspaceRef.current === requestedWorkspace) {
+            setError(e.message || String(e));
+            if (!cached) setPayload({ memories: [], categories: [], sources: [], overview: {} });
+          }
+          return null;
+        })
+        .finally(function () { if (workspaceRef.current === requestedWorkspace) setLoading(false); });
     }
     function loadLearning() {
-      setLearningLoading(true); setLearningError("");
-      return fetch("/api/evolution?project=" + encodeURIComponent(learningProject) + "&compact=1").then(jsonOrThrow)
-        .then(function (p) { setLearningData(p || {}); return p; })
-        .catch(function (e) { setLearningError(e.message || String(e)); setLearningData({ learned_skills: [], skill_candidates: [], patterns: [], tool_chains: [] }); })
-        .finally(function () { setLearningLoading(false); });
+      var requestedProject = learningProject;
+      var cached = memoryPageCache.learningPayloads[requestedProject];
+      if (learningProjectRef.current === requestedProject) { setLearningLoading(!cached); setLearningError(""); }
+      return fetchLearningPayload(requestedProject)
+        .then(function (p) {
+          if (learningProjectRef.current === requestedProject) setLearningData(p || {});
+          return p;
+        })
+        .catch(function (e) {
+          if (learningProjectRef.current === requestedProject) {
+            setLearningError(e.message || String(e));
+            if (!cached) setLearningData({ learned_skills: [], skill_candidates: [], tool_chains: [] });
+          }
+          return null;
+        })
+        .finally(function () { if (learningProjectRef.current === requestedProject) setLearningLoading(false); });
     }
     function runLearningAction(kind, turnId) {
-      var url = (kind === "rebuild" ? "/api/patterns/rebuild" : "/api/patterns/learn") + "?project=" + encodeURIComponent(learningProject);
+      var url = (kind === "rebuild" ? "/api/learning/rebuild" : "/api/learning/process") + "?project=" + encodeURIComponent(learningProject);
       if (kind === "learn" && turnId) url += "&turn_id=" + encodeURIComponent(turnId);
       setLearningBusy(kind); setLearningNote(""); setLearningError("");
       return fetch(url, { method: "POST" }).then(jsonOrThrow)
         .then(function (payload) {
           var stats = payload.stats || payload.result || {};
-          setLearningData({
+          var nextLearning = {
             learned_skills: payload.learned_skills || [],
             skill_candidates: payload.skill_candidates || [],
-            patterns: payload.patterns || [],
             tool_chains: payload.tool_chains || [],
             scripts: payload.scripts || [],
-          });
+          };
+          cacheLearningPayload(learningProject, nextLearning);
+          setLearningData(nextLearning);
           setLearningNote(t("memory.learning.processedNote", "Processed {turns} rounds, {candidates} candidates await a decision, created {skills} skills.", {
             turns: stats.processed_turns || 0,
             candidates: stats.candidates_awaiting_user || 0,
             skills: stats.skills_created || 0,
           }));
-        })
-        .catch(function (e) { setLearningError(e.message || String(e)); })
-        .finally(function () { setLearningBusy(""); });
-    }
-    function learnPatternAsSkill(patternId) {
-      if (!patternId) return Promise.resolve();
-      var busyKey = "pattern:" + patternId;
-      setLearningBusy(busyKey); setLearningNote(""); setLearningError("");
-      return fetch("/api/patterns/" + encodeURIComponent(patternId) + "/learn-skill?project=" + encodeURIComponent(learningProject), { method: "POST" }).then(jsonOrThrow)
-        .then(function (payload) {
-          setLearningData({
-            learned_skills: payload.learned_skills || [],
-            skill_candidates: payload.skill_candidates || [],
-            patterns: payload.patterns || [],
-            tool_chains: payload.tool_chains || [],
-            scripts: payload.scripts || [],
-          });
-          if (payload.skill_id) {
-            setSelectedLearningKind("skill");
-            setSelectedLearningDetailKind("skill");
-            setSelectedLearningSkillId(payload.skill_id);
-          }
-          setLearningNote(payload.created
-            ? t("memory.learning.patternCreatedNote", "Created a skill from this behavior pattern.")
-            : t("memory.learning.patternExistingNote", "This behavior pattern already has a skill; switched to that skill."));
         })
         .catch(function (e) { setLearningError(e.message || String(e)); })
         .finally(function () { setLearningBusy(""); });
@@ -994,7 +969,6 @@
       }).then(jsonOrThrow)
         .then(function (payload) {
           if (payload.skill_id) {
-            setSelectedLearningKind("skill");
             setSelectedLearningDetailKind("skill");
             setSelectedLearningSkillId(payload.skill_id);
           }
@@ -1009,21 +983,8 @@
         .finally(function () { setLearningBusy(""); });
     }
     function selectLearningSkill(id) {
-      setSelectedLearningKind("skill");
       setSelectedLearningDetailKind("skill");
       setSelectedLearningSkillId(id || "");
-      var snap = learningSnapshot(learningData);
-      var skill = snap.skills.find(function (item) { return item.id === id; }) || null;
-      var sourceChain = findSkillSourceChain(skill, snap.chains);
-      if (sourceChain) {
-        setSelectedLearningSessionId(sourceChain.session_id || "");
-        setSelectedLearningChainId(sourceChain.id || "");
-      }
-    }
-    function selectLearningPattern(id) {
-      setSelectedLearningKind("pattern");
-      setSelectedLearningDetailKind("skill");
-      setSelectedLearningPatternId(id || "");
     }
     function handleDeleteLearnedSkill(skillId) {
       if (!skillId) return Promise.resolve();
@@ -1039,27 +1000,67 @@
         .catch(function () {})
         .finally(function () { setLearningBusy(""); });
     }
+    function applyPendingMemorySelection() {
+      var pending = window.__workbenchPendingSelection;
+      var pendingMemId = pending && pending.type === "memory" ? (pending.memId || pending.id) : "";
+      if (pendingMemId) {
+        setSelectedId(pendingMemId);
+        setActivePanel("");
+        window.__workbenchPendingSelection = null;
+      }
+    }
+
     useEffect(function () {
+      var cachedPayload = memoryPageCache.payloads[workspace];
+      var cachedLearning = memoryPageCache.learningPayloads[learningProject];
+      setPayload(cachedPayload ? cachedPayload.value : null);
+      setLoading(!cachedPayload);
+      setLearningData(cachedLearning ? cachedLearning.value : null);
+      setLearningLoading(false);
       setSelectedId("");
       setActivePanel("");
-      setSelectedLearningKind("skill");
       setSelectedLearningDetailKind("chain");
       setSelectedLearningSkillId("");
-      setSelectedLearningPatternId("");
       setSelectedLearningChainId("");
       setSelectedLearningSessionId("");
       setActiveCat("all");
       setSourceFilter("");
-      load().then(function () {
-        var pending = window.__workbenchPendingSelection;
-        var pendingMemId = pending && pending.type === "memory" ? (pending.memId || pending.id) : "";
-        if (pendingMemId) {
-          setSelectedId(pendingMemId);
-          setActivePanel("");
-          window.__workbenchPendingSelection = null;
-        }
-      });
     }, [workspace, learningProject]);
+
+    useEffect(function () {
+      if (!active) return;
+      var cached = memoryPageCache.payloads[workspace];
+      load({ background: !!cached }).then(applyPendingMemorySelection);
+    }, [workspace, active]);
+
+    // Cached data paints immediately, then focus/visibility and runtime events
+    // revalidate it. Pending-request dedupe keeps event bursts to one request.
+    useEffect(function () {
+      if (!active) return undefined;
+      var refreshTimer = null;
+      function refreshSoon() {
+        if (document.hidden) return;
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(function () {
+          refreshTimer = null;
+          load({ background: true });
+        }, 250);
+      }
+      function onVisibility() { if (!document.hidden) refreshSoon(); }
+      function onRuntimeEvent(event) {
+        if (!event) return;
+        if (["tool_call", "assistant_message", "chat_message", "session_update", "goal_loop_update"].indexOf(event.type) >= 0) refreshSoon();
+      }
+      window.addEventListener("focus", refreshSoon);
+      document.addEventListener("visibilitychange", onVisibility);
+      if (window.__sseHandlers && window.__sseHandlers.add) window.__sseHandlers.add(onRuntimeEvent);
+      return function () {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        window.removeEventListener("focus", refreshSoon);
+        document.removeEventListener("visibilitychange", onVisibility);
+        if (window.__sseHandlers && window.__sseHandlers.delete) window.__sseHandlers.delete(onRuntimeEvent);
+      };
+    }, [workspace, active]);
 
     // Listen for search-navigation events while already mounted.
     useEffect(function () {
@@ -1112,18 +1113,10 @@
     var selectedLearningChain = selectedLearningChainId
       ? sessionChains.find(function (c) { return c.id === selectedLearningChainId; }) || sessionChains[0] || null
       : sessionChains[0] || null;
-    var selectedLearningSkill = selectedLearningKind === "skill"
-      ? learningSnap.skills.find(function (s) { return s.id === selectedLearningSkillId; }) || learningSnap.skills[0] || null
-      : null;
-    var selectedLearningPattern = selectedLearningKind === "pattern"
-      ? learningSnap.patterns.find(function (p) { return p.id === selectedLearningPatternId; }) || learningSnap.patterns[0] || null
-      : selectedLearningSkill
-        ? learningSnap.patterns.find(function (p) { return p.id === selectedLearningSkill.pattern_id; }) || null
-        : null;
+    var selectedLearningSkill = learningSnap.skills.find(function (s) { return s.id === selectedLearningSkillId; }) || learningSnap.skills[0] || null;
     useEffect(function () {
       if (!learningData) return;
       var skills = (learningData.learned_skills || []);
-      var patterns = (learningData.patterns || []);
       var chains = (learningData.tool_chains || []);
       var sessions = learningSessions(chains.filter(function (chain) {
         var summary = (chain && chain.summary) || {};
@@ -1142,22 +1135,12 @@
       if (!skills.length && selectedLearningDetailKind === "skill") setSelectedLearningDetailKind("chain");
       if (!skills.length) {
         if (selectedLearningSkillId) setSelectedLearningSkillId("");
-        if (patterns.length) {
-          if (selectedLearningKind !== "pattern") setSelectedLearningKind("pattern");
-          if (!selectedLearningPatternId || !patterns.some(function (p) { return p.id === selectedLearningPatternId; })) {
-            setSelectedLearningPatternId(patterns[0].id);
-          }
-        }
         return;
       }
-      if (selectedLearningKind !== "pattern" && (!selectedLearningSkillId || !skills.some(function (s) { return s.id === selectedLearningSkillId; }))) {
+      if (!selectedLearningSkillId || !skills.some(function (s) { return s.id === selectedLearningSkillId; })) {
         setSelectedLearningSkillId(skills[0].id);
       }
-      if (selectedLearningKind === "pattern" && selectedLearningPatternId && !patterns.some(function (p) { return p.id === selectedLearningPatternId; })) {
-        setSelectedLearningKind("skill");
-        setSelectedLearningSkillId(skills[0].id);
-      }
-    }, [learningData, selectedLearningKind, selectedLearningDetailKind, selectedLearningSkillId, selectedLearningPatternId, selectedLearningChainId, selectedLearningSessionId]);
+    }, [learningData, selectedLearningDetailKind, selectedLearningSkillId, selectedLearningChainId, selectedLearningSessionId]);
 
     var visible = useMemo(function () {
       var q = query.trim().toLowerCase();
@@ -1210,7 +1193,8 @@
     }, [selected, memories]);
 
     function applyPayload(p) {
-      setPayload(p);
+      memoryPageCache.payloads[workspace] = { value: p, updatedAt: Date.now() };
+      if (workspaceRef.current === workspace) setPayload(p);
       return p;
     }
     function handleCreate(body) {
@@ -1323,7 +1307,6 @@
       note: learningNote,
       load: loadLearning,
       runAction: runLearningAction,
-      learnPatternAsSkill: learnPatternAsSkill,
       decideCandidate: decideSkillCandidate,
     };
 
@@ -1372,7 +1355,7 @@
     return h("section", { className: "wb-mem-page" + (activePanel === "learning" ? " learning-active" : "") },
       activePanel === "learning" ? null : rail,
       main,
-      activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, detailKind: selectedLearningDetailKind, chain: selectedLearningChain, skill: selectedLearningSkill, pattern: selectedLearningPattern, onDeleteSkill: handleDeleteLearnedSkill }) : h(DetailPanel, {
+      activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, detailKind: selectedLearningDetailKind, chain: selectedLearningChain, skill: selectedLearningSkill, onDeleteSkill: handleDeleteLearnedSkill }) : h(DetailPanel, {
         memory: selected, related: related, busy: busy,
         onSelect: setSelectedId,
         onEdit: function (m) { setModal({ mode: "edit", id: m.id, draft: { content: m.content, category: m.category, source: m.source, confidence: m.confidence, tags: m.tags } }); },
