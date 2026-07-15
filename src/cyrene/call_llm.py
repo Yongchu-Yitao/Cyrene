@@ -50,6 +50,8 @@ _http_clients: weakref.WeakKeyDictionary[
 _HTTP_MAX_CONNECTIONS = 40
 _HTTP_MAX_KEEPALIVE_CONNECTIONS = 20
 _LAST_SUCCESS_SETTING = "llm_last_success_endpoints"
+_SESSION_AFFINITY_PREFIX = "session:"
+_MAX_SESSION_AFFINITIES = 2048
 _last_success_cache: dict[str, dict[str, str]] | None = None
 
 
@@ -111,10 +113,23 @@ def _last_success_map() -> dict[str, dict[str, str]]:
     return _last_success_cache
 
 
+def _session_affinity_key(model_type: str, session_id: str) -> str:
+    """Persistent affinity key scoped to one conversation and model role."""
+    session = str(session_id or "").strip()
+    if not session:
+        return ""
+    return f"{_SESSION_AFFINITY_PREFIX}{session}:{str(model_type or 'primary')}"
+
+
 def _prioritize_last_success(
-    candidates: list[dict[str, Any]], model_type: str
+    candidates: list[dict[str, Any]], model_type: str, session_id: str = ""
 ) -> list[dict[str, Any]]:
-    affinity = _last_success_map().get(model_type) or {}
+    affinity_key = _session_affinity_key(model_type, session_id)
+    affinity = (
+        _last_success_map().get(affinity_key) or {}
+        if affinity_key
+        else {}
+    )
     prepared: list[dict[str, Any]] = []
     for configured_rank, original in enumerate(candidates):
         candidate = dict(original)
@@ -147,7 +162,22 @@ def _prioritize_last_success(
     return prepared
 
 
-def _remember_success(model_type: str, candidate: dict[str, Any], endpoint: str) -> None:
+def _remember_success(
+    model_type: str,
+    candidate: dict[str, Any],
+    endpoint: str,
+    session_id: str = "",
+) -> None:
+    """Remember a successful candidate only for the conversation that used it.
+
+    Calls without a session id deliberately have no affinity: they always start
+    from the configured primary order on their next invocation.
+    """
+    global _last_success_cache
+
+    affinity_key = _session_affinity_key(model_type, session_id)
+    if not affinity_key:
+        return
     affinity = {
         "candidate_id": str(candidate.get("id") or ""),
         "model": str(candidate.get("model") or ""),
@@ -155,9 +185,22 @@ def _remember_success(model_type: str, candidate: dict[str, Any], endpoint: str)
         "endpoint": str(endpoint or ""),
     }
     saved = _last_success_map()
-    if saved.get(model_type) == affinity:
+    if saved.get(affinity_key) == affinity:
         return
-    saved[model_type] = affinity
+    # Retire the old process-wide keys as soon as scoped state is written. They
+    # must never influence a new conversation after this migration.
+    saved.pop("primary", None)
+    saved.pop("secondary", None)
+    saved.pop("vision", None)
+    saved[affinity_key] = affinity
+    scoped_keys = [
+        key for key in saved
+        if str(key).startswith(_SESSION_AFFINITY_PREFIX)
+    ]
+    while len(scoped_keys) > _MAX_SESSION_AFFINITIES:
+        oldest = scoped_keys.pop(0)
+        saved.pop(oldest, None)
+    _last_success_cache = saved
     set_setting(_LAST_SUCCESS_SETTING, dict(saved))
 
 
@@ -170,9 +213,10 @@ _secondary_in_flight: int = 0
 # Candidate failure cooldown — a dead endpoint must not slow down every call
 # ---------------------------------------------------------------------------
 # 连不上的候选（如下线的本地模型机器）会让每次调用都先撞一遍超时。失败后把该候选
-# 冷却一段时间，期间直接跳过；全部候选都在冷却时照常尝试，避免无模型可用。
+# 冷却一段时间，期间在同一对话内直接跳过；新对话使用不同的 session key，
+# 因此仍会从设置中的 primary 重新尝试。无 session 的后台调用共享一个空作用域。
 _CANDIDATE_COOLDOWN_SECONDS = 120.0
-_candidate_cooldowns: dict[tuple[str, str], float] = {}
+_candidate_cooldowns: dict[tuple[str, str, str], float] = {}
 
 # A Workbench round can call the LLM several times (decision, tool rounds,
 # wrap-up) while the configured primary remains in cooldown.  Remember the
@@ -196,19 +240,25 @@ SERVER_ERROR_RETRY_LIMIT = 2
 _SERVER_ERROR_RETRY_BASE_DELAY_SECONDS = 1.0
 
 
-def _candidate_key(candidate: dict[str, Any]) -> tuple[str, str]:
-    return (str(candidate.get("model") or ""), str(candidate.get("base_url") or ""))
+def _candidate_key(
+    candidate: dict[str, Any], session_id: str = ""
+) -> tuple[str, str, str]:
+    return (
+        str(session_id or "").strip(),
+        str(candidate.get("model") or ""),
+        str(candidate.get("base_url") or ""),
+    )
 
 
-def _candidate_cooling(key: tuple[str, str]) -> bool:
+def _candidate_cooling(key: tuple[str, str, str]) -> bool:
     return _candidate_cooldowns.get(key, 0.0) > _time.monotonic()
 
 
-def _set_candidate_cooldown(key: tuple[str, str]) -> None:
+def _set_candidate_cooldown(key: tuple[str, str, str]) -> None:
     _candidate_cooldowns[key] = _time.monotonic() + _CANDIDATE_COOLDOWN_SECONDS
 
 
-def _clear_candidate_cooldown(key: tuple[str, str]) -> None:
+def _clear_candidate_cooldown(key: tuple[str, str, str]) -> None:
     _candidate_cooldowns.pop(key, None)
 
 
@@ -974,7 +1024,7 @@ async def call_llm(
         )
         return ""
     if candidates is None:
-        resolved = _prioritize_last_success(resolved, model_type)
+        resolved = _prioritize_last_success(resolved, model_type, session_id)
     else:
         resolved = [
             {
@@ -1032,8 +1082,14 @@ async def call_llm(
 
     # Skip candidates that recently failed (dead endpoint / bad key). If that
     # would leave nothing, ignore cooldowns and try the full list anyway.
-    available = [c for c in resolved if not _candidate_cooling(_candidate_key(c))]
-    skipped_cooling = [c for c in resolved if _candidate_cooling(_candidate_key(c))]
+    available = [
+        c for c in resolved
+        if not _candidate_cooling(_candidate_key(c, session_id))
+    ]
+    skipped_cooling = [
+        c for c in resolved
+        if _candidate_cooling(_candidate_key(c, session_id))
+    ]
     if not available:
         available = resolved
         skipped_cooling = []
@@ -1312,9 +1368,13 @@ async def call_llm(
                             "connection_pool_key": connection_pool_key,
                             })
 
-                        _clear_candidate_cooldown(_candidate_key(candidate))
+                        _clear_candidate_cooldown(
+                            _candidate_key(candidate, session_id)
+                        )
                         if candidates is None:
-                            _remember_success(model_type, candidate, endpoint)
+                            _remember_success(
+                                model_type, candidate, endpoint, session_id
+                            )
                         if failed_this_call or skipped_cooling:
                             logger.warning(
                                 "call_llm succeeded on %s after %d failed and %d cooled-down candidate(s)%s "
@@ -1360,7 +1420,9 @@ async def call_llm(
                     # All endpoints for this candidate failed — cool it down and
                     # try the next one. The error is preserved in last_error and
                     # re-raised only after all candidates are exhausted.
-                    _set_candidate_cooldown(_candidate_key(candidate))
+                    _set_candidate_cooldown(
+                        _candidate_key(candidate, session_id)
+                    )
                     failed_this_call.append(
                         f"{_candidate_label(candidate)}: {_format_httpx_error(candidate_error)}"
                     )
@@ -1370,7 +1432,7 @@ async def call_llm(
 
             except Exception as exc:
                 last_error = exc
-                _set_candidate_cooldown(_candidate_key(candidate))
+                _set_candidate_cooldown(_candidate_key(candidate, session_id))
                 failed_this_call.append(f"{_candidate_label(candidate)}: {exc.__class__.__name__}: {exc}")
                 if int(candidate.get("_configured_rank") or 0) == 0:
                     failed_primary_model = str(candidate.get("model") or "")

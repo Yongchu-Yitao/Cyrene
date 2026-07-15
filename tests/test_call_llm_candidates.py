@@ -328,9 +328,9 @@ async def test_call_llm_returns_empty_when_no_model_configured(monkeypatch):
     assert result == ""
 
 
-def test_last_success_affinity_prioritizes_candidate_and_exact_endpoint():
+def test_last_success_affinity_is_scoped_to_conversation_and_exact_endpoint():
     cl._last_success_cache = {
-        "primary": {
+        "session:chat_existing:primary": {
             "candidate_id": "backup",
             "model": "backup-model",
             "base_url": "https://backup.example/v1",
@@ -351,11 +351,15 @@ def test_last_success_affinity_prioritizes_candidate_and_exact_endpoint():
         },
     ]
 
-    ordered = cl._prioritize_last_success(candidates, "primary")
+    ordered = cl._prioritize_last_success(candidates, "primary", "chat_existing")
+    new_chat_order = cl._prioritize_last_success(candidates, "primary", "chat_new")
+    unscoped_order = cl._prioritize_last_success(candidates, "primary")
 
     assert [item["id"] for item in ordered] == ["backup", "main"]
     assert ordered[0]["endpoints"][0].endswith("chat/completions-alt")
     assert ordered[0]["_configured_rank"] == 1
+    assert [item["id"] for item in new_chat_order] == ["main", "backup"]
+    assert [item["id"] for item in unscoped_order] == ["main", "backup"]
 
 
 def test_successful_endpoint_affinity_is_persisted_only_when_changed(monkeypatch):
@@ -366,12 +370,52 @@ def test_successful_endpoint_affinity_is_persisted_only_when_changed(monkeypatch
         "id": "main", "model": "model", "base_url": "https://model.example/v1"
     }
 
-    cl._remember_success("primary", candidate, "https://model.example/v1/chat/completions")
-    cl._remember_success("primary", candidate, "https://model.example/v1/chat/completions")
+    cl._remember_success(
+        "primary", candidate, "https://model.example/v1/chat/completions", "chat_1"
+    )
+    cl._remember_success(
+        "primary", candidate, "https://model.example/v1/chat/completions", "chat_1"
+    )
 
     assert len(writes) == 1
     assert writes[0][0] == "llm_last_success_endpoints"
-    assert writes[0][1]["primary"]["candidate_id"] == "main"
+    assert writes[0][1]["session:chat_1:primary"]["candidate_id"] == "main"
+
+
+def test_success_without_session_does_not_create_global_affinity(monkeypatch):
+    writes = []
+    cl._last_success_cache = {
+        "primary": {"candidate_id": "legacy-global"},
+    }
+    monkeypatch.setattr(cl, "set_setting", lambda key, value: writes.append((key, value)))
+
+    cl._remember_success(
+        "primary",
+        {"id": "main", "model": "model", "base_url": "https://model.example/v1"},
+        "https://model.example/v1/chat/completions",
+    )
+
+    assert writes == []
+    assert cl._prioritize_last_success([
+        {
+            "id": "main", "model": "model", "base_url": "https://model.example/v1",
+            "endpoints": ["https://model.example/v1/chat/completions"],
+        }
+    ], "primary")[0]["id"] == "main"
+
+
+def test_candidate_cooldown_is_scoped_to_conversation():
+    candidate = {
+        "id": "main",
+        "model": "primary-model",
+        "base_url": "https://primary.example/v1",
+    }
+
+    cl._set_candidate_cooldown(cl._candidate_key(candidate, "chat_existing"))
+
+    assert cl._candidate_cooling(cl._candidate_key(candidate, "chat_existing"))
+    assert not cl._candidate_cooling(cl._candidate_key(candidate, "chat_new"))
+    assert not cl._candidate_cooling(cl._candidate_key(candidate))
 
 
 async def test_call_llm_reuses_http_client_within_event_loop(monkeypatch):
@@ -608,7 +652,7 @@ async def test_last_success_affinity_does_not_publish_fallback_ui_event(monkeypa
         },
     ]
     cl._last_success_cache = {
-        "primary": {
+        "session:chat_1:primary": {
             "candidate_id": "backup", "model": "backup",
             "base_url": "https://backup/v1",
             "endpoint": "https://backup/v1/chat/completions",
