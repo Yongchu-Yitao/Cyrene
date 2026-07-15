@@ -488,6 +488,7 @@ def test_workbench_chat_persists_intermediate_messages_between_tool_cards(
         state_messages.extend([
             {
                 "role": "assistant",
+                "created_at": chat_mod._utc_now_iso(),
                 "tool_calls": [{
                     "id": "search_1",
                     "function": {
@@ -501,11 +502,12 @@ def test_workbench_chat_persists_intermediate_messages_between_tool_cards(
                 "role": "assistant",
                 "content": "先汇报阶段结果，我继续处理。",
                 "message_id": "mid_1",
-                    "created_at": chat_mod._utc_now_iso(),
+                "created_at": chat_mod._utc_now_iso(),
                 "intermediate_reply": True,
             },
             {
                 "role": "assistant",
+                "created_at": chat_mod._utc_now_iso(),
                 "tool_calls": [
                     {
                         "id": "message_1",
@@ -525,7 +527,11 @@ def test_workbench_chat_persists_intermediate_messages_between_tool_cards(
             },
             {"role": "tool", "tool_call_id": "message_1", "content": "sent"},
             {"role": "tool", "tool_call_id": "bash_1", "content": "done"},
-            {"role": "assistant", "content": "最终完成。"},
+            {
+                "role": "assistant",
+                "content": "最终完成。",
+                "created_at": chat_mod._utc_now_iso(),
+            },
         ])
         return "最终完成。"
 
@@ -539,17 +545,27 @@ def test_workbench_chat_persists_intermediate_messages_between_tool_cards(
 
     assert response.status_code == 200
     saved = response.json()["assistantMessages"]
+    assert [message.get("activityCard", False) for message in saved] == [
+        True,
+        False,
+        True,
+        False,
+    ]
     assert [message["content"] for message in saved] == [
+        "",
         "先汇报阶段结果，我继续处理。",
+        "",
         "最终完成。",
     ]
     assert [entry["tool"] for entry in saved[0]["trace"]] == ["WebSearch"]
-    assert [entry["tool"] for entry in saved[1]["trace"]] == ["Bash"]
+    assert [entry["tool"] for entry in saved[2]["trace"]] == ["Bash"]
 
     chats = json.loads((search_env["data_dir"] / "workbench_chats.json").read_text(encoding="utf-8"))
     transcript = chats["chats"][0]["messages"]
-    assert [message["content"] for message in transcript[-2:]] == [
+    assert [message["content"] for message in transcript[-4:]] == [
+        "",
         "先汇报阶段结果，我继续处理。",
+        "",
         "最终完成。",
     ]
 

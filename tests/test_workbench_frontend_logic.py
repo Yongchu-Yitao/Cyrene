@@ -84,6 +84,76 @@ process.stdout.write(JSON.stringify(result));
     return json.loads(completed.stdout)
 
 
+def _run_workbench_timeline_js(expression: str):
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    timeline_source = "function wbcConfirmOptimisticMessage(" + source.split(
+        "function wbcConfirmOptimisticMessage(", 1
+    )[1].split("function wbcCurrentModel(", 1)[0]
+    script = f"""
+eval({json.dumps(timeline_source)});
+const result = ({expression});
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
+def test_workbench_confirmed_user_turn_keeps_live_timeline_anchor():
+    result = _run_workbench_timeline_js(
+        """
+(() => {
+  const startedAt = Date.parse("2026-07-15T09:27:52.100Z");
+  const optimistic = {
+    id: "pending_user",
+    role: "user",
+    content: "你好",
+    createdAt: new Date(startedAt).toISOString(),
+    optimistic: true
+  };
+  const confirmed = wbcConfirmOptimisticMessage(optimistic, {
+    id: "saved_user",
+    role: "user",
+    content: "你好",
+    createdAt: "2026-07-15T09:27:52.180000+00:00"
+  });
+  const runtime = wbcRuntimeTimelineMessages({
+    chatId: "chat_1",
+    startedAt,
+    activities: []
+  });
+  const merged = wbcMergeChronologicalMessages([confirmed], runtime);
+  return {
+    ids: merged.map(item => item.id),
+    createdAt: confirmed.createdAt,
+    serverCreatedAt: confirmed.serverCreatedAt
+  };
+})()
+"""
+    )
+
+    assert result == {
+        "ids": ["saved_user", "runtime_heartbeat_chat_1", "runtime_activity_1"],
+        "createdAt": "2026-07-15T09:27:52.100Z",
+        "serverCreatedAt": "2026-07-15T09:27:52.180000+00:00",
+    }
+
+
+def test_workbench_timeline_compares_real_instants_not_timestamp_strings():
+    result = _run_workbench_timeline_js(
+        """
+wbcMergeChronologicalMessages(
+  [{ id: "first", createdAt: "2026-01-01T01:00:00+01:00" }],
+  [{ id: "second", createdAt: "2026-01-01T00:00:00.500Z" }]
+).map(item => item.id)
+"""
+    )
+
+    assert result == ["first", "second"]
+
+
 def test_workbench_plan_revision_guard_only_blocks_unresolved_started_steps():
     result = _run_workbench_model_js(
         """
@@ -426,7 +496,7 @@ def test_workbench_chat_tracks_actual_model_from_live_llm_events():
     assert result == "mimo-v2.5"
 
 
-def test_workbench_chat_groups_reasoning_and_tools_by_llm_activity():
+def test_workbench_chat_groups_reasoning_and_tools_until_visible_message():
     result = _run_workbench_runtime_js(
         """
 (() => {
@@ -504,18 +574,11 @@ def test_workbench_chat_groups_reasoning_and_tools_by_llm_activity():
 """
     )
 
-    assert result == [
-        {
-            "id": "activity_1",
-            "reasoning": "first reasoning",
-            "tools": ["read_file"],
-        },
-        {
-            "id": "activity_2",
-            "reasoning": "second reasoning",
-            "tools": ["list_skills", "read_file"],
-        },
-    ]
+    assert result == [{
+        "id": "activity_1",
+        "reasoning": "first reasoning\n\nsecond reasoning",
+        "tools": ["read_file", "list_skills", "read_file"],
+    }]
 
 
 def test_workbench_chat_dedupes_cross_connection_llm_event_race():
@@ -558,7 +621,7 @@ def test_workbench_chat_dedupes_cross_connection_llm_event_race():
     assert result == {"count": 1, "reasoning": "late reasoning"}
 
 
-def test_workbench_chat_merges_only_fully_continuous_reasoning_calls():
+def test_workbench_chat_visible_message_closes_activity_group():
     result = _run_workbench_runtime_js(
         """
 (() => {
@@ -599,6 +662,14 @@ def test_workbench_chat_merges_only_fully_continuous_reasoning_calls():
     tool: "read_file",
     args: { path: "boundary.md" }
   });
+  global.__wbcStreamHandlers.onIntermediateMessage({
+    message: {
+      id: "mid_1",
+      role: "assistant",
+      content: "中途回复",
+      createdAt: "2026-01-01T00:00:02Z"
+    }
+  });
   runReasoningCall(3, "thought after tool");
 
   return WorkbenchChatRuntimes.snapshot().chat_continuous.activities.map(activity => ({
@@ -619,6 +690,48 @@ def test_workbench_chat_merges_only_fully_continuous_reasoning_calls():
             "tools": [],
         },
     ]
+
+
+def test_workbench_chat_merges_tool_only_calls_without_visible_boundary():
+    result = _run_workbench_runtime_js(
+        """
+(() => {
+  const model = {
+    sendMessage: (_chatId, _input, handlers) => {
+      global.__wbcStreamHandlers = handlers;
+      return new Promise(() => {});
+    }
+  };
+  WorkbenchChatRuntimes.start("chat_tools", { message: "hello" }, model);
+  global.__wbcSseHandler({
+    type: "llm_call", status: "started", event_id: "s1",
+    session_id: "chat_tools", model: "mimo-v2.5"
+  });
+  global.__wbcSseHandler({
+    type: "llm_call", status: "completed", event_id: "c1",
+    session_id: "chat_tools", model: "mimo-v2.5", response: {}
+  });
+  global.__wbcSseHandler({
+    type: "tool_call", session_id: "chat_tools", tool: "read_file", args: { path: "a" }
+  });
+  global.__wbcSseHandler({
+    type: "llm_call", status: "started", event_id: "s2",
+    session_id: "chat_tools", model: "mimo-v2.5"
+  });
+  global.__wbcSseHandler({
+    type: "llm_call", status: "completed", event_id: "c2",
+    session_id: "chat_tools", model: "mimo-v2.5", response: {}
+  });
+  global.__wbcSseHandler({
+    type: "tool_call", session_id: "chat_tools", tool: "list_skills", args: {}
+  });
+  const activities = WorkbenchChatRuntimes.snapshot().chat_tools.activities;
+  return activities.map(activity => activity.progress.map(entry => entry.text));
+})()
+"""
+    )
+
+    assert result == [["read_file", "list_skills"]]
 
 
 def test_workbench_chat_model_labels_and_run_summary_use_live_data():
@@ -894,8 +1007,9 @@ def test_workbench_chat_tool_trace_preserves_i18n_metadata():
     segment_adapter = chat.split("function wbcRuntimeSegmentMessages(", 1)[1].split(
         "function wbcSubagentStatusText", 1
     )[0]
-    assert "var activities = Array.isArray(runtime.activities)" in live_message
-    assert "activity={activity}" in live_message
+    assert "if (!runtime.text) return null;" in live_message
+    assert "function wbcRuntimeTimelineMessages(runtime)" in chat
+    assert "runtimeActivity: activity" in chat
     assert "trace: hasLiveActivities ? []" in segment_adapter
     assert "Array.isArray(segment.progress) ? segment.progress" in segment_adapter
     assert "return { tool: entry.text, preview: entry.preview };" not in live_message
@@ -935,25 +1049,36 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert "useWbcState(false)" in activity_card
     assert "useWbcState(0)" in activity_card
     assert 'setLockedHeight(cardRef.current.getBoundingClientRect().height)' in chat
+    assert 'var [lockedTraceCount, setLockedTraceCount] = useWbcState(0);' in chat
+    assert 'entries.length !== lockedTraceCount' in chat
+    assert 'setLockedHeight(0);' in chat
     assert 'style={lockedHeight ? { height: lockedHeight + "px" } : null}' in chat
     assert 'setShowReasoning(function (visible) { return !visible; });' in chat
-    assert "activities.map(function (activity, index)" in live_message
-    assert "key={activity.id || index}" in live_message
+    assert 'var hasReasoning = !!String(item.reasoning || "").trim();' in activity_card
+    assert 'if (!hasReasoning) return;' in activity_card
+    assert 'onToggle={hasReasoning ? toggleReasoning : null}' in activity_card
+    assert 'detail.scrollTop = active ? detail.scrollHeight : 0;' in activity_card
+    assert "if (!msg.runtimeActivityActive && activityEntries.length === 0) return null;" in chat
+    assert "wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime))" in chat
+    assert "if (msg.runtimeActivity || msg.activityCard)" in chat
+    assert "activity={activity}" in chat
     assert "reasoning={item.reasoning}" in activity_card
     assert "useWbcState(false)" not in live_message
     assert "useWbcState(0)" not in live_message
     assert "trace: hasLiveActivities ? []" in chat
-    assert 'className="wb-spinner small" aria-hidden="true"' in chat
+    assert 'activityRunning ? <span className="wb-spinner small" aria-hidden="true" /> : null' in chat
     assert 'className="wbc-thinking-detail-text" ref={reasoningRef}' in chat
     assert ".wbc-trace.live.wbc-trace-locked" in css
     assert ".wbc-trace.wbc-trace-locked .wbc-trace-view" in css
+    thread_child_css = css.split(".wbc-thread > * {", 1)[1].split("}", 1)[0]
+    assert "flex-shrink: 0;" in thread_child_css
     trace_view_css = css.split(".wbc-trace-view {", 1)[1].split("}", 1)[0]
     assert "height: 100%;" not in trace_view_css
     detail_css = css.split(".wbc-thinking-detail {", 1)[1].split("}", 1)[0]
     assert "overflow: hidden;" in detail_css
     detail_text_css = css.split(".wbc-thinking-detail-text {", 1)[1].split("}", 1)[0]
     assert "overflow-y: auto;" in detail_text_css
-    assert "查看实时思考详情" in i18n
+    assert "查看思考详情" in i18n
 
 
 def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():

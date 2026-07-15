@@ -1434,6 +1434,132 @@ def _extract_exchange_segments(
     return segments, trace[:40], usage, files[:20]
 
 
+def _extract_exchange_timeline(
+    state_messages: list[dict[str, Any]],
+    state_ids_before: set[str],
+    *,
+    include_open_tool_preamble: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
+    """Build a durable, chronological stream of activity cards and messages.
+
+    Unlike ``_extract_exchange_segments`` (which attaches accumulated tools to
+    a later reply), this representation keeps every card at the timestamp of
+    the LLM turn that created it. Visible assistant messages are emitted as
+    their own entries. Reasoning and tool calls remain in the same activity card
+    until a visible assistant message closes that card.
+    """
+    messages = _reorder_tool_produced_replies(state_messages)
+    result_map = _build_tool_result_map(messages)
+    last_assistant_idx = -1
+    for idx, message in enumerate(messages):
+        mid = str(message.get("message_id") or message.get("id") or "").strip()
+        if mid and mid in state_ids_before:
+            continue
+        if str(message.get("role") or "") == "assistant" and not bool(message.get("intermediate_reply")):
+            last_assistant_idx = idx
+
+    timeline: list[dict[str, Any]] = []
+    usage = _exchange_usage()
+    files: list[dict[str, Any]] = []
+    seen_file_urls: set[str] = set()
+    pending: dict[str, Any] | None = None
+
+    def flush_activity() -> None:
+        nonlocal pending
+        # Pure reasoning is a live-only affordance. Once that phase finishes it
+        # should not leave a standalone "thinking complete" card in the durable
+        # transcript. Keep the card only when it owns actual tool activity.
+        if pending is not None and pending.get("trace"):
+            timeline.append(pending)
+        pending = None
+
+    def start_activity(message: dict[str, Any], idx: int) -> dict[str, Any]:
+        mid = str(message.get("message_id") or message.get("id") or "").strip()
+        fallback = _segment_fallback_id(message, idx)
+        model_name = str(
+            (message.get("usage") or {}).get("model")
+            if isinstance(message.get("usage"), dict)
+            else ""
+        ).strip() or str(message.get("model") or "").strip()
+        entry: dict[str, Any] = {
+            "id": "activity_" + (mid or fallback),
+            "role": "assistant",
+            "content": "",
+            "createdAt": str(message.get("created_at") or message.get("createdAt") or _utc_now_iso()),
+            "activityCard": True,
+            "reasoning": "",
+            "trace": [],
+            "intermediate": True,
+        }
+        if model_name:
+            entry["model"] = model_name
+        return entry
+
+    for idx, message in enumerate(messages):
+        mid = str(message.get("message_id") or message.get("id") or "").strip()
+        if mid and mid in state_ids_before:
+            continue
+        if str(message.get("role") or "") != "assistant":
+            continue
+
+        _accumulate_usage(message, usage)
+
+        if bool(message.get("intermediate_reply")):
+            flush_activity()
+            timeline.append(_make_reply_segment(
+                message,
+                [],
+                _exchange_usage(),
+                [],
+                fallback_id=_segment_fallback_id(message, idx),
+            ))
+            continue
+
+        _accumulate_attachments(message, files, seen_file_urls)
+
+        reasoning = str(message.get("reasoning_content") or "").strip()
+        tools: list[dict[str, Any]] = []
+        _accumulate_tools(message, tools, result_map)
+
+        if reasoning:
+            if pending is None:
+                pending = start_activity(message, idx)
+            prior_reasoning = str(pending.get("reasoning") or "").rstrip()
+            pending["reasoning"] = (prior_reasoning + "\n\n" + reasoning) if prior_reasoning else reasoning
+
+        if tools:
+            if pending is None:
+                pending = start_activity(message, idx)
+            pending_trace = pending.setdefault("trace", [])
+            pending_trace.extend(tools)
+            if len(pending_trace) > 40:
+                del pending_trace[:-40]
+
+        is_completed_mid_turn = idx != last_assistant_idx
+        is_open_tool_preamble = (
+            include_open_tool_preamble
+            and idx == last_assistant_idx
+            and _has_traceable_tools(message)
+        )
+        if (
+            (is_completed_mid_turn or is_open_tool_preamble)
+            and str(message.get("content") or "").strip()
+        ):
+            flush_activity()
+            timeline.append(_make_reply_segment(
+                message,
+                [],
+                _exchange_usage(),
+                [],
+                fallback_id=_segment_fallback_id(message, idx),
+            ))
+
+    flush_activity()
+    if not usage["total_tokens"]:
+        usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+    return timeline, usage, files[:20]
+
+
 def _last_exchange_model(
     state_messages: list[dict[str, Any]], state_ids_before: set[str]
 ) -> str:
@@ -2336,7 +2462,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         def _finalize(reply_text: str) -> dict[str, Any]:
             """Persist mid-run messages plus the final assistant reply in order."""
             state_messages = _session_state_messages(chat_id)
-            intermediate_entries, trace, usage, files = _extract_exchange_segments(
+            timeline_entries, usage, files = _extract_exchange_timeline(
                 state_messages, state_ids_before
             )
             fresh = _read_chats_store()
@@ -2346,7 +2472,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             _commit_retry_cut(fresh_chat)
             configured_model = str(fresh_chat.get("model") or "")
             model_name = _last_exchange_model(state_messages, state_ids_before) or configured_model
-            for entry in intermediate_entries:
+            for entry in timeline_entries:
                 entry.setdefault("model", model_name)
             assistant_entry: dict[str, Any] = {
                 "id": _short_id("msg"),
@@ -2355,14 +2481,12 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 "createdAt": _utc_now_iso(),
                 "model": model_name,
             }
-            if trace:
-                assistant_entry["trace"] = trace
             if any(usage.values()):
                 assistant_entry["usage"] = usage
             if files:
                 assistant_entry["attachments"] = files
             fresh_chat["lastModel"] = model_name
-            saved_messages = [*intermediate_entries, assistant_entry]
+            saved_messages = [*timeline_entries, assistant_entry]
             _merge_chat_messages_chronologically(fresh_chat, saved_messages)
             fresh_chat["status"] = "idle"
             fresh_chat.pop("pendingQuestion", None)
@@ -2446,7 +2570,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             if pending:
                 fresh_chat["pendingQuestion"] = pending
                 state_messages = _session_state_messages(chat_id)
-                intermediate_entries, trace, usage, files = _extract_exchange_segments(
+                timeline_entries, usage, files = _extract_exchange_timeline(
                     state_messages,
                     state_ids_before,
                     include_open_tool_preamble=True,
@@ -2455,16 +2579,15 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                     _last_exchange_model(state_messages, state_ids_before)
                     or str(fresh_chat.get("model") or "")
                 )
-                for entry in intermediate_entries:
+                for entry in timeline_entries:
                     entry.setdefault("model", model_name)
                 question_entry = _pending_question_message(
                     pending,
-                    trace=trace,
                     usage=usage,
                     files=files,
                     model=model_name,
                 )
-                saved_messages = [*intermediate_entries, question_entry]
+                saved_messages = [*timeline_entries, question_entry]
                 fresh_chat["lastModel"] = model_name
                 _merge_chat_messages_chronologically(
                     fresh_chat, saved_messages
@@ -2907,26 +3030,25 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
 
             resume_state_messages = await asyncio.to_thread(_session_state_messages, chat_id)
 
-            def extract_pending() -> tuple[list[dict[str, Any]], list[Any], dict[str, Any], list[Any]]:
-                return _extract_exchange_segments(
+            def extract_pending() -> tuple[list[dict[str, Any]], dict[str, Any], list[Any]]:
+                return _extract_exchange_timeline(
                     resume_state_messages,
                     state_ids_before_resume,
                     include_open_tool_preamble=True,
                 )
 
-            intermediate_entries, trace, usage, files = await asyncio.to_thread(extract_pending)
+            timeline_entries, usage, files = await asyncio.to_thread(extract_pending)
             pending_model = (
                 _last_exchange_model(resume_state_messages, state_ids_before_resume)
                 or str(chat.get("model") or "")
             )
-            for entry in intermediate_entries:
+            for entry in timeline_entries:
                 entry.setdefault("model", pending_model)
             additions = [
-                *intermediate_entries,
+                *timeline_entries,
                 *([
                     _pending_question_message(
                         new_pending,
-                        trace=trace,
                         usage=usage,
                         files=files,
                         model=pending_model,
@@ -2945,12 +3067,12 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
 
         answer_state_messages = await asyncio.to_thread(_session_state_messages, chat_id)
 
-        def extract_answer() -> tuple[list[dict[str, Any]], list[Any], dict[str, Any], list[Any]]:
-            return _extract_exchange_segments(
+        def extract_answer() -> tuple[list[dict[str, Any]], dict[str, Any], list[Any]]:
+            return _extract_exchange_timeline(
                 answer_state_messages, state_ids_before_resume
             )
 
-        intermediate_entries, trace, usage, files = await asyncio.to_thread(extract_answer)
+        timeline_entries, usage, files = await asyncio.to_thread(extract_answer)
         fresh = await asyncio.to_thread(_read_chats_store)
         fresh_chat = _find_chat(fresh, chat_id)
         if not fresh_chat:
@@ -2959,7 +3081,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             _last_exchange_model(answer_state_messages, state_ids_before_resume)
             or str(fresh_chat.get("model") or "")
         )
-        for entry in intermediate_entries:
+        for entry in timeline_entries:
             entry.setdefault("model", model_name)
         assistant_entry: dict[str, Any] = {
             "id": _short_id("msg"),
@@ -2968,13 +3090,11 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             "createdAt": _utc_now_iso(),
             "model": model_name,
         }
-        if trace:
-            assistant_entry["trace"] = trace
         if any(usage.values()):
             assistant_entry["usage"] = usage
         if files:
             assistant_entry["attachments"] = files
-        saved_messages = [*intermediate_entries, assistant_entry]
+        saved_messages = [*timeline_entries, assistant_entry]
         _merge_chat_messages_chronologically(fresh_chat, saved_messages)
         fresh_chat["lastModel"] = model_name
         fresh_chat["status"] = "idle"

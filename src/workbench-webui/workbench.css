@@ -11086,6 +11086,14 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   gap: 16px;
 }
 
+/* A scrollable column must overflow instead of distributing negative space by
+   shrinking transcript rows. In particular, a size-locked reasoning card has
+   overflow:hidden, which otherwise lets flexbox collapse its content box to
+   zero and leaves what looks like an empty, flattened card. */
+.wbc-thread > * {
+  flex-shrink: 0;
+}
+
 .wbc-empty-thread {
   margin: auto;
   max-width: 380px;

@@ -278,6 +278,21 @@ function wbcFormatTime(value) {
   }
 }
 
+function wbcConfirmOptimisticMessage(previous, confirmed) {
+  var prior = previous || {};
+  var next = { ...prior, ...(confirmed || {}), optimistic: false };
+  // The server timestamp is authoritative for persistence, but it is produced
+  // after the request reaches Python. Replacing the optimistic timestamp with
+  // it while the run is live can move the user's turn below the already-mounted
+  // thinking placeholder. Keep the client timestamp as this render's stable
+  // causal anchor; the next durable reload naturally uses the server timestamp.
+  if (prior.optimistic && prior.createdAt) {
+    next.serverCreatedAt = String((confirmed && (confirmed.createdAt || confirmed.created_at)) || "");
+    next.createdAt = prior.createdAt;
+  }
+  return next;
+}
+
 function wbcMergeChronologicalMessages(messages, additions) {
   // Runtime segments are discovered independently from persisted guidance.
   // Merge them by event time so steering stays where it happened instead of
@@ -297,18 +312,20 @@ function wbcMergeChronologicalMessages(messages, additions) {
       for (var requestIndex = 0; requestIndex < merged.length; requestIndex++) {
         if (String(merged[requestIndex] && merged[requestIndex].clientRequestId || "") !== clientRequestId) continue;
         var previousId = String(merged[requestIndex] && merged[requestIndex].id || "");
-        merged[requestIndex] = { ...merged[requestIndex], ...item, optimistic: false };
+        merged[requestIndex] = wbcConfirmOptimisticMessage(merged[requestIndex], item);
         if (previousId) known.delete(previousId);
         if (id) known.add(id);
         return;
       }
     }
     var at = String(item.createdAt || item.created_at || "");
+    var atMs = at ? Date.parse(at) : NaN;
     var index = merged.length;
-    if (at) {
+    if (Number.isFinite(atMs)) {
       for (var i = 0; i < merged.length; i++) {
         var currentAt = String(merged[i] && (merged[i].createdAt || merged[i].created_at) || "");
-        if (currentAt && currentAt > at) { index = i; break; }
+        var currentAtMs = currentAt ? Date.parse(currentAt) : NaN;
+        if (Number.isFinite(currentAtMs) && currentAtMs > atMs) { index = i; break; }
       }
     }
     merged.splice(index, 0, item);
@@ -332,6 +349,31 @@ function wbcRuntimeSegmentMessages(runtime) {
       runtimeSegment: true,
     };
   });
+}
+
+function wbcRuntimeTimelineMessages(runtime) {
+  if (!runtime) return [];
+  var startedAt = Number(runtime.startedAt || Date.now());
+  var activities = Array.isArray(runtime.activities) && runtime.activities.length
+    ? runtime.activities
+    : [{ id: "activity_1", reasoning: "", progress: [] }];
+  var items = [{
+    id: "runtime_heartbeat_" + String(runtime.chatId || "chat"),
+    role: "assistant",
+    createdAt: new Date(startedAt + 1).toISOString(),
+    runtimeHeartbeat: true,
+  }];
+  activities.forEach(function (activity, index) {
+    items.push({
+      id: "runtime_" + String(activity.id || index),
+      role: "assistant",
+      createdAt: new Date(Number(activity.createdAt || startedAt + index + 2)).toISOString(),
+      runtimeActivity: activity,
+      runtimeActivityActive: index === activities.length - 1,
+      runtimeActivityHasReplyText: !!runtime.text,
+    });
+  });
+  return items;
 }
 
 function wbcCurrentModel(chat, project, runtime, liveData) {
@@ -750,6 +792,18 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     return { ...cur, activities: nextActivities };
   }
 
+  function closeActivityTimeline(cur) {
+    var activities = Array.isArray(cur.activities) ? cur.activities.slice() : [];
+    if (!activities.length) return cur;
+    var lastIndex = activities.length - 1;
+    activities[lastIndex] = { ...activities[lastIndex], timelineClosed: true };
+    return { ...cur, activities: activities };
+  }
+
+  function closeTimeline(chatId) {
+    update(chatId, function (cur) { return cur ? closeActivityTimeline(cur) : null; });
+  }
+
   function abort(chatId) {
     var ac = aborts[chatId];
     if (ac) { try { ac.abort(); } catch (e) {} }
@@ -834,8 +888,9 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
           segments: nextSegments,
         };
       }
+      var closed = closeActivityTimeline(cur);
       return {
-        ...cur,
+        ...closed,
         text: "",
         progress: [],
         replying: false,
@@ -869,16 +924,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
           if (!cur) return null;
           var activities = Array.isArray(cur.activities) ? cur.activities : [];
           var last = activities.length ? activities[activities.length - 1] : null;
-          var lastProgress = last && Array.isArray(last.progress) ? last.progress : [];
-          var completedWithoutActivity = !!(
-            last
-            && last.llmStatus === "completed"
-            && lastProgress.length === 0
-          );
-          var reuseLlmCard = !!(last && (
-            last.llmStatus === "started"
-            || completedWithoutActivity
-          ));
+          var reuseLlmCard = !!(last && !last.timelineClosed);
           var next = reuseLlmCard
             ? updateLastActivity(cur, function (activity) {
                 var current = String(activity.reasoning || "");
@@ -956,7 +1002,8 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
       onGuidanceReceived: function (event) {
         if (event && event.userMessage) fire("onUserMessage", chatId, event.userMessage);
         update(chatId, function (cur) {
-          return cur ? { ...cur, lastEventAt: Date.now() } : null;
+          if (!cur) return null;
+          return { ...closeActivityTimeline(cur), lastEventAt: Date.now() };
         });
       },
       onSaved: function (event) {
@@ -1101,7 +1148,8 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
         var eventStatus = String(event.status || "completed").toLowerCase();
         var activities = Array.isArray(latest.activities) ? latest.activities : [];
         var duplicate = eventId && activities.some(function (activity) {
-          return String(activity && (activity.llmEventId || activity.llmStartedEventId) || "") === eventId;
+          var ids = activity && Array.isArray(activity.llmEventIds) ? activity.llmEventIds : [];
+          return ids.indexOf(eventId) >= 0;
         });
         var next = latest;
         if (!duplicate) {
@@ -1111,35 +1159,34 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
             // different connections, so either may arrive first. Reuse the
             // provisional reasoning card (or a retrying start card) instead of
             // creating two cards for one LLM call.
-            var lastProgress = last && Array.isArray(last.progress) ? last.progress : [];
-            var continuesPureReasoning = !!(
-              last
-              && last.llmStatus === "completed"
-              && lastProgress.length === 0
-            );
-            if (last && (last.awaitingLlmEvent || last.llmStatus === "started" || continuesPureReasoning || (!last.llmStatus && !last.llmEventId))) {
+            var continuesActivity = !!(last && !last.timelineClosed);
+            if (continuesActivity) {
               next = updateLastActivity(latest, function (activity) {
+                var eventIds = Array.isArray(activity.llmEventIds) ? activity.llmEventIds : [];
                 return {
                   ...activity,
                   awaitingLlmEvent: false,
                   llmStatus: "started",
                   llmStartedEventId: eventId,
+                  llmEventIds: eventId ? eventIds.concat([eventId]).slice(-100) : eventIds,
                   model: String(event.model || ""),
                   reasoningStreamSeen: activity.awaitingLlmEvent ? activity.reasoningStreamSeen : false,
-                  mergeReasoning: continuesPureReasoning,
+                  mergeReasoning: activity.llmStatus === "completed",
                 };
               });
             } else {
               next = appendActivity(latest, {
                 llmStatus: "started",
                 llmStartedEventId: eventId,
+                llmEventIds: eventId ? [eventId] : [],
                 model: String(event.model || ""),
                 reasoningCallStart: 0,
                 reasoningStreamSeen: false,
               });
             }
-          } else if (last && (last.awaitingLlmEvent || last.llmStatus === "started")) {
+          } else if (last && !last.timelineClosed) {
             next = updateLastActivity(latest, function (activity) {
+              var eventIds = Array.isArray(activity.llmEventIds) ? activity.llmEventIds : [];
               var current = String(activity.reasoning || "");
               var reasoning = current;
               var callStart = Math.max(0, Math.min(Number(activity.reasoningCallStart || 0), current.length));
@@ -1156,6 +1203,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
                 awaitingLlmEvent: false,
                 llmStatus: "completed",
                 llmEventId: eventId,
+                llmEventIds: eventId ? eventIds.concat([eventId]).slice(-100) : eventIds,
                 model: String(event.model || ""),
                 reasoning: reasoning,
                 reasoningCallStart: callStart,
@@ -1167,6 +1215,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
             next = appendActivity(latest, {
               llmStatus: "completed",
               llmEventId: eventId,
+              llmEventIds: eventId ? [eventId] : [],
               model: String(event.model || ""),
               reasoning: eventReasoning,
               reasoningCallStart: 0,
@@ -1214,7 +1263,12 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     if (!entry) return;
     update(chatId, function (latest) {
       if (!latest) return null;
-      var next = updateLastActivity(latest, function (activity) {
+      var latestActivities = Array.isArray(latest.activities) ? latest.activities : [];
+      var latestActivity = latestActivities.length ? latestActivities[latestActivities.length - 1] : null;
+      var activityBase = latestActivity && latestActivity.timelineClosed
+        ? appendActivity(latest, {})
+        : latest;
+      var next = updateLastActivity(activityBase, function (activity) {
         var activityProgress = Array.isArray(activity.progress) ? activity.progress : [];
         return { ...activity, progress: activityProgress.concat([entry]).slice(-30) };
       });
@@ -1230,7 +1284,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
   return {
     subscribe: subscribe, snapshot: snapshot, get: get, isRunning: isRunning,
     update: update, clear: clear, abort: abort, interrupt: interrupt,
-    start: start, reconnect: reconnect, deferSend: deferSend, setHooks: setHooks,
+    start: start, reconnect: reconnect, deferSend: deferSend, closeTimeline: closeTimeline, setHooks: setHooks,
   };
 })();
 window.WorkbenchChatRuntimes = WorkbenchChatRuntimes;
@@ -1778,7 +1832,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
             for (var i = 0; i < messages.length; i++) {
               if (String(messages[i] && messages[i].id || "") !== optimisticId) continue;
               var confirmed = messages.slice();
-              confirmed[i] = { ...userMessage, optimistic: false };
+              confirmed[i] = wbcConfirmOptimisticMessage(messages[i], userMessage);
               return { ...prev, messages: confirmed };
             }
           }
@@ -1894,6 +1948,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
       clientRequestId: clientRequestId,
     };
     setError("");
+    runtimeEngine.closeTimeline(chatId);
     setActiveChat(function (prev) {
       if (!prev || prev.id !== chatId) return prev;
       return { ...prev, messages: wbcMergeChronologicalMessages(prev.messages || [], [optimisticMessage]) };
@@ -2309,7 +2364,8 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var durableMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
-  var messages = wbcMergeChronologicalMessages(durableMessages, wbcRuntimeSegmentMessages(runtime));
+  var runtimeTimeline = wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime));
+  var messages = wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
   var isLegacy = !!(chat && chat.legacy);
   var lastAssistantId = "";
   var lastUserId = "";
@@ -2397,6 +2453,29 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
             && chat.pendingQuestion
             && String(chat.pendingQuestion.id || "") === String(msg.questionId || "")
           );
+          if (msg.runtimeHeartbeat) {
+            return <WbcHeartbeat key={msg.id} startedAt={runtime && runtime.startedAt} lastEventAt={runtime && runtime.lastEventAt} />;
+          }
+          if (msg.runtimeActivity || msg.activityCard) {
+            var activity = msg.runtimeActivity || {
+              id: msg.id,
+              reasoning: msg.reasoning || "",
+              progress: Array.isArray(msg.trace) ? msg.trace : [],
+            };
+            var activityEntries = Array.isArray(activity.progress) ? activity.progress : [];
+            // A tool-free thinking card is useful only while it is the live
+            // phase. Once completed, omit it instead of leaving a durable
+            // "thinking complete" placeholder between messages.
+            if (!msg.runtimeActivityActive && activityEntries.length === 0) return null;
+            return (
+              <WbcLiveActivityCard
+                key={msg.id}
+                activity={activity}
+                active={!!msg.runtimeActivityActive}
+                hasReplyText={!!msg.runtimeActivityHasReplyText}
+              />
+            );
+          }
           if (isActiveQuestion) {
             return <WbcQuestionPrompt key={msg.id} pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} trace={msg.trace} />;
           }
@@ -2802,7 +2881,7 @@ function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, o
     >
       {showReasoning ? (
         <div className="wbc-thinking-detail" aria-live="polite">
-          <span className="wb-spinner small" aria-hidden="true" />
+          {activityRunning ? <span className="wb-spinner small" aria-hidden="true" /> : null}
           <span className="wbc-thinking-detail-text" ref={reasoningRef}>
             {reasoning || wbcT("workbenchChat.reasoningPending", "Waiting for live reasoning...")}
           </span>
@@ -2934,21 +3013,35 @@ function WbcHeartbeat({ startedAt, lastEventAt }) {
 function WbcLiveActivityCard({ activity, active, hasReplyText }) {
   var item = activity || {};
   var entries = Array.isArray(item.progress) ? item.progress : [];
+  var hasReasoning = !!String(item.reasoning || "").trim();
   var [showReasoning, setShowReasoning] = useWbcState(false);
   var [lockedHeight, setLockedHeight] = useWbcState(0);
+  var [lockedTraceCount, setLockedTraceCount] = useWbcState(0);
   var cardRef = useWbcRef(null);
   var reasoningRef = useWbcRef(null);
   function toggleReasoning() {
+    if (!hasReasoning) return;
     if (typeof window.getSelection === "function" && String(window.getSelection() || "")) return;
-    if (!lockedHeight && cardRef.current) {
+    if (!showReasoning && !lockedHeight && cardRef.current) {
       setLockedHeight(cardRef.current.getBoundingClientRect().height);
+      setLockedTraceCount(entries.length);
+    } else if (showReasoning && entries.length !== lockedTraceCount) {
+      // The card may finish more tools while its reasoning side is visible.
+      // The old compact lock would leave no room for the updated tool list.
+      setLockedHeight(0);
+      setLockedTraceCount(entries.length);
     }
     setShowReasoning(function (visible) { return !visible; });
   }
   useWbcEffect(function () {
     var detail = reasoningRef.current;
-    if (showReasoning && detail) detail.scrollTop = detail.scrollHeight;
-  }, [item.reasoning, showReasoning]);
+    if (showReasoning && detail) {
+      // Follow a live stream, but open completed reasoning from its beginning.
+      // Scrolling a one-line locked card to the end can otherwise land on an
+      // empty trailing line and make a populated detail look blank.
+      detail.scrollTop = active ? detail.scrollHeight : 0;
+    }
+  }, [item.reasoning, showReasoning, active]);
 
   var label = entries.length
     ? (active && !hasReplyText
@@ -2965,7 +3058,7 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
       running={active}
       reasoning={item.reasoning}
       showReasoning={showReasoning}
-      onToggle={toggleReasoning}
+      onToggle={hasReasoning ? toggleReasoning : null}
       cardRef={cardRef}
       reasoningRef={reasoningRef}
       lockedHeight={lockedHeight}
@@ -2975,36 +3068,19 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
 }
 
 function WbcLiveMessage({ runtime, onOpenFile }) {
-  var activities = Array.isArray(runtime.activities) && runtime.activities.length
-    ? runtime.activities
-    : [{ id: "activity_1", reasoning: "", progress: [] }];
   // Re-parse the streaming markdown only when the text actually changed — not on
   // every heartbeat / progress-driven re-render of this card.
   var liveHtml = useWbcMemo(function () {
     return runtime.text ? wbcRenderMarkdown(runtime.text) : "";
   }, [runtime.text]);
+  if (!runtime.text) return null;
   return (
     <React.Fragment>
       <div className="wbc-msg assistant">
-        <WbcHeartbeat startedAt={runtime.startedAt} lastEventAt={runtime.lastEventAt} />
-        <div className="wbc-live-activities">
-          {activities.map(function (activity, index) {
-            return (
-              <WbcLiveActivityCard
-                key={activity.id || index}
-                activity={activity}
-                active={index === activities.length - 1}
-                hasReplyText={!!runtime.text}
-              />
-            );
-          })}
+        <div className="wbc-msg-body markdown">
+          <div dangerouslySetInnerHTML={{ __html: liveHtml }} />
+          <span className="wbc-caret" />
         </div>
-        {runtime.text && (
-          <div className="wbc-msg-body markdown">
-            <div dangerouslySetInnerHTML={{ __html: liveHtml }} />
-            <span className="wbc-caret" />
-          </div>
-        )}
       </div>
     </React.Fragment>
   );

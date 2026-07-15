@@ -19,6 +19,7 @@ from cyrene.agent.message import _apply_assistant_meta, _assistant_entry_from_re
 from webui.workbench_chat_runs import ChatRun
 from webui.routes_workbench_chat import (
     _extract_exchange_segments,
+    _extract_exchange_timeline,
     _last_exchange_model,
     _merge_chat_messages_chronologically,
     _pending_question_message,
@@ -26,6 +27,89 @@ from webui.routes_workbench_chat import (
     _remove_retry_replaced_messages,
     _tool_result_is_error,
 )
+
+
+def test_durable_timeline_keeps_cards_and_messages_in_event_order():
+    messages = [
+        {"role": "user", "message_id": "u1", "content": "start"},
+        {
+            "role": "assistant",
+            "message_id": "a1",
+            "created_at": "2026-01-01T00:00:01+00:00",
+            "reasoning_content": "first thought",
+            "tool_calls": [{"id": "c1", "function": {"name": "read_file", "arguments": '{}'}}],
+        },
+        _tool_result("c1", '{"ok":true}'),
+        {
+            "role": "assistant",
+            "message_id": "m1",
+            "created_at": "2026-01-01T00:00:02+00:00",
+            "intermediate_reply": True,
+            "content": "中间进度",
+        },
+        {
+            "role": "assistant",
+            "message_id": "a2",
+            "created_at": "2026-01-01T00:00:03+00:00",
+            "tool_calls": [{"id": "c2", "function": {"name": "list_skills", "arguments": '{}'}}],
+        },
+        _tool_result("c2", '{"ok":true}'),
+        {
+            "role": "assistant",
+            "message_id": "a3",
+            "created_at": "2026-01-01T00:00:04+00:00",
+            "tool_calls": [{"id": "c3", "function": {"name": "read_file", "arguments": '{}'}}],
+        },
+        _tool_result("c3", '{"ok":true}'),
+        {
+            "role": "assistant",
+            "message_id": "a4",
+            "created_at": "2026-01-01T00:00:05+00:00",
+            "reasoning_content": "final thought",
+            "content": "完成",
+        },
+    ]
+
+    timeline, _usage, _files = _extract_exchange_timeline(messages, set())
+
+    assert [entry["id"] for entry in timeline] == [
+        "activity_a1",
+        "m1",
+        "activity_a2",
+    ]
+    assert [tool["tool"] for tool in timeline[2]["trace"]] == [
+        "list_skills",
+        "read_file",
+    ]
+    assert timeline[2]["reasoning"] == "final thought"
+    assert timeline[0]["createdAt"] < timeline[1]["createdAt"] < timeline[2]["createdAt"]
+
+
+def test_durable_timeline_omits_tool_free_pure_reasoning_card():
+    messages = [
+        {
+            "role": "assistant",
+            "message_id": "a1",
+            "created_at": "2026-01-01T00:00:01+00:00",
+            "reasoning_content": "first",
+        },
+        {
+            "role": "assistant",
+            "message_id": "a2",
+            "created_at": "2026-01-01T00:00:02+00:00",
+            "reasoning_content": "second",
+        },
+        {
+            "role": "assistant",
+            "message_id": "a3",
+            "created_at": "2026-01-01T00:00:03+00:00",
+            "content": "done",
+        },
+    ]
+
+    timeline, _usage, _files = _extract_exchange_timeline(messages, set())
+
+    assert timeline == []
 
 
 def test_exchange_model_comes_from_actual_fallback_response():
