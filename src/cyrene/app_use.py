@@ -21,6 +21,7 @@ _SESSION_MEASUREMENTS: dict[str, dict[str, Any] | None] = {}
 _SESSION_FOCUS_READY: set[str] = set()
 _SESSION_VISUAL_READY: set[str] = set()
 _SESSION_PRIMARY_CLICK_RESULTS: dict[str, dict[str, Any] | None] = {}
+_SESSION_CAPABILITIES: dict[str, set[str]] = {}
 
 
 VISUAL_CLICK_CAPABILITY = {
@@ -67,11 +68,13 @@ MEASURE_COORDINATES_CAPABILITY = {
     "name": "measure_coordinates",
     "description": (
         "Validate an agent-selected point from a fresh window capture without clicking it. Call visual_describe first, then "
-        "provide x/y and a crop width/height in captured-image, window-relative, or global screen coordinates. The tool crops "
+        "provide x/y and a crop width/height in captured-image, window-relative, or global screen coordinates. When calibrating "
+        "a named control, also provide target to bind later visual_click or visual_type fallbacks to that same description. The tool crops "
         "that range, marks the candidate point, and returns the calibration image plus the exact captured-image, window-relative, "
         "and global screen coordinates. Inspect the calibration image before passing window_point unchanged to click_at."
     ),
     "arguments": {
+        "target": "string?",
         "x": "number",
         "y": "number",
         "width": "number?",
@@ -100,12 +103,15 @@ def _with_python_capabilities(result: dict[str, Any]) -> dict[str, Any]:
     if result.get("status") != "success" or not isinstance(result.get("capabilities"), list):
         return result
     names = {item.get("name") for item in result["capabilities"] if isinstance(item, dict)}
-    additions = [
-        item for item in (MEASURE_COORDINATES_CAPABILITY, VISUAL_CLICK_CAPABILITY, VISUAL_TYPE_CAPABILITY)
-        if item["name"] not in names
-    ]
-    if not additions:
-        additions = []
+    additions: list[dict[str, Any]] = []
+    if "visual_describe" in names and "measure_coordinates" not in names:
+        additions.append(MEASURE_COORDINATES_CAPABILITY)
+    if {"visual_describe", "focus_window", "click_at"}.issubset(names) and "visual_click" not in names:
+        additions.append(VISUAL_CLICK_CAPABILITY)
+    # visual_type is a Python orchestration over the macOS-only
+    # virtual_type_at primitive. Never disclose it when that primitive is absent.
+    if {"visual_describe", "virtual_type_at"}.issubset(names) and "visual_type" not in names:
+        additions.append(VISUAL_TYPE_CAPABILITY)
     result = dict(result)
     capabilities = [*result["capabilities"], *additions]
     indexed = list(enumerate(capabilities))
@@ -114,29 +120,36 @@ def _with_python_capabilities(result: dict[str, Any]) -> dict[str, Any]:
         item[0],
     ))
     result["capabilities"] = [item for _, item in indexed]
-    result["interaction_priority"] = [
-        "inspect_fresh_window_capture",
-        "measure_agent_selected_coordinates",
-        "focus_target_window",
-        "primary_foreground_click_at",
-        "restore_cyrene_focus",
-        "visual_effect_verification",
-        "semantic_or_menu_fallback",
+    final_names = {item.get("name") for item in result["capabilities"] if isinstance(item, dict)}
+    if "visual_describe" in final_names:
+        result["required_first_activation_action"] = "call:visual_describe"
+    if "measure_coordinates" in final_names:
+        result["interaction_priority"] = [
+            "inspect_fresh_window_capture",
+            "measure_agent_selected_coordinates",
+            *(
+                ["focus_target_window", "primary_foreground_click_at", "restore_cyrene_focus"]
+                if {"focus_window", "click_at"}.issubset(final_names) else []
+            ),
+            "visual_effect_verification",
+            "semantic_or_menu_fallback",
+        ]
+    if "click_at" in final_names:
+        result["primary_click"] = {
+            "capability": "click_at",
+            "coordinate_space": "window",
+            "required_parameters": {"allow_foreground_input": True},
+            "point_source": "latest measure_coordinates.window_point",
+        }
+    result["fallback_click_capabilities"] = [
+        name for name in ("visual_click", "virtual_click_at") if name in final_names
     ]
-    result["required_first_activation_action"] = "call:visual_describe"
-    result["primary_click"] = {
-        "capability": "click_at",
-        "coordinate_space": "window",
-        "required_parameters": {"allow_foreground_input": True},
-        "point_source": "latest measure_coordinates.window_point",
-    }
-    result["fallback_click_capabilities"] = ["visual_click", "virtual_click_at"]
-    result["next_valid_actions"] = [
-        "call:visual_describe",
-        "call:measure_coordinates",
-        "status",
-        "disconnect",
-    ]
+    next_valid_actions = []
+    if "visual_describe" in final_names:
+        next_valid_actions.append("call:visual_describe")
+    if "measure_coordinates" in final_names:
+        next_valid_actions.append("call:measure_coordinates")
+    result["next_valid_actions"] = [*next_valid_actions, "status", "disconnect"]
     return result
 
 
@@ -148,6 +161,13 @@ async def _execute_measure_coordinates(session_id: str, parameters: dict[str, An
             "message": f"measure_coordinates does not accept: {', '.join(unknown)}.",
             "accepted_arguments": sorted(_MEASURE_COORDINATES_ARGUMENTS),
         }
+    raw_target = parameters.get("target")
+    if raw_target is not None and (not isinstance(raw_target, str) or not raw_target.strip()):
+        return {
+            "status": "error", "type": "invalid_arguments",
+            "message": "measure_coordinates target must be a non-empty string when provided.",
+        }
+    target = raw_target.strip() if isinstance(raw_target, str) else ""
     try:
         x = float(parameters.get("x"))
         y = float(parameters.get("y"))
@@ -293,6 +313,7 @@ async def _execute_measure_coordinates(session_id: str, parameters: dict[str, An
         "status": "success", "summary": "Created a marked calibration crop for the agent-selected coordinate without sending input.",
         "session_id": session_id, "method": "agent_selected_coordinate_calibration",
         "provided_coordinate_space": coordinate_space,
+        **({"target": target} if target else {}),
         "provided_point": {"x": x, "y": y},
         "provided_range": {"width": crop_width, "height": crop_height},
         "captured_point": captured_point, "window_point": window_point, "screen_point": screen_point,
@@ -1050,7 +1071,19 @@ async def execute_app_use(arguments: dict[str, Any]) -> dict[str, Any]:
         measurement = _SESSION_MEASUREMENTS.get(session_id) or {}
         measured_target = " ".join(str(measurement.get("target") or "").lower().split())
         requested_target = " ".join(str((request.get("parameters") or {}).get("target") or "").lower().split())
-        if measured_target and requested_target != measured_target:
+        if not measured_target:
+            return {
+                "status": "error",
+                "type": "measured_target_required",
+                "message": (
+                    f"{capability} requires the latest coordinate measurement to be bound to the same target description. "
+                    "Call measure_coordinates again with target set to the intended control."
+                ),
+                "session_id": session_id,
+                "requested_target": (request.get("parameters") or {}).get("target"),
+                "next_valid_actions": ["call:measure_coordinates", "disconnect"],
+            }
+        if requested_target != measured_target:
             return {
                 "status": "error",
                 "type": "measured_target_mismatch",
@@ -1064,6 +1097,10 @@ async def execute_app_use(arguments: dict[str, Any]) -> dict[str, Any]:
         operation == "call"
         and capability in {"visual_click", "virtual_click_at"}
         and isinstance(_SESSION_MEASUREMENTS.get(session_id), dict)
+        and (
+            session_id not in _SESSION_CAPABILITIES
+            or "click_at" in _SESSION_CAPABILITIES[session_id]
+        )
     ):
         primary_result = _SESSION_PRIMARY_CLICK_RESULTS.get(session_id)
         if primary_result is None:
@@ -1139,6 +1176,11 @@ async def execute_app_use(arguments: dict[str, Any]) -> dict[str, Any]:
         if session_id and isinstance(semantic_profile, dict):
             _SESSION_SEMANTIC_STATUS[session_id] = str(semantic_profile.get("status") or "unknown")
         if session_id:
+            _SESSION_CAPABILITIES[session_id] = {
+                str(item.get("name") or "")
+                for item in (result.get("capabilities") or [])
+                if isinstance(item, dict) and item.get("name")
+            }
             _SESSION_MEASUREMENTS[session_id] = None
             _SESSION_FOCUS_READY.discard(session_id)
             _SESSION_VISUAL_READY.discard(session_id)
@@ -1149,6 +1191,7 @@ async def execute_app_use(arguments: dict[str, Any]) -> dict[str, Any]:
         _SESSION_FOCUS_READY.discard(str(request.get("session_id") or ""))
         _SESSION_VISUAL_READY.discard(str(request.get("session_id") or ""))
         _SESSION_PRIMARY_CLICK_RESULTS.pop(str(request.get("session_id") or ""), None)
+        _SESSION_CAPABILITIES.pop(str(request.get("session_id") or ""), None)
     if (
         operation == "call"
         and request.get("capability") == "visual_describe"

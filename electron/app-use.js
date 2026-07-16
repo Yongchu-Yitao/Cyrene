@@ -789,7 +789,10 @@ class AppUseManager {
       probe && probe.found === true && broadContainer && coverage >= 0.65,
     );
     if (!probe || probe.found !== true || !probe.action || degenerateAxTarget) {
-      if (parameters.pid_event_fallback !== false && typeof this.provider.pidEvent === 'function') {
+      const supportsPidEventFallback = String(session.target.platform || process.platform) === 'darwin'
+        && parameters.pid_event_fallback !== false
+        && typeof this.provider.pidEvent === 'function';
+      if (supportsPidEventFallback) {
         const fallbackResult = await this._pidEventAt(session, 'pid_click_at', point, parameters);
         if (degenerateAxTarget) {
           fallbackResult.diagnostics = {
@@ -1042,7 +1045,15 @@ class AppUseManager {
     }
     const result = await this.provider.focusTarget(session.target);
     if (result && result.verified === false) {
-      throw new AppUseError('focus_failed', `Could not focus ${session.target.appName || 'the target application'}.`);
+      throw new AppUseError(
+        'focus_failed',
+        `Could not focus ${session.target.appName || 'the target application'}.`,
+        {
+          diagnostics: result.diagnostics || null,
+          retryable: true,
+          remediation: 'Ensure Cyrene and the target run at the same Windows integrity level, restore the target window, and retry.',
+        },
+      );
     }
     return result || { ok: true };
   }

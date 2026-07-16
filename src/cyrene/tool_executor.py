@@ -85,7 +85,9 @@ _TOOL_TIMEOUT_SECONDS = {
     "Edit": 30.0,
     "Glob": 30.0,
     "Grep": 30.0,
-    "app_use": 60.0,
+    # visual_click and visual_type may perform two independently bounded
+    # 60-second vision passes plus desktop capture and verification RPCs.
+    "app_use": 180.0,
 }
 
 

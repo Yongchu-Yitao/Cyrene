@@ -814,13 +814,41 @@ class BrowserTabManager {
     if (!tab) return { ok: false, error: 'No browser tab is open.' };
     const wc = tab.view.webContents;
     let text = '';
+    let links = [];
     try {
-      text = await wc.executeJavaScript(
-        '(() => document.body ? document.body.innerText : "")()',
+      const pageData = await wc.executeJavaScript(
+        `(() => {
+          const clean = (value, limit = 200) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit);
+          const seen = new Set();
+          const links = [];
+          for (const el of Array.from(document.querySelectorAll('a[href]'))) {
+            const style = window.getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+            if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+            const imageAlt = Array.from(el.querySelectorAll('img[alt]')).map((img) => img.getAttribute('alt') || '').join(' ');
+            const text = clean(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || imageAlt);
+            if (!text) continue;
+            let url = '';
+            try { url = new URL(el.getAttribute('href') || '', location.href).href; } catch (_) { continue; }
+            if (!/^https?:/i.test(url)) continue;
+            const key = text + '\\n' + url;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const ref = 'e' + (links.length + 1);
+            el.setAttribute('data-cyrene-ref', String(links.length + 1));
+            links.push({ ref, text, url });
+            if (links.length >= 120) break;
+          }
+          return { text: document.body ? document.body.innerText : '', links };
+        })()`,
         true
       );
+      text = pageData && pageData.text ? pageData.text : '';
+      links = pageData && Array.isArray(pageData.links) ? pageData.links : [];
     } catch (_) {
       text = '';
+      links = [];
     }
     const url = wc.getURL();
     const title = wc.getTitle();
@@ -831,6 +859,7 @@ class BrowserTabManager {
       title,
       status: 0,
       text: trimmedText,
+      links,
       pageSignal: browserPageSignal(url, title, trimmedText),
       tabId: tab.id,
     };

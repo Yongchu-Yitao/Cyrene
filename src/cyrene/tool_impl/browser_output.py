@@ -32,4 +32,24 @@ def page_observation_lines(result: dict[str, Any]) -> list[str]:
     return lines
 
 
-__all__ = ["page_signal_lines", "page_observation_lines"]
+def page_link_lines(result: dict[str, Any]) -> list[str]:
+    """Format readable anchors returned by browser navigation."""
+    links = result.get("links")
+    if not isinstance(links, list):
+        return []
+    rows: list[str] = []
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        text = " ".join(str(link.get("text") or "").split()).strip()
+        url = str(link.get("url") or link.get("href") or "").strip()
+        ref = str(link.get("ref") or "").strip()
+        if text and url:
+            prefix = f"[{ref}] " if ref else ""
+            rows.append(f"- {prefix}{text!r} -> {url}")
+    if not rows:
+        return []
+    return ["Text links on this page:\n" + "\n".join(rows)]
+
+
+__all__ = ["page_signal_lines", "page_observation_lines", "page_link_lines"]

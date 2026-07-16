@@ -40,7 +40,8 @@ class _FakePage:
     async def content(self):
         return (
             "<html><head><title>Example</title></head>"
-            "<body><h1>Hello</h1><p>World</p></body></html>"
+            "<body><h1>Hello</h1><p>World</p>"
+            "<a href='/watch/123'>Readable video</a></body></html>"
         )
 
     async def screenshot(self, **_kw):
@@ -79,12 +80,47 @@ async def test_session_navigate_returns_text_and_emits_frame(monkeypatch):
 
     assert result["title"] == "Example"
     assert "Hello" in result["text"] and "World" in result["text"]
+    assert result["links"] == [
+        {"text": "Readable video", "url": "https://example.com/watch/123"}
+    ]
     assert session._page.url == "https://example.com/page"
 
     frames = [e for e in captured if e.get("type") == "browser_frame"]
     assert len(frames) == 1
     assert frames[0]["action"] == "navigate"
     assert "image" not in frames[0]
+
+
+async def test_session_navigate_returns_immediately_clickable_link_refs(monkeypatch):
+    from cyrene import browser
+
+    session = browser._BrowserSession()
+    page = _FakePage()
+
+    async def evaluate(script, args):
+        assert "data-cyrene-ref" in script
+        assert args == [120, 200]
+        return [
+            {
+                "ref": "e1",
+                "text": "Target video",
+                "url": "https://example.com/video/1",
+            }
+        ]
+
+    page.evaluate = evaluate
+    session._page = page
+
+    async def _noop(**_kw):
+        return None
+
+    monkeypatch.setattr(session, "_ensure_started", _noop)
+
+    result = await session.navigate("https://example.com/search")
+
+    assert result["links"] == [
+        {"ref": "e1", "text": "Target video", "url": "https://example.com/video/1"}
+    ]
 
 
 async def test_emit_frame_normalizes_box_and_target(monkeypatch):
@@ -163,6 +199,44 @@ async def test_navigate_falls_back_to_httpx_without_playwright(monkeypatch):
 
     assert called["url"] == "https://ex.com"
     assert result["status"] == 200
+
+
+def test_html_links_resolve_text_and_image_links_and_skip_non_http():
+    from cyrene.browser import _html_links
+
+    links = _html_links(
+        """
+        <a href="/video/BV123">Video title</a>
+        <a href="/video/BV456"><img alt="Image-only title"></a>
+        <a href="javascript:void(0)">Not a URL</a>
+        <a href="/video/BV123">Video title</a>
+        """,
+        "https://www.bilibili.com/search",
+    )
+
+    assert links == [
+        {"text": "Video title", "url": "https://www.bilibili.com/video/BV123"},
+        {"text": "Image-only title", "url": "https://www.bilibili.com/video/BV456"},
+    ]
+
+
+def test_browser_navigate_link_output_is_before_page_text():
+    from cyrene.tool_impl.browser_output import page_link_lines
+
+    lines = page_link_lines(
+        {"links": [{"text": "Target result", "url": "https://example.com/video/1"}]}
+    )
+
+    assert lines == [
+        "Text links on this page:\n- 'Target result' -> https://example.com/video/1"
+    ]
+
+    lines_with_ref = page_link_lines(
+        {"links": [{"ref": "e7", "text": "Clickable result", "url": "https://example.com/video/7"}]}
+    )
+    assert lines_with_ref == [
+        "Text links on this page:\n- [e7] 'Clickable result' -> https://example.com/video/7"
+    ]
 
 
 async def test_navigate_normalizes_bare_domain_before_validation(monkeypatch):
@@ -1112,6 +1186,7 @@ async def test_navigate_uses_electron_rpc_when_available(monkeypatch):
             "status": 0,
             "title": "Electron Page",
             "text": "Readable body",
+            "links": [{"text": "Result", "url": "https://example.com/result"}],
         }
 
     monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
@@ -1122,6 +1197,7 @@ async def test_navigate_uses_electron_rpc_when_available(monkeypatch):
     assert calls[0][1]["url"] == "https://example.com/electron"
     assert result["title"] == "Electron Page"
     assert result["text"] == "Readable body"
+    assert result["links"] == [{"text": "Result", "url": "https://example.com/result"}]
     assert [e for e in captured if e.get("type") == "browser_frame"]
 
 

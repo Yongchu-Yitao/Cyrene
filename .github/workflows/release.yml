@@ -104,6 +104,16 @@ jobs:
       - name: Install Electron deps
         run: cd electron && npm install
 
+      - name: Test Windows App Use provider
+        shell: powershell
+        run: |
+          node --test electron/app-use.test.js
+          $json = @{ operation = 'list_targets'; excludePid = 0; excludeApplicationIds = @(); excludeAppNames = @() } | ConvertTo-Json -Compress
+          $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+          $raw = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File electron\app-use-windows.ps1 -PayloadBase64 $payload
+          $result = @($raw)[-1] | ConvertFrom-Json
+          if ($result.ok -ne $true) { throw "Windows App Use provider smoke test failed: $(@($raw) -join [Environment]::NewLine)" }
+
       - name: Build WebUI JS
         run: cd src/webui && npm install && node build-jsx.mjs
 
@@ -250,6 +260,16 @@ jobs:
 
       - name: Install Electron deps
         run: cd electron && npm install
+
+      - name: Test Windows App Use provider
+        shell: powershell
+        run: |
+          node --test electron/app-use.test.js
+          $json = @{ operation = 'list_targets'; excludePid = 0; excludeApplicationIds = @(); excludeAppNames = @() } | ConvertTo-Json -Compress
+          $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+          $raw = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File electron\app-use-windows.ps1 -PayloadBase64 $payload
+          $result = @($raw)[-1] | ConvertFrom-Json
+          if ($result.ok -ne $true) { throw "Windows App Use provider smoke test failed: $(@($raw) -join [Environment]::NewLine)" }
 
       - name: Build WebUI JS
         run: cd src/webui && npm install && node build-jsx.mjs

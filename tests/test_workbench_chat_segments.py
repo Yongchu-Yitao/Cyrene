@@ -86,6 +86,62 @@ def test_durable_timeline_keeps_cards_and_messages_in_event_order():
     assert timeline[0]["createdAt"] < timeline[1]["createdAt"] < timeline[2]["createdAt"]
 
 
+def test_durable_timeline_splits_tools_around_visible_tool_preamble():
+    messages = [
+        {"role": "user", "message_id": "u1", "content": "把照片发给我"},
+        {
+            "role": "assistant",
+            "message_id": "a1",
+            "created_at": "2026-01-01T00:00:01+00:00",
+            "reasoning_content": "先确认文件存在",
+            "tool_calls": [{"id": "c1", "function": {"name": "Bash", "arguments": '{"command":"ls photo.jpg"}'}}],
+        },
+        _tool_result("c1", '{"exit_code":0}'),
+        # send_file writes this delivery reply before its own assistant tool-call
+        # message is committed; the renderer reorders it after that tool call.
+        {
+            "role": "assistant",
+            "message_id": "file1",
+            "created_at": "2026-01-01T00:00:03+00:00",
+            "intermediate_reply": True,
+            "content": "你的照片",
+            "attachments": [{"id": "f1", "name": "photo.jpg", "url": "/f/photo.jpg"}],
+        },
+        {
+            "role": "assistant",
+            "message_id": "a2",
+            "created_at": "2026-01-01T00:00:02+00:00",
+            "reasoning_content": "文件存在，现在发送",
+            "content": "找到了，我发给你。",
+            "tool_calls": [{"id": "c2", "function": {"name": "send_file", "arguments": '{"path":"photo.jpg"}'}}],
+        },
+        _tool_result("c2", '{"status":"sent"}'),
+        {
+            "role": "assistant",
+            "message_id": "a3",
+            "created_at": "2026-01-01T00:00:04+00:00",
+            "content": "发送完成。",
+        },
+    ]
+
+    timeline, _usage, _files = _extract_exchange_timeline(messages, set())
+
+    assert [entry["id"] for entry in timeline] == [
+        "activity_a1",
+        "a2",
+        "activity_a2",
+        "file1",
+    ]
+    assert [tool["tool"] for tool in timeline[0]["trace"]] == ["Bash"]
+    assert timeline[0]["reasoning"] == "先确认文件存在"
+    assert timeline[1]["content"] == "找到了，我发给你。"
+    assert timeline[1]["trace"] == []
+    assert [tool["tool"] for tool in timeline[2]["trace"]] == ["send_file"]
+    assert timeline[2]["reasoning"] == "文件存在，现在发送"
+    assert timeline[3]["content"] == "你的照片"
+    assert timeline[3]["trace"] == []
+
+
 def test_durable_timeline_omits_tool_free_pure_reasoning_card():
     messages = [
         {
@@ -374,6 +430,7 @@ def test_preamble_prose_is_kept_as_its_own_reply_block():
     assert len(segments) == 1
     assert segments[0]["content"] == "我先看看桌面。"
     assert segments[0].get("trace") in (None, [])
+    assert segments[0]["opensActivity"] is True
     # …and the tool it requested becomes the card shown with the final reply.
     assert [t["tool"] for t in trailing] == ["Bash"]
 

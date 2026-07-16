@@ -565,6 +565,10 @@ def _persist_live_public_message(chat_id: str, message: dict[str, Any]) -> None:
     # the stream event unchanged for reconnect fallback, but never checkpoint a
     # second non-interactive copy on the visible message itself.
     entry.pop("trace", None)
+    # Live-only hint used by the client to move the current LLM call's reasoning
+    # to the activity that follows a visible tool preamble. It is not transcript
+    # content and must not survive as stale metadata after finalization.
+    entry.pop("opensActivity", None)
     _merge_chat_messages_chronologically(chat, [entry])
     chat["updatedAt"] = str(entry.get("createdAt") or chat.get("updatedAt") or _utc_now_iso())
     _write_chats_store(payload)
@@ -1420,13 +1424,20 @@ def _extract_exchange_segments(
             and str(message.get("content") or "").strip()
         ):
             _accumulate_usage(message, usage)
-            segments.append(_make_reply_segment(
+            segment = _make_reply_segment(
                 message,
                 trace,
                 usage,
                 files,
                 fallback_id=_segment_fallback_id(message, idx),
-            ))
+            )
+            # Content in an assistant tool-call message is emitted before that
+            # message's tools execute. Tell the live client to close the prior
+            # activity at the prose, then open a new clickable activity for the
+            # current call's reasoning and tools.
+            if _has_traceable_tools(message):
+                segment["opensActivity"] = True
+            segments.append(segment)
             trace, usage, files, seen_file_urls = [], _exchange_usage(), [], set()
             _accumulate_tools(message, trace, result_map)
             continue
@@ -1529,6 +1540,26 @@ def _extract_exchange_timeline(
 
         _accumulate_attachments(message, files, seen_file_urls)
 
+        is_completed_mid_turn = idx != last_assistant_idx
+        is_open_tool_preamble = (
+            include_open_tool_preamble
+            and idx == last_assistant_idx
+            and _has_traceable_tools(message)
+        )
+        visible_tool_preamble = (
+            (is_completed_mid_turn or is_open_tool_preamble)
+            and str(message.get("content") or "").strip()
+        )
+
+        # A model turn can say something and request tools in the same response.
+        # Its prose is visible before those tools run, so it is a real timeline
+        # boundary: flush prior calls, show the prose, then start the current
+        # call's reasoning/tool activity. Accumulating first would incorrectly
+        # create one aggregate card above the prose.
+        if visible_tool_preamble:
+            flush_activity()
+            append_visible_message(message, idx)
+
         reasoning = str(message.get("reasoning_content") or "").strip()
         tools: list[dict[str, Any]] = []
         _accumulate_tools(message, tools, result_map)
@@ -1546,19 +1577,6 @@ def _extract_exchange_timeline(
             pending_trace.extend(tools)
             if len(pending_trace) > 40:
                 del pending_trace[:-40]
-
-        is_completed_mid_turn = idx != last_assistant_idx
-        is_open_tool_preamble = (
-            include_open_tool_preamble
-            and idx == last_assistant_idx
-            and _has_traceable_tools(message)
-        )
-        if (
-            (is_completed_mid_turn or is_open_tool_preamble)
-            and str(message.get("content") or "").strip()
-        ):
-            flush_activity()
-            append_visible_message(message, idx)
 
     flush_activity()
     if not usage["total_tokens"]:

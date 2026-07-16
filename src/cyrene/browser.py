@@ -439,6 +439,37 @@ _BROWSER_FIND_JS = r"""
 """
 
 
+_BROWSER_TEXT_LINKS_JS = r"""
+(function(maxArg, textArg) {
+  const maxLinks = Math.max(1, Math.min(200, Number(maxArg) || 120));
+  const textLimit = Math.max(20, Math.min(500, Number(textArg) || 200));
+  const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, textLimit);
+  const seen = new Set();
+  const links = [];
+  for (const el of Array.from(document.querySelectorAll('a[href]'))) {
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+    const imageAlt = Array.from(el.querySelectorAll('img[alt]')).map((img) => img.getAttribute('alt') || '').join(' ');
+    const text = clean(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || imageAlt);
+    if (!text) continue;
+    let url = '';
+    try { url = new URL(el.getAttribute('href') || '', location.href).href; } catch (_) { continue; }
+    if (!/^https?:/i.test(url)) continue;
+    const key = text + '\n' + url;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const ref = 'e' + (links.length + 1);
+    el.setAttribute('data-cyrene-ref', String(links.length + 1));
+    links.push({ ref, text, url });
+    if (links.length >= maxLinks) break;
+  }
+  return links;
+})
+"""
+
+
 async def _emit_electron_frame(action: str, result: dict[str, Any], *, target: str | None = None, box: Any = None) -> None:
     """Publish the same lightweight browser_frame metadata for Electron tabs."""
     try:
@@ -538,6 +569,75 @@ def _html_to_text(html: str, max_chars: int = 8000) -> str:
     if len(text) > max_chars:
         text = text[:max_chars] + "\n…[truncated]"
     return text
+
+
+class _HTMLLinkExtractor(HTMLParser):
+    """Extract readable anchor text and resolved HTTP(S) destinations."""
+
+    def __init__(self, base_url: str, *, max_links: int = 120, text_limit: int = 200) -> None:
+        super().__init__()
+        self._base_url = base_url
+        self._max_links = max(1, max_links)
+        self._text_limit = max(20, text_limit)
+        self._anchor: dict[str, Any] | None = None
+        self._skip_depth = 0
+        self._seen: set[tuple[str, str]] = set()
+        self.links: list[dict[str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_map = {str(key).lower(): str(value or "") for key, value in attrs}
+        if tag in ("script", "style", "noscript"):
+            self._skip_depth += 1
+            return
+        if tag == "a" and self._anchor is None:
+            self._anchor = {
+                "href": attrs_map.get("href", ""),
+                "label": attrs_map.get("aria-label", "") or attrs_map.get("title", ""),
+                "chunks": [],
+                "image_alt": "",
+            }
+        elif tag == "img" and self._anchor is not None:
+            self._anchor["image_alt"] = attrs_map.get("alt", "")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("script", "style", "noscript"):
+            self._skip_depth = max(0, self._skip_depth - 1)
+            return
+        if tag != "a" or self._anchor is None:
+            return
+        href = str(self._anchor.get("href") or "").strip()
+        inner_text = " ".join(self._anchor.get("chunks") or [])
+        text = re.sub(
+            r"\s+",
+            " ",
+            inner_text or str(self._anchor.get("label") or "") or str(self._anchor.get("image_alt") or ""),
+        ).strip()
+        self._anchor = None
+        if not href or not text or len(self.links) >= self._max_links:
+            return
+        resolved = urljoin(self._base_url, href)
+        try:
+            parsed = urlparse(resolved)
+        except Exception:
+            return
+        if parsed.scheme not in ("http", "https"):
+            return
+        text = text[: self._text_limit]
+        key = (text, resolved)
+        if key in self._seen:
+            return
+        self._seen.add(key)
+        self.links.append({"text": text, "url": resolved})
+
+    def handle_data(self, data: str) -> None:
+        if self._anchor is not None and self._skip_depth == 0:
+            self._anchor["chunks"].append(data)
+
+
+def _html_links(html: str, base_url: str, *, max_links: int = 120) -> list[dict[str, str]]:
+    parser = _HTMLLinkExtractor(base_url, max_links=max_links)
+    parser.feed(html)
+    return parser.links
 
 
 # ---------------------------------------------------------------------------
@@ -791,12 +891,21 @@ class _BrowserSession:
             title = await page.title()
             html = await page.content()
             text = _html_to_text(html, max_chars=max_chars)
+            try:
+                evaluated_links = await page.evaluate(
+                    f"([maxArg, textArg]) => ({_BROWSER_TEXT_LINKS_JS})(maxArg, textArg)",
+                    [120, 200],
+                )
+                links = evaluated_links if isinstance(evaluated_links, list) else _html_links(html, final_url)
+            except Exception:
+                links = _html_links(html, final_url)
             await self._emit_frame("navigate", url=page.url, title=title)
             return {
                 "url": page.url,
                 "status": status,
                 "title": title,
                 "text": text,
+                "links": links,
                 "page_signal": _browser_page_signal(page.url, title, text),
                 "error": None,
             }
@@ -1409,8 +1518,11 @@ async def navigate(
                     "status": int(result.get("status") or 0),
                     "title": str(result.get("title") or ""),
                     "text": str(result.get("text") or ""),
+                    "links": result.get("links") if isinstance(result.get("links"), list) else [],
                     "error": None,
                 }
+                if isinstance(result.get("page_signal"), dict):
+                    ret["page_signal"] = result["page_signal"]
                 tid = result.get("tabId")
                 if tid:
                     ret["tabId"] = str(tid)
@@ -1462,6 +1574,7 @@ async def _httpx_navigate(
 
             if extract_text:
                 result["text"] = _html_to_text(html, max_chars=max_chars)
+            result["links"] = _html_links(html, str(response.url))
             result["page_signal"] = _browser_page_signal(
                 str(response.url), str(result.get("title") or ""), str(result.get("text") or "")
             )

@@ -4876,7 +4876,7 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 .settings-overlay-panel {
   width: min(920px, calc(100vw - 48px));
-  height: min(520px, calc(100vh - 48px));
+  height: min(640px, calc(100vh - 48px));
   position: relative;
   display: flex;
   flex-direction: column;
@@ -11376,12 +11376,10 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   background: color-mix(in srgb, var(--wb-accent) 18%, transparent);
 }
 
-/* ---- branch tree (fork lineage navigator) — timeline styling mirrors the
-   task plan (.wbp-*): circular nodes with a card-bg halo masking the
-   connectors, quiet rounded content slabs, soft accent slab for current. ---- */
+/* ---- branch tree (fork lineage navigator) ---- */
 
 .wbc-branch {
-  padding: 2px 0 10px;
+  padding: 2px 0 12px;
 }
 
 .wbc-branch-empty {
@@ -11389,8 +11387,13 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-branch-hint {
-  margin: 0 4px 14px;
-  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  margin: 0 2px 18px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 72%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-card-bg) 54%, transparent);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
   color: var(--wb-muted);
 }
 
@@ -11404,7 +11407,21 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 .wbc-branch-row {
   position: relative;
   display: block;
+}
+
+.wbc-branch-button {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 /* Connector segments: .v verticals (ancestor guides + own-column half-lines),
@@ -11413,17 +11430,18 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 .wbc-branch-line {
   position: absolute;
   z-index: 0;
-  background: color-mix(in srgb, var(--wb-line) 85%, transparent);
+  background: color-mix(in srgb, var(--wb-line-2) 64%, transparent);
   border-radius: 1px;
+  pointer-events: none;
 }
 
 .wbc-branch-line.v {
-  width: 2px;
+  width: 1px;
   transform: translateX(-50%);
 }
 
 .wbc-branch-line.h {
-  height: 2px;
+  height: 1px;
 }
 
 /* Top-right rounded corner = the quarter turn that drops the horizontal lead
@@ -11431,8 +11449,8 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
    the node). */
 .wbc-branch-line.arc {
   background: transparent;
-  border-top: 2px solid color-mix(in srgb, var(--wb-line) 85%, transparent);
-  border-right: 2px solid color-mix(in srgb, var(--wb-line) 85%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--wb-line-2) 64%, transparent);
   border-radius: 0 11px 0 0;
 }
 
@@ -11441,49 +11459,77 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   top: 16px;
   z-index: 1;
   box-sizing: border-box;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border-radius: 999px;
-  border: 2px solid color-mix(in srgb, var(--wb-line-2) 78%, transparent);
+  border: 1.5px solid color-mix(in srgb, var(--wb-muted) 52%, var(--wb-line-2));
   background: var(--wb-right-bg);
   transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 3px var(--wb-right-bg);
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 
-.wbc-branch-row.kind-root .wbc-branch-node {
-  border-color: var(--wb-accent);
-  background: var(--wb-accent);
+.wbc-branch-node-core {
+  position: absolute;
+  inset: 3px;
+  border-radius: inherit;
+  background: transparent;
 }
 
 .wbc-branch-row.kind-fork .wbc-branch-node {
-  border-color: color-mix(in srgb, var(--wb-accent) 55%, var(--wb-line-2));
+  border-color: color-mix(in srgb, var(--wb-accent) 52%, var(--wb-line-2));
 }
 
-/* Current = a single solid accent dot (no ring), the card slab carries the
-   rest of the emphasis. */
-.wbc-branch-row.active .wbc-branch-node {
-  border-color: var(--wb-accent);
+.wbc-branch-row.kind-root .wbc-branch-node-core,
+.wbc-branch-row.on-current-branch .wbc-branch-node-core {
   background: var(--wb-accent);
 }
 
-/* Content slab — transparent until hover/current, mirroring .wbp-row. */
+.wbc-branch-row.on-current-branch .wbc-branch-node {
+  border-color: var(--wb-accent);
+}
+
+.wbc-branch-row.current .wbc-branch-node {
+  background: var(--wb-accent);
+  box-shadow:
+    0 0 0 3px var(--wb-right-bg),
+    0 0 0 5px color-mix(in srgb, var(--wb-accent) 20%, transparent);
+}
+
+.wbc-branch-row.current .wbc-branch-node-core {
+  background: var(--wb-accent-text);
+}
+
 .wbc-branch-card {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
   border: 1px solid transparent;
-  border-radius: 12px;
-  padding: 8px 14px 16px;
-  transition: background 130ms ease, border-color 130ms ease;
+  border-radius: 10px;
+  padding: 9px 32px 11px 12px;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
 
-.wbc-branch-row:hover .wbc-branch-card {
-  background: color-mix(in srgb, var(--wb-accent) 4%, transparent);
+.wbc-branch-button:hover .wbc-branch-card {
+  border-color: color-mix(in srgb, var(--wb-line-2) 70%, transparent);
+  background: color-mix(in srgb, var(--wb-card-bg) 66%, transparent);
 }
 
-.wbc-branch-row.active .wbc-branch-card {
-  border-color: color-mix(in srgb, var(--wb-accent) 22%, transparent);
-  background: color-mix(in srgb, var(--wb-accent) 6%, transparent);
+.wbc-branch-button:focus-visible {
+  outline: none;
+}
+
+.wbc-branch-button:focus-visible .wbc-branch-card {
+  border-color: var(--wb-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 17%, transparent);
+}
+
+.wbc-branch-row.current .wbc-branch-card {
+  border-color: color-mix(in srgb, var(--wb-accent) 32%, transparent);
+  background: color-mix(in srgb, var(--wb-accent) 8%, var(--wb-card-bg));
+  box-shadow: inset 3px 0 0 var(--wb-accent);
 }
 
 .wbc-branch-meta {
@@ -11501,13 +11547,14 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   color: var(--wb-muted);
 }
 
-.wbc-branch-row.active .wbc-branch-kind {
+.wbc-branch-row.on-current-branch .wbc-branch-kind {
   color: var(--wb-accent);
 }
 
 .wbc-branch-text {
-  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
-  line-height: 1.5;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 520;
+  line-height: 1.55;
   color: var(--wb-text);
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -11518,14 +11565,54 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 .wbc-branch-here {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
-  font-weight: 600;
-  line-height: 1.65;
+  font-weight: 680;
+  line-height: 1.7;
   letter-spacing: 0.02em;
   color: var(--wb-accent);
-  background: color-mix(in srgb, var(--wb-accent) 14%, transparent);
-  border-radius: 5px;
-  padding: 0 6px;
+  background: color-mix(in srgb, var(--wb-accent) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 18%, transparent);
+  border-radius: 999px;
+  padding: 0 7px 0 6px;
+}
+
+.wbc-branch-here-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.wbc-branch-arrow {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  width: 6px;
+  height: 6px;
+  border-top: 1.5px solid currentColor;
+  border-right: 1.5px solid currentColor;
+  color: var(--wb-faint);
+  opacity: 0;
+  transform: translate(-3px, -50%) rotate(45deg);
+  transition: opacity 160ms ease, transform 160ms ease, color 160ms ease;
+}
+
+.wbc-branch-button:hover .wbc-branch-arrow,
+.wbc-branch-button:focus-visible .wbc-branch-arrow {
+  color: var(--wb-accent);
+  opacity: 1;
+  transform: translate(0, -50%) rotate(45deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-branch-node,
+  .wbc-branch-card,
+  .wbc-branch-arrow {
+    transition: none;
+  }
 }
 
 /* ---- tool trace card ---- */

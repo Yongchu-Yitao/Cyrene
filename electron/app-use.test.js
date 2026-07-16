@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
@@ -7,6 +8,7 @@ const {
   CAPABILITIES,
   DARWIN_MENU_CAPABILITY,
   DARWIN_PID_TYPE_CAPABILITY,
+  capabilitiesForTarget,
   resolveDarwinHitTestHelperPath,
   resolveProviderScriptPath,
   SAFARI_CAPABILITIES,
@@ -34,6 +36,23 @@ test('Windows packaged provider uses the same external resource layout', () => {
     resourcesPath,
     existsSync: (candidate) => candidate === expected,
   }), expected);
+});
+
+test('Windows provider source includes Win32 bounds and robust focus fallbacks', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'app-use-windows.ps1'), 'utf8');
+  assert.match(source, /GetWindowRect/);
+  assert.match(source, /WindowRect\(\$handleValue\)/);
+  assert.match(source, /AttachThreadInput/);
+  assert.match(source, /sameIntegrityLevelRequired/);
+});
+
+test('Windows runtime capabilities exclude macOS PID typing and menu commands', () => {
+  const names = capabilitiesForTarget({ platform: 'win32', applicationId: 'C:\\Demo\\demo.exe' })
+    .map((item) => item.name);
+  assert.equal(names.includes('virtual_type_at'), false);
+  assert.equal(names.includes('menu_command'), false);
+  assert.equal(names.includes('visual_describe'), true);
+  assert.equal(names.includes('virtual_click_at'), true);
 });
 
 test('packaged macOS coordinate hit-test helper resolves outside app.asar', () => {
@@ -448,6 +467,34 @@ test('virtual coordinate click sends no input when the point has no accessible a
   assert.equal(provider.hitTests.length, 1);
 });
 
+test('Windows virtual click never enters the macOS PID event fallback', async () => {
+  const provider = new FakeProvider();
+  provider.targets = provider.targets.map((target) => ({
+    ...target,
+    platform: 'win32',
+    applicationId: `C:\\Apps\\${target.appName}.exe`,
+  }));
+  let pidFallbackCalled = false;
+  provider.pidEvent = async () => {
+    pidFallbackCalled = true;
+    throw new Error('macOS-only PID fallback must not run on Windows');
+  };
+  const manager = new AppUseManager({ provider, ownPid: 999 });
+  const listed = await manager.handle('list_targets', {});
+  const connected = await manager.handle('connect', {
+    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
+    parameters: {},
+  });
+  const result = await manager.handle('call', {
+    session_id: connected.session_id,
+    capability: 'virtual_click_at',
+    parameters: { x: 700, y: 500, coordinate_space: 'window', pid_event_fallback: true },
+  });
+  assert.equal(result.status, 'error');
+  assert.equal(result.type, 'unsupported_background_interaction');
+  assert.equal(pidFallbackCalled, false);
+});
+
 test('virtual coordinate click remains independent of a timing-out full accessibility snapshot', async () => {
   const provider = new FakeProvider();
   provider.snapshot = async () => { throw new Error('full tree timed out'); };
@@ -664,6 +711,32 @@ test('real pointer and focus-dependent input require explicit foreground authori
   assert.equal(result.type, 'foreground_input_not_allowed');
   assert.deepEqual(provider.focused, []);
   assert.deepEqual(provider.performed, []);
+});
+
+test('focus failure preserves Windows diagnostics and remediation', async () => {
+  const provider = new FakeProvider();
+  provider.targets = provider.targets.map((target) => ({ ...target, platform: 'win32' }));
+  provider.focusTarget = async () => ({
+    ok: true,
+    verified: false,
+    diagnostics: { method: 'SetForegroundWindow+AttachThreadInput', sameIntegrityLevelRequired: true },
+  });
+  const manager = new AppUseManager({ provider, ownPid: 999 });
+  const listed = await manager.handle('list_targets', {});
+  const connected = await manager.handle('connect', {
+    target_id: listed.targets.find((target) => target.app_name === 'TextEdit').target_id,
+    parameters: {},
+  });
+  const result = await manager.handle('call', {
+    session_id: connected.session_id,
+    capability: 'focus_window',
+    parameters: {},
+  });
+  assert.equal(result.status, 'error');
+  assert.equal(result.type, 'focus_failed');
+  assert.equal(result.retryable, true);
+  assert.equal(result.diagnostics.sameIntegrityLevelRequired, true);
+  assert.match(result.remediation, /same Windows integrity level/i);
 });
 
 test('focus policy never allows verified background text value writes', async () => {

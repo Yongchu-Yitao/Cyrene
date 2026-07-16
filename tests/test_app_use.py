@@ -37,12 +37,14 @@ def clear_app_use_runtime_session_state():
     app_use._SESSION_FOCUS_READY.clear()
     app_use._SESSION_VISUAL_READY.clear()
     app_use._SESSION_PRIMARY_CLICK_RESULTS.clear()
+    app_use._SESSION_CAPABILITIES.clear()
     yield
     app_use._SESSION_SEMANTIC_STATUS.clear()
     app_use._SESSION_MEASUREMENTS.clear()
     app_use._SESSION_FOCUS_READY.clear()
     app_use._SESSION_VISUAL_READY.clear()
     app_use._SESSION_PRIMARY_CLICK_RESULTS.clear()
+    app_use._SESSION_CAPABILITIES.clear()
     for name, previous in prior_pil_modules.items():
         if previous is None:
             sys.modules.pop(name, None)
@@ -67,8 +69,14 @@ def test_app_use_schema_keeps_runtime_capabilities_out_of_function_enum():
     from cyrene.tool_impl.app_use import TOOL_DEF
 
     function = TOOL_DEF["function"]
+    description = function["description"]
     properties = function["parameters"]["properties"]
     assert function["name"] == "app_use"
+    assert "visual_click" in description
+    assert "real OS pointer click" in description
+    assert "visibly moves the real cursor" in description
+    assert "temporarily changes foreground focus" in description
+    assert "It is not an OS mouse event" not in description
     assert properties["operation"]["enum"] == [
         "list_targets", "connect", "call", "status", "disconnect"
     ]
@@ -251,17 +259,23 @@ async def test_connect_discloses_python_visual_click_workflow(monkeypatch):
             "capabilities": [
                 {"name": "focus_window"}, {"name": "click_at"},
                 {"name": "visual_describe"}, {"name": "snapshot"},
+                {"name": "virtual_click_at"}, {"name": "virtual_type_at"},
             ],
         }
 
     monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
     result = await app_use.execute_app_use({"operation": "connect", "target_id": "target-1"})
     names = [item["name"] for item in result["capabilities"]]
-    assert names == ["visual_describe", "measure_coordinates", "focus_window", "click_at", "visual_click", "visual_type", "snapshot"]
+    assert names == [
+        "visual_describe", "measure_coordinates", "focus_window", "click_at",
+        "visual_click", "virtual_click_at", "visual_type", "virtual_type_at", "snapshot",
+    ]
+    assert "target" in result["capabilities"][1]["arguments"]
     visual_click = result["capabilities"][4]
     assert visual_click["background"] == "requires_focus"
     assert "allow_foreground_fallback" in visual_click["arguments"]
-    assert result["capabilities"][5]["background"] == "safe_when_supported"
+    visual_type = next(item for item in result["capabilities"] if item["name"] == "visual_type")
+    assert visual_type["background"] == "safe_when_supported"
     assert result["interaction_priority"][:2] == [
         "inspect_fresh_window_capture", "measure_agent_selected_coordinates",
     ]
@@ -275,6 +289,67 @@ async def test_connect_discloses_python_visual_click_workflow(monkeypatch):
     }
     assert result["fallback_click_capabilities"] == ["visual_click", "virtual_click_at"]
     assert result["next_valid_actions"][:2] == ["call:visual_describe", "call:measure_coordinates"]
+
+
+@pytest.mark.asyncio
+async def test_connect_does_not_disclose_mac_only_or_focus_dependent_python_capabilities(monkeypatch):
+    from cyrene import app_use
+
+    responses = iter([
+        {
+            "status": "success", "session_id": "session-windows",
+            "target": {"platform": "win32"},
+            "focus_policy": "when_required",
+            "capabilities": [
+                {"name": "visual_describe"}, {"name": "focus_window"},
+                {"name": "click_at"}, {"name": "virtual_click_at"},
+            ],
+        },
+        {
+            "status": "success", "session_id": "session-no-focus",
+            "target": {"platform": "win32"},
+            "focus_policy": "never",
+            "capabilities": [
+                {"name": "visual_describe"}, {"name": "virtual_click_at"},
+            ],
+        },
+        {"status": "uncertain", "session_id": "session-no-focus"},
+    ])
+
+    async def fake_rpc(_operation, _arguments, **_kwargs):
+        return next(responses)
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    windows = await app_use.execute_app_use({"operation": "connect", "target_id": "target-win"})
+    windows_names = [item["name"] for item in windows["capabilities"]]
+    assert "visual_click" in windows_names
+    assert "visual_type" not in windows_names
+
+    no_focus = await app_use.execute_app_use({
+        "operation": "connect", "target_id": "target-win", "parameters": {"focus_policy": "never"},
+    })
+    no_focus_names = [item["name"] for item in no_focus["capabilities"]]
+    assert "visual_click" not in no_focus_names
+    assert "visual_type" not in no_focus_names
+    assert no_focus["fallback_click_capabilities"] == ["virtual_click_at"]
+    app_use._SESSION_MEASUREMENTS["session-no-focus"] = {
+        "target": "Save button",
+        "window_point": {"x": 120, "y": 88},
+        "screen_point": {"x": 220, "y": 188},
+    }
+    background_click = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-no-focus", "capability": "virtual_click_at",
+        "parameters": {"x": 120, "y": 88, "coordinate_space": "window"},
+    })
+    assert background_click["status"] == "uncertain"
+    assert background_click.get("type") != "primary_click_required"
+
+
+def test_app_use_timeout_covers_two_vision_passes():
+    from cyrene.app_use import VISION_ANALYSIS_TIMEOUT_SECONDS
+    from cyrene.tool_executor import _tool_timeout_seconds
+
+    assert _tool_timeout_seconds("app_use", {}) >= (2 * VISION_ANALYSIS_TIMEOUT_SECONDS) + 30
 
 
 @pytest.mark.asyncio
@@ -369,12 +444,12 @@ async def test_measure_coordinates_requires_prior_visual_inspection_for_connecte
 
 
 @pytest.mark.asyncio
-async def test_measure_coordinates_rejects_legacy_target_locator_arguments():
+async def test_measure_coordinates_rejects_empty_target_binding():
     from cyrene import app_use
 
     result = await app_use.execute_app_use({
         "operation": "call", "session_id": "session-legacy", "capability": "measure_coordinates",
-        "parameters": {"target": "Save button"},
+        "parameters": {"target": "  ", "x": 10, "y": 10},
     })
     assert result["status"] == "error"
     assert result["type"] == "invalid_arguments"
@@ -490,6 +565,30 @@ async def test_visual_activation_requires_measurement_for_the_same_target(monkey
 
 
 @pytest.mark.asyncio
+async def test_visual_activation_requires_measurement_with_a_bound_target(monkeypatch):
+    from cyrene import app_use
+
+    calls = []
+
+    async def fake_rpc(operation, arguments, **_kwargs):
+        calls.append((operation, arguments))
+        return {"status": "success"}
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    app_use._SESSION_MEASUREMENTS["session-unbound"] = {
+        "window_point": {"x": 120, "y": 88},
+    }
+    blocked = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-unbound", "capability": "visual_click",
+        "parameters": {"target": "Messages app icon"},
+    })
+    assert blocked["status"] == "error"
+    assert blocked["type"] == "measured_target_required"
+    assert blocked["next_valid_actions"] == ["call:measure_coordinates", "disconnect"]
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_measure_coordinates_crops_marks_and_returns_all_coordinate_spaces(monkeypatch):
     from cyrene import app_use
     from cyrene import attachments
@@ -516,9 +615,13 @@ async def test_measure_coordinates_crops_marks_and_returns_all_coordinate_spaces
     monkeypatch.setattr(attachments, "analyze_image_with_primary_model", fake_analysis)
     result = await app_use.execute_app_use({
         "operation": "call", "session_id": "session-1", "capability": "measure_coordinates",
-        "parameters": {"x": 364, "y": 230, "width": 68, "height": 68, "coordinate_space": "captured"},
+        "parameters": {
+            "target": "Messages app icon", "x": 364, "y": 230,
+            "width": 68, "height": 68, "coordinate_space": "captured",
+        },
     })
     assert result["status"] == "success"
+    assert result["target"] == "Messages app icon"
     assert result["captured_point"] == {"x": 364.0, "y": 230.0}
     assert result["window_point"]["x"] == pytest.approx(218.5267, rel=1e-4)
     assert result["window_point"]["y"] == 138.0

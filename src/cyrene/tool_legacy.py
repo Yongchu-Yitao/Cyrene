@@ -1752,6 +1752,8 @@ async def _tool_browser_navigate(args: dict[str, Any], _bot: Any, _chat_id: int,
         parts.append(f"Tab: {tid}")
     if electron_browser_available():
         parts.append("[Desktop app] The page is fully rendered in the embedded browser — the user sees images, video, and interactive content live. Use browser_click, browser_type, browser_screenshot and the tab tools to interact further.")
+    from cyrene.tool_impl.browser_output import page_link_lines
+    parts.extend(page_link_lines(result))
     if result.get("text"):
         parts.append(result["text"])
     if result.get("error"):
@@ -2731,7 +2733,7 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "browser_navigate",
-            "description": "Navigate the current browser tab to a URL and return the page text. Always reuses the SAME tab — never opens a new one. Call this repeatedly as you try different URLs to find the right page. Do NOT use browser_tab_new unless the user explicitly says to keep a page open. In the desktop app (Electron) the page is fully rendered (images, video, interactive) and the user can see and operate the live browser in the side panel.",
+            "description": "Navigate the current browser tab to a URL and return the page text plus readable text links, clickable refs, and their real URLs. Always reuses the SAME tab — never opens a new one. To follow a returned page link as a real click, call browser_click_ref with its ref. Use returned refs/URLs instead of guessing or constructing resource IDs. Do NOT use browser_tab_new unless the user explicitly says to keep a page open. In the desktop app (Electron) the page is fully rendered (images, video, interactive) and the user can see and operate the live browser in the side panel.",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -851,6 +851,50 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     }
   }
 
+  function splitActivityAtVisiblePreamble(cur, message) {
+    var activities = Array.isArray(cur.activities) ? cur.activities.slice() : [];
+    var last = activities.length ? activities[activities.length - 1] : null;
+    if (!last) {
+      var messageAt = Date.parse(String(message && message.createdAt || ""));
+      return appendActivity(cur, {
+        createdAt: Math.max(Date.now(), Number.isFinite(messageAt) ? messageAt + 1 : 0),
+      });
+    }
+
+    // The current LLM call's reasoning was provisionally merged into the last
+    // activity while it streamed. Once its visible tool preamble arrives, the
+    // true boundary is known: keep prior tools/reasoning above the prose and
+    // move only this call's reasoning into a fresh activity below the prose.
+    var reasoning = String(last.reasoning || "");
+    var callStart = Math.max(0, Math.min(Number(last.reasoningCallStart || 0), reasoning.length));
+    var priorReasoning = reasoning.slice(0, callStart).replace(/\s+$/, "");
+    var currentReasoning = reasoning.slice(callStart).replace(/^\s+/, "");
+    var priorProgress = Array.isArray(last.progress) ? last.progress : [];
+    activities.pop();
+    if (priorProgress.length || priorReasoning.trim()) {
+      activities.push({
+        ...last,
+        reasoning: priorReasoning,
+        reasoningActive: false,
+        timelineClosed: true,
+      });
+    }
+
+    var nextSeq = Number(cur.activitySeq || 0) + 1;
+    var messageAt = Date.parse(String(message && message.createdAt || ""));
+    activities.push({
+      ...last,
+      id: "activity_" + nextSeq,
+      reasoning: currentReasoning,
+      reasoningCallStart: 0,
+      reasoningActive: false,
+      progress: [],
+      createdAt: Math.max(Date.now(), Number.isFinite(messageAt) ? messageAt + 1 : 0),
+      timelineClosed: false,
+    });
+    return { ...cur, activitySeq: nextSeq, activities: activities };
+  }
+
   function appendIntermediate(chatId, message) {
     if (!chatId || !message || !message.id) return;
     update(chatId, function (cur) {
@@ -900,7 +944,9 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
           segments: nextSegments,
         };
       }
-      var closed = closeActivityTimeline(cur);
+      var closed = message.opensActivity
+        ? splitActivityAtVisiblePreamble(cur, message)
+        : closeActivityTimeline(cur);
       return {
         ...closed,
         text: "",
@@ -3829,28 +3875,35 @@ function WbcBranchTab({ chats, activeChatId, onSelectChat }) {
       <ul className="wbc-branch-tree">
         {rows.map(function (row, index) {
           var isActive = row.chatId === activeChatId;
-          var cls = "wbc-branch-row depth-" + row.depth + " kind-" + row.kind + (isActive ? " active" : "");
+          var isCurrent = isActive && row.isHead;
+          var cls = "wbc-branch-row depth-" + row.depth + " kind-" + row.kind + (isActive ? " on-current-branch" : "") + (isCurrent ? " current" : "");
           return (
             <li
               key={row.chatId + ":" + row.kind + ":" + index}
               className={cls}
-              role="button"
-              tabIndex={0}
-              title={row.title || ""}
-              onClick={function () { onSelectChat(row.chatId); }}
-              onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelectChat(row.chatId); } }}
             >
-              {wbcBranchConnectors(row).map(function (seg, segIndex) {
-                return <span key={"seg" + segIndex} className={"wbc-branch-line " + seg.cls} style={seg.style} aria-hidden="true" />;
-              })}
-              <span className="wbc-branch-node" style={{ left: (row.depth * 22 + 13) + "px" }} aria-hidden="true" />
-              <span className="wbc-branch-card" style={{ marginLeft: (row.depth * 22 + 28) + "px" }}>
-                <span className="wbc-branch-meta">
-                  <span className="wbc-branch-kind">{wbcBranchKindLabel(row.kind)}</span>
-                  {isActive && row.isHead && <span className="wbc-branch-here">{wbcT("workbenchChat.branchHere", "Current")}</span>}
+              <button
+                type="button"
+                className="wbc-branch-button"
+                title={row.title || ""}
+                aria-current={isCurrent ? "true" : undefined}
+                onClick={function () { onSelectChat(row.chatId); }}
+              >
+                {wbcBranchConnectors(row).map(function (seg, segIndex) {
+                  return <span key={"seg" + segIndex} className={"wbc-branch-line " + seg.cls} style={seg.style} aria-hidden="true" />;
+                })}
+                <span className="wbc-branch-node" style={{ left: (row.depth * 22 + 13) + "px" }} aria-hidden="true">
+                  <span className="wbc-branch-node-core" />
                 </span>
-                <span className="wbc-branch-text">{row.text || wbcT("workbenchChat.branchNoText", "(empty message)")}</span>
-              </span>
+                <span className="wbc-branch-card" style={{ marginLeft: (row.depth * 22 + 28) + "px" }}>
+                  <span className="wbc-branch-meta">
+                    <span className="wbc-branch-kind">{wbcBranchKindLabel(row.kind)}</span>
+                    {isCurrent && <span className="wbc-branch-here"><span className="wbc-branch-here-dot" aria-hidden="true" />{wbcT("workbenchChat.branchHere", "Current")}</span>}
+                  </span>
+                  <span className="wbc-branch-text">{row.text || wbcT("workbenchChat.branchNoText", "(empty message)")}</span>
+                  <span className="wbc-branch-arrow" aria-hidden="true" />
+                </span>
+              </button>
             </li>
           );
         })}

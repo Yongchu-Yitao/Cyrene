@@ -18,17 +18,23 @@ public static class CyreneWindowApi {
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll", SetLastError=true)] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll", SetLastError=true)] public static extern bool AttachThreadInput(uint sourceThreadId, uint targetThreadId, bool attach);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT point);
     [DllImport("user32.dll", SetLastError=true)] public static extern uint SendInput(uint count, INPUT[] inputs, int size);
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
     [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT {
         public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo;
     }
@@ -39,6 +45,38 @@ public static class CyreneWindowApi {
         if (SendInput(1, new [] { input }, Marshal.SizeOf(typeof(INPUT))) != 1) throw new InvalidOperationException("SendInput did not inject the mouse event.");
     }
     public static POINT Cursor() { POINT point; if (!GetCursorPos(out point)) throw new InvalidOperationException("GetCursorPos failed."); return point; }
+    public static RECT WindowRect(IntPtr hWnd) {
+        RECT rect;
+        if (!GetWindowRect(hWnd, out rect)) throw new InvalidOperationException("GetWindowRect failed.");
+        return rect;
+    }
+    public static bool FocusWindow(IntPtr hWnd) {
+        ShowWindowAsync(hWnd, 9);
+        if (SetForegroundWindow(hWnd) && GetForegroundWindow() == hWnd) return true;
+        IntPtr foreground = GetForegroundWindow();
+        uint ignoredPid;
+        uint currentThread = GetCurrentThreadId();
+        uint foregroundThread = foreground == IntPtr.Zero ? 0 : GetWindowThreadProcessId(foreground, out ignoredPid);
+        uint targetThread = GetWindowThreadProcessId(hWnd, out ignoredPid);
+        bool attachedForeground = false;
+        bool attachedTarget = false;
+        try {
+            if (foregroundThread != 0 && foregroundThread != currentThread) {
+                attachedForeground = AttachThreadInput(currentThread, foregroundThread, true);
+            }
+            if (targetThread != 0 && targetThread != currentThread && targetThread != foregroundThread) {
+                attachedTarget = AttachThreadInput(currentThread, targetThread, true);
+            }
+            BringWindowToTop(hWnd);
+            SetForegroundWindow(hWnd);
+            SetFocus(hWnd);
+            Thread.Sleep(100);
+            return GetForegroundWindow() == hWnd;
+        } finally {
+            if (attachedTarget) AttachThreadInput(currentThread, targetThread, false);
+            if (attachedForeground) AttachThreadInput(currentThread, foregroundThread, false);
+        }
+    }
     public static void Move(int fromX, int fromY, int toX, int toY, int durationMs, bool drag) {
         int steps = Math.Max(1, Math.Min(120, (int)Math.Ceiling(Math.Max(0, durationMs) / 16.0)));
         for (int i = 1; i <= steps; i++) {
@@ -170,12 +208,16 @@ function Get-Targets($Payload) {
             if ($excludedAppNames -contains ([string]$process.ProcessName).ToLowerInvariant()) { continue }
             if ($excludedApplicationIds -contains $processPath.ToLowerInvariant()) { continue }
             $handle = $handleValue.ToInt64()
-            $rect = $null
-            try {
-                $root = [System.Windows.Automation.AutomationElement]::FromHandle($handleValue)
-                $bounds = $root.Current.BoundingRectangle
-                $rect = @{ x = $bounds.X; y = $bounds.Y; width = $bounds.Width; height = $bounds.Height }
-            } catch {}
+            # Window coordinates are a Win32 property and must remain available
+            # even when the application exposes no UI Automation tree.
+            $nativeBounds = [CyreneWindowApi]::WindowRect($handleValue)
+            $rect = @{
+                x = $nativeBounds.Left
+                y = $nativeBounds.Top
+                width = $nativeBounds.Right - $nativeBounds.Left
+                height = $nativeBounds.Bottom - $nativeBounds.Top
+            }
+            if ($rect.width -le 0 -or $rect.height -le 0) { continue }
             $targets += @{
                 platform = 'win32'
                 pid = $process.Id
@@ -371,11 +413,19 @@ function Hit-Test($Payload) {
 
 function Focus-Target($Target) {
     $handle = Target-Handle $Target
-    [void][CyreneWindowApi]::ShowWindowAsync($handle, 9)
-    [void][CyreneWindowApi]::SetForegroundWindow($handle)
-    Start-Sleep -Milliseconds 60
+    $focused = [CyreneWindowApi]::FocusWindow($handle)
     $foreground = [CyreneWindowApi]::GetForegroundWindow().ToInt64()
-    return @{ ok = $true; verified = ($foreground -eq $handle.ToInt64()); summary = "Focused $($Target.appName)."; diagnostics = @{ foregroundWindow = $foreground } }
+    return @{
+        ok = $true
+        verified = ($focused -and $foreground -eq $handle.ToInt64())
+        summary = "Focused $($Target.appName)."
+        diagnostics = @{
+            method = 'SetForegroundWindow+AttachThreadInput'
+            requestedWindow = $handle.ToInt64()
+            foregroundWindow = $foreground
+            sameIntegrityLevelRequired = $true
+        }
+    }
 }
 
 function Escape-SendKeys([string]$Text) {

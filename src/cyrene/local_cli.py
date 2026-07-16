@@ -359,6 +359,16 @@ async def _cli_loop() -> None:
             logger.exception("Error in CLI loop")
 
 
+async def _run_cli_loop_with_shutdown() -> None:
+    """Run the interactive CLI and drain background work before its loop closes."""
+    try:
+        await _cli_loop()
+    finally:
+        from cyrene.runtime_lifecycle import shutdown_background_work
+
+        await shutdown_background_work()
+
+
 def _run_electron_mode() -> None:
     """Start web UI mode for Electron embedding.
 
@@ -938,7 +948,7 @@ def main() -> None:
         asyncio.run(run_setup())
 
     try:
-        asyncio.run(_cli_loop())
+        asyncio.run(_run_cli_loop_with_shutdown())
     finally:
         from cyrene.searxng_manager import stop_searxng
         stop_searxng()
