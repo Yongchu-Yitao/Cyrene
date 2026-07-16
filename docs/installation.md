@@ -122,7 +122,7 @@ python -m cyrene.local_cli
 
 ## Optional Extras
 
-- **Browser live view & login takeover**: `pip install -e ".[browser]"` then `playwright install chromium`
+- **Browser live view & login takeover outside Electron**: `pip install -e ".[browser]"` then `playwright install chromium` (desktop releases use embedded Chromium)
 - **Development/test dependencies**: `pip install -e ".[dev]"`
 
 ## Next Steps

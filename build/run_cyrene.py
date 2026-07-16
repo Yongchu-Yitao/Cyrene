@@ -10,6 +10,7 @@ import h11
 import httpcore
 import httpx
 import importlib
+import importlib.util
 import jinja2
 import multipart
 import simplexng
@@ -76,6 +77,10 @@ def _run_smoke_test() -> None:
             print(f"playwright_browser=FAILED: {exc}")
             raise SystemExit(1) from exc
     else:
+        if importlib.util.find_spec("playwright") is not None:
+            print("playwright_package=FAILED: unexpectedly bundled without a browser runtime")
+            raise SystemExit(1)
+        print("playwright_package=not bundled")
         print("playwright_browser=not bundled")
 
 
@@ -86,7 +91,10 @@ def _write_crash_log(exc: BaseException) -> None:
     stderr pipe may not receive PyInstaller's C-level output. Writing directly
     from Python guarantees a readable crash log on every platform.
     """
-    import os, tempfile, traceback, datetime
+    import datetime
+    import os
+    import tempfile
+    import traceback
     log_path = os.path.join(tempfile.gettempdir(), "cyrene_error.log")
     try:
         with open(log_path, "a", encoding="utf-8") as _f:

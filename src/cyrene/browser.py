@@ -1,11 +1,9 @@
-"""Browser automation — a persistent Playwright session with live-view frame streaming.
+"""Browser automation shared by Electron and optional Playwright runtimes.
 
-Uses ``httpx`` for basic HTTP fetching (always available, used as a fallback when
-Playwright is missing). When Playwright is installed, a single **persistent browser
-context** (with an on-disk profile, so logins survive across runs) is launched lazily
-and reused across navigate / click / type. After every action a JPEG screenshot is
-rendered by the WebSocket screencast; the ``browser_frame`` SSE event only carries
-lightweight action metadata.
+Electron desktop uses its embedded Chromium through a local authenticated RPC
+bridge, so the visible native tab and agent actions share one persistent profile.
+Non-Electron runs use ``httpx`` for basic fetching and can opt into Playwright for
+a persistent browser context, WebSocket screencast, and headed login takeover.
 
 Tools exposed to the agent (see ``tools.py``):
   - ``browser_navigate`` — open a page in the shared session, return readable text
@@ -15,12 +13,9 @@ Tools exposed to the agent (see ``tools.py``):
   - ``browser_type`` / ``browser_type_ref``
   - ``browser_wait`` / ``browser_network_log``
 
-Live-view / takeover design lives in ``~/.claude/plans/browser-live-view-takeover.md``.
-This module implements the persistent session, WebSocket screencast, and
-native-window login takeover on top of ``_BrowserSession``.
-
-Playwright is supplied by the Cyrene runtime/environment. If it cannot be loaded,
-browser automation degrades to text-only HTTP fetching where possible.
+The ``_BrowserSession`` implementation is only used outside Electron. If optional
+Playwright cannot be loaded, browser automation degrades to text-only HTTP fetching
+where possible.
 """
 
 from __future__ import annotations
@@ -276,6 +271,16 @@ def browser_runtime_unavailable_message(exc: Exception | str | None = None) -> s
 def electron_browser_available() -> bool:
     """Return True when the Electron host exposed its browser RPC server."""
     return bool(os.environ.get("CYRENE_ELECTRON_RPC_PORT") and os.environ.get("CYRENE_ELECTRON_RPC_TOKEN"))
+
+
+def _electron_browser_failure(exc: Exception | str, **extra: Any) -> dict[str, Any]:
+    """Return an Electron browser error without switching to another runtime."""
+    detail = str(exc).strip() or "unknown error"
+    return {
+        "ok": False,
+        "error": f"Electron desktop browser is unavailable: {detail}",
+        **extra,
+    }
 
 
 async def _electron_browser_rpc(method: str, args: dict[str, Any] | None = None, *, timeout: float = 45.0) -> dict[str, Any]:
@@ -1492,8 +1497,9 @@ async def navigate(
 ) -> dict[str, Any]:
     """Open *url* in the shared browser session and return structured page data.
 
-    Falls back to a plain ``httpx`` fetch when Playwright is unavailable (or the
-    persistent session fails to launch), preserving the original behavior.
+    Electron desktop calls are strict: an RPC failure is returned to the caller
+    instead of silently opening a separate Playwright browser/profile. Outside
+    Electron, Playwright and then plain ``httpx`` remain available as fallbacks.
 
     Returns::
         {"url": str, "status": int, "title": str, "text": str, "error": str | None}
@@ -1510,25 +1516,39 @@ async def navigate(
                 {"url": url, "maxChars": max_chars, "extractText": extract_text},
             ))
             if result.get("ok") is False:
-                logger.warning("Electron navigate failed (%s); falling back", result.get("error"))
-            else:
-                await _emit_electron_frame("navigate", result)
-                ret = {
+                return {
                     "url": str(result.get("url") or url),
                     "status": int(result.get("status") or 0),
                     "title": str(result.get("title") or ""),
                     "text": str(result.get("text") or ""),
                     "links": result.get("links") if isinstance(result.get("links"), list) else [],
-                    "error": None,
+                    "error": str(result.get("error") or "Electron desktop browser navigation failed."),
                 }
-                if isinstance(result.get("page_signal"), dict):
-                    ret["page_signal"] = result["page_signal"]
-                tid = result.get("tabId")
-                if tid:
-                    ret["tabId"] = str(tid)
-                return ret
+            await _emit_electron_frame("navigate", result)
+            ret = {
+                "url": str(result.get("url") or url),
+                "status": int(result.get("status") or 0),
+                "title": str(result.get("title") or ""),
+                "text": str(result.get("text") or ""),
+                "links": result.get("links") if isinstance(result.get("links"), list) else [],
+                "error": None,
+            }
+            if isinstance(result.get("page_signal"), dict):
+                ret["page_signal"] = result["page_signal"]
+            tid = result.get("tabId")
+            if tid:
+                ret["tabId"] = str(tid)
+            return ret
         except Exception as exc:
-            logger.warning("Electron browser navigate failed (%s); falling back", exc)
+            logger.warning("Electron browser navigate failed (%s)", exc)
+            return {
+                "url": url,
+                "status": 0,
+                "title": "",
+                "text": "",
+                "links": [],
+                "error": _electron_browser_failure(exc)["error"],
+            }
     if _ensure_playwright() is not None:
         try:
             session = await get_session()
@@ -1607,29 +1627,29 @@ async def screenshot(url: str = "", *, full_page: bool = True) -> dict[str, Any]
             nav = {"ok": True, "title": ""}
             if url:
                 nav = await _electron_browser_rpc("navigate", {"url": url, "maxChars": 0})
-            if nav.get("ok") is True:
-                result = await _electron_browser_rpc("screenshot", {})
-                if result.get("ok") is True:
-                    TEMP_DIR.mkdir(parents=True, exist_ok=True)
-                    tmp = tempfile.NamedTemporaryFile(suffix=".png", dir=TEMP_DIR, delete=False)
-                    tmp.close()
-                    try:
-                        data = base64.b64decode(str(result.get("pngBase64") or ""), validate=False)
-                        with open(tmp.name, "wb") as fh:
-                            fh.write(data)
-                    except Exception:
-                        try:
-                            os.unlink(tmp.name)
-                        except OSError:
-                            pass
-                        raise
-                    await _emit_electron_frame("screenshot", result)
-                    return {"ok": True, "path": tmp.name, "title": str(result.get("title") or nav.get("title") or "")}
-                logger.warning("Electron screenshot RPC failed (%s); falling back", result.get("error"))
-            else:
-                logger.warning("Electron navigate for screenshot failed (%s); falling back", nav.get("error"))
+            if nav.get("ok") is not True:
+                return {"ok": False, "error": str(nav.get("error") or "Electron desktop browser navigation failed.")}
+            result = await _electron_browser_rpc("screenshot", {})
+            if result.get("ok") is not True:
+                return {"ok": False, "error": str(result.get("error") or "Electron desktop browser screenshot failed.")}
+            TEMP_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = tempfile.NamedTemporaryFile(suffix=".png", dir=TEMP_DIR, delete=False)
+            tmp.close()
+            try:
+                data = base64.b64decode(str(result.get("pngBase64") or ""), validate=False)
+                with open(tmp.name, "wb") as fh:
+                    fh.write(data)
+            except Exception:
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+                raise
+            await _emit_electron_frame("screenshot", result)
+            return {"ok": True, "path": tmp.name, "title": str(result.get("title") or nav.get("title") or "")}
         except Exception as exc:
-            logger.warning("Electron screenshot failed (%s); falling back to Playwright", exc)
+            logger.warning("Electron screenshot failed (%s)", exc)
+            return _electron_browser_failure(exc)
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     try:
@@ -1663,7 +1683,8 @@ async def inspect_page(*, max_elements: int = 80, text_limit: int = 160) -> dict
                 await _emit_electron_frame("inspect", result)
             return result
         except Exception as exc:
-            logger.warning("Electron inspect failed (%s); falling back to Playwright", exc)
+            logger.warning("Electron inspect failed (%s)", exc)
+            return _electron_browser_failure(exc, elements=[])
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message(), "elements": []}
     session = _get_session()
@@ -1686,7 +1707,8 @@ async def click(selector: str) -> dict[str, Any]:
             logger.warning("Electron click ok:false (%s)", result.get("error"))
             return result
         except Exception as exc:
-            logger.warning("Electron click failed (%s); falling back to Playwright", exc)
+            logger.warning("Electron click failed (%s)", exc)
+            return _electron_browser_failure(exc)
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     session = _get_session()
@@ -1707,7 +1729,8 @@ async def click_ref(ref: str) -> dict[str, Any]:
                 await _emit_electron_frame("click", result, target=ref, box=result.get("box"))
             return result
         except Exception as exc:
-            logger.warning("Electron click_ref failed (%s); falling back to Playwright", exc)
+            logger.warning("Electron click_ref failed (%s)", exc)
+            return _electron_browser_failure(exc)
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     session = _get_session()
@@ -1728,7 +1751,8 @@ async def click_text(text: str, *, exact: bool = False) -> dict[str, Any]:
                 await _emit_electron_frame("click", result, target=text, box=result.get("box"))
             return result
         except Exception as exc:
-            logger.warning("Electron click_text failed (%s); falling back to Playwright", exc)
+            logger.warning("Electron click_text failed (%s)", exc)
+            return _electron_browser_failure(exc)
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     session = _get_session()
@@ -1749,7 +1773,8 @@ async def click_at(x: int, y: int) -> dict[str, Any]:
                 await _emit_electron_frame("click", result, target=f"{x},{y}", box=result.get("box"))
             return result
         except Exception as exc:
-            logger.warning("Electron click_at failed (%s); falling back to Playwright", exc)
+            logger.warning("Electron click_at failed (%s)", exc)
+            return _electron_browser_failure(exc)
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     session = _get_session()
@@ -1772,7 +1797,8 @@ async def type_text(selector: str, text: str, *, submit: bool = False) -> dict[s
             logger.warning("Electron type_text ok:false (%s)", result.get("error"))
             return result
         except Exception as exc:
-            logger.warning("Electron type_text failed (%s); falling back to Playwright", exc)
+            logger.warning("Electron type_text failed (%s)", exc)
+            return _electron_browser_failure(exc)
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     session = _get_session()
@@ -1793,7 +1819,8 @@ async def type_ref(ref: str, text: str, *, submit: bool = False) -> dict[str, An
                 await _emit_electron_frame("type", result, target=ref, box=result.get("box"))
             return result
         except Exception as exc:
-            logger.warning("Electron type_ref failed (%s); falling back to Playwright", exc)
+            logger.warning("Electron type_ref failed (%s)", exc)
+            return _electron_browser_failure(exc)
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     session = _get_session()
@@ -1815,7 +1842,8 @@ async def wait_for_page(*, selector: str = "", text: str = "", url_contains: str
                 timeout=max(2.0, min(35.0, float(timeout_ms or 5000) / 1000.0 + 5.0)),
             )
         except Exception as exc:
-            logger.warning("Electron wait_for failed (%s); falling back to Playwright", exc)
+            logger.warning("Electron wait_for failed (%s)", exc)
+            return _electron_browser_failure(exc)
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     session = _get_session()
@@ -1833,7 +1861,8 @@ async def network_log(*, max_entries: int = 40) -> dict[str, Any]:
         try:
             return await _electron_browser_rpc("networkLog", {"maxEntries": max_entries}, timeout=10.0)
         except Exception as exc:
-            logger.warning("Electron network_log failed (%s); falling back to Playwright", exc)
+            logger.warning("Electron network_log failed (%s)", exc)
+            return _electron_browser_failure(exc, entries=[])
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message(), "entries": []}
     session = _get_session()
@@ -1851,7 +1880,8 @@ async def scroll_page(*, delta_x: int = 0, delta_y: int = 500) -> dict[str, Any]
         try:
             return await _electron_browser_rpc("scroll", {"deltaX": delta_x, "deltaY": delta_y})
         except Exception as exc:
-            logger.warning("Electron scroll failed (%s); falling back to Playwright", exc)
+            logger.warning("Electron scroll failed (%s)", exc)
+            return _electron_browser_failure(exc)
     if _ensure_playwright() is None:
         return {"ok": False, "error": browser_runtime_unavailable_message()}
     session = _get_session()

@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.6.12] - 2026-07-17
+
+0.6.12 是 `0.6.11` 之后的正式功能与体积优化版本，完整收录其后已经合入 `main` 的实时会话收件箱、工具生命周期展示和分支树导航改进，以及本次 Electron 浏览器运行时与桌面打包瘦身。本版本为稳定正式版，不是 beta 或 prerelease。
+
+### Electron 浏览器与桌面包瘦身
+
+- Electron 桌面版的浏览器工具现在严格复用应用内嵌 Chromium、原生 `WebContentsView` 标签页和 `persist:cyrene-browser` 持久分区；用户可见页面与 Agent 的导航、快照、点击、输入、等待、网络日志、截图、滚动和标签页操作保持在同一会话中。
+- Electron RPC 返回业务错误或发生连接异常时会直接向调用方报告，不再静默启动 Playwright 的第二套浏览器与独立登录配置，避免界面所见页面和 Agent 实际操作页面分叉。
+- 正式桌面构建默认跳过 Playwright 安装和 Chromium 下载，PyInstaller 同时排除 `playwright` Python 包、浏览器可执行文件和 headless shell，消除每次更新附带的数百 MB 重复浏览器运行时。
+- 保留非 Electron Web UI / CLI 的既有兼容路径：可选安装 `.[browser]` 使用持久 Playwright 会话，缺少 Playwright 时 `browser_navigate` 仍可退回只读 `httpx` 获取。
+- 新增 `build/build.py --bundle-playwright`，供确实需要完整浏览器能力的独立 PyInstaller 构建显式打包 Playwright + Chromium；显式请求但运行时准备失败时构建会立即失败，避免产生表面成功但浏览器不可用的包。
+- 更新 README、安装、架构、浏览器实况和文档站说明，明确 Electron 与非 Electron 两套运行路径及各自的安装要求。
+
+### 实时会话收件箱与工具状态
+
+- Workbench Context 面板新增实时“会话收件箱”，展示当前运行的队列深度、用户指导、工具结果和工具活动，并区分 queued、claimed、running、ready、consumed、completed、failed、cancelled 等状态。
+- 新增会话收件箱查询接口和运行时 `live_snapshot`，把内存中尚未完成持久化的事件与 SQLite 记录合并显示；Context 面板在打开期间持续刷新，工具完成、指导认领和恢复状态可及时出现。
+- 工具执行在处理器启动前发布带 `tool_call_id` 的 `tool_call_started`，完成事件沿用同一 ID，使前端原位更新同一工具行而不是生成重复记录；工具参数和结果继续经过敏感信息脱敏。
+- 并行/串行工具批次维护 running → ready → consumed 的实时状态，收件箱元数据同时保留经过脱敏的参数和调度信息，便于检查当前任务究竟在执行、等待还是已经被 Agent 消费。
+- 新增中英文状态、空态、错误态与骨架屏文案和样式，并扩充工具事件、实时收件箱和前端渲染回归测试。
+
+### 用户指导持久化与运行恢复
+
+- 用户在任务运行中发送的指导加入稳定去重标识；活动运行会同时检查内存与 SQLite，应用重启或并发请求后仍能识别已经接收的指导，避免重复注入。
+- 收件箱持久记录携带公开消息 ID、创建时间和事件 ID；启动时会修复“收件箱已落盘、聊天 transcript 尚未写入”这一窄故障窗口，使指导不会因进程中断而从可见对话中消失。
+- 最终回复流式生成期间到达的新指导不再被任务收尾吞掉：当前回复会转为中间边界，同一运行继续注入并处理最新指令。
+- 已结束的聊天运行在保留窗口内可通过独立的 replayable 查询继续回放终止事件，改善 SSE 重连和页面恢复时的完整性。
+- 加强异步持久化、后台任务排空、重复请求、崩溃修复、延迟指导和收件箱故障路径测试。
+
+### 分支树导航
+
+- 将 Workbench 对话分支树改为紧凑的 Git 历史式布局：主线与分支使用独立色调和更窄轨道，连接曲线、节点与内容卡在深层分叉中保持对齐。
+- 分支行改为单行摘要、固定高度和统一列布局，当前节点标识更简洁；悬停、键盘焦点、减少动态效果和深度自适应轨道同步完善。
+- 更新设计 QA 记录并增加布局结构、连接线样式、固定高度和文本截断回归断言。
+
+### 版本、构建与验证
+
+- Python 包、`uv.lock`、Electron 应用与 lockfile、README 徽章、文档站、微信通道、WebUI 静态资源缓存戳及对应测试统一更新为 `0.6.12`。
+- 新增桌面默认不安装/不打包 Playwright、独立构建显式 opt-in，以及 Electron RPC 错误绝不回退 Playwright 的回归测试。
+- 本地完整验证通过 1107 项 pytest；PyInstaller macOS 构建和冻结程序 smoke test 通过，冻结 Python 产物扫描确认不含 Playwright 包、`ms-playwright` 及其 Chromium / Chromium headless shell 目录。
+
 ## [0.6.11] - 2026-07-16
 
 0.6.11 是 `0.6.10` 之后的正式功能与可靠性版本，完整收录其后已经合入 `main` 的模型候选会话亲和、聊天活动展示和滚动布局改进，以及本次尚未发布的浏览器链接引用、App Use 跨平台能力约束、Windows 桌面控制可靠性和 Workbench 时间线/分支导航更新。本版本为稳定正式版，不是 beta 或 prerelease。

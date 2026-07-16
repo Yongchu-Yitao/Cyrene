@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.6.11-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.6.12-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-beta-orange" alt="Status">
 </p>
@@ -62,7 +62,7 @@ What Cyrene can actually *do* beyond talking.
 - **Built-in web search** — bundled SimpleXNG (SearXNG engine) means web search works out of the box, with no Docker and no external search API key. *Stable*
 - **MCP protocol** — connect any stdio or SSE [Model Context Protocol](https://modelcontextprotocol.io) server to extend the toolset with third-party capabilities. *Stable*
 - **Task scheduler** — cron, interval, and one-shot scheduled tasks, plus a proactive "lottery" system that lets Cyrene act on its own initiative rather than only when prompted. *Stable*
-- **Browser live view** — drives a real, persistent Playwright browser (logins survive across runs) and screencasts it live into the UI over WebSocket. You can take **live control in-panel**, or hand off to a **headed window** for login walls, CAPTCHAs, and 2FA, then resume in the same authenticated session. *Beta*
+- **Browser live view** — the Electron app drives its embedded, persistent browser directly (logins survive across runs), with native tabs and in-panel control. Source/CLI web runs can opt into Playwright for the same automation tools, live screencast, and login takeover flow. *Beta*
 - **Code tools** — codebase indexing, symbol search, and git helpers for working inside repositories. *Beta*
 - **Claude Code bridge** — detect, launch, and chat with Claude Code tmux sessions directly from within Cyrene. *Beta*
 - **Skills installer** — install `.md` / `.zip` prompt skills at runtime to teach Cyrene new procedures without a redeploy. *Stable*
@@ -74,14 +74,14 @@ Where you actually talk to Cyrene.
 - **Workbench UI** — a project-centric desktop experience: per-project dashboard, schedule, knowledge, memory, and chat, with honest step-by-step task execution you can follow and steer. *Stable*
 - **Legacy agent UI** — the classic single-agent web UI: real-time chat, an agent-flow timeline, session history, and settings. *Stable*
 - **Context debugger** — inspect exactly what context (system prompt, memory, conversation history, tool set) was sent to each individual LLM call. *Stable*
-- **Electron desktop app** — packaged builds for macOS, Windows (x64 + ARM64), and Linux via CI, with credentials stored in the OS keyring. *Beta*
+- **Electron desktop app** — packaged builds for macOS, Windows (x64 + ARM64), and Linux via CI, with credentials stored in the OS keyring. Its embedded Chromium powers browser tools, so releases do not ship a second Playwright/Chromium runtime. *Beta*
 - **Telegram bot** — full agent access from Telegram. *Stable*
 - **WeChat bot** — basic WeChat integration. *Alpha*
 - **Map engine** — interactive AMap / Leaflet map with pins for location-based tasks. *Beta*
 
 ---
 
-## Limitations (current as of v0.6.11)
+## Limitations (current as of v0.6.12)
 
 - **Single-user** — one workspace, one `SOUL.md`, no user isolation
 - **Local-only Web UI** — binds to `127.0.0.1`; the desktop app uses OS keyring auth, but the raw web server has no auth layer
@@ -124,7 +124,7 @@ Open `http://localhost:4242`. First launch runs an onboarding wizard that guides
 
 Optional extras:
 
-- **Browser live view & login takeover** — `uv pip install -e ".[browser]"` then `playwright install chromium`
+- **Browser live view & login takeover outside Electron** — `uv pip install -e ".[browser]"` then `playwright install chromium` (desktop releases need no extra install)
 - **Development & tests** — `uv pip install -e ".[dev]"` then `uv run pytest -q`
 
 > **Windows?** Pre-built binary recommended. For source (requires patching vendored SimpleXNG deps), see [docs/installation.md](docs/installation.md#windows).
@@ -149,8 +149,8 @@ Optional extras:
 - **Linting** — Ruff (line length 180)
 - **LLM** — OpenAI-compatible API (default: DeepSeek, works with Claude/GPT/Qwen)
 - **Search** — SimpleXNG (bundled, no Docker)
-- **Browser** — Playwright (headless/headed), WebSocket screencasting
-- **Desktop** — Electron + electron-builder, OS keyring (keyring)
+- **Browser** — Electron embedded Chromium on desktop; optional Playwright + WebSocket screencasting outside Electron
+- **Desktop** — Electron + electron-builder, persistent native browser partition, OS keyring (keyring)
 - **Channels** — python-telegram-bot, WeChat (itchat)
 - **Encryption** — Fernet (cryptography) for config store
 
