@@ -842,6 +842,32 @@ def test_workbench_chat_delete_detaches_local_fork_markers():
     assert "setActiveChat(function (prev) { return detachDeletedForkSource(prev); })" in handler
 
 
+def test_workbench_branch_tree_uses_compact_git_history_layout():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    branch = source.split("function WbcBranchTab", 1)[1].split(
+        "// ---------------------------------------------------------------------------\n// Right context panel", 1
+    )[0]
+
+    assert "wbc-branch-hint" not in branch
+    assert '"--wbc-branch-rail": (maxDepth * 14 + 30) + "px"' in branch
+    assert "CURVE_W = 14, CURVE_H = 24" in source
+    assert 'grid-template-columns: 42px minmax(0, 1fr) max-content' in styles
+    assert "height: 56px" in styles.split(".wbc-branch-button", 1)[1].split("}", 1)[0]
+    card_styles = styles.split(".wbc-branch-card", 1)[1].split("}", 1)[0]
+    assert "height: 44px" in card_styles
+    assert "border: 1px solid" in card_styles
+    assert ".wbc-branch-line.main-lane" in styles
+    assert ".wbc-branch-line.fork-lane" in styles
+    assert "border-top-right-radius: 14px 24px" in styles
+    assert "-webkit-line-clamp" not in styles.split(".wbc-branch-text", 1)[1].split("}", 1)[0]
+
+
 def test_workbench_chat_switches_stop_to_guidance_while_running():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(

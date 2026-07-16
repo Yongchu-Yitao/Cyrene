@@ -3873,25 +3873,36 @@ function wbcBranchRows(lineage) {
   return rows;
 }
 
-// Connector segments for one row on a 22px-per-depth grid, columns centered at
-// `d*22+13` and the node centered 16px down. Ancestor columns draw full-height
-// guides; the own column draws a half-line up or down. A fork head taps its
-// parent column with a short horizontal lead from the trunk, then a top-right
-// quarter-circle turn that drops vertically into the node (├──╮ shape). The
-// opaque node circle covers any line crossing behind it.
+// Connector segments for one compact Git-style row. Each depth gets a narrow
+// lane; the root lane uses the source-control blue while nested lanes use the
+// Workbench accent. Keeping the tone on each segment lets a fork stay readable
+// without adding cards, badges, or other decoration around the row.
 function wbcBranchConnectors(row) {
-  var U = 22, CY = 16, BASE = 13, R = 11, d = row.depth;
+  var U = 14, CY = 28, BASE = 14, CURVE_W = 14, CURVE_H = 24, d = row.depth;
   function cx(col) { return col * U + BASE; }
+  function tone(col) { return col === 0 ? "main-lane" : "fork-lane"; }
   var segs = [];
   for (var c = 0; c < d; c += 1) {
-    segs.push({ cls: "v", style: { left: cx(c) + "px", top: 0, bottom: 0 } });
+    segs.push({ cls: "v " + tone(c), style: { left: cx(c) + "px", top: 0, bottom: 0 } });
   }
-  if (row.lineDown) segs.push({ cls: "v", style: { left: cx(d) + "px", top: CY + "px", bottom: 0 } });
-  if (row.lineUp) segs.push({ cls: "v", style: { left: cx(d) + "px", top: 0, height: CY + "px" } });
+  if (row.lineDown) segs.push({ cls: "v " + tone(d), style: { left: cx(d) + "px", top: CY + "px", bottom: 0 } });
+  if (row.lineUp) segs.push({ cls: "v " + tone(d), style: { left: cx(d) + "px", top: 0, height: CY + "px" } });
   if (row.elbow) {
     var nodeX = cx(d), parentX = cx(d - 1);
-    segs.push({ cls: "h", style: { left: parentX + "px", top: (CY - R) + "px", width: (nodeX - R - parentX) + "px" } });
-    segs.push({ cls: "arc", style: { left: (nodeX - R) + "px", top: (CY - R) + "px", width: R + "px", height: R + "px" } });
+    var curveWidth = Math.min(CURVE_W, nodeX - parentX);
+    var straightWidth = nodeX - curveWidth - parentX;
+    if (straightWidth > 0) {
+      segs.push({ cls: "h fork-lane", style: { left: parentX + "px", top: (CY - CURVE_H) + "px", width: (straightWidth + 1) + "px" } });
+    }
+    segs.push({
+      cls: "arc fork-lane",
+      style: {
+        left: (nodeX - curveWidth) + "px",
+        top: (CY - CURVE_H) + "px",
+        width: curveWidth + "px",
+        height: CURVE_H + "px",
+      },
+    });
   }
   return segs;
 }
@@ -3921,14 +3932,17 @@ function WbcBranchTab({ chats, activeChatId, onSelectChat }) {
   if (!rows.length) {
     return <p className="workbench-muted wbc-branch-empty">{wbcT("workbenchChat.branchEmpty", "This conversation has no branches.")}</p>;
   }
+  var maxDepth = rows.reduce(function (depth, row) {
+    return Math.max(depth, Number(row.depth) || 0);
+  }, 0);
   return (
-    <div className="wbc-branch">
-      <p className="wbc-branch-hint">{wbcT("workbenchChat.branchHint", "Click a node to jump to that branch.")}</p>
+    <div className="wbc-branch" style={{ "--wbc-branch-rail": (maxDepth * 14 + 30) + "px" }}>
       <ul className="wbc-branch-tree">
         {rows.map(function (row, index) {
           var isActive = row.chatId === activeChatId;
           var isCurrent = isActive && row.isHead;
-          var cls = "wbc-branch-row depth-" + row.depth + " kind-" + row.kind + (isActive ? " on-current-branch" : "") + (isCurrent ? " current" : "");
+          var lane = row.depth > 0 ? " lane-fork" : " lane-main";
+          var cls = "wbc-branch-row depth-" + row.depth + " kind-" + row.kind + lane + (isActive ? " on-current-branch" : "") + (isCurrent ? " current" : "");
           return (
             <li
               key={row.chatId + ":" + row.kind + ":" + index}
@@ -3937,23 +3951,20 @@ function WbcBranchTab({ chats, activeChatId, onSelectChat }) {
               <button
                 type="button"
                 className="wbc-branch-button"
-                title={row.title || ""}
+                title={row.text || row.title || ""}
                 aria-current={isCurrent ? "true" : undefined}
                 onClick={function () { onSelectChat(row.chatId); }}
               >
                 {wbcBranchConnectors(row).map(function (seg, segIndex) {
                   return <span key={"seg" + segIndex} className={"wbc-branch-line " + seg.cls} style={seg.style} aria-hidden="true" />;
                 })}
-                <span className="wbc-branch-node" style={{ left: (row.depth * 22 + 13) + "px" }} aria-hidden="true">
+                <span className="wbc-branch-node" style={{ left: (row.depth * 14 + 14) + "px" }} aria-hidden="true">
                   <span className="wbc-branch-node-core" />
                 </span>
-                <span className="wbc-branch-card" style={{ marginLeft: (row.depth * 22 + 28) + "px" }}>
-                  <span className="wbc-branch-meta">
-                    <span className="wbc-branch-kind">{wbcBranchKindLabel(row.kind)}</span>
-                    {isCurrent && <span className="wbc-branch-here"><span className="wbc-branch-here-dot" aria-hidden="true" />{wbcT("workbenchChat.branchHere", "Current")}</span>}
-                  </span>
+                <span className="wbc-branch-card">
+                  <span className="wbc-branch-kind">{wbcBranchKindLabel(row.kind)}</span>
                   <span className="wbc-branch-text">{row.text || wbcT("workbenchChat.branchNoText", "(empty message)")}</span>
-                  <span className="wbc-branch-arrow" aria-hidden="true" />
+                  {isCurrent && <span className="wbc-branch-here">{wbcT("workbenchChat.branchHere", "Current")}</span>}
                 </span>
               </button>
             </li>
