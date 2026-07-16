@@ -97,6 +97,12 @@ Cyrene ships with two web front-ends:
 
 Both UIs bind to `127.0.0.1` and are served by the same FastAPI backend. The desktop/Electron build adds local-auth middleware backed by the OS keyring.
 
+Desktop browser tools use Electron's embedded Chromium through a token-authenticated
+loopback RPC bridge, and the visible `WebContentsView` shares the same persistent
+profile as agent actions. Packaged desktop builds therefore exclude Playwright and
+its separate Chromium download. Non-Electron Web UI/CLI runs retain Playwright as
+an optional extra, with text-only `httpx` navigation as the final fallback.
+
 ### Search
 
 Built-in search uses [SimpleXNG](https://github.com/jlevy/simplexng) — no Docker required. The manager auto-generates `data/simplexng_settings.yml`, auto-starts on port 8888, and handles proxy discovery. The deep research pipeline uses query generation → parallel search → filtering → synthesis.

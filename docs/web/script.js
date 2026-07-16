@@ -70,7 +70,7 @@
     'page.memory': { zh: '三层记忆架构：上下文窗口、短期记忆、SOUL.md', en: 'Three-layer memory: context window, short-term, SOUL.md' },
     'page.subagents': { zh: '并行子代理系统：生命周期、通信、使用场景', en: 'Parallel sub-agent system: lifecycle, communication, use cases' },
     'page.knowledge': { zh: '文档上传、嵌入索引、实体管理', en: 'Document upload, embedding, entity management' },
-    'page.browser': { zh: 'Playwright 浏览器实况与登录接管', en: 'Playwright browser live view and login takeover' },
+    'page.browser': { zh: 'Electron / Playwright 浏览器实况与登录接管', en: 'Electron / Playwright browser live view and login takeover' },
     'page.mcp': { zh: 'MCP 协议支持：stdio 和 SSE 传输', en: 'MCP protocol support: stdio and SSE transports' },
     'page.scheduler': { zh: 'Cron/间隔/一次性任务和主动抽奖系统', en: 'Cron, interval, one-shot tasks and proactive lottery' },
     'page.search': { zh: 'SimpleXNG 内置搜索和深度研究管道', en: 'SimpleXNG built-in search and deep research pipeline' },

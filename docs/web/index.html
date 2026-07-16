@@ -91,7 +91,7 @@
     </nav>
 
     <div class="sidebar-footer">
-      <div class="sidebar-version">v0.6.11</div>
+      <div class="sidebar-version">v0.6.12</div>
     </div>
   </aside>
 
@@ -149,7 +149,7 @@
           <li><strong>Shell 执行</strong>——执行 Bash 命令，支持持久 Shell 会话跨步骤复用。</li>
           <li><strong>Web 搜索与获取</strong>——内置 SimpleXNG 搜索引擎（基于 SearXNG）搜索 Web，WebFetch 获取页面内容。无需 Docker 或外部搜索 API。</li>
           <li><strong>知识库检索</strong>——SearchKnowledge 工具在工作区知识库中执行语义或关键词搜索。</li>
-          <li><strong>浏览器自动化</strong>——10 个浏览器工具（navigate / screenshot / click / type / scroll / 标签页管理 / 登录接管），持久 Playwright 会话，实时 CDP 画面推送。详见<a href="#" onclick="navigateTo('browser')">浏览器实况</a>。</li>
+          <li><strong>浏览器自动化</strong>——Electron 桌面版直接使用内嵌 Chromium（原生标签页、持久登录、无需 Playwright）；非桌面运行可选 Playwright 实时画面与登录接管。详见<a href="#" onclick="navigateTo('browser')">浏览器实况</a>。</li>
           <li><strong>并行子代理</strong>——生成独立代理并行执行任务，通过文件收件箱协调，支持 running → waiting → resumed → done 生命周期。详见<a href="#" onclick="navigateTo('subagents')">子代理系统</a>。</li>
           <li><strong>MCP 协议</strong>——连接 stdio 或 SSE 的 MCP 服务器扩展工具集，无需重启。详见<a href="#" onclick="navigateTo('mcp')">MCP 协议</a>。</li>
           <li><strong>任务调度</strong>——Cron、间隔和一次性任务；抽奖系统让代理主动发起行动；管家代理维护 SOUL.md。详见<a href="#" onclick="navigateTo('scheduler')">任务调度</a>。</li>
@@ -163,7 +163,7 @@
           <li><strong>Workbench UI</strong>（默认）——项目中心化桌面体验：项目隔离、意图分流、逐步执行。每个项目独立的工作区、知识库、记忆和聊天。</li>
           <li><strong>Legacy Agent UI</strong>——经典界面：实时聊天、Agent Flow SVG 时间线、记忆面板、设置页、实体管理、地图视图。</li>
           <li><strong>Context Debugger</strong>——每次 LLM 调用标记 <code>_ctx</code> 来源元数据，精确追溯上下文每个块的来源。</li>
-          <li><strong>Electron 桌面应用</strong>——CI 自动构建 macOS、Windows（x64 + ARM64）和 Linux 包。凭据存在 OS 钥匙串。</li>
+          <li><strong>Electron 桌面应用</strong>——CI 自动构建 macOS、Windows（x64 + ARM64）和 Linux 包。凭据存在 OS 钥匙串，浏览器工具复用 Electron 内嵌 Chromium，不携带第二套 Playwright 浏览器。</li>
           <li><strong>引导向导</strong>——首次启动自动运行，引导配置 API 密钥、模型和人格，无需手动编辑文件。</li>
           <li><strong>地图引擎</strong>——AMap / Leaflet 交互式地图，支持标注点和路线。</li>
           <li><strong>Telegram / WeChat Bot</strong>——从聊天软件访问完整代理能力，支持双阶段循环和全部工具。</li>
@@ -199,8 +199,8 @@
               <tr><td>包管理器</td><td>uv（锁定文件已提交，pip 也支持）</td></tr>
               <tr><td>LLM</td><td>OpenAI 兼容 API（默认 DeepSeek；支持 Claude/GPT/Qwen）</td></tr>
               <tr><td>搜索</td><td>SimpleXNG（基于 SearXNG，内置）</td></tr>
-              <tr><td>浏览器</td><td>Playwright（有头/无头），CDP WebSocket 画面推送</td></tr>
-              <tr><td>桌面</td><td>Electron + electron-builder，OS 钥匙串存储凭据</td></tr>
+              <tr><td>浏览器</td><td>桌面 Electron 内嵌 Chromium；非桌面可选 Playwright + CDP WebSocket</td></tr>
+              <tr><td>桌面</td><td>Electron + electron-builder，持久原生浏览器分区，OS 钥匙串存储凭据</td></tr>
               <tr><td>渠道</td><td>python-telegram-bot, itchat</td></tr>
               <tr><td>代码检查</td><td>Ruff（行长 180）</td></tr>
               <tr><td>加密</td><td>Fernet（cryptography）配置仓库加密</td></tr>
@@ -250,7 +250,7 @@
           <li><strong>Shell execution</strong> — run Bash commands with persistent shell sessions across rounds.</li>
           <li><strong>Web search & fetch</strong> — built-in SimpleXNG (SearXNG) for web search, WebFetch for URL content. No Docker or external API key.</li>
           <li><strong>Knowledge search</strong> — SearchKnowledge tool for semantic/keyword search over the workspace knowledge base.</li>
-          <li><strong>Browser automation</strong> — 10 tools (navigate, screenshot, click, type, scroll, tab management, login takeover), persistent Playwright session, live CDP screencast over WebSocket. See <a href="#" onclick="navigateTo('browser')">Browser</a>.</li>
+          <li><strong>Browser automation</strong> — Electron desktop uses its embedded Chromium directly (native tabs, persistent logins, no Playwright); non-desktop runs can opt into Playwright live view and login takeover. See <a href="#" onclick="navigateTo('browser')">Browser</a>.</li>
           <li><strong>Parallel sub-agents</strong> — spawn independent agents with full tool access, coordinated via a file-based inbox. Lifecycle: running → waiting → resumed → done. See <a href="#" onclick="navigateTo('subagents')">Sub-agents</a>.</li>
           <li><strong>MCP protocol</strong> — connect stdio or SSE MCP servers to extend the toolset without restarting. See <a href="#" onclick="navigateTo('mcp')">MCP</a>.</li>
           <li><strong>Task scheduler</strong> — cron, interval, and one-shot tasks. Proactive lottery system for agent-initiated actions. Steward agent for SOUL.md maintenance. See <a href="#" onclick="navigateTo('scheduler')">Scheduler</a>.</li>
@@ -263,7 +263,7 @@
           <li><strong>Workbench UI</strong> (default) — project-centric experience: project isolation, intent dispatch, step-by-step execution, independent workspace/knowledge/memory per project.</li>
           <li><strong>Legacy Agent UI</strong> — classic interface with real-time chat, Agent Flow SVG timeline, memory panel, settings, entity management, and map view.</li>
           <li><strong>Context Debugger</strong> — every LLM call is tagged with <code>_ctx</code> provenance metadata for precise context tracing.</li>
-          <li><strong>Electron desktop app</strong> — CI-built packages for macOS, Windows (x64+ARM64), Linux. OS keyring credential storage.</li>
+          <li><strong>Electron desktop app</strong> — CI-built packages for macOS, Windows (x64+ARM64), Linux. OS keyring credential storage and browser tools powered by embedded Chromium without a second Playwright browser.</li>
           <li><strong>Onboarding wizard</strong> — runs on first launch, guides API key, model, and personality setup — no manual file editing.</li>
           <li><strong>Map engine</strong> — AMap / Leaflet interactive map with pins and routes.</li>
           <li><strong>Telegram / WeChat Bot</strong> — full agent capability from messaging apps.</li>
@@ -287,8 +287,8 @@
               <tr><td>Package manager</td><td>uv (lockfile committed; pip also supported)</td></tr>
               <tr><td>LLM</td><td>OpenAI-compatible API (default DeepSeek)</td></tr>
               <tr><td>Search</td><td>SimpleXNG (built-in SearXNG)</td></tr>
-              <tr><td>Browser</td><td>Playwright, CDP WebSocket screencast</td></tr>
-              <tr><td>Desktop</td><td>Electron + electron-builder, OS keyring</td></tr>
+              <tr><td>Browser</td><td>Electron embedded Chromium on desktop; optional Playwright + CDP WebSocket outside Electron</td></tr>
+              <tr><td>Desktop</td><td>Electron + electron-builder, persistent native browser partition, OS keyring</td></tr>
               <tr><td>Channels</td><td>python-telegram-bot, itchat</td></tr>
               <tr><td>Encryption</td><td>Fernet (cryptography) for config store</td></tr>
             </tbody>
@@ -430,7 +430,7 @@ python -m cyrene --workbench</code></pre></div>
           <table>
             <thead><tr><th>扩展</th><th>安装命令</th><th>说明</th></tr></thead>
             <tbody>
-              <tr><td>浏览器实况</td><td><code>pip install -e ".[browser]"<br>playwright install chromium</code></td><td>Playwright 浏览器自动化、实时画面、登录接管</td></tr>
+              <tr><td>浏览器实况（非 Electron）</td><td><code>pip install -e ".[browser]"<br>playwright install chromium</code></td><td>源码 Web UI / CLI 的可选 Playwright 自动化；桌面版无需安装</td></tr>
               <tr><td>开发工具</td><td><code>pip install -e ".[dev]"</code></td><td>pytest 测试框架和其他开发依赖</td></tr>
             </tbody>
           </table>
@@ -1464,29 +1464,31 @@ cyrene stop</code></pre></div>
 <div lang="zh">
 <div class="page-header">
         <h1>浏览器实况与登录接管</h1>
-        <p class="page-subtitle">持久的 Playwright 浏览器会话，实时画面推送，一键接管登录墙。</p>
+        <p class="page-subtitle">桌面版复用 Electron 内嵌 Chromium；非桌面环境可选 Playwright 实时画面与登录接管。</p>
       </div>
 
       <section>
         <h2>特性</h2>
         <p>当代理使用浏览器工具时，聊天 UI 实时显示页面的画面——你能看到代理看到了什么和正在做什么。遇到登录墙时，代理可以把浏览器的<strong>控制权交给你</strong>。</p>
         <ul>
-          <li><strong>持续浏览器上下文</strong>——懒惰启动，跨所有浏览器操作重用。配置文件在磁盘上持久化（<code>&lt;DATA_DIR&gt;/browser_profile</code>），cookies/登录状态<strong>跨运行保留</strong>。</li>
-          <li><strong>实时画面</strong>——CDP screencast 通过 <code>/ws/browser</code> WebSocket 持续推送 JPEG 帧。</li>
-          <li><strong>登录接管</strong>——代理遇到登录墙时请求接管 → 真实浏览器窗口打开 → 你登录 → 代理在已验证会话中继续。</li>
+          <li><strong>Electron 桌面版</strong>——原生 <code>WebContentsView</code> 标签页直接嵌入 Workbench，用户和代理操作同一个持久浏览器分区，无需 Playwright。</li>
+          <li><strong>非桌面 Playwright 模式</strong>——配置文件在 <code>&lt;DATA_DIR&gt;/browser_profile</code> 持久化，CDP screencast 通过 <code>/ws/browser</code> 推送实时画面。</li>
+          <li><strong>登录接管</strong>——桌面版直接在内嵌标签页登录；非桌面模式可切换到真实有头 Chromium 窗口，完成后继续同一会话。</li>
         </ul>
       </section>
 
       <section>
         <h2>设置</h2>
-        <p>浏览器工具无需额外依赖的基本功能：<code>browser_navigate</code> 在没有 Playwright 时会降级为纯文本 HTTP 获取。</p>
+        <p><strong>Electron 桌面版无需额外安装。</strong>浏览器工具通过本机令牌认证的 RPC 调用内嵌 Chromium；RPC 故障会明确返回，不会静默启动另一套浏览器。</p>
+
+        <p>非 Electron 运行的基本功能无需额外依赖：<code>browser_navigate</code> 在没有 Playwright 时会降级为纯文本 HTTP 获取。</p>
 
         <p>完整功能（浏览器自动化、实时画面、登录接管）：</p>
         <div class="code-block"><pre><code>pip install -e ".[browser]"
 playwright install chromium</code></pre></div>
 
         <div class="note">
-          <strong>注意：</strong>如果 Playwright 或 Chromium 运行时缺失，实时画面面板会显示设置提示；<code>browser_click</code>/<code>browser_type</code>/<code>browser_request_takeover</code> 会报告 Playwright 未安装。
+          <strong>注意：</strong>以上安装仅适用于源码 Web UI / CLI。如果 Playwright 或 Chromium 运行时缺失，交互式浏览器工具会报告运行时不可用。
         </div>
       </section>
 
@@ -1544,17 +1546,18 @@ playwright install chromium</code></pre></div>
 <div lang="en">
 <div class="page-header">
         <h1>Browser Live View & Login Takeover</h1>
-        <p class="page-subtitle">Persistent Playwright browser session with live screencast and one-click login takeover.</p>
+        <p class="page-subtitle">Electron desktop reuses embedded Chromium; non-desktop runs can opt into Playwright live view and login takeover.</p>
       </div>
       <section>
         <ul>
-          <li><strong>Persistent context</strong> — browser profile on disk, cookies survive restarts</li>
-          <li><strong>Live screencast</strong> — CDP JPEG frames via WebSocket</li>
-          <li><strong>Login takeover</strong> — agent hits login wall → real window opens → you log in → agent resumes authenticated</li>
+          <li><strong>Electron desktop</strong> — native <code>WebContentsView</code> tabs share one persistent partition with agent tools; no Playwright install</li>
+          <li><strong>Non-desktop Playwright mode</strong> — persistent profile and CDP JPEG live screencast via WebSocket</li>
+          <li><strong>Login takeover</strong> — use the embedded desktop tab, or a headed Chromium window in Playwright mode</li>
         </ul>
       </section>
       <section>
         <h2>Setup</h2>
+        <p>Packaged desktop releases need no extra setup. For source Web UI or CLI:</p>
         <div class="code-block"><pre><code>pip install -e ".[browser]"
 playwright install chromium</code></pre></div>
       </section>

@@ -829,8 +829,6 @@ async def test_httpx_navigate_ssrf_redirect_error_no_exception_log(monkeypatch):
 
         # We can't easily trigger a real redirect in a unit test, so verify the
         # error-handling path by directly calling _httpx_navigate with a mock.
-        import httpx
-
         async def fake_get(*_a, **_kw):
             raise SSRFBlockedError("redirect to 10.0.0.1 blocked")
 
@@ -1289,9 +1287,8 @@ async def test_current_page_screenshot_uses_electron_without_navigation(monkeypa
     assert calls == [("screenshot", {})]
 
 
-async def test_click_and_type_fallback_on_electron_ok_false(monkeypatch):
+async def test_electron_ok_false_does_not_fall_back_to_playwright(monkeypatch):
     from cyrene import browser
-    from cyrene.browser import _ensure_playwright
 
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
     monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
@@ -1303,11 +1300,56 @@ async def test_click_and_type_fallback_on_electron_ok_false(monkeypatch):
         return {"ok": False, "error": "element not found"}
 
     monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
+    monkeypatch.setattr(
+        browser,
+        "_ensure_playwright",
+        lambda: (_ for _ in ()).throw(AssertionError("Electron must not use Playwright")),
+    )
 
-    # When RPC returns ok:false and Playwright is available, it should fall through
     r1 = await browser.click("#btn")
-    # If the RPC returned ok:false we should have tried the RPC and then fallen back
-    assert any(c[0] == "click" for c in calls)
+    r2 = await browser.type_text("#input", "hello")
+    r3 = await browser.navigate("https://example.com")
+
+    assert r1 == {"ok": False, "error": "element not found"}
+    assert r2 == {"ok": False, "error": "element not found"}
+    assert r3["error"] == "element not found"
+    assert [method for method, _args in calls] == ["click", "type", "navigate"]
+
+
+async def test_electron_rpc_errors_never_start_playwright(monkeypatch):
+    from cyrene import browser
+
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
+
+    async def failed_rpc(method, args=None, **_kw):
+        raise ConnectionError(f"{method} RPC stopped")
+
+    monkeypatch.setattr(browser, "_electron_browser_rpc", failed_rpc)
+    monkeypatch.setattr(
+        browser,
+        "_ensure_playwright",
+        lambda: (_ for _ in ()).throw(AssertionError("Electron must not use Playwright")),
+    )
+
+    results = [
+        await browser.navigate("https://example.com"),
+        await browser.screenshot(),
+        await browser.inspect_page(),
+        await browser.click("#button"),
+        await browser.click_ref("e1"),
+        await browser.click_text("Continue"),
+        await browser.click_at(10, 20),
+        await browser.type_text("#input", "hello"),
+        await browser.type_ref("e2", "world"),
+        await browser.wait_for_page(text="Ready"),
+        await browser.network_log(),
+        await browser.scroll_page(delta_y=100),
+    ]
+
+    assert all(result.get("error") for result in results)
+    assert results[2]["elements"] == []
+    assert results[10]["entries"] == []
 
 
 async def test_electron_tab_management_apis(monkeypatch):
@@ -1324,15 +1366,15 @@ async def test_electron_tab_management_apis(monkeypatch):
 
     monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
 
-    r1 = await browser.list_tabs()
+    await browser.list_tabs()
     assert any(c[0] == "state" for c in calls)
 
     calls.clear()
-    r2 = await browser.new_tab("https://example.com")
+    await browser.new_tab("https://example.com")
     assert any(c[0] == "createTab" for c in calls)
 
     calls.clear()
-    r3 = await browser.select_tab("tab_1")
+    await browser.select_tab("tab_1")
     assert any(c[0] == "activateTab" for c in calls)
 
 

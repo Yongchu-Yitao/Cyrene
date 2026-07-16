@@ -6,22 +6,39 @@ agent hits a login wall, CAPTCHA, or 2FA, it can **hand the browser to you**: a 
 window opens, you log in, and the agent resumes in the same (now authenticated)
 session.
 
-## Setup
+## Runtime and setup
 
-The browser tools work without any extra dependency — they fall back to a plain
-HTTP fetch (`httpx`) for `browser_navigate`. For the full experience (real browser
-automation, live screencast, and login takeover), install Playwright:
+The packaged Electron desktop app uses Electron's embedded Chromium directly.
+It needs no Playwright installation and stores cookies/logins in the persistent
+`persist:cyrene-browser` partition. Browser tool calls and the visible browser
+panel share that same runtime and profile; an Electron RPC failure is reported
+instead of silently opening a second browser.
+
+When Cyrene runs without Electron (source Web UI or CLI), `browser_navigate` can
+fall back to a plain HTTP fetch (`httpx`). For full non-desktop automation, live
+screencast, and headed login takeover, install the optional Playwright runtime:
 
 ```bash
 pip install -e ".[browser]"   # installs the optional "browser" extra (Playwright)
 playwright install chromium    # one-time download of the Chromium runtime
 ```
 
-If Playwright (or the Chromium runtime) is missing, the live-view panel shows a
-hint and `browser_navigate` degrades to a text-only fetch; `browser_click` /
-`browser_type` / `browser_request_takeover` report that Playwright is required.
+If Playwright (or its Chromium runtime) is missing outside Electron, the
+live-view panel shows a hint and `browser_navigate` degrades to a text-only fetch;
+interactive tools report that the browser runtime is unavailable.
 
 ## How the live view works
+
+### Electron desktop
+
+- Electron creates native browser tabs as `WebContentsView` instances and embeds
+  the active tab in the Workbench browser panel.
+- The Python tool layer calls a loopback, token-authenticated Electron RPC server
+  for navigation, snapshots, clicks, typing, waits, network logs, screenshots,
+  scrolling, and tab management.
+- The user and the agent operate the same persistent browser tab and profile.
+
+### Non-Electron Playwright mode
 
 - A single **persistent browser context** is launched lazily and reused across all
   browser actions. Its profile lives on disk at `<DATA_DIR>/browser_profile`, so
@@ -35,7 +52,11 @@ hint and `browser_navigate` degrades to a text-only fetch; `browser_click` /
 - The panel auto-reveals in the chat's right sidebar the moment the agent starts
   browsing, and a **Browser** tab lets you reopen it.
 
-## Login takeover (native window)
+## Login takeover
+
+In Electron, the browser is already a visible embedded native view, so the user
+can complete login in the same tab. In non-Electron Playwright mode, login
+takeover uses the following headed-window flow:
 
 1. The agent calls the `browser_request_takeover` tool the moment it hits a login
    wall (it is prompted to do this early, before deep work on the page).
@@ -50,13 +71,15 @@ hint and `browser_navigate` degrades to a text-only fetch; `browser_click` /
 Because the profile is persistent, the window usually only needs to appear once
 per site.
 
-> **Local only.** Native-window takeover assumes the UI and the browser run on the
-> same machine (true for the desktop / local web app). The persistent profile means
-> takeover is rarely needed after the first login.
+> **Local only.** Playwright native-window takeover assumes the Web UI and browser
+> run on the same machine. The persistent profile means takeover is rarely needed
+> after the first login.
 
 ## Configuration
 
-These are read from the config store (env keys); defaults shown:
+These are read from the config store (env keys); defaults shown. Most viewport,
+headless, screencast, and locale settings apply to non-Electron Playwright mode;
+`CYRENE_BROWSER_USER_AGENT` is also honored by Electron.
 
 | Key | Default | Meaning |
 |-----|---------|---------|

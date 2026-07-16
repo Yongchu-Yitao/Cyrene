@@ -113,3 +113,35 @@ def test_ensure_playwright_uses_dedicated_browser_root(tmp_path, monkeypatch):
     install_call = calls[1]
     assert install_call[0][-3:] == ["playwright", "install", "chromium"]
     assert install_call[1]["env"]["PLAYWRIGHT_BROWSERS_PATH"] == str(browser_root)
+
+
+def test_desktop_build_skips_playwright_without_installing(monkeypatch):
+    build_module = _load_build_module()
+
+    def unexpected_install():
+        raise AssertionError("desktop builds must not install Playwright")
+
+    monkeypatch.setattr(build_module, "ensure_playwright_browsers", unexpected_install)
+    monkeypatch.setenv("CYRENE_PLAYWRIGHT_BROWSERS_DIR", "/stale/browser/path")
+    monkeypatch.setenv("CYRENE_BUNDLE_PLAYWRIGHT", "1")
+
+    assert build_module.configure_playwright_bundle(False) is None
+    assert "CYRENE_PLAYWRIGHT_BROWSERS_DIR" not in os.environ
+    assert os.environ["CYRENE_BUNDLE_PLAYWRIGHT"] == "0"
+
+
+def test_standalone_build_can_opt_in_to_playwright(tmp_path, monkeypatch):
+    build_module = _load_build_module()
+    browser_root = tmp_path / "ms-playwright"
+    monkeypatch.setattr(build_module, "ensure_playwright_browsers", lambda: browser_root)
+
+    assert build_module.configure_playwright_bundle(True) == browser_root
+    assert os.environ["CYRENE_PLAYWRIGHT_BROWSERS_DIR"] == str(browser_root)
+    assert os.environ["CYRENE_BUNDLE_PLAYWRIGHT"] == "1"
+
+
+def test_frozen_smoke_test_rejects_stray_playwright_package():
+    entrypoint = (BUILD_DIR / "run_cyrene.py").read_text(encoding="utf-8")
+
+    assert 'importlib.util.find_spec("playwright")' in entrypoint
+    assert "playwright_package=FAILED: unexpectedly bundled" in entrypoint

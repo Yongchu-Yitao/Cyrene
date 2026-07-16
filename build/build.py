@@ -412,6 +412,28 @@ def ensure_playwright_browsers() -> Path | None:
     return PLAYWRIGHT_BROWSERS_DIR
 
 
+def configure_playwright_bundle(enabled: bool) -> Path | None:
+    """Configure whether the frozen Python bundle includes Playwright.
+
+    Electron releases use the host's embedded Chromium through browser RPC, so
+    bundling a second Chromium runtime only increases the installer size.  The
+    opt-in path remains available for standalone/non-Electron PyInstaller builds.
+    """
+    os.environ.pop("CYRENE_PLAYWRIGHT_BROWSERS_DIR", None)
+    os.environ["CYRENE_BUNDLE_PLAYWRIGHT"] = "0"
+    if not enabled:
+        print("\n[Playwright] Skipped (Electron uses its embedded browser runtime)")
+        return None
+
+    playwright_browsers = ensure_playwright_browsers()
+    if playwright_browsers is None:
+        print("  [error] --bundle-playwright was requested but Chromium could not be prepared")
+        raise SystemExit(1)
+    os.environ["CYRENE_PLAYWRIGHT_BROWSERS_DIR"] = str(playwright_browsers)
+    os.environ["CYRENE_BUNDLE_PLAYWRIGHT"] = "1"
+    return playwright_browsers
+
+
 def run_electron_builder(arch: str = "x64") -> None:
     """Run electron-builder to package the Electron app around the PyInstaller bundle."""
     electron_dir = PROJECT_ROOT / "electron"
@@ -535,6 +557,11 @@ def main() -> None:
     parser.add_argument("--skip-icons", action="store_true", help="跳过图标生成")
     parser.add_argument("--pyinstaller-only", action="store_true", help="只跑 PyInstaller，跳过 Electron 打包")
     parser.add_argument(
+        "--bundle-playwright",
+        action="store_true",
+        help="在独立 PyInstaller 包中包含 Playwright + Chromium（Electron 桌面包不需要）",
+    )
+    parser.add_argument(
         "--ui-mode",
         choices=["workbench", "agent"],
         default="workbench",
@@ -564,10 +591,7 @@ def main() -> None:
 
     build_webui_js()
 
-    os.environ.pop("CYRENE_PLAYWRIGHT_BROWSERS_DIR", None)
-    playwright_browsers = ensure_playwright_browsers()
-    if playwright_browsers is not None:
-        os.environ["CYRENE_PLAYWRIGHT_BROWSERS_DIR"] = str(playwright_browsers)
+    configure_playwright_bundle(args.bundle_playwright)
 
     try:
         write_buildinfo(args.ui_mode)

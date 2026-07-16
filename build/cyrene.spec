@@ -14,6 +14,7 @@ _SRC = _PROJECT_ROOT / "src"
 _ENTRY = str(Path(SPECPATH).resolve() / "run_cyrene.py")
 _IS_MAC = sys.platform == "darwin"
 _IS_WIN = sys.platform == "win32"
+_BUNDLE_PLAYWRIGHT = os.environ.get("CYRENE_BUNDLE_PLAYWRIGHT") == "1"
 
 # 从 pyproject.toml 读取版本号
 import tomllib
@@ -157,8 +158,6 @@ for _package in (
     "pypdf",
     "reportlab",
     "PIL",
-    # Browser automation. Browser executables are collected separately below.
-    "playwright",
     # simplexng runtime deps
     "waitress",
     "flask",
@@ -168,6 +167,12 @@ for _package in (
     "fasttext_predict",
 ):
     _collect_package(_package)
+
+# Electron owns the desktop browser runtime.  Playwright is intentionally
+# excluded from normal release builds and remains opt-in for standalone frozen
+# builds that do not have the Electron RPC bridge.
+if _BUNDLE_PLAYWRIGHT:
+    _collect_package("playwright")
 
 if _IS_WIN:
     _collect_package("winloop")
@@ -179,7 +184,7 @@ _hidden = list(dict.fromkeys(_hidden))
 # ---- Playwright Chromium browser runtime (optional) ----
 _playwright_browser_toc = []
 _playwright_browser_root = os.environ.get("CYRENE_PLAYWRIGHT_BROWSERS_DIR")
-if _playwright_browser_root:
+if _BUNDLE_PLAYWRIGHT and _playwright_browser_root:
     try:
         _playwright_browser_toc = collect_browser_toc(Path(_playwright_browser_root))
         print(
@@ -194,6 +199,8 @@ _excludes = [
     "tkinter", "matplotlib", "numpy", "pandas", "scipy",
     "PIL._tkinter_finder", "curses",
 ]
+if not _BUNDLE_PLAYWRIGHT:
+    _excludes.append("playwright")
 
 # ---- 图标 ----
 _icon = None
