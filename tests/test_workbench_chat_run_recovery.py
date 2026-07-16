@@ -62,6 +62,27 @@ async def test_chat_run_driver_error_always_publishes_terminal_event_and_wakes_w
     assert any(event.get("type") == "error" for event in run.events)
 
 
+async def test_finished_run_remains_replayable_during_retention_window():
+    from webui.workbench_chat_runs import ChatRunManager
+
+    manager = ChatRunManager(retention_seconds=45)
+
+    async def runner(run):
+        run.outcome = {"kind": "reply"}
+        await run.publish({"type": "saved", "assistantMessage": {"content": "done"}})
+
+    run, _ = manager.start_or_get(
+        "chat_replay_finished", {"type": "ack"}, runner, stream=False
+    )
+    await asyncio.wait_for(run.done.wait(), timeout=1)
+
+    assert manager.get("chat_replay_finished") is None
+    assert manager.get_replayable("chat_replay_finished") is run
+    replayed = [line async for line in manager.stream(run)]
+    assert any('"type": "saved"' in line for line in replayed)
+    await manager.shutdown()
+
+
 async def test_chat_run_storage_setup_runs_off_the_event_loop(monkeypatch, tmp_path):
     from cyrene.workbench_inbox import WorkbenchAgentInbox
     from webui.workbench_chat_runs import ChatRunManager

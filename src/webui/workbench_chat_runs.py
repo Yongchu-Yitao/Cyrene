@@ -157,10 +157,20 @@ class ChatRunManager:
         self._db_path = str(db_path or "")
 
     def get(self, chat_id: str) -> ChatRun | None:
+        """Return only an actively running exchange."""
         run = self.runs.get(str(chat_id))
         if run is not None and run.done.is_set():
             return None
         return run
+
+    def get_replayable(self, chat_id: str) -> ChatRun | None:
+        """Return a retained run, including one that has just finished.
+
+        Finished runs stay in ``runs`` for the retention window specifically so
+        a reconnect can replay terminal events.  Keeping this separate from
+        :meth:`get` prevents a completed exchange from blocking a new send.
+        """
+        return self.runs.get(str(chat_id))
 
     def interrupt(self, chat_id: str) -> bool:
         """Cancel a live run and wake attached streams immediately."""
@@ -382,6 +392,11 @@ class ChatRunManager:
                 chat_mod._write_chats_store(payload)
         except Exception:
             logger.exception("Chat run startup recovery failed")
+        try:
+            if self._db_path:
+                chat_mod._reconcile_inbox_guidance_messages(self._db_path)
+        except Exception:
+            logger.exception("Chat guidance transcript reconciliation failed")
 
     async def shutdown(self) -> None:
         """On graceful shutdown, give in-flight runs a chance to finalize (so a

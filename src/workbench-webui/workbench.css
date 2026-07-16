@@ -13102,6 +13102,190 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   color: var(--wb-muted);
 }
 
+/* Live session inbox card in the conversation Context tab. */
+.wbc-inbox-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding-bottom: 10px;
+}
+
+.wbc-inbox-head,
+.wbc-inbox-event-head,
+.wbc-inbox-event-meta {
+  display: flex;
+  align-items: center;
+}
+
+.wbc-inbox-head {
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.wbc-inbox-head h3 {
+  margin: 0;
+}
+
+.wbc-inbox-queue-count,
+.wbc-inbox-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.wbc-inbox-queue-count {
+  flex: 0 0 auto;
+  color: var(--wb-faint);
+}
+
+.wbc-inbox-status i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.wbc-inbox-queue-count.active {
+  color: var(--wb-green);
+}
+
+.wbc-inbox-queue-count b {
+  color: currentColor;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-inbox-feed {
+  display: flex;
+  flex-direction: column;
+}
+
+.wbc-inbox-row {
+  padding: 8px 0 0;
+  border-top: 1px solid var(--wb-line);
+}
+
+.wbc-inbox-event-body {
+  min-width: 0;
+}
+
+.wbc-inbox-event-head {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wbc-inbox-event-head > b {
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-inbox-status {
+  flex: 0 0 auto;
+  color: var(--wb-muted);
+}
+
+.wbc-inbox-status.status-queued,
+.wbc-inbox-status.status-ready { color: var(--wb-amber); }
+.wbc-inbox-status.status-claimed { color: var(--wb-blue); }
+.wbc-inbox-status.status-running { color: var(--wb-green); }
+.wbc-inbox-status.status-completed,
+.wbc-inbox-status.status-consumed { color: var(--wb-green); }
+.wbc-inbox-status.status-failed { color: var(--wb-red); }
+.wbc-inbox-status.status-cancelled { color: var(--wb-faint); }
+
+.wbc-inbox-event-body > p {
+  display: -webkit-box;
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.wbc-inbox-event-meta {
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--wb-faint);
+  font-size: calc(9.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-inbox-event-meta time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-inbox-empty,
+.wbc-inbox-error {
+  border-top: 1px solid var(--wb-line);
+  padding: 10px 0 2px;
+}
+
+.wbc-inbox-empty {
+  color: var(--wb-faint);
+}
+
+.wbc-inbox-empty p {
+  color: inherit;
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-inbox-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--wb-red);
+  font-size: calc(11px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-inbox-error button {
+  min-height: 40px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 10px;
+}
+
+.wbc-inbox-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wbc-inbox-skeleton span {
+  display: block;
+  height: 34px;
+  border-top: 1px solid var(--wb-line);
+  background: linear-gradient(90deg, var(--wb-icon-bg), var(--wb-row-hover-bg), var(--wb-icon-bg));
+  background-size: 200% 100%;
+  animation: wbc-inbox-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes wbc-inbox-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-inbox-skeleton span {
+    animation: none;
+  }
+}
+
 /* Context-window gauge + composition (per-conversation overview) */
 .wbc-ctx-gauge {
   display: flex;

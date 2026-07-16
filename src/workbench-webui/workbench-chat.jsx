@@ -51,6 +51,22 @@ var WorkbenchChatModel = (function () {
     return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/subagents" + query, options);
   }
 
+  function getInbox(chatId, options) {
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) {
+      return Promise.resolve({
+        active: false,
+        runStatus: "idle",
+        counts: { queued: 0, claimed: 0, completed: 0, failed: 0, cancelled: 0, total: 0 },
+        events: [],
+        tools: [],
+      });
+    }
+    return apiJson(
+      "/api/workbench/chats/" + encodeURIComponent(chatId) + "/inbox",
+      options
+    );
+  }
+
   function renameChat(chatId, title) {
     return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId), {
       method: "PATCH",
@@ -220,6 +236,7 @@ var WorkbenchChatModel = (function () {
     createChat: createChat,
     getChat: getChat,
     getSubagents: getSubagents,
+    getInbox: getInbox,
     renameChat: renameChat,
     deleteChat: deleteChat,
     toTask: toTask,
@@ -1291,14 +1308,21 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
       return;
     }
     var entry = null;
-    if (event.type === "tool_call") {
+    if (event.type === "tool_call_started" || event.type === "tool_call") {
       var toolName = String(event.tool || "");
       if (["use_tools", "quit", "send_message", "update_plan_progress"].indexOf(toolName) >= 0) return;
       var args = event.args || {};
       var preview = Object.values(args).filter(Boolean).map(String).join(", ").slice(0, 60);
-      // tool_call is emitted by the executor after the handler returns and
-      // already carries its result. It is a completion event, not a start event.
-      entry = { kind: "tool", text: toolName || wbcT("settings.tools", "Tools"), preview: preview, status: "completed" };
+      var toolStarted = event.type === "tool_call_started";
+      var toolResult = String(event.result || "");
+      entry = {
+        kind: "tool",
+        toolCallId: String(event.tool_call_id || ""),
+        text: toolName || wbcT("settings.tools", "Tools"),
+        preview: preview,
+        status: toolStarted ? "running" : "completed",
+        failed: !toolStarted && toolResult.toLowerCase().startsWith("tool failed:"),
+      };
     } else if (event.type === "phase_transition" && (event.detail || event.detail_key)) {
       entry = { kind: "phase", text: event.detail ? String(event.detail).slice(0, 80) : "", detailKey: event.detail_key || "", detailParams: event.detail_params || {}, preview: "" };
     } else if (event.type === "subagent_update") {
@@ -1321,6 +1345,31 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
     if (!entry) return;
     update(chatId, function (latest) {
       if (!latest) return null;
+      // A completion updates the row created by tool_call_started in place.
+      // Mapping instead of remove/reinsert preserves the LLM's tool-call order,
+      // including when several tools run concurrently and finish out of order.
+      if (entry.toolCallId) {
+        var matchedToolCall = false;
+        function mergeToolProgress(items) {
+          return (Array.isArray(items) ? items : []).map(function (item) {
+            if (String(item && item.toolCallId || "") !== entry.toolCallId) return item;
+            matchedToolCall = true;
+            return { ...item, ...entry };
+          });
+        }
+        var mergedActivities = (Array.isArray(latest.activities) ? latest.activities : []).map(function (activity) {
+          return { ...activity, progress: mergeToolProgress(activity && activity.progress) };
+        });
+        var mergedProgress = mergeToolProgress(latest.progress);
+        if (matchedToolCall) {
+          return {
+            ...latest,
+            activities: mergedActivities,
+            progress: mergedProgress,
+            lastEventAt: Date.now(),
+          };
+        }
+      }
       var latestActivities = Array.isArray(latest.activities) ? latest.activities : [];
       var latestActivity = latestActivities.length ? latestActivities[latestActivities.length - 1] : null;
       var activityBase = latestActivity && latestActivity.timelineClosed
@@ -2966,11 +3015,11 @@ function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, o
           {entries.length > 0 && (
             <ul className="wbc-trace-list">
               {entries.map(function (entry, i) {
-                var isLast = activityRunning && i === entries.length - 1 && entry.status !== "completed";
+                var isRunning = activityRunning && entry.status === "running";
                 var failed = !!entry.failed;
                 return (
-                  <li key={i} className={failed ? "failed" : (isLast ? "active" : "done")}>
-                    <span className="wbc-trace-mark">{failed ? WBC_ICONS.x : (isLast ? <span className="wb-spinner small" /> : WBC_ICONS.check)}</span>
+                  <li key={entry.toolCallId || i} className={failed ? "failed" : (isRunning ? "active" : "done")}>
+                    <span className="wbc-trace-mark">{failed ? WBC_ICONS.x : (isRunning ? <span className="wb-spinner small" /> : WBC_ICONS.check)}</span>
                     <span className="wbc-trace-text">
                       {(function () {
                         var toolKey = entry.text || entry.tool || "";
@@ -3084,6 +3133,9 @@ function WbcHeartbeat({ startedAt, lastEventAt }) {
 function WbcLiveActivityCard({ activity, active, hasReplyText }) {
   var item = activity || {};
   var entries = Array.isArray(item.progress) ? item.progress : [];
+  var hasRunningTools = entries.some(function (entry) {
+    return entry && entry.kind === "tool" && entry.status === "running";
+  });
   var hasReasoning = !!String(item.reasoning || "").trim();
   var [showReasoning, setShowReasoning] = useWbcState(false);
   var [lockedHeight, setLockedHeight] = useWbcState(0);
@@ -3113,7 +3165,7 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
   }, [item.reasoning, showReasoning, active]);
 
   var label = entries.length
-    ? (active && !hasReplyText
+    ? (hasRunningTools && !hasReplyText
       ? wbcT("workbenchChat.toolRunning", "Calling tools...")
       : wbcT("workbenchChat.traceSummary", "Execution ({count} tool calls)", { count: entries.length }))
     : (active
@@ -5177,6 +5229,222 @@ function WbcContextBlockList({ chat, running }) {
   );
 }
 
+var WBC_INBOX_CACHE_LIMIT = 32;
+var wbcInboxSnapshotCache = new Map();
+
+function wbcCachedInbox(chatId) {
+  return chatId ? (wbcInboxSnapshotCache.get(String(chatId)) || null) : null;
+}
+
+function wbcCacheInbox(chatId, payload) {
+  var key = String(chatId || "");
+  if (!key || !payload) return;
+  // Refresh insertion order so the least-recently-viewed conversation is
+  // evicted first. Inbox snapshots are small, but the chat list is unbounded.
+  wbcInboxSnapshotCache.delete(key);
+  wbcInboxSnapshotCache.set(key, payload);
+  if (wbcInboxSnapshotCache.size > WBC_INBOX_CACHE_LIMIT) {
+    var oldestKey = wbcInboxSnapshotCache.keys().next().value;
+    if (oldestKey) wbcInboxSnapshotCache.delete(oldestKey);
+  }
+}
+
+function useWbcLiveInbox(chat) {
+  var chatId = chat ? chat.id : "";
+  var [retryRevision, setRetryRevision] = useWbcState(0);
+  var [view, setView] = useWbcState(function () {
+    var cached = wbcCachedInbox(chatId);
+    return { chatId: chatId, data: cached, loading: !!chatId && !cached, error: "" };
+  });
+
+  useWbcEffect(function () {
+    if (!chatId) {
+      setView({ chatId: "", data: null, loading: false, error: "" });
+      return undefined;
+    }
+    var cancelled = false;
+    var inFlight = false;
+    setView(function (previous) {
+      var nextData = previous.chatId === chatId
+        ? previous.data
+        : wbcCachedInbox(chatId);
+      return {
+        chatId: chatId,
+        data: nextData,
+        // A cached snapshot remains visible while the fresh request runs.
+        // Loading UI is reserved for the first visit with no usable state.
+        loading: !nextData,
+        error: "",
+      };
+    });
+
+    function load() {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      window.WorkbenchChatModel.getInbox(chatId, {
+        toast: false,
+        timeout: 5000,
+        cache: "no-store",
+      })
+        .then(function (payload) {
+          wbcCacheInbox(chatId, payload);
+          if (!cancelled) setView({ chatId: chatId, data: payload, loading: false, error: "" });
+        })
+        .catch(function (err) {
+          if (!cancelled && (!err || err.name !== "AbortError")) {
+            setView(function (previous) {
+              return {
+                chatId: chatId,
+                data: previous.chatId === chatId ? previous.data : null,
+                loading: false,
+                error: wbcErrorText(err),
+              };
+            });
+          }
+        })
+        .finally(function () { inFlight = false; });
+    }
+
+    load();
+    // The inbox can change independently of the chat transcript (tool result,
+    // guidance claim, recovery), so keep observing while the Context tab is
+    // mounted instead of relying on the UI's possibly stale `running` flag.
+    var timer = setInterval(load, 1000);
+    return function () {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [chatId, retryRevision]);
+
+  var cachedData = wbcCachedInbox(chatId);
+  var currentData = view.chatId === chatId ? view.data : cachedData;
+  return {
+    data: currentData,
+    loading: currentData ? false : (view.chatId === chatId ? view.loading : true),
+    error: view.chatId === chatId ? view.error : "",
+    retry: function () { setRetryRevision(function (value) { return value + 1; }); },
+  };
+}
+
+function wbcInboxStatus(status) {
+  var value = String(status || "queued");
+  var labels = {
+    queued: ["workbenchChat.inbox.status.queued", "Queued"],
+    claimed: ["workbenchChat.inbox.status.claimed", "Claimed"],
+    completed: ["workbenchChat.inbox.status.completed", "Completed"],
+    failed: ["workbenchChat.inbox.status.failed", "Failed"],
+    cancelled: ["workbenchChat.inbox.status.cancelled", "Cancelled"],
+    running: ["workbenchChat.inbox.status.running", "Running"],
+    ready: ["workbenchChat.inbox.status.ready", "Ready"],
+    consumed: ["workbenchChat.inbox.status.consumed", "Consumed"],
+  };
+  var item = labels[value] || ["workbenchChat.inbox.status.unknown", value || "Unknown"];
+  return { value: value, label: wbcT(item[0], item[1]) };
+}
+
+function wbcInboxEventLabel(item) {
+  if (item.type === "guidance") return wbcT("workbenchChat.inbox.guidance", "User guidance");
+  if (item.type === "tool_result" || item.type === "tool_activity") {
+    return item.toolName
+      ? wbcT("toolName." + item.toolName, item.toolName)
+      : wbcT(
+          item.type === "tool_result" ? "workbenchChat.inbox.toolResult" : "workbenchChat.inbox.toolActivity",
+          item.type === "tool_result" ? "Tool result" : "Tool activity"
+        );
+  }
+  return String(item.type || wbcT("workbenchChat.inbox.event", "Inbox event"));
+}
+
+function wbcInboxArgumentPreview(argumentsValue) {
+  if (!argumentsValue || typeof argumentsValue !== "object" || Array.isArray(argumentsValue)) return "";
+  return Object.keys(argumentsValue).map(function (key) {
+    var value = argumentsValue[key];
+    if (value === null || value === undefined || value === "") return "";
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value); } catch (e) { return String(value); }
+  }).filter(Boolean).join(" · ").slice(0, 240);
+}
+
+function WbcInboxCard({ chat }) {
+  var liveView = useWbcLiveInbox(chat);
+  var data = liveView.data;
+  var counts = (data && data.counts) || {};
+  var live = (data && data.live) || {};
+  var events = data && Array.isArray(data.events) ? data.events : [];
+  var tools = data && Array.isArray(data.tools) ? data.tools : [];
+  var activeTools = tools.filter(function (tool) {
+    return tool.state === "queued" || tool.state === "running";
+  });
+  var feed = events.concat(activeTools.map(function (tool) {
+    return {
+      eventId: "active:" + tool.toolCallId,
+      type: "tool_activity",
+      status: tool.state,
+      toolName: tool.toolName,
+      toolCallId: tool.toolCallId,
+      createdAt: tool.updatedAt,
+      preview: wbcInboxArgumentPreview(tool.arguments),
+    };
+  })).sort(function (left, right) {
+    return String(right.createdAt || "").localeCompare(String(left.createdAt || ""));
+  }).slice(0, 20);
+  var queueDepth = data && data.active
+    ? Number(live.queueDepth || 0)
+    : Number(counts.queued || 0) + Number(counts.claimed || 0);
+
+  return (
+    <section className="workbench-side-section wbc-inbox-card" aria-labelledby="wbc-inbox-title">
+      <div className="wbc-inbox-head">
+        <h3 id="wbc-inbox-title">{wbcT("workbenchChat.inbox.title", "Session inbox")}</h3>
+        <span className={"wbc-inbox-queue-count" + (queueDepth > 0 ? " active" : "")} aria-live="polite">
+          <span>{wbcT("workbenchChat.inbox.queue", "In queue")}</span>
+          <b>{queueDepth}</b>
+        </span>
+      </div>
+
+      {liveView.loading && !data ? (
+        <div className="wbc-inbox-skeleton" role="status" aria-label={wbcT("workbenchChat.inbox.loading", "Loading inbox") }>
+          <span /><span /><span />
+        </div>
+      ) : (
+        <React.Fragment>
+          {liveView.error && (
+            <div className="wbc-inbox-error" role="alert">
+              <span>{liveView.error}</span>
+              <button type="button" onClick={liveView.retry}>{wbcT("workbenchChat.error.retry", "Retry")}</button>
+            </div>
+          )}
+          {feed.length === 0 ? (
+            <div className="wbc-inbox-empty">
+              <p>{wbcT("workbenchChat.inbox.empty", "No inbox events for this run yet.")}</p>
+            </div>
+          ) : (
+            <div className="wbc-inbox-feed">
+              {feed.map(function (item) {
+                var status = wbcInboxStatus(item.status);
+                return (
+                  <article className="wbc-inbox-row" key={item.eventId}>
+                    <div className="wbc-inbox-event-body">
+                      <div className="wbc-inbox-event-head">
+                        <b>{wbcInboxEventLabel(item)}</b>
+                        <span className={"wbc-inbox-status status-" + status.value}><i aria-hidden="true" />{status.label}</span>
+                      </div>
+                      {item.preview && <p title={item.preview}>{item.preview}</p>}
+                      <div className="wbc-inbox-event-meta">
+                        {item.createdAt && <time dateTime={item.createdAt} title={item.createdAt}>{wbcFormatTime(item.createdAt)}</time>}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </React.Fragment>
+      )}
+    </section>
+  );
+}
+
 function WbcContextTab({ project, chat, runtime }) {
   var [state, setState] = useWbcState(null);
   useWbcEffect(function () {
@@ -5192,6 +5460,7 @@ function WbcContextTab({ project, chat, runtime }) {
         <h3>{wbcT("workbenchChat.conversationContext", "Conversation context")}</h3>
         <WbcContextBlockList chat={chat} running={!!runtime} />
       </section>
+      <WbcInboxCard chat={chat} />
       <section className="workbench-side-section">
         <h3>{wbcT("workbenchChat.injectedContext", "Injected context")}</h3>
         <div className="workbench-check">

@@ -14,11 +14,33 @@ from cyrene.task_lifecycle import drain_or_cancel, track_task
 
 # Set to True to suppress background action recording (used by RunLearnedSkill replay).
 _skip_action_recording: ContextVar[bool] = ContextVar("_skip_action_recording", default=False)
+# The main-agent dispatcher sets this while executing a concrete LLM tool call.
+# Keeping the id in task-local context lets the completion event update the
+# already-rendered UI row without changing the long-standing _execute_tool API.
+_active_tool_call_id: ContextVar[str] = ContextVar("_active_tool_call_id", default="")
 
 logger = logging.getLogger(__name__)
 
 _pending_action_record_tasks: set[asyncio.Task[Any]] = set()
 _pending_timed_out_tool_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _tool_call_event(name: str, arguments: dict[str, Any], result: Any) -> dict[str, Any]:
+    """Build a completion event, preserving the originating tool-call id."""
+    from cyrene.agent.state import _caller_type, _current_round_id
+
+    event: dict[str, Any] = {
+        "type": "tool_call",
+        "caller": _caller_type.get(),
+        "tool": name,
+        "args": redact_value(arguments),
+        "result": redact_text(str(result)),
+        "round_id": _current_round_id.get(),
+    }
+    tool_call_id = _active_tool_call_id.get()
+    if tool_call_id:
+        event["tool_call_id"] = tool_call_id
+    return event
 
 
 def _record_action_background(*args: Any, **kwargs: Any) -> None:
@@ -214,11 +236,10 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
             )
             if _debug.VERBOSE:
                 _debug.log_tool_call(_caller_type.get(), name, redact_value(arguments), redact_text(result), (time.monotonic() - _t0) * 1000)
-            await _debug.publish_event({
-                "type": "tool_call", "caller": _caller_type.get(), "tool": name, "args": redact_value(arguments),
-                "result": redact_text(str(result)),
-                "round_id": _current_round_id.get(),
-            }, session_id=_current_session_id.get())
+            await _debug.publish_event(
+                _tool_call_event(name, arguments, result),
+                session_id=_current_session_id.get(),
+            )
             tool_success = not str(result).lower().startswith("tool failed:")
             _record_action_background(
                 name,
@@ -256,11 +277,10 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
     except Exception as e:
         from cyrene import debug
         from cyrene.agent.state import _caller_type, _current_round_id, _current_session_id
-        await debug.publish_event({
-            "type": "tool_call", "caller": _caller_type.get(), "tool": name, "args": redact_value(arguments),
-            "result": redact_text(f"Tool failed: {e}"),
-            "round_id": _current_round_id.get(),
-        }, session_id=_current_session_id.get())
+        await debug.publish_event(
+            _tool_call_event(name, arguments, f"Tool failed: {e}"),
+            session_id=_current_session_id.get(),
+        )
         _record_action_background(
             name,
             redact_value(arguments),
@@ -277,11 +297,10 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
         from cyrene.agent.state import _caller_type
         debug.log_tool_call(_caller_type.get(), name, redact_value(arguments), redact_text(result), (time.monotonic() - _t0) * 1000)
     from cyrene.agent.state import _caller_type, _current_round_id, _current_session_id
-    await debug.publish_event({
-        "type": "tool_call", "caller": _caller_type.get(), "tool": name, "args": redact_value(arguments),
-        "result": redact_text(str(result)),
-        "round_id": _current_round_id.get(),
-    }, session_id=_current_session_id.get())
+    await debug.publish_event(
+        _tool_call_event(name, arguments, result),
+        session_id=_current_session_id.get(),
+    )
     tool_success = not str(result).lower().startswith("tool failed:")
     _record_action_background(
         name,

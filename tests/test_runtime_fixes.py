@@ -186,6 +186,61 @@ async def test_execute_tool_awaits_event_publish(monkeypatch):
     tools.TOOL_HANDLERS.pop("__test_tool__", None)
 
 
+async def test_execute_tool_completion_carries_active_tool_call_id(monkeypatch):
+    from cyrene import debug, tool_executor
+
+    published = []
+
+    async def fake_handler(arguments, bot, chat_id, db_path, notify_state):
+        return "ok"
+
+    async def fake_publish_event(event, **kwargs):
+        published.append(event)
+
+    monkeypatch.setitem(tool_executor.TOOL_HANDLERS, "__identified_tool__", fake_handler)
+    monkeypatch.setattr(debug, "publish_event", fake_publish_event)
+    token = tool_executor._active_tool_call_id.set("call_live_1")
+    try:
+        result = await tool_executor._execute_tool(
+            "__identified_tool__", {}, None, 0, "db.sqlite3", None
+        )
+    finally:
+        tool_executor._active_tool_call_id.reset(token)
+
+    assert result == "ok"
+    assert published[-1]["type"] == "tool_call"
+    assert published[-1]["tool_call_id"] == "call_live_1"
+
+
+async def test_main_agent_publishes_tool_start_with_identity_and_redacted_args(monkeypatch):
+    from cyrene.agent import agent as agent_core
+
+    publish = AsyncMock()
+    monkeypatch.setattr(agent_core, "_publish_runtime_event", publish)
+
+    await agent_core._publish_tool_call_started(
+        "call_start_1", "WebSearch", {"query": "Nanjing travel"}
+    )
+
+    event = publish.await_args.args[0]
+    assert event == {
+        "type": "tool_call_started",
+        "tool_call_id": "call_start_1",
+        "tool": "WebSearch",
+        "args": {"query": "Nanjing travel"},
+    }
+
+
+def test_main_agent_inbox_metadata_includes_visible_tool_arguments():
+    from cyrene.agent import agent as agent_core
+
+    metadata = agent_core._inbox_tool_metadata(
+        "WebSearch", {"query": "Nanjing travel", "limit": 5}
+    )
+
+    assert metadata["arguments"] == {"query": "Nanjing travel", "limit": 5}
+
+
 async def test_execute_tool_timeout_becomes_a_structured_tool_result(monkeypatch):
     from cyrene import debug
     from cyrene import tool_executor

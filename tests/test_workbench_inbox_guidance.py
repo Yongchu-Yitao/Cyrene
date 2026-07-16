@@ -81,6 +81,79 @@ async def test_tool_result_is_delivered_when_persistence_fails(tmp_path, monkeyp
     await inbox.close()
 
 
+async def test_live_snapshot_exposes_current_tool_state_and_result_content():
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_live_snapshot")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def tool() -> str:
+        started.set()
+        await release.wait()
+        return "fresh result content"
+
+    inbox.submit_tool("call_live", "ReadWorkspace", tool)
+    await asyncio.wait_for(started.wait(), timeout=1)
+    running = inbox.live_snapshot()
+    assert running["activeTasks"] == 1
+    assert running["tools"][0] == {
+        "toolCallId": "call_live",
+        "toolName": "ReadWorkspace",
+        "state": "running",
+        "updatedAt": running["tools"][0]["updatedAt"],
+    }
+
+    release.set()
+    deadline = asyncio.get_running_loop().time() + 1
+    while not inbox.live_snapshot()["events"]:
+        assert asyncio.get_running_loop().time() < deadline
+        await asyncio.sleep(0)
+    ready = inbox.live_snapshot()
+    assert ready["tools"][0]["state"] == "ready"
+    assert ready["events"][0]["toolCallId"] == "call_live"
+    assert ready["events"][0]["preview"] == "fresh result content"
+
+    assert await inbox.wait_for_tool_result("call_live") == "fresh result content"
+    consumed = inbox.live_snapshot()
+    assert consumed["tools"][0]["state"] == "consumed"
+    assert consumed["events"] == []
+    await inbox.close()
+
+
+async def test_live_snapshot_keeps_tool_arguments_across_state_changes():
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_live_arguments")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def tool() -> str:
+        started.set()
+        await release.wait()
+        return "search complete"
+
+    arguments = {"query": "南京旅游资源", "limit": 5}
+    inbox.submit_tool(
+        "call_live_arguments",
+        "WebSearch",
+        tool,
+        metadata={"arguments": arguments},
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    running = inbox.live_snapshot()["tools"][0]
+    assert running["state"] == "running"
+    assert running["arguments"] == arguments
+
+    release.set()
+    assert await inbox.wait_for_tool_result("call_live_arguments") == "search complete"
+    consumed = inbox.live_snapshot()["tools"][0]
+    assert consumed["state"] == "consumed"
+    assert consumed["arguments"] == arguments
+    await inbox.close()
+
+
 async def test_tool_result_wakes_agent_before_blocked_persistence_finishes(
     tmp_path, monkeypatch
 ):
@@ -115,7 +188,7 @@ async def test_tool_result_wakes_agent_before_blocked_persistence_finishes(
         await inbox.close()
 
 
-async def test_guidance_wakes_agent_before_blocked_persistence_finishes(
+async def test_guidance_is_not_delivered_before_blocked_persistence_finishes(
     tmp_path, monkeypatch
 ):
     from cyrene.workbench_inbox import WorkbenchAgentInbox
@@ -140,13 +213,15 @@ async def test_guidance_wakes_agent_before_blocked_persistence_finishes(
         )
         assert await asyncio.to_thread(persistence_started.wait, 1)
         guidance = inbox.collect_guidance_nowait()
-        assert [item["payload"]["text"] for item in guidance] == ["立即改变方向"]
+        assert guidance == []
         assert not put_task.done()
-        inbox.acknowledge(guidance)
         assert not release_persistence.is_set()
         release_persistence.set()
         event = await asyncio.wait_for(put_task, timeout=1)
+        guidance = inbox.collect_guidance_nowait()
+        assert [item["payload"]["text"] for item in guidance] == ["立即改变方向"]
         assert event["event_id"] == guidance[0]["event_id"]
+        inbox.acknowledge(guidance)
     finally:
         release_persistence.set()
         await inbox.close()
@@ -198,6 +273,40 @@ async def test_guidance_dedupe_returns_original_event_without_second_delivery(tm
     events = inbox.collect_guidance_nowait()
     assert len(events) == 1
     inbox.acknowledge(events)
+    await inbox.close()
+
+
+async def test_completed_guidance_dedupe_survives_process_restart(tmp_path):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    db_path = tmp_path / "workbench.db"
+    first = WorkbenchAgentInbox("chat_restart_dedupe", str(db_path), run_id="run_1")
+    original = await first.put_guidance("first", client_request_id="same-request")
+    events = first.collect_guidance_nowait()
+    first.acknowledge(events)
+    await first.close()
+
+    resumed = WorkbenchAgentInbox("chat_restart_dedupe", str(db_path), run_id="run_2")
+    duplicate = await resumed.put_guidance("changed", client_request_id="same-request")
+    assert duplicate["duplicate"] is True
+    assert duplicate["event_id"] == original["event_id"]
+    assert resumed.collect_guidance_nowait() == []
+    await resumed.close()
+
+
+async def test_guidance_persistence_failure_rejects_without_delivery(tmp_path, monkeypatch):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+
+    inbox = WorkbenchAgentInbox("chat_guidance_failure", str(tmp_path / "workbench.db"))
+    monkeypatch.setattr(inbox, "_persist", lambda _event: None)
+
+    try:
+        await inbox.put_guidance("must be durable", client_request_id="durable-1")
+    except RuntimeError as exc:
+        assert "persist" in str(exc).lower()
+    else:
+        raise AssertionError("non-durable guidance was accepted")
+    assert inbox.collect_guidance_nowait() == []
     await inbox.close()
 
 
@@ -655,8 +764,20 @@ async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tm
             "/api/workbench/chats/chat_live/guidance",
             json={"message": "先做后端", "clientRequestId": "guide_http_1"},
         )
+        inbox_response = await client.get(
+            "/api/workbench/chats/chat_live/inbox"
+        )
     assert response.status_code == 200
     assert response.json()["queued"] is True
+    assert inbox_response.status_code == 200
+    assert inbox_response.headers["cache-control"] == "no-store"
+    inbox_payload = inbox_response.json()
+    assert inbox_payload["active"] is True
+    assert inbox_payload["observedAt"]
+    assert inbox_payload["counts"]["queued"] == 1
+    assert inbox_payload["live"]["events"][0]["type"] == "guidance"
+    assert inbox_payload["events"][0]["type"] == "guidance"
+    assert inbox_payload["events"][0]["preview"] == "先做后端"
     queued = run.inbox.collect_guidance_nowait()
     assert [event["payload"]["text"] for event in queued] == ["先做后端"]
     run.inbox.acknowledge(queued)
@@ -673,6 +794,62 @@ async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tm
     assert late.status_code == 409
     release.set()
     await asyncio.wait_for(run.done.wait(), timeout=1)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        idle_inbox = await client.get("/api/workbench/chats/chat_live/inbox")
+    assert idle_inbox.status_code == 200
+    assert idle_inbox.json()["active"] is False
+    assert idle_inbox.json()["runId"] == ""
+    assert idle_inbox.json()["events"] == []
+    assert idle_inbox.json()["tools"] == []
+
+
+async def test_startup_reconciles_durable_guidance_missing_from_transcript(
+    monkeypatch, tmp_path
+):
+    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from webui import routes_workbench_chat as chat_mod
+
+    db_path = tmp_path / "workbench.db"
+    chats_path = tmp_path / "workbench_chats.json"
+    chats_path.write_text(
+        json.dumps({
+            "chats": [{
+                "id": "chat_reconcile",
+                "messages": [],
+                "createdAt": "2026-01-01T00:00:00+00:00",
+                "updatedAt": "2026-01-01T00:00:00+00:00",
+            }]
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(chat_mod, "_CHATS_STORE", chats_path)
+    monkeypatch.setattr(chat_mod, "_CONFIGURED_CHATS_STORE", None)
+    monkeypatch.setattr(chat_mod, "_STORE_DB_PATH", "")
+
+    inbox = WorkbenchAgentInbox(
+        "chat_reconcile", str(db_path), run_id="run_reconcile"
+    )
+    event = await inbox.put_guidance(
+        "recover visible guidance",
+        client_request_id="req_reconcile",
+        public_message_id="msg_reconcile",
+        public_created_at="2026-01-01T00:00:02+00:00",
+    )
+
+    assert chat_mod._reconcile_inbox_guidance_messages(str(db_path)) == 1
+    assert chat_mod._reconcile_inbox_guidance_messages(str(db_path)) == 0
+    stored = chat_mod._read_chats_store()
+    assert stored["chats"][0]["messages"] == [{
+        "id": "msg_reconcile",
+        "role": "user",
+        "content": "recover visible guidance",
+        "createdAt": "2026-01-01T00:00:02+00:00",
+        "guidance": True,
+        "guidanceEventId": event["event_id"],
+        "runId": "run_reconcile",
+        "clientRequestId": "req_reconcile",
+    }]
+    await inbox.close()
 
 
 async def test_main_agent_resumes_from_tool_result_and_applies_runtime_guidance(monkeypatch, tmp_path):
@@ -908,6 +1085,124 @@ async def test_main_agent_applies_guidance_sent_while_model_call_is_in_flight(mo
     assert len(model_calls) == 2
 
 
+async def test_main_agent_keeps_wrap_reply_and_continues_with_late_guidance(monkeypatch, tmp_path):
+    from cyrene.agent import agent as agent_mod
+    from cyrene.agent import state as state_mod
+    from cyrene.workbench_inbox import WorkbenchAgentInbox, _workbench_agent_inbox
+
+    inbox = WorkbenchAgentInbox("chat_wrap_guidance", str(tmp_path / "workbench.db"))
+    wrap_started = asyncio.Event()
+    release_wrap = asyncio.Event()
+    model_calls = []
+    saved = []
+    wrap_calls = 0
+
+    async def fake_llm(messages, tools=None, **_kwargs):
+        model_calls.append([dict(message) for message in messages])
+        if len(model_calls) == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "phase1_use",
+                    "type": "function",
+                    "function": {"name": "use_tools", "arguments": '{"task":"inspect"}'},
+                }],
+            }
+        if len(model_calls) == 2:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "quit_old",
+                    "type": "function",
+                    "function": {"name": "quit", "arguments": "{}"},
+                }],
+            }
+        assert any(
+            "继续处理新要求" in str(message.get("content") or "")
+            for message in messages
+        )
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "quit_new",
+                "type": "function",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        }
+
+    async def fake_final_reply(_messages, _tools, max_tokens=None):
+        nonlocal wrap_calls
+        wrap_calls += 1
+        if wrap_calls == 1:
+            wrap_started.set()
+            await release_wrap.wait()
+            return {"role": "assistant", "content": "已经生成的旧回复"}
+        return {"role": "assistant", "content": "按新指令完成的回复"}
+
+    async def fake_save(messages, **_kwargs):
+        saved.append([dict(message) for message in messages])
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(agent_mod, "_call_llm", fake_llm)
+    monkeypatch.setattr(agent_mod, "_final_reply_with_tools", fake_final_reply)
+    monkeypatch.setattr(agent_mod, "_append_session_message", noop)
+    monkeypatch.setattr(agent_mod, "_save_session_messages", fake_save)
+    monkeypatch.setattr(agent_mod, "_publish_runtime_event", noop)
+    monkeypatch.setattr(agent_mod, "get_active_tool_defs", lambda: [
+        {"type": "function", "function": {"name": "quit", "parameters": {}}},
+    ])
+
+    async def stream_noop(_event):
+        return None
+
+    round_token = state_mod._current_round_id.set("round_wrap_guidance")
+    writer_token = state_mod._reply_stream_writer.set(stream_noop)
+    inbox_token = _workbench_agent_inbox.set(inbox)
+    try:
+        task = asyncio.create_task(
+            agent_mod._run_main_agent("先完成原任务", [], None, 0, "db.sqlite3")
+        )
+        await asyncio.wait_for(wrap_started.wait(), timeout=1)
+        guidance = await inbox.put_guidance(
+            "继续处理新要求", client_request_id="guide_during_wrap"
+        )
+        release_wrap.set()
+        assert await asyncio.wait_for(task, timeout=2) == "按新指令完成的回复"
+    finally:
+        _workbench_agent_inbox.reset(inbox_token)
+        state_mod._reply_stream_writer.reset(writer_token)
+        state_mod._current_round_id.reset(round_token)
+        await inbox.close()
+
+    assert wrap_calls == 2
+    assert len(model_calls) == 3
+    assert saved
+    final_messages = saved[-1]
+    old_reply = next(
+        message for message in final_messages
+        if message.get("content") == "已经生成的旧回复"
+    )
+    assert old_reply["intermediate_reply"] is True
+    assert any(
+        message.get("runtime_guidance")
+        and "继续处理新要求" in str(message.get("content") or "")
+        for message in final_messages
+    )
+    assert final_messages[-1]["content"] == "按新指令完成的回复"
+
+    with inbox._connect() as conn:
+        status = conn.execute(
+            "SELECT status FROM workbench_agent_inbox WHERE event_id = ?",
+            (guidance["event_id"],),
+        ).fetchone()[0]
+    assert status == "completed"
+
+
 async def test_chat_run_interrupt_cleans_pending_inbox_with_run_id(tmp_path):
     from webui.workbench_chat_runs import ChatRunManager
 
@@ -972,7 +1267,7 @@ def test_workbench_composer_switches_stop_button_to_guidance_when_typed():
     assert 'id: "guidance_pending_" + clientRequestId' in source
     assert "optimistic: true" in source
     assert "wbcMergeChronologicalMessages(prev.messages || [], [optimisticMessage])" in source
-    assert 'entry.status !== "completed"' in source
+    assert 'entry.status === "running"' in source
     assert 'err.code === "chat_not_running"' in source
     assert "runtimeEngine.deferSend(chatId, { message: text }, model)" in source
     assert "terminal event wakes the deferred send" in source

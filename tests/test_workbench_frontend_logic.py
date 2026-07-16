@@ -891,8 +891,94 @@ def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
     assert "optimistic: true" in guidance_handler
     assert "response.userMessage" in guidance_handler
     assert "item.clientRequestId" in guidance_handler
-    assert 'status: "completed"' in source
-    assert 'entry.status !== "completed"' in trace_card
+    assert 'status: toolStarted ? "running" : "completed"' in source
+    assert 'entry.status === "running"' in trace_card
+
+
+def test_workbench_tool_start_is_rendered_then_completed_in_place():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    runtime = source.split("function onSseEvent(event)", 1)[1].split(
+        "if (window.__sseHandlers", 1
+    )[0]
+    activity_card = source.split("function WbcLiveActivityCard", 1)[1].split(
+        "function WbcLiveMessage", 1
+    )[0]
+    assert 'event.type === "tool_call_started" || event.type === "tool_call"' in runtime
+    assert 'toolCallId: String(event.tool_call_id || "")' in runtime
+    assert 'status: toolStarted ? "running" : "completed"' in runtime
+    assert 'return { ...item, ...entry };' in runtime
+    assert "progress: mergeToolProgress(activity && activity.progress)" in runtime
+    assert "matchedToolCall" in runtime
+    assert 'entry.toolCallId || i' in source
+    assert 'entry.kind === "tool" && entry.status === "running"' in activity_card
+    assert "hasRunningTools && !hasReplyText" in activity_card
+
+
+def test_workbench_context_tab_has_live_session_inbox_card():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    css = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    context_tab = source.split("function WbcContextTab", 1)[1].split(
+        "function WbcArtifactsTab", 1
+    )[0]
+    live_hook = source.split("function useWbcLiveInbox", 1)[1].split(
+        "function wbcInboxStatus", 1
+    )[0]
+    inbox_card = source.split("function WbcInboxCard", 1)[1].split(
+        "function WbcContextTab", 1
+    )[0]
+    assert '<WbcInboxCard chat={chat} />' in context_tab
+    assert context_tab.index('<WbcInboxCard chat={chat} />') > context_tab.index(
+        'workbenchChat.conversationContext'
+    )
+    assert context_tab.index('<WbcInboxCard chat={chat} />') < context_tab.index(
+        'workbenchChat.injectedContext'
+    )
+    assert '"/inbox"' in source
+    assert 'cache: "no-store"' in live_hook
+    assert "setInterval(load, 1000)" in live_hook
+    assert "running ? setInterval" not in live_hook
+    assert "wbcInboxSnapshotCache = new Map()" in source
+    assert "wbcCacheInbox(chatId, payload)" in live_hook
+    assert "loading: !nextData" in live_hook
+    assert "[chatId, retryRevision]" in live_hook
+    assert "chat.updatedAt" not in live_hook
+    assert 'workbenchChat.inbox.queue' in inbox_card
+    assert 'className={"wbc-inbox-queue-count"' in inbox_card
+    assert 'className="wbc-inbox-summary"' not in inbox_card
+    assert 'workbenchChat.inbox.live' not in inbox_card
+    assert 'wbc-inbox-live' not in inbox_card
+    assert "wbc-inbox-run-row" not in inbox_card
+    assert 'workbenchChat.inbox.guidancePending' not in inbox_card
+    assert 'workbenchChat.inbox.activeTools' not in inbox_card
+    assert 'wbcT("toolName." + item.toolName, item.toolName)' in source
+    assert "wbcInboxArgumentPreview(tool.arguments)" in inbox_card
+    assert "item.toolCallId && <code" not in inbox_card
+    assert 'aria-live="polite"' in source
+    assert ".wbc-inbox-card" in css
+    inbox_card_css = css.split(".wbc-inbox-card", 1)[1].split(
+        ".wbc-inbox-head,", 1
+    )[0]
+    inbox_meta_css = css.split(".wbc-inbox-event-meta {", 2)[2].split("}", 1)[0]
+    assert "padding-bottom: 10px" in inbox_card_css
+    assert "justify-content: flex-end" in inbox_meta_css
+    assert ".wbc-inbox-event-meta code" not in css
+    assert "@media (prefers-reduced-motion: reduce)" in css
+    assert '"workbenchChat.inbox.title": "Session inbox"' in i18n
+    assert '"workbenchChat.inbox.title": "Agent 收件箱"' in i18n
+    assert '"workbenchChat.inbox.live"' not in i18n
 
 
 def test_workbench_chat_does_not_render_previous_transcript_during_switch():

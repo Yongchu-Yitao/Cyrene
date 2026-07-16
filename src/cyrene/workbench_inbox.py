@@ -37,6 +37,7 @@ class _BatchCall:
     read_only: bool = False
     resource_keys: tuple[str, ...] = ()
     requires_order: bool = True
+    arguments: dict[str, Any] | None = None
 
 
 def _now() -> str:
@@ -67,6 +68,7 @@ class WorkbenchAgentInbox:
         self._telemetry_tail: asyncio.Task[Any] | None = None
         self._result_queued_at: dict[str, float] = {}
         self._tool_submitted_at: dict[str, float] = {}
+        self._live_tool_states: dict[str, dict[str, Any]] = {}
         self._closed = False
         if self.db_path:
             self._ensure_schema()
@@ -176,6 +178,96 @@ class WorkbenchAgentInbox:
     def _queue_length(self) -> int:
         return self._queue.qsize() + len(self._guidance) + len(self._pending_tool_results)
 
+    def live_snapshot(self) -> dict[str, Any]:
+        """Return the current in-memory state for the Workbench inspector.
+
+        SQLite remains the durable source of truth, but tool results are put on
+        the agent queue before their background INSERT completes.  Including a
+        bounded live view here lets the Context tab show that event immediately
+        instead of briefly displaying counters without the corresponding
+        content.
+        """
+        events: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def append_event(event: dict[str, Any], status: str) -> None:
+            event_id = str(event.get("event_id") or "")
+            if not event_id or event_id in seen:
+                return
+            seen.add(event_id)
+            payload = event.get("payload")
+            payload = payload if isinstance(payload, dict) else {}
+            event_type = str(event.get("type") or "event")
+            item: dict[str, Any] = {
+                "eventId": event_id,
+                "runId": str(event.get("run_id") or self.run_id),
+                "roundId": str(event.get("round_id") or ""),
+                "batchId": str(event.get("batch_id") or ""),
+                "type": event_type,
+                "status": status,
+                "priority": int(event.get("priority") or 0),
+                "createdAt": str(event.get("created_at") or ""),
+            }
+            if event_type == "guidance":
+                item["preview"] = _preview(payload.get("text"))
+                item["clientRequestId"] = str(
+                    payload.get("client_request_id") or ""
+                )
+            elif event_type == "tool_result":
+                item.update({
+                    "toolCallId": str(payload.get("tool_call_id") or ""),
+                    "toolName": str(payload.get("tool_name") or ""),
+                    "preview": _preview(payload.get("result")),
+                    "isError": bool(payload.get("is_error")),
+                    "skipped": bool(payload.get("skipped")),
+                })
+            events.append(item)
+
+        for _priority, _sequence, event in list(self._queue._queue):
+            append_event(event, "queued")
+        for event in self._guidance:
+            append_event(event, "claimed")
+        for event in self._pending_tool_results.values():
+            append_event(event, "queued")
+        events.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
+        return {
+            "queueDepth": self._queue_length(),
+            "pendingGuidance": self._guidance_pending_count,
+            "activeTasks": sum(1 for task in self._tasks if not task.done()),
+            "persistenceTasks": sum(
+                1 for task in self._persistence_tasks if not task.done()
+            ),
+            "closed": self._closed,
+            "events": events[:40],
+            "tools": sorted(
+                self._live_tool_states.values(),
+                key=lambda item: str(item.get("updatedAt") or ""),
+                reverse=True,
+            )[:24],
+        }
+
+    def _set_live_tool_state(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        state: str,
+        *,
+        arguments: dict[str, Any] | None = None,
+    ) -> None:
+        previous = self._live_tool_states.get(str(tool_call_id)) or {}
+        item: dict[str, Any] = {
+            "toolCallId": str(tool_call_id),
+            "toolName": str(tool_name),
+            "state": str(state),
+            "updatedAt": _now(),
+        }
+        visible_arguments = (
+            arguments if arguments is not None else previous.get("arguments")
+        )
+        if isinstance(visible_arguments, dict):
+            item["arguments"] = dict(visible_arguments)
+        self._live_tool_states[str(tool_call_id)] = item
+
     def _record_event(
         self,
         event_type: str,
@@ -272,6 +364,49 @@ class WorkbenchAgentInbox:
         except Exception:
             logger.exception("Failed to resolve duplicate Workbench inbox event")
             return ""
+
+    def _existing_event(self, dedupe_key: str) -> dict[str, Any] | None:
+        """Load the durable event represented by an idempotency key.
+
+        The in-memory dedupe map only spans one Python process.  HTTP retries
+        can arrive after a restart, so guidance must consult SQLite before it
+        is delivered to the live agent; otherwise ``INSERT OR IGNORE`` notices
+        the duplicate only after the second copy has already reached the queue.
+        """
+        if not self.db_path or not dedupe_key:
+            return None
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT event_id, run_id, round_id, batch_id, event_type,
+                           priority, dedupe_key, payload_json, created_at
+                    FROM workbench_agent_inbox
+                    WHERE session_id=? AND dedupe_key=?
+                    """,
+                    (self.session_id, dedupe_key),
+                ).fetchone()
+            if not row:
+                return None
+            try:
+                payload = json.loads(str(row[7]) or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {}
+            return {
+                "event_id": str(row[0]),
+                "session_id": self.session_id,
+                "run_id": str(row[1] or ""),
+                "round_id": str(row[2] or ""),
+                "batch_id": str(row[3] or ""),
+                "type": str(row[4] or "event"),
+                "priority": int(row[5] or 0),
+                "dedupe_key": str(row[6] or ""),
+                "payload": payload if isinstance(payload, dict) else {},
+                "created_at": str(row[8] or ""),
+            }
+        except Exception:
+            logger.exception("Failed to load duplicate Workbench inbox event")
+            return None
 
     def _complete(self, event_id: str) -> None:
         if not self.db_path:
@@ -474,6 +609,16 @@ class WorkbenchAgentInbox:
         if dedupe_key and dedupe_key in self._live_dedupe_events:
             existing = self._live_dedupe_events[dedupe_key]
             return {**existing, "duplicate": True}
+
+        # Guidance is an accepted user command, not disposable telemetry.  Its
+        # recoverable copy must exist before the running agent can act on it.
+        # This also makes idempotency survive process restarts: a completed row
+        # still wins over a retried client request id and is never re-enqueued.
+        if event_type == "guidance" and dedupe_key and self.db_path:
+            existing = await asyncio.to_thread(self._existing_event, dedupe_key)
+            if existing is not None:
+                self._live_dedupe_events[dedupe_key] = existing
+                return {**existing, "duplicate": True}
         event = {
             "event_id": f"evt_{uuid4().hex}",
             "session_id": self.session_id,
@@ -486,45 +631,53 @@ class WorkbenchAgentInbox:
             "dedupe_key": dedupe_key,
             "created_at": _now(),
         }
-        if event_type in {"tool_result", "guidance"}:
+        if event_type == "tool_result":
             # The live agent must be woken before optional durability work.
-            # A slow or unavailable SQLite connection can no longer strand an
-            # already-completed tool call or user guidance before inbox delivery.
+            # Tool jobs cannot be resumed after a crash, so a slow or unavailable
+            # SQLite connection must not strand an already-completed tool call.
             if dedupe_key:
                 self._live_dedupe_events[dedupe_key] = event
-            if event_type == "guidance":
-                self._guidance_pending_count += 1
-                self._guidance_signal.set()
             self._enqueue_nowait(event)
-            persistence_task = self._schedule_live_event_persistence(event)
-            if event_type == "guidance":
-                # The agent is already awake, but do not acknowledge acceptance
-                # to the HTTP caller until the recoverable copy is durable.
-                await persistence_task
+            self._schedule_live_event_persistence(event)
             return event
 
-        persisted = self._persist(event)
+        persisted = await asyncio.to_thread(self._persist, event)
         if persisted is False:
-            # A duplicate dedupe key is already represented in the queue/log.
+            # A concurrent request/process may have inserted the idempotency key
+            # after the preflight read. Return that durable event without ever
+            # delivering this second copy.
             if dedupe_key:
-                return {
-                    **event,
-                    "event_id": self._existing_event_id(dedupe_key) or event["event_id"],
-                    "duplicate": True,
-                }
+                existing = await asyncio.to_thread(self._existing_event, dedupe_key)
+                if existing is not None:
+                    self._live_dedupe_events[dedupe_key] = existing
+                    return {**existing, "duplicate": True}
             raise RuntimeError("Failed to persist Workbench inbox event")
         if persisted is None:
             raise RuntimeError("Failed to persist Workbench inbox event")
+        if dedupe_key:
+            self._live_dedupe_events[dedupe_key] = event
         if event_type == "guidance":
             self._guidance_pending_count += 1
             self._guidance_signal.set()
         await self._queue.put(self._queue_item(event))
         return event
 
-    async def put_guidance(self, text: str, *, client_request_id: str = "") -> dict[str, Any]:
+    async def put_guidance(
+        self,
+        text: str,
+        *,
+        client_request_id: str = "",
+        public_message_id: str = "",
+        public_created_at: str = "",
+    ) -> dict[str, Any]:
         event = await self.put(
             "guidance",
-            {"text": str(text).strip(), "client_request_id": str(client_request_id)},
+            {
+                "text": str(text).strip(),
+                "client_request_id": str(client_request_id),
+                "public_message_id": str(public_message_id),
+                "public_created_at": str(public_created_at),
+            },
             priority=100,
             dedupe_key=f"guidance:{client_request_id}" if client_request_id else "",
         )
@@ -545,6 +698,7 @@ class WorkbenchAgentInbox:
     ) -> None:
         started = time.perf_counter()
         submitted_at = self._tool_submitted_at.pop(tool_call_id, started)
+        self._set_live_tool_state(tool_call_id, tool_name, "running")
         self._record_event_background(
             "tool_started", batch_id=batch_id, tool_call_id=tool_call_id,
             tool_name=tool_name,
@@ -570,6 +724,7 @@ class WorkbenchAgentInbox:
                 "tool_result", payload, batch_id=batch_id,
                 dedupe_key=f"tool-result:{tool_call_id}"
             )
+            self._set_live_tool_state(tool_call_id, tool_name, "ready")
             self._result_queued_at[tool_call_id] = time.perf_counter()
             self._record_event_background(
                 "tool_result_queued", batch_id=batch_id,
@@ -590,6 +745,7 @@ class WorkbenchAgentInbox:
             "tool_result", payload, batch_id=batch_id,
             dedupe_key=f"tool-result:{tool_call_id}"
         )
+        self._set_live_tool_state(tool_call_id, tool_name, "ready")
         self._result_queued_at[tool_call_id] = time.perf_counter()
         self._record_event_background(
             "tool_result_queued", batch_id=batch_id,
@@ -611,6 +767,15 @@ class WorkbenchAgentInbox:
             raise RuntimeError("Workbench agent inbox is closed")
         batch_id = str(batch_id or f"batch_{uuid4().hex}")
         self._tool_submitted_at[tool_call_id] = time.perf_counter()
+        visible_arguments = (
+            metadata.get("arguments") if isinstance(metadata, dict) else None
+        )
+        self._set_live_tool_state(
+            tool_call_id,
+            tool_name,
+            "queued",
+            arguments=visible_arguments if isinstance(visible_arguments, dict) else None,
+        )
         self._record_event_background(
             "tool_submitted", batch_id=batch_id, tool_call_id=tool_call_id,
             tool_name=tool_name, payload=dict(metadata or {}),
@@ -641,6 +806,11 @@ class WorkbenchAgentInbox:
             requires_order=bool(
                 metadata.get("requires_order", True)
                 or (not read_only and not resource_keys)
+            ),
+            arguments=(
+                dict(metadata.get("arguments"))
+                if isinstance(metadata.get("arguments"), dict)
+                else None
             ),
         )
 
@@ -694,6 +864,7 @@ class WorkbenchAgentInbox:
             batch_id=batch_id,
             dedupe_key=f"tool-result:{call.tool_call_id}",
         )
+        self._set_live_tool_state(call.tool_call_id, call.tool_name, "ready")
         self._result_queued_at[call.tool_call_id] = time.perf_counter()
         self._record_event_background(
             "tool_result_queued", batch_id=batch_id,
@@ -717,6 +888,12 @@ class WorkbenchAgentInbox:
         normalized = [self._normalize_batch_call(call) for call in calls]
         for call in normalized:
             self._tool_submitted_at[call.tool_call_id] = time.perf_counter()
+            self._set_live_tool_state(
+                call.tool_call_id,
+                call.tool_name,
+                "queued",
+                arguments=call.arguments,
+            )
             self._record_event_background(
                 "tool_submitted", batch_id=batch_id,
                 tool_call_id=call.tool_call_id, tool_name=call.tool_name,
@@ -830,6 +1007,9 @@ class WorkbenchAgentInbox:
             payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
             if event_type == "tool_result" and str(payload.get("tool_call_id") or "") == tool_call_id:
                 self._complete_live_event(str(event["event_id"]))
+                self._set_live_tool_state(
+                    tool_call_id, str(payload.get("tool_name") or ""), "consumed"
+                )
                 queued_at = self._result_queued_at.pop(tool_call_id, None)
                 queue_delay_ms = (
                     (time.perf_counter() - queued_at) * 1000 if queued_at is not None else None
@@ -963,6 +1143,10 @@ class WorkbenchAgentInbox:
                 break
         self._guidance.clear()
         self._pending_tool_results.clear()
+        for item in self._live_tool_states.values():
+            if str(item.get("state") or "") in {"queued", "running", "ready"}:
+                item["state"] = "cancelled"
+                item["updatedAt"] = _now()
         self._guidance_pending_count = 0
         self._guidance_signal.clear()
         self._record_event_background(
@@ -982,6 +1166,229 @@ class WorkbenchAgentInbox:
                 await asyncio.gather(*pending, return_exceptions=True)
 
 
+def _inbox_payload(raw: Any) -> dict[str, Any]:
+    try:
+        value = json.loads(str(raw) or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _preview(value: Any, limit: int = 600) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def read_workbench_inbox_snapshot(
+    db_path: str,
+    session_id: str,
+    *,
+    run_id: str = "",
+    limit: int = 40,
+) -> dict[str, Any]:
+    """Read one conversation's latest inbox run for the diagnostic UI.
+
+    This is deliberately read-only and safe to call via ``asyncio.to_thread``.
+    Payloads are reduced to short user/tool previews so a large tool result
+    cannot bloat the sidebar response.
+    """
+    session_id = str(session_id or "")
+    selected_run_id = str(run_id or "")
+    empty = {
+        "sessionId": session_id,
+        "runId": selected_run_id,
+        "counts": {
+            "queued": 0,
+            "claimed": 0,
+            "completed": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "total": 0,
+        },
+        "events": [],
+        "tools": [],
+        "updatedAt": "",
+    }
+    if not db_path or not session_id:
+        return empty
+    path = Path(db_path).expanduser().resolve()
+    if not path.exists():
+        return empty
+    try:
+        with sqlite3.connect(str(path), timeout=5) as conn:
+            conn.execute("PRAGMA busy_timeout = 5000")
+            if not selected_run_id:
+                row = conn.execute(
+                    """
+                    SELECT run_id FROM (
+                        SELECT run_id, created_at FROM workbench_agent_inbox
+                        WHERE session_id=? AND run_id<>''
+                        UNION ALL
+                        SELECT run_id, created_at FROM workbench_agent_run_events
+                        WHERE session_id=? AND run_id<>''
+                    ) ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (session_id, session_id),
+                ).fetchone()
+                selected_run_id = str(row[0]) if row else ""
+
+            where = "session_id=?"
+            params: list[Any] = [session_id]
+            if selected_run_id:
+                where += " AND run_id=?"
+                params.append(selected_run_id)
+
+            counts = dict(empty["counts"])
+            for status, count in conn.execute(
+                f"SELECT status, COUNT(*) FROM workbench_agent_inbox WHERE {where} GROUP BY status",
+                params,
+            ).fetchall():
+                key = str(status or "")
+                if key:
+                    counts[key] = int(count or 0)
+            counts["total"] = sum(
+                int(value or 0) for key, value in counts.items() if key != "total"
+            )
+
+            rows = conn.execute(
+                f"""
+                SELECT event_id, run_id, round_id, batch_id, event_type, status,
+                       priority, payload_json, created_at, completed_at,
+                       termination_reason
+                FROM workbench_agent_inbox WHERE {where}
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                [*params, max(1, min(int(limit or 40), 100))],
+            ).fetchall()
+            events: list[dict[str, Any]] = []
+            for row in rows:
+                payload = _inbox_payload(row[7])
+                event_type = str(row[4] or "event")
+                item: dict[str, Any] = {
+                    "eventId": str(row[0]),
+                    "runId": str(row[1] or ""),
+                    "roundId": str(row[2] or ""),
+                    "batchId": str(row[3] or ""),
+                    "type": event_type,
+                    "status": str(row[5] or ""),
+                    "priority": int(row[6] or 0),
+                    "createdAt": str(row[8] or ""),
+                    "completedAt": str(row[9] or ""),
+                    "terminationReason": str(row[10] or ""),
+                }
+                if event_type == "guidance":
+                    item["preview"] = _preview(payload.get("text"))
+                    item["clientRequestId"] = str(
+                        payload.get("client_request_id") or ""
+                    )
+                elif event_type == "tool_result":
+                    item.update({
+                        "toolCallId": str(payload.get("tool_call_id") or ""),
+                        "toolName": str(payload.get("tool_name") or ""),
+                        "preview": _preview(payload.get("result")),
+                        "isError": bool(payload.get("is_error")),
+                        "skipped": bool(payload.get("skipped")),
+                    })
+                events.append(item)
+
+            trace_rows = conn.execute(
+                f"""
+                SELECT event_type, tool_call_id, tool_name, created_at
+                FROM workbench_agent_run_events
+                WHERE {where} AND tool_call_id<>''
+                ORDER BY created_at
+                """,
+                params,
+            ).fetchall()
+            tool_states: dict[str, dict[str, Any]] = {}
+            state_map = {
+                "tool_submitted": "queued",
+                "tool_started": "running",
+                "tool_result_queued": "ready",
+                "tool_result_consumed": "consumed",
+            }
+            for event_type, tool_call_id, tool_name, created_at in trace_rows:
+                call_id = str(tool_call_id or "")
+                if not call_id:
+                    continue
+                tool_states[call_id] = {
+                    "toolCallId": call_id,
+                    "toolName": str(tool_name or ""),
+                    "state": state_map.get(str(event_type or ""), str(event_type or "")),
+                    "updatedAt": str(created_at or ""),
+                }
+            tools = sorted(
+                tool_states.values(), key=lambda item: item["updatedAt"], reverse=True
+            )[:24]
+            timestamps = [
+                str(item.get("completedAt") or item.get("createdAt") or "")
+                for item in events
+            ] + [str(item.get("updatedAt") or "") for item in tools]
+            return {
+                "sessionId": session_id,
+                "runId": selected_run_id,
+                "counts": counts,
+                "events": events,
+                "tools": tools,
+                "updatedAt": max((stamp for stamp in timestamps if stamp), default=""),
+            }
+    except sqlite3.OperationalError as exc:
+        # Older/empty databases may not have the inspector tables yet.
+        if "no such table" not in str(exc).lower():
+            logger.exception("Failed to inspect Workbench inbox for %s", session_id)
+        return empty
+    except Exception:
+        logger.exception("Failed to inspect Workbench inbox for %s", session_id)
+        return empty
+
+
+def read_workbench_guidance_records(db_path: str) -> list[dict[str, Any]]:
+    """Return guidance rows carrying enough metadata to repair the transcript."""
+    if not db_path:
+        return []
+    path = Path(db_path).expanduser().resolve()
+    if not path.exists():
+        return []
+    try:
+        with sqlite3.connect(str(path), timeout=5) as conn:
+            conn.execute("PRAGMA busy_timeout = 5000")
+            rows = conn.execute(
+                """
+                SELECT session_id, event_id, run_id, payload_json, created_at
+                FROM workbench_agent_inbox
+                WHERE event_type='guidance'
+                  AND payload_json LIKE '%public_message_id%'
+                ORDER BY created_at
+                """
+            ).fetchall()
+        records: list[dict[str, Any]] = []
+        for session_id, event_id, run_id, payload_json, created_at in rows:
+            payload = _inbox_payload(payload_json)
+            message_id = str(payload.get("public_message_id") or "").strip()
+            text = str(payload.get("text") or "").strip()
+            if not message_id or not text:
+                continue
+            records.append({
+                "sessionId": str(session_id or ""),
+                "eventId": str(event_id or ""),
+                "runId": str(run_id or ""),
+                "messageId": message_id,
+                "clientRequestId": str(payload.get("client_request_id") or ""),
+                "content": text,
+                "createdAt": str(payload.get("public_created_at") or created_at or ""),
+            })
+        return records
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            logger.exception("Failed to read Workbench guidance records")
+        return []
+    except Exception:
+        logger.exception("Failed to read Workbench guidance records")
+        return []
+
+
 _workbench_agent_inbox: ContextVar[WorkbenchAgentInbox | None] = ContextVar(
     "_workbench_agent_inbox", default=None
 )
@@ -995,4 +1402,6 @@ __all__ = [
     "WorkbenchAgentInbox",
     "_workbench_agent_inbox",
     "current_workbench_inbox",
+    "read_workbench_guidance_records",
+    "read_workbench_inbox_snapshot",
 ]

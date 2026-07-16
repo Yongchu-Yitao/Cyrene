@@ -58,6 +58,7 @@ from cyrene.agent.state import (
 )
 from cyrene.llm import _assistant_text, _truncate
 from cyrene.context_trace import attach_context, context_block
+from cyrene.secret_redaction import redact_value
 from cyrene.tools import (
     _execute_tool,
     get_active_tool_defs,
@@ -66,6 +67,44 @@ from cyrene.tools import (
 from cyrene.workbench_inbox import current_workbench_inbox
 
 logger = logging.getLogger(__name__)
+
+
+async def _publish_tool_call_started(
+    tool_call_id: str, tool_name: str, arguments: dict[str, Any]
+) -> None:
+    """Tell the live transcript about a tool before its handler starts."""
+    await _publish_runtime_event({
+        "type": "tool_call_started",
+        "tool_call_id": str(tool_call_id),
+        "tool": str(tool_name or ""),
+        "args": redact_value(arguments),
+    })
+
+
+async def _execute_tool_for_call(
+    tool_call_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    bot: Any,
+    chat_id: int,
+    db_path: str,
+) -> str:
+    """Execute a tool while tagging its eventual completion with its call id."""
+    from cyrene.tool_executor import _active_tool_call_id
+
+    token = _active_tool_call_id.set(str(tool_call_id))
+    try:
+        return await _execute_tool(tool_name, arguments, bot, chat_id, db_path, None)
+    finally:
+        _active_tool_call_id.reset(token)
+
+
+def _inbox_tool_metadata(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Combine scheduler metadata with redacted arguments for the live UI."""
+    return {
+        **get_tool_execution_metadata(tool_name, arguments),
+        "arguments": redact_value(arguments),
+    }
 
 
 def _tool_def_name(tool_def: dict[str, Any]) -> str:
@@ -701,6 +740,22 @@ async def _run_main_agent(
                             final_entry["client_request_id"] = client_request_id
                         if round_id:
                             final_entry["round_id"] = round_id
+                        # Guidance can arrive while the streamed wrap-up LLM call
+                        # above is in flight. Keep the reply the user has already
+                        # seen, but turn it into an intermediate transcript
+                        # boundary and continue the same run with the new
+                        # instruction instead of finalizing and cancelling it.
+                        late_guidance = (
+                            runtime_inbox.collect_guidance_nowait()
+                            if runtime_inbox is not None
+                            else []
+                        )
+                        if late_guidance:
+                            final_entry["intermediate_reply"] = True
+                            messages.append(_apply_assistant_meta(final_entry))
+                            await _inject_runtime_guidance(messages, late_guidance)
+                            await _save(_session_messages_to_save(messages))
+                            continue
                         messages.append(_apply_assistant_meta(final_entry))
                         await _save(_session_messages_to_save(messages))
                         return final_text
@@ -719,9 +774,11 @@ async def _run_main_agent(
             )
             pending_reflection_tool_calls: list[tuple[dict[str, Any], dict[str, Any]]] = []
             inbox_batch_args: dict[str, dict[str, Any]] = {}
+            published_tool_starts: set[str] = set()
             tool_batch_id = f"batch_{uuid4().hex}"
             if runtime_inbox is not None and not guidance_supersedes_batch:
                 inbox_calls: list[tuple[Any, ...]] = []
+                inbox_start_events: list[tuple[str, str, dict[str, Any]]] = []
                 for pending_call in tcs:
                     pending_name = str(pending_call.get("function", {}).get("name") or "")
                     if pending_name in {"use_tools", "quit", "DeepReflect"}:
@@ -735,15 +792,23 @@ async def _run_main_agent(
                     except (KeyError, TypeError, json.JSONDecodeError):
                         continue
                     inbox_batch_args[pending_call["id"]] = pending_args
+                    inbox_start_events.append((
+                        pending_call["id"], pending_name, pending_args
+                    ))
                     inbox_calls.append((
                         pending_call["id"],
                         pending_name,
-                        lambda pending_name=pending_name, pending_args=dict(pending_args): _execute_tool(
-                            pending_name, pending_args, bot, chat_id, db_path, None
+                        lambda pending_call_id=pending_call["id"], pending_name=pending_name, pending_args=dict(pending_args): _execute_tool_for_call(
+                            pending_call_id, pending_name, pending_args, bot, chat_id, db_path
                         ),
-                        get_tool_execution_metadata(pending_name, pending_args),
+                        _inbox_tool_metadata(pending_name, pending_args),
                     ))
                 if inbox_calls:
+                    for pending_call_id, pending_name, pending_args in inbox_start_events:
+                        await _publish_tool_call_started(
+                            pending_call_id, pending_name, pending_args
+                        )
+                        published_tool_starts.add(pending_call_id)
                     runtime_inbox.submit_tool_batch(
                         inbox_calls, batch_id=tool_batch_id
                     )
@@ -818,17 +883,25 @@ async def _run_main_agent(
                         result = "Deep reflection complete. A reflection record will be added to the visible transcript."
                     else:
                         if runtime_inbox is None:
-                            result = await _execute_tool(tool_name, args, bot, chat_id, db_path, None)
+                            if t["id"] not in published_tool_starts:
+                                await _publish_tool_call_started(t["id"], str(tool_name or ""), args)
+                                published_tool_starts.add(t["id"])
+                            result = await _execute_tool_for_call(
+                                t["id"], str(tool_name or ""), args, bot, chat_id, db_path
+                            )
                         else:
                             if t["id"] not in inbox_batch_args:
+                                if t["id"] not in published_tool_starts:
+                                    await _publish_tool_call_started(t["id"], str(tool_name or ""), args)
+                                    published_tool_starts.add(t["id"])
                                 runtime_inbox.submit_tool(
                                     t["id"],
                                     str(tool_name or ""),
-                                    lambda tool_name=tool_name, args=dict(args): _execute_tool(
-                                        tool_name, args, bot, chat_id, db_path, None
+                                    lambda tool_call_id=t["id"], tool_name=tool_name, args=dict(args): _execute_tool_for_call(
+                                        tool_call_id, str(tool_name or ""), args, bot, chat_id, db_path
                                     ),
                                     batch_id=tool_batch_id,
-                                    metadata=get_tool_execution_metadata(
+                                    metadata=_inbox_tool_metadata(
                                         str(tool_name or ""), args
                                     ),
                                 )

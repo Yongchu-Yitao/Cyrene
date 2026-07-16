@@ -301,6 +301,65 @@ def _write_chats_store(payload: dict[str, Any]) -> None:
         payload._workbench_base = getattr(merged, "_workbench_base", dict(merged))
 
 
+def _reconcile_inbox_guidance_messages(db_path: str) -> int:
+    """Repair the narrow crash window between inbox and transcript commits.
+
+    Guidance is durable before it is delivered to the agent.  Its public
+    transcript entry is a separate Workbench document write, so a process can
+    stop between the two commits.  The durable inbox row carries the stable
+    public message id needed to restore that entry exactly once on startup.
+    """
+    from cyrene.workbench_inbox import read_workbench_guidance_records
+
+    records = read_workbench_guidance_records(db_path)
+    if not records:
+        return 0
+    payload = _read_chats_store()
+    chats = {
+        str(chat.get("id") or ""): chat
+        for chat in payload.get("chats", []) or []
+        if isinstance(chat, dict)
+    }
+    repaired = 0
+    for record in records:
+        chat = chats.get(str(record.get("sessionId") or ""))
+        if chat is None:
+            continue
+        messages = chat.setdefault("messages", [])
+        event_id = str(record.get("eventId") or "")
+        message_id = str(record.get("messageId") or "")
+        if any(
+            str(item.get("id") or "") == message_id
+            or (
+                event_id
+                and str(item.get("guidanceEventId") or "") == event_id
+            )
+            for item in messages
+            if isinstance(item, dict)
+        ):
+            continue
+        entry = {
+            "id": message_id,
+            "role": "user",
+            "content": str(record.get("content") or ""),
+            "createdAt": str(record.get("createdAt") or _utc_now_iso()),
+            "guidance": True,
+            "guidanceEventId": event_id,
+            "runId": str(record.get("runId") or ""),
+        }
+        client_request_id = str(record.get("clientRequestId") or "")
+        if client_request_id:
+            entry["clientRequestId"] = client_request_id
+        _merge_chat_messages_chronologically(chat, [entry])
+        chat["updatedAt"] = max(
+            str(chat.get("updatedAt") or ""), str(entry["createdAt"])
+        )
+        repaired += 1
+    if repaired:
+        _write_chats_store(payload)
+    return repaired
+
+
 def configure_store(db_path: str) -> None:
     global _STORE_DB_PATH, _CONFIGURED_CHATS_STORE
     _STORE_DB_PATH = str(db_path or "")
@@ -2187,10 +2246,65 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         total = sum(layer["totalTokens"] for layer in layers)
         return {"layers": layers, "totalTokensEst": total, "messageTokens": msg_total}
 
+    @router.get("/api/workbench/chats/{chat_id}/inbox")
+    async def api_workbench_chat_inbox(chat_id: str):
+        """Return only the current live inbox for this conversation."""
+        if chat_id.startswith("legacy:"):
+            return JSONResponse(
+                {"error": "legacy chat has no Workbench inbox"}, status_code=404
+            )
+        payload = await asyncio.to_thread(_read_chats_store)
+        if not _find_chat(payload, chat_id):
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        run = _CHAT_RUN_MANAGER.get(chat_id)
+        live = run.inbox.live_snapshot() if run is not None else {
+            "queueDepth": 0,
+            "pendingGuidance": 0,
+            "activeTasks": 0,
+            "persistenceTasks": 0,
+            "closed": True,
+            "events": [],
+            "tools": [],
+        }
+        events = list(live.get("events") or [])
+        tools = [
+            dict(item)
+            for item in list(live.get("tools") or [])
+            if str(item.get("state") or "") in {"queued", "running", "ready"}
+        ]
+        counts = {
+            "queued": sum(1 for item in events if item.get("status") == "queued"),
+            "claimed": sum(1 for item in events if item.get("status") == "claimed"),
+            "completed": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "total": len(events),
+        }
+        timestamps = [str(item.get("createdAt") or "") for item in events]
+        timestamps.extend(str(item.get("updatedAt") or "") for item in tools)
+        snapshot = {
+            "sessionId": chat_id,
+            "runId": str(run.run_id if run is not None else ""),
+            "active": bool(
+                run is not None and run.status in {"running", "finishing"}
+            ),
+            "runStatus": str(run.status if run is not None else "idle"),
+            "counts": counts,
+            "events": events,
+            "tools": tools,
+            "updatedAt": max((stamp for stamp in timestamps if stamp), default=""),
+            "observedAt": _utc_now_iso(),
+            "live": live,
+        }
+        return JSONResponse(snapshot, headers={"Cache-Control": "no-store"})
+
     @router.get("/api/workbench/chats/{chat_id}/run-stream")
     async def api_workbench_chat_run_stream(chat_id: str):
         """Reconnect to an existing streamed run without submitting a message."""
-        run = _CHAT_RUN_MANAGER.get(chat_id)
+        replay_lookup = getattr(
+            _CHAT_RUN_MANAGER, "get_replayable", _CHAT_RUN_MANAGER.get
+        )
+        run = replay_lookup(chat_id)
         if run is None:
             await asyncio.to_thread(_settle_chat_running_status, chat_id)
             return JSONResponse(
@@ -2241,18 +2355,32 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
 
-        event = await run.inbox.put_guidance(
-            message, client_request_id=client_request_id
-        )
+        now = _utc_now_iso()
+        public_message_id = _short_id("msg")
+        try:
+            event = await run.inbox.put_guidance(
+                message,
+                client_request_id=client_request_id,
+                public_message_id=public_message_id,
+                public_created_at=now,
+            )
+        except RuntimeError:
+            logger.exception("Failed to persist guidance for chat %s", chat_id)
+            return JSONResponse(
+                {
+                    "error": "guidance could not be saved; please retry",
+                    "code": "guidance_persistence_failed",
+                },
+                status_code=503,
+            )
         if event.get("duplicate"):
             return {
                 "queued": True, "duplicate": True, "eventId": event["event_id"],
                 "runId": run.run_id,
             }
 
-        now = _utc_now_iso()
         user_entry = {
-            "id": _short_id("msg"),
+            "id": public_message_id,
             "role": "user",
             "content": message,
             "createdAt": now,
