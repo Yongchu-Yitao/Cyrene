@@ -4856,6 +4856,7 @@ html[data-theme="light"] .wb-tool-list .mono {
 /* ── Settings Overlay ── */
 
 .settings-overlay {
+  --wb-settings-panel-height: min(540px, calc(100vh - 48px));
   position: fixed;
   inset: 0;
   z-index: 9999;
@@ -4876,7 +4877,7 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 .settings-overlay-panel {
   width: min(920px, calc(100vw - 48px));
-  height: min(640px, calc(100vh - 48px));
+  height: var(--wb-settings-panel-height);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -6942,7 +6943,7 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 .wb-changelog-modal {
   width: min(920px, calc(100vw - 48px));
-  height: min(520px, calc(100vh - 48px));
+  height: var(--wb-settings-panel-height);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -7044,7 +7045,7 @@ html[data-theme="light"] .wb-tool-list .mono {
 @media (max-width: 920px) {
   .settings-overlay-panel {
     width: calc(100vw - 24px);
-    height: calc(100vh - 24px);
+    height: var(--wb-settings-panel-height);
   }
 
   .settings-overlay-body {
@@ -11076,14 +11077,291 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 /* ---- thread ---- */
 
+.wbc-thread-stage {
+  --wbc-thread-inset-top: 18px;
+  --wbc-thread-inset-inline: 22px;
+  --wbc-thread-inset-bottom: 8px;
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
 .wbc-thread {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 18px 22px 8px;
+  padding: var(--wbc-thread-inset-top) var(--wbc-thread-inset-inline) var(--wbc-thread-inset-bottom);
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* ---- floating browser window ---- */
+
+/* This is the exact red-box region in the product spec. It deliberately
+   mirrors the transcript's content insets, so browser drag and resize bounds
+   stay aligned with the message/composer edges at every app size. Overflow is
+   left visible to preserve the floating window shadow at the boundary. */
+.wbc-browser-movement-region {
+  position: absolute;
+  inset: var(--wbc-thread-inset-top) var(--wbc-thread-inset-inline) var(--wbc-thread-inset-bottom);
+  pointer-events: none;
+}
+
+.wbc-browser-movement-region > * {
+  pointer-events: auto;
+}
+
+.wbc-browser-window {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--wb-line-2);
+  background: var(--wb-card-bg-strong);
+  color: var(--wb-text);
+  box-shadow: 0 18px 48px rgba(10, 18, 32, 0.22), 0 2px 8px rgba(10, 18, 32, 0.12);
+  box-sizing: border-box;
+}
+
+.wbc-browser-window.pip {
+  position: absolute;
+  z-index: 24;
+  right: 16px;
+  bottom: 16px;
+  width: min(280px, calc(100% - 32px));
+  height: min(215px, calc(100% - 32px));
+  min-width: min(240px, 100%);
+  min-height: min(180px, 100%);
+  border-radius: 12px;
+}
+
+.wbc-browser-window.maximized {
+  position: fixed;
+  z-index: 10040;
+  inset: 0;
+  width: auto;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.wbc-browser-window-bar {
+  flex: 0 0 auto;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--wb-line);
+  border-radius: 11px 11px 0 0;
+  background: var(--wb-surface);
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.wbc-browser-window.maximized .wbc-browser-window-bar {
+  height: 58px;
+  min-height: 58px;
+  flex-basis: 58px;
+  box-sizing: border-box;
+  border-radius: 0;
+  cursor: default;
+  -webkit-app-region: drag;
+}
+
+html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-bar {
+  padding-left: 82px;
+}
+
+.wbc-browser-window-bar:active {
+  cursor: grabbing;
+}
+
+.wbc-browser-window-bar strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+}
+
+.wbc-browser-title-pill {
+  flex: 0 0 auto;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--wb-green, #1f9d57) 22%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-green, #1f9d57) 12%, var(--wb-card-bg));
+  color: color-mix(in srgb, var(--wb-green, #1f9d57) 88%, var(--wb-text));
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 760;
+  letter-spacing: 0.01em;
+  line-height: 1;
+}
+
+.wbc-browser-window-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+}
+
+.wbc-browser-window-actions button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.wbc-browser-window-actions button:hover {
+  border-color: var(--wb-line);
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-material-icon {
+  width: 17px;
+  height: 17px;
+  display: block;
+  background: currentColor;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}
+
+.wbc-material-icon.close-fullscreen {
+  -webkit-mask-image: url("/static/app/icons/close-fullscreen-rounded.svg");
+  mask-image: url("/static/app/icons/close-fullscreen-rounded.svg");
+}
+
+.wbc-browser-window-actions button:focus-visible,
+.wbc-browser-restore-float:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 38%, transparent);
+  outline-offset: 2px;
+}
+
+.wbc-browser-window-content {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  border-radius: 0 0 11px 11px;
+  background: var(--wb-card-bg);
+}
+
+.wbc-browser-window-content > .browser-view {
+  flex: 1 1 auto;
+}
+
+/* The compact window shows the active page rather than duplicating the full
+   right-panel tab strip. Maximized browser mode retains the strip. */
+.wbc-browser-window.pip .browser-tabs-strip {
+  display: none;
+}
+
+.wbc-browser-resize-handle {
+  position: absolute;
+  z-index: 4;
+  touch-action: none;
+}
+
+.wbc-browser-resize-handle.n,
+.wbc-browser-resize-handle.s {
+  left: 10px;
+  right: 10px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.wbc-browser-resize-handle.n { top: -4px; }
+.wbc-browser-resize-handle.s { bottom: -4px; }
+
+.wbc-browser-resize-handle.e,
+.wbc-browser-resize-handle.w {
+  top: 10px;
+  bottom: 10px;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.wbc-browser-resize-handle.e { right: -4px; }
+.wbc-browser-resize-handle.w { left: -4px; }
+
+.wbc-browser-resize-handle.ne,
+.wbc-browser-resize-handle.nw,
+.wbc-browser-resize-handle.se,
+.wbc-browser-resize-handle.sw {
+  width: 14px;
+  height: 14px;
+}
+
+.wbc-browser-resize-handle.ne { top: -5px; right: -5px; cursor: nesw-resize; }
+.wbc-browser-resize-handle.nw { top: -5px; left: -5px; cursor: nwse-resize; }
+.wbc-browser-resize-handle.se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.wbc-browser-resize-handle.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+
+.wbc-browser-window-interacting,
+.wbc-browser-window-interacting * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.wbc-browser-restore-float {
+  position: absolute;
+  z-index: 24;
+  right: 24px;
+  bottom: 32px;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 17px;
+  border: 1px solid color-mix(in srgb, var(--wb-green, #1f9d57) 24%, transparent);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--wb-green, #1f9d57) 12%, var(--wb-card-bg));
+  color: color-mix(in srgb, var(--wb-green, #1f9d57) 88%, var(--wb-text));
+  box-shadow: 0 7px 18px rgba(10, 18, 32, 0.14), 0 2px 5px rgba(10, 18, 32, 0.07);
+  font: inherit;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 760;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+
+.wbc-browser-restore-float:hover {
+  border-color: color-mix(in srgb, var(--wb-green, #1f9d57) 42%, transparent);
+  transform: translateY(-1px);
+  box-shadow: 0 9px 22px rgba(10, 18, 32, 0.16), 0 2px 6px rgba(10, 18, 32, 0.08);
+}
+
+.wbc-browser-restore-float:active {
+  transform: translateY(0) scale(0.985);
 }
 
 /* A scrollable column must overflow instead of distributing negative space by
@@ -13927,6 +14205,22 @@ html[data-theme="dark"] .wbc-trace {
   background: #fff;
 }
 
+.browser-native-host.is-previewing {
+  background: var(--wb-card-bg, #fff);
+}
+
+.browser-native-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: fill;
+  pointer-events: none;
+  user-select: none;
+}
+
 .browser-empty {
   position: absolute;
   inset: 0;
@@ -15636,6 +15930,19 @@ html[data-density="compact"] :where(.workbench-confirm-modal, .workbench-toast-h
   min-height: calc(32px * var(--wb-ui-density-scale, 1)) !important;
   padding-block: var(--wb-ui-control-py) !important;
   padding-inline: var(--wb-ui-control-px) !important;
+}
+
+/* Related links mix anchors with a real button for the in-app changelog.
+   Pin their final control metrics here so the global native-button typography
+   rule cannot make the changelog action taller or use a different font size. */
+.workbench-shell .settings-overlay .wb-about-related-action {
+  min-height: calc(30px * var(--wb-ui-density-scale, 1)) !important;
+  padding-block: calc(5px * var(--wb-ui-density-scale, 1)) !important;
+  padding-inline: 11px !important;
+  font-family: var(--wb-font) !important;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1)) !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
 }
 
 html[data-density="compact"] .workbench-shell :where(

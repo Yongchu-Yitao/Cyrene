@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import ipaddress
 import json
 import logging
@@ -283,13 +284,35 @@ def _electron_browser_failure(exc: Exception | str, **extra: Any) -> dict[str, A
     }
 
 
-async def _electron_browser_rpc(method: str, args: dict[str, Any] | None = None, *, timeout: float = 45.0) -> dict[str, Any]:
+async def _electron_browser_rpc(
+    method: str,
+    args: dict[str, Any] | None = None,
+    *,
+    timeout: float = 45.0,
+    session_id: str | None = None,
+    round_id: str | None = None,
+) -> dict[str, Any]:
     port = str(os.environ.get("CYRENE_ELECTRON_RPC_PORT") or "").strip()
     token = str(os.environ.get("CYRENE_ELECTRON_RPC_TOKEN") or "").strip()
     if not port or not token:
         raise RuntimeError("Electron browser RPC is unavailable.")
     url = f"http://127.0.0.1:{port}/browser/rpc"
-    payload = {"method": method, "args": args or {}}
+    try:
+        from cyrene.agent.state import _current_round_id, _current_session_id
+
+        current_session_id = str(_current_session_id.get() or "").strip()
+        current_round_id = str(_current_round_id.get() or "").strip()
+    except Exception:
+        current_session_id = ""
+        current_round_id = ""
+    rpc_session_id = current_session_id if session_id is None else str(session_id or "").strip()
+    rpc_round_id = current_round_id if round_id is None else str(round_id or "").strip()
+    payload = {
+        "method": method,
+        "sessionId": rpc_session_id,
+        "roundId": rpc_round_id,
+        "args": args or {},
+    }
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         response = await client.post(
             url,
@@ -301,6 +324,19 @@ async def _electron_browser_rpc(method: str, args: dict[str, Any] | None = None,
     if not isinstance(data, dict):
         raise RuntimeError("Electron browser RPC returned a non-object response.")
     return data
+
+
+async def close_electron_browser_session(session_id: str) -> dict[str, Any]:
+    """Close the Electron tabs owned by one conversation without clearing login data."""
+    if not electron_browser_available():
+        return {"ok": True, "sessionId": str(session_id or "").strip(), "closed": False}
+    return await _electron_browser_rpc(
+        "closeSession",
+        {},
+        timeout=10.0,
+        session_id=str(session_id or "").strip(),
+        round_id="",
+    )
 
 
 async def electron_current_url() -> str:
@@ -336,6 +372,7 @@ _BROWSER_INSPECT_JS = r"""
     if (tag === 'input') {
       const type = String(el.getAttribute('type') || 'text').toLowerCase();
       if (type === 'button' || type === 'submit' || type === 'reset') return 'button';
+      if (type === 'file') return 'file-upload';
       return 'textbox';
     }
     if (tag === 'textarea') return 'textbox';
@@ -376,6 +413,9 @@ _BROWSER_INSPECT_JS = r"""
       ref,
       tag,
       role,
+      inputType: tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '',
+      accept: tag === 'input' ? clean(el.getAttribute('accept'), 240) : '',
+      multiple: tag === 'input' && el.hasAttribute('multiple'),
       text,
       ariaLabel,
       placeholder,
@@ -439,6 +479,9 @@ _BROWSER_FIND_JS = r"""
     y: Math.round(r.top + r.height / 2),
     box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
     tag: String(el.tagName || '').toLowerCase(),
+    inputType: String(el.getAttribute && el.getAttribute('type') || '').toLowerCase(),
+    accept: String(el.getAttribute && el.getAttribute('accept') || ''),
+    multiple: !!(el.hasAttribute && el.hasAttribute('multiple')),
   };
 })
 """
@@ -1112,6 +1155,110 @@ class _BrowserSession:
             title = await page.title()
             await self._emit_frame("type", target=ref, box=box, url=page.url, title=title)
             return {"ok": True, "url": page.url, "title": title}
+
+    async def prepare_file_upload(self, ref: str) -> dict[str, Any]:
+        """Resolve a Playwright file input without opening a native picker."""
+        if not await self._wait_for_control():
+            return {"ok": False, "url": self._safe_url(), "error": _USER_CONTROL_MSG}
+        normalized = str(ref or "").strip().removeprefix("e").removeprefix("E")
+        if not normalized.isdigit():
+            return {"ok": False, "error": "Invalid browser element ref."}
+        async with self._action_lock:
+            page = await self.page()
+            locator = page.locator(f'[data-cyrene-ref="{normalized}"]')
+            try:
+                details = await locator.evaluate(
+                    """el => ({
+                        tag: String(el.tagName || '').toLowerCase(),
+                        type: String(el.getAttribute('type') || '').toLowerCase(),
+                        accept: String(el.getAttribute('accept') || ''),
+                        multiple: el.hasAttribute('multiple'),
+                        name: String(el.getAttribute('name') || ''),
+                        ariaLabel: String(el.getAttribute('aria-label') || ''),
+                        uploadId: (() => {
+                            let value = String(el.getAttribute('data-cyrene-upload-id') || '');
+                            if (!/^[a-zA-Z0-9_-]{16,100}$/.test(value)) {
+                                const random = globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
+                                    ? globalThis.crypto.randomUUID()
+                                    : Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+                                value = 'cyrene_' + random;
+                                el.setAttribute('data-cyrene-upload-id', value);
+                            }
+                            return value;
+                        })()
+                    })"""
+                )
+            except Exception as exc:
+                return {"ok": False, "error": f"Browser file input ref was not found: {exc}"}
+            if not isinstance(details, dict) or details.get("tag") != "input" or details.get("type") != "file":
+                return {"ok": False, "error": "The browser ref is not a file input."}
+            top_url = str(page.url or "")
+            upload_id = str(details.get("uploadId") or "")
+            target_id = "upload_" + hashlib.sha256(f"{top_url}\n{upload_id}".encode("utf-8")).hexdigest()[:24]
+            parsed = urlparse(top_url)
+            origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+            return {
+                "ok": True,
+                "target": {
+                    "id": target_id,
+                    "ref": f"e{normalized}",
+                    "uploadId": upload_id,
+                    "tabId": "playwright",
+                    "chooserId": "",
+                    "mode": "selectMultiple" if details.get("multiple") else "selectSingle",
+                    "multiple": bool(details.get("multiple")),
+                    "accept": str(details.get("accept") or ""),
+                    "name": str(details.get("name") or ""),
+                    "ariaLabel": str(details.get("ariaLabel") or ""),
+                    "topUrl": top_url,
+                    "frameUrl": top_url,
+                    "origin": origin,
+                },
+            }
+
+    async def set_input_files(self, target: dict[str, Any], file_paths: list[str]) -> dict[str, Any]:
+        """Set an already-approved Playwright file input."""
+        if not await self._wait_for_control():
+            return {"ok": False, "url": self._safe_url(), "error": _USER_CONTROL_MSG}
+        async with self._action_lock:
+            page = await self.page()
+            if str(page.url or "") != str(target.get("topUrl") or ""):
+                return {"ok": False, "error": "The page changed after approval. Upload was cancelled.", "code": "UPLOAD_PAGE_CHANGED"}
+            upload_id = str(target.get("uploadId") or "")
+            if not upload_id:
+                return {"ok": False, "error": "The approved file input is no longer available."}
+            locator = page.locator(f'[data-cyrene-upload-id="{upload_id}"]')
+            try:
+                details = await locator.evaluate(
+                    """el => ({
+                        tag: String(el.tagName || '').toLowerCase(),
+                        type: String(el.getAttribute('type') || '').toLowerCase(),
+                        accept: String(el.getAttribute('accept') || ''),
+                        multiple: el.hasAttribute('multiple'),
+                        name: String(el.getAttribute('name') || ''),
+                        ariaLabel: String(el.getAttribute('aria-label') || '')
+                    })"""
+                )
+                if (
+                    details.get("tag") != "input"
+                    or details.get("type") != "file"
+                    or str(details.get("accept") or "") != str(target.get("accept") or "")
+                    or bool(details.get("multiple")) != bool(target.get("multiple"))
+                    or str(details.get("name") or "") != str(target.get("name") or "")
+                    or str(details.get("ariaLabel") or "") != str(target.get("ariaLabel") or "")
+                ):
+                    return {"ok": False, "error": "The approved file input changed. Upload was cancelled.", "code": "UPLOAD_TARGET_CHANGED"}
+                await locator.set_input_files(file_paths)
+            except Exception as exc:
+                return {"ok": False, "error": f"Failed to set browser file input: {exc}", "code": "SET_INPUT_FILES_FAILED"}
+            return {
+                "ok": True,
+                "target": dict(target),
+                "files": [{"name": os.path.basename(item)} for item in file_paths],
+                "url": str(page.url or ""),
+                "title": await page.title(),
+                "tabId": "playwright",
+            }
 
     async def wait_for(self, *, selector: str = "", text: str = "", url_contains: str = "", timeout_ms: int = 5000) -> dict[str, Any]:
         if not await self._wait_for_control():
@@ -1828,6 +1975,59 @@ async def type_ref(ref: str, text: str, *, submit: bool = False) -> dict[str, An
         return {"ok": False, "error": "No page open. Call browser_navigate first."}
     try:
         return await session.type_ref(ref, text, submit=submit)
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
+async def prepare_file_upload(*, chooser_id: str = "", ref: str = "") -> dict[str, Any]:
+    """Resolve a browser file-input target without opening a native picker."""
+    chooser_id = str(chooser_id or "").strip()
+    ref = str(ref or "").strip()
+    if electron_browser_available():
+        try:
+            return await _electron_browser_rpc(
+                "prepareUpload",
+                {"chooserId": chooser_id, "ref": ref},
+                timeout=15.0,
+            )
+        except Exception as exc:
+            logger.warning("Electron prepare_file_upload failed (%s)", exc)
+            return _electron_browser_failure(exc)
+    if chooser_id:
+        return {"ok": False, "error": "chooser_id is supported only by the Electron desktop browser."}
+    if not ref:
+        return {"ok": False, "error": "ref is required outside Electron."}
+    if _ensure_playwright() is None:
+        return {"ok": False, "error": browser_runtime_unavailable_message()}
+    try:
+        return await _get_session().prepare_file_upload(ref)
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
+
+
+async def set_input_files(target: dict[str, Any], files: list[dict[str, Any]]) -> dict[str, Any]:
+    """Apply files to an approved browser input after transport-side revalidation."""
+    if electron_browser_available():
+        try:
+            return await _electron_browser_rpc(
+                "setInputFiles",
+                {
+                    "targetId": str(target.get("id") or ""),
+                    "tabId": str(target.get("tabId") or ""),
+                    "files": files,
+                },
+                timeout=90.0,
+            )
+        except Exception as exc:
+            logger.warning("Electron set_input_files failed (%s)", exc)
+            return _electron_browser_failure(exc)
+    if _ensure_playwright() is None:
+        return {"ok": False, "error": browser_runtime_unavailable_message()}
+    try:
+        return await _get_session().set_input_files(
+            target,
+            [str(item.get("path") or "") for item in files],
+        )
     except Exception as exc:
         return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
 

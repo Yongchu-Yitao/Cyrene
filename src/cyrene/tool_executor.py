@@ -95,6 +95,7 @@ _BROWSER_TOOL_NAMES = {
     "browser_click_at",
     "browser_type",
     "browser_type_ref",
+    "browser_upload_files",
     "browser_wait",
     "browser_network_log",
     "browser_request_takeover",

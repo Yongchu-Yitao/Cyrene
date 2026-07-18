@@ -1164,7 +1164,7 @@ def _permission_answer_granted(text: str) -> bool:
         "仅这次允许", "allow once", "仅此次", "这次", "once",
         "始终允许", "always allow", "always", "永久允许", "allow",
         "本次会话内总是允许", "本轮总是允许", "always allow this session",
-        "允许这次", "允许这次读取", "允许执行", "允许删除", "仅此任务允许 full_access",
+        "允许这次", "允许这次读取", "允许这次上传", "允许执行", "允许删除", "仅此任务允许 full_access",
         "同意", "确认", "好", "好的", "可以", "行", "yes", "y", "ok", "okay",
         "allow_once",
     }
@@ -1183,6 +1183,7 @@ async def _handle_permission_elevation_answer(
     from cyrene.agent.state import (
         _destructive_confirmation_allow_all,
         _destructive_confirmation_fingerprints,
+        _external_upload_confirmation_fingerprints,
         _temporary_full_access,
     )
 
@@ -1257,6 +1258,33 @@ async def _handle_permission_elevation_answer(
             system = (
                 "The user denied the destructive/irreversible operation. "
                 "Treat the operation as refused, do not retry it, and choose a safer alternative."
+            )
+    elif permission_kind == "external_upload_confirmation":
+        fingerprint = str(meta.get("fingerprint", "") or "").strip()
+        from cyrene.agent.state import _publish_runtime_event
+        safe_target = meta.get("target") if isinstance(meta.get("target"), dict) else {}
+        safe_files = meta.get("files") if isinstance(meta.get("files"), list) else []
+        await _publish_runtime_event({
+            "type": "external_upload_confirmation",
+            "decision": "approved" if granted else "denied",
+            "tool_name": "browser_upload_files",
+            "fingerprint": fingerprint,
+            "target": safe_target,
+            "files": safe_files,
+        })
+        if granted:
+            if fingerprint:
+                existing = set(_external_upload_confirmation_fingerprints.get())
+                existing.add(fingerprint)
+                _external_upload_confirmation_fingerprints.set(frozenset(existing))
+            system = (
+                "The user approved exactly one external browser file upload bound to the displayed "
+                "site, input target, and file hashes. Retry browser_upload_files with the same arguments."
+            )
+        else:
+            system = (
+                "The user denied the external browser file upload. Do not retry it or choose another "
+                "file or destination unless the user explicitly asks."
             )
     elif granted:
         _temporary_full_access.set(True)

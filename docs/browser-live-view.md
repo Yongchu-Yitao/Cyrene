@@ -9,10 +9,13 @@ session.
 ## Runtime and setup
 
 The packaged Electron desktop app uses Electron's embedded Chromium directly.
-It needs no Playwright installation and stores cookies/logins in the persistent
-`persist:cyrene-browser` partition. Browser tool calls and the visible browser
-panel share that same runtime and profile; an Electron RPC failure is reported
-instead of silently opening a second browser.
+It needs no Playwright installation. Every conversation has its own in-memory
+tab manager, current page, and navigation history, while all conversations use
+the shared persistent `persist:cyrene-browser` partition. Cookies and login state
+therefore remain available across conversations. Browser tool calls are routed
+by the originating conversation ID and share that conversation's visible tabs.
+Deleting a conversation closes its tabs without clearing the shared login data.
+An Electron RPC failure is reported instead of silently opening a second browser.
 
 When Cyrene runs without Electron (source Web UI or CLI), `browser_navigate` can
 fall back to a plain HTTP fetch (`httpx`). For full non-desktop automation, live
@@ -36,7 +39,15 @@ interactive tools report that the browser runtime is unavailable.
 - The Python tool layer calls a loopback, token-authenticated Electron RPC server
   for navigation, snapshots, clicks, typing, waits, network logs, screenshots,
   scrolling, and tab management.
-- The user and the agent operate the same persistent browser tab and profile.
+- Electron keeps a separate tab manager for every conversation session.
+  Switching conversations detaches the old native view and attaches the selected
+  conversation's active tab.
+- Background agents include their session ID in every browser RPC, so they can
+  browse without changing or controlling the browser visible in another chat.
+- Within one conversation, the user and the agent operate the same persistent
+  browser tabs and profile.
+- All conversation managers intentionally share the same Electron partition, so
+  signing in once makes that login available to other conversations.
 
 ### Non-Electron Playwright mode
 
@@ -100,6 +111,18 @@ Browser navigation is a **network read**, like `WebFetch` / `WebSearch`, so it d
 profile, which lives inside `DATA_DIR` (in-workspace). Login takeover is an
 explicit, user-driven action (you perform the login in the native window).
 
+File upload is intentionally stricter. An agent click that would open a native
+file chooser is intercepted inside Electron, while a user's own click remains a
+normal native interaction. The agent must then call `browser_upload_files`. Every
+call pauses for an explicit, human-only, single-use approval showing the receiving
+origin and each file's name, size, media type, and SHA-256 digest. Approval is
+bound to the browser tab, page/frame URL, input element, and exact file contents;
+page, destination, or file changes cancel the upload. `full_access` and automatic
+permission modes do not bypass this confirmation. The tool only populates the
+file input—it never clicks a separate submit button. Approved bytes are copied to
+a private, read-only temporary snapshot so later form submission cannot observe a
+changed source file; the snapshot is removed after at most 15 minutes.
+
 ## Tools
 
 | Tool | Purpose |
@@ -113,6 +136,7 @@ explicit, user-driven action (you perform the login in the native window).
 | `browser_click_at` | Click viewport coordinates. |
 | `browser_type` | Type into an input (optionally submit). |
 | `browser_type_ref` | Type into an editable element ref returned by `browser_snapshot`. |
+| `browser_upload_files` | Attach exact local files to an intercepted or referenced file input after single-use human approval. |
 | `browser_wait` | Wait for SPA URL/text/selector conditions after async rendering. |
 | `browser_network_log` | Return recent resource/fetch/XHR URLs visible to the page. |
 | `browser_request_takeover` | Open a real window for the user to log in, pause, then resume authenticated. |

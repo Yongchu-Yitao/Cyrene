@@ -1689,8 +1689,8 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
                   try {
                     var r = await fetch("/api/backup/restore", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:last.path})});
                     var d = await r.json();
-                    if (d.ok) setBackupMsg(t("settings.backupRestored",{n:d.restored.length}));
-                    else throw new Error(d.error);
+                    if (d.ok) setBackupMsg(t("settings.backupRestored",{n:d.restored.length})+" "+t("settings.backupRestartRequired"));
+                    else throw new Error(d.error || (d.errors || []).join("; "));
                   } catch(e) { setBackupMsg(t("settings.backupRestoreFailed")+": "+e.message); }
                 }}>{t("settings.backupRestoreBtn")}</button>
               </div>

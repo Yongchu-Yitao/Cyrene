@@ -19,11 +19,15 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { AppUseManager } = require('./app-use');
 
 const APP_NAME = 'Cyrene';
 const TEMP_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
+const BROWSER_UPLOAD_TARGET_TTL_MS = 15 * 60 * 1000;
+const BROWSER_UPLOAD_MAX_FILES = 10;
+const BROWSER_UPLOAD_MAX_FILE_BYTES = 100 * 1024 * 1024;
 let _errorLogStream = null;
 
 function getCyreneUserDataDir() {
@@ -65,15 +69,45 @@ function appendErrorLog(text) {
   if (s) s.write(text);
 }
 
+function sha256File(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+function urlOrigin(value) {
+  try {
+    return new URL(String(value || '')).origin;
+  } catch (_) {
+    return '';
+  }
+}
+
+function cdpAttributes(node) {
+  const raw = node && Array.isArray(node.attributes) ? node.attributes : [];
+  const attrs = {};
+  for (let index = 0; index + 1 < raw.length; index += 2) {
+    attrs[String(raw[index] || '').toLowerCase()] = String(raw[index + 1] || '');
+  }
+  return attrs;
+}
+
 function cleanupTemporaryArtifacts(ttlMs = TEMP_ARTIFACT_TTL_MS) {
   const tempDir = getCyreneTempDir();
-  const cutoff = Date.now() - Math.max(0, Number(ttlMs) || 0);
   try {
     fs.mkdirSync(tempDir, { recursive: true });
     for (const name of fs.readdirSync(tempDir)) {
       const target = path.join(tempDir, name);
       try {
         const stat = fs.lstatSync(target);
+        const targetTtlMs = name.startsWith('cyrene-browser-upload-')
+          ? BROWSER_UPLOAD_TARGET_TTL_MS
+          : Math.max(0, Number(ttlMs) || 0);
+        const cutoff = Date.now() - targetTtlMs;
         if (stat.mtimeMs > cutoff) continue;
         fs.rmSync(target, { recursive: true, force: true });
       } catch (_) {}
@@ -85,7 +119,7 @@ function cleanupTemporaryArtifacts(ttlMs = TEMP_ARTIFACT_TTL_MS) {
 // Python backend via env (CYRENE_AUTH_TOKEN). Injected as the X-Cyrene-Token
 // header on every request to the local backend (see installAuthHeaderInjector).
 // The renderer never sees this token.
-const AUTH_TOKEN = require('crypto').randomBytes(32).toString('hex');
+const AUTH_TOKEN = crypto.randomBytes(32).toString('hex');
 
 const isDev = process.env.ELECTRON_DEV === '1';
 const isMac = process.platform === 'darwin';
@@ -108,7 +142,9 @@ let isShuttingDown = false;
 let isQuitting = false;
 let launchHidden = process.argv.includes('--hidden');
 let tray = null;
-let browserTabManager = null;
+const browserTabManagers = new Map();
+let activeBrowserSessionId = '';
+let browserSurfaceObscured = false;
 let appUseManager = null;
 let appUsePointerWindow = null;
 let appUsePointerHideTimer = null;
@@ -245,6 +281,11 @@ const MENU_TRANSLATIONS = Object.freeze({
 
 const BROWSER_PARTITION = 'persist:cyrene-browser';
 const DEFAULT_BROWSER_VERSION = '147.0.0.0';
+const guardedBrowserPartitions = new Set();
+
+function normalizeBrowserSessionId(value) {
+  return String(value || '').trim();
+}
 
 function browserUserAgent() {
   const override = String(process.env.CYRENE_BROWSER_USER_AGENT || '').trim();
@@ -312,6 +353,7 @@ const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
     if (tag === 'input') {
       const type = String(el.getAttribute('type') || 'text').toLowerCase();
       if (type === 'button' || type === 'submit' || type === 'reset') return 'button';
+      if (type === 'file') return 'file-upload';
       return 'textbox';
     }
     if (tag === 'textarea') return 'textbox';
@@ -352,6 +394,9 @@ const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
       ref,
       tag,
       role,
+      inputType: tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '',
+      accept: tag === 'input' ? clean(el.getAttribute('accept'), 240) : '',
+      multiple: tag === 'input' && el.hasAttribute('multiple'),
       text,
       ariaLabel,
       placeholder,
@@ -414,17 +459,23 @@ const BROWSER_FIND_TARGET_SCRIPT = `
     y: Math.round(r.top + r.height / 2),
     box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
     tag: String(el.tagName || '').toLowerCase(),
+    inputType: String(el.getAttribute && el.getAttribute('type') || '').toLowerCase(),
+    accept: String(el.getAttribute && el.getAttribute('accept') || ''),
+    multiple: !!(el.hasAttribute && el.hasAttribute('multiple')),
   };
 })
 `;
 
-function installBrowserSessionGuards() {
+function installBrowserSessionGuards(partition = BROWSER_PARTITION) {
+  const partitionName = String(partition || BROWSER_PARTITION);
+  if (guardedBrowserPartitions.has(partitionName)) return;
   let browserSession = null;
   try {
-    browserSession = session.fromPartition(BROWSER_PARTITION);
+    browserSession = session.fromPartition(partitionName);
   } catch (_) {
     return;
   }
+  guardedBrowserPartitions.add(partitionName);
   browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
     callback(false);
   });
@@ -439,16 +490,26 @@ function installBrowserSessionGuards() {
 }
 
 class BrowserTabManager {
-  constructor() {
+  constructor(sessionId = '') {
+    this.sessionId = normalizeBrowserSessionId(sessionId);
+    // Tabs and navigation state are session-scoped, while browser identity is
+    // intentionally shared: every manager uses the historical persistent
+    // partition so a login completed in one conversation is available in all.
+    this.partition = BROWSER_PARTITION;
+    installBrowserSessionGuards(this.partition);
     this.tabs = new Map();
     this.activeTabId = '';
     this.nextTabId = 1;
     this.bounds = { x: 0, y: 0, width: 0, height: 0 };
+    this.borderRadius = 0;
     this.visible = false;
-    this.obscured = false;
+    this.obscured = browserSurfaceObscured;
     this.attachedTabId = '';
     this._syncTimer = null;
-    this.browserContext = { sessionId: '', roundId: '' };
+    this._repaintTimer = null;
+    this._boundsTransitionToken = 0;
+    this._boundsTransitioning = false;
+    this.browserContext = { sessionId: this.sessionId, roundId: '' };
   }
 
   ownerWindow() {
@@ -458,7 +519,7 @@ class BrowserTabManager {
   createView() {
     const view = new WebContentsView({
       webPreferences: {
-        partition: BROWSER_PARTITION,
+        partition: this.partition,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -493,6 +554,27 @@ class BrowserTabManager {
     wc.on('console-message', (_event, _level, message) => {
       this.handleCapturedUserEvent(view, message);
     });
+    wc.debugger.on('message', (_event, method, params) => {
+      if (method !== 'Page.fileChooserOpened') return;
+      const tab = this._tabForView(view);
+      if (!tab) return;
+      // Page.enable asks Chromium to report chooser events even while native
+      // interception is off. Ignore those user-driven events completely.
+      if (typeof tab.agentFileChooserResolver !== 'function') return;
+      this._captureFileChooser(tab, params || {}).catch((err) => {
+        console.warn('[electron] Failed to capture browser file chooser:', err);
+        if (typeof tab.agentFileChooserResolver === 'function') {
+          tab.agentFileChooserResolver({
+            error: 'The file chooser was blocked because its input target could not be verified: ' + String((err && err.message) || err),
+            code: 'FILE_CHOOSER_TARGET_UNVERIFIED',
+          });
+        }
+      });
+    });
+    wc.debugger.on('detach', () => {
+      const tab = this._tabForView(view);
+      if (tab) tab.debuggerReady = false;
+    });
     wc.on('destroyed', () => {
       for (const [id, tab] of this.tabs.entries()) {
         if (tab.view === view) this.tabs.delete(id);
@@ -507,9 +589,7 @@ class BrowserTabManager {
   }
 
   setContext(info = {}) {
-    const sessionId = String(info.sessionId || info.session_id || '').trim();
     const roundId = String(info.roundId || info.round_id || '').trim();
-    if (sessionId) this.browserContext.sessionId = sessionId;
     this.browserContext.roundId = roundId;
     return this.state();
   }
@@ -519,6 +599,165 @@ class BrowserTabManager {
       if (tab.view === view) return tab;
     }
     return null;
+  }
+
+  async _ensureDebugger(tab) {
+    const wc = tab && tab.view && tab.view.webContents;
+    if (!wc || wc.isDestroyed()) throw new Error('Browser tab is unavailable.');
+    if (!wc.debugger.isAttached()) wc.debugger.attach('1.3');
+    if (!tab.debuggerReady) {
+      await wc.debugger.sendCommand('Page.enable', { enableFileChooserOpenedEvent: true });
+      await wc.debugger.sendCommand('DOM.enable');
+      tab.debuggerReady = true;
+    }
+    return wc.debugger;
+  }
+
+  async _setFileChooserInterception(tab, enabled) {
+    const debug = await this._ensureDebugger(tab);
+    await debug.sendCommand('Page.setInterceptFileChooserDialog', {
+      enabled: enabled === true,
+      cancel: false,
+    });
+  }
+
+  async _frameState(tab, frameId = '') {
+    const debug = await this._ensureDebugger(tab);
+    const result = await debug.sendCommand('Page.getFrameTree');
+    const visit = (tree) => {
+      if (!tree || !tree.frame) return null;
+      if (!frameId || String(tree.frame.id || '') === String(frameId)) {
+        return {
+          id: String(tree.frame.id || ''),
+          url: String(tree.frame.url || ''),
+          loaderId: String(tree.frame.loaderId || ''),
+        };
+      }
+      for (const child of tree.childFrames || []) {
+        const found = visit(child);
+        if (found) return found;
+      }
+      return null;
+    };
+    return visit(result && result.frameTree);
+  }
+
+  async _frameUrl(tab, frameId = '') {
+    const frame = await this._frameState(tab, frameId);
+    return frame ? frame.url : '';
+  }
+
+  async _describeUploadTarget(tab, backendNodeId, { chooserId = '', frameId = '', mode = '' } = {}) {
+    const debug = await this._ensureDebugger(tab);
+    const described = await debug.sendCommand('DOM.describeNode', {
+      backendNodeId: Number(backendNodeId),
+      depth: 0,
+      pierce: true,
+    });
+    const node = described && described.node;
+    const attrs = cdpAttributes(node);
+    if (!node || String(node.nodeName || '').toLowerCase() !== 'input' || String(attrs.type || '').toLowerCase() !== 'file') {
+      throw new Error('The intercepted target is not a file input.');
+    }
+    const topUrl = tab.view.webContents.getURL();
+    const frameState = await this._frameState(tab, frameId);
+    const frameUrl = (frameState && frameState.url) || topUrl;
+    const frameLoaderId = String(frameState && frameState.loaderId || '');
+    const stableKey = [tab.id, topUrl, frameUrl, frameLoaderId, String(node.backendNodeId || backendNodeId)].join('\n');
+    const targetId = 'upload_' + crypto.createHash('sha256').update(stableKey, 'utf8').digest('hex').slice(0, 24);
+    const target = {
+      id: targetId,
+      tabId: tab.id,
+      chooserId: String(chooserId || ''),
+      backendNodeId: Number(node.backendNodeId || backendNodeId),
+      frameId: String(frameId || ''),
+      mode: String(mode || (Object.prototype.hasOwnProperty.call(attrs, 'multiple') ? 'selectMultiple' : 'selectSingle')),
+      multiple: mode === 'selectMultiple' || Object.prototype.hasOwnProperty.call(attrs, 'multiple'),
+      accept: String(attrs.accept || ''),
+      name: String(attrs.name || ''),
+      ariaLabel: String(attrs['aria-label'] || ''),
+      topUrl,
+      frameUrl,
+      frameLoaderId,
+      origin: urlOrigin(frameUrl) || urlOrigin(topUrl),
+      createdAt: Date.now(),
+    };
+    tab.uploadTargets.set(targetId, target);
+    return target;
+  }
+
+  _publicUploadTarget(target) {
+    return {
+      id: target.id,
+      tabId: target.tabId,
+      chooserId: target.chooserId || '',
+      mode: target.mode,
+      multiple: !!target.multiple,
+      accept: target.accept || '',
+      name: target.name || '',
+      ariaLabel: target.ariaLabel || '',
+      topUrl: target.topUrl,
+      frameUrl: target.frameUrl,
+      frameLoaderId: target.frameLoaderId || '',
+      origin: target.origin,
+    };
+  }
+
+  _pruneUploadTargets(tab) {
+    const cutoff = Date.now() - BROWSER_UPLOAD_TARGET_TTL_MS;
+    for (const [id, target] of tab.uploadTargets || []) {
+      if (Number(target.createdAt || 0) < cutoff) tab.uploadTargets.delete(id);
+    }
+    for (const [id, chooser] of tab.fileChoosers || []) {
+      if (Number(chooser.createdAt || 0) < cutoff) tab.fileChoosers.delete(id);
+    }
+  }
+
+  async _captureFileChooser(tab, params) {
+    const backendNodeId = Number(params && params.backendNodeId);
+    if (!Number.isFinite(backendNodeId) || backendNodeId <= 0) {
+      throw new Error('File chooser did not expose an input node.');
+    }
+    const chooserId = 'chooser_' + crypto.randomBytes(12).toString('hex');
+    const target = await this._describeUploadTarget(tab, backendNodeId, {
+      chooserId,
+      frameId: String(params.frameId || ''),
+      mode: String(params.mode || ''),
+    });
+    const chooser = {
+      id: chooserId,
+      targetId: target.id,
+      createdAt: Date.now(),
+    };
+    tab.fileChoosers.set(chooserId, chooser);
+    tab.lastAgentFileChooser = chooser;
+    if (typeof tab.agentFileChooserResolver === 'function') {
+      tab.agentFileChooserResolver(this._publicUploadTarget(target));
+    }
+  }
+
+  async _targetFromRef(tab, ref) {
+    const normalized = String(ref || '').trim().replace(/^e/i, '');
+    if (!/^\d+$/.test(normalized)) throw new Error('Invalid browser element ref.');
+    const debug = await this._ensureDebugger(tab);
+    const expression = `document.querySelector('[data-cyrene-ref="${normalized}"]')`;
+    const evaluated = await debug.sendCommand('Runtime.evaluate', {
+      expression,
+      returnByValue: false,
+      silent: true,
+    });
+    const remote = evaluated && evaluated.result;
+    if (!remote || !remote.objectId || remote.subtype === 'null') {
+      throw new Error('Browser file input ref was not found. Take a new browser_snapshot and retry.');
+    }
+    try {
+      const described = await debug.sendCommand('DOM.describeNode', { objectId: remote.objectId, depth: 0 });
+      const node = described && described.node;
+      if (!node || !node.backendNodeId) throw new Error('Unable to resolve browser file input.');
+      return await this._describeUploadTarget(tab, node.backendNodeId, {});
+    } finally {
+      debug.sendCommand('Runtime.releaseObject', { objectId: remote.objectId }).catch(() => {});
+    }
   }
 
   _markAgentInput(tab, ms = 1500) {
@@ -684,6 +923,7 @@ class BrowserTabManager {
     return {
       ok: true,
       available: !!WebContentsView,
+      sessionId: this.sessionId,
       activeTabId: this.activeTabId,
       visible: this.visible,
       tabs,
@@ -693,6 +933,7 @@ class BrowserTabManager {
   }
 
   emitState() {
+    if (this.sessionId !== activeBrowserSessionId) return;
     const win = this.ownerWindow();
     if (win) {
       try { win.webContents.send('browser:state', this.state()); } catch (_) {}
@@ -708,7 +949,17 @@ class BrowserTabManager {
     if (!WebContentsView) throw new Error('Electron WebContentsView is unavailable.');
     const id = `tab_${this.nextTabId++}`;
     const view = this.createView();
-    const tab = { id, view, url: normalizeBrowserUrl(url), title: '' };
+    const tab = {
+      id,
+      view,
+      url: normalizeBrowserUrl(url),
+      title: '',
+      debuggerReady: false,
+      fileChoosers: new Map(),
+      uploadTargets: new Map(),
+      lastAgentFileChooser: null,
+      agentFileChooserResolver: null,
+    };
     this.tabs.set(id, tab);
     if (activate || !this.activeTabId) this.activeTabId = id;
     if (tab.url && tab.url !== 'about:blank') {
@@ -748,23 +999,86 @@ class BrowserTabManager {
   detachView(tab) {
     const win = this.ownerWindow();
     if (!win || !tab) return;
+    try { tab.view.setVisible(false); } catch (_) {}
     try { win.contentView.removeChildView(tab.view); } catch (_) {}
     if (this.attachedTabId === tab.id) this.attachedTabId = '';
+  }
+
+  repaintView(tab) {
+    if (!tab || !tab.view || tab.view.webContents.isDestroyed()) return;
+    const wc = tab.view.webContents;
+    try { wc.invalidate(); } catch (_) {}
+    if (this._repaintTimer) clearTimeout(this._repaintTimer);
+    this._repaintTimer = setTimeout(() => {
+      this._repaintTimer = null;
+      if (tab.view.webContents.isDestroyed()) return;
+      if (this.attachedTabId !== tab.id || !this.visible || this.obscured) return;
+      try { tab.view.webContents.invalidate(); } catch (_) {}
+    }, 80);
   }
 
   syncAttachedView() {
     const win = this.ownerWindow();
     if (!win) return;
     const active = this.tabs.get(this.activeTabId);
+    const ownsVisibleSurface = this.sessionId === activeBrowserSessionId;
     for (const tab of this.tabs.values()) {
-      if (!active || tab.id !== active.id || !this.visible || this.obscured) this.detachView(tab);
+      if (!active || tab.id !== active.id || !ownsVisibleSurface) this.detachView(tab);
     }
-    if (!active || !this.visible || this.obscured) return;
+    if (!active || !ownsVisibleSurface) return;
+    if (!this.visible || this.obscured || this._boundsTransitioning) {
+      // Keep the active WebContentsView attached but hidden across PiP/fullscreen
+      // transitions. Removing and re-adding it on macOS can strand Chromium's
+      // compositor surface as a white rectangle when the size shrinks again.
+      if (this.attachedTabId === active.id) {
+        try { active.view.setVisible(false); } catch (_) {}
+      }
+      return;
+    }
+    const wasAttached = this.attachedTabId === active.id;
+    let wasVisible = false;
+    if (wasAttached && typeof active.view.getVisible === 'function') {
+      try { wasVisible = active.view.getVisible(); } catch (_) {}
+    }
     if (this.attachedTabId !== active.id) {
+      try { active.view.setBorderRadius(this.borderRadius); } catch (_) {}
+      try { active.view.setBounds(this.bounds); } catch (_) {}
       try { win.contentView.addChildView(active.view); } catch (_) {}
       this.attachedTabId = active.id;
+    } else {
+      try { active.view.setBorderRadius(this.borderRadius); } catch (_) {}
+      try { active.view.setBounds(this.bounds); } catch (_) {}
     }
+    try { active.view.setVisible(true); } catch (_) {}
+    if (!wasAttached || !wasVisible) this.repaintView(active);
+  }
+
+  async settleBoundsTransition() {
+    const token = ++this._boundsTransitionToken;
+    this._boundsTransitioning = true;
+    if (this._syncTimer) { clearTimeout(this._syncTimer); this._syncTimer = null; }
+    this.syncAttachedView();
+    const active = this.tabs.get(this.activeTabId);
+    if (!active || active.view.webContents.isDestroyed()) {
+      this._boundsTransitioning = false;
+      return this.state();
+    }
+    try { active.view.setBorderRadius(this.borderRadius); } catch (_) {}
     try { active.view.setBounds(this.bounds); } catch (_) {}
+    try { active.view.webContents.invalidate(); } catch (_) {}
+    // capturePage waits for Chromium to produce a frame at the final size. Keep
+    // the renderer's bitmap proxy visible until this promise resolves, so the
+    // native compositor never exposes its temporary white surface.
+    await Promise.race([
+      active.view.webContents.capturePage().catch(() => null),
+      new Promise((resolve) => setTimeout(resolve, 180)),
+    ]);
+    if (token !== this._boundsTransitionToken) return this.state();
+    this._boundsTransitioning = false;
+    this.syncAttachedView();
+    await new Promise((resolve) => setTimeout(resolve, 34));
+    if (token === this._boundsTransitionToken) this.repaintView(active);
+    return this.state();
   }
 
   setBounds(info = {}) {
@@ -776,14 +1090,24 @@ class BrowserTabManager {
       width,
       height,
     };
+    this.borderRadius = Math.max(0, Math.min(24, Math.round(Number(info.borderRadius) || 0)));
     this.visible = info.visible === true && width > 8 && height > 8;
-    // Debounce sync when visible — rapid bounds changes (e.g. resize, requestAnimationFrame)
-    // can trigger concurrent WebContentsView setBounds calls that SIGSEGV on Electron 35.
+    // Coalesce native view updates to a stable ~30fps cadence. Electron 35 can
+    // leave a WebContentsView white (or crash on some macOS builds) when
+    // setBounds is hammered by concurrent renderer IPC calls. A 32ms trailing
+    // update stays visually attached without the old 50ms drag lag.
     if (!this.visible) {
+      this._boundsTransitionToken += 1;
+      this._boundsTransitioning = false;
       if (this._syncTimer) { clearTimeout(this._syncTimer); this._syncTimer = null; }
       this.syncAttachedView();
+    } else if (info.transition === true) {
+      return this.settleBoundsTransition();
     } else if (!this._syncTimer) {
-      this._syncTimer = setTimeout(() => { this._syncTimer = null; this.syncAttachedView(); }, 50);
+      this._syncTimer = setTimeout(() => {
+        this._syncTimer = null;
+        this.syncAttachedView();
+      }, 32);
     }
     return this.state();
   }
@@ -977,17 +1301,152 @@ class BrowserTabManager {
     if (blocked) return blocked;
     const wc = tab.view.webContents;
     try {
+      try {
+        await this._setFileChooserInterception(tab, true);
+      } catch (err) {
+        return {
+          ok: false,
+          code: 'FILE_CHOOSER_GUARD_UNAVAILABLE',
+          error: 'Secure file chooser interception is unavailable: ' + String((err && err.message) || err),
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          tabId: tab.id,
+        };
+      }
       const before = await this._contentState(wc);
+      tab.lastAgentFileChooser = null;
+      const chooserPromise = new Promise((resolve) => { tab.agentFileChooserResolver = resolve; });
       this._markAgentInput(tab);
       wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
       wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
       wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
-      await this._waitForClickOutcome(wc, before);
+      const outcome = await Promise.race([
+        this._waitForClickOutcome(wc, before).then(() => ({ kind: 'page' })),
+        chooserPromise.then((target) => ({ kind: 'file-chooser', target })),
+      ]);
+      if (outcome && outcome.kind === 'file-chooser') {
+        if (!outcome.target || outcome.target.error) {
+          return {
+            ok: false,
+            code: String(outcome.target && outcome.target.code || 'FILE_CHOOSER_TARGET_UNVERIFIED'),
+            error: String(outcome.target && outcome.target.error || 'The intercepted file input could not be verified.'),
+            url: wc.getURL(),
+            title: wc.getTitle(),
+            tabId: tab.id,
+          };
+        }
+        return {
+          ok: false,
+          code: 'FILE_CHOOSER_INTERCEPTED',
+          error: 'A file chooser was intercepted. Use browser_upload_files with the returned chooser_id.',
+          chooserId: outcome.target.chooserId,
+          uploadTarget: outcome.target,
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          tabId: tab.id,
+          box: info && info.box ? info.box : null,
+        };
+      }
       return this._finishClick(tab, info);
     } finally {
+      tab.agentFileChooserResolver = null;
+      await this._setFileChooserInterception(tab, false).catch(() => {});
       tab.agentClickInFlight = false;
       tab.lastAgentClickAt = Date.now();
     }
+  }
+
+  async prepareUpload({ chooserId = '', ref = '', tabId = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No browser tab is open.' };
+    this._pruneUploadTargets(tab);
+    let target = null;
+    const chooserKey = String(chooserId || '').trim();
+    if (chooserKey) {
+      const chooser = tab.fileChoosers.get(chooserKey);
+      if (!chooser) return { ok: false, error: 'The intercepted file chooser expired or is no longer available.', code: 'FILE_CHOOSER_EXPIRED' };
+      target = tab.uploadTargets.get(chooser.targetId) || null;
+    } else if (ref) {
+      try {
+        target = await this._targetFromRef(tab, ref);
+      } catch (err) {
+        return { ok: false, error: String((err && err.message) || err), code: 'FILE_INPUT_NOT_FOUND' };
+      }
+    } else {
+      return { ok: false, error: 'chooserId or ref is required.' };
+    }
+    if (!target) return { ok: false, error: 'The browser upload target is no longer available.', code: 'FILE_INPUT_EXPIRED' };
+    if (tab.view.webContents.getURL() !== target.topUrl) {
+      return { ok: false, error: 'The page changed after the file chooser was captured. Click the upload control again.', code: 'UPLOAD_PAGE_CHANGED' };
+    }
+    return { ok: true, target: this._publicUploadTarget(target) };
+  }
+
+  async setInputFiles({ targetId = '', files = [], tabId = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No browser tab is open.' };
+    this._pruneUploadTargets(tab);
+    const target = tab.uploadTargets.get(String(targetId || ''));
+    if (!target) return { ok: false, error: 'The approved browser upload target expired.', code: 'FILE_INPUT_EXPIRED' };
+    const entries = Array.isArray(files) ? files : [];
+    if (!entries.length || entries.length > BROWSER_UPLOAD_MAX_FILES) {
+      return { ok: false, error: `Choose between 1 and ${BROWSER_UPLOAD_MAX_FILES} files.` };
+    }
+    if (!target.multiple && entries.length !== 1) {
+      return { ok: false, error: 'This file input accepts only one file.' };
+    }
+    if (tab.view.webContents.getURL() !== target.topUrl) {
+      return { ok: false, error: 'The page changed after approval. Upload was cancelled.', code: 'UPLOAD_PAGE_CHANGED' };
+    }
+    const currentFrame = await this._frameState(tab, target.frameId);
+    const currentFrameUrl = (currentFrame && currentFrame.url) || target.topUrl;
+    if (
+      currentFrameUrl !== target.frameUrl
+      || String(currentFrame && currentFrame.loaderId || '') !== String(target.frameLoaderId || '')
+      || (urlOrigin(currentFrameUrl) || urlOrigin(target.topUrl)) !== target.origin
+    ) {
+      return { ok: false, error: 'The receiving frame changed after approval. Upload was cancelled.', code: 'UPLOAD_ORIGIN_CHANGED' };
+    }
+    const validatedPaths = [];
+    const publicFiles = [];
+    for (const entry of entries) {
+      const rawFilePath = String(entry && entry.path || '').trim();
+      const expectedSize = Number(entry && entry.size);
+      const expectedSha256 = String(entry && entry.sha256 || '').toLowerCase();
+      if (!rawFilePath || !expectedSha256) return { ok: false, error: 'File validation metadata is incomplete.' };
+      const filePath = path.resolve(rawFilePath);
+      let lst = null;
+      try { lst = fs.lstatSync(filePath); } catch (_) { return { ok: false, error: `File is no longer available: ${path.basename(filePath)}` }; }
+      if (lst.isSymbolicLink() || !lst.isFile()) return { ok: false, error: `Only regular, non-symlink files may be uploaded: ${path.basename(filePath)}` };
+      if (lst.size > BROWSER_UPLOAD_MAX_FILE_BYTES || lst.size !== expectedSize) {
+        return { ok: false, error: `File size changed or exceeds the upload limit: ${path.basename(filePath)}` };
+      }
+      const actualSha256 = await sha256File(filePath);
+      if (actualSha256 !== expectedSha256) {
+        return { ok: false, error: `File content changed after approval: ${path.basename(filePath)}`, code: 'UPLOAD_FILE_CHANGED' };
+      }
+      validatedPaths.push(filePath);
+      publicFiles.push({ name: path.basename(filePath), size: lst.size, sha256: actualSha256 });
+    }
+    try {
+      const debug = await this._ensureDebugger(tab);
+      await debug.sendCommand('DOM.setFileInputFiles', {
+        files: validatedPaths,
+        backendNodeId: target.backendNodeId,
+      });
+    } catch (err) {
+      return { ok: false, error: 'Failed to set browser file input: ' + String((err && err.message) || err), code: 'SET_INPUT_FILES_FAILED' };
+    }
+    tab.uploadTargets.delete(target.id);
+    if (target.chooserId) tab.fileChoosers.delete(target.chooserId);
+    return {
+      ok: true,
+      target: this._publicUploadTarget(target),
+      files: publicFiles,
+      url: tab.view.webContents.getURL(),
+      title: tab.view.webContents.getTitle(),
+      tabId: tab.id,
+    };
   }
 
   async _finishClick(tab, info) {
@@ -1185,11 +1644,79 @@ class BrowserTabManager {
     await tab.view.webContents.executeJavaScript(`window.scrollBy(${JSON.stringify(deltaX)},${JSON.stringify(deltaY)})`, true).catch(() => {});
     return { ok: true };
   }
+
+  closeAll() {
+    if (this._syncTimer) clearTimeout(this._syncTimer);
+    this._syncTimer = null;
+    if (this._repaintTimer) clearTimeout(this._repaintTimer);
+    this._repaintTimer = null;
+    this._boundsTransitionToken += 1;
+    this._boundsTransitioning = false;
+    for (const tab of Array.from(this.tabs.values())) {
+      this.detachView(tab);
+      try { tab.view.webContents.close(); } catch (_) {}
+    }
+    this.tabs.clear();
+    this.activeTabId = '';
+    this.attachedTabId = '';
+    this.visible = false;
+  }
 }
 
-function getBrowserTabManager() {
-  if (!browserTabManager) browserTabManager = new BrowserTabManager();
-  return browserTabManager;
+function getBrowserTabManager(sessionId = activeBrowserSessionId) {
+  const normalized = normalizeBrowserSessionId(sessionId);
+  if (!browserTabManagers.has(normalized)) {
+    browserTabManagers.set(normalized, new BrowserTabManager(normalized));
+  }
+  return browserTabManagers.get(normalized);
+}
+
+function activateBrowserSession(info = {}) {
+  const sessionId = normalizeBrowserSessionId(info.sessionId || info.session_id);
+  if (sessionId !== activeBrowserSessionId) {
+    const previous = browserTabManagers.get(activeBrowserSessionId);
+    if (previous) {
+      previous.visible = false;
+      previous.syncAttachedView();
+    }
+    activeBrowserSessionId = sessionId;
+  }
+  const manager = getBrowserTabManager(sessionId);
+  manager.setContext(info);
+  manager.syncAttachedView();
+  manager.emitState();
+  return manager;
+}
+
+function hideAllBrowserSessions() {
+  for (const manager of browserTabManagers.values()) {
+    manager.setBounds({ visible: false });
+  }
+}
+
+function setBrowserSurfaceObscured(obscured = false) {
+  browserSurfaceObscured = obscured === true;
+  for (const manager of browserTabManagers.values()) {
+    manager.setObscured(browserSurfaceObscured);
+  }
+  return getBrowserTabManager(activeBrowserSessionId).state();
+}
+
+function closeAllBrowserSessions() {
+  for (const manager of browserTabManagers.values()) manager.closeAll();
+  browserTabManagers.clear();
+  activeBrowserSessionId = '';
+  browserSurfaceObscured = false;
+}
+
+function closeBrowserSession(sessionId) {
+  const normalized = normalizeBrowserSessionId(sessionId);
+  const manager = browserTabManagers.get(normalized);
+  if (!manager) return { ok: true, sessionId: normalized, closed: false };
+  manager.closeAll();
+  browserTabManagers.delete(normalized);
+  if (activeBrowserSessionId === normalized) activeBrowserSessionId = '';
+  return { ok: true, sessionId: normalized, closed: true };
 }
 
 function getAppUseManager() {
@@ -1278,17 +1805,39 @@ async function captureAppUseTarget(target) {
   };
 }
 
-async function handleBrowserRpc(method, args) {
-  const manager = getBrowserTabManager();
+function browserRpcSessionId(args = {}, context = {}) {
+  if (Object.prototype.hasOwnProperty.call(context || {}, 'sessionId')) {
+    return normalizeBrowserSessionId(context.sessionId);
+  }
+  if (Object.prototype.hasOwnProperty.call(context || {}, 'session_id')) {
+    return normalizeBrowserSessionId(context.session_id);
+  }
+  if (Object.prototype.hasOwnProperty.call(args || {}, 'sessionId')) {
+    return normalizeBrowserSessionId(args.sessionId);
+  }
+  if (Object.prototype.hasOwnProperty.call(args || {}, 'session_id')) {
+    return normalizeBrowserSessionId(args.session_id);
+  }
+  return activeBrowserSessionId;
+}
+
+async function handleBrowserRpc(method, args, context = {}) {
+  if (method === 'setContext') {
+    return activateBrowserSession(args || {}).state();
+  }
+  if (method === 'closeSession') {
+    return closeBrowserSession(browserRpcSessionId(args, context));
+  }
+  const manager = getBrowserTabManager(browserRpcSessionId(args, context));
+  const roundId = String(context.roundId || context.round_id || args && (args.roundId || args.round_id) || '').trim();
+  if (roundId) manager.setContext({ roundId });
   switch (method) {
     case 'state':
       return manager.state();
     case 'setBounds':
       return manager.setBounds(args || {});
-    case 'setContext':
-      return manager.setContext(args || {});
     case 'setObscured':
-      return manager.setObscured(args && args.obscured);
+      return setBrowserSurfaceObscured(args && args.obscured);
     case 'createTab':
       await manager.createTab(args || {});
       return manager.state();
@@ -1320,6 +1869,10 @@ async function handleBrowserRpc(method, args) {
       return manager.networkLog(args || {});
     case 'screenshot':
       return manager.screenshot(args || {});
+    case 'prepareUpload':
+      return manager.prepareUpload(args || {});
+    case 'setInputFiles':
+      return manager.setInputFiles(args || {});
     case 'goBack':
       return manager.goBack();
     case 'goForward':
@@ -1366,7 +1919,14 @@ function startElectronRpcServer() {
             const payload = JSON.parse(body || '{}');
             const result = rpcPath === '/app/rpc'
               ? await handleAppUseRpc(String(payload.method || ''), payload.args || {})
-              : await handleBrowserRpc(String(payload.method || ''), payload.args || {});
+              : await handleBrowserRpc(
+                  String(payload.method || ''),
+                  payload.args || {},
+                  {
+                    sessionId: Object.prototype.hasOwnProperty.call(payload, 'sessionId') ? payload.sessionId : '',
+                    roundId: payload.roundId || '',
+                  }
+                );
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result || { ok: true }));
           } catch (err) {
@@ -2140,13 +2700,13 @@ function installLocalNavigationGuards(window, port, { allowLocalPopups = false }
       return;
     }
     // Navigation allowed — hide the browser view
-    if (browserTabManager) browserTabManager.setBounds({ visible: false });
+    hideAllBrowserSessions();
   });
   // did-start-navigation 补充 will-navigate 不触发的场景（Cmd+R 等），
   // 但排除 SPA 同文档导航（hash 变更 / pushState）。
   window.webContents.on('did-start-navigation', (event, url, isInPlace, isMainFrame) => {
     if (isInPlace) return;
-    if (isMainFrame && browserTabManager) browserTabManager.setBounds({ visible: false });
+    if (isMainFrame) hideAllBrowserSessions();
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -2331,7 +2891,7 @@ async function createMainWindow(shellOverride) {
   });
 
   mainWindow.on('closed', () => {
-    if (browserTabManager) browserTabManager.setBounds({ visible: false });
+    hideAllBrowserSessions();
     mainWindow = null;
   });
 
@@ -2576,45 +3136,47 @@ if (!gotSingleInstanceLock) {
       const target = (mode === 'legacy' || mode === 'agent') ? 'legacy' : 'workbench';
       return reopenWindowForShell(target);
     });
-    ipcMain.handle('browser:get-state', () => getBrowserTabManager().state());
-    ipcMain.handle('browser:set-bounds', (_event, info) => handleBrowserRpc('setBounds', info || {}));
+    ipcMain.handle('browser:get-state', (_event, info) => handleBrowserRpc('state', {}, info || {}));
+    ipcMain.handle('browser:set-bounds', (_event, info) => handleBrowserRpc('setBounds', info || {}, info || {}));
     ipcMain.handle('browser:set-context', (_event, info) => handleBrowserRpc('setContext', info || {}));
-    ipcMain.handle('browser:set-obscured', (_event, obscured) => handleBrowserRpc('setObscured', { obscured: obscured === true }));
+    ipcMain.handle('browser:set-obscured', (_event, info) => handleBrowserRpc('setObscured', info || {}, info || {}));
     ipcMain.handle('browser:create-tab', async (_event, info) => {
-      const result = await handleBrowserRpc('createTab', info || {});
-      getBrowserTabManager().recordUserEvent('navigate', { payload: { action: 'create_tab', url: info && info.url || '' } });
+      const result = await handleBrowserRpc('createTab', info || {}, info || {});
+      getBrowserTabManager(browserRpcSessionId(info || {}, info || {})).recordUserEvent('navigate', { payload: { action: 'create_tab', url: info && info.url || '' } });
       return result;
     });
-    ipcMain.handle('browser:activate-tab', async (_event, tabId) => {
-      const result = await handleBrowserRpc('activateTab', { tabId });
-      getBrowserTabManager().recordUserEvent('select_tab', { payload: { tabId: String(tabId || '') } });
+    ipcMain.handle('browser:activate-tab', async (_event, info) => {
+      const result = await handleBrowserRpc('activateTab', info || {}, info || {});
+      getBrowserTabManager(browserRpcSessionId(info || {}, info || {})).recordUserEvent('select_tab', { payload: { tabId: String(info && info.tabId || '') } });
       return result;
     });
-    ipcMain.handle('browser:close-tab', async (_event, tabId) => {
-      getBrowserTabManager().recordUserEvent('close_tab', { payload: { tabId: String(tabId || '') } });
-      return handleBrowserRpc('closeTab', { tabId });
+    ipcMain.handle('browser:close-tab', async (_event, info) => {
+      getBrowserTabManager(browserRpcSessionId(info || {}, info || {})).recordUserEvent('close_tab', { payload: { tabId: String(info && info.tabId || '') } });
+      return handleBrowserRpc('closeTab', info || {}, info || {});
     });
     ipcMain.handle('browser:navigate', async (_event, info) => {
-      const result = await handleBrowserRpc('navigate', info || {});
-      getBrowserTabManager().recordUserEvent('navigate', { payload: { url: info && info.url || '' } });
+      const result = await handleBrowserRpc('navigate', info || {}, info || {});
+      const manager = getBrowserTabManager(browserRpcSessionId(info || {}, info || {}));
+      manager.recordUserEvent('navigate', { payload: { url: info && info.url || '' } });
+      return result && result.ok === false ? result : manager.state();
+    });
+    ipcMain.handle('browser:go-back', async (_event, info) => {
+      const result = await handleBrowserRpc('goBack', {}, info || {});
+      getBrowserTabManager(browserRpcSessionId({}, info || {})).recordUserEvent('navigate', { payload: { action: 'go_back' } });
       return result;
     });
-    ipcMain.handle('browser:go-back', async () => {
-      const result = await handleBrowserRpc('goBack', {});
-      getBrowserTabManager().recordUserEvent('navigate', { payload: { action: 'go_back' } });
+    ipcMain.handle('browser:go-forward', async (_event, info) => {
+      const result = await handleBrowserRpc('goForward', {}, info || {});
+      getBrowserTabManager(browserRpcSessionId({}, info || {})).recordUserEvent('navigate', { payload: { action: 'go_forward' } });
       return result;
     });
-    ipcMain.handle('browser:go-forward', async () => {
-      const result = await handleBrowserRpc('goForward', {});
-      getBrowserTabManager().recordUserEvent('navigate', { payload: { action: 'go_forward' } });
+    ipcMain.handle('browser:reload', async (_event, info) => {
+      const result = await handleBrowserRpc('reload', {}, info || {});
+      getBrowserTabManager(browserRpcSessionId({}, info || {})).recordUserEvent('navigate', { payload: { action: 'reload' } });
       return result;
     });
-    ipcMain.handle('browser:reload', async () => {
-      const result = await handleBrowserRpc('reload', {});
-      getBrowserTabManager().recordUserEvent('navigate', { payload: { action: 'reload' } });
-      return result;
-    });
-    ipcMain.handle('browser:set-muted', (_event, info) => handleBrowserRpc('setMuted', info || {}));
+    ipcMain.handle('browser:set-muted', (_event, info) => handleBrowserRpc('setMuted', info || {}, info || {}));
+    ipcMain.handle('browser:screenshot', (_event, info) => handleBrowserRpc('screenshot', info || {}, info || {}));
     spawnPython();
     if (!launchHidden) {
       createMainWindow();
@@ -2640,6 +3202,7 @@ if (!gotSingleInstanceLock) {
     appUsePointerHideTimer = null;
     if (appUsePointerWindow && !appUsePointerWindow.isDestroyed()) appUsePointerWindow.destroy();
     appUsePointerWindow = null;
+    closeAllBrowserSessions();
     killPython();
   });
 

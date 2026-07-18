@@ -75,6 +75,7 @@ _MAIN_ONLY_TOOLS = {
     "browser_click_at",
     "browser_type",
     "browser_type_ref",
+    "browser_upload_files",
     "browser_wait",
     "browser_network_log",
     "browser_request_takeover",
@@ -186,7 +187,10 @@ async def _request_scope_elevation(
 
     mode = _state._permission_mode.get()
     # 破坏性/不可逆操作必须由真人确认，不能被 full_access 或 auto mode 短路。
-    requires_human_confirmation = permission_kind == "destructive_confirmation"
+    requires_human_confirmation = permission_kind in {
+        "destructive_confirmation",
+        "external_upload_confirmation",
+    }
     # 完全访问模式：工具层通常已用 _temporary_full_access 短路，这里保险直接放行。
     if mode == "full_access" and not requires_human_confirmation:
         return None
@@ -412,6 +416,75 @@ async def _request_external_delivery_confirmation(
         permission_kind="external_delivery_request",
         options=["允许这次", "本次会话内总是允许", "拒绝"],
         scope_hint="外部通信/文件外发的 ",
+    )
+
+
+async def _request_external_upload_confirmation(
+    *,
+    fingerprint: str,
+    target: dict[str, Any],
+    files: list[dict[str, Any]],
+    reason: str = "",
+) -> str | None:
+    """Require a human, single-use approval before exposing files to a website."""
+    from cyrene.agent import state as _state
+
+    normalized_fingerprint = str(fingerprint or "").strip()
+    if normalized_fingerprint in _state._external_upload_confirmation_fingerprints.get():
+        return None
+
+    safe_target = {
+        "id": str(target.get("id") or ""),
+        "tab_id": str(target.get("tabId") or ""),
+        "origin": str(target.get("origin") or ""),
+        "top_url": str(target.get("topUrl") or "")[:1000],
+        "frame_url": str(target.get("frameUrl") or "")[:1000],
+        "accept": str(target.get("accept") or "")[:240],
+        "multiple": bool(target.get("multiple")),
+    }
+    safe_files = [
+        {
+            "name": str(item.get("name") or "")[:240],
+            "size": int(item.get("size") or 0),
+            "sha256": str(item.get("sha256") or "")[:64],
+            "content_type": str(item.get("content_type") or "application/octet-stream")[:160],
+        }
+        for item in files
+    ]
+    await _state._publish_runtime_event({
+        "type": "external_upload_confirmation",
+        "decision": "requested",
+        "tool_name": "browser_upload_files",
+        "fingerprint": normalized_fingerprint,
+        "target": safe_target,
+        "files": safe_files,
+    })
+    file_lines = "\n".join(
+        f"- {item['name']} ({item['size']} bytes, {item['content_type']}, SHA-256 {item['sha256']})"
+        for item in safe_files
+    )
+    detail = (
+        f"接收站点：{safe_target['origin'] or safe_target['frame_url']}\n"
+        f"页面：{safe_target['top_url']}\n"
+        f"文件输入限制：accept={safe_target['accept'] or '(未声明)'}, multiple={safe_target['multiple']}\n"
+        f"文件：\n{file_lines}\n"
+        "注意：设置文件后，网页可能立即开始上传，无需再次点击提交。"
+    )
+    if reason:
+        detail += f"\nAgent 说明：{str(reason)[:500]}"
+    return await _request_scope_elevation(
+        tool_name="browser_upload_files",
+        path_hint=", ".join(item["name"] for item in safe_files),
+        operation=f"向 {safe_target['origin'] or '外部网页'} 上传本地文件",
+        reason=detail,
+        permission_kind="external_upload_confirmation",
+        options=["允许这次上传", "拒绝"],
+        scope_hint="本地数据外发的 ",
+        meta_extra={
+            "fingerprint": normalized_fingerprint,
+            "target": safe_target,
+            "files": safe_files,
+        },
     )
 
 

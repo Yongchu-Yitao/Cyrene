@@ -32,6 +32,26 @@ def page_observation_lines(result: dict[str, Any]) -> list[str]:
     return lines
 
 
+def file_chooser_instruction(result: dict[str, Any]) -> str:
+    """Return an agent-actionable message for a securely intercepted chooser."""
+    if str(result.get("code") or "") != "FILE_CHOOSER_INTERCEPTED":
+        return ""
+    chooser_id = str(result.get("chooserId") or "").strip()
+    target = result.get("uploadTarget") if isinstance(result.get("uploadTarget"), dict) else {}
+    origin = str(target.get("origin") or target.get("frameUrl") or result.get("url") or "")
+    accept = str(target.get("accept") or "") or "(not declared)"
+    multiple = bool(target.get("multiple"))
+    return (
+        "FILE_CHOOSER_INTERCEPTED: the native system picker was suppressed.\n"
+        f"chooser_id: {chooser_id}\n"
+        f"receiving_origin: {origin}\n"
+        f"accept: {accept}\n"
+        f"multiple: {multiple}\n"
+        "Next action: call browser_upload_files with this chooser_id and the exact local file paths. "
+        "That tool will pause for a human, single-use external-upload approval."
+    )
+
+
 def page_link_lines(result: dict[str, Any]) -> list[str]:
     """Format readable anchors returned by browser navigation."""
     links = result.get("links")
@@ -52,4 +72,4 @@ def page_link_lines(result: dict[str, Any]) -> list[str]:
     return ["Text links on this page:\n" + "\n".join(rows)]
 
 
-__all__ = ["page_signal_lines", "page_observation_lines", "page_link_lines"]
+__all__ = ["page_signal_lines", "page_observation_lines", "page_link_lines", "file_chooser_instruction"]

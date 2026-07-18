@@ -8704,7 +8704,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         ok = await delete_backup(name)
         return {"ok": ok}
 
-    @router.post("/api/backup/download/{backup_name}")
+    @router.get("/api/backup/download/{backup_name}")
     async def api_backup_download(backup_name: str):
         from cyrene.backup import _BACKUP_DIR
         target = (_BACKUP_DIR / backup_name).resolve()
@@ -11077,6 +11077,9 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             "delete_confirmation",
             "task_permission_request",
             "git_commit",
+            "destructive_confirmation",
+            "external_delivery_request",
+            "external_upload_confirmation",
         }
         pending_options = pending.get("options") if isinstance(pending.get("options"), list) else []
         normalized_answer = answer_text.strip().casefold()

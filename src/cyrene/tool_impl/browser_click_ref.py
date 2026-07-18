@@ -34,6 +34,10 @@ async def _tool_browser_click_ref(args: dict[str, Any], _bot: Any, _chat_id: int
         parts = [f"Clicked {ref}.", f"URL: {result.get('url', '—')}", f"Title: {result.get('title', '—')}" ]
         parts.extend(page_observation_lines(result))
         return "\n".join(parts)
+    from cyrene.tool_impl.browser_output import file_chooser_instruction
+    chooser = file_chooser_instruction(result)
+    if chooser:
+        return chooser
     return f"Click failed: {result.get('error', 'unknown error')}"
 
 

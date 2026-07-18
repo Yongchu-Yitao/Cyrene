@@ -309,7 +309,7 @@ function SettingsOverlay({
 
     fetch("/api/settings/tools").then(function (r) { return r.json(); }).then(function (p) {
       var tools = p.tools || [];
-      var browserToolNames = ["browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_click_ref", "browser_click_text", "browser_click_at", "browser_type", "browser_type_ref", "browser_wait", "browser_network_log", "browser_tab_list", "browser_tab_new", "browser_tab_select", "browser_tab_close", "browser_scroll", "browser_user_events", "browser_request_takeover"];
+      var browserToolNames = ["browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_click_ref", "browser_click_text", "browser_click_at", "browser_type", "browser_type_ref", "browser_upload_files", "browser_wait", "browser_network_log", "browser_tab_list", "browser_tab_new", "browser_tab_select", "browser_tab_close", "browser_scroll", "browser_user_events", "browser_request_takeover"];
       setToolList(tools);
       if (tools.length) {
         var browserToolsList = tools.filter(function (tool) { return browserToolNames.indexOf(tool.name) >= 0; });
@@ -398,7 +398,7 @@ function SettingsOverlay({
   }
 
   function saveBrowserTools(nextEnabled) {
-    var browserToolNames = ["browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_click_ref", "browser_click_text", "browser_click_at", "browser_type", "browser_type_ref", "browser_wait", "browser_network_log", "browser_tab_list", "browser_tab_new", "browser_tab_select", "browser_tab_close", "browser_scroll", "browser_user_events", "browser_request_takeover"];
+    var browserToolNames = ["browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_click_ref", "browser_click_text", "browser_click_at", "browser_type", "browser_type_ref", "browser_upload_files", "browser_wait", "browser_network_log", "browser_tab_list", "browser_tab_new", "browser_tab_select", "browser_tab_close", "browser_scroll", "browser_user_events", "browser_request_takeover"];
     var nextToolList = toolList.map(function (tool) {
       return browserToolNames.indexOf(tool.name) >= 0 ? { ...tool, enabled: nextEnabled } : tool;
     });
@@ -1214,7 +1214,7 @@ function DataPanel(p) {
           if (!backupList.length) { setBackupMsg(t("settings.backupNoBackups")); return; }
           var last = backupList[0];
           fetch("/api/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: last.path }) })
-            .then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupMsg(t("settings.backupRestored", { n: d.restored.length })); else throw new Error(d.error); })
+            .then(function (r) { return r.json(); }).then(function (d) { if (d.ok) setBackupMsg(t("settings.backupRestored", { n: d.restored.length }) + " " + t("settings.backupRestartRequired")); else throw new Error(d.error || (d.errors || []).join("; ")); })
             .catch(function (e) { setBackupMsg(t("settings.backupRestoreFailed") + ": " + e.message); });
         } }, t("settings.backupRestoreBtn")),
       ),

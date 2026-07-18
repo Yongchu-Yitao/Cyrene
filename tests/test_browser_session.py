@@ -9,6 +9,7 @@ Covers the live-view foundation without launching a real browser:
 """
 
 import asyncio
+import json
 import sys
 import time
 from pathlib import Path
@@ -1197,6 +1198,77 @@ async def test_navigate_uses_electron_rpc_when_available(monkeypatch):
     assert result["text"] == "Readable body"
     assert result["links"] == [{"text": "Result", "url": "https://example.com/result"}]
     assert [e for e in captured if e.get("type") == "browser_frame"]
+
+
+async def test_electron_rpc_carries_originating_session_context(monkeypatch):
+    from cyrene import browser
+    from cyrene.agent import state
+
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
+    captured: dict = {}
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True}
+
+    class _Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, **kwargs):
+            captured.update(json.loads(kwargs["content"]))
+            return _Response()
+
+    monkeypatch.setattr(browser.httpx, "AsyncClient", _Client)
+    session_token = state._current_session_id.set("chat-isolated-a")
+    round_token = state._current_round_id.set("round-a")
+    try:
+        result = await browser._electron_browser_rpc("navigate", {"url": "https://example.com"})
+    finally:
+        state._current_round_id.reset(round_token)
+        state._current_session_id.reset(session_token)
+
+    assert result == {"ok": True}
+    assert captured == {
+        "method": "navigate",
+        "sessionId": "chat-isolated-a",
+        "roundId": "round-a",
+        "args": {"url": "https://example.com"},
+    }
+
+
+async def test_close_electron_browser_session_targets_only_requested_chat(monkeypatch):
+    from cyrene import browser
+
+    calls = []
+
+    async def fake_rpc(method, args=None, **kwargs):
+        calls.append((method, args or {}, kwargs))
+        return {"ok": True, "sessionId": kwargs.get("session_id"), "closed": True}
+
+    monkeypatch.setattr(browser, "electron_browser_available", lambda: True)
+    monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
+
+    result = await browser.close_electron_browser_session("chat-to-delete")
+
+    assert result["closed"] is True
+    assert calls == [
+        (
+            "closeSession",
+            {},
+            {"timeout": 10.0, "session_id": "chat-to-delete", "round_id": ""},
+        )
+    ]
 
 
 async def test_click_and_type_use_electron_rpc_when_available(monkeypatch):
