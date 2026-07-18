@@ -2571,6 +2571,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var [nativeBrowserState, setNativeBrowserState] = useWbcState(null);
   var effectiveMode = mode || "pip";
   var displayBrowserState = nativeBrowserState || browserState || {};
+  var hasNoBrowserTabs = Array.isArray(displayBrowserState.tabs) && displayBrowserState.tabs.length === 0;
 
   function cancelModeTransition() {
     if (modeTransitionRafRef.current) {
@@ -2761,6 +2762,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   }, []);
 
   if (!visible) return null;
+  if (hasNoBrowserTabs && (effectiveMode === "pip" || effectiveMode === "minimized")) return null;
   if (effectiveMode === "minimized") {
     return (
       <button type="button" className="wbc-browser-restore-float" onClick={onRestore} title={wbcT("workbenchChat.browserRestoreHint", "Reopen browser window")}>

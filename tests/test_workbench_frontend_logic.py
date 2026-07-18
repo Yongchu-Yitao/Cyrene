@@ -514,6 +514,8 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     assert "WBC_ICONS.windowMaximize" in source
     assert "WBC_ICONS.windowMinimize" in source
     minimized_surface = source.split('effectiveMode === "minimized"', 1)[1].split("var inlineStyle", 1)[0]
+    assert 'Array.isArray(displayBrowserState.tabs) && displayBrowserState.tabs.length === 0' in source
+    assert 'hasNoBrowserTabs && (effectiveMode === "pip" || effectiveMode === "minimized")' in source
     assert "wbc-browser-title-pill" not in minimized_surface
     assert "WBC_ICONS.windowMaximize" not in minimized_surface
     assert "WBC_ICONS.windowRestore" not in minimized_surface
@@ -549,12 +551,12 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert 'wbcNotifyBrowserWindowInteraction(true, "mode", browserSessionId);' in source
     assert 'wbcNotifyBrowserWindowInteraction(false, "mode", browserSessionId);' in source
     sync_view_block = main.split("  syncAttachedView() {", 1)[1].split("\n  setBounds(", 1)[0]
-    set_bounds_index = sync_view_block.index("active.view.setBounds(this.bounds)")
+    set_bounds_index = sync_view_block.index("active.view.setBounds(targetBounds)")
     attach_index = sync_view_block.index("win.contentView.addChildView(active.view)")
     assert set_bounds_index < attach_index
     assert "active.view.setVisible(false)" in sync_view_block
     assert "active.view.setVisible(true)" in sync_view_block
-    assert "active.view.setBorderRadius(this.borderRadius)" in sync_view_block
+    assert "active.view.setBorderRadius(targetRadius)" in sync_view_block
     assert "this.borderRadius = Math.max(0, Math.min(24" in main
     assert 'node.closest(".wbc-browser-window.pip") ? 11 : 0' in browser_view
     assert "borderRadius: borderRadius" in browser_view
@@ -562,6 +564,66 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "wc.invalidate()" in main
     assert "settleBoundsTransition" in main
     assert "active.view.webContents.capturePage()" in main
+
+
+def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    browser_view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+
+    create_view = main.split("  createView() {", 1)[1].split("\n  setContext(", 1)[0]
+    assert "disableHtmlFullscreenWindowResize: true" in create_view
+    assert "wc.on('enter-html-full-screen'" in create_view
+    assert "this.enterVideoFullscreen(view)" in create_view
+    assert "wc.on('leave-html-full-screen'" in create_view
+    assert "this.finishVideoFullscreen(view)" in create_view
+
+    enter_fullscreen = main.split("  async enterVideoFullscreen(view) {", 1)[1].split("\n  finishVideoFullscreen(", 1)[0]
+    assert "external: isMac" in enter_fullscreen
+    assert "if (isMac)" in enter_fullscreen
+    assert "const videoWindow = new BrowserWindow" in enter_fullscreen
+    assert "videoWindow.setFullScreen(true)" in enter_fullscreen
+    assert "else if ((isWindows || isLinux) && mainWindow && !mainWindow.isDestroyed())" in enter_fullscreen
+    assert "mainWindow.setFullScreen(true)" in enter_fullscreen
+    assert "this._mainFullscreenLeaveHandler" in enter_fullscreen
+    assert "this.requestVideoFullscreenExit()" in enter_fullscreen
+
+    finish_fullscreen = main.split("  finishVideoFullscreen(view) {", 1)[1].split("\n  createView()", 1)[0]
+    assert "!this._mainWindowWasFullScreen" in finish_fullscreen
+    assert "mainWindow.setFullScreen(false)" in finish_fullscreen
+    assert "mainWindow.removeListener('leave-full-screen', this._mainFullscreenLeaveHandler)" in finish_fullscreen
+
+    sync_view = main.split("  syncAttachedView() {", 1)[1].split("\n  async settleBoundsTransition", 1)[0]
+    assert "const fullscreenTab = this.fullscreenTab()" in sync_view
+    assert "const targetBounds = fullscreenActive ? this.fullscreenBounds(win) : this.bounds" in sync_view
+    assert "win.contentView.addChildView(active.view)" in sync_view
+    assert "videoFullscreen:" in main
+    assert "platform: process.platform" in main
+
+    assert 'className="browser-video-fullscreen-overlay"' in browser_view
+    assert "已在全屏播放" in browser_view
+    assert "视频正在独立的全屏窗口中播放" in browser_view
+    assert ".browser-video-fullscreen-overlay" in styles
+
+    session_guards = main.split("function installBrowserSessionGuards(", 1)[1].split("\nclass BrowserTabManager", 1)[0]
+    assert "permission === 'fullscreen'" in session_guards
+    assert "browserSession.setPermissionCheckHandler" in session_guards
+    assert "browserSession.setPermissionRequestHandler" in session_guards
+    assert "callback(browserPermissionAllowed(permission))" in session_guards
+
+
+def test_electron_browser_tab_attaches_before_navigation_and_survives_media_load_errors():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    create_tab = main.split("  async createTab(", 1)[1].split("\n  activateTab(", 1)[0]
+
+    attach_index = create_tab.index("this.syncAttachedView()")
+    load_index = create_tab.index("await view.webContents.loadURL(tab.url)")
+    assert attach_index < load_index
+    assert "tab.lastLoadError = String" in create_tab
+    assert "Browser tab navigation reported an error" in create_tab
+    assert "return tab" in create_tab
 
 
 def test_workbench_browser_window_frame_stays_inside_chat_region():

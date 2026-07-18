@@ -14002,6 +14002,7 @@ html[data-theme="dark"] .wbc-trace {
 /* ---- browser panel ---- */
 
 .browser-view {
+  position: relative;
   flex: 1;
   min-height: 0;
   min-width: 0;
@@ -14219,6 +14220,43 @@ html[data-theme="dark"] .wbc-trace {
   object-fit: fill;
   pointer-events: none;
   user-select: none;
+}
+
+.browser-video-fullscreen-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  box-sizing: border-box;
+  text-align: center;
+  background: color-mix(in srgb, var(--wb-main-bg, #f5f6f8) 96%, transparent);
+  color: var(--wb-text, #17191d);
+}
+
+.browser-video-fullscreen-overlay strong {
+  font-size: calc(15px * var(--wb-ui-font-scale, 1));
+  font-weight: 760;
+}
+
+.browser-video-fullscreen-overlay > span:last-child {
+  color: var(--wb-muted, #6f737b);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+}
+
+.browser-video-fullscreen-icon {
+  width: 42px;
+  height: 42px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--wb-green, #1f9d57) 24%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--wb-green, #1f9d57) 12%, var(--wb-card-bg, #fff));
+  color: color-mix(in srgb, var(--wb-green, #1f9d57) 88%, var(--wb-text, #17191d));
 }
 
 .browser-empty {

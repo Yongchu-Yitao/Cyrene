@@ -36,6 +36,7 @@ function BrowserIcon({ name, size }) {
   if (name === "close") return <svg {...common}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>;
   if (name === "volume") return <svg {...common}><path d="M11 5 6 9H3v6h3l5 4V5Z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /></svg>;
   if (name === "muted") return <svg {...common}><path d="M11 5 6 9H3v6h3l5 4V5Z" /><path d="m16 9 5 5" /><path d="m21 9-5 5" /></svg>;
+  if (name === "fullscreen") return <svg {...common}><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5" /></svg>;
   return null;
 }
 
@@ -58,6 +59,8 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
 
   const active = state.activeTab || null;
   const tabs = Array.isArray(state.tabs) ? state.tabs : [];
+  const videoFullscreen = state.videoFullscreen || {};
+  const videoFullscreenActive = videoFullscreen.active === true;
 
   function refreshState() {
     if (!bridge || typeof bridge.getState !== "function") return;
@@ -343,6 +346,13 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
           </div>
         )}
       </div>
+      {videoFullscreenActive && (
+        <div className="browser-video-fullscreen-overlay" role="status" aria-live="polite">
+          <span className="browser-video-fullscreen-icon" aria-hidden="true"><BrowserIcon name="fullscreen" size={24} /></span>
+          <strong>已在全屏播放</strong>
+          <span>{videoFullscreen.external ? "视频正在独立的全屏窗口中播放" : "视频正在 Cyrene 内全屏播放"}</span>
+        </div>
+      )}
     </div>
   );
 }
