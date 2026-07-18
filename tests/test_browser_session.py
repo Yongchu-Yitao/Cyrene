@@ -1450,6 +1450,66 @@ async def test_electron_tab_management_apis(monkeypatch):
     assert any(c[0] == "activateTab" for c in calls)
 
 
+async def test_electron_scroll_forwards_nested_target_options(monkeypatch):
+    from cyrene import browser
+
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_PORT", "12345")
+    monkeypatch.setenv("CYRENE_ELECTRON_RPC_TOKEN", "token")
+    calls = []
+
+    async def fake_rpc(method, args=None, **_kw):
+        calls.append((method, args or {}))
+        return {"ok": True, "moved": True, "actualDeltaY": 240}
+
+    monkeypatch.setattr(browser, "_electron_browser_rpc", fake_rpc)
+
+    result = await browser.scroll_page(delta_x=4, delta_y=240, x=120, y=300, ref="e77")
+
+    assert result["moved"] is True
+    assert calls == [
+        ("scroll", {"deltaX": 4, "deltaY": 240, "x": 120, "y": 300, "ref": "e77"})
+    ]
+
+
+async def test_browser_scroll_tool_reports_actual_nested_scroll(monkeypatch):
+    from cyrene.tool_impl import browser_scroll as tool
+
+    captured = {}
+
+    async def fake_scroll_page(**kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": True,
+            "moved": True,
+            "actualDeltaY": 318,
+            "target": {"tag": "div", "id": "noteContainer", "ref": "77"},
+            "x": 174,
+            "y": 302,
+        }
+
+    monkeypatch.setattr("cyrene.browser.scroll_page", fake_scroll_page)
+
+    result = await tool._tool_browser_scroll(
+        {"delta_y": 500, "ref": "e77", "x": 174, "y": 302}, None, 0, "db", None
+    )
+
+    assert captured == {"delta_y": 500, "x": 174, "y": 302, "ref": "e77"}
+    assert result == "Scrolled noteContainer by 318px."
+
+
+async def test_browser_scroll_tool_does_not_claim_success_without_movement(monkeypatch):
+    from cyrene.tool_impl import browser_scroll as tool
+
+    async def fake_scroll_page(**_kwargs):
+        return {"ok": True, "moved": False, "actualDeltaY": 0, "x": 10, "y": 20}
+
+    monkeypatch.setattr("cyrene.browser.scroll_page", fake_scroll_page)
+
+    result = await tool._tool_browser_scroll({"delta_y": 500}, None, 0, "db", None)
+
+    assert result.startswith("Scroll had no effect.")
+
+
 async def test_browser_tab_tools_are_registered(monkeypatch):
     from cyrene import registry_tools as _rt
 

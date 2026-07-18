@@ -2074,11 +2074,25 @@ async def network_log(*, max_entries: int = 40) -> dict[str, Any]:
         return {"ok": False, "error": browser_runtime_unavailable_message(exc), "entries": []}
 
 
-async def scroll_page(*, delta_x: int = 0, delta_y: int = 500) -> dict[str, Any]:
+async def scroll_page(
+    *,
+    delta_x: int = 0,
+    delta_y: int = 500,
+    x: int | None = None,
+    y: int | None = None,
+    ref: str = "",
+) -> dict[str, Any]:
     """Scroll the current page by *delta_x* / *delta_y* pixels."""
     if electron_browser_available():
         try:
-            return await _electron_browser_rpc("scroll", {"deltaX": delta_x, "deltaY": delta_y})
+            payload: dict[str, Any] = {"deltaX": delta_x, "deltaY": delta_y}
+            if x is not None:
+                payload["x"] = x
+            if y is not None:
+                payload["y"] = y
+            if ref:
+                payload["ref"] = ref
+            return await _electron_browser_rpc("scroll", payload)
         except Exception as exc:
             logger.warning("Electron scroll failed (%s)", exc)
             return _electron_browser_failure(exc)
@@ -2091,8 +2105,82 @@ async def scroll_page(*, delta_x: int = 0, delta_y: int = 500) -> dict[str, Any]
         return {"ok": False, "error": "No page open. Call browser_navigate first."}
     try:
         page = await session.page()
-        await page.evaluate(f"window.scrollBy({delta_x}, {delta_y})")
-        return {"ok": True}
+        px = x
+        py = y
+        if ref:
+            box = await page.locator(f'[data-cyrene-ref="{ref.removeprefix("e")}"]').bounding_box()
+            if box is None:
+                return {"ok": False, "error": f"Scroll target {ref} not found."}
+            px = round(box["x"] + box["width"] / 2)
+            py = round(box["y"] + box["height"] / 2)
+        if px is None or py is None:
+            viewport = page.viewport_size or {"width": 1280, "height": 720}
+            px = round(viewport["width"] / 2) if px is None else px
+            py = round(viewport["height"] / 2) if py is None else py
+        probe_id = f"cyrene-scroll-{time.monotonic_ns()}"
+        before = await page.evaluate(
+            """([x, y, dx, dy, probeId]) => {
+                const root = document.scrollingElement || document.documentElement;
+                const canMove = (el) => {
+                    if (!(el instanceof Element)) return false;
+                    const style = getComputedStyle(el);
+                    const overflowX = style.overflowX || style.overflow;
+                    const overflowY = style.overflowY || style.overflow;
+                    const scrollableX = el === root || /^(auto|scroll|overlay)$/.test(overflowX);
+                    const scrollableY = el === root || /^(auto|scroll|overlay)$/.test(overflowY);
+                    const canX = dx > 0
+                        ? scrollableX && el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+                        : dx < 0 && scrollableX && el.scrollLeft > 1;
+                    const canY = dy > 0
+                        ? scrollableY && el.scrollTop + el.clientHeight < el.scrollHeight - 1
+                        : dy < 0 && scrollableY && el.scrollTop > 1;
+                    return canX || canY;
+                };
+                const parentOf = (el) => el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
+                let target = document.elementFromPoint(x, y);
+                while (target && !canMove(target)) target = parentOf(target);
+                if (!target && canMove(root)) target = root;
+                if (!target) return {found: false};
+                target.setAttribute('data-cyrene-scroll-probe', probeId);
+                return {
+                    found: true,
+                    tag: String(target.tagName || '').toLowerCase(),
+                    id: String(target.id || ''),
+                    ref: String(target.getAttribute('data-cyrene-ref') || ''),
+                    scrollLeft: Number(target.scrollLeft || 0),
+                    scrollTop: Number(target.scrollTop || 0),
+                };
+            }""",
+            [px, py, delta_x, delta_y, probe_id],
+        )
+        await page.mouse.move(px, py)
+        await page.mouse.wheel(delta_x, delta_y)
+        await page.wait_for_timeout(100)
+        after = await page.evaluate(
+            """(probeId) => {
+                const target = document.querySelector(`[data-cyrene-scroll-probe="${CSS.escape(probeId)}"]`);
+                if (!target) return {found: false};
+                const result = {
+                    found: true,
+                    scrollLeft: Number(target.scrollLeft || 0),
+                    scrollTop: Number(target.scrollTop || 0),
+                };
+                target.removeAttribute('data-cyrene-scroll-probe');
+                return result;
+            }""",
+            probe_id,
+        )
+        actual_delta_x = after.get("scrollLeft", 0) - before.get("scrollLeft", 0) if before.get("found") and after.get("found") else 0
+        actual_delta_y = after.get("scrollTop", 0) - before.get("scrollTop", 0) if before.get("found") and after.get("found") else 0
+        return {
+            "ok": True,
+            "moved": actual_delta_x != 0 or actual_delta_y != 0,
+            "actualDeltaX": actual_delta_x,
+            "actualDeltaY": actual_delta_y,
+            "target": {key: before.get(key, "") for key in ("tag", "id", "ref")} if before.get("found") else None,
+            "x": px,
+            "y": py,
+        }
     except Exception as exc:
         return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
 

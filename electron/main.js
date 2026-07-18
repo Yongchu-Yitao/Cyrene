@@ -1066,14 +1066,23 @@ class BrowserTabManager {
           emit("submit", {}, describe(event.target));
         }, true);
         let lastScroll = 0;
-        document.addEventListener("scroll", () => {
+        document.addEventListener("scroll", (event) => {
           const now = Date.now();
           if (now - lastScroll < 500) return;
           lastScroll = now;
+          const scrollTarget = event.target === document
+            ? document.scrollingElement
+            : event.target;
           emit("scroll", {
-            scrollX: Math.round(window.scrollX || 0),
-            scrollY: Math.round(window.scrollY || 0),
-          }, {});
+            scrollLeft: Math.round(scrollTarget && scrollTarget.scrollLeft || 0),
+            scrollTop: Math.round(scrollTarget && scrollTarget.scrollTop || 0),
+            scrollWidth: Math.round(scrollTarget && scrollTarget.scrollWidth || 0),
+            scrollHeight: Math.round(scrollTarget && scrollTarget.scrollHeight || 0),
+            clientWidth: Math.round(scrollTarget && scrollTarget.clientWidth || 0),
+            clientHeight: Math.round(scrollTarget && scrollTarget.clientHeight || 0),
+            rootScrollX: Math.round(window.scrollX || 0),
+            rootScrollY: Math.round(window.scrollY || 0),
+          }, describe(scrollTarget));
         }, true);
         return true;
       })()
@@ -1897,12 +1906,113 @@ class BrowserTabManager {
     return this.state();
   }
 
-  async scroll({ deltaX = 0, deltaY = 0, tabId = '' } = {}) {
+  async scroll({ deltaX = 0, deltaY = 0, x = null, y = null, ref = '', tabId = '' } = {}) {
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No browser tab is open.' };
+    const wc = tab.view.webContents;
+    const dx = Number(deltaX);
+    const dy = Number(deltaY);
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return { ok: false, error: 'Invalid scroll delta.' };
+
+    let px = x === null || x === undefined ? NaN : Number(x);
+    let py = y === null || y === undefined ? NaN : Number(y);
+    if (String(ref || '').trim()) {
+      const info = await this._findTarget(wc, { mode: 'ref', value: String(ref).trim() });
+      if (!info || !info.ok) {
+        return { ok: false, error: 'Scroll target ' + ((info && info.error) || 'not found'), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+      }
+      px = info.x;
+      py = info.y;
+    }
+    const bounds = tab.view.getBounds();
+    if (!Number.isFinite(px)) px = Math.floor(Math.max(1, bounds.width) / 2);
+    if (!Number.isFinite(py)) py = Math.floor(Math.max(1, bounds.height) / 2);
+    px = Math.max(0, Math.min(Math.max(0, bounds.width - 1), Math.round(px)));
+    py = Math.max(0, Math.min(Math.max(0, bounds.height - 1), Math.round(py)));
+
+    // Mark the nearest scrollable ancestor under the pointer so the result can
+    // report whether Chromium actually moved it. The wheel event itself is sent
+    // through Chromium's trusted input pipeline, matching a user's mouse/trackpad
+    // and allowing nested overflow containers to scroll.
+    const probeId = 'scroll_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+    const before = await wc.executeJavaScript(`(() => {
+      const x = ${JSON.stringify(px)};
+      const y = ${JSON.stringify(py)};
+      const dx = ${JSON.stringify(dx)};
+      const dy = ${JSON.stringify(dy)};
+      const probeId = ${JSON.stringify(probeId)};
+      const root = document.scrollingElement || document.documentElement;
+      const canMove = (el) => {
+        if (!(el instanceof Element)) return false;
+        const style = getComputedStyle(el);
+        const overflowX = style.overflowX || style.overflow;
+        const overflowY = style.overflowY || style.overflow;
+        const scrollableX = el === root || (/^(auto|scroll|overlay)$/).test(overflowX);
+        const scrollableY = el === root || (/^(auto|scroll|overlay)$/).test(overflowY);
+        const canX = dx > 0
+          ? scrollableX && el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+          : dx < 0 && scrollableX && el.scrollLeft > 1;
+        const canY = dy > 0
+          ? scrollableY && el.scrollTop + el.clientHeight < el.scrollHeight - 1
+          : dy < 0 && scrollableY && el.scrollTop > 1;
+        return canX || canY;
+      };
+      const parentOf = (el) => el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
+      let target = document.elementFromPoint(x, y);
+      while (target && !canMove(target)) target = parentOf(target);
+      if (!target && canMove(root)) target = root;
+      if (!target) return { found: false, x, y };
+      target.setAttribute('data-cyrene-scroll-probe', probeId);
+      return {
+        found: true,
+        x,
+        y,
+        tag: String(target.tagName || '').toLowerCase(),
+        id: String(target.id || ''),
+        ref: String(target.getAttribute('data-cyrene-ref') || ''),
+        scrollLeft: Number(target.scrollLeft || 0),
+        scrollTop: Number(target.scrollTop || 0),
+      };
+    })()`, true).catch(() => ({ found: false, x: px, y: py }));
+
     this._markAgentInput(tab);
-    await tab.view.webContents.executeJavaScript(`window.scrollBy(${JSON.stringify(deltaX)},${JSON.stringify(deltaY)})`, true).catch(() => {});
-    return { ok: true };
+    wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
+    wc.sendInputEvent({
+      type: 'mouseWheel',
+      x: px,
+      y: py,
+      // Electron follows native wheel direction (positive is left/up), while
+      // browser_scroll and Playwright use positive deltas for right/down.
+      deltaX: -dx,
+      deltaY: -dy,
+      hasPreciseScrollingDeltas: true,
+      canScroll: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const after = await wc.executeJavaScript(`(() => {
+      const target = document.querySelector('[data-cyrene-scroll-probe=${JSON.stringify(probeId)}]');
+      if (!target) return { found: false };
+      const result = {
+        found: true,
+        scrollLeft: Number(target.scrollLeft || 0),
+        scrollTop: Number(target.scrollTop || 0),
+      };
+      target.removeAttribute('data-cyrene-scroll-probe');
+      return result;
+    })()`, true).catch(() => ({ found: false }));
+    const actualDeltaX = before.found && after.found ? after.scrollLeft - before.scrollLeft : 0;
+    const actualDeltaY = before.found && after.found ? after.scrollTop - before.scrollTop : 0;
+    return {
+      ok: true,
+      moved: actualDeltaX !== 0 || actualDeltaY !== 0,
+      actualDeltaX,
+      actualDeltaY,
+      target: before.found ? { tag: before.tag, id: before.id, ref: before.ref } : null,
+      x: px,
+      y: py,
+      tabId: tab.id,
+    };
   }
 
   closeAll() {

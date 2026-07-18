@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.14] - 2026-07-18
+
+- **Agent 现在可以滚动弹窗和页面内区域** — 内置浏览器的 `browser_scroll` 不再固定滚动最外层文档，而是在目标元素所在位置发送真实滚轮输入。小红书帖子详情、评论区、侧栏、模态框及其他使用 `overflow: auto/scroll` 的 SPA 内部区域都能像用户鼠标或触控板一样滚动。
+- **滚动位置可以明确指定** — `browser_scroll` 新增可选的元素 `ref` 和视口 `x` / `y` 坐标；Agent 可以用 `browser_snapshot` 返回的引用指定要滚动的帖子、评论区或侧栏。未指定目标时使用浏览器视口中心，兼容原有调用。
+- **滚动结果不再虚报成功** — Electron 和 Playwright 都会记录目标区域滚动前后的实际位置。发生滚动时返回实际位移和目标；位于边界或坐标未命中可滚动区域时明确返回“没有效果”，不再无条件报告 `Scrolled 500px`。
+- **用户滚动记录能区分根页面与内部容器** — 浏览器行为事件现在记录触发滚动的真实元素、`scrollTop`、内容尺寸、可视尺寸以及根文档位置。开发者可以直接判断用户滚动的是页面、弹窗还是嵌套区域，不再把内部滚动误记为 `window.scrollY: 0`。
+
+### 技术细节
+
+- Electron 浏览器将 `window.scrollBy()` 替换为 Chromium 可信 `mouseWheel` 输入，通过目标坐标完成原生命中测试和滚动链；处理 Electron 原生滚轮与 Web/Playwright 正负方向相反的差异，并支持 Shadow DOM 宿主回溯。
+- 滚动前给最近且在指定方向仍可移动的容器设置一次性探针，滚动后读取并移除探针，以返回 `actualDeltaX` / `actualDeltaY`、目标标签、ID 和引用。目标查找会跳过已到边界的内部容器，让浏览器自然向外层滚动链传递。
+- Playwright fallback 改用 `page.mouse.move()` + `page.mouse.wheel()`，并使用同样的目标探测和实际位移验证，不再执行根文档级 JavaScript 滚动。
+- 新增 Electron 真实 Chromium 冒烟测试，覆盖 `body` 禁止滚动、固定弹窗内部独立滚动及向下/向上反向滚动；补充 Electron RPC 参数、工具实际位移输出和无位移提示的 Python 回归测试。
+- Python 包、`uv.lock`、Electron 应用与 lockfile、README、文档站、微信通道、WebUI 静态资源缓存戳及相关测试统一更新到 `0.6.14`。
+- 发布前全量 pytest 通过 1140 项，Node App Use 通过 44 项；Electron 35 真实 Chromium 嵌套滚动冒烟测试、JavaScript 语法检查、Python 编译检查与 Python/Electron lockfile 校验全部通过。
+
+---
+
 ## [0.6.13] - 2026-07-18
 
 - **浏览器真正留在对话里** — Agent 打开浏览器但没有切到右侧浏览器 Tab 时，会在当前对话区域显示可拖动、可缩放的小窗；位置和最大尺寸严格限制在对话内容区域。小窗支持最小化为单一“浏览器”药丸、恢复和最大化为整个 Cyrene 浏览器界面，默认尺寸缩小为此前的一半。
