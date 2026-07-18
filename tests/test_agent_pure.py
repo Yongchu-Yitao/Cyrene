@@ -40,6 +40,21 @@ def test_main_agent_prompt_proactively_consults_knowledge_base():
     assert "single cooldown/recovery attempt" in _EXECUTION_SYSTEM_PROMPT
 
 
+def test_browser_prompts_prefer_visible_clicks_over_direct_url_navigation():
+    from cyrene.agent.prompts import _EXECUTION_SYSTEM_PROMPT, _MAIN_AGENT_PROMPT
+
+    for prompt in (_MAIN_AGENT_PROMPT, _EXECUTION_SYSTEM_PROMPT):
+        assert "prefer" in prompt.lower()
+        assert "browser_snapshot" in prompt
+        assert "browser_click_ref" in prompt
+        assert "browser_click_text" in prompt
+        assert "exact URL explicitly requested by the user" in prompt
+
+    assert "Prefer clicking visible page UI over navigating by URL" in _MAIN_AGENT_PROMPT
+    assert "do not construct, copy, or re-enter a URL" in _MAIN_AGENT_PROMPT
+    assert "call it repeatedly with different URLs" not in _MAIN_AGENT_PROMPT
+
+
 # ===========================================================================
 # report_export_filename  (modules/deep_research.py)
 # ===========================================================================
