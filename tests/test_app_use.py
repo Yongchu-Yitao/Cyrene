@@ -218,6 +218,41 @@ async def test_visual_describe_converts_window_capture_to_text(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_visual_describe_default_prompt_requires_a_concise_coordinate_summary(monkeypatch):
+    from cyrene import app_use
+
+    async def fake_rpc(_operation, _arguments, **_kwargs):
+        return {
+            "status": "success",
+            "session_id": "session-brief",
+            "image_base64": "aW1hZ2U=",
+            "mime_type": "image/png",
+            "width": 800,
+            "height": 600,
+        }
+
+    seen_prompt = ""
+
+    async def fake_analysis(_image_base64, _mime_type, prompt, **_kwargs):
+        nonlocal seen_prompt
+        seen_prompt = prompt
+        return "Current screen; Maps center (400,300).", "vision-test"
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    monkeypatch.setattr(app_use, "_analyze_capture", fake_analysis)
+    result = await app_use.execute_app_use({
+        "operation": "call",
+        "session_id": "session-brief",
+        "capability": "visual_describe",
+        "parameters": {},
+    })
+    assert result["status"] == "success"
+    assert "at most 8 short bullets and 600 characters" in seen_prompt
+    assert "Omit exhaustive OCR and decorative details" in seen_prompt
+    assert "captured-image pixels" in seen_prompt
+
+
+@pytest.mark.asyncio
 async def test_visual_describe_reports_capture_success_separately_from_vision_timeout(monkeypatch):
     from cyrene import app_use
 
@@ -381,7 +416,7 @@ async def test_connect_hides_semantic_fallback_actions_when_tree_is_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_connect_requires_visual_inspection_then_coordinate_measurement(monkeypatch):
+async def test_only_coordinate_actions_require_visual_inspection_then_measurement(monkeypatch):
     from cyrene import app_use
 
     calls = []
@@ -394,26 +429,47 @@ async def test_connect_requires_visual_inspection_then_coordinate_measurement(mo
                 "image_base64": _png_base64(100, 80), "mime_type": "image/png",
                 "width": 100, "height": 80,
             }
-        return {
-            "status": "success", "session_id": "session-gated",
-            "capabilities": [
-                {"name": "focus_window"}, {"name": "click_at"},
-                {"name": "visual_describe"}, {"name": "virtual_click_at"},
-            ],
-        }
+        if operation == "connect":
+            return {
+                "status": "success", "session_id": "session-gated",
+                "capabilities": [
+                    {"name": "focus_window"}, {"name": "click_at"},
+                    {"name": "visual_describe"}, {"name": "virtual_click_at"},
+                    {"name": "menu_command"}, {"name": "key_chord"}, {"name": "swipe"},
+                ],
+            }
+        return {"status": "success", "session_id": "session-gated"}
 
     monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
     app_use._SESSION_MEASUREMENTS.pop("session-gated", None)
     connected = await app_use.execute_app_use({"operation": "connect", "target_id": "target-1"})
     assert connected["status"] == "success"
-    blocked = await app_use.execute_app_use({
+    focused = await app_use.execute_app_use({
         "operation": "call", "session_id": "session-gated", "capability": "focus_window",
         "parameters": {},
     })
+    assert focused["status"] == "success"
+    menu = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-gated", "capability": "menu_command",
+        "parameters": {"name": "Home"},
+    })
+    assert menu["status"] == "success"
+    shortcut = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-gated", "capability": "key_chord",
+        "parameters": {"keys": ["command", "h"], "allow_foreground_input": True},
+    })
+    assert shortcut["status"] == "success"
+    blocked = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-gated", "capability": "swipe",
+        "parameters": {"x": 50, "y": 75, "direction": "up", "allow_foreground_input": True},
+    })
     assert blocked["status"] == "error"
     assert blocked["type"] == "coordinate_measurement_required"
+    assert blocked["required_action"] == "call:visual_describe"
     assert blocked["next_valid_actions"] == ["call:visual_describe", "call:measure_coordinates", "disconnect"]
-    assert [operation for operation, _ in calls] == ["connect"]
+    assert [arguments.get("capability") for operation, arguments in calls if operation == "call"] == [
+        "focus_window", "menu_command", "key_chord",
+    ]
     monkeypatch.setattr(app_use, "_analyze_capture", AsyncMock(return_value=("A window.", "vision-test")))
     inspected = await app_use.execute_app_use({
         "operation": "call", "session_id": "session-gated", "capability": "visual_describe",
@@ -423,10 +479,12 @@ async def test_connect_requires_visual_inspection_then_coordinate_measurement(mo
     assert os.path.isfile(inspected["capture_image"]["path"])
     os.unlink(inspected["capture_image"]["path"])
     still_blocked = await app_use.execute_app_use({
-        "operation": "call", "session_id": "session-gated", "capability": "focus_window",
-        "parameters": {},
+        "operation": "call", "session_id": "session-gated", "capability": "swipe",
+        "parameters": {"x": 50, "y": 75, "direction": "up", "allow_foreground_input": True},
     })
     assert still_blocked["type"] == "coordinate_measurement_required"
+    assert still_blocked["required_action"] == "call:measure_coordinates"
+    assert still_blocked["next_valid_actions"] == ["call:measure_coordinates", "call:visual_describe", "disconnect"]
 
 
 @pytest.mark.asyncio
@@ -492,6 +550,44 @@ async def test_virtual_click_must_reuse_latest_measured_point(monkeypatch):
     })
     assert allowed["status"] == "uncertain"
     assert calls[-1][1]["capability"] == "virtual_click_at"
+
+
+@pytest.mark.asyncio
+async def test_swipe_must_reuse_latest_measured_start_point(monkeypatch):
+    from cyrene import app_use
+
+    calls = []
+
+    async def fake_rpc(operation, arguments, **_kwargs):
+        calls.append((operation, arguments))
+        return {"status": "success", "session_id": "session-swipe"}
+
+    monkeypatch.setattr(app_use, "_electron_app_rpc", fake_rpc)
+    app_use._SESSION_MEASUREMENTS["session-swipe"] = {
+        "window_point": {"x": 162.7, "y": 708.0},
+        "screen_point": {"x": 1603.7, "y": -189.0},
+    }
+    blocked = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-swipe", "capability": "swipe",
+        "parameters": {
+            "x": 150, "y": 690, "direction": "up", "distance": 100,
+            "coordinate_space": "window", "allow_foreground_input": True,
+        },
+    })
+    assert blocked["status"] == "error"
+    assert blocked["type"] == "measured_coordinate_mismatch"
+    assert blocked["expected_point"] == {"x": 162.7, "y": 708.0}
+    assert calls == []
+
+    allowed = await app_use.execute_app_use({
+        "operation": "call", "session_id": "session-swipe", "capability": "swipe",
+        "parameters": {
+            "x": 162.7, "y": 708.0, "direction": "up", "distance": 100,
+            "coordinate_space": "window", "allow_foreground_input": True,
+        },
+    })
+    assert allowed["status"] == "success"
+    assert calls[-1][1]["capability"] == "swipe"
 
 
 @pytest.mark.asyncio

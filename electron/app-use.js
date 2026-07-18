@@ -5,6 +5,7 @@ const { execFile } = require('child_process');
 
 const MANIFEST_VERSION = 'app-use-semantic-v2';
 const DEFAULT_SESSION_TTL_MS = 5 * 60 * 1000;
+const MAX_SCROLL_AT_AMOUNT = 50_000;
 const SEMANTIC_TREE_CAPABILITIES = new Set([
   'snapshot', 'inspect', 'find', 'press', 'set_value', 'select', 'toggle', 'scroll',
   'type_text', 'select_text', 'set_selection_range', 'wait',
@@ -29,7 +30,7 @@ const CAPABILITIES = Object.freeze([
   { name: 'hover_at', description: 'Move the real OS pointer; allow_foreground_input=true is required. This is unavailable in a background-only session.', arguments: { x: 'number', y: 'number', coordinate_space: 'window|screen?', duration_ms: 'integer?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
   { name: 'drag', description: 'Drag with the real OS pointer; allow_foreground_input=true is required.', arguments: { from_x: 'number', from_y: 'number', to_x: 'number', to_y: 'number', coordinate_space: 'window|screen?', duration_ms: 'integer?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
   { name: 'swipe', description: 'Swipe with the real OS pointer; allow_foreground_input=true is required.', arguments: { x: 'number', y: 'number', direction: 'up|down|left|right', distance: 'number?', coordinate_space: 'window|screen?', duration_ms: 'integer?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
-  { name: 'scroll_at', description: 'Send a real OS wheel event at a point; allow_foreground_input=true is required.', arguments: { x: 'number', y: 'number', direction: 'up|down|left|right', amount: 'integer?', coordinate_space: 'window|screen?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
+  { name: 'scroll_at', description: `Send real OS wheel events at a point. On macOS, amount is pixels (default 30); on Windows, amount is wheel steps (default 3). The maximum is ${MAX_SCROLL_AT_AMOUNT}, injected in safe increments; allow_foreground_input=true is required.`, arguments: { x: 'number', y: 'number', direction: 'up|down|left|right', amount: 'integer?', coordinate_space: 'window|screen?', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
   { name: 'key_chord', description: 'Send a focus-dependent key or shortcut; allow_foreground_input=true is required.', arguments: { keys: 'string[]', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
   { name: 'key_sequence', description: 'Execute focus-dependent keyboard steps; allow_foreground_input=true is required.', arguments: { steps: '{type:shortcut|text|key|pause,keys?:string[],text?:string,key?:string,ms?:integer}[]', allow_foreground_input: 'boolean' }, background: 'requires_focus' },
   { name: 'wait', description: 'Wait for an element or property condition, then return a fresh semantic snapshot.', arguments: { ref: 'string?', property: 'string?', equals: 'any?', contains: 'string?', exists: 'boolean?', timeout_ms: 'integer?' }, background: 'safe' },
@@ -111,6 +112,16 @@ function validateCapabilityParameters(capability, parameters) {
       `${capability} does not accept: ${unknown.join(', ')}.`,
       { accepted_arguments: [...accepted].sort() },
     );
+  }
+  if (capability === 'scroll_at' && Object.prototype.hasOwnProperty.call(parameters, 'amount')) {
+    const amount = parameters.amount;
+    if (!Number.isInteger(amount) || amount < 1 || amount > MAX_SCROLL_AT_AMOUNT) {
+      throw new AppUseError(
+        'invalid_arguments',
+        `scroll_at amount must be an integer from 1 to ${MAX_SCROLL_AT_AMOUNT}.`,
+        { accepted_range: { amount: { min: 1, max: MAX_SCROLL_AT_AMOUNT } } },
+      );
+    }
   }
 }
 

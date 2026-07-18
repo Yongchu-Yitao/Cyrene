@@ -46,6 +46,23 @@ test('Windows provider source includes Win32 bounds and robust focus fallbacks',
   assert.match(source, /sameIntegrityLevelRequired/);
 });
 
+test('coordinate scroll providers split large amounts into safe wheel events', () => {
+  const macSource = fs.readFileSync(path.join(__dirname, 'app-use-macos.jxa'), 'utf8');
+  const windowsSource = fs.readFileSync(path.join(__dirname, 'app-use-windows.ps1'), 'utf8');
+  assert.match(macSource, /const MAX_SCROLL_AT_AMOUNT = 50000;/);
+  assert.match(macSource, /const MAX_SCROLL_EVENT_AMOUNT = 10;/);
+  assert.match(macSource, /const DEFAULT_SCROLL_AT_PIXEL_AMOUNT = 30;/);
+  assert.match(macSource, /while \(remaining > 0\)/);
+  assert.match(macSource, /Math\.min\(MAX_SCROLL_EVENT_AMOUNT, remaining\)/);
+  assert.match(macSource, /kCGScrollEventUnitPixel/);
+  assert.doesNotMatch(macSource, /Math\.min\(20, Math\.trunc\(Number\(parameters\.amount/);
+  assert.match(windowsSource, /\$MaxScrollAtAmount = 50000/);
+  assert.match(windowsSource, /\$MaxScrollEventAmount = 10/);
+  assert.match(windowsSource, /while \(\$remaining -gt 0\)/);
+  assert.match(windowsSource, /\[Math\]::Min\(\$MaxScrollEventAmount, \$remaining\)/);
+  assert.doesNotMatch(windowsSource, /\[Math\]::Min\(20, .*\$Parameters\.amount/);
+});
+
 test('Windows runtime capabilities exclude macOS PID typing and menu commands', () => {
   const names = capabilitiesForTarget({ platform: 'win32', applicationId: 'C:\\Demo\\demo.exe' })
     .map((item) => item.name);
@@ -553,6 +570,32 @@ test('rejects unknown capability parameters before any desktop action', async ()
   assert.equal(result.type, 'invalid_arguments');
   assert.match(result.message, /keyboard_shortcut/);
   assert.deepEqual(provider.performed, []);
+});
+
+test('coordinate scroll accepts large distances and rejects invalid amounts before input', async () => {
+  const { manager, provider, connected } = await connectedManager();
+  for (const amount of [10_000, 40_000, 50_000]) {
+    const accepted = await manager.handle('call', {
+      session_id: connected.session_id,
+      capability: 'scroll_at',
+      parameters: { x: 80, y: 45, direction: 'down', amount, allow_foreground_input: true },
+    });
+    assert.equal(accepted.status, 'success');
+    assert.equal(provider.performed.at(-1).parameters.amount, amount);
+  }
+
+  const performedCount = provider.performed.length;
+  for (const amount of [0, 1.5, 50_001, '100']) {
+    const rejected = await manager.handle('call', {
+      session_id: connected.session_id,
+      capability: 'scroll_at',
+      parameters: { x: 80, y: 45, direction: 'down', amount, allow_foreground_input: true },
+    });
+    assert.equal(rejected.status, 'error');
+    assert.equal(rejected.type, 'invalid_arguments');
+    assert.match(rejected.message, /integer from 1 to 50000/);
+  }
+  assert.equal(provider.performed.length, performedCount);
 });
 
 test('background menu command reports the exact AX action without foreground input', async () => {

@@ -4,6 +4,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$MaxScrollAtAmount = 50000
+$MaxScrollEventAmount = 10
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms
@@ -153,14 +155,25 @@ function Perform-CoordinateAction($Target, [string]$Capability, $Parameters) {
             [void][CyreneWindowApi]::SetCursorPos($point.x, $point.y)
             $direction = if ($Parameters.direction) { ([string]$Parameters.direction).ToLowerInvariant() } else { 'down' }
             if ($direction -notin @('up', 'down', 'left', 'right')) { throw 'direction must be up, down, left, or right.' }
-            $amount = [Math]::Max(1, [Math]::Min(20, $(if ($Parameters.amount) { [int]$Parameters.amount } else { 3 })))
-            $delta = [int32]$(if ($direction -in @('up', 'left')) { 120 * $amount } else { -120 * $amount })
-            $data = [BitConverter]::ToUInt32([BitConverter]::GetBytes($delta), 0)
-            [CyreneWindowApi]::Mouse($(if ($direction -in @('left', 'right')) { [uint32]0x1000 } else { [uint32]0x0800 }), $data)
+            $amountNumber = Finite-Number $(if ($null -ne $Parameters.amount) { $Parameters.amount } else { 3 }) 'amount'
+            if ($amountNumber -ne [Math]::Truncate($amountNumber) -or $amountNumber -lt 1 -or $amountNumber -gt $MaxScrollAtAmount) { throw "scroll_at amount must be an integer from 1 to $MaxScrollAtAmount." }
+            $amount = [int64]$amountNumber
+            $remaining = $amount
+            $scrollEventCount = 0
+            while ($remaining -gt 0) {
+                $step = [int32][Math]::Min($MaxScrollEventAmount, $remaining)
+                $delta = [int32]$(if ($direction -in @('up', 'left')) { 120 * $step } else { -120 * $step })
+                $data = [BitConverter]::ToUInt32([BitConverter]::GetBytes($delta), 0)
+                [CyreneWindowApi]::Mouse($(if ($direction -in @('left', 'right')) { [uint32]0x1000 } else { [uint32]0x0800 }), $data)
+                $remaining -= $step
+                $scrollEventCount += 1
+            }
         }
         $actual = [CyreneWindowApi]::Cursor()
         $verified = [Math]::Abs($actual.X - $point.x) -le 2 -and [Math]::Abs($actual.Y - $point.y) -le 2
-        return @{ ok = $true; verified = $verified; uncertain = -not $verified; skipSnapshot = $true; visualChangeExpected = ($Capability -ne 'hover_at'); summary = "Performed $Capability at ($($point.x), $($point.y))."; diagnostics = @{ method = 'SendInput'; point = $point; actualPointer = @{ x = $actual.X; y = $actual.Y }; pointerVerified = $verified; foregroundRequired = $true } }
+        $diagnostics = @{ method = 'SendInput'; point = $point; actualPointer = @{ x = $actual.X; y = $actual.Y }; pointerVerified = $verified; foregroundRequired = $true }
+        if ($Capability -eq 'scroll_at') { $diagnostics.scrollEventCount = $scrollEventCount }
+        return @{ ok = $true; verified = $verified; uncertain = -not $verified; skipSnapshot = $true; visualChangeExpected = ($Capability -ne 'hover_at'); summary = "Performed $Capability at ($($point.x), $($point.y))."; diagnostics = $diagnostics }
     }
     $from = if ($Capability -eq 'drag') { Screen-Point $Target $Parameters 'from_x' 'from_y' } else { Screen-Point $Target $Parameters 'x' 'y' }
     if ($Capability -eq 'drag') { $to = Screen-Point $Target $Parameters 'to_x' 'to_y' }

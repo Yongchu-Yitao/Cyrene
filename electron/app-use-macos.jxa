@@ -1,6 +1,10 @@
 ObjC.import('AppKit');
 ObjC.import('CoreGraphics');
 
+const MAX_SCROLL_AT_AMOUNT = 50000;
+const MAX_SCROLL_EVENT_AMOUNT = 10;
+const DEFAULT_SCROLL_AT_PIXEL_AMOUNT = 30;
+
 function safe(fn, fallback) {
   try {
     const value = fn();
@@ -370,6 +374,7 @@ function setSelectionWithKeyboard(resolved, element, range) {
 }
 
 function performCoordinateAction(target, capability, parameters) {
+  let scrollEventCount = null;
   if (capability === 'click_at' || capability === 'double_click' || capability === 'right_click' || capability === 'hover_at' || capability === 'scroll_at') {
     const point = screenPoint(target, parameters, 'x', 'y');
     if (capability === 'click_at') mouseClick(point, $.kCGMouseButtonLeft, 1, 0);
@@ -380,15 +385,27 @@ function performCoordinateAction(target, capability, parameters) {
       movePointer(cursorPoint(), point, 0, false);
       const direction = String(parameters.direction || 'down').toLowerCase();
       if (!['up', 'down', 'left', 'right'].includes(direction)) fail('invalid_arguments', 'direction must be up, down, left, or right.');
-      const amount = Math.max(1, Math.min(20, Math.trunc(Number(parameters.amount || 3))));
-      const vertical = direction === 'up' ? amount : direction === 'down' ? -amount : 0;
-      const horizontal = direction === 'left' ? amount : direction === 'right' ? -amount : 0;
-      const event = $.CGEventCreateScrollWheelEvent(null, $.kCGScrollEventUnitLine, 2, vertical, horizontal);
-      $.CGEventPost($.kCGHIDEventTap, event);
+      const amount = Number(parameters.amount === undefined ? DEFAULT_SCROLL_AT_PIXEL_AMOUNT : parameters.amount);
+      if (!Number.isInteger(amount) || amount < 1 || amount > MAX_SCROLL_AT_AMOUNT) {
+        fail('invalid_arguments', `scroll_at amount must be an integer from 1 to ${MAX_SCROLL_AT_AMOUNT}.`);
+      }
+      let remaining = amount;
+      scrollEventCount = 0;
+      while (remaining > 0) {
+        const step = Math.min(MAX_SCROLL_EVENT_AMOUNT, remaining);
+        const vertical = direction === 'up' ? step : direction === 'down' ? -step : 0;
+        const horizontal = direction === 'left' ? step : direction === 'right' ? -step : 0;
+        const event = $.CGEventCreateScrollWheelEvent(null, $.kCGScrollEventUnitPixel, 2, vertical, horizontal);
+        $.CGEventPost($.kCGHIDEventTap, event);
+        remaining -= step;
+        scrollEventCount += 1;
+      }
     }
     const actual = cursorPoint();
     const pointerVerified = Math.abs(actual.x - point.x) <= 2 && Math.abs(actual.y - point.y) <= 2;
-    return { ok: true, verified: pointerVerified, uncertain: !pointerVerified, skipSnapshot: true, visualChangeExpected: capability !== 'hover_at', summary: `Performed ${capability} at (${Math.round(point.x)}, ${Math.round(point.y)}).`, diagnostics: { method: 'Quartz CGEvent', point, actualPointer: actual, pointerVerified, foregroundRequired: true } };
+    const diagnostics = { method: 'Quartz CGEvent', point, actualPointer: actual, pointerVerified, foregroundRequired: true };
+    if (capability === 'scroll_at') diagnostics.scrollEventCount = scrollEventCount;
+    return { ok: true, verified: pointerVerified, uncertain: !pointerVerified, skipSnapshot: true, visualChangeExpected: capability !== 'hover_at', summary: `Performed ${capability} at (${Math.round(point.x)}, ${Math.round(point.y)}).`, diagnostics };
   }
   let from;
   let to;
