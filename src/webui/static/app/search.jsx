@@ -12,6 +12,7 @@ var SEARCH_TYPES = [
 ];
 
 var SEARCH_TYPE_ORDER = ["project", "task", "chat", "knowledge", "memory", "schedule"];
+var SEARCH_REQUEST_TIMEOUT_MS = 10000;
 var SEARCH_GROUP_KEYS = {
   project: "search.group.projects",
   task: "search.group.tasks",
@@ -33,6 +34,7 @@ function SearchOverlay({ onClose }) {
   var [status, setStatus] = useStateSr("idle"); // idle | loading | done | error
   var debounceRef = useRefSr(null);
   var abortRef = useRefSr(null);
+  var requestSeqRef = useRefSr(0);
 
   // Auto-focus input on mount and restore focus on close.
   useEffectSr(function () {
@@ -98,8 +100,12 @@ function SearchOverlay({ onClose }) {
 
   // Debounced search with request cancellation.
   useEffectSr(function () {
+    var requestId = ++requestSeqRef.current;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (abortRef.current) {
+      if (abortRef.current.__cyreneTimeoutId) {
+        clearTimeout(abortRef.current.__cyreneTimeoutId);
+      }
       try { abortRef.current.abort(); } catch (e) {}
       abortRef.current = null;
     }
@@ -113,33 +119,62 @@ function SearchOverlay({ onClose }) {
     setStatus("loading");
     debounceRef.current = setTimeout(function () {
       var controller = new AbortController();
+      controller.__cyreneTimedOut = false;
+      controller.__cyreneTimeoutId = setTimeout(function () {
+        if (requestSeqRef.current !== requestId || controller.signal.aborted) return;
+        controller.__cyreneTimedOut = true;
+        controller.abort();
+      }, SEARCH_REQUEST_TIMEOUT_MS);
       abortRef.current = controller;
       if (legacyMode) {
-        doLegacySearch(q, controller.signal);
+        doLegacySearch(q, controller, requestId);
       } else {
-        doWorkbenchSearch(q, controller.signal);
+        doWorkbenchSearch(q, controller, requestId);
       }
     }, 250);
     return function () {
+      if (requestSeqRef.current === requestId) requestSeqRef.current += 1;
       if (debounceRef.current) clearTimeout(debounceRef.current);
       if (abortRef.current) {
+        if (abortRef.current.__cyreneTimeoutId) {
+          clearTimeout(abortRef.current.__cyreneTimeoutId);
+        }
         try { abortRef.current.abort(); } catch (e) {}
         abortRef.current = null;
       }
     };
   }, [query, activeType, legacyMode]);
 
-  async function doWorkbenchSearch(q, signal) {
+  function finishSearchRequest(controller) {
+    if (controller.__cyreneTimeoutId) {
+      clearTimeout(controller.__cyreneTimeoutId);
+      controller.__cyreneTimeoutId = null;
+    }
+    if (abortRef.current === controller) abortRef.current = null;
+  }
+
+  function shouldIgnoreSearchResponse(controller, requestId) {
+    if (requestSeqRef.current !== requestId) return true;
+    if (!controller.signal.aborted) return false;
+    // A timeout can race with a response that has already resolved.  In that
+    // case fetch may not reject with AbortError, so settle the loading state
+    // here instead of returning and leaving the overlay spinning forever.
+    if (controller.__cyreneTimedOut) setStatus("error");
+    return true;
+  }
+
+  async function doWorkbenchSearch(q, controller, requestId) {
+    var signal = controller.signal;
     try {
       var typesParam = activeType === "all" ? "" : activeType;
       var url = "/api/workbench/search?q=" + encodeURIComponent(q) +
         "&types=" + encodeURIComponent(typesParam) +
         "&limit=50";
       var r = await fetch(url, { signal: signal });
-      if (signal && signal.aborted) return;
+      if (shouldIgnoreSearchResponse(controller, requestId)) return;
       if (!r.ok) throw new Error("HTTP " + r.status);
       var data = await r.json();
-      if (signal && signal.aborted) return;
+      if (shouldIgnoreSearchResponse(controller, requestId)) return;
       if (data.ok && data.groups) {
         setGroups(data.groups);
         setResults(flattenGroups(data.groups));
@@ -150,19 +185,23 @@ function SearchOverlay({ onClose }) {
         setStatus("done");
       }
     } catch (e) {
-      if (e && e.name === "AbortError") return;
+      if (requestSeqRef.current !== requestId) return;
+      if (e && e.name === "AbortError" && !controller.__cyreneTimedOut) return;
       console.error("Workbench search failed:", e);
       setStatus("error");
+    } finally {
+      finishSearchRequest(controller);
     }
   }
 
-  async function doLegacySearch(q, signal) {
+  async function doLegacySearch(q, controller, requestId) {
+    var signal = controller.signal;
     try {
       var r = await fetch("/api/search/conversations?q=" + encodeURIComponent(q) + "&limit=50", { signal: signal });
-      if (signal && signal.aborted) return;
+      if (shouldIgnoreSearchResponse(controller, requestId)) return;
       if (!r.ok) throw new Error("HTTP " + r.status);
       var data = await r.json();
-      if (signal && signal.aborted) return;
+      if (shouldIgnoreSearchResponse(controller, requestId)) return;
       if (data.ok && Array.isArray(data.results)) {
         setResults(data.results);
         setGroups({});
@@ -173,9 +212,12 @@ function SearchOverlay({ onClose }) {
         setStatus("done");
       }
     } catch (e) {
-      if (e && e.name === "AbortError") return;
+      if (requestSeqRef.current !== requestId) return;
+      if (e && e.name === "AbortError" && !controller.__cyreneTimedOut) return;
       console.error("Search failed:", e);
       setStatus("error");
+    } finally {
+      finishSearchRequest(controller);
     }
   }
 

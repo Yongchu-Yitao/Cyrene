@@ -3,6 +3,20 @@ import subprocess
 from pathlib import Path
 
 
+def test_global_search_times_out_and_ignores_stale_requests():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "static" / "app" / "search.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "SEARCH_REQUEST_TIMEOUT_MS = 10000" in source
+    assert "requestSeqRef.current !== requestId" in source
+    assert "controller.__cyreneTimedOut = true" in source
+    assert "function shouldIgnoreSearchResponse" in source
+    assert 'if (controller.__cyreneTimedOut) setStatus("error")' in source
+    assert 'e.name === "AbortError" && !controller.__cyreneTimedOut' in source
+
+
 def test_new_workbench_chat_reuses_create_response_without_refetching():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(

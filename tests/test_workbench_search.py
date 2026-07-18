@@ -1,7 +1,9 @@
 """Tests for the Workbench global search endpoint and helpers."""
 
+import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock
@@ -419,6 +421,43 @@ async def test_search_workbench_items_type_filter(search_env):
 async def test_search_workbench_items_no_query():
     groups = await _search_workbench_items("", {"project"}, 10)
     assert groups == {"project": []}
+
+
+@pytest.mark.asyncio
+async def test_search_uses_lightweight_store_without_blocking_event_loop(monkeypatch):
+    from webui import routes as routes_mod
+
+    payload = {
+        "projects": [{
+            "id": "project_fast",
+            "name": "Fast project",
+            "description": "search target",
+            "context": {},
+            "sessions": [],
+        }]
+    }
+
+    def slow_lightweight_read():
+        time.sleep(0.1)
+        return payload
+
+    monkeypatch.setattr(routes_mod, "_read_workbench_store_lightweight", slow_lightweight_read)
+    monkeypatch.setattr(
+        routes_mod,
+        "_read_workbench_store",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("full repair reader must not run during search")
+        ),
+    )
+
+    search_task = asyncio.create_task(
+        routes_mod._search_workbench_items("target", {"project"}, 10)
+    )
+    await asyncio.sleep(0.02)
+
+    assert not search_task.done()
+    groups = await search_task
+    assert [item["id"] for item in groups["project"]] == ["project_fast"]
 
 
 def test_api_workbench_search_returns_grouped_results(client):

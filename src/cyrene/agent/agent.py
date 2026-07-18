@@ -146,17 +146,27 @@ def _quit_reply_from_response(response_obj: dict[str, Any]) -> str:
 
 
 def _materialize_quit_reply_for_history(response_obj: dict[str, Any], assistant_entry: dict[str, Any]) -> None:
-    """Mirror ``quit(reply=...)`` into assistant content before persisting history.
+    """Persist a terminal ``quit(reply=...)`` as a normal assistant message.
 
     Workbench shows the value returned by ``_ensure_text_reply()``, but the next
     model turn reads ``data/sessions/<id>/state.json``. If the reply stays only in
-    the quit tool arguments, the visible transcript and LLM history diverge.
+    the quit tool arguments, the visible transcript and LLM history diverge. A
+    terminal quit has no matching ``role=tool`` result, so keeping its tool call
+    would also make the LLM payload sanitizer discard the whole assistant reply.
     """
-    if str(assistant_entry.get("content") or "").strip():
+    tool_calls = response_obj.get("tool_calls") or []
+    if not tool_calls or not all(
+        isinstance(call, dict)
+        and str(call.get("function", {}).get("name") or "") == "quit"
+        for call in tool_calls
+    ):
         return
-    reply = _quit_reply_from_response(response_obj)
-    if reply:
-        assistant_entry["content"] = reply
+    if not str(assistant_entry.get("content") or "").strip():
+        reply = _quit_reply_from_response(response_obj)
+        if reply:
+            assistant_entry["content"] = reply
+    if str(assistant_entry.get("content") or "").strip():
+        assistant_entry.pop("tool_calls", None)
 
 
 def _wrap_final_text_from_response(wrap: dict[str, Any], messages: list[dict[str, Any]]) -> str:

@@ -6700,7 +6700,12 @@ async def _search_workbench_items(query: str, types: set[str], per_type_limit: i
     if not query:
         return groups
 
-    store = _read_workbench_store()
+    # Search only needs persisted project/session metadata.  The full reader
+    # also performs historical invariant repair and scans every project
+    # workspace for artifact backfills, which made each keystroke scale with
+    # the number of tasks and files.  Keep that repair work off the search hot
+    # path and move the SQLite read off the event loop.
+    store = await asyncio.to_thread(_read_workbench_store_lightweight)
     projects = store.get("projects", [])
     project_by_id: dict[str, dict[str, Any]] = {str(p.get("id") or ""): p for p in projects if p.get("id")}
     project_names: dict[str, str] = {
@@ -6771,20 +6776,24 @@ async def _search_workbench_items(query: str, types: set[str], per_type_limit: i
     if "chat" in types:
         try:
             from webui.routes_workbench_chat import _read_chats_store
-            chats_payload = _read_chats_store()
-            for chat in chats_payload.get("chats", []):
-                chat_id = str(chat.get("id") or "")
-                pid = str(chat.get("projectId") or "")
-                title = str(chat.get("title") or "")
-                preview = str(chat.get("preview") or "")
-                matched = _search_matches(query, title) or _search_matches(query, preview)
-                if not matched and isinstance(chat.get("messages"), list):
-                    for message in chat["messages"]:
-                        if _search_matches(query, str(message.get("content") or message.get("body") or "")):
-                            matched = True
-                            break
-                if matched:
-                    groups["chat"].append({
+
+            def _search_chats() -> list[dict[str, Any]]:
+                found: list[dict[str, Any]] = []
+                chats_payload = _read_chats_store()
+                for chat in chats_payload.get("chats", []):
+                    chat_id = str(chat.get("id") or "")
+                    pid = str(chat.get("projectId") or "")
+                    title = str(chat.get("title") or "")
+                    preview = str(chat.get("preview") or "")
+                    matched = _search_matches(query, title) or _search_matches(query, preview)
+                    if not matched and isinstance(chat.get("messages"), list):
+                        for message in chat["messages"]:
+                            if _search_matches(query, str(message.get("content") or message.get("body") or "")):
+                                matched = True
+                                break
+                    if not matched:
+                        continue
+                    found.append({
                         "id": chat_id,
                         "type": "chat",
                         "title": title or "New chat",
@@ -6794,8 +6803,12 @@ async def _search_workbench_items(query: str, types: set[str], per_type_limit: i
                         "chatId": chat_id,
                         "updatedAt": chat.get("updatedAt") or chat.get("createdAt") or "",
                     })
-                    if len(groups["chat"]) >= per_type_limit:
+                    if len(found) >= per_type_limit:
                         break
+
+                return found
+
+            groups["chat"].extend(await asyncio.to_thread(_search_chats))
         except Exception:
             logger.exception("Workbench chat search failed")
 
@@ -6850,34 +6863,37 @@ async def _search_workbench_items(query: str, types: set[str], per_type_limit: i
                 _is_user_visible_entry,
             )
 
-            memory_keys = {
-                key[len("memory:"):]
-                for key in list_document_keys(_db_path or str(DB_PATH), prefix="memory:")
-            }
-            memory_keys.update(
-                path.stem[len("wb_memory_"):]
-                for path in STORE_DIR.glob("wb_memory_*.json")
-            )
-            for dk in sorted(memory_keys):
-                if len(groups["memory"]) >= per_type_limit:
-                    break
-                pid = data_key_to_project.get(dk, "")
-                data = read_document(
-                    _db_path or str(DB_PATH),
-                    f"memory:{dk}",
-                    list,
-                    legacy_path=STORE_DIR / f"wb_memory_{dk}.json",
+            def _search_memories() -> list[dict[str, Any]]:
+                found: list[dict[str, Any]] = []
+                memory_keys = {
+                    key[len("memory:"):]
+                    for key in list_document_keys(_db_path or str(DB_PATH), prefix="memory:")
+                }
+                memory_keys.update(
+                    path.stem[len("wb_memory_"):]
+                    for path in STORE_DIR.glob("wb_memory_*.json")
                 )
-                entries = data if isinstance(data, list) else []
-                for entry in entries:
-                    if not isinstance(entry, dict) or not _is_user_visible_entry(entry):
-                        continue
-                    content = str(entry.get("content") or "")
-                    tags = [str(t) for t in (entry.get("tags") or [])]
-                    tag_text = " ".join(tags)
-                    if _search_matches(query, content) or _search_matches(query, tag_text):
+                for dk in sorted(memory_keys):
+                    if len(found) >= per_type_limit:
+                        break
+                    pid = data_key_to_project.get(dk, "")
+                    data = read_document(
+                        _db_path or str(DB_PATH),
+                        f"memory:{dk}",
+                        list,
+                        legacy_path=STORE_DIR / f"wb_memory_{dk}.json",
+                    )
+                    entries = data if isinstance(data, list) else []
+                    for entry in entries:
+                        if not isinstance(entry, dict) or not _is_user_visible_entry(entry):
+                            continue
+                        content = str(entry.get("content") or "")
+                        tags = [str(t) for t in (entry.get("tags") or [])]
+                        tag_text = " ".join(tags)
+                        if not (_search_matches(query, content) or _search_matches(query, tag_text)):
+                            continue
                         mem_id = _entry_id(entry)
-                        groups["memory"].append({
+                        found.append({
                             "id": mem_id,
                             "type": "memory",
                             "title": content[:80] or "Memory",
@@ -6889,8 +6905,12 @@ async def _search_workbench_items(query: str, types: set[str], per_type_limit: i
                             "tags": tags,
                             "updatedAt": entry.get("last_mentioned") or entry.get("first_seen") or "",
                         })
-                        if len(groups["memory"]) >= per_type_limit:
+                        if len(found) >= per_type_limit:
                             break
+
+                return found
+
+            groups["memory"].extend(await asyncio.to_thread(_search_memories))
         except Exception:
             logger.exception("Workbench memory search failed")
 

@@ -150,6 +150,7 @@ async def test_streaming_wrapup_prompt_rejects_placeholder_after_delivery(monkey
 async def test_quit_reply_is_persisted_as_assistant_content(monkeypatch):
     """A direct quit(reply=...) answer must be visible in the next LLM history."""
     from cyrene.agent import agent as agent_core
+    from cyrene.call_llm import _sanitize_messages_for_llm
 
     saved_messages = []
 
@@ -186,5 +187,17 @@ async def test_quit_reply_is_persisted_as_assistant_content(monkeypatch):
 
     assert result == "上一轮已经回答"
     assert saved_messages
-    assert saved_messages[-1][-1]["role"] == "assistant"
-    assert saved_messages[-1][-1]["content"] == "上一轮已经回答"
+    persisted_reply = saved_messages[-1][-1]
+    assert persisted_reply["role"] == "assistant"
+    assert persisted_reply["content"] == "上一轮已经回答"
+    assert "tool_calls" not in persisted_reply
+
+    next_turn_payload = _sanitize_messages_for_llm([
+        {"role": "user", "content": "RecallConversation 之后你能看到什么"},
+        persisted_reply,
+        {"role": "user", "content": "继续说"},
+    ])
+    assert [message["role"] for message in next_turn_payload] == [
+        "user", "assistant", "user",
+    ]
+    assert next_turn_payload[1]["content"] == "上一轮已经回答"
