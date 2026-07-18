@@ -517,6 +517,49 @@ function wbcRandomThinkingPhrase() {
   return phrases[Math.floor(Math.random() * phrases.length)] || wbcT("workbenchChat.stillWorking", "Still working…");
 }
 
+function wbcBrowserPageTitle(browserState) {
+  var browser = browserState || {};
+  var activeTab = browser.activeTab || {};
+  var title = String(activeTab.title || browser.title || "").trim();
+  if (title && title !== "about:blank") return title;
+  var rawUrl = String(activeTab.url || browser.url || browser.frameUrl || "").trim();
+  if (rawUrl && rawUrl !== "about:blank") {
+    try {
+      var host = new URL(rawUrl).hostname.replace(/^www\./, "");
+      if (host) return host;
+    } catch (e) {}
+  }
+  return "";
+}
+
+function wbcBrowserWindowTitle(browserState) {
+  var page = wbcBrowserPageTitle(browserState);
+  if (page) return wbcT("workbenchChat.browserWindowTitleWithPage", "Browser · {page}", { page: page });
+  return wbcT("workbenchChat.browserWindowTitle", "Browser");
+}
+
+function wbcClampBrowserWindowFrame(frame, areaWidth, areaHeight, minWidth, minHeight) {
+  var aw = Math.max(0, Number(areaWidth) || 0);
+  var ah = Math.max(0, Number(areaHeight) || 0);
+  var mw = Math.min(Math.max(1, Number(minWidth) || 1), aw || 1);
+  var mh = Math.min(Math.max(1, Number(minHeight) || 1), ah || 1);
+  var width = Math.min(Math.max(mw, Number(frame && frame.width) || mw), aw || mw);
+  var height = Math.min(Math.max(mh, Number(frame && frame.height) || mh), ah || mh);
+  var x = Math.min(Math.max(0, Number(frame && frame.x) || 0), Math.max(0, aw - width));
+  var y = Math.min(Math.max(0, Number(frame && frame.y) || 0), Math.max(0, ah - height));
+  return { x: x, y: y, width: width, height: height };
+}
+
+function wbcNotifyBrowserLayoutChanged() {
+  window.dispatchEvent(new CustomEvent("workbench:browser-layout"));
+}
+
+function wbcNotifyBrowserWindowInteraction(active, kind, sessionId) {
+  window.dispatchEvent(new CustomEvent("workbench:browser-window-interaction", {
+    detail: { active: active === true, kind: kind || "", sessionId: String(sessionId || "") },
+  }));
+}
+
 // Shared budget error code → i18n key suffix mapping.  Defined here and
 // re-used in workbench.jsx (task controller) via window.WORKBENCH_BUDGET_CODES
 // so adding a new budget code only needs one update.
@@ -568,6 +611,9 @@ var WBC_ICONS = {
   chevronsRight: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m13 7 5 5-5 5M6 7l5 5-5 5"/></svg>,
   download: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>,
   sidebar: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m9 10-2 2 2 2"/></svg>,
+  windowMaximize: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5"/></svg>,
+  windowMinimize: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>,
+  windowRestore: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="7" y="7" width="13" height="13" rx="2"/><path d="M4 16V6a2 2 0 0 1 2-2h10"/></svg>,
 };
 
 // Slash commands + permission modes (mirrors the legacy agent capabilities;
@@ -1459,6 +1505,10 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   var [sideTab, setSideTab] = useWbcState("overview");
   var [sideVisible, setSideVisible] = useWbcState(true);
   var [browserActiveByChat, setBrowserActiveByChat] = useWbcState({});
+  // The side-panel Browser tab and the floating browser are two presentations
+  // of the same session. Keep only the floating presentation state here so the
+  // WebContentsView is never mounted in two places at once.
+  var [browserWindowModeByChat, setBrowserWindowModeByChat] = useWbcState({});
   var [viewerFile, setViewerFile] = useWbcState(null);
   var [subagentData, setSubagentData] = useWbcState({ rounds: [], activeRoundId: "", agents: [], messages: [] });
   var [subagentLoading, setSubagentLoading] = useWbcState(false);
@@ -1843,7 +1893,11 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
           if (!sid || prev[sid]) return prev;
           return { ...prev, [sid]: true };
         });
-        setSideTab("browser");
+        setBrowserWindowModeByChat(function (prev) {
+          var sid = String(browserEventChatId || activeChatIdRef.current || "");
+          if (!sid || prev[sid]) return prev;
+          return { ...prev, [sid]: "pip" };
+        });
       }
       // Live tool/phase/subagent progress is folded into the runtime by the
       // module-level engine (WorkbenchChatRuntimes) so it keeps accumulating even
@@ -1853,24 +1907,27 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     return function () { window.__sseHandlers.delete(onEvent); };
   }, []);
 
-  // 页面加载时检查 Electron 原生浏览器 bridge 是否有活跃 tabs，用于刷新后保持浏览器 tab 可见。
-  // 仅在页面刷新/重新加载时恢复一次（挂载态首次有 chatId 时）；
-  // 不随 activeChatId 变化重新触发，防止切到另一对话时误恢复不属于它的浏览器 tab。
-  // BrowserTabManager.state() 不存 sessionId/chatId，不做精确匹配——只要有 tabs 就恢复。
-  var browserRestoredRef = useWbcRef(false);
+  // 按对话查询 Electron 中对应的 BrowserTabManager。每个 manager 的 tabs
+  // 和 persistent partition 都由 chatId 隔离，刷新 UI 不会把别的对话误认
+  // 为当前对话的浏览器。
+  var browserRestoredRef = useWbcRef({});
   useWbcEffect(function () {
-    if (browserRestoredRef.current) return;
     var bridge = window.cyrene && window.cyrene.browser;
     if (!bridge || typeof bridge.getState !== "function") return;
     var chatId = activeChatId || "";
     if (!chatId) return;
-    browserRestoredRef.current = true;
-    bridge.getState().then(function (state) {
+    if (browserRestoredRef.current[chatId]) return;
+    browserRestoredRef.current[chatId] = true;
+    bridge.getState(chatId).then(function (state) {
+      if (String(state && state.sessionId || "") !== String(chatId)) return;
       if (!state || !state.tabs || !Array.isArray(state.tabs) || !state.tabs.length) return;
       setBrowserActiveByChat(function (prev) {
         if (prev[chatId]) return prev;
-        setSideTab("browser");
         return Object.assign({}, prev, { [chatId]: true });
+      });
+      setBrowserWindowModeByChat(function (prev) {
+        if (prev[chatId]) return prev;
+        return Object.assign({}, prev, { [chatId]: "pip" });
       });
     }).catch(function (err) { console.error("getState failed", err); });
   }, [activeChatId]);
@@ -2286,6 +2343,25 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   var selectedChatSummary = chats.find(function (item) {
     return String(item.id || "") === String(activeChatId || "");
   }) || null;
+  var activeBrowserState = wbcBrowserStateForChat(activeChatId);
+  var browserMarkedActive = !!(browserActiveByChat && browserActiveByChat[activeChatId]);
+  var hasActiveBrowser = !!((activeBrowserState && activeBrowserState.active) || browserMarkedActive);
+  var browserWindowMode = browserWindowModeByChat[activeChatId] || "pip";
+  var browserTabOpen = !!(
+    hasActiveBrowser
+    && sideVisible
+    && sideTab === "browser"
+    && browserWindowMode !== "maximized"
+  );
+
+  function setActiveBrowserWindowMode(mode) {
+    var chatId = String(activeChatId || "");
+    if (!chatId) return;
+    setBrowserWindowModeByChat(function (prev) {
+      if (prev[chatId] === mode) return prev;
+      return Object.assign({}, prev, { [chatId]: mode });
+    });
+  }
 
   return (
     <div className={"wbc-page" + (sideVisible ? "" : " wbc-side-hidden")}>
@@ -2322,6 +2398,23 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
         onOpenFile={openViewer}
         sideVisible={sideVisible}
         onToggleSide={onToggleSide}
+        browserState={activeBrowserState}
+        browserSessionId={activeChatId || ""}
+        browserVisible={hasActiveBrowser && !browserTabOpen}
+        browserWindowMode={browserWindowMode}
+        onBrowserMinimize={function () { setActiveBrowserWindowMode("minimized"); }}
+        onBrowserMaximize={function () { setActiveBrowserWindowMode("maximized"); }}
+        onBrowserRestore={function () { setActiveBrowserWindowMode("pip"); }}
+        onBrowserTakeoverComplete={function (payload) {
+          var pending = activeChat && activeChat.pendingQuestion;
+          if (!pending || !pending.id) return Promise.reject(new Error("登录确认已不在等待中。"));
+          var takeoverQuestionId = String(payload && payload.questionId || "");
+          if (takeoverQuestionId && String(pending.id || "") !== takeoverQuestionId) {
+            return Promise.reject(new Error("登录确认已更新，请使用对话中的最新确认。"));
+          }
+          handleAnswer(pending.id, (payload && payload.text) || "我已完成登录");
+          return Promise.resolve();
+        }}
       />
       <WbcSide
         project={project}
@@ -2357,6 +2450,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
           return Promise.resolve();
         }}
         browserActiveByChat={browserActiveByChat}
+        browserSuppressed={browserWindowMode === "maximized"}
       />
     </div>
   );
@@ -2467,7 +2561,273 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, sideVisible, onToggleSide }) {
+function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mode, onMinimize, onMaximize, onRestore, onTakeoverComplete }) {
+  var shellRef = useWbcRef(null);
+  var frameRef = useWbcRef(null);
+  var interactionRef = useWbcRef(null);
+  var modeTransitionRafRef = useWbcRef(0);
+  var modeTransitionTimerRef = useWbcRef(null);
+  var [frame, setFrame] = useWbcState(null);
+  var [nativeBrowserState, setNativeBrowserState] = useWbcState(null);
+  var effectiveMode = mode || "pip";
+  var displayBrowserState = nativeBrowserState || browserState || {};
+  var hasNoBrowserTabs = Array.isArray(displayBrowserState.tabs) && displayBrowserState.tabs.length === 0;
+
+  function cancelModeTransition() {
+    if (modeTransitionRafRef.current) {
+      cancelAnimationFrame(modeTransitionRafRef.current);
+      modeTransitionRafRef.current = 0;
+    }
+    if (modeTransitionTimerRef.current) {
+      clearTimeout(modeTransitionTimerRef.current);
+      modeTransitionTimerRef.current = null;
+    }
+  }
+
+  function runModeTransition(action) {
+    if (!action) return;
+    cancelModeTransition();
+    // Detach the native view before React changes the shell from a bounded PiP
+    // rectangle to a fixed full-window surface (or back). The bitmap proxy is
+    // kept for two committed frames, then the live view is attached once at the
+    // final bounds; this avoids Electron's white compositor surface.
+    wbcNotifyBrowserWindowInteraction(true, "mode", browserSessionId);
+    action();
+    modeTransitionRafRef.current = requestAnimationFrame(function () {
+      modeTransitionRafRef.current = requestAnimationFrame(function () {
+        modeTransitionRafRef.current = 0;
+        modeTransitionTimerRef.current = setTimeout(function () {
+          modeTransitionTimerRef.current = null;
+          wbcNotifyBrowserWindowInteraction(false, "mode", browserSessionId);
+        }, 48);
+      });
+    });
+  }
+
+  function measuredFrame() {
+    var node = shellRef.current;
+    var area = node && node.parentElement;
+    if (!node || !area) return null;
+    var nodeRect = node.getBoundingClientRect();
+    var areaRect = area.getBoundingClientRect();
+    return {
+      x: nodeRect.left - areaRect.left,
+      y: nodeRect.top - areaRect.top,
+      width: nodeRect.width,
+      height: nodeRect.height,
+    };
+  }
+
+  function commitFrame(next, area) {
+    var host = area || (shellRef.current && shellRef.current.parentElement);
+    if (!host || !next) return;
+    var clamped = wbcClampBrowserWindowFrame(next, host.clientWidth, host.clientHeight, 240, 180);
+    frameRef.current = clamped;
+    // Keep the DOM shell and Electron's native WebContentsView on the same
+    // pointer frame. Waiting for React to commit here makes the page visibly
+    // trail the window chrome during a drag or resize.
+    var node = shellRef.current;
+    if (node) {
+      node.style.left = clamped.x + "px";
+      node.style.top = clamped.y + "px";
+      node.style.width = clamped.width + "px";
+      node.style.height = clamped.height + "px";
+      node.style.right = "auto";
+      node.style.bottom = "auto";
+    }
+    setFrame(clamped);
+    wbcNotifyBrowserLayoutChanged();
+  }
+
+  function stopInteraction() {
+    var interaction = interactionRef.current;
+    interactionRef.current = null;
+    if (interaction && interaction.captureNode && interaction.captureNode.releasePointerCapture) {
+      try { interaction.captureNode.releasePointerCapture(interaction.pointerId); } catch (e) {}
+    }
+    document.body.classList.remove("wbc-browser-window-interacting");
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", stopInteraction);
+    window.removeEventListener("pointercancel", stopInteraction);
+    wbcNotifyBrowserLayoutChanged();
+    if (interaction) wbcNotifyBrowserWindowInteraction(false, interaction.kind, browserSessionId);
+  }
+
+  function onPointerMove(event) {
+    var interaction = interactionRef.current;
+    if (!interaction) return;
+    var dx = event.clientX - interaction.clientX;
+    var dy = event.clientY - interaction.clientY;
+    var start = interaction.frame;
+    var next = { x: start.x, y: start.y, width: start.width, height: start.height };
+    if (interaction.kind === "drag") {
+      next.x = start.x + dx;
+      next.y = start.y + dy;
+    } else {
+      var direction = interaction.direction;
+      var right = start.x + start.width;
+      var bottom = start.y + start.height;
+      var minWidth = Math.min(240, interaction.area.clientWidth);
+      var minHeight = Math.min(180, interaction.area.clientHeight);
+      if (direction.indexOf("e") !== -1) right = Math.min(interaction.area.clientWidth, Math.max(start.x + minWidth, right + dx));
+      if (direction.indexOf("s") !== -1) bottom = Math.min(interaction.area.clientHeight, Math.max(start.y + minHeight, bottom + dy));
+      if (direction.indexOf("w") !== -1) next.x = Math.max(0, Math.min(right - minWidth, start.x + dx));
+      if (direction.indexOf("n") !== -1) next.y = Math.max(0, Math.min(bottom - minHeight, start.y + dy));
+      next.width = right - next.x;
+      next.height = bottom - next.y;
+    }
+    commitFrame(next, interaction.area);
+  }
+
+  function beginInteraction(event, kind, direction) {
+    if (effectiveMode !== "pip" || event.button !== 0) return;
+    if (kind === "drag" && event.target && event.target.closest && event.target.closest("button")) return;
+    var node = shellRef.current;
+    var area = node && node.parentElement;
+    var start = frameRef.current || measuredFrame();
+    if (!node || !area || !start) return;
+    event.preventDefault();
+    interactionRef.current = {
+      kind: kind,
+      direction: direction || "",
+      clientX: event.clientX,
+      clientY: event.clientY,
+      frame: start,
+      area: area,
+      pointerId: event.pointerId,
+      captureNode: event.currentTarget,
+    };
+    if (event.currentTarget && event.currentTarget.setPointerCapture) {
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch (e) {}
+    }
+    document.body.classList.add("wbc-browser-window-interacting");
+    wbcNotifyBrowserWindowInteraction(true, kind, browserSessionId);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopInteraction);
+    window.addEventListener("pointercancel", stopInteraction);
+  }
+
+  useWbcEffect(function () {
+    frameRef.current = null;
+    setFrame(null);
+  }, [browserSessionId]);
+
+  useWbcEffect(function () {
+    var bridge = window.cyrene && window.cyrene.browser;
+    var sessionId = String(browserSessionId || "");
+    setNativeBrowserState(null);
+    if (!visible || !sessionId || !bridge || typeof bridge.getState !== "function") return undefined;
+    bridge.getState(sessionId).then(function (next) {
+      if (next && String(next.sessionId || "") === sessionId) setNativeBrowserState(next);
+    }).catch(function () {});
+    if (typeof bridge.onState !== "function") return undefined;
+    return bridge.onState(function (next) {
+      if (next && String(next.sessionId || "") === sessionId) setNativeBrowserState(next);
+    });
+  }, [visible, browserSessionId]);
+
+  useWbcEffect(function () {
+    if (!visible || effectiveMode !== "pip") return undefined;
+    var node = shellRef.current;
+    var area = node && node.parentElement;
+    if (!area || typeof ResizeObserver === "undefined") return undefined;
+    var observer = new ResizeObserver(function () {
+      var current = frameRef.current;
+      if (current) commitFrame(current, area);
+      wbcNotifyBrowserLayoutChanged();
+    });
+    observer.observe(area);
+    return function () { observer.disconnect(); };
+  }, [visible, effectiveMode]);
+
+  useWbcEffect(function () {
+    var raf = requestAnimationFrame(wbcNotifyBrowserLayoutChanged);
+    return function () { cancelAnimationFrame(raf); };
+  }, [frame && frame.x, frame && frame.y, frame && frame.width, frame && frame.height, effectiveMode, visible]);
+
+  useWbcEffect(function () {
+    if (effectiveMode !== "maximized") return undefined;
+    function onKeyDown(event) {
+      if (event.key === "Escape" && onRestore) onRestore();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return function () { window.removeEventListener("keydown", onKeyDown); };
+  }, [effectiveMode, onRestore]);
+
+  useWbcEffect(function () {
+    return function () {
+      stopInteraction();
+      cancelModeTransition();
+    };
+  }, []);
+
+  if (!visible) return null;
+  if (hasNoBrowserTabs && (effectiveMode === "pip" || effectiveMode === "minimized")) return null;
+  if (effectiveMode === "minimized") {
+    return (
+      <button type="button" className="wbc-browser-restore-float" onClick={onRestore} title={wbcT("workbenchChat.browserRestoreHint", "Reopen browser window")}>
+        <span>{wbcT("workbenchChat.browserWindowTitle", "Browser")}</span>
+      </button>
+    );
+  }
+
+  var inlineStyle = effectiveMode === "pip" && frame ? {
+    left: frame.x + "px",
+    top: frame.y + "px",
+    width: frame.width + "px",
+    height: frame.height + "px",
+    right: "auto",
+    bottom: "auto",
+  } : undefined;
+  var resizeDirections = ["n", "e", "s", "w", "ne", "nw", "se", "sw"];
+  return (
+    <section
+      ref={shellRef}
+      className={"wbc-browser-window " + effectiveMode}
+      style={inlineStyle}
+      aria-label={wbcT("workbenchChat.browserWindowRegion", "Live browser window")}
+    >
+      <div
+        className="wbc-browser-window-bar"
+        onPointerDown={function (event) { beginInteraction(event, "drag", ""); }}
+        onDoubleClick={function () { runModeTransition(effectiveMode === "pip" ? onMaximize : onRestore); }}
+      >
+        <span className="wbc-browser-title-pill">{wbcT("workbenchChat.browserWindowTitle", "Browser")}</span>
+        {wbcBrowserPageTitle(displayBrowserState) && <strong title={wbcBrowserWindowTitle(displayBrowserState)}>{wbcBrowserPageTitle(displayBrowserState)}</strong>}
+        <div className="wbc-browser-window-actions">
+          {effectiveMode === "pip" ? (
+            <button type="button" onClick={function () { runModeTransition(onMaximize); }} title={wbcT("workbenchChat.browserMaximize", "Maximize")} aria-label={wbcT("workbenchChat.browserMaximize", "Maximize")}>{WBC_ICONS.windowMaximize}</button>
+          ) : (
+            <button type="button" onClick={function () { runModeTransition(onRestore); }} title={wbcT("workbenchChat.browserRestoreSize", "Restore")} aria-label={wbcT("workbenchChat.browserRestoreSize", "Restore")}><span className="wbc-material-icon close-fullscreen" aria-hidden="true" /></button>
+          )}
+          <button type="button" onClick={onMinimize} title={wbcT("workbenchChat.browserMinimize", "Minimize")} aria-label={wbcT("workbenchChat.browserMinimize", "Minimize")}>{WBC_ICONS.windowMinimize}</button>
+        </div>
+      </div>
+      <div className="wbc-browser-window-content">
+        {typeof window.BrowserViewportPanel !== "undefined"
+          ? React.createElement(window.BrowserViewportPanel, {
+              browserState: browserState || {},
+              browserSessionId: browserSessionId || "",
+              roundId: (browserState && browserState.roundId) || "",
+              onTakeoverComplete: onTakeoverComplete,
+            })
+          : <p className="workbench-muted">{wbcT("chat.side.browserUnavailable", "Browser view is unavailable.")}</p>}
+      </div>
+      {effectiveMode === "pip" && resizeDirections.map(function (direction) {
+        return (
+          <span
+            key={direction}
+            className={"wbc-browser-resize-handle " + direction}
+            onPointerDown={function (event) { beginInteraction(event, "resize", direction); }}
+            aria-hidden="true"
+          />
+        );
+      })}
+    </section>
+  );
+}
+
+function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, sideVisible, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMinimize, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete }) {
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var durableMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
@@ -2546,6 +2906,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         </div>
       )}
       {error && <WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} />}
+      <div className="wbc-thread-stage">
       <div className="wbc-thread" ref={scrollRef} onScroll={onScroll}>
         {loading && !chat && (
           <div className="wbc-empty-thread wbc-loading-thread" role="status">
@@ -2609,6 +2970,19 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         }) && (
           <WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} />
         )}
+      </div>
+      <div className="wbc-browser-movement-region">
+        <WbcBrowserFloatingSurface
+          browserState={browserState}
+          browserSessionId={browserSessionId}
+          visible={browserVisible}
+          mode={browserWindowMode}
+          onMinimize={onBrowserMinimize}
+          onMaximize={onBrowserMaximize}
+          onRestore={onBrowserRestore}
+          onTakeoverComplete={onBrowserTakeoverComplete}
+        />
+      </div>
       </div>
       <WbcComposer
         chat={chat}
@@ -4003,14 +4377,13 @@ function WbcSide({
   compactBusy,
   onBrowserTakeoverComplete,
   browserActiveByChat,
+  browserSuppressed,
   onToggleSide,
 }) {
   if (typeof window.useDataVersion === "function") window.useDataVersion();
   var browserState = wbcBrowserStateForChat(activeChatId);
   var browserMarkedActive = !!(browserActiveByChat && browserActiveByChat[activeChatId]);
-  var browserPanelState = (browserState && browserState.active)
-    ? browserState
-    : (browserMarkedActive && window.DATA && window.DATA.browser ? window.DATA.browser : browserState);
+  var browserPanelState = browserState || {};
   var hasMap = wbcChatUsedMap(chat, runtime);
   var hasBrowser = !!((browserState && browserState.active) || browserMarkedActive);
   var hasBranches = useWbcMemo(function () {
@@ -4067,7 +4440,7 @@ function WbcSide({
         {activeTab === "branches" && <WbcBranchTab chats={chats} activeChatId={activeChatId} onSelectChat={onSelectChat} />}
         {activeTab === "viewer" && <WbcViewerTab file={viewerFile} />}
         {activeTab === "map" && <WbcMapTab chatId={chat ? chat.id : ""} active={true} />}
-        {activeTab === "browser" && (
+        {activeTab === "browser" && !browserSuppressed && (
           typeof window.BrowserViewportPanel !== "undefined"
             ? React.createElement(window.BrowserViewportPanel, {
                 browserState: browserPanelState,

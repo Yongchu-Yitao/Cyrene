@@ -1064,6 +1064,7 @@ _PERMISSION_ELEVATION_KINDS: frozenset[str] = frozenset({
     "read_elevation",
     "subshell_elevation",
     "external_delivery_request",
+    "external_upload_confirmation",
     "delete_confirmation",
     "destructive_confirmation",
     "task_permission_request",

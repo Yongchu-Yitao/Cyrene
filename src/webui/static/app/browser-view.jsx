@@ -36,28 +36,36 @@ function BrowserIcon({ name, size }) {
   if (name === "close") return <svg {...common}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>;
   if (name === "volume") return <svg {...common}><path d="M11 5 6 9H3v6h3l5 4V5Z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /></svg>;
   if (name === "muted") return <svg {...common}><path d="M11 5 6 9H3v6h3l5 4V5Z" /><path d="m16 9 5 5" /><path d="m21 9-5 5" /></svg>;
+  if (name === "fullscreen") return <svg {...common}><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5" /></svg>;
   return null;
 }
 
 function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, browserState }) {
   browserState = browserState || (window.DATA && window.DATA.browser);
   const bridge = window.cyrene && window.cyrene.browser;
+  const electronSessionId = String(browserSessionId || (browserState && browserState.sessionId) || "").trim();
   const hostRef = React.useRef(null);
   const addressRef = React.useRef(null);
   const boundsRafRef = React.useRef(0);
+  const lastBoundsRef = React.useRef("");
   const overlayObscuredRef = React.useRef(false);
+  const windowInteractionRef = React.useRef(false);
+  const interactionPreviewTokenRef = React.useRef(0);
   const [state, setState] = React.useState({ tabs: [], activeTabId: "", activeTab: null });
   const [address, setAddress] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [interactionPreview, setInteractionPreview] = React.useState("");
 
   const active = state.activeTab || null;
   const tabs = Array.isArray(state.tabs) ? state.tabs : [];
+  const videoFullscreen = state.videoFullscreen || {};
+  const videoFullscreenActive = videoFullscreen.active === true;
 
   function refreshState() {
     if (!bridge || typeof bridge.getState !== "function") return;
-    bridge.getState().then(function (next) {
-      if (next && next.ok !== false) setState(next);
+    bridge.getState(electronSessionId).then(function (next) {
+      if (next && next.ok !== false && String(next.sessionId || "") === electronSessionId) setState(next);
     }).catch(function () {});
   }
 
@@ -65,16 +73,18 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     refreshState();
     if (!bridge || typeof bridge.onState !== "function") return undefined;
     return bridge.onState(function (next) {
-      if (next && next.ok !== false) setState(next);
+      if (next && next.ok !== false && String(next.sessionId || "") === electronSessionId) setState(next);
     });
-  }, []);
+  }, [electronSessionId]);
 
   React.useEffect(function () {
     if (!bridge || typeof bridge.setContext !== "function") return undefined;
-    const sessionId = String(browserSessionId || (browserState && browserState.sessionId) || "").trim();
+    setState({ sessionId: electronSessionId, tabs: [], activeTabId: "", activeTab: null });
     const rid = String(roundId || (browserState && browserState.roundId) || "").trim();
-    bridge.setContext({ sessionId: sessionId, roundId: rid }).catch(function () {});
-  }, [browserSessionId, roundId, browserState && browserState.sessionId, browserState && browserState.roundId]);
+    bridge.setContext({ sessionId: electronSessionId, roundId: rid }).then(function (next) {
+      if (next && next.ok !== false && String(next.sessionId || "") === electronSessionId) setState(next);
+    }).catch(function () {});
+  }, [electronSessionId, roundId, browserState && browserState.roundId]);
 
   React.useEffect(function () {
     const nextUrl = (active && active.url) || "";
@@ -84,18 +94,38 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   function sendBounds(visible) {
     if (!bridge || typeof bridge.setBounds !== "function") return;
     const node = hostRef.current;
-    if (!visible || overlayObscuredRef.current || !node) {
-      bridge.setBounds({ visible: false }).catch(function () {});
+    if (!visible || overlayObscuredRef.current || windowInteractionRef.current || !node) {
+      if (lastBoundsRef.current === "hidden") return;
+      lastBoundsRef.current = "hidden";
+      bridge.setBounds({ sessionId: electronSessionId, visible: false }).catch(function () {
+        lastBoundsRef.current = "";
+      });
       return;
     }
     const rect = node.getBoundingClientRect();
-    bridge.setBounds({
+    const borderRadius = node.closest(".wbc-browser-window.pip") ? 11 : 0;
+    const payload = {
+      sessionId: electronSessionId,
       visible: true,
       x: rect.left,
       y: rect.top,
       width: rect.width,
       height: rect.height,
-    }).catch(function () {});
+      borderRadius: borderRadius,
+    };
+    const signature = [
+      electronSessionId,
+      Math.round(rect.left),
+      Math.round(rect.top),
+      Math.round(rect.width),
+      Math.round(rect.height),
+      borderRadius,
+    ].join(":");
+    if (lastBoundsRef.current === signature) return;
+    lastBoundsRef.current = signature;
+    bridge.setBounds(payload).catch(function () {
+      if (lastBoundsRef.current === signature) lastBoundsRef.current = "";
+    });
   }
 
   function scheduleBounds() {
@@ -103,6 +133,49 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     boundsRafRef.current = requestAnimationFrame(function () {
       boundsRafRef.current = 0;
       sendBounds(true);
+    });
+  }
+
+  function finishWindowInteraction(token) {
+    const node = hostRef.current;
+    if (!bridge || typeof bridge.setBounds !== "function" || !node) {
+      windowInteractionRef.current = false;
+      setInteractionPreview("");
+      lastBoundsRef.current = "";
+      scheduleBounds();
+      return;
+    }
+    const rect = node.getBoundingClientRect();
+    const borderRadius = node.closest(".wbc-browser-window.pip") ? 11 : 0;
+    const signature = [
+      electronSessionId,
+      Math.round(rect.left),
+      Math.round(rect.top),
+      Math.round(rect.width),
+      Math.round(rect.height),
+      borderRadius,
+    ].join(":");
+    bridge.setBounds({
+      sessionId: electronSessionId,
+      visible: true,
+      transition: true,
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
+      borderRadius: borderRadius,
+    }).then(function () {
+      if (interactionPreviewTokenRef.current !== token) return;
+      lastBoundsRef.current = signature;
+      windowInteractionRef.current = false;
+      setInteractionPreview("");
+      scheduleBounds();
+    }).catch(function () {
+      if (interactionPreviewTokenRef.current !== token) return;
+      lastBoundsRef.current = "";
+      windowInteractionRef.current = false;
+      setInteractionPreview("");
+      scheduleBounds();
     });
   }
 
@@ -118,7 +191,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       window.removeEventListener("resize", scheduleBounds);
       sendBounds(false);
     };
-  }, []);
+  }, [electronSessionId]);
 
   React.useEffect(function () {
     function onBrowserObscured(event) {
@@ -138,7 +211,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     return function () {
       window.removeEventListener("workbench:browser-obscured", onBrowserObscured);
     };
-  }, []);
+  }, [electronSessionId]);
 
   React.useEffect(function () {
     function onWorkbenchRightResize(ev) {
@@ -150,30 +223,80 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     return function () {
       window.removeEventListener("workbench:right-resize", onWorkbenchRightResize);
     };
-  }, []);
+  }, [electronSessionId]);
+
+  // Floating browser windows can move without changing the native host's own
+  // dimensions. ResizeObserver cannot see that translation, so the workbench
+  // publishes an explicit layout event while a window is dragged or resized.
+  React.useEffect(function () {
+    function onBrowserLayout() { scheduleBounds(); }
+    window.addEventListener("workbench:browser-layout", onBrowserLayout);
+    return function () {
+      window.removeEventListener("workbench:browser-layout", onBrowserLayout);
+    };
+  }, [electronSessionId]);
+
+  // A native WebContentsView cannot be transformed by renderer CSS. During a
+  // floating-window drag/resize, temporarily show a captured bitmap inside the
+  // React shell and detach the native view. The preview follows perfectly; the
+  // live view is reattached at the final bounds on pointer release.
+  React.useEffect(function () {
+    function onBrowserWindowInteraction(event) {
+      var detail = event && event.detail || {};
+      if (String(detail.sessionId || "") !== electronSessionId) return;
+      var activeInteraction = detail.active === true;
+      var token = interactionPreviewTokenRef.current + 1;
+      interactionPreviewTokenRef.current = token;
+      if (!activeInteraction) {
+        // Keep the bitmap proxy mounted until Electron confirms that Chromium
+        // has produced a frame at the final PiP/fullscreen bounds.
+        finishWindowInteraction(token);
+        return;
+      }
+      windowInteractionRef.current = true;
+      sendBounds(false);
+      if (!bridge || typeof bridge.screenshot !== "function") return;
+      bridge.screenshot({ sessionId: electronSessionId }).then(function (result) {
+        if (!windowInteractionRef.current || interactionPreviewTokenRef.current !== token) return;
+        if (result && result.ok !== false && result.pngBase64) {
+          setInteractionPreview("data:image/png;base64," + result.pngBase64);
+        }
+      }).catch(function () {});
+    }
+    window.addEventListener("workbench:browser-window-interaction", onBrowserWindowInteraction);
+    return function () {
+      interactionPreviewTokenRef.current += 1;
+      windowInteractionRef.current = false;
+      window.removeEventListener("workbench:browser-window-interaction", onBrowserWindowInteraction);
+    };
+  }, [electronSessionId]);
 
   React.useEffect(function () {
     scheduleBounds();
-  }, [state.activeTabId, tabs.length]);
+  }, [electronSessionId, state.activeTabId, tabs.length]);
 
   function run(action) {
     setBusy(true);
     setError("");
     return Promise.resolve()
       .then(action)
-      .then(function (next) { if (next && next.ok !== false) setState(next); else if (next && next.error) setError(next.error); })
+      .then(function (next) {
+        if (next && next.ok === false) setError(next.error || "browser action failed");
+        else if (next && Array.isArray(next.tabs)) setState(next);
+        return next;
+      })
       .catch(function (e) { setError((e && e.message) || String(e || "browser action failed")); })
       .finally(function () { setBusy(false); scheduleBounds(); });
   }
 
   function createTab(url) {
-    return run(function () { return bridge.createTab({ url: url || "about:blank", activate: true }); });
+    return run(function () { return bridge.createTab({ sessionId: electronSessionId, url: url || "about:blank", activate: true }); });
   }
 
   function navigate() {
     const url = (addressRef.current ? addressRef.current.value : address).trim();
     if (!url) return createTab("about:blank");
-    run(function () { return bridge.navigate({ url: url }); });
+    run(function () { return bridge.navigate({ sessionId: electronSessionId, url: url }); });
   }
 
   function onAddressKeyDown(e) {
@@ -188,14 +311,14 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       <div className="browser-tabs-strip">
         {tabs.map(function (tab) {
           return (
-            <button key={tab.id} type="button" className={"browser-tab" + (tab.id === state.activeTabId ? " active" : "")} onClick={function () { run(function () { return bridge.activateTab(tab.id); }); }} title={(tab.title || tab.url || "Browser") + (tab.audible ? " · audible" : "")}>
+            <button key={tab.id} type="button" className={"browser-tab" + (tab.id === state.activeTabId ? " active" : "")} onClick={function () { run(function () { return bridge.activateTab({ sessionId: electronSessionId, tabId: tab.id }); }); }} title={(tab.title || tab.url || "Browser") + (tab.audible ? " · audible" : "")}>
               <span className="browser-tab-title">{tab.title || tab.url || "New tab"}</span>
               {tab.audible && <span className="browser-tab-audio" aria-hidden="true"><BrowserIcon name="volume" size={13} /></span>}
               <span
                 className="browser-tab-close"
                 role="button"
                 tabIndex={-1}
-                onClick={function (e) { e.stopPropagation(); run(function () { return bridge.closeTab(tab.id); }); }}
+                onClick={function (e) { e.stopPropagation(); run(function () { return bridge.closeTab({ sessionId: electronSessionId, tabId: tab.id }); }); }}
                 title="Close tab"
               ><BrowserIcon name="close" size={12} /></span>
             </button>
@@ -205,23 +328,31 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
         {onClose && <button type="button" className="browser-icon-btn" onClick={onClose} title="Close panel"><BrowserIcon name="close" /></button>}
       </div>
       <div className="browser-nav-bar">
-        <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoBack || busy} onClick={function () { run(function () { return bridge.goBack(); }); }} title="Back"><BrowserIcon name="back" /></button>
-        <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoForward || busy} onClick={function () { run(function () { return bridge.goForward(); }); }} title="Forward"><BrowserIcon name="forward" /></button>
-        <button type="button" className="browser-icon-btn" disabled={!active || busy} onClick={function () { run(function () { return bridge.reload(); }); }} title="Reload"><BrowserIcon name="reload" /></button>
+        <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoBack || busy} onClick={function () { run(function () { return bridge.goBack(electronSessionId); }); }} title="Back"><BrowserIcon name="back" /></button>
+        <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoForward || busy} onClick={function () { run(function () { return bridge.goForward(electronSessionId); }); }} title="Forward"><BrowserIcon name="forward" /></button>
+        <button type="button" className="browser-icon-btn" disabled={!active || busy} onClick={function () { run(function () { return bridge.reload(electronSessionId); }); }} title="Reload"><BrowserIcon name="reload" /></button>
         <input ref={addressRef} className="browser-address" value={address} onChange={function (e) { setAddress(e.target.value); }} onKeyDown={onAddressKeyDown} placeholder="https://example.com" />
         <button type="button" className="browser-icon-btn browser-go-btn" disabled={busy} onClick={navigate} title="Go"><BrowserIcon name="go" /></button>
-        <button type="button" className={"browser-icon-btn" + (active && active.muted ? " muted" : "")} disabled={!active} onClick={function () { run(function () { return bridge.setMuted({ muted: !(active && active.muted) }); }); }} title={active && active.muted ? "Unmute" : "Mute"}>
+        <button type="button" className={"browser-icon-btn" + (active && active.muted ? " muted" : "")} disabled={!active} onClick={function () { run(function () { return bridge.setMuted({ sessionId: electronSessionId, muted: !(active && active.muted) }); }); }} title={active && active.muted ? "Unmute" : "Mute"}>
           <BrowserIcon name={active && active.muted ? "muted" : "volume"} />
         </button>
       </div>
       {error && <div className="browser-error">{error}</div>}
-      <div ref={hostRef} className="browser-native-host">
+      <div ref={hostRef} className={"browser-native-host" + (interactionPreview ? " is-previewing" : "")}>
+        {interactionPreview && <img className="browser-native-preview" src={interactionPreview} alt="" aria-hidden="true" />}
         {!tabs.length && (
           <div className="browser-empty">
             <button type="button" className="btn primary" onClick={function () { createTab("about:blank"); }}>打开浏览器</button>
           </div>
         )}
       </div>
+      {videoFullscreenActive && (
+        <div className="browser-video-fullscreen-overlay" role="status" aria-live="polite">
+          <span className="browser-video-fullscreen-icon" aria-hidden="true"><BrowserIcon name="fullscreen" size={24} /></span>
+          <strong>已在全屏播放</strong>
+          <span>{videoFullscreen.external ? "视频正在独立的全屏窗口中播放" : "视频正在 Cyrene 内全屏播放"}</span>
+        </div>
+      )}
     </div>
   );
 }

@@ -87,6 +87,30 @@ def test_migration_fixes_incomplete_model_entries(isolated_config_store):
     assert vision[0]["api_key"] == "sk-env"
 
 
+def test_portable_snapshot_is_detached_reencrypted_and_activated(
+    isolated_config_store,
+    monkeypatch,
+):
+    monkeypatch.setenv("CYRENE_CONFIG_KEYRING", "0")
+    original = {
+        "env": {"OPENAI_API_KEY": "old-secret", "OPENAI_MODEL": "old-model"},
+        "settings": {"app_language": "en"},
+    }
+    _write_encrypted(isolated_config_store, original)
+
+    exported = isolated_config_store.export_snapshot()
+    exported["env"]["OPENAI_API_KEY"] = "changed-only-in-snapshot"
+    assert isolated_config_store.get_env("OPENAI_API_KEY") == "old-secret"
+
+    normalized, encrypted = isolated_config_store.prepare_restored_snapshot(exported)
+    decrypted = json.loads(isolated_config_store._cipher().decrypt(encrypted))
+    assert decrypted == normalized == exported
+
+    isolated_config_store.activate_restored_snapshot(normalized)
+    assert isolated_config_store.get_env("OPENAI_API_KEY") == "changed-only-in-snapshot"
+    assert isolated_config_store.get_setting("app_language") == "en"
+
+
 def test_unknown_model_context_uses_smallest_known_candidate_window(monkeypatch):
     from cyrene import config_store
 

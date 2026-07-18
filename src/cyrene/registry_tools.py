@@ -71,6 +71,7 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.browser_click_at",  # browser_click_at
     "cyrene.tool_impl.browser_type",  # browser_type
     "cyrene.tool_impl.browser_type_ref",  # browser_type_ref
+    "cyrene.tool_impl.browser_upload_files",  # browser_upload_files
     "cyrene.tool_impl.browser_wait",  # browser_wait
     "cyrene.tool_impl.browser_network_log",  # browser_network_log
     "cyrene.tool_impl.browser_tab_list",  # browser_tab_list
@@ -116,6 +117,7 @@ _MAIN_ONLY_TOOLS = {
     "browser_click_at",
     "browser_type",
     "browser_type_ref",
+    "browser_upload_files",
     "browser_wait",
     "browser_network_log",
     "browser_tab_list",
@@ -151,6 +153,7 @@ _REQUIRES_ORDER_TOOLS = {
     "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click",
     "browser_click_ref", "browser_click_text", "browser_click_at", "browser_type",
     "browser_type_ref", "browser_wait", "browser_network_log", "browser_tab_list",
+    "browser_upload_files",
     "browser_tab_new", "browser_tab_select", "browser_tab_close", "browser_scroll",
     "browser_user_events", "browser_request_takeover",
 }

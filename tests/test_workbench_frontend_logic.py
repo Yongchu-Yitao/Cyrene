@@ -479,15 +479,174 @@ def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
     assert result["confirmation"]["userMessage"]["id"] == "msg-1"
 
 
-def test_workbench_chat_reveals_browser_tab_from_live_browser_events():
+def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
 
     assert "browserActiveByChat" in source
     assert 'event.type === "browser_frame" || event.type === "browser_takeover_request"' in source
     assert "(!browserEventChatId || browserEventChatId === String(activeChatIdRef.current))" in source
     assert "setBrowserActiveByChat(function (prev)" in source
     assert "(browserState && browserState.active) || browserMarkedActive" in source
+    browser_event_block = source.split("var browserEventChatId", 1)[1].split(
+        "// Live tool/phase/subagent progress", 1
+    )[0]
+    assert "setBrowserWindowModeByChat" in browser_event_block
+    assert 'setSideTab("browser")' not in browser_event_block
+    assert 'browserWindowModeByChat[activeChatId] || "pip"' in source
+    assert 'effectiveMode === "minimized"' in source
+    assert 'effectiveMode !== "maximized"' in source
+    assert "wbc-browser-resize-handle" in source
+    assert ".wbc-thread-stage" in styles
+    assert '<div className="wbc-browser-movement-region">' in source
+    movement_region_styles = styles.split(".wbc-browser-movement-region {", 1)[1].split("}", 1)[0]
+    assert "position: absolute;" in movement_region_styles
+    assert "inset: var(--wbc-thread-inset-top) var(--wbc-thread-inset-inline) var(--wbc-thread-inset-bottom);" in movement_region_styles
+    assert "pointer-events: none;" in movement_region_styles
+    thread_styles = styles.split(".wbc-thread {", 1)[1].split("}", 1)[0]
+    assert "padding: var(--wbc-thread-inset-top) var(--wbc-thread-inset-inline) var(--wbc-thread-inset-bottom);" in thread_styles
+    assert ".wbc-browser-window.maximized" in styles
+    assert ".wbc-browser-restore-float" in styles
+    pip_styles = styles.split(".wbc-browser-window.pip {", 1)[1].split("}", 1)[0]
+    assert "width: min(280px" in pip_styles
+    assert "height: min(215px" in pip_styles
+    assert "WBC_ICONS.windowMaximize" in source
+    assert "WBC_ICONS.windowMinimize" in source
+    minimized_surface = source.split('effectiveMode === "minimized"', 1)[1].split("var inlineStyle", 1)[0]
+    assert 'Array.isArray(displayBrowserState.tabs) && displayBrowserState.tabs.length === 0' in source
+    assert 'hasNoBrowserTabs && (effectiveMode === "pip" || effectiveMode === "minimized")' in source
+    assert "wbc-browser-title-pill" not in minimized_surface
+    assert "WBC_ICONS.windowMaximize" not in minimized_surface
+    assert "WBC_ICONS.windowRestore" not in minimized_surface
+    assert "wbc-material-icon close-fullscreen" in source
+    assert 'close-fullscreen-rounded.svg' in styles
+    assert "height: 58px;" in styles
+    assert "wbc-browser-title-pill" in source
+    assert "wbc-browser-restore-icon" not in source
+    assert "browser-status-dot running" not in source.split("function WbcBrowserFloatingSurface", 1)[1].split("function WbcMain", 1)[0]
+
+
+def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+
+    set_bounds_block = main.split("  setBounds(info = {}) {", 1)[1].split("\n  setObscured(", 1)[0]
+    assert "this.syncAttachedView();" in set_bounds_block
+    assert "}, 32);" in set_bounds_block
+    assert "}, 50);" not in set_bounds_block
+    commit_block = source.split("  function commitFrame(next, area) {", 1)[1].split("\n  function stopInteraction", 1)[0]
+    assert 'node.style.left = clamped.x + "px"' in commit_block
+    assert "wbcNotifyBrowserLayoutChanged();" in commit_block
+
+    browser_view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
+    assert "lastBoundsRef" in browser_view
+    assert "if (lastBoundsRef.current === signature) return;" in browser_view
+    assert "workbench:browser-window-interaction" in browser_view
+    assert "browser-native-preview" in browser_view
+    assert "bridge.screenshot" in browser_view
+    assert "finishWindowInteraction" in browser_view
+    assert "transition: true" in browser_view
+    assert 'wbcNotifyBrowserWindowInteraction(true, "mode", browserSessionId);' in source
+    assert 'wbcNotifyBrowserWindowInteraction(false, "mode", browserSessionId);' in source
+    sync_view_block = main.split("  syncAttachedView() {", 1)[1].split("\n  setBounds(", 1)[0]
+    set_bounds_index = sync_view_block.index("active.view.setBounds(targetBounds)")
+    attach_index = sync_view_block.index("win.contentView.addChildView(active.view)")
+    assert set_bounds_index < attach_index
+    assert "active.view.setVisible(false)" in sync_view_block
+    assert "active.view.setVisible(true)" in sync_view_block
+    assert "active.view.setBorderRadius(targetRadius)" in sync_view_block
+    assert "this.borderRadius = Math.max(0, Math.min(24" in main
+    assert 'node.closest(".wbc-browser-window.pip") ? 11 : 0' in browser_view
+    assert "borderRadius: borderRadius" in browser_view
+    assert "this.repaintView(active)" in sync_view_block
+    assert "wc.invalidate()" in main
+    assert "settleBoundsTransition" in main
+    assert "active.view.webContents.capturePage()" in main
+
+
+def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    browser_view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+
+    create_view = main.split("  createView() {", 1)[1].split("\n  setContext(", 1)[0]
+    assert "disableHtmlFullscreenWindowResize: true" in create_view
+    assert "wc.on('enter-html-full-screen'" in create_view
+    assert "this.enterVideoFullscreen(view)" in create_view
+    assert "wc.on('leave-html-full-screen'" in create_view
+    assert "this.finishVideoFullscreen(view)" in create_view
+
+    enter_fullscreen = main.split("  async enterVideoFullscreen(view) {", 1)[1].split("\n  finishVideoFullscreen(", 1)[0]
+    assert "external: isMac" in enter_fullscreen
+    assert "if (isMac)" in enter_fullscreen
+    assert "const videoWindow = new BrowserWindow" in enter_fullscreen
+    assert "videoWindow.setFullScreen(true)" in enter_fullscreen
+    assert "else if ((isWindows || isLinux) && mainWindow && !mainWindow.isDestroyed())" in enter_fullscreen
+    assert "mainWindow.setFullScreen(true)" in enter_fullscreen
+    assert "this._mainFullscreenLeaveHandler" in enter_fullscreen
+    assert "this.requestVideoFullscreenExit()" in enter_fullscreen
+
+    finish_fullscreen = main.split("  finishVideoFullscreen(view) {", 1)[1].split("\n  createView()", 1)[0]
+    assert "!this._mainWindowWasFullScreen" in finish_fullscreen
+    assert "mainWindow.setFullScreen(false)" in finish_fullscreen
+    assert "mainWindow.removeListener('leave-full-screen', this._mainFullscreenLeaveHandler)" in finish_fullscreen
+
+    sync_view = main.split("  syncAttachedView() {", 1)[1].split("\n  async settleBoundsTransition", 1)[0]
+    assert "const fullscreenTab = this.fullscreenTab()" in sync_view
+    assert "const targetBounds = fullscreenActive ? this.fullscreenBounds(win) : this.bounds" in sync_view
+    assert "win.contentView.addChildView(active.view)" in sync_view
+    assert "videoFullscreen:" in main
+    assert "platform: process.platform" in main
+
+    assert 'className="browser-video-fullscreen-overlay"' in browser_view
+    assert "已在全屏播放" in browser_view
+    assert "视频正在独立的全屏窗口中播放" in browser_view
+    assert ".browser-video-fullscreen-overlay" in styles
+
+    session_guards = main.split("function installBrowserSessionGuards(", 1)[1].split("\nclass BrowserTabManager", 1)[0]
+    assert "permission === 'fullscreen'" in session_guards
+    assert "browserSession.setPermissionCheckHandler" in session_guards
+    assert "browserSession.setPermissionRequestHandler" in session_guards
+    assert "callback(browserPermissionAllowed(permission))" in session_guards
+
+
+def test_electron_browser_tab_attaches_before_navigation_and_survives_media_load_errors():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    create_tab = main.split("  async createTab(", 1)[1].split("\n  activateTab(", 1)[0]
+
+    attach_index = create_tab.index("this.syncAttachedView()")
+    load_index = create_tab.index("await view.webContents.loadURL(tab.url)")
+    assert attach_index < load_index
+    assert "tab.lastLoadError = String" in create_tab
+    assert "Browser tab navigation reported an error" in create_tab
+    assert "return tab" in create_tab
+
+
+def test_workbench_browser_window_frame_stays_inside_chat_region():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    helper_source = "function wbcClampBrowserWindowFrame(" + source.split(
+        "function wbcClampBrowserWindowFrame(", 1
+    )[1].split("function wbcNotifyBrowserLayoutChanged", 1)[0]
+    script = f"""
+eval({json.dumps(helper_source)});
+const result = [
+  wbcClampBrowserWindowFrame({{ x: 900, y: 500, width: 400, height: 300 }}, 1000, 600, 240, 180),
+  wbcClampBrowserWindowFrame({{ x: 0, y: 0, width: 1000, height: 600 }}, 1000, 600, 240, 180),
+  wbcClampBrowserWindowFrame({{ x: -20, y: -30, width: 80, height: 90 }}, 300, 220, 240, 180)
+];
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    assert json.loads(completed.stdout) == [
+        {"x": 600, "y": 300, "width": 400, "height": 300},
+        {"x": 0, "y": 0, "width": 1000, "height": 600},
+        {"x": 0, "y": 0, "width": 240, "height": 180},
+    ]
 
 
 def test_workbench_chat_tracks_actual_model_from_live_llm_events():
@@ -1305,6 +1464,8 @@ def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
     assert '"workbenchChat.ctxBlock.skills.learned": "已学习技能"' in i18n
     assert '"toolName.browser_user_events": "User browser operations"' in i18n
     assert '"toolName.browser_user_events": "用户浏览器操作"' in i18n
+    assert '"toolName.browser_upload_files": "Upload files"' in i18n
+    assert '"toolName.browser_upload_files": "上传文件"' in i18n
 
 
 def test_workbench_phase_events_publish_translation_keys():
@@ -1597,6 +1758,33 @@ def test_electron_browser_panel_uses_native_browser_bridge():
     assert "browser_user_events" in (root / "src" / "cyrene" / "registry_tools.py").read_text(encoding="utf-8")
 
 
+def test_electron_browser_tabs_are_per_session_while_login_state_is_shared():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
+    browser = (root / "src" / "cyrene" / "browser.py").read_text(encoding="utf-8")
+    chat_routes = (root / "src" / "webui" / "routes_workbench_chat.py").read_text(encoding="utf-8")
+    view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
+    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+
+    assert "const browserTabManagers = new Map();" in main
+    assert "new BrowserTabManager(normalized)" in main
+    assert "this.partition = BROWSER_PARTITION;" in main
+    assert "partition: this.partition" in main
+    assert "sessionId: this.sessionId" in main
+    assert "this.sessionId !== activeBrowserSessionId" in main
+    assert "closeBrowserSession" in main
+    assert "manager.closeAll()" in main
+    assert "payload.sessionId" in main
+    assert '"sessionId": session_id' in browser
+    assert "getState: (sessionId)" in preload
+    assert "bridge.getState(electronSessionId)" in view
+    assert 'String(next.sessionId || "") === electronSessionId' in view
+    assert "bridge.getState(chatId)" in chat
+    assert "Array.isArray(next.tabs)" in view
+    assert "await close_electron_browser_session(chat_id)" in chat_routes
+
+
 def test_electron_browser_user_events_are_recorded_for_learning():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
@@ -1614,7 +1802,7 @@ def test_electron_browser_user_events_are_recorded_for_learning():
     # Browser telemetry is persisted here; completed agent turns own the
     # learning barrier so an event cannot race an incomplete tool chain.
     assert "process_unprocessed_turns" not in routes
-    assert "bridge.setContext({ sessionId: sessionId, roundId: rid })" in view
+    assert "bridge.setContext({ sessionId: electronSessionId, roundId: rid })" in view
 
 
 def test_electron_browser_panel_does_not_restore_closed_tabs_from_stale_state():
@@ -1896,8 +2084,9 @@ def test_workbench_chat_exposes_browser_live_view_and_takeover():
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
 
     assert 'event.type === "browser_frame" || event.type === "browser_takeover_request"' in source
-    assert 'setSideTab("browser")' in source
-    browser_switch_block = source.split('event.type === "browser_frame" || event.type === "browser_takeover_request"', 1)[1].split('setSideTab("browser")', 1)[0]
+    browser_switch_block = source.split('event.type === "browser_frame" || event.type === "browser_takeover_request"', 1)[1].split('// Live tool/phase/subagent progress', 1)[0]
+    assert 'setSideTab("browser")' not in browser_switch_block
+    assert "setBrowserWindowModeByChat" in browser_switch_block
     assert "runtimeEngine.isRunning" not in browser_switch_block
     assert 'id: "browser", label: wbcT("chat.side.browser", "Browser")' in source
     assert "window.BrowserViewportPanel" in source
@@ -2214,6 +2403,16 @@ def test_workbench_about_related_actions_only_click_right_button():
     assert ".wb-about-related-row:hover" not in styles
     assert ".wb-about-related-action:hover" in styles
     assert ".wb-about-related-action:focus-visible" in styles
+
+    final_action_rule = styles.rsplit(".workbench-shell .settings-overlay .wb-about-related-action {", 1)[1].split("}", 1)[0]
+    assert "min-height: calc(30px * var(--wb-ui-density-scale, 1)) !important" in final_action_rule
+    assert "font-family: var(--wb-font) !important" in final_action_rule
+    assert "font-size: calc(13px * var(--wb-ui-font-scale, 1)) !important" in final_action_rule
+    assert "font-weight: 600 !important" in final_action_rule
+    assert "line-height: 1 !important" in final_action_rule
+
+    assert "--wb-settings-panel-height: min(540px, calc(100vh - 48px))" in styles
+    assert styles.count("height: var(--wb-settings-panel-height);") == 3
 
 
 def test_workbench_help_center_lists_shortcuts_from_module_with_customize_link():

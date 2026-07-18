@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from copy import deepcopy
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -438,6 +439,54 @@ def _ensure_loaded() -> dict:
     if _cache is None:
         _cache = _read_config()
     return _cache
+
+
+def export_snapshot() -> dict:
+    """Return a portable, detached snapshot of all configuration.
+
+    The on-disk ``config.enc`` file cannot be copied between installations
+    because its Fernet key normally lives in the operating-system keyring.
+    Backup archives therefore carry this logical snapshot and re-encrypt it
+    with the destination installation's key during restore.
+    """
+    return deepcopy(_ensure_loaded())
+
+
+def _normalize_restored_snapshot(snapshot: dict) -> dict:
+    if not isinstance(snapshot, dict):
+        raise ValueError("configuration snapshot must be an object")
+    env = snapshot.get("env")
+    settings = snapshot.get("settings")
+    if not isinstance(env, dict) or not isinstance(settings, dict):
+        raise ValueError("configuration snapshot must contain env and settings objects")
+    if not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
+        raise ValueError("configuration env values must be strings")
+    return {"env": deepcopy(env), "settings": deepcopy(settings)}
+
+
+def prepare_restored_snapshot(snapshot: dict) -> tuple[dict, bytes]:
+    """Validate *snapshot* and encrypt it with this installation's key."""
+    normalized = _normalize_restored_snapshot(snapshot)
+
+    plain = json.dumps(normalized, ensure_ascii=False, indent=2).encode("utf-8")
+    return normalized, _cipher().encrypt(plain)
+
+
+def activate_restored_snapshot(snapshot: dict) -> None:
+    """Make an already-persisted restored snapshot active in this process."""
+    normalized = _normalize_restored_snapshot(snapshot)
+    global _cache, _migrated
+    previous_env = set((_cache or {}).get("env", {}))
+    _cache = normalized
+    _migrated = True
+    restored_env = normalized["env"]
+    for key in previous_env - set(restored_env):
+        os.environ.pop(key, None)
+    for key, value in restored_env.items():
+        if value:
+            os.environ[key] = value
+        else:
+            os.environ.pop(key, None)
 
 
 # ---------------------------------------------------------------------------

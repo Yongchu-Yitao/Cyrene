@@ -22,18 +22,22 @@ contextBridge.exposeInMainWorld('cyrene', {
   },
   switchUiShell: (mode) => ipcRenderer.invoke('window:switch-shell', mode),
   browser: {
-    getState: () => ipcRenderer.invoke('browser:get-state'),
+    getState: (sessionId) => ipcRenderer.invoke('browser:get-state', { sessionId: String(sessionId || '') }),
     setBounds: (info) => ipcRenderer.invoke('browser:set-bounds', info || {}),
     setContext: (info) => ipcRenderer.invoke('browser:set-context', info || {}),
-    setObscured: (obscured) => ipcRenderer.invoke('browser:set-obscured', obscured === true),
+    setObscured: (info) => ipcRenderer.invoke(
+      'browser:set-obscured',
+      info && typeof info === 'object' ? info : { obscured: info === true }
+    ),
     createTab: (info) => ipcRenderer.invoke('browser:create-tab', info || {}),
-    activateTab: (tabId) => ipcRenderer.invoke('browser:activate-tab', tabId),
-    closeTab: (tabId) => ipcRenderer.invoke('browser:close-tab', tabId),
+    activateTab: (info) => ipcRenderer.invoke('browser:activate-tab', info || {}),
+    closeTab: (info) => ipcRenderer.invoke('browser:close-tab', info || {}),
     navigate: (info) => ipcRenderer.invoke('browser:navigate', info || {}),
-    goBack: () => ipcRenderer.invoke('browser:go-back'),
-    goForward: () => ipcRenderer.invoke('browser:go-forward'),
-    reload: () => ipcRenderer.invoke('browser:reload'),
+    goBack: (sessionId) => ipcRenderer.invoke('browser:go-back', { sessionId: String(sessionId || '') }),
+    goForward: (sessionId) => ipcRenderer.invoke('browser:go-forward', { sessionId: String(sessionId || '') }),
+    reload: (sessionId) => ipcRenderer.invoke('browser:reload', { sessionId: String(sessionId || '') }),
     setMuted: (info) => ipcRenderer.invoke('browser:set-muted', info || {}),
+    screenshot: (info) => ipcRenderer.invoke('browser:screenshot', info || {}),
     onState: (callback) => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_event, state) => callback(state);

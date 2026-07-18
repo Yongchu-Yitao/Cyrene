@@ -2434,6 +2434,12 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             payload, status_code = await _routes()._delete_chat_session(session_id)
             if status_code != 200:
                 return JSONResponse(payload, status_code=status_code)
+            try:
+                from cyrene.browser import close_electron_browser_session
+
+                await close_electron_browser_session(session_id)
+            except Exception:
+                logger.exception("Failed to close Electron browser for chat %s", session_id)
             return {"ok": True}
         payload = await asyncio.to_thread(_read_chats_store)
         chats = payload.get("chats", [])
@@ -2451,6 +2457,12 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             await clear_session_id(session_id=chat_id)
         except Exception:
             logger.exception("Failed to clear agent state for chat %s", chat_id)
+        try:
+            from cyrene.browser import close_electron_browser_session
+
+            await close_electron_browser_session(chat_id)
+        except Exception:
+            logger.exception("Failed to close Electron browser for chat %s", chat_id)
         return {"ok": True}
 
     @router.post("/api/workbench/chats/{chat_id}/messages")

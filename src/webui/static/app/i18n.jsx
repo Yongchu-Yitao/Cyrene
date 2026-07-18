@@ -1133,7 +1133,7 @@ const TRANSLATIONS = {
 
     // ── Settings / Backup ──────────────────────────────────────────────────
     "settings.backup": "Backup & Restore",
-    "settings.backupSubtitle": "Export or restore all agent data — conversations, memory, settings, and task schedules.",
+    "settings.backupSubtitle": "Export or restore agent data — conversations, memory, settings, and task schedules. Archives may contain API keys; store them securely.",
     "settings.browserTools": "Browser automation tools",
     "settings.browserToolsHint": "Enable browser navigation, snapshot, screenshot, click, type, wait, and network inspection tools. The desktop app uses the embedded Electron browser; non-desktop runs fall back to Playwright/httpx.",
     "settings.backupExportBtn": "Create backup",
@@ -1141,6 +1141,7 @@ const TRANSLATIONS = {
     "settings.backupExporting": "Creating backup…",
     "settings.backupExported": "Backup created ({n} files, {size}).",
     "settings.backupRestored": "Restored {n} files from backup.",
+    "settings.backupRestartRequired": "Restart Cyrene to finish applying all restored runtime settings.",
     "settings.backupRestoreFailed": "Restore failed",
     "settings.backupHistory": "Backup history",
     "settings.backupHistoryHint": "Previous export archives are listed below.",
@@ -1227,6 +1228,7 @@ const TRANSLATIONS = {
     "tool.desc.browser_click_at": "Click the page at viewport coordinates.",
     "tool.desc.browser_type": "Type text into an input on the current page.",
     "tool.desc.browser_type_ref": "Type into an editable element returned by browser_snapshot.",
+    "tool.desc.browser_upload_files": "Attach approved local files to a browser file input without opening the system picker. Every upload requires a single-use human approval.",
     "tool.desc.browser_wait": "Wait for SPA navigation or async rendering.",
     "tool.desc.browser_network_log": "Inspect recent browser network resource URLs.",
     "tool.desc.browser_user_events": "List recent user-driven operations in the embedded browser including clicks, text input, scrolling, and navigation.",
@@ -2396,7 +2398,7 @@ const TRANSLATIONS = {
 
     // ── 设置 / 备份 ──────────────────────────────────────────────────────
     "settings.backup": "备份与恢复",
-    "settings.backupSubtitle": "导出或恢复所有 agent 数据——对话、记忆、设置、任务计划。",
+    "settings.backupSubtitle": "导出或恢复 agent 数据——对话、记忆、设置、任务计划。归档可能包含 API 密钥，请妥善保管。",
     "settings.browserTools": "浏览器自动化工具",
     "settings.browserToolsHint": "启用浏览器导航、页面快照、截图、点击、输入、等待和网络检查工具。桌面版使用内嵌 Electron 浏览器；非桌面环境回退到 Playwright/httpx。",
     "settings.backupExportBtn": "创建备份",
@@ -2404,6 +2406,7 @@ const TRANSLATIONS = {
     "settings.backupExporting": "正在创建备份…",
     "settings.backupExported": "备份已创建（{n} 个文件，{size}）。",
     "settings.backupRestored": "已从备份恢复 {n} 个文件。",
+    "settings.backupRestartRequired": "请重启 Cyrene，以完成所有运行时设置的应用。",
     "settings.backupRestoreFailed": "恢复失败",
     "settings.backupHistory": "备份历史",
     "settings.backupHistoryHint": "之前的导出归档列在下方。",
@@ -2487,6 +2490,7 @@ const TRANSLATIONS = {
     "tool.desc.browser_click_at": "按视口坐标点击页面。",
     "tool.desc.browser_type": "在当前页面的输入框中输入文字。",
     "tool.desc.browser_type_ref": "向 browser_snapshot 返回的引用元素输入文字。",
+    "tool.desc.browser_upload_files": "无需打开系统文件选择器，将经人工批准的本地文件附加到网页文件输入框；每次上传都需要一次性人工审批。",
     "tool.desc.browser_wait": "等待 SPA 导航或异步渲染完成。",
     "tool.desc.browser_network_log": "检查最近的浏览器网络资源 URL。",
     "tool.desc.browser_user_events": "列出用户在嵌入式浏览器中的最近操作，包括点击、文本输入、滚动和导航。",

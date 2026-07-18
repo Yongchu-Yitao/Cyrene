@@ -24,6 +24,7 @@ def _format_element(el: dict[str, Any]) -> str:
     ref = str(el.get("ref") or "?")
     tag = str(el.get("tag") or "")
     role = str(el.get("role") or "")
+    input_type = str(el.get("inputType") or "")
     label = str(el.get("text") or el.get("ariaLabel") or el.get("placeholder") or el.get("alt") or "").strip()
     href = str(el.get("href") or "").strip()
     selector = str(el.get("selector") or "").strip()
@@ -31,6 +32,11 @@ def _format_element(el: dict[str, Any]) -> str:
     bits = [f"[{ref}]", tag]
     if role:
         bits.append(f"role={role}")
+    if input_type:
+        bits.append(f"type={input_type}")
+    if input_type == "file":
+        bits.append(f"accept={str(el.get('accept') or '(not declared)')}")
+        bits.append(f"multiple={bool(el.get('multiple'))}")
     if label:
         bits.append(f"text={label!r}")
     if href:

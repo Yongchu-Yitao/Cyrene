@@ -203,6 +203,14 @@ _destructive_confirmation_allow_all: ContextVar[bool] = ContextVar(
     default=False,
 )
 
+# 外部网页文件上传始终需要真人逐次确认。授权以绑定页面目标与文件哈希的
+# fingerprint 保存，并由上传工具在第一次执行时消费；auto/full_access
+# 不能设置或绕过这组授权。
+_external_upload_confirmation_fingerprints: ContextVar[frozenset[str]] = ContextVar(
+    "_external_upload_confirmation_fingerprints",
+    default=frozenset(),
+)
+
 # 本轮权限模式 —— 由 /api/chat 的 mode 字段决定，round 起始设置、结束重置。
 #   "default"     —— 碰到权限边界时提问让用户授权（现状）
 #   "full_access" —— 默认放行所有操作（round 起始时同时置 _temporary_full_access）
