@@ -4,12 +4,12 @@
 
 ### Verbose Mode
 
-Logs every LLM call (full prompt, tools, response, duration) to `data/debug_*.jsonl`:
+Logs every LLM call (full prompt, tools, response, duration) and context trace to `data/debug_*.jsonl`:
 
 ```bash
-PYTHONPATH=src python -m cyrene.local_cli --headless --verbose
+python -m cyrene.local_cli --verbose
 # or
-PYTHONPATH=src python -m cyrene.local_cli --web --verbose
+python -m cyrene --workbench --verbose
 ```
 
 ### Debug Logs
@@ -17,8 +17,8 @@ PYTHONPATH=src python -m cyrene.local_cli --web --verbose
 With `--verbose`, events are written to timestamped JSONL files:
 
 ```text
-data/debug_20260519_133426.jsonl
-data/debug_20260519_134417.jsonl
+data/debug_20260617_133426.jsonl
+data/debug_20260617_134417.jsonl
 ```
 
 Each log line is a JSON object:
@@ -32,7 +32,25 @@ Each log line is a JSON object:
  "duration_ms": 150.2}
 ```
 
-### Event Inspection
+### Context Debugger
+
+When `--verbose` is enabled, every LLM call is tagged with `_ctx` provenance metadata describing where each context block came from. These traces are written to the debug JSONL and exposed through the Web UI **Context Debugger** page and the API:
+
+```bash
+# List recent events
+curl http://localhost:4242/api/context-debug/events?limit=10
+
+# Get full event detail (including context trace)
+curl http://localhost:4242/api/context-debug/events/evt_3b22f9a5c0cb
+```
+
+Via the CLI:
+
+```bash
+cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb
+```
+
+### Event Inspection (legacy)
 
 When `--verbose` is enabled, every LLM call and tool call gets a unique `event_id` (e.g., `evt_3b22f9a5c0cb`) that persists to disk. Even after a daemon restart, you can inspect full event details:
 
@@ -44,30 +62,26 @@ curl http://localhost:4242/api/events/list
 curl http://localhost:4242/api/events/evt_3b22f9a5c0cb
 ```
 
-Via the CLI:
-
-```bash
-cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb
-```
-
 ### Web UI Debug
 
 The **Status** page shows live debug logs, system metrics, worker status, and service health. The **Agent Flow** page visualizes every step of the agent's execution as an interactive SVG flowchart.
 
 ## Testing
 
+The project uses `pytest` with async support and a 60-second thread-based timeout to avoid deadlocks.
+
 ```bash
 # Fresh dev test setup (installs package + test dependencies)
 uv pip install -e ".[dev]"
 
-# Run MCP manager tests
-python -m pytest tests/test_mcp_manager.py -v
+# Run all tests
+uv run pytest -q
 
-# Run all tests (editable install makes PYTHONPATH=src unnecessary)
-pytest -q
+# Run a specific test file
+python -m pytest tests/test_context_trace.py -v
 ```
 
-Some tests require an LLM endpoint to be configured.
+Some tests require an LLM endpoint to be configured. Set `OPENAI_API_KEY` and `OPENAI_BASE_URL` before running those tests.
 
 ## Project Conventions
 
@@ -81,18 +95,28 @@ Some tests require an LLM endpoint to be configured.
 ### Module Pattern
 
 Each module has a single responsibility. Cross-module communication uses:
+
 - Function calls for direct imports
 - Event bus (`debug.publish_event` / `debug.subscribe`) for real-time UI updates
 - File-based inbox (`inbox.py`) for inter-agent messaging
+- SQLite for structured persistence
 
 ### Adding New Tools
 
-1. Add the handler function in `tools.py`
-2. Add the tool definition to `TOOL_DEFS`
-3. Add the handler to `TOOL_HANDLERS`
-4. Optionally add MCP server support via `mcp_manager.py`
+1. Create a new module under `cyrene/tool_impl/` (e.g., `my_tool.py`)
+2. Export `TOOL_DEF` (dict) and `handler` (async callable)
+3. Register the module in `cyrene/registry_tools.py::_NATIVE_TOOL_MODULES`
+4. Optionally add a UI/settings entry in `src/webui/static/app/settings.jsx`
 
-## CI
+For MCP server support, add servers through the Settings UI or `cyrene mcp add`.
 
-GitHub Actions workflow at `.github/workflows/ci.yml` runs tests on each push.
-It currently runs `uv run pytest -q` and `python -m compileall src`.
+## CI / Release
+
+The repository uses GitHub Actions for release builds:
+
+- Workflow: `.github/workflows/release.yml`
+- Triggers: version tags (`v*`) or manual dispatch with a choice of default UI (`workbench` or `agent`)
+- Builds: PyInstaller + Electron for macOS, Windows (x64/ARM64), and Linux
+- Smoke test: packaged app `--smoke-test`
+
+There is currently no continuous-integration test job; run tests locally before tagging a release.

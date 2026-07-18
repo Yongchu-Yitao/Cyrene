@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.1] - 2026-06-21
+
+### Added
+
+- **Workspace scope injection** — All agent system prompts now include a workspace scope block that defines workspace-aware path resolution, shell command write guards, and output conventions, reducing permission prompts.
+- **WeChat file uploads** — WeChat channel now supports sending file attachments; improved group-chat scroll behavior in the Web UI.
+- **Temporal context handling** — Agent and subagent prompts now correctly handle temporal context (today's date, current time) for subagent rounds.
+
+### Fixed
+
+- **Update check** — Follows HTTP redirects and disables proxy env for the update-check HTTP client, fixing release detection behind proxies.
+- **Update repo URL** — Corrected to `Yongchu-Yitao/Cyrene` (was pointing to a fork).
+- **Chat scroll pinning** — Stabilized auto-scroll behavior during streaming replies.
+- **Build pipeline** — JSX compilation now runs before PyInstaller in the CI build pipeline; added missing PyInstaller modules (pydantic_core, typing_extensions) and crash logging for frozen builds.
+
+### Changed
+
+- **Permission hardening** — Permission snapshots before skill execution; workspace scope guards for read/write/shell ops; high-risk tool confirmation flow.
+
 ## [0.5.0] - 2026-06-07
 
 ### Added

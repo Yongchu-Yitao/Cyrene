@@ -7,7 +7,7 @@
     "name": "Cyrene",
     "email": "ikerrrrrrrrrrr@users.noreply.github.com"
   },
-  "homepage": "https://github.com/ikerrrrrrrrrrr/Cyrene",
+  "homepage": "https://github.com/Yongchu-Yitao/Cyrene",
   "main": "main.js",
   "scripts": {
     "start": "electron .",

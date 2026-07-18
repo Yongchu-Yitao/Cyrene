@@ -3,22 +3,46 @@
 ## Prerequisites
 
 - Python 3.12+
-- Conda (recommended) or venv
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
+- [Node.js 20+](https://nodejs.org/) (for WebUI JSX precompilation from source)
 - Git
 
 ## Linux / macOS
+
+### Using uv (recommended)
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/Yongchu-Yitao/Cyrene.git
+cd Cyrene
+
+# 2. Install dependencies (uv sync reads the locked uv.lock for reproducibility)
+uv sync
+
+# 3. Precompile the WebUI JSX → JS
+cd src/webui && npm install && node build-jsx.mjs && cd ../..
+
+# 4. Run
+python -m cyrene --workbench
+```
+
+> The first launch runs an onboarding wizard that guides you through API key and personality setup.
+
+### Using pip / conda
 
 ```bash
 conda create -n cyrene python=3.12 -y
 conda activate cyrene
 pip install -e .
-cp .env.example .env
-# Edit .env with your API key
+cd src/webui && npm install && node build-jsx.mjs && cd ../..
+python -m cyrene --workbench
 ```
+
+> You do **not** need a `.env` file. Configuration is stored in an encrypted config store and managed through the Web UI or onboarding wizard. A legacy `.env.example` is still provided for backward compatibility.
 
 ## Windows
 
-Windows requires extra steps because `uvloop` (used by the built-in SearXNG) is Unix-only.
+Windows requires extra steps because `uvloop` (used by the built-in SimpleXNG) is Unix-only.
 
 ### 1. Environment
 
@@ -44,7 +68,7 @@ pip install -e . --no-build-isolation
 
 ### 3. Windows Compatibility Patches
 
-These patches fix SearXNG's vendored code for Windows:
+These patches fix SimpleXNG's vendored code for Windows:
 
 **Replace uvloop with winloop**
 Edit `Lib/site-packages/simplexng/_vendor/searx/network/client.py`:
@@ -81,7 +105,7 @@ def getpwuid(uid):
     return type("pw", (), {"pw_name": name, "pw_uid": uid})()
 ```
 
-**Enable JSON API in SearXNG**
+**Enable JSON API in SimpleXNG**
 Edit `Lib/site-packages/simplexng/settings/settings_template.yml`:
 ```yaml
 search:
@@ -90,26 +114,38 @@ search:
     - json    # ← add this line
 ```
 
-### 4. Configure
+### 4. Precompile WebUI JSX and launch
 
 ```bash
-cp .env.example .env
-# Edit .env with your API key
+cd src/webui && npm install && node build-jsx.mjs && cd ../..
+python -m cyrene --workbench
 ```
+
+The onboarding wizard will run on first launch.
 
 ### Alternative: External SearXNG
 
-If you prefer not to patch, set `SEARXNG_URL` in `.env` to point to an external SearXNG instance and skip the built-in one entirely.
+If you prefer not to patch, set `SEARXNG_URL` in the encrypted config (or `.env`) to point to an external SearXNG instance and set `SEARXNG_AUTO_START=0`.
 
 ## Verify Installation
 
 ```bash
-conda activate cyrene
 cd /path/to/Cyrene
-PYTHONPATH=src python -m cyrene.local_cli --web
+python -m cyrene --workbench
 ```
 
 Open `http://localhost:4242`. You should see the onboarding wizard on first launch.
+
+To test the agent without the web server:
+
+```bash
+python -m cyrene.local_cli
+```
+
+## Optional Extras
+
+- **Browser live view & login takeover outside Electron**: `pip install -e ".[browser]"` then `playwright install chromium` (desktop releases use embedded Chromium)
+- **Development/test dependencies**: `pip install -e ".[dev]"`
 
 ## Next Steps
 
