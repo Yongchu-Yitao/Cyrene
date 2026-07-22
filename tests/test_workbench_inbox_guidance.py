@@ -759,6 +759,18 @@ async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tm
 
     run, _ = manager.start_or_get("chat_live", {"type": "ack"}, runner, stream=True)
     transport = httpx.ASGITransport(app=app)
+    # A live run is authoritative and must not wait behind the durable chats
+    # document read on every sidebar poll.
+    def unexpected_store_read():
+        raise AssertionError("active inbox poll should use the in-memory run")
+
+    with monkeypatch.context() as active_patch:
+        active_patch.setattr(chat_mod, "_read_chats_store", unexpected_store_read)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            active_inbox = await client.get("/api/workbench/chats/chat_live/inbox")
+    assert active_inbox.status_code == 200
+    assert active_inbox.json()["active"] is True
+
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             "/api/workbench/chats/chat_live/guidance",

@@ -1065,12 +1065,19 @@ def _context_segment_tokens(messages: list[dict[str, Any]]) -> dict[str, int]:
     return seg
 
 
-def _chat_context_payload(state_id: str, model_name: str) -> dict[str, Any]:
+def _chat_context_payload(
+    state_id: str,
+    model_name: str,
+    *,
+    ctx_limit: int | None = None,
+) -> dict[str, Any]:
     """Live context-window composition for one chat, computed from raw state.
 
     Per-conversation by construction (state lives at ``sessions/<id>/state.json``)
     and cheap enough to poll while a run streams, so the overview updates in
-    real time as the agent appends turns.
+    real time as the agent appends turns. API callers pass the automatic
+    compactor's active-primary-model budget via ``ctx_limit`` so a fallback model
+    recorded on the latest assistant message cannot move the gauge's 60% marker.
     """
     from cyrene.agent.session import _COMPACT_TRIGGER_RATIO
     from cyrene.config_store import effective_ctx_limit_for_model
@@ -1087,7 +1094,11 @@ def _chat_context_payload(state_id: str, model_name: str) -> dict[str, Any]:
     effective_model = actual_model or model_name
     seg = _context_segment_tokens(messages)
     used = sum(seg.values())
-    limit = effective_ctx_limit_for_model(effective_model)
+    limit = (
+        int(ctx_limit)
+        if ctx_limit is not None
+        else effective_ctx_limit_for_model(effective_model)
+    )
     compacted_blocks = sum(
         1 for m in messages if isinstance(m, dict) and m.get("compacted_block")
     )
@@ -2124,19 +2135,35 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
     async def api_workbench_chat_context(chat_id: str):
         """Live context-window gauge + composition for the overview panel."""
         from cyrene import config
+        from cyrene.config_store import get_current_ctx_limit
+
+        # Keep the gauge denominator identical to automatic persistence
+        # compaction. The latest assistant call may have used a fallback model,
+        # but that runtime metadata must not move the displayed 60% threshold.
+        compactor_ctx_limit = get_current_ctx_limit()
 
         if chat_id.startswith("legacy:"):
             _prefix, _project_id, session_id = (chat_id.split(":", 2) + ["", ""])[:3]
             if not session_id:
                 return JSONResponse({"error": "chat not found"}, status_code=404)
             model_name = str(getattr(config, "OPENAI_MODEL", "") or "")
-            return await asyncio.to_thread(_chat_context_payload, session_id, model_name)
+            return await asyncio.to_thread(
+                _chat_context_payload,
+                session_id,
+                model_name,
+                ctx_limit=compactor_ctx_limit,
+            )
         payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
         model_name = str(chat.get("model") or getattr(config, "OPENAI_MODEL", "") or "")
-        return await asyncio.to_thread(_chat_context_payload, chat_id, model_name)
+        return await asyncio.to_thread(
+            _chat_context_payload,
+            chat_id,
+            model_name,
+            ctx_limit=compactor_ctx_limit,
+        )
 
     @router.post("/api/workbench/chats/{chat_id}/compact")
     async def api_workbench_chat_compact(chat_id: str):
@@ -2249,14 +2276,23 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
     @router.get("/api/workbench/chats/{chat_id}/inbox")
     async def api_workbench_chat_inbox(chat_id: str):
         """Return only the current live inbox for this conversation."""
+        started = time.monotonic()
         if chat_id.startswith("legacy:"):
             return JSONResponse(
                 {"error": "legacy chat has no Workbench inbox"}, status_code=404
             )
-        payload = await asyncio.to_thread(_read_chats_store)
-        if not _find_chat(payload, chat_id):
-            return JSONResponse({"error": "chat not found"}, status_code=404)
+        # A mounted Context tab polls this endpoint throughout a run. The run
+        # registry is authoritative for that hot path, so do not queue a full
+        # chats-document SQLite read merely to re-validate an already running
+        # conversation. Idle/unknown ids still use the durable store for the
+        # existing 404 contract. Re-check after the await because a run may
+        # start while validation is in progress.
         run = _CHAT_RUN_MANAGER.get(chat_id)
+        if run is None:
+            payload = await asyncio.to_thread(_read_chats_store)
+            if not _find_chat(payload, chat_id):
+                return JSONResponse({"error": "chat not found"}, status_code=404)
+            run = _CHAT_RUN_MANAGER.get(chat_id)
         live = run.inbox.live_snapshot() if run is not None else {
             "queueDepth": 0,
             "pendingGuidance": 0,
@@ -2296,6 +2332,14 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             "observedAt": _utc_now_iso(),
             "live": live,
         }
+        elapsed_ms = (time.monotonic() - started) * 1000
+        if elapsed_ms >= 1000:
+            logger.warning(
+                "Slow Workbench inbox snapshot [chat_id=%s active=%s duration_ms=%.1f]",
+                chat_id,
+                run is not None,
+                elapsed_ms,
+            )
         return JSONResponse(snapshot, headers={"Cache-Control": "no-store"})
 
     @router.get("/api/workbench/chats/{chat_id}/run-stream")

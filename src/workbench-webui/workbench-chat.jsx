@@ -517,6 +517,25 @@ function wbcRandomThinkingPhrase() {
   return phrases[Math.floor(Math.random() * phrases.length)] || wbcT("workbenchChat.stillWorking", "Still working…");
 }
 
+function wbcBrowserFullscreenStatusText(runtime) {
+  if (runtime && String(runtime.text || "").trim()) {
+    return wbcT("workbenchChat.browserChatReplying", "Agent is replying…");
+  }
+  var activities = runtime && Array.isArray(runtime.activities) ? runtime.activities : [];
+  var activity = activities.length ? activities[activities.length - 1] : null;
+  var progress = activity && Array.isArray(activity.progress) && activity.progress.length
+    ? activity.progress
+    : (runtime && Array.isArray(runtime.progress) ? runtime.progress : []);
+  var entry = progress.length ? progress[progress.length - 1] : null;
+  if (entry) {
+    var key = entry.text || entry.tool || "";
+    if (entry.kind === "tool" || entry.tool) return wbcT("toolName." + key, key);
+    if (entry.detailKey) return wbcT(entry.detailKey, key, entry.detailParams);
+    if (key) return key;
+  }
+  return wbcT("workbenchChat.browserChatWorking", "Agent is working in the browser…");
+}
+
 function wbcBrowserPageTitle(browserState) {
   var browser = browserState || {};
   var activeTab = browser.activeTab || {};
@@ -2561,7 +2580,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mode, onMinimize, onMaximize, onRestore, onTakeoverComplete }) {
+function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mode, runtime, running, onSend, onGuidance, onInterrupt, onMinimize, onMaximize, onRestore, onTakeoverComplete }) {
   var shellRef = useWbcRef(null);
   var frameRef = useWbcRef(null);
   var interactionRef = useWbcRef(null);
@@ -2569,9 +2588,55 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var modeTransitionTimerRef = useWbcRef(null);
   var [frame, setFrame] = useWbcState(null);
   var [nativeBrowserState, setNativeBrowserState] = useWbcState(null);
+  var [fullscreenDraft, setFullscreenDraft] = useWbcState("");
+  var [fullscreenStatusRequested, setFullscreenStatusRequested] = useWbcState(false);
+  var [fullscreenSubmitting, setFullscreenSubmitting] = useWbcState(false);
+  var [chatOverlayThemeRevision, setChatOverlayThemeRevision] = useWbcState(0);
   var effectiveMode = mode || "pip";
   var displayBrowserState = nativeBrowserState || browserState || {};
   var hasNoBrowserTabs = Array.isArray(displayBrowserState.tabs) && displayBrowserState.tabs.length === 0;
+  var browserBridge = window.cyrene && window.cyrene.browser;
+  var hasNativeChatOverlay = !!(browserBridge && typeof browserBridge.setChatOverlay === "function");
+  var fullscreenStatusVisible = effectiveMode === "maximized"
+    && fullscreenStatusRequested
+    && (!!running || fullscreenSubmitting);
+  var fullscreenStatusText = wbcBrowserFullscreenStatusText(runtime);
+
+  function sendFullscreenChatText(value) {
+    var text = String(value || "").trim();
+    if (!text) return;
+    var wasRunning = !!running;
+    setFullscreenStatusRequested(true);
+    setFullscreenSubmitting(true);
+    var request;
+    try {
+      request = wasRunning && onGuidance
+        ? onGuidance(text)
+        : (onSend ? onSend({ message: text, attachments: [], mode: "auto", command: "" }) : null);
+    } catch (error) {
+      if (!hasNativeChatOverlay) setFullscreenDraft(text);
+      setFullscreenStatusRequested(false);
+      setFullscreenSubmitting(false);
+      return;
+    }
+    Promise.resolve(request).catch(function () {
+      if (!hasNativeChatOverlay) setFullscreenDraft(text);
+      setFullscreenStatusRequested(false);
+    }).finally(function () {
+      setFullscreenSubmitting(false);
+    });
+  }
+
+  function submitFullscreenChat(event) {
+    if (event) event.preventDefault();
+    var text = String(fullscreenDraft || "").trim();
+    if (!text) {
+      if (running && onInterrupt) onInterrupt();
+      return;
+    }
+    setFullscreenDraft("");
+    sendFullscreenChatText(text);
+  }
 
   function cancelModeTransition() {
     if (modeTransitionRafRef.current) {
@@ -2712,6 +2777,104 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     setFrame(null);
   }, [browserSessionId]);
 
+  // A fullscreen session starts visually quiet. Only commands sent from this
+  // compact composer opt into the live status pill; runs that were already in
+  // progress before maximizing therefore do not create unsolicited chrome.
+  useWbcEffect(function () {
+    setFullscreenDraft("");
+    setFullscreenStatusRequested(false);
+    setFullscreenSubmitting(false);
+  }, [effectiveMode, browserSessionId]);
+
+  // The runtime disappears as soon as a reply/tool run settles. Remove the
+  // status at the same transition and return the reserved pixels to the page.
+  useWbcEffect(function () {
+    if (!running && !fullscreenSubmitting) setFullscreenStatusRequested(false);
+  }, [running, fullscreenSubmitting]);
+
+  // Electron's live page is a native WebContentsView and therefore composites
+  // above renderer DOM. Its compact chat is a second transparent native view,
+  // raised above the page; the web/screencast fallback keeps the DOM version.
+  useWbcEffect(function () {
+    if (!hasNativeChatOverlay || typeof browserBridge.onChatOverlayAction !== "function") return undefined;
+    return browserBridge.onChatOverlayAction(function (action) {
+      if (!action || String(action.sessionId || "") !== String(browserSessionId || "")) return;
+      if (effectiveMode !== "maximized") return;
+      if (action.type === "stop") {
+        if (running && onInterrupt) onInterrupt();
+        return;
+      }
+      sendFullscreenChatText(action.text || "");
+    });
+  }, [hasNativeChatOverlay, browserSessionId, effectiveMode, running, onSend, onGuidance, onInterrupt]);
+
+  // The native overlay lives in a separate renderer, so CSS variables do not
+  // cascade into it. Re-send its palette whenever the host theme or accent is
+  // applied to the document root.
+  useWbcEffect(function () {
+    if (!hasNativeChatOverlay) return undefined;
+    var root = document.documentElement;
+    var frameId = 0;
+    function refreshOverlayTheme() {
+      if (frameId) return;
+      frameId = requestAnimationFrame(function () {
+        frameId = 0;
+        setChatOverlayThemeRevision(function (value) { return value + 1; });
+      });
+    }
+    var observer = typeof MutationObserver === "function"
+      ? new MutationObserver(refreshOverlayTheme)
+      : null;
+    if (observer) observer.observe(root, { attributes: true, attributeFilter: ["data-theme", "style"] });
+    window.addEventListener("cyrene-tweak-theme-change", refreshOverlayTheme);
+    window.addEventListener("cyrene-tweak-accent-change", refreshOverlayTheme);
+    return function () {
+      if (frameId) cancelAnimationFrame(frameId);
+      if (observer) observer.disconnect();
+      window.removeEventListener("cyrene-tweak-theme-change", refreshOverlayTheme);
+      window.removeEventListener("cyrene-tweak-accent-change", refreshOverlayTheme);
+    };
+  }, [hasNativeChatOverlay]);
+
+  useWbcEffect(function () {
+    if (!hasNativeChatOverlay) return;
+    var paletteNode = document.querySelector(".workbench-shell") || document.documentElement;
+    var rootStyles = getComputedStyle(paletteNode);
+    function color(name, fallback) {
+      return String(rootStyles.getPropertyValue(name) || "").trim() || fallback;
+    }
+    browserBridge.setChatOverlay({
+      sessionId: browserSessionId || "",
+      visible: visible && effectiveMode === "maximized",
+      running: !!running,
+      showStatus: fullscreenStatusVisible,
+      statusText: fullscreenStatusText,
+      placeholder: wbcT("workbenchChat.browserChatPlaceholder", "Tell Agent what to do in the browser…"),
+      placeholderRunning: wbcT("workbenchChat.browserChatPlaceholderRunning", "Add an instruction…"),
+      sendLabel: wbcT("workbenchChat.send", "Send"),
+      guideLabel: wbcT("workbenchChat.sendGuidance", "Send guidance"),
+      stopLabel: wbcT("workbenchChat.stop", "Stop"),
+      colors: {
+        line: color("--wb-line-2", "#d8dce4"),
+        panel: color("--wb-card-bg-strong", "#ffffff"),
+        text: color("--wb-text", "#17191d"),
+        muted: color("--wb-muted", "#6f737b"),
+        faint: color("--wb-faint", "#9297a1"),
+        accent: color("--wb-accent", "#6d5dfc"),
+        "accent-text": color("--wb-accent-text", "#ffffff"),
+        green: color("--wb-green", "#1f9d57"),
+        red: color("--wb-red", "#d84848"),
+      },
+    }).catch(function () {});
+  }, [hasNativeChatOverlay, browserSessionId, visible, effectiveMode, running, fullscreenStatusVisible, fullscreenStatusText, chatOverlayThemeRevision]);
+
+  useWbcEffect(function () {
+    if (!hasNativeChatOverlay) return undefined;
+    return function () {
+      browserBridge.setChatOverlay({ sessionId: browserSessionId || "", visible: false }).catch(function () {});
+    };
+  }, [hasNativeChatOverlay, browserSessionId]);
+
   useWbcEffect(function () {
     var bridge = window.cyrene && window.cyrene.browser;
     var sessionId = String(browserSessionId || "");
@@ -2812,6 +2975,39 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
               onTakeoverComplete: onTakeoverComplete,
             })
           : <p className="workbench-muted">{wbcT("chat.side.browserUnavailable", "Browser view is unavailable.")}</p>}
+        {effectiveMode === "maximized" && !hasNativeChatOverlay && (
+          <div className="wbc-browser-fullscreen-chat">
+            {fullscreenStatusVisible && (
+              <div className="wbc-browser-fullscreen-status" role="status" aria-live="polite">
+                <span className="wbc-browser-fullscreen-status-dot" aria-hidden="true" />
+                <span>{fullscreenStatusText}</span>
+              </div>
+            )}
+            <form className="wbc-browser-fullscreen-composer" onSubmit={submitFullscreenChat}>
+              <input
+                type="text"
+                value={fullscreenDraft}
+                onChange={function (event) { setFullscreenDraft(event.target.value); }}
+                placeholder={running
+                  ? wbcT("workbenchChat.browserChatPlaceholderRunning", "Add an instruction…")
+                  : wbcT("workbenchChat.browserChatPlaceholder", "Tell Agent what to do in the browser…")}
+                aria-label={wbcT("workbenchChat.browserChatInput", "Browser Agent instruction")}
+              />
+              <button
+                type="submit"
+                className={running && !fullscreenDraft.trim() ? "stop" : ""}
+                disabled={!running && !fullscreenDraft.trim()}
+                title={running && !fullscreenDraft.trim()
+                  ? wbcT("workbenchChat.stop", "Stop")
+                  : (running
+                    ? wbcT("workbenchChat.sendGuidance", "Send guidance")
+                    : wbcT("workbenchChat.send", "Send"))}
+              >
+                {running && !fullscreenDraft.trim() ? WBC_ICONS.stop : WBC_ICONS.send}
+              </button>
+            </form>
+          </div>
+        )}
       </div>
       {effectiveMode === "pip" && resizeDirections.map(function (direction) {
         return (
@@ -2977,6 +3173,11 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
           browserSessionId={browserSessionId}
           visible={browserVisible}
           mode={browserWindowMode}
+          runtime={runtime}
+          running={running}
+          onSend={onSend}
+          onGuidance={onGuidance}
+          onInterrupt={onInterrupt}
           onMinimize={onBrowserMinimize}
           onMaximize={onBrowserMaximize}
           onRestore={onBrowserRestore}
@@ -5633,7 +5834,7 @@ function wbcCacheInbox(chatId, payload) {
   }
 }
 
-function useWbcLiveInbox(chat) {
+function useWbcLiveInbox(chat, activeHint) {
   var chatId = chat ? chat.id : "";
   var [retryRevision, setRetryRevision] = useWbcState(0);
   var [view, setView] = useWbcState(function () {
@@ -5648,6 +5849,8 @@ function useWbcLiveInbox(chat) {
     }
     var cancelled = false;
     var inFlight = false;
+    var timer = null;
+    var requestController = null;
     setView(function (previous) {
       var nextData = previous.chatId === chatId
         ? previous.data
@@ -5662,17 +5865,34 @@ function useWbcLiveInbox(chat) {
       };
     });
 
+    function schedule(delay) {
+      if (cancelled) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(load, delay);
+    }
+
     function load() {
       if (cancelled || inFlight) return;
       inFlight = true;
-      window.WorkbenchChatModel.getInbox(chatId, {
+      // Keep exactly one poll alive for this hook instance. Aborting on cleanup
+      // prevents a retry/chat switch from leaving an obsolete fetch behind;
+      // the cancelled check below also protects the cache if a transport races
+      // with abort after it has already received the response.
+      requestController = typeof AbortController !== "undefined" ? new AbortController() : null;
+      var nextDelay = 1000;
+      var requestOptions = {
         toast: false,
         timeout: 5000,
         cache: "no-store",
-      })
+      };
+      if (requestController) requestOptions.signal = requestController.signal;
+      window.WorkbenchChatModel.getInbox(chatId, requestOptions)
         .then(function (payload) {
-          wbcCacheInbox(chatId, payload);
-          if (!cancelled) setView({ chatId: chatId, data: payload, loading: false, error: "" });
+          nextDelay = (payload && payload.active) || activeHint ? 1000 : 5000;
+          if (!cancelled) {
+            wbcCacheInbox(chatId, payload);
+            setView({ chatId: chatId, data: payload, loading: false, error: "" });
+          }
         })
         .catch(function (err) {
           if (!cancelled && (!err || err.name !== "AbortError")) {
@@ -5686,19 +5906,25 @@ function useWbcLiveInbox(chat) {
             });
           }
         })
-        .finally(function () { inFlight = false; });
+        .finally(function () {
+          inFlight = false;
+          requestController = null;
+          schedule(nextDelay);
+        });
     }
 
     load();
     // The inbox can change independently of the chat transcript (tool result,
     // guidance claim, recovery), so keep observing while the Context tab is
     // mounted instead of relying on the UI's possibly stale `running` flag.
-    var timer = setInterval(load, 1000);
     return function () {
       cancelled = true;
-      clearInterval(timer);
+      if (timer) clearTimeout(timer);
+      if (requestController) {
+        try { requestController.abort(); } catch (e) {}
+      }
     };
-  }, [chatId, retryRevision]);
+  }, [chatId, retryRevision, activeHint]);
 
   var cachedData = wbcCachedInbox(chatId);
   var currentData = view.chatId === chatId ? view.data : cachedData;
@@ -5749,8 +5975,8 @@ function wbcInboxArgumentPreview(argumentsValue) {
   }).filter(Boolean).join(" · ").slice(0, 240);
 }
 
-function WbcInboxCard({ chat }) {
-  var liveView = useWbcLiveInbox(chat);
+function WbcInboxCard({ chat, running }) {
+  var liveView = useWbcLiveInbox(chat, running);
   var data = liveView.data;
   var counts = (data && data.counts) || {};
   var live = (data && data.live) || {};
@@ -5772,17 +5998,19 @@ function WbcInboxCard({ chat }) {
   })).sort(function (left, right) {
     return String(right.createdAt || "").localeCompare(String(left.createdAt || ""));
   }).slice(0, 20);
-  var queueDepth = data && data.active
-    ? Number(live.queueDepth || 0)
-    : Number(counts.queued || 0) + Number(counts.claimed || 0);
+  var queueDepth = !data
+    ? null
+    : data.active
+      ? Number(live.queueDepth || 0)
+      : Number(counts.queued || 0) + Number(counts.claimed || 0);
 
   return (
     <section className="workbench-side-section wbc-inbox-card" aria-labelledby="wbc-inbox-title">
       <div className="wbc-inbox-head">
         <h3 id="wbc-inbox-title">{wbcT("workbenchChat.inbox.title", "Session inbox")}</h3>
-        <span className={"wbc-inbox-queue-count" + (queueDepth > 0 ? " active" : "")} aria-live="polite">
+        <span className={"wbc-inbox-queue-count" + (queueDepth !== null && queueDepth > 0 ? " active" : "")} aria-live="polite">
           <span>{wbcT("workbenchChat.inbox.queue", "In queue")}</span>
-          <b>{queueDepth}</b>
+          <b>{queueDepth === null ? "—" : queueDepth}</b>
         </span>
       </div>
 
@@ -5792,13 +6020,12 @@ function WbcInboxCard({ chat }) {
         </div>
       ) : (
         <React.Fragment>
-          {liveView.error && (
+          {liveView.error ? (
             <div className="wbc-inbox-error" role="alert">
               <span>{liveView.error}</span>
               <button type="button" onClick={liveView.retry}>{wbcT("workbenchChat.error.retry", "Retry")}</button>
             </div>
-          )}
-          {feed.length === 0 ? (
+          ) : feed.length === 0 ? (
             <div className="wbc-inbox-empty">
               <p>{wbcT("workbenchChat.inbox.empty", "No inbox events for this run yet.")}</p>
             </div>
@@ -5844,7 +6071,7 @@ function WbcContextTab({ project, chat, runtime }) {
         <h3>{wbcT("workbenchChat.conversationContext", "Conversation context")}</h3>
         <WbcContextBlockList chat={chat} running={!!runtime} />
       </section>
-      <WbcInboxCard chat={chat} />
+      <WbcInboxCard chat={chat} running={!!runtime} />
       <section className="workbench-side-section">
         <h3>{wbcT("workbenchChat.injectedContext", "Injected context")}</h3>
         <div className="workbench-check">

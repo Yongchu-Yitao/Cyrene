@@ -55,7 +55,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   const [address, setAddress] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
-  const [interactionPreview, setInteractionPreview] = React.useState("");
+  const [interactionPreview, setInteractionPreview] = React.useState(null);
 
   const active = state.activeTab || null;
   const tabs = Array.isArray(state.tabs) ? state.tabs : [];
@@ -103,7 +103,9 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       return;
     }
     const rect = node.getBoundingClientRect();
-    const borderRadius = node.closest(".wbc-browser-window.pip") ? 11 : 0;
+    const pipWindow = node.closest(".wbc-browser-window.pip");
+    const borderRadius = 0;
+    const pageCornerRadius = pipWindow ? 11 : 0;
     const payload = {
       sessionId: electronSessionId,
       visible: true,
@@ -112,6 +114,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       width: rect.width,
       height: rect.height,
       borderRadius: borderRadius,
+      pageCornerRadius: pageCornerRadius,
     };
     const signature = [
       electronSessionId,
@@ -120,6 +123,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       Math.round(rect.width),
       Math.round(rect.height),
       borderRadius,
+      pageCornerRadius,
     ].join(":");
     if (lastBoundsRef.current === signature) return;
     lastBoundsRef.current = signature;
@@ -140,13 +144,15 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     const node = hostRef.current;
     if (!bridge || typeof bridge.setBounds !== "function" || !node) {
       windowInteractionRef.current = false;
-      setInteractionPreview("");
+      setInteractionPreview(null);
       lastBoundsRef.current = "";
       scheduleBounds();
       return;
     }
     const rect = node.getBoundingClientRect();
-    const borderRadius = node.closest(".wbc-browser-window.pip") ? 11 : 0;
+    const pipWindow = node.closest(".wbc-browser-window.pip");
+    const borderRadius = 0;
+    const pageCornerRadius = pipWindow ? 11 : 0;
     const signature = [
       electronSessionId,
       Math.round(rect.left),
@@ -154,6 +160,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       Math.round(rect.width),
       Math.round(rect.height),
       borderRadius,
+      pageCornerRadius,
     ].join(":");
     bridge.setBounds({
       sessionId: electronSessionId,
@@ -164,17 +171,18 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       width: rect.width,
       height: rect.height,
       borderRadius: borderRadius,
+      pageCornerRadius: pageCornerRadius,
     }).then(function () {
       if (interactionPreviewTokenRef.current !== token) return;
       lastBoundsRef.current = signature;
       windowInteractionRef.current = false;
-      setInteractionPreview("");
+      setInteractionPreview(null);
       scheduleBounds();
     }).catch(function () {
       if (interactionPreviewTokenRef.current !== token) return;
       lastBoundsRef.current = "";
       windowInteractionRef.current = false;
-      setInteractionPreview("");
+      setInteractionPreview(null);
       scheduleBounds();
     });
   }
@@ -259,7 +267,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       bridge.screenshot({ sessionId: electronSessionId }).then(function (result) {
         if (!windowInteractionRef.current || interactionPreviewTokenRef.current !== token) return;
         if (result && result.ok !== false && result.pngBase64) {
-          setInteractionPreview("data:image/png;base64," + result.pngBase64);
+          setInteractionPreview({ src: "data:image/png;base64," + result.pngBase64 });
         }
       }).catch(function () {});
     }
@@ -339,7 +347,14 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       </div>
       {error && <div className="browser-error">{error}</div>}
       <div ref={hostRef} className={"browser-native-host" + (interactionPreview ? " is-previewing" : "")}>
-        {interactionPreview && <img className="browser-native-preview" src={interactionPreview} alt="" aria-hidden="true" />}
+        {interactionPreview && (
+          <img
+            className="browser-native-preview"
+            src={interactionPreview.src}
+            alt=""
+            aria-hidden="true"
+          />
+        )}
         {!tabs.length && (
           <div className="browser-empty">
             <button type="button" className="btn primary" onClick={function () { createTab("about:blank"); }}>打开浏览器</button>

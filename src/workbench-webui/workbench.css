@@ -11165,6 +11165,14 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   -webkit-user-select: none;
 }
 
+.wbc-browser-window.pip .wbc-browser-window-bar {
+  height: 48px;
+  min-height: 48px;
+  flex-basis: 48px;
+  box-sizing: border-box;
+  border-bottom: 0;
+}
+
 .wbc-browser-window.maximized .wbc-browser-window-bar {
   height: 58px;
   min-height: 58px;
@@ -11277,9 +11285,155 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   flex: 1 1 auto;
 }
 
-/* The compact window shows the active page rather than duplicating the full
-   right-panel tab strip. Maximized browser mode retains the strip. */
-.wbc-browser-window.pip .browser-tabs-strip {
+.wbc-browser-fullscreen-chat {
+  position: absolute;
+  z-index: 30;
+  left: 50%;
+  bottom: 9px;
+  width: min(520px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.wbc-browser-fullscreen-status {
+  max-width: min(100%, 420px);
+  min-height: 28px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 11px;
+  border: 1px solid var(--wb-line-2);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 94%, transparent);
+  color: var(--wb-muted);
+  box-shadow: 0 5px 16px rgba(10, 18, 32, 0.12);
+  backdrop-filter: blur(12px);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1.2;
+  animation: wbc-browser-chat-enter 160ms ease-out both;
+}
+
+.wbc-browser-fullscreen-status > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-browser-fullscreen-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--wb-green);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--wb-green) 32%, transparent);
+  animation: wbc-browser-chat-pulse 1.45s ease-out infinite;
+}
+
+.wbc-browser-fullscreen-composer {
+  width: 100%;
+  height: 40px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 5px 4px 13px;
+  border: 1px solid var(--wb-line-2);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 96%, transparent);
+  box-shadow: 0 8px 24px rgba(10, 18, 32, 0.16), 0 1px 4px rgba(10, 18, 32, 0.1);
+  backdrop-filter: blur(14px);
+}
+
+.wbc-browser-fullscreen-composer:focus-within {
+  border-color: var(--wb-active-border);
+  box-shadow: 0 8px 24px rgba(10, 18, 32, 0.16), 0 0 0 3px color-mix(in srgb, var(--wb-accent) 12%, transparent);
+}
+
+.wbc-browser-fullscreen-composer input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--wb-text);
+  font: inherit;
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-browser-fullscreen-composer input::placeholder {
+  color: var(--wb-faint);
+}
+
+.wbc-browser-fullscreen-composer button {
+  width: 31px;
+  height: 31px;
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: var(--wb-accent);
+  color: var(--wb-accent-text);
+  cursor: pointer;
+}
+
+.wbc-browser-fullscreen-composer button.stop {
+  background: var(--wb-red);
+  color: #fff;
+}
+
+.wbc-browser-fullscreen-composer button:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.wbc-browser-fullscreen-composer button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.wbc-browser-fullscreen-composer button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 42%, transparent);
+  outline-offset: 2px;
+}
+
+@keyframes wbc-browser-chat-enter {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes wbc-browser-chat-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--wb-green) 34%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 5px transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-browser-fullscreen-status,
+  .wbc-browser-fullscreen-status-dot {
+    animation: none;
+  }
+}
+
+/* The shared browser panel normally reserves a left resize gutter. Floating
+   browser shells provide their own resize affordances, so neither PiP nor
+   maximized mode should sacrifice page width to that legacy gutter. */
+.wbc-browser-window.pip .browser-view.native,
+.wbc-browser-window.maximized .browser-view.native {
+  --browser-resize-gutter: 0px;
+}
+
+.wbc-browser-window.pip .browser-tabs-strip,
+.wbc-browser-window.pip .browser-nav-bar {
   display: none;
 }
 
@@ -14086,7 +14240,7 @@ html[data-theme="dark"] .wbc-trace {
 .browser-tab.active {
   border-color: color-mix(in srgb, var(--wb-accent, var(--accent)) 54%, var(--wb-line, var(--line)));
   background: color-mix(in srgb, var(--wb-accent, var(--accent)) 9%, var(--wb-card-bg, var(--bg-1)));
-  color: var(--wb-accent, var(--accent));
+  color: var(--wb-text, var(--text));
 }
 
 .browser-tab-title {
@@ -14220,6 +14374,15 @@ html[data-theme="dark"] .wbc-trace {
   object-fit: fill;
   pointer-events: none;
   user-select: none;
+}
+
+.wbc-browser-window.pip .browser-native-host,
+.wbc-browser-window.pip .browser-native-preview {
+  border-radius: 11px;
+}
+
+.wbc-browser-window.pip .browser-native-host {
+  background: var(--wb-card-bg-strong, #fff);
 }
 
 .browser-video-fullscreen-overlay {

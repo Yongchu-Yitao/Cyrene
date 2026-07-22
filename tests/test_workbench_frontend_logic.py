@@ -41,6 +41,56 @@ def test_workbench_chat_restores_project_cache_before_background_refresh():
     assert "setChatLoading(!cachedChat);" in source
 
 
+def test_maximized_browser_has_compact_agent_chat_with_transient_status():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'effectiveMode === "maximized" && !hasNativeChatOverlay && (' in source
+    assert 'className="wbc-browser-fullscreen-chat"' in source
+    assert "fullscreenStatusRequested" in source
+    assert "if (!running && !fullscreenSubmitting) setFullscreenStatusRequested(false);" in source
+    assert "wbcBrowserFullscreenStatusText(runtime)" in source
+    assert "setChatOverlay" in source
+    assert "onChatOverlayAction" in source
+    assert "hasNativeChatOverlay" in source
+    assert 'document.querySelector(".workbench-shell") || document.documentElement' in source
+    assert 'attributeFilter: ["data-theme", "style"]' in source
+    assert 'window.addEventListener("cyrene-tweak-accent-change", refreshOverlayTheme)' in source
+    assert "chatOverlayThemeRevision" in source
+    assert ".wbc-browser-fullscreen-composer" in styles
+    assert "padding-bottom: 58px" not in styles
+
+
+def test_electron_browser_chat_overlay_floats_above_native_page():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
+    overlay_preload = (root / "electron" / "browser-chat-overlay-preload.js").read_text(
+        encoding="utf-8"
+    )
+    package = (root / "electron" / "package.json").read_text(encoding="utf-8")
+
+    assert "ensureChatOverlayView()" in main
+    assert "parent.addChildView(view)" in main
+    assert "container && container.contentView ? container.contentView : container" in main
+    assert "syncChatOverlay(this.ownerWindow()?.contentView || null" in main
+    assert "syncChatOverlay(win.contentView" in main
+    assert "Failed to attach browser chat overlay" in main
+    assert "const bottomOffset = 16" in main
+    assert "this.bounds.height - height - bottomOffset" in main
+    assert "browser:set-chat-overlay" in main
+    assert "browser-chat-overlay:action" in main
+    assert "setChatOverlay:" in preload
+    assert "onChatOverlayAction:" in preload
+    assert "contextBridge.exposeInMainWorld('browserChatOverlay'" in overlay_preload
+    assert '"browser-chat-overlay-preload.js"' in package
+
+
 def _run_workbench_model_js(expression: str):
     root = Path(__file__).resolve().parent.parent
     model_path = root / "src" / "workbench-webui" / "workbench-model.jsx"
@@ -511,6 +561,11 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     pip_styles = styles.split(".wbc-browser-window.pip {", 1)[1].split("}", 1)[0]
     assert "width: min(280px" in pip_styles
     assert "height: min(215px" in pip_styles
+    floating_native_styles = styles.split(".wbc-browser-window.pip .browser-view.native,", 1)[1].split("}", 1)[0]
+    assert ".wbc-browser-window.maximized .browser-view.native" in floating_native_styles
+    assert "--browser-resize-gutter: 0px;" in floating_native_styles
+    assert ".wbc-browser-window.pip .browser-tabs-strip," in styles
+    assert ".wbc-browser-window.pip .browser-nav-bar" in styles
     assert "WBC_ICONS.windowMaximize" in source
     assert "WBC_ICONS.windowMinimize" in source
     minimized_surface = source.split('effectiveMode === "minimized"', 1)[1].split("var inlineStyle", 1)[0]
@@ -531,6 +586,7 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
 
     set_bounds_block = main.split("  setBounds(info = {}) {", 1)[1].split("\n  setObscured(", 1)[0]
     assert "this.syncAttachedView();" in set_bounds_block
@@ -545,6 +601,9 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "if (lastBoundsRef.current === signature) return;" in browser_view
     assert "workbench:browser-window-interaction" in browser_view
     assert "browser-native-preview" in browser_view
+    assert "topInset" not in browser_view
+    assert "--browser-preview-top-inset" not in styles
+    assert "inset: 0" in styles
     assert "bridge.screenshot" in browser_view
     assert "finishWindowInteraction" in browser_view
     assert "transition: true" in browser_view
@@ -556,14 +615,47 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert set_bounds_index < attach_index
     assert "active.view.setVisible(false)" in sync_view_block
     assert "active.view.setVisible(true)" in sync_view_block
-    assert "active.view.setBorderRadius(targetRadius)" in sync_view_block
+    assert "active.view.setBorderRadius(targetCornerRadius)" in sync_view_block
     assert "this.borderRadius = Math.max(0, Math.min(24" in main
-    assert 'node.closest(".wbc-browser-window.pip") ? 11 : 0' in browser_view
+    assert 'const pipWindow = node.closest(".wbc-browser-window.pip")' in browser_view
+    assert "const borderRadius = 0;" in browser_view
+    assert "const pageCornerRadius = pipWindow ? 11 : 0;" in browser_view
+    assert "pageCornerRadius: pageCornerRadius" in browser_view
+    assert "pageCornerColor" not in browser_view
+    assert "data-cyrene-page-top-cover" not in main
+    assert "data-cyrene-pip-root-scrollbars" in main
+    assert "html::-webkit-scrollbar, body::-webkit-scrollbar" in main
+    assert "if (scrollbarStyle) scrollbarStyle.remove()" in main
+    assert "result.y -= cornerRadius" not in main
+    assert "result.height += cornerRadius" not in main
+    assert "this.applyPageFrameStyle(active.view, targetCornerRadius)" in main
+    assert "this.applyPageFrameStyle(view, undefined, true)" in main
+    assert "topMask" not in browser_view
+    assert "topMask" not in main
     assert "borderRadius: borderRadius" in browser_view
+    assert "this.bounds.height - this.bottomCornerInset" not in main
+    assert "topCover" not in browser_view
+    pip_bar_block = styles.split(".wbc-browser-window.pip .wbc-browser-window-bar {", 1)[1].split("\n}", 1)[0]
+    assert "height: 48px" in pip_bar_block
+    assert "padding-bottom: 11px" not in pip_bar_block
+    assert "border-bottom: 0" in pip_bar_block
+    assert ".wbc-browser-window.pip .wbc-browser-window-bar > *" not in styles
+    assert ".wbc-browser-window.pip .browser-native-preview" in styles
+    assert "border-radius: 11px" in styles
+    assert "topCover" not in main
     assert "this.repaintView(active)" in sync_view_block
     assert "wc.invalidate()" in main
     assert "settleBoundsTransition" in main
     assert "active.view.webContents.capturePage()" in main
+
+
+def test_active_browser_tab_uses_standard_text_color():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+
+    active_tab_styles = styles.split(".browser-tab.active {", 1)[1].split("}", 1)[0]
+    assert "color: var(--wb-text, var(--text));" in active_tab_styles
+    assert "color: var(--wb-accent, var(--accent));" not in active_tab_styles
 
 
 def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui():
@@ -596,7 +688,8 @@ def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui(
 
     sync_view = main.split("  syncAttachedView() {", 1)[1].split("\n  async settleBoundsTransition", 1)[0]
     assert "const fullscreenTab = this.fullscreenTab()" in sync_view
-    assert "const targetBounds = fullscreenActive ? this.fullscreenBounds(win) : this.bounds" in sync_view
+    assert "const targetBounds = fullscreenActive ? this.fullscreenBounds(win)" in sync_view
+    assert "this.pageViewBounds(" in sync_view
     assert "win.contentView.addChildView(active.view)" in sync_view
     assert "videoFullscreen:" in main
     assert "platform: process.platform" in main
@@ -1138,25 +1231,32 @@ def test_workbench_context_tab_has_live_session_inbox_card():
     inbox_card = source.split("function WbcInboxCard", 1)[1].split(
         "function WbcContextTab", 1
     )[0]
-    assert '<WbcInboxCard chat={chat} />' in context_tab
-    assert context_tab.index('<WbcInboxCard chat={chat} />') > context_tab.index(
+    assert '<WbcInboxCard chat={chat} running={!!runtime} />' in context_tab
+    assert context_tab.index('<WbcInboxCard chat={chat} running={!!runtime} />') > context_tab.index(
         'workbenchChat.conversationContext'
     )
-    assert context_tab.index('<WbcInboxCard chat={chat} />') < context_tab.index(
+    assert context_tab.index('<WbcInboxCard chat={chat} running={!!runtime} />') < context_tab.index(
         'workbenchChat.injectedContext'
     )
     assert '"/inbox"' in source
     assert 'cache: "no-store"' in live_hook
-    assert "setInterval(load, 1000)" in live_hook
-    assert "running ? setInterval" not in live_hook
+    assert "timer = setTimeout(load, delay)" in live_hook
+    assert "(payload && payload.active) || activeHint ? 1000 : 5000" in live_hook
+    assert 'requestOptions.signal = requestController.signal' in live_hook
+    assert "requestController.abort()" in live_hook
+    assert "if (!cancelled) {" in live_hook
+    assert "setInterval(load" not in live_hook
     assert "wbcInboxSnapshotCache = new Map()" in source
     assert "wbcCacheInbox(chatId, payload)" in live_hook
     assert "loading: !nextData" in live_hook
-    assert "[chatId, retryRevision]" in live_hook
+    assert "[chatId, retryRevision, activeHint]" in live_hook
     assert "chat.updatedAt" not in live_hook
     assert 'workbenchChat.inbox.queue' in inbox_card
     assert 'className={"wbc-inbox-queue-count"' in inbox_card
+    assert 'queueDepth === null ? "—" : queueDepth' in inbox_card
     assert 'className="wbc-inbox-summary"' not in inbox_card
+    assert "liveView.error ? (" in inbox_card
+    assert ") : feed.length === 0 ? (" in inbox_card
     assert 'workbenchChat.inbox.live' not in inbox_card
     assert 'wbc-inbox-live' not in inbox_card
     assert "wbc-inbox-run-row" not in inbox_card
@@ -1178,6 +1278,53 @@ def test_workbench_context_tab_has_live_session_inbox_card():
     assert '"workbenchChat.inbox.title": "Session inbox"' in i18n
     assert '"workbenchChat.inbox.title": "Agent 收件箱"' in i18n
     assert '"workbenchChat.inbox.live"' not in i18n
+
+
+def test_workbench_inbox_cleanup_aborts_and_ignores_a_late_response():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    hook_source = source.split("var WBC_INBOX_CACHE_LIMIT", 1)[1].split(
+        "function wbcInboxStatus", 1
+    )[0]
+    hook_source = "var WBC_INBOX_CACHE_LIMIT" + hook_source
+    script = f"""
+let cleanup = null;
+let resolveInbox = null;
+let capturedSignal = null;
+function useWbcState(initial) {{
+  let value = typeof initial === "function" ? initial() : initial;
+  return [value, function (update) {{
+    value = typeof update === "function" ? update(value) : update;
+  }}];
+}}
+function useWbcEffect(effect) {{ cleanup = effect(); }}
+function wbcErrorText(error) {{ return String(error); }}
+global.window = {{
+  WorkbenchChatModel: {{
+    getInbox: function (_chatId, options) {{
+      capturedSignal = options.signal;
+      return new Promise(function (resolve) {{ resolveInbox = resolve; }});
+    }}
+  }}
+}};
+eval({json.dumps(hook_source)});
+useWbcLiveInbox({{ id: "chat_race" }}, false);
+cleanup();
+resolveInbox({{ active: true, counts: {{}}, events: [], tools: [] }});
+setTimeout(function () {{
+  process.stdout.write(JSON.stringify({{
+    aborted: capturedSignal.aborted,
+    cacheSize: wbcInboxSnapshotCache.size
+  }}));
+}}, 0);
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True, timeout=2
+    )
+
+    assert json.loads(completed.stdout) == {"aborted": True, "cacheSize": 0}
 
 
 def test_workbench_chat_does_not_render_previous_transcript_during_switch():

@@ -283,6 +283,67 @@ const MENU_TRANSLATIONS = Object.freeze({
 const BROWSER_PARTITION = 'persist:cyrene-browser';
 const DEFAULT_BROWSER_VERSION = '147.0.0.0';
 const guardedBrowserPartitions = new Set();
+const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+  body { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 6px; padding: 8px 12px 10px; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #status { display: none; max-width: min(420px, 100%); min-height: 28px; align-items: center; gap: 8px; padding: 5px 11px; border: 1px solid var(--line, #d8dce4); border-radius: 999px; background: var(--panel, rgba(255,255,255,.96)); color: var(--muted, #6f737b); box-shadow: 0 5px 16px rgba(10,18,32,.12); font-size: 11.5px; font-weight: 650; line-height: 1.2; }
+  body.has-status #status { display: flex; }
+  #status-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--green, #1f9d57); animation: pulse 1.45s ease-out infinite; }
+  #status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  form { width: 100%; height: 40px; display: flex; align-items: center; gap: 7px; padding: 4px 5px 4px 13px; border: 1px solid var(--line, #d8dce4); border-radius: 13px; background: var(--panel, rgba(255,255,255,.96)); box-shadow: 0 8px 24px rgba(10,18,32,.16), 0 1px 4px rgba(10,18,32,.1); }
+  form:focus-within { border-color: var(--accent, #6d5dfc); box-shadow: 0 8px 24px rgba(10,18,32,.16), 0 0 0 3px color-mix(in srgb, var(--accent, #6d5dfc) 12%, transparent); }
+  input { flex: 1 1 auto; min-width: 0; height: 30px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text, #17191d); font: inherit; font-size: 13px; }
+  input::placeholder { color: var(--faint, #9297a1); }
+  button { width: 31px; height: 31px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 0; border-radius: 9px; background: var(--accent, #6d5dfc); color: var(--accent-text, #fff); cursor: pointer; }
+  button.stop { background: var(--red, #d84848); color: #fff; }
+  button:disabled { opacity: .42; cursor: default; }
+  button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green, #1f9d57) 34%, transparent); } 70%, 100% { box-shadow: 0 0 0 5px transparent; } }
+  @media (prefers-reduced-motion: reduce) { #status-dot { animation: none; } }
+</style></head><body>
+  <div id="status" role="status" aria-live="polite"><span id="status-dot"></span><span id="status-text"></span></div>
+  <form><input type="text"><button type="submit" aria-label="Send"></button></form>
+  <script>
+    const input = document.querySelector('input');
+    const button = document.querySelector('button');
+    const statusText = document.getElementById('status-text');
+    const sendIcon = '<svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+    const stopIcon = '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1"/></svg>';
+    let state = { running: false, sessionId: '' };
+    function syncButton() {
+      const stopping = state.running && !input.value.trim();
+      button.classList.toggle('stop', stopping);
+      button.disabled = !state.running && !input.value.trim();
+      button.innerHTML = stopping ? stopIcon : sendIcon;
+      button.title = stopping ? (state.stopLabel || 'Stop') : (state.running ? (state.guideLabel || 'Send guidance') : (state.sendLabel || 'Send'));
+      button.setAttribute('aria-label', button.title);
+    }
+    input.addEventListener('input', syncButton);
+    document.querySelector('form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text) {
+        if (state.running) window.browserChatOverlay.stop();
+        return;
+      }
+      window.browserChatOverlay.submit(text);
+      input.value = '';
+      syncButton();
+    });
+    window.browserChatOverlay.onState((next) => {
+      state = next || {};
+      document.body.classList.toggle('has-status', !!state.showStatus);
+      statusText.textContent = state.statusText || '';
+      input.placeholder = state.running ? (state.placeholderRunning || '') : (state.placeholder || '');
+      const colors = state.colors || {};
+      Object.keys(colors).forEach((key) => document.documentElement.style.setProperty('--' + key, String(colors[key] || '')));
+      syncButton();
+    });
+  </script>
+</body></html>`;
 
 function normalizeBrowserSessionId(value) {
   return String(value || '').trim();
@@ -514,6 +575,10 @@ class BrowserTabManager {
     this.nextTabId = 1;
     this.bounds = { x: 0, y: 0, width: 0, height: 0 };
     this.borderRadius = 0;
+    this.pageCornerRadius = 0;
+    this.chatOverlayView = null;
+    this.chatOverlayParent = null;
+    this.chatOverlayState = { visible: false, running: false, showStatus: false };
     this.visible = false;
     this.obscured = browserSurfaceObscured;
     this.attachedTabId = '';
@@ -762,7 +827,10 @@ class BrowserTabManager {
       console.warn(`[electron] Browser tab load failed (${code}) ${url}: ${desc}`);
       update();
     });
-    wc.on('did-finish-load', () => this.installUserEventCapture(view).catch(() => {}));
+    wc.on('did-finish-load', () => {
+      this.applyPageFrameStyle(view, undefined, true);
+      this.installUserEventCapture(view).catch(() => {});
+    });
     wc.on('console-message', (_event, _level, message) => {
       this.handleCapturedUserEvent(view, message);
     });
@@ -1275,17 +1343,173 @@ class BrowserTabManager {
     }, 80);
   }
 
+  pageViewBounds(bounds = this.bounds) {
+    const source = bounds || {};
+    return {
+      x: Math.round(Number(source.x) || 0),
+      y: Math.round(Number(source.y) || 0),
+      width: Math.max(0, Math.round(Number(source.width) || 0)),
+      height: Math.max(0, Math.round(Number(source.height) || 0)),
+    };
+  }
+
+  applyPageFrameStyle(view, radius = this.pageCornerRadius, force = false) {
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
+    const wc = view.webContents;
+    const cornerRadius = Math.max(0, Math.min(24, Math.round(Number(radius) || 0)));
+    const tab = this._tabForView(view);
+    const signature = String(cornerRadius);
+    if (!force && tab && tab.pageFrameSignature === signature) return;
+    const script = `(() => {
+      const scrollbarAttr = 'data-cyrene-pip-root-scrollbars';
+      let scrollbarStyle = document.querySelector('style[' + scrollbarAttr + ']');
+      const radius = ${JSON.stringify(cornerRadius)};
+      if (radius <= 0) {
+        if (scrollbarStyle) scrollbarStyle.remove();
+        return true;
+      }
+      if (!document.documentElement) return false;
+      if (!scrollbarStyle) {
+        scrollbarStyle = document.createElement('style');
+        scrollbarStyle.setAttribute(scrollbarAttr, '');
+        document.documentElement.appendChild(scrollbarStyle);
+      }
+      scrollbarStyle.textContent =
+        'html, body { scrollbar-width: none !important; }' +
+        'html::-webkit-scrollbar, body::-webkit-scrollbar {' +
+        ' display: none !important; width: 0 !important; height: 0 !important; }';
+      return true;
+    })()`;
+    wc.executeJavaScript(script, true).then((applied) => {
+      if (applied && tab) tab.pageFrameSignature = signature;
+    }).catch(() => {});
+  }
+
+  ensureChatOverlayView() {
+    if (this.chatOverlayView && !this.chatOverlayView.webContents.isDestroyed()) return this.chatOverlayView;
+    const view = new WebContentsView({
+      webPreferences: {
+        preload: path.join(__dirname, 'browser-chat-overlay-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        backgroundThrottling: false,
+      },
+    });
+    try { view.setBackgroundColor('#00000000'); } catch (_) {}
+    view.webContents.on('did-finish-load', () => this.pushChatOverlayState());
+    view.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(BROWSER_CHAT_OVERLAY_HTML)}`).catch(() => {});
+    this.chatOverlayView = view;
+    return view;
+  }
+
+  pushChatOverlayState() {
+    const view = this.chatOverlayView;
+    if (!view || view.webContents.isDestroyed()) return;
+    try { view.webContents.send('browser-chat-overlay:state', this.chatOverlayState); } catch (_) {}
+  }
+
+  hideChatOverlay() {
+    if (!this.chatOverlayView) return;
+    try { this.chatOverlayView.setVisible(false); } catch (_) {}
+  }
+
+  syncChatOverlay(container, raise = false) {
+    // BrowserWindow owns native child views through its root contentView. Accept
+    // either shape here so callers cannot accidentally attach to BrowserWindow.
+    const parent = container && container.contentView ? container.contentView : container;
+    const state = this.chatOverlayState || {};
+    const shouldShow = !!(
+      state.visible
+      && this.visible
+      && !this.obscured
+      && !this.videoFullscreen.active
+      && parent
+      && this.bounds.width > 24
+      && this.bounds.height > 24
+    );
+    if (!shouldShow) {
+      this.hideChatOverlay();
+      return;
+    }
+    const view = this.ensureChatOverlayView();
+    if (this.chatOverlayParent && this.chatOverlayParent !== parent) {
+      try {
+        this.chatOverlayParent.removeChildView(view);
+      } catch (err) {
+        console.warn('[electron] Failed to detach browser chat overlay:', err);
+      }
+      this.chatOverlayParent = null;
+    }
+    const width = Math.max(244, Math.min(544, this.bounds.width));
+    const height = state.showStatus ? 92 : 58;
+    const bottomOffset = 16;
+    try {
+      view.setBounds({
+        x: this.bounds.x + Math.round((this.bounds.width - width) / 2),
+        y: this.bounds.y + Math.max(0, this.bounds.height - height - bottomOffset),
+        width,
+        height,
+      });
+    } catch (_) {}
+    if (raise && this.chatOverlayParent === parent) {
+      try {
+        parent.removeChildView(view);
+      } catch (err) {
+        console.warn('[electron] Failed to raise browser chat overlay:', err);
+      }
+      this.chatOverlayParent = null;
+    }
+    if (this.chatOverlayParent !== parent) {
+      try {
+        parent.addChildView(view);
+        this.chatOverlayParent = parent;
+      } catch (err) {
+        console.error('[electron] Failed to attach browser chat overlay:', err);
+        this.hideChatOverlay();
+        return;
+      }
+    }
+    try { view.setVisible(true); } catch (_) {}
+    this.pushChatOverlayState();
+  }
+
+  setChatOverlay(info = {}) {
+    const colors = info.colors && typeof info.colors === 'object' ? info.colors : {};
+    this.chatOverlayState = {
+      visible: info.visible === true,
+      running: info.running === true,
+      showStatus: info.showStatus === true,
+      statusText: String(info.statusText || '').slice(0, 160),
+      placeholder: String(info.placeholder || '').slice(0, 120),
+      placeholderRunning: String(info.placeholderRunning || '').slice(0, 120),
+      sendLabel: String(info.sendLabel || '').slice(0, 80),
+      guideLabel: String(info.guideLabel || '').slice(0, 80),
+      stopLabel: String(info.stopLabel || '').slice(0, 80),
+      sessionId: this.sessionId,
+      colors,
+    };
+    this.syncChatOverlay(this.ownerWindow()?.contentView || null, false);
+    return { ok: true, visible: this.chatOverlayState.visible };
+  }
+
   syncAttachedView() {
     const fullscreenTab = this.fullscreenTab();
     const active = fullscreenTab || this.tabs.get(this.activeTabId);
     const fullscreenActive = !!fullscreenTab;
     const win = this.surfaceWindow();
-    if (!win) return;
+    if (!win) {
+      this.hideChatOverlay();
+      return;
+    }
     const ownsVisibleSurface = fullscreenActive || this.sessionId === activeBrowserSessionId;
     for (const tab of this.tabs.values()) {
       if (!active || tab.id !== active.id || !ownsVisibleSurface) this.detachView(tab);
     }
-    if (!active || !ownsVisibleSurface) return;
+    if (!active || !ownsVisibleSurface) {
+      this.hideChatOverlay();
+      return;
+    }
     const shouldShow = fullscreenActive || (this.visible && !this.obscured && !this._boundsTransitioning);
     if (!shouldShow) {
       // Keep the active WebContentsView attached but hidden across PiP/fullscreen
@@ -1294,6 +1518,7 @@ class BrowserTabManager {
       if (this.attachedTabId === active.id) {
         try { active.view.setVisible(false); } catch (_) {}
       }
+      this.hideChatOverlay();
       return;
     }
     const wasAttached = this.attachedTabId === active.id;
@@ -1302,20 +1527,22 @@ class BrowserTabManager {
     if (wasAttachedToTargetWindow && typeof active.view.getVisible === 'function') {
       try { wasVisible = active.view.getVisible(); } catch (_) {}
     }
-    const targetBounds = fullscreenActive ? this.fullscreenBounds(win) : this.bounds;
-    const targetRadius = fullscreenActive ? 0 : this.borderRadius;
+    const targetCornerRadius = fullscreenActive ? 0 : this.pageCornerRadius;
+    const targetBounds = fullscreenActive ? this.fullscreenBounds(win) : this.pageViewBounds(this.bounds);
     if (!wasAttachedToTargetWindow) {
       this.detachView(active);
-      try { active.view.setBorderRadius(targetRadius); } catch (_) {}
+      try { active.view.setBorderRadius(targetCornerRadius); } catch (_) {}
       try { active.view.setBounds(targetBounds); } catch (_) {}
       try { win.contentView.addChildView(active.view); } catch (_) {}
       this.attachedTabId = active.id;
       this.attachedWindow = win;
     } else {
-      try { active.view.setBorderRadius(targetRadius); } catch (_) {}
+      try { active.view.setBorderRadius(targetCornerRadius); } catch (_) {}
       try { active.view.setBounds(targetBounds); } catch (_) {}
     }
+    this.applyPageFrameStyle(active.view, targetCornerRadius);
     try { active.view.setVisible(true); } catch (_) {}
+    this.syncChatOverlay(win.contentView, !wasAttachedToTargetWindow);
     if (!wasAttached || !wasVisible) this.repaintView(active);
   }
 
@@ -1329,8 +1556,11 @@ class BrowserTabManager {
       this._boundsTransitioning = false;
       return this.state();
     }
-    try { active.view.setBorderRadius(this.borderRadius); } catch (_) {}
-    try { active.view.setBounds(this.bounds); } catch (_) {}
+    const targetCornerRadius = this.pageCornerRadius;
+    const targetBounds = this.pageViewBounds(this.bounds);
+    try { active.view.setBorderRadius(targetCornerRadius); } catch (_) {}
+    try { active.view.setBounds(targetBounds); } catch (_) {}
+    this.applyPageFrameStyle(active.view, targetCornerRadius);
     try { active.view.webContents.invalidate(); } catch (_) {}
     // capturePage waits for Chromium to produce a frame at the final size. Keep
     // the renderer's bitmap proxy visible until this promise resolves, so the
@@ -1357,6 +1587,7 @@ class BrowserTabManager {
       height,
     };
     this.borderRadius = Math.max(0, Math.min(24, Math.round(Number(info.borderRadius) || 0)));
+    this.pageCornerRadius = Math.max(0, Math.min(24, Math.round(Number(info.pageCornerRadius) || 0)));
     this.visible = info.visible === true && width > 8 && height > 8;
     // Preserve the in-app host geometry while a video owns the fullscreen
     // surface, but never let renderer layout churn resize the fullscreen View.
@@ -2031,6 +2262,15 @@ class BrowserTabManager {
     this.activeTabId = '';
     this.attachedTabId = '';
     this.attachedWindow = null;
+    if (this.chatOverlayView && this.chatOverlayParent) {
+      try { this.chatOverlayParent.removeChildView(this.chatOverlayView); } catch (_) {}
+    }
+    if (this.chatOverlayView && !this.chatOverlayView.webContents.isDestroyed()) {
+      try { this.chatOverlayView.webContents.close(); } catch (_) {}
+    }
+    this.chatOverlayView = null;
+    this.chatOverlayParent = null;
+    this.chatOverlayState = { visible: false, running: false, showStatus: false };
     this.visible = false;
   }
 }
@@ -2208,6 +2448,8 @@ async function handleBrowserRpc(method, args, context = {}) {
       return manager.state();
     case 'setBounds':
       return manager.setBounds(args || {});
+    case 'setChatOverlay':
+      return manager.setChatOverlay(args || {});
     case 'setObscured':
       return setBrowserSurfaceObscured(args && args.obscured);
     case 'createTab':
@@ -3510,6 +3752,7 @@ if (!gotSingleInstanceLock) {
     });
     ipcMain.handle('browser:get-state', (_event, info) => handleBrowserRpc('state', {}, info || {}));
     ipcMain.handle('browser:set-bounds', (_event, info) => handleBrowserRpc('setBounds', info || {}, info || {}));
+    ipcMain.handle('browser:set-chat-overlay', (_event, info) => handleBrowserRpc('setChatOverlay', info || {}, info || {}));
     ipcMain.handle('browser:set-context', (_event, info) => handleBrowserRpc('setContext', info || {}));
     ipcMain.handle('browser:set-obscured', (_event, info) => handleBrowserRpc('setObscured', info || {}, info || {}));
     ipcMain.handle('browser:create-tab', async (_event, info) => {
@@ -3549,6 +3792,18 @@ if (!gotSingleInstanceLock) {
     });
     ipcMain.handle('browser:set-muted', (_event, info) => handleBrowserRpc('setMuted', info || {}, info || {}));
     ipcMain.handle('browser:screenshot', (_event, info) => handleBrowserRpc('screenshot', info || {}, info || {}));
+    ipcMain.on('browser-chat-overlay:action', (event, action) => {
+      const sessionId = normalizeBrowserSessionId(action && action.sessionId);
+      const manager = browserTabManagers.get(sessionId);
+      if (!manager || !manager.chatOverlayView || manager.chatOverlayView.webContents !== event.sender) return;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('browser:chat-overlay-action', {
+          sessionId,
+          type: action && action.type === 'stop' ? 'stop' : 'submit',
+          text: String(action && action.text || '').slice(0, 20000),
+        });
+      }
+    });
     spawnPython();
     if (!launchHidden) {
       createMainWindow();
