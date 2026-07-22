@@ -2813,25 +2813,42 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     wbcNotifyBrowserLayoutChanged();
   }
 
+  function finalizeInteraction(interaction) {
+    if (!interaction) return;
+    if (interaction.previewTimer) clearTimeout(interaction.previewTimer);
+    interaction.previewTimer = null;
+    if (interactionRef.current === interaction) interactionRef.current = null;
+    window.removeEventListener("workbench:browser-window-preview-ready", onBrowserWindowPreviewReady);
+    document.body.classList.remove("wbc-browser-window-interacting");
+    wbcNotifyBrowserLayoutChanged();
+    wbcNotifyBrowserWindowInteraction(false, interaction.kind, browserSessionId);
+  }
+
   function stopInteraction() {
     var interaction = interactionRef.current;
-    interactionRef.current = null;
     if (interaction && interaction.captureNode && interaction.captureNode.releasePointerCapture) {
       try { interaction.captureNode.releasePointerCapture(interaction.pointerId); } catch (e) {}
     }
-    document.body.classList.remove("wbc-browser-window-interacting");
     window.removeEventListener("pointermove", onPointerMove);
     window.removeEventListener("pointerup", stopInteraction);
     window.removeEventListener("pointercancel", stopInteraction);
-    wbcNotifyBrowserLayoutChanged();
-    if (interaction) wbcNotifyBrowserWindowInteraction(false, interaction.kind, browserSessionId);
+    // A plain click on the title bar never starts a native-view transition.
+    // Only finish an interaction after movement crossed the drag threshold.
+    if (!interaction || !interaction.started) {
+      interactionRef.current = null;
+      window.removeEventListener("workbench:browser-window-preview-ready", onBrowserWindowPreviewReady);
+      return;
+    }
+    interaction.pointerReleased = true;
+    // A fast flick can release before capturePage resolves. Keep its final
+    // delta alive; preview-ready will commit it without exposing an old native
+    // frame. The timeout follows the same path if capture IPC ever stalls.
+    if (!interaction.previewReady) return;
+    finalizeInteraction(interaction);
   }
 
-  function onPointerMove(event) {
-    var interaction = interactionRef.current;
+  function commitInteractionDelta(interaction, dx, dy) {
     if (!interaction) return;
-    var dx = event.clientX - interaction.clientX;
-    var dy = event.clientY - interaction.clientY;
     var start = interaction.frame;
     var next = { x: start.x, y: start.y, width: start.width, height: start.height };
     if (interaction.kind === "drag") {
@@ -2853,6 +2870,42 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     commitFrame(next, interaction.area);
   }
 
+  function onBrowserWindowPreviewReady(event) {
+    var detail = event && event.detail || {};
+    if (String(detail.sessionId || "") !== String(browserSessionId || "")) return;
+    var interaction = interactionRef.current;
+    if (!interaction || !interaction.started) return;
+    if (interaction.previewTimer) clearTimeout(interaction.previewTimer);
+    interaction.previewTimer = null;
+    interaction.previewReady = true;
+    commitInteractionDelta(interaction, interaction.pendingDx, interaction.pendingDy);
+    if (interaction.pointerReleased) finalizeInteraction(interaction);
+  }
+
+  function onPointerMove(event) {
+    var interaction = interactionRef.current;
+    if (!interaction) return;
+    var dx = event.clientX - interaction.clientX;
+    var dy = event.clientY - interaction.clientY;
+    if (!interaction.started) {
+      if ((dx * dx) + (dy * dy) < 9) return;
+      interaction.started = true;
+      document.body.classList.add("wbc-browser-window-interacting");
+      wbcNotifyBrowserWindowInteraction(true, interaction.kind, browserSessionId);
+      interaction.previewTimer = setTimeout(function () {
+        wbcNotifyBrowserWindowInteraction(false, interaction.kind, browserSessionId);
+        onBrowserWindowPreviewReady({ detail: { sessionId: browserSessionId, fallback: true } });
+      }, 250);
+    }
+    interaction.pendingDx = dx;
+    interaction.pendingDy = dy;
+    // Keep the native page and shell at their original coordinates until the
+    // bitmap proxy is committed and Electron confirms the native view hidden.
+    // This removes the single exposed background/old-position frame at start.
+    if (!interaction.previewReady) return;
+    commitInteractionDelta(interaction, dx, dy);
+  }
+
   function beginInteraction(event, kind, direction) {
     if (effectiveMode !== "pip" || event.button !== 0) return;
     if (kind === "drag" && event.target && event.target.closest && event.target.closest("button")) return;
@@ -2870,15 +2923,20 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       area: area,
       pointerId: event.pointerId,
       captureNode: event.currentTarget,
+      started: false,
+      previewReady: false,
+      pendingDx: 0,
+      pendingDy: 0,
+      pointerReleased: false,
+      previewTimer: null,
     };
     if (event.currentTarget && event.currentTarget.setPointerCapture) {
       try { event.currentTarget.setPointerCapture(event.pointerId); } catch (e) {}
     }
-    document.body.classList.add("wbc-browser-window-interacting");
-    wbcNotifyBrowserWindowInteraction(true, kind, browserSessionId);
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", stopInteraction);
     window.addEventListener("pointercancel", stopInteraction);
+    window.addEventListener("workbench:browser-window-preview-ready", onBrowserWindowPreviewReady);
   }
 
   useWbcEffect(function () {
@@ -3169,6 +3227,9 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var avoidanceRafRef = useWbcRef(0);
+  var avoidancePreserveRef = useWbcRef(false);
+  var avoidanceScrollingRef = useWbcRef(false);
+  var avoidanceScrollTimerRef = useWbcRef(null);
   var durableMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   var runtimeTimeline = wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime));
   var messages = wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
@@ -3203,7 +3264,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     if (lastUserId && lastAssistantId) break;
   }
 
-  var applyBrowserAvoidance = useWbcCallback(function () {
+  var applyBrowserAvoidance = useWbcCallback(function (preserveViewport) {
     var stage = stageRef.current;
     var thread = scrollRef.current;
     if (!stage || !thread) return;
@@ -3214,7 +3275,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     // the bottom is the anchor; in scrollback it is the first visible entry.
     var anchorNode = null;
     var anchorOffset = 0;
-    if (!stickRef.current) {
+    if (preserveViewport && !stickRef.current) {
       var anchorTarget = thread.scrollTop;
       var anchorLow = 0, anchorHigh = items.length;
       while (anchorLow < anchorHigh) {
@@ -3228,6 +3289,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     }
 
     function restoreViewport() {
+      if (!preserveViewport) return;
       if (stickRef.current) {
         thread.scrollTop = thread.scrollHeight;
       } else if (anchorNode && anchorNode.isConnected) {
@@ -3284,11 +3346,19 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     }
   }, []);
 
-  var scheduleBrowserAvoidance = useWbcCallback(function () {
+  var scheduleBrowserAvoidance = useWbcCallback(function (preserveViewport) {
+    if (preserveViewport === false) avoidancePreserveRef.current = false;
+    else if (!avoidanceScrollingRef.current) avoidancePreserveRef.current = true;
     if (avoidanceRafRef.current) return;
     avoidanceRafRef.current = requestAnimationFrame(function () {
+      var shouldPreserve = avoidancePreserveRef.current;
+      avoidancePreserveRef.current = false;
       avoidanceRafRef.current = 0;
-      applyBrowserAvoidance();
+      // Width changes while a wheel/trackpad gesture is active alter message
+      // heights and fight the browser's scroll position. Keep the current lane
+      // assignment stable until the gesture settles, then recompute once.
+      if (avoidanceScrollingRef.current) return;
+      applyBrowserAvoidance(shouldPreserve);
     });
   }, [applyBrowserAvoidance]);
 
@@ -3297,7 +3367,17 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     var el = scrollRef.current;
     if (!el) return;
     stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    scheduleBrowserAvoidance();
+    // A wheel/trackpad gesture owns both scrollTop and the visible message
+    // anchor. Do not change avoided message widths during the gesture: their
+    // height reflow would make the transcript jump in the opposite direction.
+    avoidanceScrollingRef.current = true;
+    avoidancePreserveRef.current = false;
+    if (avoidanceScrollTimerRef.current) clearTimeout(avoidanceScrollTimerRef.current);
+    avoidanceScrollTimerRef.current = setTimeout(function () {
+      avoidanceScrollTimerRef.current = null;
+      avoidanceScrollingRef.current = false;
+      scheduleBrowserAvoidance(false);
+    }, 120);
   }
 
   useWbcEffect(function () {
@@ -3318,7 +3398,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     if (!stage || !thread) return undefined;
     var observedItems = typeof WeakSet === "function" ? new WeakSet() : null;
     var itemObserver = typeof ResizeObserver === "function"
-      ? new ResizeObserver(scheduleBrowserAvoidance)
+      ? new ResizeObserver(function () { scheduleBrowserAvoidance(false); })
       : null;
     function observeItems() {
       if (!itemObserver) return;
@@ -3346,6 +3426,10 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     return function () {
       if (avoidanceRafRef.current) cancelAnimationFrame(avoidanceRafRef.current);
       avoidanceRafRef.current = 0;
+      avoidancePreserveRef.current = false;
+      avoidanceScrollingRef.current = false;
+      if (avoidanceScrollTimerRef.current) clearTimeout(avoidanceScrollTimerRef.current);
+      avoidanceScrollTimerRef.current = null;
       if (itemObserver) itemObserver.disconnect();
       if (stageObserver) stageObserver.disconnect();
       if (mutationObserver) mutationObserver.disconnect();

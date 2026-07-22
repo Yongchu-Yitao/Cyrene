@@ -11192,6 +11192,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   min-height: 48px;
   flex-basis: 48px;
   box-sizing: border-box;
+  padding: 8px 8px 4px 12px;
   border-bottom: 0;
 }
 
@@ -14716,6 +14717,17 @@ html[data-theme="dark"] .wbc-trace {
   background: var(--wb-card-bg, #fff);
 }
 
+.browser-native-surface {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+.browser-native-host.is-previewing .browser-native-surface {
+  background: var(--wb-card-bg, #fff);
+}
+
 .browser-native-preview {
   position: absolute;
   inset: 0;
@@ -14728,13 +14740,18 @@ html[data-theme="dark"] .wbc-trace {
   user-select: none;
 }
 
-.wbc-browser-window.pip .browser-native-host,
-.wbc-browser-window.pip .browser-native-preview {
+.wbc-browser-window.pip .browser-native-host {
   border-radius: 11px;
 }
 
 .wbc-browser-window.pip .browser-native-host {
-  background: var(--wb-card-bg-strong, #fff);
+  --browser-content-inset: 3px;
+  background: var(--wb-surface);
+}
+
+.wbc-browser-window.pip .browser-native-surface {
+  inset: var(--browser-content-inset);
+  border-radius: 8px;
 }
 
 .browser-video-fullscreen-overlay {

@@ -935,6 +935,16 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     return undefined;
   }, [loading]);
 
+  // A reload hides the native view from beforeunload so it cannot outlive the
+  // renderer. The main-process manager survives that reload, so explicitly
+  // publish the new renderer's empty overlay state before individual overlay
+  // effects add themselves below. Without this reset the view stays obscured
+  // indefinitely and only the drag-time screenshot proxy remains visible.
+  useWorkbenchEffect(function () {
+    wbBrowserOverlayCount = 0;
+    wbSetBrowserOverlayObscured(0);
+  }, []);
+
   // Any renderer overlay must temporarily detach the native browser view.
   // The coordinator also covers topbar popovers, which cannot rely on CSS
   // z-index to appear above an Electron WebContentsView.

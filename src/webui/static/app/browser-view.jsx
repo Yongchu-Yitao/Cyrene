@@ -45,12 +45,14 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   const bridge = window.cyrene && window.cyrene.browser;
   const electronSessionId = String(browserSessionId || (browserState && browserState.sessionId) || "").trim();
   const hostRef = React.useRef(null);
+  const surfaceRef = React.useRef(null);
   const addressRef = React.useRef(null);
   const boundsRafRef = React.useRef(0);
   const lastBoundsRef = React.useRef("");
   const overlayObscuredRef = React.useRef(false);
   const windowInteractionRef = React.useRef(false);
   const interactionPreviewTokenRef = React.useRef(0);
+  const interactionPreviewMountedRef = React.useRef(false);
   const [state, setState] = React.useState({ tabs: [], activeTabId: "", activeTab: null });
   const [address, setAddress] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -92,27 +94,29 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   }, [active && active.id, active && active.url]);
 
   function sendBounds(visible) {
-    if (!bridge || typeof bridge.setBounds !== "function") return;
-    const node = hostRef.current;
+    if (!bridge || typeof bridge.setBounds !== "function") return Promise.resolve(false);
+    const node = surfaceRef.current;
     if (!visible || overlayObscuredRef.current || windowInteractionRef.current || !node) {
-      if (lastBoundsRef.current === "hidden") return;
+      if (lastBoundsRef.current === "hidden") return Promise.resolve(true);
       lastBoundsRef.current = "hidden";
-      bridge.setBounds({ sessionId: electronSessionId, visible: false }).catch(function () {
+      return bridge.setBounds({ sessionId: electronSessionId, visible: false }).then(function () {
+        return true;
+      }).catch(function () {
         lastBoundsRef.current = "";
+        return false;
       });
-      return;
     }
     const rect = node.getBoundingClientRect();
     const pipWindow = node.closest(".wbc-browser-window.pip");
     const borderRadius = 0;
-    const pageCornerRadius = pipWindow ? 11 : 0;
+    const pageCornerRadius = pipWindow ? 8 : 0;
     const payload = {
       sessionId: electronSessionId,
       visible: true,
       x: rect.left,
       y: rect.top,
-      width: rect.width,
-      height: rect.height,
+      width: Math.max(0, rect.width),
+      height: Math.max(0, rect.height),
       borderRadius: borderRadius,
       pageCornerRadius: pageCornerRadius,
     };
@@ -125,10 +129,13 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       borderRadius,
       pageCornerRadius,
     ].join(":");
-    if (lastBoundsRef.current === signature) return;
+    if (lastBoundsRef.current === signature) return Promise.resolve(true);
     lastBoundsRef.current = signature;
-    bridge.setBounds(payload).catch(function () {
+    return bridge.setBounds(payload).then(function () {
+      return true;
+    }).catch(function () {
       if (lastBoundsRef.current === signature) lastBoundsRef.current = "";
+      return false;
     });
   }
 
@@ -141,9 +148,10 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   }
 
   function finishWindowInteraction(token) {
-    const node = hostRef.current;
+    const node = surfaceRef.current;
     if (!bridge || typeof bridge.setBounds !== "function" || !node) {
       windowInteractionRef.current = false;
+      interactionPreviewMountedRef.current = false;
       setInteractionPreview(null);
       lastBoundsRef.current = "";
       scheduleBounds();
@@ -152,7 +160,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     const rect = node.getBoundingClientRect();
     const pipWindow = node.closest(".wbc-browser-window.pip");
     const borderRadius = 0;
-    const pageCornerRadius = pipWindow ? 11 : 0;
+    const pageCornerRadius = pipWindow ? 8 : 0;
     const signature = [
       electronSessionId,
       Math.round(rect.left),
@@ -168,30 +176,87 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       transition: true,
       x: rect.left,
       y: rect.top,
-      width: rect.width,
-      height: rect.height,
+      width: Math.max(0, rect.width),
+      height: Math.max(0, rect.height),
       borderRadius: borderRadius,
       pageCornerRadius: pageCornerRadius,
     }).then(function () {
       if (interactionPreviewTokenRef.current !== token) return;
       lastBoundsRef.current = signature;
       windowInteractionRef.current = false;
+      interactionPreviewMountedRef.current = false;
       setInteractionPreview(null);
       scheduleBounds();
     }).catch(function () {
       if (interactionPreviewTokenRef.current !== token) return;
       lastBoundsRef.current = "";
       windowInteractionRef.current = false;
+      interactionPreviewMountedRef.current = false;
       setInteractionPreview(null);
       scheduleBounds();
     });
   }
 
+  function publishInteractionPreviewFallback(previewToken) {
+    if (!windowInteractionRef.current
+      || interactionPreviewTokenRef.current !== previewToken) return;
+    windowInteractionRef.current = false;
+    interactionPreviewMountedRef.current = false;
+    setInteractionPreview(null);
+    lastBoundsRef.current = "";
+    window.dispatchEvent(new CustomEvent("workbench:browser-window-preview-ready", {
+      detail: { sessionId: electronSessionId, fallback: true },
+    }));
+    scheduleBounds();
+  }
+
+  // DOM commit is not enough: a data-URL <img> can still be undecoded, and a
+  // layout effect runs before that commit has painted. Wait for load/decode and
+  // two animation frames so at least one complete proxy frame has reached the
+  // renderer compositor before hiding Electron's native WebContentsView.
+  function onInteractionPreviewLoad(event) {
+    var preview = interactionPreview;
+    if (!preview) return;
+    var previewToken = preview.token;
+    var imageNode = event && event.currentTarget;
+    var decoded = imageNode && typeof imageNode.decode === "function"
+      ? imageNode.decode().catch(function () {})
+      : Promise.resolve();
+    Promise.resolve(decoded).then(function () {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          if (!windowInteractionRef.current
+            || interactionPreviewTokenRef.current !== previewToken) return;
+          interactionPreviewMountedRef.current = true;
+          Promise.resolve(sendBounds(false)).then(function (hidden) {
+            if (!windowInteractionRef.current
+              || interactionPreviewTokenRef.current !== previewToken) return;
+            if (!hidden) {
+              publishInteractionPreviewFallback(previewToken);
+              return;
+            }
+            window.dispatchEvent(new CustomEvent("workbench:browser-window-preview-ready", {
+              detail: { sessionId: electronSessionId },
+            }));
+          });
+        });
+      });
+    });
+  }
+
+  function onInteractionPreviewError() {
+    var previewToken = interactionPreview && interactionPreview.token;
+    if (previewToken == null) return;
+    publishInteractionPreviewFallback(previewToken);
+  }
+
   React.useEffect(function () {
     scheduleBounds();
     const node = hostRef.current;
+    const surface = surfaceRef.current;
     const ro = typeof ResizeObserver !== "undefined" && node ? new ResizeObserver(scheduleBounds) : null;
     if (ro && node) ro.observe(node);
+    if (ro && surface) ro.observe(surface);
     window.addEventListener("resize", scheduleBounds);
     return function () {
       if (boundsRafRef.current) cancelAnimationFrame(boundsRafRef.current);
@@ -244,10 +309,11 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     };
   }, [electronSessionId]);
 
-  // A native WebContentsView cannot be transformed by renderer CSS. During a
-  // floating-window drag/resize, temporarily show a captured bitmap inside the
-  // React shell and detach the native view. The preview follows perfectly; the
-  // live view is reattached at the final bounds on pointer release.
+  // A native WebContentsView is not part of the renderer's transform tree. If
+  // it stays attached while the PiP shell moves, it remains at the old hit-test
+  // position and can steal the pointer stream from the renderer. Use the
+  // committed bitmap proxy for drag, resize, and mode changes; the layout
+  // effect above hides the native view only after that proxy is paint-ready.
   React.useEffect(function () {
     function onBrowserWindowInteraction(event) {
       var detail = event && event.detail || {};
@@ -256,25 +322,58 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       var token = interactionPreviewTokenRef.current + 1;
       interactionPreviewTokenRef.current = token;
       if (!activeInteraction) {
+        // A very short gesture can end before capture + React commit. In that
+        // case the native view was never hidden, so just move it to the final
+        // bounds instead of starting an unnecessary detach/reattach cycle.
+        if (!interactionPreviewMountedRef.current) {
+          windowInteractionRef.current = false;
+          interactionPreviewMountedRef.current = false;
+          setInteractionPreview(null);
+          lastBoundsRef.current = "";
+          scheduleBounds();
+          return;
+        }
         // Keep the bitmap proxy mounted until Electron confirms that Chromium
         // has produced a frame at the final PiP/fullscreen bounds.
         finishWindowInteraction(token);
         return;
       }
       windowInteractionRef.current = true;
-      sendBounds(false);
+      interactionPreviewMountedRef.current = false;
+      setInteractionPreview(null);
       if (!bridge || typeof bridge.screenshot !== "function") return;
       bridge.screenshot({ sessionId: electronSessionId }).then(function (result) {
         if (!windowInteractionRef.current || interactionPreviewTokenRef.current !== token) return;
         if (result && result.ok !== false && result.pngBase64) {
-          setInteractionPreview({ src: "data:image/png;base64," + result.pngBase64 });
+          setInteractionPreview({
+            token: token,
+            src: "data:image/png;base64," + result.pngBase64,
+          });
+          return;
         }
-      }).catch(function () {});
+        windowInteractionRef.current = false;
+        interactionPreviewMountedRef.current = false;
+        lastBoundsRef.current = "";
+        window.dispatchEvent(new CustomEvent("workbench:browser-window-preview-ready", {
+          detail: { sessionId: electronSessionId, fallback: true },
+        }));
+        scheduleBounds();
+      }).catch(function () {
+        if (!windowInteractionRef.current || interactionPreviewTokenRef.current !== token) return;
+        windowInteractionRef.current = false;
+        interactionPreviewMountedRef.current = false;
+        lastBoundsRef.current = "";
+        window.dispatchEvent(new CustomEvent("workbench:browser-window-preview-ready", {
+          detail: { sessionId: electronSessionId, fallback: true },
+        }));
+        scheduleBounds();
+      });
     }
     window.addEventListener("workbench:browser-window-interaction", onBrowserWindowInteraction);
     return function () {
       interactionPreviewTokenRef.current += 1;
       windowInteractionRef.current = false;
+      interactionPreviewMountedRef.current = false;
       window.removeEventListener("workbench:browser-window-interaction", onBrowserWindowInteraction);
     };
   }, [electronSessionId]);
@@ -347,19 +446,23 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       </div>
       {error && <div className="browser-error">{error}</div>}
       <div ref={hostRef} className={"browser-native-host" + (interactionPreview ? " is-previewing" : "")}>
-        {interactionPreview && (
-          <img
-            className="browser-native-preview"
-            src={interactionPreview.src}
-            alt=""
-            aria-hidden="true"
-          />
-        )}
-        {!tabs.length && (
-          <div className="browser-empty">
-            <button type="button" className="btn primary" onClick={function () { createTab("about:blank"); }}>打开浏览器</button>
-          </div>
-        )}
+        <div ref={surfaceRef} className="browser-native-surface">
+          {interactionPreview && (
+            <img
+              className="browser-native-preview"
+              src={interactionPreview.src}
+              onLoad={onInteractionPreviewLoad}
+              onError={onInteractionPreviewError}
+              alt=""
+              aria-hidden="true"
+            />
+          )}
+          {!tabs.length && (
+            <div className="browser-empty">
+              <button type="button" className="btn primary" onClick={function () { createTab("about:blank"); }}>打开浏览器</button>
+            </div>
+          )}
+        </div>
       </div>
       {videoFullscreenActive && (
         <div className="browser-video-fullscreen-overlay" role="status" aria-live="polite">

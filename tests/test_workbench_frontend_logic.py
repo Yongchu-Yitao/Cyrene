@@ -604,10 +604,23 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     commit_block = source.split("  function commitFrame(next, area) {", 1)[1].split("\n  function stopInteraction", 1)[0]
     assert 'node.style.left = clamped.x + "px"' in commit_block
     assert "wbcNotifyBrowserLayoutChanged();" in commit_block
+    move_block = source.split("  function onPointerMove(event) {", 1)[1].split("\n  function beginInteraction", 1)[0]
+    begin_block = source.split("  function beginInteraction(event, kind, direction) {", 1)[1].split("\n  useWbcEffect", 1)[0]
+    stop_block = source.split("  function stopInteraction() {", 1)[1].split("\n  function onPointerMove", 1)[0]
+    assert "(dx * dx) + (dy * dy) < 9" in move_block
+    assert "interaction.started = true;" in move_block
+    assert "wbcNotifyBrowserWindowInteraction(true, interaction.kind" in move_block
+    assert "started: false" in begin_block
+    assert "wbcNotifyBrowserWindowInteraction(true, kind" not in begin_block
+    assert "function finalizeInteraction(interaction)" in source
+    assert "if (!interaction.previewReady) return;" in stop_block
+    assert "interaction.pointerReleased = true;" in stop_block
+    assert "if (interaction.pointerReleased) finalizeInteraction(interaction);" in stop_block
+    assert "}, 250);" in move_block
 
     browser_view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
     assert "lastBoundsRef" in browser_view
-    assert "if (lastBoundsRef.current === signature) return;" in browser_view
+    assert "if (lastBoundsRef.current === signature) return Promise.resolve(true);" in browser_view
     assert "workbench:browser-window-interaction" in browser_view
     assert "browser-native-preview" in browser_view
     assert "topInset" not in browser_view
@@ -616,6 +629,35 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "bridge.screenshot" in browser_view
     assert "finishWindowInteraction" in browser_view
     assert "transition: true" in browser_view
+    assert "interactionPreviewMountedRef" in browser_view
+    preview_commit_block = browser_view.split(
+        "function onInteractionPreviewLoad(event) {", 1
+    )[1].split("\n  function onInteractionPreviewError", 1)[0]
+    assert 'typeof imageNode.decode === "function"' in preview_commit_block
+    assert preview_commit_block.count("requestAnimationFrame(function () {") == 2
+    assert "interactionPreviewMountedRef.current = true;" in preview_commit_block
+    assert "Promise.resolve(sendBounds(false))" in preview_commit_block
+    assert 'workbench:browser-window-preview-ready' in preview_commit_block
+    assert "if (!hidden)" in preview_commit_block
+    assert "onLoad={onInteractionPreviewLoad}" in browser_view
+    assert "onError={onInteractionPreviewError}" in browser_view
+    assert "React.useLayoutEffect(function ()" not in browser_view
+    interaction_block = browser_view.split(
+        "function onBrowserWindowInteraction(event) {", 1
+    )[1].split(
+        'window.addEventListener("workbench:browser-window-interaction"', 1
+    )[0]
+    assert "sendBounds(false);" not in interaction_block
+    assert 'if (String(detail.kind || "") !== "mode")' not in interaction_block
+    assert "windowInteractionRef.current = true;" in interaction_block
+    assert "if (!interactionPreviewMountedRef.current)" in interaction_block
+    assert 'detail: { sessionId: electronSessionId, fallback: true }' in interaction_block
+    assert "function commitInteractionDelta(interaction, dx, dy)" in source
+    assert "function onBrowserWindowPreviewReady(event)" in source
+    assert "if (!interaction.previewReady) return;" in move_block
+    assert "previewReady: false" in begin_block
+    assert 'window.addEventListener("workbench:browser-window-preview-ready"' in begin_block
+    assert 'window.removeEventListener("workbench:browser-window-preview-ready"' in stop_block
     assert 'wbcNotifyBrowserWindowInteraction(true, "mode", browserSessionId);' in source
     assert 'wbcNotifyBrowserWindowInteraction(false, "mode", browserSessionId);' in source
     sync_view_block = main.split("  syncAttachedView() {", 1)[1].split("\n  setBounds(", 1)[0]
@@ -626,9 +668,14 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "active.view.setVisible(true)" in sync_view_block
     assert "active.view.setBorderRadius(targetCornerRadius)" in sync_view_block
     assert "this.borderRadius = Math.max(0, Math.min(24" in main
+    assert "const surfaceRef = React.useRef(null);" in browser_view
     assert 'const pipWindow = node.closest(".wbc-browser-window.pip")' in browser_view
     assert "const borderRadius = 0;" in browser_view
-    assert "const pageCornerRadius = pipWindow ? 11 : 0;" in browser_view
+    assert "const node = surfaceRef.current;" in browser_view
+    assert "contentInset" not in browser_view
+    assert "x: rect.left" in browser_view
+    assert "width: Math.max(0, rect.width)" in browser_view
+    assert "const pageCornerRadius = pipWindow ? 8 : 0;" in browser_view
     assert "pageCornerRadius: pageCornerRadius" in browser_view
     assert "pageCornerColor" not in browser_view
     assert "data-cyrene-page-top-cover" not in main
@@ -646,16 +693,44 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "topCover" not in browser_view
     pip_bar_block = styles.split(".wbc-browser-window.pip .wbc-browser-window-bar {", 1)[1].split("\n}", 1)[0]
     assert "height: 48px" in pip_bar_block
-    assert "padding-bottom: 11px" not in pip_bar_block
+    assert "padding: 8px 8px 4px 12px" in pip_bar_block
     assert "border-bottom: 0" in pip_bar_block
     assert ".wbc-browser-window.pip .wbc-browser-window-bar > *" not in styles
-    assert ".wbc-browser-window.pip .browser-native-preview" in styles
+    assert ".wbc-browser-window.pip .browser-native-surface" in styles
+    assert "className=\"browser-native-surface\"" in browser_view
     assert "border-radius: 11px" in styles
+    pip_host_rule = styles.split(
+        ".wbc-browser-window.pip .browser-native-host {", 2
+    )[2].split("}", 1)[0]
+    assert "--browser-content-inset: 3px;" in pip_host_rule
+    assert "background: var(--wb-surface);" in pip_host_rule
+    assert "border:" not in pip_host_rule
+    assert "box-shadow:" not in pip_host_rule
+    pip_surface_rule = styles.split(
+        ".wbc-browser-window.pip .browser-native-surface {", 1
+    )[1].split("}", 1)[0]
+    assert "inset: var(--browser-content-inset);" in pip_surface_rule
+    assert "border-radius: 8px;" in pip_surface_rule
+    assert "width:" not in pip_surface_rule
+    assert "height:" not in pip_surface_rule
     assert "topCover" not in main
     assert "this.repaintView(active)" in sync_view_block
     assert "wc.invalidate()" in main
     assert "settleBoundsTransition" in main
     assert "active.view.webContents.capturePage()" in main
+
+
+def test_workbench_reload_restores_native_browser_after_beforeunload_guard():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    reset_block = source.split(
+        "// A reload hides the native view from beforeunload", 1
+    )[1].split("// Any renderer overlay", 1)[0]
+    assert "wbBrowserOverlayCount = 0;" in reset_block
+    assert "wbSetBrowserOverlayObscured(0);" in reset_block
+    assert reset_block.index("wbBrowserOverlayCount = 0;") < reset_block.index(
+        "wbSetBrowserOverlayObscured(0);"
+    )
 
 
 def _run_browser_avoidance_plan(*args):
@@ -708,13 +783,24 @@ def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
     assert 'data-wbc-thread-item="true"' in source
     assert 'stage.querySelector(".wbc-browser-window.pip")' in source
     assert 'window.addEventListener("workbench:browser-layout", scheduleBrowserAvoidance)' in source
-    assert 'new ResizeObserver(scheduleBrowserAvoidance)' in source
+    assert 'new ResizeObserver(function () { scheduleBrowserAvoidance(false); })' in source
     assert "new MutationObserver(function ()" in source
     assert "for (var pass = 0; pass < 5; pass++)" in source
     assert 'item.offsetTop + item.offsetHeight <= contentTop' not in source
     assert 'candidate.offsetTop + candidate.offsetHeight <= contentTop' in source
     assert 'item.style.setProperty("--wbc-browser-avoid-start"' in source
     assert 'item.style.setProperty("--wbc-browser-avoid-end"' in source
+    assert "if (!preserveViewport) return;" in source
+    on_scroll_block = source.split("  function onScroll() {", 1)[1].split("\n  useWbcEffect", 1)[0]
+    assert "scheduleBrowserAvoidance(false);" in on_scroll_block
+    assert "avoidanceScrollingRef.current = true;" in on_scroll_block
+    assert "avoidancePreserveRef.current = false;" in on_scroll_block
+    assert "}, 120);" in on_scroll_block
+    schedule_block = source.split(
+        "var scheduleBrowserAvoidance = useWbcCallback(function (preserveViewport) {", 1
+    )[1].split("// Track whether the user is reading scrollback", 1)[0]
+    assert "if (preserveViewport === false) avoidancePreserveRef.current = false;" in schedule_block
+    assert "if (avoidanceScrollingRef.current) return;" in schedule_block
     thread_item_styles = styles.split(".wbc-thread-item {", 1)[1].split("}", 1)[0]
     assert "padding-inline-start: var(--wbc-browser-avoid-start, 0px);" in thread_item_styles
     assert "padding-inline-end: var(--wbc-browser-avoid-end, 0px);" in thread_item_styles
