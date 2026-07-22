@@ -1168,8 +1168,8 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "输入内容以引导正在运行的 Agent" in (
         root / "src" / "workbench-webui" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
-    assert "workbench-chat.js?v=0.6.15" in index
-    assert "workbench-i18n.js?v=0.6.15" in index
+    assert "workbench-chat.js?v=0.6.16" in index
+    assert "workbench-i18n.js?v=0.6.16" in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -1780,7 +1780,7 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
     assert "padding-inline: 8px;" in compact_tabs[0]
     assert "padding-inline: 2px;" in compact_tabs[1]
     assert "font-size: calc(12px * var(--wb-ui-font-scale, 1));" in compact_tabs[1]
-    assert "workbench.css?v=0.6.15" in index
+    assert "workbench.css?v=0.6.16" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -1802,7 +1802,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.6.15" in index
+    assert "workbench.css?v=0.6.16" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -1875,7 +1875,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=0.6.15" in index
+    assert "settings-overlay.js?v=0.6.16" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -2041,7 +2041,7 @@ def test_workbench_context_picker_contains_long_workspace_paths():
     assert "text-overflow: ellipsis;" in text_rule
     assert "white-space: nowrap;" in text_rule
     assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=0.6.15" in index
+    assert "workbench-chat.js?v=0.6.16" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -2057,8 +2057,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=0.6.15" in index
-    assert "workbench.js?v=0.6.15" in index
+    assert "workbench-model.js?v=0.6.16" in index
+    assert "workbench.js?v=0.6.16" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -2176,7 +2176,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.models || p.primary_candidates || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=0.6.15" in index
+    assert "settings-overlay.js?v=0.6.16" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -2543,7 +2543,7 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=0.6.15" in index
+    assert "compiled/workbench-shortcuts.js?v=0.6.16" in index
 
 
 def test_workbench_about_related_actions_only_click_right_button():
