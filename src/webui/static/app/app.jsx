@@ -1154,7 +1154,20 @@ function MainApp() {
 }
 
 function App() {
-  if (readUiSurfaceMode() === "quick-chat" && typeof window.QuickChatApp === "function") {
+  const quickChat = readUiSurfaceMode() === "quick-chat" && typeof window.QuickChatApp === "function";
+  const workbench = !quickChat && readUiShellMode() !== "legacy" && typeof window.WorkbenchApp === "function";
+
+  useEffectApp(function () {
+    if (workbench) return undefined;
+    Promise.resolve(window.cyreneInitialDataReady)
+      .catch(function () {})
+      .then(function () {
+        if (typeof window.markCyreneReady === "function") window.markCyreneReady();
+      });
+    return undefined;
+  }, [workbench]);
+
+  if (quickChat) {
     return <window.QuickChatApp />;
   }
   return <MainApp />;

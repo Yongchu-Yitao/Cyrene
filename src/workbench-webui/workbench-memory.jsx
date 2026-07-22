@@ -481,6 +481,10 @@
   function toolParamsText(step) {
     return toolParamsEntries(step).map(function (item) { return item.key + ": " + item.value; }).join(" · ");
   }
+  function translatedToolParamName(key, t) {
+    var raw = String(key || "");
+    return t ? t("memory.learning.toolParam." + raw, raw) : raw;
+  }
   function stepDescription(step) {
     if (!step) return "";
     return step.output_summary || step.input_summary || [step.domain, step.type, step.subtype].filter(Boolean).join(" / ") || step.tool || "";
@@ -849,7 +853,7 @@
                       params.length
                         ? h("div", { className: "wb-learning-step-params" }, params.map(function (item) {
                           return h("span", { key: item.key },
-                            h("em", null, item.key),
+                            h("em", { title: item.key }, translatedToolParamName(item.key, t)),
                             h("code", null, item.value));
                         }))
                         : h("p", null, toolParamsText(step) || stepDescription(step))),

@@ -166,6 +166,15 @@
     return React.createElement("span", { className: "wb-kb-ico " + tone + (props.lg ? " lg" : "") }, kindIconSvg(vk));
   }
 
+  // Shared by chat uploads so a PDF is represented consistently everywhere in
+  // the workbench. Keep this small visual contract independent from the
+  // knowledge-page component itself; workbench-chat.js loads after this file.
+  window.WorkbenchFileVisual = {
+    visualKind: visualKind,
+    tone: function (doc) { return KIND_TONE[visualKind(doc)] || "slate"; },
+    icon: function (doc) { return kindIconSvg(visualKind(doc)); },
+  };
+
   function docDescription(doc) {
     var summary = String((doc && doc.summary) || "").trim();
     if (summary) return summary;

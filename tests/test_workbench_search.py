@@ -515,6 +515,49 @@ def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypat
     )
 
 
+def test_workbench_chat_run_persists_non_git_workspace_diff(
+    client, search_env, monkeypatch,
+):
+    from cyrene import agent
+
+    workspace = search_env["data_dir"].parent / "workspace"
+    target = workspace / "src" / "feature.py"
+    target.parent.mkdir()
+    target.write_text("enabled = False\n", encoding="utf-8")
+
+    async def fake_run_agent(**kwargs):
+        assert Path(kwargs["workspace_dir"]) == workspace.resolve()
+        target.write_text("enabled = True\n", encoding="utf-8")
+        (workspace / "created.md").write_text("# Created\n", encoding="utf-8")
+        return "done"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    response = client.post(
+        "/api/workbench/chats/chat_1/messages",
+        json={"message": "change files"},
+    )
+    assert response.status_code == 200
+
+    changes_response = client.get("/api/workbench/chats/chat_1/changes")
+    assert changes_response.status_code == 200
+    payload = changes_response.json()
+    assert payload["fileCount"] == 2
+    latest = payload["changeSets"][0]
+    by_path = {item["path"]: item for item in latest["files"]}
+    assert by_path["src/feature.py"]["changeType"] == "modified"
+    assert by_path["created.md"]["changeType"] == "created"
+    assert all("diff" not in item for item in latest["files"])
+
+    diff_response = client.get(
+        "/api/workbench/chats/chat_1/changes/"
+        f"{latest['id']}/files/src/feature.py"
+    )
+    assert diff_response.status_code == 200
+    diff = diff_response.json()["change"]["diff"]
+    assert "-enabled = False" in diff
+    assert "+enabled = True" in diff
+
+
 def test_workbench_chat_persists_intermediate_messages_between_tool_cards(
     client, search_env, monkeypatch,
 ):

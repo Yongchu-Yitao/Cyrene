@@ -448,5 +448,5 @@ function connectEvents() {
   }
 }
 
-bootstrapData().then(() => connectEvents());
+window.cyreneInitialDataReady = bootstrapData().then(() => connectEvents());
 setInterval(() => { refreshSessions(); refreshStatus(); refreshDashboard(); }, 15000);

@@ -976,6 +976,42 @@ class _BrowserSession:
                 return result
             return {"ok": False, "url": page.url, "title": await page.title(), "error": "Unable to inspect page.", "elements": []}
 
+    async def visible_link_matches(self, target_url: str) -> dict[str, Any]:
+        """Return rendered anchors whose resolved href equals *target_url*."""
+        if not await self._wait_for_control():
+            return {"ok": False, "url": self._safe_url(), "error": _USER_CONTROL_MSG, "matches": []}
+        async with self._action_lock:
+            page = await self.page()
+            result = await page.evaluate(
+                r"""(target) => {
+                    let normalizedTarget = '';
+                    try { normalizedTarget = new URL(target, location.href).href; }
+                    catch (_) { return {ok: false, error: 'Invalid target URL.', matches: []}; }
+                    const clean = (value, limit = 200) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+                    const matches = [];
+                    for (const el of Array.from(document.querySelectorAll('a[href]'))) {
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+                        if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+                        let href = '';
+                        try { href = new URL(el.getAttribute('href') || '', location.href).href; } catch (_) { continue; }
+                        if (href !== normalizedTarget) continue;
+                        const imageAlt = Array.from(el.querySelectorAll('img[alt]')).map((img) => img.getAttribute('alt') || '').join(' ');
+                        const text = clean(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || imageAlt);
+                        let refNumber = Number(el.getAttribute('data-cyrene-ref') || 0);
+                        if (!Number.isInteger(refNumber) || refNumber < 1) {
+                            refNumber = document.querySelectorAll('[data-cyrene-ref]').length + matches.length + 1;
+                            el.setAttribute('data-cyrene-ref', String(refNumber));
+                        }
+                        matches.push({ref: 'e' + refNumber, text, url: href});
+                    }
+                    return {ok: true, url: location.href, targetUrl: normalizedTarget, matches};
+                }""",
+                target_url,
+            )
+            return result if isinstance(result, dict) else {"ok": False, "error": "Visible-link scan failed.", "matches": []}
+
     async def _find_target(self, mode: str, value: str, *, exact: bool = False) -> dict[str, Any]:
         page = await self.page()
         result = await page.evaluate(
@@ -1841,6 +1877,32 @@ async def inspect_page(*, max_elements: int = 80, text_limit: int = 160) -> dict
         return await session.inspect(max_elements=max_elements, text_limit=text_limit)
     except Exception as exc:
         return {"ok": False, "error": browser_runtime_unavailable_message(exc), "elements": []}
+
+
+async def visible_link_matches(target_url: str) -> dict[str, Any]:
+    """Scan the current page for rendered anchors resolving to *target_url*."""
+    target_url = _normalize_http_url(target_url)
+    try:
+        _check_url(target_url)
+    except SSRFBlockedError as exc:
+        return {"ok": False, "error": str(exc), "matches": []}
+    if electron_browser_available():
+        try:
+            result = await _electron_browser_rpc("visibleLinkMatches", {"url": target_url}, timeout=10.0)
+            if not isinstance(result.get("matches"), list):
+                result["matches"] = []
+            return result
+        except Exception as exc:
+            return _electron_browser_failure(exc, matches=[])
+    if _ensure_playwright() is None:
+        return {"ok": False, "error": browser_runtime_unavailable_message(), "matches": []}
+    session = _get_session()
+    if session._page is None:
+        return {"ok": False, "error": "No page open. Call browser_navigate first.", "matches": []}
+    try:
+        return await session.visible_link_matches(target_url)
+    except Exception as exc:
+        return {"ok": False, "error": browser_runtime_unavailable_message(exc), "matches": []}
 
 
 async def click(selector: str) -> dict[str, Any]:

@@ -51,6 +51,22 @@ var WorkbenchChatModel = (function () {
     return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/subagents" + query, options);
   }
 
+  function getChanges(chatId, options) {
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) {
+      return Promise.resolve({ changeSets: [], fileCount: 0, additions: 0, deletions: 0 });
+    }
+    return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId) + "/changes", options);
+  }
+
+  function getChangeDiff(chatId, changeSetId, path, options) {
+    return apiJson(
+      "/api/workbench/chats/" + encodeURIComponent(chatId)
+        + "/changes/" + encodeURIComponent(changeSetId)
+        + "/files/" + String(path || "").split("/").map(encodeURIComponent).join("/"),
+      options
+    ).then(function (payload) { return payload.change || {}; });
+  }
+
   function getInbox(chatId, options) {
     if (!chatId || String(chatId).indexOf("legacy:") === 0) {
       return Promise.resolve({
@@ -144,6 +160,10 @@ var WorkbenchChatModel = (function () {
       else if (type === "saved" && handlers.onSaved) handlers.onSaved(event);
       else if (type === "awaiting_user" && handlers.onAwaitingUser) handlers.onAwaitingUser(event);
       else if (type === "guidance_received" && handlers.onGuidanceReceived) handlers.onGuidanceReceived(event);
+      else if (type === "workspace_changes") {
+        if (handlers.onWorkspaceChanges) handlers.onWorkspaceChanges(event);
+        try { window.dispatchEvent(new CustomEvent("workbench:workspace-changes", { detail: event })); } catch (e) {}
+      }
       else if (type === "interrupted" && handlers.onInterrupted) handlers.onInterrupted(event);
       else if (type === "error" && handlers.onError) handlers.onError(new Error(event.message || wbcT("settings.failed", "Failed")));
     }
@@ -236,6 +256,8 @@ var WorkbenchChatModel = (function () {
     createChat: createChat,
     getChat: getChat,
     getSubagents: getSubagents,
+    getChanges: getChanges,
+    getChangeDiff: getChangeDiff,
     getInbox: getInbox,
     renameChat: renameChat,
     deleteChat: deleteChat,
@@ -679,6 +701,46 @@ function wbcFileViewKind(file) {
   if (file.kind === "markdown" || ext === "md" || ext === "markdown") return "markdown";
   if (file.kind === "code" || WBC_CODE_EXTS.indexOf(ext) !== -1 || ct.indexOf("text/") === 0) return "code";
   return "download";
+}
+
+function wbcAttachmentVisualKind(file) {
+  var shared = window.WorkbenchFileVisual;
+  if (shared && typeof shared.visualKind === "function") return shared.visualKind(file);
+  return wbcFileViewKind(file) === "image" ? "image" : (wbcFileViewKind(file) || "file");
+}
+
+function wbcAttachmentVisual(file) {
+  var shared = window.WorkbenchFileVisual;
+  if (shared && typeof shared.icon === "function") {
+    return {
+      kind: wbcAttachmentVisualKind(file),
+      tone: typeof shared.tone === "function" ? shared.tone(file) : "slate",
+      icon: shared.icon(file),
+    };
+  }
+  return { kind: wbcAttachmentVisualKind(file), tone: "slate", icon: WBC_ICONS.file };
+}
+
+function wbcAttachmentTypeLabel(file) {
+  var kind = wbcAttachmentVisualKind(file);
+  var fallbacks = {
+    pdf: "PDF document",
+    doc: "Word document",
+    sheet: "Spreadsheet",
+    slide: "Presentation",
+    markdown: "Markdown",
+    link: "Link",
+    code: "Code file",
+    map: "Map data",
+    note: "Text file",
+    file: "File",
+  };
+  return wbcT("workbenchChat.attachmentType." + kind, fallbacks[kind] || fallbacks.file);
+}
+
+function WbcFileVisual({ file, className }) {
+  var visual = wbcAttachmentVisual(file);
+  return <span className={(className || "wbc-file-visual") + " " + visual.tone} aria-hidden="true">{visual.icon}</span>;
 }
 
 function wbcCanOpenExternally(file) {
@@ -1832,6 +1894,9 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     if (!window.__sseHandlers) return;
     function onEvent(event) {
       if (!event) return;
+      if (event.type === "workspace_changes") {
+        try { window.dispatchEvent(new CustomEvent("workbench:workspace-changes", { detail: event })); } catch (e) {}
+      }
       if (event.type === "workbench_proactive_message") {
         if (String(event.project_id || "") !== String(projectIdRef.current || "")) return;
         var proactiveChatId = String(event.chat_id || event.session_id || "");
@@ -2580,7 +2645,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
 // Conversation main (column 3)
 // ---------------------------------------------------------------------------
 
-function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mode, runtime, running, onSend, onGuidance, onInterrupt, onMinimize, onMaximize, onRestore, onTakeoverComplete }) {
+function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mode, runtime, running, latestAssistantReplyId, latestAssistantReplyText, onSend, onGuidance, onInterrupt, onMinimize, onMaximize, onRestore, onTakeoverComplete }) {
   var shellRef = useWbcRef(null);
   var frameRef = useWbcRef(null);
   var interactionRef = useWbcRef(null);
@@ -2591,21 +2656,39 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var [fullscreenDraft, setFullscreenDraft] = useWbcState("");
   var [fullscreenStatusRequested, setFullscreenStatusRequested] = useWbcState(false);
   var [fullscreenSubmitting, setFullscreenSubmitting] = useWbcState(false);
+  var [fullscreenFinalReply, setFullscreenFinalReply] = useWbcState("");
   var [chatOverlayThemeRevision, setChatOverlayThemeRevision] = useWbcState(0);
+  var fullscreenFinalReplyTimerRef = useWbcRef(null);
+  var fullscreenReplyBaselineRef = useWbcRef("");
   var effectiveMode = mode || "pip";
   var displayBrowserState = nativeBrowserState || browserState || {};
   var hasNoBrowserTabs = Array.isArray(displayBrowserState.tabs) && displayBrowserState.tabs.length === 0;
   var browserBridge = window.cyrene && window.cyrene.browser;
   var hasNativeChatOverlay = !!(browserBridge && typeof browserBridge.setChatOverlay === "function");
+  var fullscreenSavedReply = !running && !fullscreenSubmitting
+    && String(latestAssistantReplyId || "")
+    && String(latestAssistantReplyId || "") !== fullscreenReplyBaselineRef.current
+    ? String(latestAssistantReplyText || "").replace(/\s+/g, " ").trim()
+    : "";
+  var fullscreenCompletedReply = fullscreenFinalReply || fullscreenSavedReply;
   var fullscreenStatusVisible = effectiveMode === "maximized"
     && fullscreenStatusRequested
-    && (!!running || fullscreenSubmitting);
-  var fullscreenStatusText = wbcBrowserFullscreenStatusText(runtime);
+    && (!!running || fullscreenSubmitting || !!fullscreenCompletedReply);
+  var fullscreenStatusText = fullscreenCompletedReply || wbcBrowserFullscreenStatusText(runtime);
+
+  function clearFullscreenFinalReplyTimer() {
+    if (!fullscreenFinalReplyTimerRef.current) return;
+    clearTimeout(fullscreenFinalReplyTimerRef.current);
+    fullscreenFinalReplyTimerRef.current = null;
+  }
 
   function sendFullscreenChatText(value) {
     var text = String(value || "").trim();
     if (!text) return;
     var wasRunning = !!running;
+    clearFullscreenFinalReplyTimer();
+    fullscreenReplyBaselineRef.current = String(latestAssistantReplyId || "");
+    setFullscreenFinalReply("");
     setFullscreenStatusRequested(true);
     setFullscreenSubmitting(true);
     var request;
@@ -2781,16 +2864,40 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   // compact composer opt into the live status pill; runs that were already in
   // progress before maximizing therefore do not create unsolicited chrome.
   useWbcEffect(function () {
+    clearFullscreenFinalReplyTimer();
     setFullscreenDraft("");
     setFullscreenStatusRequested(false);
     setFullscreenSubmitting(false);
+    setFullscreenFinalReply("");
+    fullscreenReplyBaselineRef.current = String(latestAssistantReplyId || "");
+    return clearFullscreenFinalReplyTimer;
   }, [effectiveMode, browserSessionId]);
 
-  // The runtime disappears as soon as a reply/tool run settles. Remove the
-  // status at the same transition and return the reserved pixels to the page.
+  // A saved assistant message lands in the durable transcript at the same time
+  // the live runtime disappears. Keep that final reply in the compact status
+  // pill briefly, then remove the pill and return its pixels to the page. Runs
+  // that finish without a textual reply retain the old immediate-hide behavior
+  // after a short grace period for the saved message update to arrive.
   useWbcEffect(function () {
-    if (!running && !fullscreenSubmitting) setFullscreenStatusRequested(false);
-  }, [running, fullscreenSubmitting]);
+    if (effectiveMode !== "maximized" || !fullscreenStatusRequested) return undefined;
+    if (running || fullscreenSubmitting || fullscreenFinalReply) return undefined;
+    var replyId = String(latestAssistantReplyId || "");
+    var replyText = String(latestAssistantReplyText || "").replace(/\s+/g, " ").trim();
+    if (replyText && replyId && replyId !== fullscreenReplyBaselineRef.current) {
+      setFullscreenFinalReply(replyText);
+      clearFullscreenFinalReplyTimer();
+      fullscreenFinalReplyTimerRef.current = setTimeout(function () {
+        fullscreenFinalReplyTimerRef.current = null;
+        setFullscreenFinalReply("");
+        setFullscreenStatusRequested(false);
+      }, 5000);
+      return undefined;
+    }
+    var settleTimer = setTimeout(function () {
+      setFullscreenStatusRequested(false);
+    }, 1200);
+    return function () { clearTimeout(settleTimer); };
+  }, [effectiveMode, running, fullscreenSubmitting, fullscreenStatusRequested, fullscreenFinalReply, latestAssistantReplyId, latestAssistantReplyText]);
 
   // Electron's live page is a native WebContentsView and therefore composites
   // above renderer DOM. Its compact chat is a second transparent native view,
@@ -2849,6 +2956,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       running: !!running,
       showStatus: fullscreenStatusVisible,
       statusText: fullscreenStatusText,
+      statusComplete: !!fullscreenCompletedReply,
       placeholder: wbcT("workbenchChat.browserChatPlaceholder", "Tell Agent what to do in the browser…"),
       placeholderRunning: wbcT("workbenchChat.browserChatPlaceholderRunning", "Add an instruction…"),
       sendLabel: wbcT("workbenchChat.send", "Send"),
@@ -2866,7 +2974,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
         red: color("--wb-red", "#d84848"),
       },
     }).catch(function () {});
-  }, [hasNativeChatOverlay, browserSessionId, visible, effectiveMode, running, fullscreenStatusVisible, fullscreenStatusText, chatOverlayThemeRevision]);
+  }, [hasNativeChatOverlay, browserSessionId, visible, effectiveMode, running, fullscreenStatusVisible, fullscreenStatusText, fullscreenCompletedReply, chatOverlayThemeRevision]);
 
   useWbcEffect(function () {
     if (!hasNativeChatOverlay) return undefined;
@@ -2978,7 +3086,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
         {effectiveMode === "maximized" && !hasNativeChatOverlay && (
           <div className="wbc-browser-fullscreen-chat">
             {fullscreenStatusVisible && (
-              <div className="wbc-browser-fullscreen-status" role="status" aria-live="polite">
+              <div className={"wbc-browser-fullscreen-status" + (fullscreenCompletedReply ? " completed" : "")} role="status" aria-live="polite">
                 <span className="wbc-browser-fullscreen-status-dot" aria-hidden="true" />
                 <span>{fullscreenStatusText}</span>
               </div>
@@ -3039,6 +3147,16 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     if (key) activityTraceKeys.add(key);
   });
   var isLegacy = !!(chat && chat.legacy);
+  var latestAssistantReplyId = "";
+  var latestAssistantReplyText = "";
+  for (var di = durableMessages.length - 1; di >= 0; di--) {
+    var durableMessage = durableMessages[di] || {};
+    var durableContent = String(durableMessage.content || "").trim();
+    if (durableMessage.role !== "assistant" || !durableContent) continue;
+    latestAssistantReplyId = String(durableMessage.id || durableMessage.createdAt || ("assistant-" + di));
+    latestAssistantReplyText = durableContent;
+    break;
+  }
   var lastAssistantId = "";
   var lastUserId = "";
   for (var mi = messages.length - 1; mi >= 0; mi--) {
@@ -3175,6 +3293,8 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
           mode={browserWindowMode}
           runtime={runtime}
           running={running}
+          latestAssistantReplyId={latestAssistantReplyId}
+          latestAssistantReplyText={latestAssistantReplyText}
           onSend={onSend}
           onGuidance={onGuidance}
           onInterrupt={onInterrupt}
@@ -3408,9 +3528,26 @@ function WbcMessageAttachment({ file, onOpenFile }) {
       />
     );
   }
+  var canOpen = !!(onOpenFile && file.url);
+  var content = (
+    <>
+      <WbcFileVisual file={file} />
+      <span className="wbc-attach-file-meta">
+        <b title={file.name}>{file.name || "file"}</b>
+        <small>{wbcAttachmentTypeLabel(file)}</small>
+      </span>
+      {canOpen ? (
+        <span className="wbc-attach-file-open">
+          <span>{wbcT("workbenchChat.openPreview", "Open preview")}</span>
+          {WBC_ICONS.chevronsRight}
+        </span>
+      ) : null}
+    </>
+  );
+  if (!canOpen) return <div className="wbc-attach-file">{content}</div>;
   return (
-    <button type="button" className="wbc-attach-chip" onClick={open} title={wbcT("workbenchChat.viewInSide", "View on the right")}>
-      {WBC_ICONS.file}{file.name || "file"}
+    <button type="button" className="wbc-attach-file" onClick={open} title={wbcT("workbenchChat.viewInSide", "View on the right")}>
+      {content}
     </button>
   );
 }
@@ -3464,13 +3601,6 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessag
     return (
       <div className="wbc-msg user editing">
         <div className="wbc-bubble wbc-edit-bubble">
-          {attachments.length > 0 && (
-            <div className="wbc-msg-attachments">
-              {attachments.map(function (file, i) {
-                return <WbcMessageAttachment key={file.id || file.url || i} file={file} onOpenFile={onOpenFile} />;
-              })}
-            </div>
-          )}
           <textarea
             ref={taRef}
             className="wbc-edit-textarea"
@@ -3479,6 +3609,13 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessag
             onKeyDown={onEditKeyDown}
             placeholder={wbcT("workbenchChat.editPlaceholder", "Edit your message...")}
           />
+          {attachments.length > 0 && (
+            <div className={"wbc-msg-attachments" + (draft.trim() ? " after-copy" : "")}>
+              {attachments.map(function (file, i) {
+                return <WbcMessageAttachment key={file.id || file.url || i} file={file} onOpenFile={onOpenFile} />;
+              })}
+            </div>
+          )}
           <div className="wbc-edit-actions">
             <button type="button" className="wb-btn ghost" onClick={cancelEdit}>{wbcT("common.cancel", "Cancel")}</button>
             <button type="button" className="wb-btn primary" onClick={saveEdit} disabled={!draft.trim()}>{wbcT("workbenchChat.editSave", "Save & send")}</button>
@@ -3493,14 +3630,14 @@ function WbcUserMessage({ msg, onOpenFile, onEditMessage, canEdit, onRetryMessag
       <div className="wbc-msg-row">
         <time>{wbcFormatTime(msg.createdAt)}</time>
         <div className="wbc-bubble">
+          {msg.content ? <p>{msg.content}</p> : null}
           {attachments.length > 0 && (
-            <div className="wbc-msg-attachments">
+            <div className={"wbc-msg-attachments" + (msg.content ? " after-copy" : "")}>
               {attachments.map(function (file, i) {
                 return <WbcMessageAttachment key={file.id || file.url || i} file={file} onOpenFile={onOpenFile} />;
               })}
             </div>
           )}
-          {msg.content ? <p>{msg.content}</p> : null}
         </div>
       </div>
       {((canEdit && onEditMessage) || onRetryMessage) && (
@@ -4173,14 +4310,20 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
               var attachmentKey = String(file.id || file.url || i);
               var showImagePreview = isImg && file.url && !failedImagePreviews[attachmentKey];
               return (
-                <div className={"wbc-attach-card" + (showImagePreview ? " image" : "")} key={attachmentKey}>
+                <div className={"wbc-attach-card" + (showImagePreview ? " image" : " file")} key={attachmentKey}>
                   {showImagePreview
                     ? <img src={file.url} alt="" onError={function () {
                         setFailedImagePreviews(function (prev) {
                           return Object.assign({}, prev, { [attachmentKey]: true });
                         });
                       }} />
-                    : <span className="wbc-attach-name" title={file.name}>{file.name || "file"}</span>}
+                    : <>
+                        <WbcFileVisual file={file} className="wbc-composer-file-visual" />
+                        <span className="wbc-attach-file-meta">
+                          <b title={file.name}>{file.name || "file"}</b>
+                          <small>{wbcAttachmentTypeLabel(file)}</small>
+                        </span>
+                      </>}
                   <button type="button" className="wbc-attach-x" onClick={function () {
                     setAttachments(attachments.filter(function (_f, idx) { return idx !== i; }));
                   }} aria-label={wbcT("workbenchChat.removeAttachment", "Remove attachment")}>{WBC_ICONS.x}</button>
@@ -4554,6 +4697,16 @@ function WbcBranchTab({ chats, activeChatId, onSelectChat }) {
 // Right context panel (column 4)
 // ---------------------------------------------------------------------------
 
+function wbcChatArtifactFiles(chat) {
+  var files = [];
+  (chat && chat.messages || []).forEach(function (msg) {
+    (msg.attachments || []).forEach(function (file) {
+      if (file) files.push({ file: file, role: msg.role });
+    });
+  });
+  return files;
+}
+
 function WbcSide({
   project,
   chat,
@@ -4582,11 +4735,57 @@ function WbcSide({
   onToggleSide,
 }) {
   if (typeof window.useDataVersion === "function") window.useDataVersion();
+  var [changesAvailability, setChangesAvailability] = useWbcState({ chatId: "", hasChanges: false });
+  var hasWorkspaceChanges = (
+    String(changesAvailability.chatId || "") === String(activeChatId || "")
+    && !!changesAvailability.hasChanges
+  );
+
+  useWbcEffect(function () {
+    var currentChatId = String(activeChatId || "");
+    var disposed = false;
+    setChangesAvailability({ chatId: currentChatId, hasChanges: false });
+    if (!currentChatId || currentChatId.indexOf("legacy:") === 0) return undefined;
+
+    function revealFromEvent(event) {
+      var detail = (event && event.detail) || {};
+      var eventChatId = String(detail.chatId || detail.session_id || "");
+      if (eventChatId && eventChatId !== currentChatId) return;
+      if (Number(detail.fileCount || 0) > 0) {
+        setChangesAvailability({ chatId: currentChatId, hasChanges: true });
+      }
+    }
+
+    window.addEventListener("workbench:workspace-changes", revealFromEvent);
+    WorkbenchChatModel.getChanges(currentChatId, { toast: false })
+      .then(function (payload) {
+        if (disposed) return;
+        var sets = Array.isArray(payload && payload.changeSets) ? payload.changeSets : [];
+        setChangesAvailability(function (current) {
+          if (String(current.chatId || "") === currentChatId && current.hasChanges) return current;
+          return { chatId: currentChatId, hasChanges: sets.length > 0 };
+        });
+      })
+      .catch(function () {
+        if (!disposed) {
+          setChangesAvailability(function (current) {
+            if (String(current.chatId || "") === currentChatId && current.hasChanges) return current;
+            return { chatId: currentChatId, hasChanges: false };
+          });
+        }
+      });
+    return function () {
+      disposed = true;
+      window.removeEventListener("workbench:workspace-changes", revealFromEvent);
+    };
+  }, [activeChatId]);
+
   var browserState = wbcBrowserStateForChat(activeChatId);
   var browserMarkedActive = !!(browserActiveByChat && browserActiveByChat[activeChatId]);
   var browserPanelState = browserState || {};
   var hasMap = wbcChatUsedMap(chat, runtime);
   var hasBrowser = !!((browserState && browserState.active) || browserMarkedActive);
+  var hasArtifacts = wbcChatArtifactFiles(chat).length > 0;
   var hasBranches = useWbcMemo(function () {
     return !!wbcBranchLineage(chats, activeChatId);
   }, [chats, activeChatId]);
@@ -4604,13 +4803,16 @@ function WbcSide({
   if (pendingPlan) tabs.push({ id: "plan", label: wbcT("chat.side.plan", "Plan") });
   if (hasSubagents) tabs.push({ id: "subagents", label: wbcT("workbenchChat.subagents", "Subagents") });
   tabs.push({ id: "context", label: wbcT("workbenchChat.context", "Context") });
-  tabs.push({ id: "artifacts", label: wbcT("workbenchChat.artifacts", "Artifacts") });
+  if (hasArtifacts) tabs.push({ id: "artifacts", label: wbcT("workbenchChat.artifacts", "Artifacts") });
+  if (hasWorkspaceChanges) {
+    tabs.push({ id: "changes", label: wbcT("workbenchChat.changes", "Changes") });
+  }
   if (hasBranches) tabs.push({ id: "branches", label: wbcT("chat.side.branches", "Branches") });
   if (viewerFile) tabs.push({ id: "viewer", label: wbcT("workbenchChat.viewer", "Viewer") });
   if (hasMap) tabs.push({ id: "map", label: wbcT("chat.side.map", "Map") });
   if (hasBrowser) tabs.push({ id: "browser", label: wbcT("chat.side.browser", "Browser") });
   var activeTab = tabs.some(function (item) { return item.id === tab; }) ? tab : "overview";
-  var flush = activeTab === "viewer" || activeTab === "map" || activeTab === "browser";
+  var flush = activeTab === "viewer" || activeTab === "map" || activeTab === "browser" || activeTab === "changes";
   return (
     <aside className="wbc-side">
       {window.WbColResizer ? React.createElement(window.WbColResizer) : null}
@@ -4638,6 +4840,7 @@ function WbcSide({
         )}
         {activeTab === "context" && <WbcContextTab project={project} chat={chat} runtime={runtime} />}
         {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} onOpenFile={onOpenFile} />}
+        {activeTab === "changes" && <WbcChangesTab chatId={activeChatId} />}
         {activeTab === "branches" && <WbcBranchTab chats={chats} activeChatId={activeChatId} onSelectChat={onSelectChat} />}
         {activeTab === "viewer" && <WbcViewerTab file={viewerFile} />}
         {activeTab === "map" && <WbcMapTab chatId={chat ? chat.id : ""} active={true} />}
@@ -4654,6 +4857,166 @@ function WbcSide({
         )}
       </div>
     </aside>
+  );
+}
+
+function wbcChangeTypeLabel(changeType) {
+  if (changeType === "created") return wbcT("workbenchChat.changes.created", "Created");
+  if (changeType === "deleted") return wbcT("workbenchChat.changes.deleted", "Deleted");
+  return wbcT("workbenchChat.changes.modified", "Modified");
+}
+
+function WbcChangesTab({ chatId }) {
+  var [payload, setPayload] = useWbcState({ changeSets: [], fileCount: 0, additions: 0, deletions: 0 });
+  var [loading, setLoading] = useWbcState(true);
+  var [error, setError] = useWbcState("");
+  var [selectedSetId, setSelectedSetId] = useWbcState("");
+  var [selectedPath, setSelectedPath] = useWbcState("");
+  var [diffState, setDiffState] = useWbcState({ loading: false, diff: "", error: "", change: null });
+  var refreshTimerRef = useWbcRef(null);
+  var chatIdRef = useWbcRef(chatId);
+  var refreshSeqRef = useWbcRef(0);
+  chatIdRef.current = chatId;
+
+  function refresh(background) {
+    if (!chatId) return Promise.resolve(null);
+    var requestedChatId = String(chatId);
+    var requestSeq = ++refreshSeqRef.current;
+    if (!background) setLoading(true);
+    setError("");
+    return WorkbenchChatModel.getChanges(chatId, { toast: false })
+      .then(function (next) {
+        if (String(chatIdRef.current || "") !== requestedChatId || refreshSeqRef.current !== requestSeq) return null;
+        var sets = Array.isArray(next.changeSets) ? next.changeSets : [];
+        setPayload(next);
+        setSelectedSetId(function (current) {
+          return sets.some(function (item) { return item.id === current; })
+            ? current
+            : (sets[0] ? sets[0].id : "");
+        });
+        return next;
+      })
+      .catch(function (err) {
+        if (String(chatIdRef.current || "") === requestedChatId && refreshSeqRef.current === requestSeq) setError(wbcErrorText(err));
+        return null;
+      })
+      .finally(function () {
+        if (String(chatIdRef.current || "") === requestedChatId && refreshSeqRef.current === requestSeq) setLoading(false);
+      });
+  }
+
+  useWbcEffect(function () {
+    setPayload({ changeSets: [], fileCount: 0, additions: 0, deletions: 0 });
+    setSelectedSetId("");
+    setSelectedPath("");
+    setDiffState({ loading: false, diff: "", error: "", change: null });
+    refreshSeqRef.current += 1;
+    refresh(false);
+  }, [chatId]);
+
+  useWbcEffect(function () {
+    function onChanges(event) {
+      var detail = (event && event.detail) || {};
+      var eventChatId = String(detail.chatId || detail.session_id || "");
+      if (eventChatId && eventChatId !== String(chatId || "")) return;
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = setTimeout(function () { refresh(true); }, 80);
+    }
+    window.addEventListener("workbench:workspace-changes", onChanges);
+    return function () {
+      window.removeEventListener("workbench:workspace-changes", onChanges);
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    };
+  }, [chatId]);
+
+  var changeSets = Array.isArray(payload.changeSets) ? payload.changeSets : [];
+  var selectedSet = changeSets.find(function (item) { return item.id === selectedSetId; }) || changeSets[0] || null;
+  var files = selectedSet && Array.isArray(selectedSet.files) ? selectedSet.files : [];
+  var summary = selectedSet || payload;
+
+  useWbcEffect(function () {
+    if (!files.length) {
+      setSelectedPath("");
+      return;
+    }
+    if (!files.some(function (item) { return item.path === selectedPath; })) {
+      setSelectedPath(files[0].path);
+    }
+  }, [selectedSetId, files.map(function (item) { return item.path; }).join("|")]);
+
+  useWbcEffect(function () {
+    if (!selectedSet || !selectedPath) {
+      setDiffState({ loading: false, diff: "", error: "", change: null });
+      return;
+    }
+    var cancelled = false;
+    setDiffState({ loading: true, diff: "", error: "", change: null });
+    WorkbenchChatModel.getChangeDiff(chatId, selectedSet.id, selectedPath, { toast: false })
+      .then(function (change) {
+        if (!cancelled) setDiffState({ loading: false, diff: String(change.diff || ""), error: "", change: change });
+      })
+      .catch(function (err) {
+        if (!cancelled) setDiffState({ loading: false, diff: "", error: wbcErrorText(err), change: null });
+      });
+    return function () { cancelled = true; };
+  }, [chatId, selectedSet && selectedSet.id, selectedPath]);
+
+  return (
+    <div className="wbc-changes-tab">
+      <div className="wbc-changes-toolbar">
+        <div className="wbc-changes-summary">
+          <b>{summary.fileCount || 0}</b>
+          <span>{wbcT("workbenchChat.changes.files", "files")}</span>
+          <i className="add">+{summary.additions || 0}</i>
+          <i className="del">−{summary.deletions || 0}</i>
+        </div>
+        {changeSets.length > 1 && (
+          <select value={selectedSet ? selectedSet.id : ""} onChange={function (event) { setSelectedSetId(event.target.value); }}>
+            {changeSets.map(function (item, index) {
+              return <option value={item.id} key={item.id}>{index === 0 ? wbcT("workbenchChat.changes.latestRun", "Latest run") : wbcFormatTime(item.completedAt)}</option>;
+            })}
+          </select>
+        )}
+      </div>
+      {loading && !changeSets.length ? (
+        <p className="workbench-muted wbc-changes-state">{wbcT("workbenchChat.changes.loading", "Loading changes...")}</p>
+      ) : error ? (
+        <div className="wbc-changes-state"><p className="workbench-muted">{error}</p><button type="button" className="wb-btn ghost" onClick={function () { refresh(false); }}>{wbcT("workbenchChat.error.retry", "Retry")}</button></div>
+      ) : !changeSets.length ? (
+        <div className="wbc-changes-empty">
+          <b>{wbcT("workbenchChat.changes.emptyTitle", "No agent changes yet")}</b>
+          <p>{wbcT("workbenchChat.changes.emptyBody", "Files created, edited, or deleted by future agent runs will appear here automatically.")}</p>
+        </div>
+      ) : (
+        <React.Fragment>
+          <div className="wbc-changes-files">
+            {files.map(function (item) {
+              var active = item.path === selectedPath;
+              return (
+                <button type="button" key={item.id || item.path} className={"wbc-change-file " + item.changeType + (active ? " active" : "")} onClick={function () { setSelectedPath(item.path); }}>
+                  <span className="wbc-change-file-path" title={item.path}>{item.path}</span>
+                  <small>{wbcChangeTypeLabel(item.changeType)}</small>
+                  <span className="wbc-change-file-lines"><i>+{item.additions || 0}</i><em>−{item.deletions || 0}</em></span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="wbc-change-diff">
+            {diffState.loading ? (
+              <p className="workbench-muted wbc-changes-state">{wbcT("workbenchChat.changes.loadingDiff", "Loading diff...")}</p>
+            ) : diffState.error ? (
+              <p className="workbench-muted wbc-changes-state">{diffState.error}</p>
+            ) : diffState.diff && typeof DiffViewerPanel !== "undefined" ? (
+              <DiffViewerPanel diff={diffState.diff} mode="text" hideHeader={true} hideHunkHeaders={true} />
+            ) : diffState.change && diffState.change.binary ? (
+              <p className="workbench-muted wbc-changes-state">{wbcT("workbenchChat.changes.binary", "Binary or large file changed; text diff is unavailable.")}</p>
+            ) : (
+              <p className="workbench-muted wbc-changes-state">{wbcT("workbenchChat.changes.noDiff", "No text diff is available.")}</p>
+            )}
+          </div>
+        </React.Fragment>
+      )}
+    </div>
   );
 }
 
@@ -5024,6 +5387,7 @@ function WbcPdfJsViewer({ file, url }) {
   var [failReason, setFailReason] = useWbcState("");
   var [analyzing, setAnalyzing] = useWbcState(false);
   var [analysisResult, setAnalysisResult] = useWbcState("");
+  var analyzeButtonRef = useWbcRef(null);
 
   useWbcEffect(function () {
     var container = containerRef.current;
@@ -5033,12 +5397,14 @@ function WbcPdfJsViewer({ file, url }) {
 
     var cancelled = false;
     var abortLoader = new AbortController();
+    var loadTimedOut = false;
     var timer = setTimeout(function () {
-      abortLoader.abort();
-      setFailReason('timeout (15s)');
+      loadTimedOut = true;
+      abortLoader.abort(new DOMException('PDF loading timed out', 'TimeoutError'));
+      setFailReason('timeout (60s)');
       setFailed(true);
       setLoading(false);
-    }, 15000);
+    }, 60000);
 
     var result = window.pdfjsSetupViewer(container);
     var viewer = result.viewer;
@@ -5067,7 +5433,12 @@ function WbcPdfJsViewer({ file, url }) {
       setLoading(false);
       setScale(viewer.currentScale);
     }).catch(function (err) {
-      if (!cancelled) { clearTimeout(timer); setFailReason(String(err && err.message || err)); setFailed(true); setLoading(false); }
+      if (!cancelled) {
+        clearTimeout(timer);
+        setFailReason(loadTimedOut ? 'timeout (60s)' : String(err && err.message || err));
+        setFailed(true);
+        setLoading(false);
+      }
     });
 
     return function () {
@@ -5100,23 +5471,73 @@ function WbcPdfJsViewer({ file, url }) {
   // Text selection → agent analysis
   function analyzePdfText() {
     var text = window.pdfjsGetSelectedText(containerRef.current).trim();
-    if (!text) return;
+    if (!text || analyzing) return;
+    var language = window.WorkbenchI18n && window.WorkbenchI18n.getLang
+      ? window.WorkbenchI18n.getLang()
+      : "en";
 
     setAnalyzing(true);
+    setAnalysisResult('');
 
-    fetch('/api/pdf/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text, pdf_name: file ? file.name || 'PDF' : 'PDF' }),
-    }).then(function (r) { return r.json(); })
+    if (!window.pdfjsBuildAnalysisInventory || !window.pdfjsExtractAnalysisContext) {
+      setAnalysisResult(wbcT(
+        "workbenchChat.pdfAnalysisFailed",
+        "Analysis failed: {error}",
+        { error: wbcT("workbenchChat.pdfAnalysisUnavailable", "PDF context tools unavailable") }
+      ));
+      setAnalyzing(false);
+      return;
+    }
+
+    window.pdfjsBuildAnalysisInventory(containerRef.current, viewerRef.current, pageNum)
+      .then(function (inventory) {
+        return fetch('/api/pdf/context-plan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: text,
+            pdf_name: file ? file.name || 'PDF' : 'PDF',
+            lang: language,
+            inventory: inventory,
+          }),
+        }).then(function (response) { return response.json(); })
+          .then(function (plan) {
+            if (plan.error) throw new Error(plan.error);
+            return window.pdfjsExtractAnalysisContext(
+              viewerRef.current,
+              plan.page_numbers,
+              inventory,
+              plan.reason
+            );
+          });
+      })
+      .then(function (context) {
+        return fetch('/api/pdf/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: text,
+            pdf_name: file ? file.name || 'PDF' : 'PDF',
+            lang: language,
+            context: context,
+          }),
+        });
+      })
+      .then(function (r) { return r.json(); })
       .then(function (data) {
-        setAnalysisResult(data.result || data.error || '(no result)');
+        if (data.error) throw new Error(data.error);
+        setAnalysisResult(data.result || wbcT("workbenchChat.pdfAnalysisEmpty", "No result"));
         var sel = window.getSelection();
         if (sel) sel.removeAllRanges();
       }).catch(function (err) {
-        setAnalysisResult('Analysis failed: ' + err.message);
+        setAnalysisResult(wbcT(
+          "workbenchChat.pdfAnalysisFailed",
+          "Analysis failed: {error}",
+          { error: err.message }
+        ));
       }).finally(function () {
         setAnalyzing(false);
+        if (analyzeButtonRef.current) analyzeButtonRef.current.style.display = 'none';
       });
   }
 
@@ -5135,7 +5556,7 @@ function WbcPdfJsViewer({ file, url }) {
           {pageNum} / {pageCount}
         </span>
       )}
-      {url ? <a className="wbc-viewer-open" href={"/pdf/viewer?url=" + encodeURIComponent(url) + "&name=" + encodeURIComponent((file && file.name) || "PDF")} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
+      {url ? <a className="wbc-viewer-open" href={"/pdf/viewer?url=" + encodeURIComponent(url) + "&name=" + encodeURIComponent((file && file.name) || "PDF") + "&lang=" + encodeURIComponent(window.WorkbenchI18n && window.WorkbenchI18n.getLang ? window.WorkbenchI18n.getLang() : "en")} target="_blank" rel="noreferrer" title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}>↗</a> : null}
       {file ? wbcDownloadLink(file, { className: "wbc-viewer-download" }) : null}
     </div>
   );
@@ -5145,7 +5566,7 @@ function WbcPdfJsViewer({ file, url }) {
       if (loading || failed) return;
       setTimeout(function () {
         if (window.pdfjsGetSelectedText(containerRef.current).trim()) {
-          document.getElementById('wbc-pdf-analyze-btn') && (document.getElementById('wbc-pdf-analyze-btn').style.display = 'block');
+          if (analyzeButtonRef.current) analyzeButtonRef.current.style.display = 'inline-flex';
         }
       }, 200);
     }}>
@@ -5167,15 +5588,28 @@ function WbcPdfJsViewer({ file, url }) {
         </div>
       )}
 
-      <button id="wbc-pdf-analyze-btn" style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 200, background: '#4a90d9', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 16px', fontSize: 13, cursor: 'pointer', display: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}
+      <button ref={analyzeButtonRef} id="wbc-pdf-analyze-btn" className="wbc-pdf-analyze" style={{ display: 'none' }}
         onClick={analyzePdfText}
-      >{analyzing ? '分析中…' : '分析选中的文字'}</button>
+        disabled={analyzing}
+      >
+        {analyzing ? <span className="wbc-pdf-analysis-spinner" aria-hidden="true" /> : null}
+        <span>{analyzing
+          ? wbcT("workbenchChat.pdfAnalyzing", "Analyzing…")
+          : wbcT("workbenchChat.pdfAnalyze", "Analyze selection")}</span>
+      </button>
 
-      {analysisResult ? (
-        <div style={{ position: 'fixed', bottom: 60, right: 16, zIndex: 200, width: 360, maxHeight: '50vh', overflowY: 'auto', background: '#2a2a2a', color: '#e0e0e0', borderRadius: 8, padding: 12, fontSize: 13, lineHeight: 1.5, boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
-          <button style={{ float: 'right', background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: 16 }} onClick={function () { setAnalysisResult(''); }}>×</button>
-          <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{analysisResult}</div>
-        </div>
+      {(analyzing || analysisResult) ? (
+        <section className="wbc-pdf-analysis" role="region" aria-live="polite" aria-label={wbcT("workbenchChat.pdfAnalysisTitle", "PDF analysis")}>
+          {!analyzing ? <button type="button" className="wbc-pdf-analysis-close" aria-label={wbcT("workbenchChat.pdfAnalysisClose", "Close PDF analysis")} onClick={function () { setAnalysisResult(''); }}>×</button> : null}
+          {analyzing ? (
+            <div className="wbc-pdf-analysis-loading">
+              <span className="wbc-pdf-analysis-spinner" aria-hidden="true" />
+              <span>{wbcT("workbenchChat.pdfAnalysisLoading", "Agent is choosing and reading the relevant PDF context…")}</span>
+            </div>
+          ) : (
+            <div className="wbc-pdf-analysis-body markdown wbc-msg-body" dangerouslySetInnerHTML={{ __html: wbcRenderMarkdown(analysisResult) }} />
+          )}
+        </section>
       ) : null}
     </div>
   );
@@ -6094,10 +6528,7 @@ function WbcContextTab({ project, chat, runtime }) {
 }
 
 function WbcArtifactsTab({ chat, onOpenFile }) {
-  var files = [];
-  (chat && chat.messages || []).forEach(function (msg) {
-    (msg.attachments || []).forEach(function (file) { files.push({ file: file, role: msg.role }); });
-  });
+  var files = wbcChatArtifactFiles(chat);
   return (
     <div className="workbench-side-stack">
       <section className="workbench-side-section">

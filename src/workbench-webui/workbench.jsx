@@ -664,6 +664,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   // notification callbacks (interval / SSE closures captured once on mount).
   var activeViewRef = useWorkbenchRef({ page: null, taskView: "board", chatId: "", sessionId: "" });
   var sessionLoadSeqRef = useWorkbenchRef(0);
+  var launchReadyRef = useWorkbenchRef(false);
   var menuActionsRef = useWorkbenchRef({ createProject: function () {}, createSession: function () {}, onToggleTheme: function () {} });
 
   function projectForSession(snapshot, sessionId) {
@@ -920,6 +921,19 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     reloadWorkbench();
     reloadNotifications();
   }, []);
+
+  // Keep the static launch screen above the renderer until the workbench's
+  // initial project payload and the shared UI bootstrap have both settled.
+  useWorkbenchEffect(function () {
+    if (loading || launchReadyRef.current) return undefined;
+    launchReadyRef.current = true;
+    Promise.resolve(window.cyreneInitialDataReady)
+      .catch(function () {})
+      .then(function () {
+        if (typeof window.markCyreneReady === "function") window.markCyreneReady();
+      });
+    return undefined;
+  }, [loading]);
 
   // Any renderer overlay must temporarily detach the native browser view.
   // The coordinator also covers topbar popovers, which cannot rely on CSS
@@ -2167,6 +2181,9 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
   );
 }
 
+// Temporarily keep sign-out unavailable until the authentication flow is ready.
+var WB_ACCOUNT_LOGOUT_VISIBLE = false;
+
 function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggleCollapse, onSelectProject, onCreateProject, onEditProject, onDeleteProject, onOpenPage, onSettings }) {
   var { t } = window.useWorkbenchI18n();
   window.useDataVersion();  // re-render chip when DATA.user changes (profile save); data.js loads before this bundle
@@ -2422,11 +2439,15 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               {t("rail.profile")}
             </button>
-            <div className="wb-account-menu-divider"></div>
-            <button type="button" className="danger" onClick={function () { setAccountMenuOpen(false); }}>
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-              {t("rail.logout")}
-            </button>
+            {WB_ACCOUNT_LOGOUT_VISIBLE && (
+              <>
+                <div className="wb-account-menu-divider"></div>
+                <button type="button" className="danger" onClick={function () { setAccountMenuOpen(false); }}>
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                  {t("rail.logout")}
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>

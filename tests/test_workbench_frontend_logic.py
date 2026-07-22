@@ -53,7 +53,10 @@ def test_maximized_browser_has_compact_agent_chat_with_transient_status():
     assert 'effectiveMode === "maximized" && !hasNativeChatOverlay && (' in source
     assert 'className="wbc-browser-fullscreen-chat"' in source
     assert "fullscreenStatusRequested" in source
-    assert "if (!running && !fullscreenSubmitting) setFullscreenStatusRequested(false);" in source
+    assert "fullscreenFinalReply" in source
+    assert "latestAssistantReplyText" in source
+    assert "fullscreenReplyBaselineRef" in source
+    assert "}, 5000);" in source
     assert "wbcBrowserFullscreenStatusText(runtime)" in source
     assert "setChatOverlay" in source
     assert "onChatOverlayAction" in source
@@ -63,6 +66,10 @@ def test_maximized_browser_has_compact_agent_chat_with_transient_status():
     assert 'window.addEventListener("cyrene-tweak-accent-change", refreshOverlayTheme)' in source
     assert "chatOverlayThemeRevision" in source
     assert ".wbc-browser-fullscreen-composer" in styles
+    composer = styles.split(".wbc-browser-fullscreen-composer {", 1)[1].split("}", 1)[0]
+    focused_composer = styles.split(".wbc-browser-fullscreen-composer:focus-within {", 1)[1].split("}", 1)[0]
+    assert "box-shadow: none;" in composer
+    assert "box-shadow: none;" in focused_composer
     assert "padding-bottom: 58px" not in styles
 
 
@@ -81,10 +88,12 @@ def test_electron_browser_chat_overlay_floats_above_native_page():
     assert "syncChatOverlay(this.ownerWindow()?.contentView || null" in main
     assert "syncChatOverlay(win.contentView" in main
     assert "Failed to attach browser chat overlay" in main
-    assert "const bottomOffset = 16" in main
+    assert "const bottomOffset = 56" in main
     assert "this.bounds.height - height - bottomOffset" in main
     assert "browser:set-chat-overlay" in main
     assert "browser-chat-overlay:action" in main
+    assert "form:focus-within { border-color: var(--accent, #6d5dfc); box-shadow: none; }" in main
+    assert "statusComplete" in main
     assert "setChatOverlay:" in preload
     assert "onChatOverlayAction:" in preload
     assert "contextBridge.exposeInMainWorld('browserChatOverlay'" in overlay_preload
@@ -1406,6 +1415,13 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     )[1].split("function WbcUserMessage(", 1)[0]
     assert "onError={function () { setImageFailed(true); }}" in message_attachment
     assert source.count("<WbcMessageAttachment key=") == 2
+    assert "window.WorkbenchFileVisual" in source
+    assert 'className="wbc-attach-file"' in message_attachment
+    assert 'wbcT("workbenchChat.openPreview", "Open preview")' in message_attachment
+    assert 'className={"wbc-msg-attachments" + (msg.content ? " after-copy" : "")}' in source
+    assert 'className={"wbc-attach-card" + (showImagePreview ? " image" : " file")}' in source
+    assert ".wbc-attach-file-open" in styles
+    assert ".wbc-attach-card.file" in styles
     image_rule = styles.split(".wbc-attach-card.image {", 1)[1].split("}", 1)[0]
     assert "overflow: hidden;" in image_rule
 
@@ -2644,6 +2660,27 @@ def test_workbench_skill_learning_has_small_screen_progressive_disclosure():
     assert "@media (max-width: 1080px)" in css
     assert "@media (max-width: 760px)" in css
     assert "grid-template-rows: minmax(220px, 38%) minmax(0, 1fr);" in css
+
+
+def test_workbench_skill_learning_remains_operable_in_short_windows():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    css = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    translations = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+
+    sidebar_block = css.split(".wb-learning-session-list {", 1)[1].split("}", 1)[0]
+    sessions_block = css.split(".wb-learning-side-section.sessions {", 1)[1].split("}", 1)[0]
+    assert "overflow-y: auto;" in sidebar_block
+    assert "scrollbar-width: none;" in sidebar_block
+    assert ".wb-learning-session-list::-webkit-scrollbar" in css
+    assert "flex: 1 0 200px;" in sessions_block
+    assert "min-height: 200px;" in sessions_block
+    assert "@media (max-height: 760px)" in css
+
+    assert "translatedToolParamName(item.key, t)" in source
+    assert '"memory.learning.toolParam.payload": "Payload"' in translations
+    assert '"memory.learning.toolParam.payload": "操作数据"' in translations
+    assert '"memory.learning.toolParam.target": "目标元素"' in translations
 
 
 def test_workbench_memory_related_uses_tag_and_content_matching_not_category_only():

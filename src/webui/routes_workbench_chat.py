@@ -24,6 +24,7 @@ import re
 import shutil
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -37,6 +38,15 @@ from cyrene.config import DATA_DIR
 from cyrene.conversations import archive_session_exchange
 from cyrene.io_utils import atomic_write_json, read_json_safe
 from cyrene.workbench_store import read_document, write_document
+from cyrene.workspace_changes import (
+    WorkspaceSnapshot,
+    build_change_set,
+    capture_workspace_snapshot,
+    delete_chat_change_sets,
+    get_chat_file_change,
+    list_chat_change_sets,
+    save_change_set,
+)
 from webui import api_models
 from webui.workbench_chat_runs import ChatRun, ChatRunManager
 from webui.workbench_notifications import append_notification
@@ -47,6 +57,23 @@ _CHATS_STORE = DATA_DIR / "workbench_chats.json"
 _STORE_DB_PATH = ""
 _CONFIGURED_CHATS_STORE = None
 _CHAT_RUN_MANAGER = ChatRunManager()
+
+
+class _WorkspaceChangesLockEntry:
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.users = 0
+
+
+_WORKSPACE_CHANGES_LOCKS: dict[str, _WorkspaceChangesLockEntry] = {}
+
+
+@dataclass
+class _WorkspaceChangesBaseline:
+    snapshot: WorkspaceSnapshot | None
+    lock_entry: _WorkspaceChangesLockEntry | None = None
+    workspace_key: str = ""
+    released: bool = False
 
 
 def _settle_chat_running_status(chat_id: str) -> None:
@@ -372,6 +399,122 @@ def startup_chat_runs() -> None:
 
 async def shutdown_chat_runs() -> None:
     await _CHAT_RUN_MANAGER.shutdown()
+
+
+async def _capture_workspace_changes_baseline(
+    workspace_dir: str | Path | None,
+) -> _WorkspaceChangesBaseline:
+    """Acquire the workspace attribution lease, then take the pre-run image.
+
+    Snapshot attribution is only unambiguous when two chat agents cannot span
+    the same workspace interval.  The lease therefore covers the agent run and
+    final snapshot, while still allowing runs in different workspaces to
+    proceed concurrently.
+    """
+    if not workspace_dir:
+        return _WorkspaceChangesBaseline(snapshot=None)
+    try:
+        workspace_key = str(Path(workspace_dir).expanduser().resolve())
+    except OSError:
+        return _WorkspaceChangesBaseline(snapshot=None)
+    entry = _WORKSPACE_CHANGES_LOCKS.setdefault(
+        workspace_key, _WorkspaceChangesLockEntry()
+    )
+    entry.users += 1
+    try:
+        await entry.lock.acquire()
+    except BaseException:
+        entry.users -= 1
+        if entry.users == 0 and _WORKSPACE_CHANGES_LOCKS.get(workspace_key) is entry:
+            _WORKSPACE_CHANGES_LOCKS.pop(workspace_key, None)
+        raise
+    try:
+        snapshot = await asyncio.to_thread(capture_workspace_snapshot, workspace_key)
+    except asyncio.CancelledError:
+        entry.lock.release()
+        entry.users -= 1
+        if entry.users == 0 and _WORKSPACE_CHANGES_LOCKS.get(workspace_key) is entry:
+            _WORKSPACE_CHANGES_LOCKS.pop(workspace_key, None)
+        raise
+    except Exception:
+        logger.exception("Failed to capture Workbench workspace baseline")
+        entry.lock.release()
+        entry.users -= 1
+        if entry.users == 0 and _WORKSPACE_CHANGES_LOCKS.get(workspace_key) is entry:
+            _WORKSPACE_CHANGES_LOCKS.pop(workspace_key, None)
+        return _WorkspaceChangesBaseline(snapshot=None)
+    return _WorkspaceChangesBaseline(
+        snapshot=snapshot,
+        lock_entry=entry,
+        workspace_key=workspace_key,
+    )
+
+
+def _release_workspace_changes_baseline(before: _WorkspaceChangesBaseline | None) -> None:
+    if before is None or before.released:
+        return
+    before.released = True
+    entry = before.lock_entry
+    if entry is not None and entry.lock.locked():
+        entry.lock.release()
+    if entry is not None:
+        entry.users = max(0, entry.users - 1)
+    if (
+        before.workspace_key
+        and entry is not None
+        and entry.users == 0
+        and _WORKSPACE_CHANGES_LOCKS.get(before.workspace_key) is entry
+    ):
+        _WORKSPACE_CHANGES_LOCKS.pop(before.workspace_key, None)
+
+
+async def _finalize_workspace_changes(
+    *,
+    chat_id: str,
+    run_id: str,
+    workspace_dir: str | Path | None,
+    before: _WorkspaceChangesBaseline | None,
+    status: str,
+    run: ChatRun | None = None,
+) -> dict[str, Any] | None:
+    """Persist and publish the authoritative non-Git change set for one run."""
+    try:
+        if before is None or before.snapshot is None:
+            return None
+        after = await asyncio.to_thread(capture_workspace_snapshot, workspace_dir)
+        change_set = await asyncio.to_thread(
+            build_change_set,
+            chat_id=chat_id,
+            run_id=run_id,
+            before=before.snapshot,
+            after=after,
+            status=status,
+        )
+        if change_set.get("fileCount"):
+            await asyncio.to_thread(save_change_set, _STORE_DB_PATH, change_set)
+        event = {
+            "type": "workspace_changes",
+            "chatId": chat_id,
+            "runId": run_id,
+            "changeSetId": change_set.get("id"),
+            "status": status,
+            "fileCount": int(change_set.get("fileCount") or 0),
+            "additions": int(change_set.get("additions") or 0),
+            "deletions": int(change_set.get("deletions") or 0),
+        }
+        if run is not None:
+            await run.publish(event)
+        from cyrene import debug
+
+        await debug.publish_event(event, session_id=chat_id)
+        return change_set
+    except Exception:
+        # Change tracking is observability. It must never hide or replace the
+        # agent's real reply, pending question, or error outcome.
+        logger.exception("Failed to finalize workspace changes for chat %s", chat_id)
+        return None
+    finally:
+        _release_workspace_changes_baseline(before)
 
 
 def _mark_user_activity(chat: dict[str, Any], timestamp: str) -> None:
@@ -2122,6 +2265,45 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             logger.warning("Slow Workbench chat detail load [chat_id=%s duration_ms=%.1f]", chat_id, elapsed_ms)
         return {"chat": _public_chat_full(chat)}
 
+    @router.get("/api/workbench/chats/{chat_id}/changes")
+    async def api_workbench_chat_changes(chat_id: str):
+        """Return durable run-scoped workspace changes without consulting Git."""
+        if chat_id.startswith("legacy:"):
+            return {"changeSets": [], "fileCount": 0, "additions": 0, "deletions": 0}
+        payload = await asyncio.to_thread(_read_chats_store)
+        if not _find_chat(payload, chat_id):
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        change_sets = await asyncio.to_thread(
+            list_chat_change_sets, _STORE_DB_PATH, chat_id
+        )
+        return {
+            "changeSets": change_sets,
+            "fileCount": sum(int(item.get("fileCount") or 0) for item in change_sets),
+            "additions": sum(int(item.get("additions") or 0) for item in change_sets),
+            "deletions": sum(int(item.get("deletions") or 0) for item in change_sets),
+        }
+
+    @router.get("/api/workbench/chats/{chat_id}/changes/{change_set_id}/files/{file_path:path}")
+    async def api_workbench_chat_change_diff(
+        chat_id: str, change_set_id: str, file_path: str
+    ):
+        """Return the immutable diff recorded for one file in one agent run."""
+        if chat_id.startswith("legacy:"):
+            return JSONResponse({"error": "file change not found"}, status_code=404)
+        payload = await asyncio.to_thread(_read_chats_store)
+        if not _find_chat(payload, chat_id):
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        change = await asyncio.to_thread(
+            get_chat_file_change,
+            _STORE_DB_PATH,
+            chat_id,
+            change_set_id,
+            file_path,
+        )
+        if change is None:
+            return JSONResponse({"error": "file change not found"}, status_code=404)
+        return {"change": change}
+
     @router.get("/api/workbench/chats/{chat_id}/subagents")
     async def api_workbench_chat_subagents(chat_id: str, round_id: str = ""):
         if chat_id.startswith("legacy:"):
@@ -2496,6 +2678,10 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         payload["chats"] = next_chats
         await asyncio.to_thread(_write_chats_store, payload)
         try:
+            await asyncio.to_thread(delete_chat_change_sets, _STORE_DB_PATH, chat_id)
+        except Exception:
+            logger.exception("Failed to delete workspace change history for chat %s", chat_id)
+        try:
             _CHAT_RUN_MANAGER.interrupt(chat_id)
             interrupt_active_run(session_id=chat_id)
             await clear_session_id(session_id=chat_id)
@@ -2807,16 +2993,44 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             return [_public_message(item) for item in saved_messages]
 
         async def run_non_streaming(run: ChatRun) -> None:
+            changes_before = await _capture_workspace_changes_baseline(workspace_dir)
             try:
                 reply = await _run()
+            except asyncio.CancelledError:
+                await _finalize_workspace_changes(
+                    chat_id=chat_id,
+                    run_id=run.run_id,
+                    workspace_dir=workspace_dir,
+                    before=changes_before,
+                    status="cancelled",
+                    run=run,
+                )
+                await asyncio.to_thread(_restore_retry_state)
+                raise
             except Exception as exc:
                 logger.exception("Workbench chat run failed for %s", chat_id)
+                await _finalize_workspace_changes(
+                    chat_id=chat_id,
+                    run_id=run.run_id,
+                    workspace_dir=workspace_dir,
+                    before=changes_before,
+                    status="error",
+                    run=run,
+                )
                 await asyncio.to_thread(_restore_retry_state)
                 await asyncio.to_thread(_settle_status)
                 run.outcome = {"kind": "error", "exc": exc}
                 return
             run.status = "finishing"
             if reply == R._AWAITING_USER_SENTINEL:
+                await _finalize_workspace_changes(
+                    chat_id=chat_id,
+                    run_id=run.run_id,
+                    workspace_dir=workspace_dir,
+                    before=changes_before,
+                    status="awaiting_user",
+                    run=run,
+                )
                 if retry:
                     def commit_retry() -> None:
                         fresh = _read_chats_store()
@@ -2830,6 +3044,14 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 run.outcome = {"kind": "awaiting", "pending": pending}
                 run.outcome["assistantMessages"] = awaiting_messages
                 return
+            await _finalize_workspace_changes(
+                chat_id=chat_id,
+                run_id=run.run_id,
+                workspace_dir=workspace_dir,
+                before=changes_before,
+                status="completed",
+                run=run,
+            )
             finalized = await _finalize_async(reply)
             run.outcome = {
                 "kind": "reply",
@@ -2888,6 +3110,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             ack["userMessage"] = _public_message(user_entry)
 
         async def run_streaming(run: ChatRun) -> None:
+            changes_before = await _capture_workspace_changes_baseline(workspace_dir)
             live_segments_stop = asyncio.Event()
             live_segments_task = asyncio.create_task(
                 _publish_live_exchange_segments_loop(run, chat_id, state_ids_before, live_segments_stop)
@@ -2896,10 +3119,26 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 try:
                     reply = await _run()
                 except asyncio.CancelledError:
+                    await _finalize_workspace_changes(
+                        chat_id=chat_id,
+                        run_id=run.run_id,
+                        workspace_dir=workspace_dir,
+                        before=changes_before,
+                        status="cancelled",
+                        run=run,
+                    )
                     await asyncio.to_thread(_restore_retry_state)
                     raise
                 except Exception as exc:
                     logger.exception("Workbench chat streaming run failed for %s", chat_id)
+                    await _finalize_workspace_changes(
+                        chat_id=chat_id,
+                        run_id=run.run_id,
+                        workspace_dir=workspace_dir,
+                        before=changes_before,
+                        status="error",
+                        run=run,
+                    )
                     await asyncio.to_thread(_restore_retry_state)
                     await asyncio.to_thread(_settle_status)
                     run.outcome = {"kind": "error", "exc": exc}
@@ -2916,6 +3155,14 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                 live_segments_stop.set()
                 await live_segments_task
                 if reply == R._AWAITING_USER_SENTINEL:
+                    await _finalize_workspace_changes(
+                        chat_id=chat_id,
+                        run_id=run.run_id,
+                        workspace_dir=workspace_dir,
+                        before=changes_before,
+                        status="awaiting_user",
+                        run=run,
+                    )
                     # Run paused for a permission / clarification answer — surface
                     # the question instead of streaming the sentinel as a reply.
                     if retry:
@@ -2938,6 +3185,14 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                         "truncateAfterMessageId": truncate_after_id,
                     })
                     return
+                await _finalize_workspace_changes(
+                    chat_id=chat_id,
+                    run_id=run.run_id,
+                    workspace_dir=workspace_dir,
+                    before=changes_before,
+                    status="completed",
+                    run=run,
+                )
                 if not run.saw_reply_events:
                     await run.publish({"type": "reply_start"})
                     for chunk in R._reply_stream_chunks(reply):
@@ -3219,6 +3474,8 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             mid = str(m.get("message_id") or m.get("id") or "").strip()
             if mid:
                 state_ids_before_resume.add(mid)
+        resume_run_id = f"resume_{uuid.uuid4().hex}"
+        changes_before = await _capture_workspace_changes_baseline(workspace_dir)
         try:
             if mode == "default":
                 reply = await R._workbench_answer_pending(
@@ -3229,9 +3486,33 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                     chat_id, question_id, answer_text, workspace_dir,
                     permission_mode=mode,
                 )
+        except asyncio.CancelledError:
+            await _finalize_workspace_changes(
+                chat_id=chat_id,
+                run_id=resume_run_id,
+                workspace_dir=workspace_dir,
+                before=changes_before,
+                status="cancelled",
+            )
+            raise
         except Exception as exc:
+            await _finalize_workspace_changes(
+                chat_id=chat_id,
+                run_id=resume_run_id,
+                workspace_dir=workspace_dir,
+                before=changes_before,
+                status="error",
+            )
             logger.exception("Workbench chat answer-resume failed for %s", chat_id)
             return JSONResponse({"error": "answer resume failed", "detail": str(exc)}, status_code=502)
+
+        await _finalize_workspace_changes(
+            chat_id=chat_id,
+            run_id=resume_run_id,
+            workspace_dir=workspace_dir,
+            before=changes_before,
+            status="awaiting_user" if reply == R._AWAITING_USER_SENTINEL else "completed",
+        )
 
         if reply == R._AWAITING_USER_SENTINEL:
             new_pending = await asyncio.to_thread(R._workbench_pending_question_for, chat_id)

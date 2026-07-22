@@ -8,26 +8,6 @@ const APP_DIR = resolve(__dirname, 'static/app')
 const OUT_DIR = resolve(APP_DIR, 'compiled')
 const WORKBENCH_DIR = resolve(__dirname, '../workbench-webui')
 
-// pdfjs-dist 6 uses the ES2025 Uint8Array#toHex API when calculating PDF
-// fingerprints. Electron 35 / Chromium 134 does not expose that API yet,
-// and the worker then rejects every document before the first page renders.
-// Inject the small non-enumerable compatibility shim into both the main PDF.js
-// bundle and its separately executed worker bundle.
-const PDFJS_TYPED_ARRAY_COMPAT = `
-if (typeof Uint8Array.prototype.toHex !== 'function') {
-  Object.defineProperty(Uint8Array.prototype, 'toHex', {
-    configurable: true,
-    value: function () {
-      let hex = '';
-      for (let i = 0; i < this.length; i++) {
-        hex += this[i].toString(16).padStart(2, '0');
-      }
-      return hex;
-    },
-  });
-}
-`
-
 function collect(dir) {
   const files = []
   for (const entry of readdirSync(dir)) {
@@ -88,10 +68,14 @@ async function build() {
   if (existsSync(PDFJS_SRC)) {
     mkdirSync(join(PDFJS_DST, 'images'), { recursive: true })
 
+    // Electron 35 / Chromium 134 does not implement all APIs used by the
+    // pdfjs-dist 6 modern bundles (notably Map/WeakMap#getOrInsertComputed and
+    // Uint8Array#toHex). Keep the core, worker, and viewer on PDF.js's official
+    // legacy build so all three execution contexts receive the same polyfills.
     const files = [
-      ['build/pdf.min.mjs', 'pdf.min.js'],
-      ['build/pdf.worker.min.mjs', 'pdf.worker.min.js'],
-      ['web/pdf_viewer.mjs', 'pdf_viewer.js'],
+      ['legacy/build/pdf.min.mjs', 'pdf.min.js'],
+      ['legacy/build/pdf.worker.min.mjs', 'pdf.worker.min.js'],
+      ['legacy/web/pdf_viewer.mjs', 'pdf_viewer.js'],
       ['web/pdf_viewer.css', 'pdf_viewer.css'],
     ]
     for (const [src, dst] of files) {
@@ -104,9 +88,6 @@ async function build() {
         content = content.replace(/import\.meta\.url/g, '"file://"')
         // Remove sourcemap reference (file renamed, map doesn't exist)
         content = content.replace(/\/\/# sourceMappingURL.*/g, '')
-        if (dst === 'pdf.min.js' || dst === 'pdf.worker.min.js') {
-          content = PDFJS_TYPED_ARRAY_COMPAT + content
-        }
         if (dst === 'pdf.min.js') {
           // pdf.min.mjs already sets globalThis.pdfjsLib = {...} — its
           // export { ... } is redundant for classic script usage, just drop it.
@@ -130,6 +111,9 @@ async function build() {
           // Worker — just remove export, keep globalThis.pdfjsWorker intact.
           content = content.replace(/\bexport\s*\{[^}]*\};?/g, '/* export removed */')
         }
+        // Upstream legacy bundles contain whitespace-only Webpack marker lines.
+        // Keep generated assets clean so repository-wide diff checks stay useful.
+        content = content.replace(/[ \t]+$/gm, '')
         writeFileSync(dstPath, content)
         console.log(`✓ pdfjs/${dst}`)
       }

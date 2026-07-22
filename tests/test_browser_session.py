@@ -1522,6 +1522,63 @@ async def test_browser_tab_tools_are_registered(monkeypatch):
     assert any("browser_scroll" in m for m in modules)
 
 
+async def test_browser_navigate_rejects_visible_target_link(monkeypatch):
+    from cyrene.tool_impl import browser_navigate as tool
+
+    navigated = False
+
+    async def fake_visible_link_matches(url):
+        assert url == "https://example.com/detail"
+        return {
+            "ok": True,
+            "targetUrl": url,
+            "matches": [{"ref": "e12", "text": "Details", "url": url}],
+        }
+
+    async def fake_navigate(*_args, **_kwargs):
+        nonlocal navigated
+        navigated = True
+        return {}
+
+    monkeypatch.setattr("cyrene.browser.visible_link_matches", fake_visible_link_matches)
+    monkeypatch.setattr("cyrene.browser.navigate", fake_navigate)
+
+    raw = await tool._tool_browser_navigate(
+        {"url": "https://example.com/detail", "reason": "ui_unreachable"}, None, 0, "db", None
+    )
+    result = json.loads(raw)
+
+    assert result["code"] == "VISIBLE_LINK_AVAILABLE"
+    assert result["matches"] == [
+        {"ref": "e12", "text": "Details", "url": "https://example.com/detail"}
+    ]
+    assert navigated is False
+
+
+async def test_browser_navigate_allows_user_requested_exact_url(monkeypatch):
+    from cyrene.tool_impl import browser_navigate as tool
+
+    scan_called = False
+
+    async def fake_visible_link_matches(_url):
+        nonlocal scan_called
+        scan_called = True
+        return {"ok": True, "matches": [{"ref": "e1"}]}
+
+    async def fake_navigate(url, **_kwargs):
+        return {"url": url, "title": "Exact", "text": "", "links": [], "error": None}
+
+    monkeypatch.setattr("cyrene.browser.visible_link_matches", fake_visible_link_matches)
+    monkeypatch.setattr("cyrene.browser.navigate", fake_navigate)
+
+    raw = await tool._tool_browser_navigate(
+        {"url": "https://example.com/exact", "reason": "user_exact_url"}, None, 0, "db", None
+    )
+
+    assert "Title: Exact" in raw
+    assert scan_called is False
+
+
 async def test_screenshot_uses_electron_rpc_and_writes_png(monkeypatch, tmp_path):
     from cyrene import browser
 

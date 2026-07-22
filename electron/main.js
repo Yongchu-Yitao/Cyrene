@@ -293,8 +293,8 @@ const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
   body.has-status #status { display: flex; }
   #status-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--green, #1f9d57); animation: pulse 1.45s ease-out infinite; }
   #status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  form { width: 100%; height: 40px; display: flex; align-items: center; gap: 7px; padding: 4px 5px 4px 13px; border: 1px solid var(--line, #d8dce4); border-radius: 13px; background: var(--panel, rgba(255,255,255,.96)); box-shadow: 0 8px 24px rgba(10,18,32,.16), 0 1px 4px rgba(10,18,32,.1); }
-  form:focus-within { border-color: var(--accent, #6d5dfc); box-shadow: 0 8px 24px rgba(10,18,32,.16), 0 0 0 3px color-mix(in srgb, var(--accent, #6d5dfc) 12%, transparent); }
+  form { width: 100%; height: 40px; display: flex; align-items: center; gap: 7px; padding: 4px 5px 4px 13px; border: 1px solid var(--line, #d8dce4); border-radius: 13px; background: var(--panel, rgba(255,255,255,.96)); box-shadow: none; }
+  form:focus-within { border-color: var(--accent, #6d5dfc); box-shadow: none; }
   input { flex: 1 1 auto; min-width: 0; height: 30px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text, #17191d); font: inherit; font-size: 13px; }
   input::placeholder { color: var(--faint, #9297a1); }
   button { width: 31px; height: 31px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 0; border-radius: 9px; background: var(--accent, #6d5dfc); color: var(--accent-text, #fff); cursor: pointer; }
@@ -302,6 +302,7 @@ const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
   button:disabled { opacity: .42; cursor: default; }
   button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green, #1f9d57) 34%, transparent); } 70%, 100% { box-shadow: 0 0 0 5px transparent; } }
+  body.status-complete #status-dot { animation: none; box-shadow: none; }
   @media (prefers-reduced-motion: reduce) { #status-dot { animation: none; } }
 </style></head><body>
   <div id="status" role="status" aria-live="polite"><span id="status-dot"></span><span id="status-text"></span></div>
@@ -336,6 +337,7 @@ const BROWSER_CHAT_OVERLAY_HTML = `<!doctype html>
     window.browserChatOverlay.onState((next) => {
       state = next || {};
       document.body.classList.toggle('has-status', !!state.showStatus);
+      document.body.classList.toggle('status-complete', !!state.statusComplete);
       statusText.textContent = state.statusText || '';
       input.placeholder = state.running ? (state.placeholderRunning || '') : (state.placeholder || '');
       const colors = state.colors || {};
@@ -1443,7 +1445,7 @@ class BrowserTabManager {
     }
     const width = Math.max(244, Math.min(544, this.bounds.width));
     const height = state.showStatus ? 92 : 58;
-    const bottomOffset = 16;
+    const bottomOffset = 56;
     try {
       view.setBounds({
         x: this.bounds.x + Math.round((this.bounds.width - width) / 2),
@@ -1480,6 +1482,7 @@ class BrowserTabManager {
       visible: info.visible === true,
       running: info.running === true,
       showStatus: info.showStatus === true,
+      statusComplete: info.statusComplete === true,
       statusText: String(info.statusText || '').slice(0, 160),
       placeholder: String(info.placeholder || '').slice(0, 120),
       placeholderRunning: String(info.placeholderRunning || '').slice(0, 120),
@@ -1701,6 +1704,46 @@ class BrowserTabManager {
       return { ...(result || {}), ok: true, tabId: tab.id };
     } catch (err) {
       return { ok: false, error: 'Inspect failed: ' + String((err && err.message) || err), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
+    }
+  }
+
+  async visibleLinkMatches({ tabId = '', url = '' } = {}) {
+    const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
+    if (!tab) return { ok: false, error: 'No browser tab is open.', matches: [] };
+    const wc = tab.view.webContents;
+    const targetUrl = normalizeBrowserUrl(url);
+    try {
+      const result = await wc.executeJavaScript(
+        `(() => {
+          const target = ${JSON.stringify(targetUrl)};
+          const clean = (value, limit = 200) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit);
+          let normalizedTarget = '';
+          try { normalizedTarget = new URL(target, location.href).href; } catch (_) { return { ok: false, error: 'Invalid target URL.', matches: [] }; }
+          const matches = [];
+          for (const el of Array.from(document.querySelectorAll('a[href]'))) {
+            const style = window.getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+            if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+            let href = '';
+            try { href = new URL(el.getAttribute('href') || '', location.href).href; } catch (_) { continue; }
+            if (href !== normalizedTarget) continue;
+            const imageAlt = Array.from(el.querySelectorAll('img[alt]')).map((img) => img.getAttribute('alt') || '').join(' ');
+            const text = clean(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || imageAlt);
+            let refNumber = Number(el.getAttribute('data-cyrene-ref') || 0);
+            if (!Number.isInteger(refNumber) || refNumber < 1) {
+              refNumber = document.querySelectorAll('[data-cyrene-ref]').length + matches.length + 1;
+              el.setAttribute('data-cyrene-ref', String(refNumber));
+            }
+            matches.push({ ref: 'e' + refNumber, text, url: href });
+          }
+          return { ok: true, url: location.href, targetUrl: normalizedTarget, matches };
+        })()`,
+        true
+      );
+      return result && typeof result === 'object' ? result : { ok: false, error: 'Visible-link scan failed.', matches: [] };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err), matches: [] };
     }
   }
 
@@ -2465,6 +2508,8 @@ async function handleBrowserRpc(method, args, context = {}) {
       return manager.pageSnapshot(args && args.tabId, args && args.maxChars);
     case 'inspect':
       return manager.inspect(args || {});
+    case 'visibleLinkMatches':
+      return manager.visibleLinkMatches(args || {});
     case 'click':
       return manager.click(args || {});
     case 'clickRef':

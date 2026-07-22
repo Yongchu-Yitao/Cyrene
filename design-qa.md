@@ -129,3 +129,51 @@ final result: passed
 - [ ] Capture and compare the revised Electron interaction states after user validation.
 
 final result: blocked
+
+---
+
+# Launch Screen Design QA
+
+## Comparison target
+
+- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-a852e1b0-05c7-42cd-9810-8b22cbf35252.png` (1487 × 1058 px), normalized to 1440 × 1024 for comparison.
+- Implementation screenshot: `/Users/syw/.codex/visualizations/2026/07/22/019f88a6-a228-7693-bc9f-1f94e0c734b9/launch-screen-qa/qa-launch-light.png`.
+- Full-view comparison: `/Users/syw/.codex/visualizations/2026/07/22/019f88a6-a228-7693-bc9f-1f94e0c734b9/launch-screen-qa/qa-launch-comparison.png`.
+- Focused-region comparison: `/Users/syw/.codex/visualizations/2026/07/22/019f88a6-a228-7693-bc9f-1f94e0c734b9/launch-screen-qa/qa-launch-focus-comparison.png`.
+- Viewport: 1440 × 1024 CSS px, device scale factor 1; implementation screenshot is 1440 × 1024 px.
+- State: first-load launch overlay, light theme. Dark-theme styles were inspected during the same reload at full opacity before removal.
+
+## Findings
+
+- No actionable P0, P1, or P2 mismatches remain.
+- Fonts and typography: the horizontal `Cyrene` wordmark uses the Workbench Manrope/Inter/system stack at 34px and weight 720. The smaller scale than the generated reference is intentional, following the user's explicit request that the logo not be too large.
+- Spacing and layout rhythm: the 72 × 72px logo, 20px horizontal gap, and optically centered flex row preserve scheme 3's compact lockup with ample negative space.
+- Colors and visual tokens: light uses Workbench surface `#f5f6f8` with `#171c22`; browser inspection confirmed dark uses `#1a2230` with `#edf2f8` at opacity 1.
+- Image quality and asset fidelity: the existing project `logo-mark.png` is used directly at native aspect ratio. It remains sharp with no crop, generated substitute, or transparency halo.
+- Copy and content: only the exact title `Cyrene` is visible; there is no progress text, subtitle, skeleton, or other application content.
+- Loading behavior: the static overlay renders before the React bundles. After the Workbench signals readiness it continues tracking all first-screen fetches, requires a 300ms network-quiet window, and only then removes itself with a 140ms fade. A 20-second safety deadline prevents a failed request from trapping the user. The overlay was absent after readiness and no console errors were present.
+
+## Comparison history
+
+1. The first implementation used a vertical logo-and-title stack.
+2. The user selected scheme 3. The implementation changed to the exact horizontal lockup while retaining the requested smaller logo and Workbench theme adaptation.
+3. Browser QA captured the launch state at 1440 × 1024, verified dark computed styles, and confirmed the overlay is removed after initial content readiness.
+4. Follow-up testing found that nested chat/context requests could begin after the project list was ready. The launch gate now waits for all first-screen fetches to settle and remain quiet for 300ms before revealing the Workbench.
+
+## Verification
+
+- Primary flow tested: opened a fresh Cyrene instance, observed the launch-only state, waited for initial data, and confirmed the onboarding/workbench content replaced the launch overlay.
+- Themes tested: light launch screenshot; dark launch computed style and post-load dark state.
+- Console errors checked: none.
+- Automated verification: `npm run build`; `pytest -q tests/test_launch_screen.py tests/test_workbench_frontend_logic.py` (109 passed); `git diff --check`.
+
+## Implementation checklist
+
+- [x] Scheme 3 horizontal logo/title composition.
+- [x] Small 72px logo and concise 34px title.
+- [x] Workbench light/dark surface and text colors.
+- [x] Static pre-React rendering with no content flash.
+- [x] Removal only after initial content loading settles.
+- [x] Reduced-motion support and accessible status label.
+
+final result: passed

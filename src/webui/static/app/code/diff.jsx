@@ -32,10 +32,20 @@
       var line = lines[i];
       if (line.indexOf("@@") === 0) {
         if (currentHunk) hunks.push(currentHunk);
-        var match = line.match(/@@ -(\d+),?\d* \+(\d+),?\d* @@/);
+        var match = line.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/);
         leftLine = match ? parseInt(match[1], 10) : 0;
-        rightLine = match ? parseInt(match[2], 10) : 0;
-        currentHunk = { header: line, lines: [], leftStart: leftLine, rightStart: rightLine };
+        rightLine = match ? parseInt(match[3], 10) : 0;
+        var leftCount = match ? parseInt(match[2] || "1", 10) : 0;
+        var rightCount = match ? parseInt(match[4] || "1", 10) : 0;
+        currentHunk = {
+          header: line,
+          context: match ? String(match[5] || "").trim() : "",
+          lines: [],
+          leftStart: leftLine,
+          rightStart: rightLine,
+          leftCount: leftCount,
+          rightCount: rightCount,
+        };
       } else if (currentHunk) {
         if (line.indexOf("+") === 0) {
           currentHunk.lines.push({ type: "add", text: line.slice(1), leftNum: null, rightNum: rightLine });
@@ -52,6 +62,12 @@
     }
     if (currentHunk) hunks.push(currentHunk);
     return hunks;
+  }
+
+  function diffRangeLabel(start, count) {
+    if (!count) return "∅";
+    if (count === 1) return String(start);
+    return String(start) + "–" + String(start + count - 1);
   }
 
   function DiffViewerPanel(props) {
@@ -87,8 +103,8 @@
       className: "diff-viewer-panel",
       style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" },
     },
-      // Header
-      createElement("div", { className: "diff-viewer-header" },
+      // Header (optional for compact embedded viewers such as Workbench Changes)
+      !props.hideHeader && createElement("div", { className: "diff-viewer-header" },
         createElement("span", { className: "diff-viewer-title" }, diffT("chat.diff.title", "Diff")),
         props.left && props.right && createElement("span", { className: "diff-viewer-files" },
           props.left + " → " + props.right
@@ -116,8 +132,19 @@
                 return createElement("div", { className: "diff-viewer-empty" }, diffT("chat.diff.noDifferences", "No differences"));
               }
               return hunks.map(function (hunk, hi) {
+                var leftRange = diffRangeLabel(hunk.leftStart, hunk.leftCount);
+                var rightRange = diffRangeLabel(hunk.rightStart, hunk.rightCount);
                 return createElement("div", { key: "h" + hi, className: "diff-hunk" },
-                  createElement("div", { className: "diff-hunk-header" }, hunk.header),
+                  !props.hideHunkHeaders && createElement("div", {
+                    className: "diff-hunk-header",
+                    title: hunk.header,
+                    "aria-label": "Changed lines " + leftRange + " to " + rightRange,
+                  },
+                    createElement("span", { className: "diff-hunk-range old" }, leftRange),
+                    createElement("span", { className: "diff-hunk-arrow", "aria-hidden": "true" }, "→"),
+                    createElement("span", { className: "diff-hunk-range new" }, rightRange),
+                    hunk.context && createElement("span", { className: "diff-hunk-context" }, hunk.context)
+                  ),
                   hunk.lines.map(function (l, li) {
                     return createElement("div", {
                       key: "l" + li,
@@ -125,6 +152,7 @@
                     },
                       createElement("span", { className: "diff-ln diff-ln-left" }, l.leftNum != null ? l.leftNum : ""),
                       createElement("span", { className: "diff-ln diff-ln-right" }, l.rightNum != null ? l.rightNum : ""),
+                      createElement("span", { className: "diff-marker", "aria-hidden": "true" }, l.type === "add" ? "+" : l.type === "del" ? "−" : ""),
                       createElement("span", { className: "diff-text" }, l.text)
                     );
                   })

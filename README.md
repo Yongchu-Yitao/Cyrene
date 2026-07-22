@@ -122,6 +122,49 @@ Open `http://localhost:4242`. First launch runs an onboarding wizard that guides
 
 > No `.env` file is required. All configuration is stored in an encrypted store (`data/config.enc` by default) and managed through the Web UI settings or onboarding wizard. A legacy `.env.example` is kept for backward compatibility.
 
+### Electron app from source (development)
+
+The Electron package lives in `electron/`, not at the repository root. Before
+launching it, activate the same Python environment in which the project
+dependencies were installed (`uv sync`, `pip install -e .`, or the equivalent).
+Then use:
+
+```bash
+cd electron
+
+# Keep both npm and the active environment's python3 visible to Electron, and
+# make the source checkout importable by the Python backend subprocess.
+CYRENE_ROOT="$(cd .. && pwd)"
+PYTHON3_DIR="$(dirname "$(command -v python3)")"
+env PATH="$PYTHON3_DIR:$PATH" PYTHONPATH="$CYRENE_ROOT/src" npm run dev
+```
+
+You can verify the selected interpreter before launching:
+
+```bash
+PYTHONPATH="$(cd ../src && pwd)" python3 -c \
+  'import cyrene, cryptography, fastapi, uvicorn; print("Python environment OK")'
+```
+
+Common launch pitfalls:
+
+- Running `npm run dev` from the repository root fails because the root has no
+  `package.json`; run it from `electron/`.
+- `ModuleNotFoundError: No module named 'cyrene'` means the checkout's `src/`
+  directory is not on `PYTHONPATH`. Use the command above instead of launching
+  Electron with a bare `npm run dev`.
+- `ModuleNotFoundError: No module named 'cryptography'` (or another runtime
+  dependency) means Electron resolved a different system `python3` from the one
+  used to install Cyrene. Activate the intended environment and keep its binary
+  directory first in `PATH` as shown above.
+- A raw request to `http://127.0.0.1:4242/` may return `401 Unauthorized` while
+  the Electron backend is healthy: the desktop window supplies its generated
+  authentication token. Confirm startup using the `UIMODE=workbench`,
+  `PORT=4242`, and HTTP `200` entries in the Electron terminal log.
+- Chromium DevTools messages about `Autofill.enable` / `Autofill.setAddresses`,
+  and `401` responses for optional JavaScript source maps, are development-log
+  noise and do not indicate that Workbench failed to load.
+
 Optional extras:
 
 - **Browser live view & login takeover outside Electron** — `uv pip install -e ".[browser]"` then `playwright install chromium` (desktop releases need no extra install)
