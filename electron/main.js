@@ -401,7 +401,10 @@ const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
   const textLimit = Math.max(20, Math.min(500, Number(textArg) || 160));
   const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
   const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
-  const candidates = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],[tabindex],summary,label,img,[contenteditable="true"],video,section,article,div,span'));
+  const candidates = [
+    ...Array.from(document.querySelectorAll('input,textarea,select,button,a[href],[contenteditable="true"],[role="textbox"],[role="searchbox"],[role="combobox"],[role="button"],[role="link"],[tabindex]')),
+    ...Array.from(document.querySelectorAll('summary,label,[role],img,video,section,article,div,span')),
+  ];
   const seen = new Set();
   const out = [];
   const cssEscape = (value) => {
@@ -596,6 +599,11 @@ class BrowserTabManager {
     this._fullscreenResizeHandler = null;
     this._mainFullscreenLeaveHandler = null;
     this.browserContext = { sessionId: this.sessionId, roundId: '' };
+    this.latestSnapshot = null;
+  }
+
+  invalidateSnapshot() {
+    this.latestSnapshot = null;
   }
 
   ownerWindow() {
@@ -813,6 +821,8 @@ class BrowserTabManager {
     wc.on('did-stop-loading', update);
     wc.on('did-navigate', update);
     wc.on('did-navigate-in-page', update);
+    wc.on('did-navigate', () => this.invalidateSnapshot());
+    wc.on('did-navigate-in-page', () => this.invalidateSnapshot());
     wc.on('page-title-updated', update);
     wc.on('media-started-playing', update);
     wc.on('media-paused', update);
@@ -1268,7 +1278,10 @@ class BrowserTabManager {
       agentFileChooserResolver: null,
     };
     this.tabs.set(id, tab);
-    if (activate || !this.activeTabId) this.activeTabId = id;
+    if (activate || !this.activeTabId) {
+      this.activeTabId = id;
+      this.invalidateSnapshot();
+    }
 
     // Attach the WebContentsView before waiting for navigation. Chromium can
     // reject loadURL() for media documents with ERR_FAILED even though it has
@@ -1294,6 +1307,7 @@ class BrowserTabManager {
     const id = String(tabId || '').trim();
     if (!this.tabs.has(id)) throw new Error('Browser tab not found.');
     this.activeTabId = id;
+    this.invalidateSnapshot();
     this.syncAttachedView();
     this.emitState();
     return this.state();
@@ -1623,6 +1637,7 @@ class BrowserTabManager {
   }
 
   async navigate({ url, tabId = '', maxChars = 8000 } = {}) {
+    this.invalidateSnapshot();
     const targetUrl = normalizeBrowserUrl(url);
     let tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) tab = await this.createTab({ url: 'about:blank', activate: true });
@@ -1701,7 +1716,10 @@ class BrowserTabManager {
         `${BROWSER_VISIBLE_ELEMENTS_SCRIPT}(${JSON.stringify(maxElements)}, ${JSON.stringify(textLimit)})`,
         true
       );
-      return { ...(result || {}), ok: true, tabId: tab.id };
+      const snapshotToken = crypto.randomBytes(24).toString('base64url');
+      const snapshotUrl = String((result && result.url) || wc.getURL());
+      this.latestSnapshot = { token: snapshotToken, tabId: tab.id, url: snapshotUrl, issuedAt: Date.now() };
+      return { ...(result || {}), ok: true, tabId: tab.id, snapshotToken };
     } catch (err) {
       return { ok: false, error: 'Inspect failed: ' + String((err && err.message) || err), url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
     }
@@ -1745,6 +1763,68 @@ class BrowserTabManager {
     } catch (err) {
       return { ok: false, error: String((err && err.message) || err), matches: [] };
     }
+  }
+
+  async navigationGuard({ url = '', reason = '', snapshotToken = '' } = {}) {
+    const tab = this.tabs.get(this.activeTabId);
+    const targetUrl = normalizeBrowserUrl(url);
+    if (!tab) {
+      if (String(reason || '') === 'ui_unreachable') {
+        return { ok: false, allowed: false, code: 'SNAPSHOT_CREDENTIAL_REQUIRED', error: 'ui_unreachable requires a fresh browser_snapshot credential.' };
+      }
+      return { ok: true, allowed: true, targetUrl };
+    }
+    const currentUrl = tab.view.webContents.getURL();
+    let normalizedTarget = targetUrl;
+    let normalizedCurrent = currentUrl;
+    try { normalizedTarget = new URL(targetUrl, currentUrl).href; } catch (_) {}
+    try { normalizedCurrent = new URL(currentUrl).href; } catch (_) {}
+    if (normalizedCurrent === normalizedTarget) {
+      return {
+        ok: false,
+        allowed: false,
+        code: 'ALREADY_AT_TARGET',
+        error: 'The active browser tab is already at the requested URL; browser_navigate was not executed.',
+        url: normalizedCurrent,
+        tabId: tab.id,
+      };
+    }
+    if (String(reason || '') === 'user_exact_url') return { ok: true, allowed: true, targetUrl: normalizedTarget };
+    if (String(reason || '') === 'ui_unreachable') {
+      const credential = this.latestSnapshot;
+      const token = String(snapshotToken || '');
+      const providedToken = Buffer.from(token);
+      const expectedToken = Buffer.from(String(credential && credential.token || ''));
+      const valid = credential
+        && token
+        && providedToken.length === expectedToken.length
+        && crypto.timingSafeEqual(providedToken, expectedToken)
+        && credential.tabId === tab.id
+        && credential.url === currentUrl
+        && Date.now() - credential.issuedAt <= 120000;
+      if (!valid) {
+        return {
+          ok: false,
+          allowed: false,
+          code: 'SNAPSHOT_CREDENTIAL_INVALID',
+          error: 'ui_unreachable requires the unexpired token from the latest browser_snapshot of the active page.',
+        };
+      }
+      this.invalidateSnapshot();
+      const scan = await this.visibleLinkMatches({ tabId: tab.id, url: normalizedTarget });
+      const matches = Array.isArray(scan.matches) ? scan.matches : [];
+      if (matches.length) {
+        return {
+          ok: false,
+          allowed: false,
+          code: 'VISIBLE_LINK_AVAILABLE',
+          error: 'Target URL is available through visible page UI. Use browser_click_ref or browser_click_text.',
+          targetUrl: normalizedTarget,
+          matches,
+        };
+      }
+    }
+    return { ok: true, allowed: true, targetUrl: normalizedTarget };
   }
 
   async _findTarget(wc, { mode = 'selector', value = '', exact = false, visibleOnly = true } = {}) {
@@ -1840,6 +1920,7 @@ class BrowserTabManager {
   }
 
   async _dispatchClick(tab, info) {
+    this.invalidateSnapshot();
     const blocked = this._beginClick(tab);
     if (blocked) return blocked;
     const wc = tab.view.webContents;
@@ -1993,8 +2074,18 @@ class BrowserTabManager {
   }
 
   async _finishClick(tab, info) {
-    const snapshot = await this.pageSnapshot(tab.id, 4000);
-    return { ...snapshot, tabId: tab.id, box: info && info.box ? info.box : null };
+    const activeTab = this.tabs.get(this.activeTabId) || tab;
+    const openedNewTab = activeTab.id !== tab.id;
+    const snapshot = await this.pageSnapshot(activeTab.id, 4000);
+    return {
+      ...snapshot,
+      tabId: activeTab.id,
+      activeTabId: activeTab.id,
+      openedNewTab,
+      sourceTabId: tab.id,
+      sourceUrl: tab.view.webContents.getURL(),
+      box: info && info.box ? info.box : null,
+    };
   }
 
   async click({ selector, tabId = '' } = {}) {
@@ -2040,6 +2131,7 @@ class BrowserTabManager {
   }
 
   async _typeIntoTarget({ mode = 'selector', value = '', text = '', submit = false, tabId = '' } = {}) {
+    this.invalidateSnapshot();
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
     const wc = tab.view.webContents;
@@ -2181,6 +2273,7 @@ class BrowserTabManager {
   }
 
   async scroll({ deltaX = 0, deltaY = 0, x = null, y = null, ref = '', tabId = '' } = {}) {
+    this.invalidateSnapshot();
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No browser tab is open.' };
     const wc = tab.view.webContents;
@@ -2510,6 +2603,8 @@ async function handleBrowserRpc(method, args, context = {}) {
       return manager.inspect(args || {});
     case 'visibleLinkMatches':
       return manager.visibleLinkMatches(args || {});
+    case 'navigationGuard':
+      return manager.navigationGuard(args || {});
     case 'click':
       return manager.click(args || {});
     case 'clickRef':

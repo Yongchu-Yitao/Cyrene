@@ -11111,6 +11111,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-thread {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -11550,6 +11551,29 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
    zero and leaves what looks like an empty, flattened card. */
 .wbc-thread > * {
   flex-shrink: 0;
+}
+
+/* A transcript entry owns the horizontal space that can be yielded to a
+   floating browser. Padding the wrapper (rather than the message itself)
+   preserves the existing user-right / assistant-left alignment inside the
+   remaining readable lane. The values are updated only for vertically
+   intersecting entries. */
+.wbc-thread-item {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding-inline-start: var(--wbc-browser-avoid-start, 0px);
+  padding-inline-end: var(--wbc-browser-avoid-end, 0px);
+}
+
+.wbc-thread-item > .wbc-msg.user {
+  align-self: flex-end;
+}
+
+.wbc-thread-item > .wbc-msg.assistant {
+  align-self: stretch;
 }
 
 .wbc-empty-thread {

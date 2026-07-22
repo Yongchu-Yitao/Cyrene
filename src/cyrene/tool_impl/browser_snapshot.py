@@ -62,6 +62,13 @@ async def _tool_browser_snapshot(args: dict[str, Any], _bot: Any, _chat_id: int,
         f"Title: {result.get('title', '—')}",
         f"URL: {result.get('url', '—')}",
     ]
+    snapshot_token = str(result.get("snapshot_token") or "").strip()
+    if snapshot_token:
+        parts.append(
+            "Snapshot credential: " + snapshot_token
+            + "\nUse this once as browser_navigate.snapshot_token only with reason=ui_unreachable. "
+            "It expires after 2 minutes or any browser interaction/new snapshot."
+        )
     from cyrene.tool_impl.browser_output import page_observation_lines
     parts.extend(page_observation_lines(result))
     elements = result.get("elements") if isinstance(result.get("elements"), list) else []

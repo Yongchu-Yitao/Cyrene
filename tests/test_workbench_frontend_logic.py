@@ -658,6 +658,70 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "active.view.webContents.capturePage()" in main
 
 
+def _run_browser_avoidance_plan(*args):
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    function_source = "function wbcBrowserAvoidancePlan" + source.split(
+        "function wbcBrowserAvoidancePlan", 1
+    )[1].split("\nfunction wbcNotifyBrowserLayoutChanged", 1)[0]
+    script = f"""
+{function_source}
+const result = wbcBrowserAvoidancePlan(...{json.dumps(list(args))});
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    return json.loads(completed.stdout)
+
+
+def test_browser_avoidance_plan_uses_the_wider_readable_lane():
+    assert _run_browser_avoidance_plan(100, 800, 650, 200, 14) == {
+        "side": "left",
+        "start": 0,
+        "end": 264,
+    }
+    assert _run_browser_avoidance_plan(100, 800, 150, 200, 14) == {
+        "side": "right",
+        "start": 264,
+        "end": 0,
+    }
+
+
+def test_browser_avoidance_plan_declines_centered_or_too_narrow_layouts():
+    assert _run_browser_avoidance_plan(100, 800, 400, 200, 14) is None
+    assert _run_browser_avoidance_plan(100, 800, 430, 350, 14) is None
+    assert _run_browser_avoidance_plan(100, 800, 920, 200, 14) is None
+
+
+def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'data-wbc-thread-item="true"' in source
+    assert 'stage.querySelector(".wbc-browser-window.pip")' in source
+    assert 'window.addEventListener("workbench:browser-layout", scheduleBrowserAvoidance)' in source
+    assert 'new ResizeObserver(scheduleBrowserAvoidance)' in source
+    assert "new MutationObserver(function ()" in source
+    assert "for (var pass = 0; pass < 5; pass++)" in source
+    assert 'item.offsetTop + item.offsetHeight <= contentTop' not in source
+    assert 'candidate.offsetTop + candidate.offsetHeight <= contentTop' in source
+    assert 'item.style.setProperty("--wbc-browser-avoid-start"' in source
+    assert 'item.style.setProperty("--wbc-browser-avoid-end"' in source
+    thread_item_styles = styles.split(".wbc-thread-item {", 1)[1].split("}", 1)[0]
+    assert "padding-inline-start: var(--wbc-browser-avoid-start, 0px);" in thread_item_styles
+    assert "padding-inline-end: var(--wbc-browser-avoid-end, 0px);" in thread_item_styles
+    assert ".wbc-thread-item > .wbc-msg.user" in styles
+    assert ".wbc-thread-item > .wbc-msg.assistant" in styles
+
+
 def test_active_browser_tab_uses_standard_text_color():
     root = Path(__file__).resolve().parent.parent
     styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")

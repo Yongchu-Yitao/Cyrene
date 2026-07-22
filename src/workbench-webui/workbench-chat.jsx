@@ -591,6 +591,32 @@ function wbcClampBrowserWindowFrame(frame, areaWidth, areaHeight, minWidth, minH
   return { x: x, y: y, width: width, height: height };
 }
 
+// Pick a readable lane beside the floating browser.  Keeping this calculation
+// pure makes the product rule explicit: avoid only when the PiP is clearly off
+// centre and one side remains wide enough to read.  Insets are relative to the
+// transcript content box, not the Electron window.
+function wbcBrowserAvoidancePlan(areaLeft, areaWidth, browserLeft, browserWidth, gap) {
+  var left = Number(areaLeft) || 0;
+  var width = Math.max(0, Number(areaWidth) || 0);
+  var right = left + width;
+  var browserStart = Number(browserLeft) || 0;
+  var browserSize = Math.max(0, Number(browserWidth) || 0);
+  var browserEnd = browserStart + browserSize;
+  var gutter = Math.max(0, Number(gap) || 0);
+  if (width <= 0 || browserSize <= 0 || browserEnd <= left || browserStart >= right) return null;
+
+  var leftLane = Math.max(0, browserStart - gutter - left);
+  var rightLane = Math.max(0, right - browserEnd - gutter);
+  var readable = Math.min(360, width * 0.45);
+  var centreDeadZone = Math.min(80, width * 0.12);
+  if (Math.max(leftLane, rightLane) < readable) return null;
+  if (Math.abs(leftLane - rightLane) < centreDeadZone) return null;
+  if (leftLane > rightLane) {
+    return { side: "left", start: 0, end: Math.max(0, right - browserStart + gutter) };
+  }
+  return { side: "right", start: Math.max(0, browserEnd - left + gutter), end: 0 };
+}
+
 function wbcNotifyBrowserLayoutChanged() {
   window.dispatchEvent(new CustomEvent("workbench:browser-layout"));
 }
@@ -3131,9 +3157,18 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   );
 }
 
+// One stable layout box per transcript entry.  Browser avoidance is applied to
+// this wrapper so the existing child alignment stays intact: user bubbles keep
+// hugging the lane's right edge and assistant content keeps its left edge.
+function WbcThreadItem({ children }) {
+  return <div className="wbc-thread-item" data-wbc-thread-item="true">{children}</div>;
+}
+
 function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, sideVisible, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMinimize, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete }) {
+  var stageRef = useWbcRef(null);
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
+  var avoidanceRafRef = useWbcRef(0);
   var durableMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   var runtimeTimeline = wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime));
   var messages = wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
@@ -3168,11 +3203,101 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     if (lastUserId && lastAssistantId) break;
   }
 
+  var applyBrowserAvoidance = useWbcCallback(function () {
+    var stage = stageRef.current;
+    var thread = scrollRef.current;
+    if (!stage || !thread) return;
+    var items = Array.prototype.slice.call(thread.querySelectorAll(":scope > [data-wbc-thread-item]"));
+    if (!items.length) return;
+
+    // Preserve the reader's visual anchor across text reflow.  At the live tail
+    // the bottom is the anchor; in scrollback it is the first visible entry.
+    var anchorNode = null;
+    var anchorOffset = 0;
+    if (!stickRef.current) {
+      var anchorTarget = thread.scrollTop;
+      var anchorLow = 0, anchorHigh = items.length;
+      while (anchorLow < anchorHigh) {
+        var anchorMid = Math.floor((anchorLow + anchorHigh) / 2);
+        var anchorItem = items[anchorMid];
+        if (anchorItem.offsetTop + anchorItem.offsetHeight <= anchorTarget) anchorLow = anchorMid + 1;
+        else anchorHigh = anchorMid;
+      }
+      anchorNode = items[Math.min(anchorLow, items.length - 1)] || null;
+      if (anchorNode) anchorOffset = anchorNode.offsetTop - thread.scrollTop;
+    }
+
+    function restoreViewport() {
+      if (stickRef.current) {
+        thread.scrollTop = thread.scrollHeight;
+      } else if (anchorNode && anchorNode.isConnected) {
+        thread.scrollTop = Math.max(0, anchorNode.offsetTop - anchorOffset);
+      }
+    }
+
+    items.forEach(function (item) {
+      item.classList.remove("wbc-browser-avoid-left", "wbc-browser-avoid-right");
+      item.style.removeProperty("--wbc-browser-avoid-start");
+      item.style.removeProperty("--wbc-browser-avoid-end");
+    });
+    restoreViewport();
+
+    var browserWindow = stage.querySelector(".wbc-browser-window.pip");
+    if (!browserWindow) return;
+    var browserRect = browserWindow.getBoundingClientRect();
+    var threadRect = thread.getBoundingClientRect();
+    var threadStyles = getComputedStyle(thread);
+    var paddingLeft = parseFloat(threadStyles.paddingLeft) || 0;
+    var paddingRight = parseFloat(threadStyles.paddingRight) || 0;
+    var areaLeft = threadRect.left + paddingLeft;
+    var areaWidth = Math.max(0, thread.clientWidth - paddingLeft - paddingRight);
+    var gap = 14;
+    var plan = wbcBrowserAvoidancePlan(areaLeft, areaWidth, browserRect.left, browserRect.width, gap);
+    if (!plan) return;
+
+    // Adding a lane can make a long entry taller and move later entries under
+    // the fixed PiP.  Grow the avoided set monotonically for a few cheap passes
+    // until no newly intersecting entry appears; never remove one mid-pass.
+    for (var pass = 0; pass < 5; pass++) {
+      var contentTop = thread.scrollTop + browserRect.top - threadRect.top - gap;
+      var contentBottom = thread.scrollTop + browserRect.bottom - threadRect.top + gap;
+      var low = 0, high = items.length;
+      while (low < high) {
+        var mid = Math.floor((low + high) / 2);
+        var candidate = items[mid];
+        if (candidate.offsetTop + candidate.offsetHeight <= contentTop) low = mid + 1;
+        else high = mid;
+      }
+      var changed = false;
+      for (var index = low; index < items.length; index++) {
+        var item = items[index];
+        if (item.offsetTop >= contentBottom) break;
+        var expectedClass = plan.side === "left" ? "wbc-browser-avoid-left" : "wbc-browser-avoid-right";
+        if (item.classList.contains(expectedClass)) continue;
+        item.classList.add(expectedClass);
+        item.style.setProperty("--wbc-browser-avoid-start", Math.round(plan.start) + "px");
+        item.style.setProperty("--wbc-browser-avoid-end", Math.round(plan.end) + "px");
+        changed = true;
+      }
+      if (!changed) break;
+      restoreViewport();
+    }
+  }, []);
+
+  var scheduleBrowserAvoidance = useWbcCallback(function () {
+    if (avoidanceRafRef.current) return;
+    avoidanceRafRef.current = requestAnimationFrame(function () {
+      avoidanceRafRef.current = 0;
+      applyBrowserAvoidance();
+    });
+  }, [applyBrowserAvoidance]);
+
   // Track whether the user is reading scrollback; only auto-stick near bottom.
   function onScroll() {
     var el = scrollRef.current;
     if (!el) return;
     stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    scheduleBrowserAvoidance();
   }
 
   useWbcEffect(function () {
@@ -3184,7 +3309,54 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     stickRef.current = true;
     var el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
+    scheduleBrowserAvoidance();
   }, [chat && chat.id]);
+
+  useWbcEffect(function () {
+    var stage = stageRef.current;
+    var thread = scrollRef.current;
+    if (!stage || !thread) return undefined;
+    var observedItems = typeof WeakSet === "function" ? new WeakSet() : null;
+    var itemObserver = typeof ResizeObserver === "function"
+      ? new ResizeObserver(scheduleBrowserAvoidance)
+      : null;
+    function observeItems() {
+      if (!itemObserver) return;
+      thread.querySelectorAll(":scope > [data-wbc-thread-item]").forEach(function (item) {
+        if (observedItems && observedItems.has(item)) return;
+        if (observedItems) observedItems.add(item);
+        itemObserver.observe(item);
+      });
+    }
+    observeItems();
+    var stageObserver = typeof ResizeObserver === "function"
+      ? new ResizeObserver(scheduleBrowserAvoidance)
+      : null;
+    if (stageObserver) stageObserver.observe(stage);
+    var mutationObserver = typeof MutationObserver === "function"
+      ? new MutationObserver(function () {
+          observeItems();
+          scheduleBrowserAvoidance();
+        })
+      : null;
+    if (mutationObserver) mutationObserver.observe(thread, { childList: true, subtree: true, characterData: true });
+    window.addEventListener("workbench:browser-layout", scheduleBrowserAvoidance);
+    window.addEventListener("resize", scheduleBrowserAvoidance);
+    scheduleBrowserAvoidance();
+    return function () {
+      if (avoidanceRafRef.current) cancelAnimationFrame(avoidanceRafRef.current);
+      avoidanceRafRef.current = 0;
+      if (itemObserver) itemObserver.disconnect();
+      if (stageObserver) stageObserver.disconnect();
+      if (mutationObserver) mutationObserver.disconnect();
+      window.removeEventListener("workbench:browser-layout", scheduleBrowserAvoidance);
+      window.removeEventListener("resize", scheduleBrowserAvoidance);
+    };
+  }, [scheduleBrowserAvoidance, project && project.id]);
+
+  useWbcEffect(function () {
+    scheduleBrowserAvoidance();
+  }, [messages.length, runtime && runtime.text, runtime && runtime.progress && runtime.progress.length, runtime && runtime.activities && runtime.activities.length, browserVisible, browserWindowMode, sideVisible]);
 
   if (!project) {
     return <main className="wbc-main"><div className="workbench-empty">{wbcT("workbenchChat.noProject", "Select a project first.")}</div></main>;
@@ -3220,7 +3392,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         </div>
       )}
       {error && <WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} />}
-      <div className="wbc-thread-stage">
+      <div className="wbc-thread-stage" ref={stageRef}>
       <div className="wbc-thread" ref={scrollRef} onScroll={onScroll}>
         {loading && !chat && (
           <div className="wbc-empty-thread wbc-loading-thread" role="status">
@@ -3245,7 +3417,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
             && String(chat.pendingQuestion.id || "") === String(msg.questionId || "")
           );
           if (msg.runtimeHeartbeat) {
-            return <WbcHeartbeat key={msg.id} startedAt={runtime && runtime.startedAt} lastEventAt={runtime && runtime.lastEventAt} />;
+            return <WbcThreadItem key={msg.id}><WbcHeartbeat startedAt={runtime && runtime.startedAt} lastEventAt={runtime && runtime.lastEventAt} /></WbcThreadItem>;
           }
           if (msg.runtimeActivity || msg.activityCard) {
             var activity = msg.runtimeActivity || {
@@ -3259,30 +3431,35 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
             // "thinking complete" placeholder between messages.
             if (!msg.runtimeActivityActive && activityEntries.length === 0) return null;
             return (
-              <WbcLiveActivityCard
-                key={msg.id}
-                activity={activity}
-                active={!!msg.runtimeActivityActive}
-                hasReplyText={!!msg.runtimeActivityHasReplyText}
-              />
+              <WbcThreadItem key={msg.id}>
+                <WbcLiveActivityCard
+                  activity={activity}
+                  active={!!msg.runtimeActivityActive}
+                  hasReplyText={!!msg.runtimeActivityHasReplyText}
+                />
+              </WbcThreadItem>
             );
           }
           if (isActiveQuestion) {
-            return <WbcQuestionPrompt key={msg.id} pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} trace={msg.trace} />;
+            return <WbcThreadItem key={msg.id}><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} trace={msg.trace} /></WbcThreadItem>;
           }
           var messageTraceKey = wbcTraceDedupeKey(msg.trace);
           var visibleMessage = messageTraceKey && activityTraceKeys.has(messageTraceKey)
             ? { ...msg, trace: [] }
             : msg;
-          return msg.role === "user"
-            ? <WbcUserMessage key={msg.id} msg={visibleMessage} onOpenFile={onOpenFile} onEditMessage={onEditMessage} canEdit={canEdit} onRetryMessage={canRetryUser ? onRetryMessage : null} />
-            : <WbcAssistantMessage key={msg.id} msg={visibleMessage} onOpenFile={onOpenFile} onRetryMessage={canRetryAssistant ? onRetryMessage : null} />;
+          return (
+            <WbcThreadItem key={msg.id}>
+              {msg.role === "user"
+                ? <WbcUserMessage msg={visibleMessage} onOpenFile={onOpenFile} onEditMessage={onEditMessage} canEdit={canEdit} onRetryMessage={canRetryUser ? onRetryMessage : null} />
+                : <WbcAssistantMessage msg={visibleMessage} onOpenFile={onOpenFile} onRetryMessage={canRetryAssistant ? onRetryMessage : null} />}
+            </WbcThreadItem>
+          );
         })}
-        {runtime && <WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} />}
+        {runtime && runtime.text && <WbcThreadItem><WbcLiveMessage runtime={runtime} onOpenFile={onOpenFile} /></WbcThreadItem>}
         {chat && chat.pendingQuestion && chat.pendingQuestion.id && !runtime && !messages.some(function (msg) {
           return msg.questionPrompt && String(msg.questionId || "") === String(chat.pendingQuestion.id || "");
         }) && (
-          <WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} />
+          <WbcThreadItem><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} /></WbcThreadItem>
         )}
       </div>
       <div className="wbc-browser-movement-region">

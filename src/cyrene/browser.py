@@ -29,6 +29,7 @@ import logging
 import os
 import platform
 import re
+import secrets
 import socket
 import tempfile
 import time
@@ -118,6 +119,16 @@ def _normalize_browser_result(result: dict[str, Any]) -> dict[str, Any]:
     """Normalize Electron's camelCase observation fields for Python tools."""
     if isinstance(result, dict) and "page_signal" not in result and "pageSignal" in result:
         result["page_signal"] = result.pop("pageSignal")
+    if isinstance(result, dict) and "snapshot_token" not in result and "snapshotToken" in result:
+        result["snapshot_token"] = result.pop("snapshotToken")
+    for camel, snake in (
+        ("openedNewTab", "opened_new_tab"),
+        ("activeTabId", "active_tab_id"),
+        ("sourceTabId", "source_tab_id"),
+        ("sourceUrl", "source_url"),
+    ):
+        if isinstance(result, dict) and snake not in result and camel in result:
+            result[snake] = result.pop(camel)
     return result
 
 
@@ -356,7 +367,10 @@ _BROWSER_INSPECT_JS = r"""
   const textLimit = Math.max(20, Math.min(500, Number(textArg) || 160));
   const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
   const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
-  const candidates = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],[tabindex],summary,label,img,[contenteditable="true"],video,section,article,div,span'));
+  const candidates = [
+    ...Array.from(document.querySelectorAll('input,textarea,select,button,a[href],[contenteditable="true"],[role="textbox"],[role="searchbox"],[role="combobox"],[role="button"],[role="link"],[tabindex]')),
+    ...Array.from(document.querySelectorAll('summary,label,[role],img,video,section,article,div,span')),
+  ];
   const seen = new Set();
   const out = [];
   const clean = (value, limit = textLimit) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
@@ -722,6 +736,7 @@ class _BrowserSession:
         self._action_lock = asyncio.Lock()
         self._mode_lock = asyncio.Lock()
         self._last_agent_click_completed_at = 0.0
+        self._latest_snapshot: dict[str, Any] | None = None
         # Screencast (M2): live JPEG frames fanned out to WebSocket subscribers.
         self._cdp: Any = None
         self._screencasting = False
@@ -777,6 +792,9 @@ class _BrowserSession:
             return self._page.url
         except Exception:
             return ""
+
+    def _invalidate_snapshot(self) -> None:
+        self._latest_snapshot = None
 
     # -- Login takeover (M3): headless <-> headed restart -------------------
     #
@@ -925,6 +943,7 @@ class _BrowserSession:
         if not await self._wait_for_control():
             return {"url": url, "status": 0, "title": "", "text": "", "error": _USER_CONTROL_MSG}
         async with self._action_lock:
+            self._invalidate_snapshot()
             page = await self.page()
             response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             final_url = page.url
@@ -968,6 +987,15 @@ class _BrowserSession:
                 [max_elements, text_limit],
             )
             if isinstance(result, dict):
+                snapshot_token = secrets.token_urlsafe(32)
+                snapshot_url = str(result.get("url") or page.url)
+                self._latest_snapshot = {
+                    "token": snapshot_token,
+                    "url": snapshot_url,
+                    "issued_at": time.monotonic(),
+                    "page": page,
+                }
+                result["snapshot_token"] = snapshot_token
                 result["page_signal"] = _browser_page_signal(
                     str(result.get("url") or page.url),
                     str(result.get("title") or await page.title()),
@@ -975,6 +1003,66 @@ class _BrowserSession:
                 )
                 return result
             return {"ok": False, "url": page.url, "title": await page.title(), "error": "Unable to inspect page.", "elements": []}
+
+    async def navigation_guard(self, target_url: str, reason: str, snapshot_token: str = "") -> dict[str, Any]:
+        page = self._page
+        if page is None:
+            if reason == "ui_unreachable":
+                return {
+                    "ok": False,
+                    "allowed": False,
+                    "code": "SNAPSHOT_CREDENTIAL_REQUIRED",
+                    "error": "ui_unreachable requires a fresh browser_snapshot credential.",
+                }
+            return {"ok": True, "allowed": True, "targetUrl": target_url}
+        current_url = str(page.url or "")
+        normalized = await page.evaluate(
+            "([target, current]) => ({target: new URL(target, current).href, current: new URL(current).href})",
+            [target_url, current_url],
+        )
+        normalized_target = str(normalized.get("target") or target_url) if isinstance(normalized, dict) else target_url
+        normalized_current = str(normalized.get("current") or current_url) if isinstance(normalized, dict) else current_url
+        if normalized_target == normalized_current:
+            return {
+                "ok": False,
+                "allowed": False,
+                "code": "ALREADY_AT_TARGET",
+                "error": "The active browser tab is already at the requested URL; browser_navigate was not executed.",
+                "url": normalized_current,
+                "tabId": "playwright",
+            }
+        if reason == "user_exact_url":
+            return {"ok": True, "allowed": True, "targetUrl": normalized_target}
+        if reason == "ui_unreachable":
+            credential = self._latest_snapshot
+            valid = bool(
+                credential
+                and snapshot_token
+                and secrets.compare_digest(snapshot_token, str(credential.get("token") or ""))
+                and credential.get("page") is page
+                and str(credential.get("url") or "") == current_url
+                and time.monotonic() - float(credential.get("issued_at") or 0) <= 120
+            )
+            if not valid:
+                return {
+                    "ok": False,
+                    "allowed": False,
+                    "code": "SNAPSHOT_CREDENTIAL_INVALID",
+                    "error": "ui_unreachable requires the unexpired token from the latest browser_snapshot of the active page.",
+                }
+            self._invalidate_snapshot()
+            scan = await self.visible_link_matches(normalized_target)
+            matches = scan.get("matches") if isinstance(scan.get("matches"), list) else []
+            if matches:
+                return {
+                    "ok": False,
+                    "allowed": False,
+                    "code": "VISIBLE_LINK_AVAILABLE",
+                    "error": "Target URL is available through visible page UI. Use browser_click_ref or browser_click_text.",
+                    "targetUrl": normalized_target,
+                    "matches": matches,
+                }
+        return {"ok": True, "allowed": True, "targetUrl": normalized_target}
 
     async def visible_link_matches(self, target_url: str) -> dict[str, Any]:
         """Return rendered anchors whose resolved href equals *target_url*."""
@@ -1085,10 +1173,37 @@ class _BrowserSession:
             "text": preview,
         }
 
+    async def _adopt_popup_after_click(self, source_page: Any, pages_before: set[Any]) -> dict[str, Any] | None:
+        if self._context is None:
+            return None
+        new_pages = [page for page in self._context.pages if page not in pages_before and not page.is_closed()]
+        if not new_pages:
+            return None
+        popup = new_pages[-1]
+        self._page = popup
+        try:
+            await popup.wait_for_load_state("domcontentloaded", timeout=3000)
+        except Exception:
+            pass
+        title = await popup.title()
+        observation = await self._interaction_observation(popup)
+        return {
+            "ok": True,
+            "url": popup.url,
+            "title": title,
+            "tabId": "playwright",
+            "active_tab_id": "playwright",
+            "opened_new_tab": True,
+            "source_tab_id": "playwright-source",
+            "source_url": source_page.url,
+            **observation,
+        }
+
     async def _mouse_click_target(self, mode: str, value: str, *, exact: bool = False, target_label: str = "") -> dict[str, Any]:
         if not await self._wait_for_control():
             return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
         async with self._action_lock:
+            self._invalidate_snapshot()
             page = await self.page()
             if self._click_debounced():
                 return self._click_debounced_result(page)
@@ -1096,11 +1211,17 @@ class _BrowserSession:
             if not info.get("ok"):
                 return {"ok": False, "url": page.url, "title": await page.title(), "error": "Element " + str(info.get("error") or "not found")}
             before = await self._semantic_content_state(page)
+            pages_before = set(self._context.pages) if self._context is not None else {page}
             try:
                 await page.mouse.click(float(info.get("x") or 0), float(info.get("y") or 0))
                 await self._settle_after_interaction(page, before=before)
             finally:
                 self._last_agent_click_completed_at = time.monotonic()
+            popup_result = await self._adopt_popup_after_click(page, pages_before)
+            if popup_result is not None:
+                popup_result["box"] = info.get("box")
+                await self._emit_frame("click", target=target_label or value, box=info.get("box"), url=popup_result["url"], title=popup_result["title"])
+                return popup_result
             title = await page.title()
             observation = await self._interaction_observation(page)
             await self._emit_frame("click", target=target_label or value, box=info.get("box"), url=page.url, title=title)
@@ -1110,6 +1231,7 @@ class _BrowserSession:
         if not await self._wait_for_control():
             return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
         async with self._action_lock:
+            self._invalidate_snapshot()
             from playwright.async_api import expect
 
             page = await self.page()
@@ -1119,11 +1241,17 @@ class _BrowserSession:
             await expect(el).to_be_visible(timeout=5000)
             box = await el.bounding_box()
             before = await self._semantic_content_state(page)
+            pages_before = set(self._context.pages) if self._context is not None else {page}
             try:
                 await el.click()
                 await self._settle_after_interaction(page, before=before)
             finally:
                 self._last_agent_click_completed_at = time.monotonic()
+            popup_result = await self._adopt_popup_after_click(page, pages_before)
+            if popup_result is not None:
+                popup_result["box"] = box
+                await self._emit_frame("click", target=selector, box=box, url=popup_result["url"], title=popup_result["title"])
+                return popup_result
             title = await page.title()
             observation = await self._interaction_observation(page)
             await self._emit_frame("click", target=selector, box=box, url=page.url, title=title)
@@ -1139,6 +1267,7 @@ class _BrowserSession:
         if not await self._wait_for_control():
             return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
         async with self._action_lock:
+            self._invalidate_snapshot()
             page = await self.page()
             if self._click_debounced():
                 return self._click_debounced_result(page)
@@ -1158,6 +1287,7 @@ class _BrowserSession:
         if not await self._wait_for_control():
             return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
         async with self._action_lock:
+            self._invalidate_snapshot()
             page = await self.page()
             el = page.locator(selector)
             box = await el.bounding_box()
@@ -1173,6 +1303,7 @@ class _BrowserSession:
         if not await self._wait_for_control():
             return {"ok": False, "url": self._safe_url(), "title": "", "error": _USER_CONTROL_MSG}
         async with self._action_lock:
+            self._invalidate_snapshot()
             page = await self.page()
             await page.evaluate(
                 f"([maxArg, textArg]) => ({_BROWSER_INSPECT_JS})(maxArg, textArg)",
@@ -1905,6 +2036,48 @@ async def visible_link_matches(target_url: str) -> dict[str, Any]:
         return {"ok": False, "error": browser_runtime_unavailable_message(exc), "matches": []}
 
 
+async def navigation_guard(target_url: str, reason: str, snapshot_token: str = "") -> dict[str, Any]:
+    """Authorize direct navigation against current browser state and snapshot evidence."""
+    target_url = _normalize_http_url(target_url)
+    try:
+        _check_url(target_url)
+    except SSRFBlockedError as exc:
+        return {"ok": False, "allowed": False, "code": "NAVIGATION_URL_BLOCKED", "error": str(exc)}
+    if electron_browser_available():
+        try:
+            return await _electron_browser_rpc(
+                "navigationGuard",
+                {"url": target_url, "reason": reason, "snapshotToken": snapshot_token},
+                timeout=10.0,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "allowed": False,
+                "code": "NAVIGATION_GUARD_UNAVAILABLE",
+                "error": browser_runtime_unavailable_message(exc),
+            }
+    if _ensure_playwright() is None:
+        if reason == "ui_unreachable":
+            return {
+                "ok": False,
+                "allowed": False,
+                "code": "SNAPSHOT_CREDENTIAL_UNAVAILABLE",
+                "error": "ui_unreachable requires an interactive browser snapshot.",
+            }
+        return {"ok": True, "allowed": True, "targetUrl": target_url}
+    session = _get_session()
+    try:
+        return await session.navigation_guard(target_url, reason, snapshot_token)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "allowed": False,
+            "code": "NAVIGATION_GUARD_UNAVAILABLE",
+            "error": browser_runtime_unavailable_message(exc),
+        }
+
+
 async def click(selector: str) -> dict[str, Any]:
     """Click an element on the current page by CSS selector."""
     if electron_browser_available():
@@ -2166,6 +2339,7 @@ async def scroll_page(
     if session._page is None:
         return {"ok": False, "error": "No page open. Call browser_navigate first."}
     try:
+        session._invalidate_snapshot()
         page = await session.page()
         px = x
         py = y

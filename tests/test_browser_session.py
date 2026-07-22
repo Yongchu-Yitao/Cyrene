@@ -1527,10 +1527,16 @@ async def test_browser_navigate_rejects_visible_target_link(monkeypatch):
 
     navigated = False
 
-    async def fake_visible_link_matches(url):
-        assert url == "https://example.com/detail"
+    async def fake_navigation_guard(url, reason, snapshot_token):
+        assert (url, reason, snapshot_token) == (
+            "https://example.com/detail",
+            "ui_unreachable",
+            "snapshot-secret",
+        )
         return {
-            "ok": True,
+            "ok": False,
+            "allowed": False,
+            "code": "VISIBLE_LINK_AVAILABLE",
             "targetUrl": url,
             "matches": [{"ref": "e12", "text": "Details", "url": url}],
         }
@@ -1540,11 +1546,19 @@ async def test_browser_navigate_rejects_visible_target_link(monkeypatch):
         navigated = True
         return {}
 
-    monkeypatch.setattr("cyrene.browser.visible_link_matches", fake_visible_link_matches)
+    monkeypatch.setattr("cyrene.browser.navigation_guard", fake_navigation_guard)
     monkeypatch.setattr("cyrene.browser.navigate", fake_navigate)
 
     raw = await tool._tool_browser_navigate(
-        {"url": "https://example.com/detail", "reason": "ui_unreachable"}, None, 0, "db", None
+        {
+            "url": "https://example.com/detail",
+            "reason": "ui_unreachable",
+            "snapshot_token": "snapshot-secret",
+        },
+        None,
+        0,
+        "db",
+        None,
     )
     result = json.loads(raw)
 
@@ -1558,17 +1572,17 @@ async def test_browser_navigate_rejects_visible_target_link(monkeypatch):
 async def test_browser_navigate_allows_user_requested_exact_url(monkeypatch):
     from cyrene.tool_impl import browser_navigate as tool
 
-    scan_called = False
+    guard_args = None
 
-    async def fake_visible_link_matches(_url):
-        nonlocal scan_called
-        scan_called = True
-        return {"ok": True, "matches": [{"ref": "e1"}]}
+    async def fake_navigation_guard(url, reason, snapshot_token):
+        nonlocal guard_args
+        guard_args = (url, reason, snapshot_token)
+        return {"ok": True, "allowed": True, "targetUrl": url}
 
     async def fake_navigate(url, **_kwargs):
         return {"url": url, "title": "Exact", "text": "", "links": [], "error": None}
 
-    monkeypatch.setattr("cyrene.browser.visible_link_matches", fake_visible_link_matches)
+    monkeypatch.setattr("cyrene.browser.navigation_guard", fake_navigation_guard)
     monkeypatch.setattr("cyrene.browser.navigate", fake_navigate)
 
     raw = await tool._tool_browser_navigate(
@@ -1576,7 +1590,79 @@ async def test_browser_navigate_allows_user_requested_exact_url(monkeypatch):
     )
 
     assert "Title: Exact" in raw
-    assert scan_called is False
+    assert guard_args == ("https://example.com/exact", "user_exact_url", "")
+
+
+async def test_browser_navigate_returns_current_url_guard_error(monkeypatch):
+    from cyrene.tool_impl import browser_navigate as tool
+
+    async def fake_navigation_guard(url, reason, snapshot_token):
+        return {
+            "ok": False,
+            "allowed": False,
+            "code": "ALREADY_AT_TARGET",
+            "url": url,
+            "error": "already there",
+        }
+
+    async def unexpected_navigate(*_args, **_kwargs):
+        raise AssertionError("navigate must not run")
+
+    monkeypatch.setattr("cyrene.browser.navigation_guard", fake_navigation_guard)
+    monkeypatch.setattr("cyrene.browser.navigate", unexpected_navigate)
+
+    result = json.loads(await tool._tool_browser_navigate(
+        {"url": "https://example.com/current", "reason": "starting_page"}, None, 0, "db", None
+    ))
+
+    assert result["code"] == "ALREADY_AT_TARGET"
+
+
+def test_browser_snapshot_prioritizes_interactive_elements_and_exposes_credential():
+    import inspect
+
+    from cyrene import browser
+    from cyrene.tool_impl import browser_snapshot
+
+    interactive = "input,textarea,select,button,a[href]"
+    assert interactive in browser._BROWSER_INSPECT_JS
+    assert browser._BROWSER_INSPECT_JS.index(interactive) < browser._BROWSER_INSPECT_JS.index("summary,label")
+    assert "Snapshot credential:" in inspect.getsource(browser_snapshot._tool_browser_snapshot)
+
+
+async def test_browser_click_ref_reports_popup_as_new_active_tab(monkeypatch):
+    from cyrene.tool_impl import browser_click_ref as tool
+
+    async def fake_click_ref(ref):
+        assert ref == "e9"
+        return {
+            "ok": True,
+            "url": "https://www.bilibili.com/video/BV1test/",
+            "title": "Video",
+            "tabId": "tab_2",
+            "active_tab_id": "tab_2",
+            "opened_new_tab": True,
+            "source_tab_id": "tab_1",
+            "source_url": "https://search.bilibili.com/all?keyword=test",
+        }
+
+    monkeypatch.setattr("cyrene.browser.click_ref", fake_click_ref)
+
+    result = await tool._tool_browser_click_ref({"ref": "e9"}, None, 0, "db", None)
+
+    assert "URL: https://www.bilibili.com/video/BV1test/" in result
+    assert "Opened new active tab: tab_2" in result
+    assert "source tab: tab_1" in result
+
+
+def test_electron_click_finish_uses_active_popup_tab():
+    main = (Path(__file__).resolve().parent.parent / "electron" / "main.js").read_text(encoding="utf-8")
+    finish = main.split("async _finishClick(tab, info)", 1)[1].split("async click({ selector", 1)[0]
+
+    assert "this.tabs.get(this.activeTabId) || tab" in finish
+    assert "this.pageSnapshot(activeTab.id" in finish
+    assert "openedNewTab" in finish
+    assert "sourceTabId" in finish
 
 
 async def test_screenshot_uses_electron_rpc_and_writes_png(monkeypatch, tmp_path):

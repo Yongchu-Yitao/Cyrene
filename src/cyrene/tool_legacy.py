@@ -1813,33 +1813,15 @@ async def _tool_list_skills(_args: dict[str, Any], _bot: Any, _chat_id: int, _db
 
 
 async def _tool_browser_navigate(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.browser import navigate, visible_link_matches
+    from cyrene.browser import navigate, navigation_guard
     url = str(args.get("url") or "").strip()
     if not url:
         return "No URL provided."
     reason = str(args.get("reason") or "").strip()
-    if reason != "user_exact_url":
-        scan = await visible_link_matches(url)
-        matches = scan.get("matches") if isinstance(scan.get("matches"), list) else []
-        if matches:
-            return _json_result({
-                "ok": False,
-                "code": "VISIBLE_LINK_AVAILABLE",
-                "error": (
-                    "Target URL is already available as a visible link on the current page. "
-                    "Use browser_click_ref or browser_click_text instead of browser_navigate."
-                ),
-                "target_url": str(scan.get("targetUrl") or url),
-                "matches": [
-                    {
-                        "ref": str(item.get("ref") or ""),
-                        "text": str(item.get("text") or ""),
-                        "url": str(item.get("url") or ""),
-                    }
-                    for item in matches
-                    if isinstance(item, dict)
-                ],
-            })
+    snapshot_token = str(args.get("snapshot_token") or "").strip()
+    guard = await navigation_guard(url, reason, snapshot_token)
+    if guard.get("allowed") is not True:
+        return _json_result(guard)
     result = await navigate(url, extract_text=True)
     from cyrene.browser import electron_browser_available
     parts = [f"Title: {result.get('title', '—')}", f"URL: {result.get('url', url)}"]
@@ -2838,6 +2820,10 @@ TOOL_DEFS = [
                         "type": "string",
                         "enum": ["starting_page", "user_exact_url", "ui_unreachable"],
                         "description": "Why direct URL navigation is necessary. Use user_exact_url only when the user explicitly requested this exact URL.",
+                    },
+                    "snapshot_token": {
+                        "type": "string",
+                        "description": "Required only for ui_unreachable. Must be the opaque token returned by the latest browser_snapshot for the active page.",
                     },
                 },
                 "required": ["url", "reason"],
