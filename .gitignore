@@ -77,3 +77,9 @@ gaia_*.json
 # Scripts and tools
 scripts/
 finetune/
+docs/research-workbench-report/artifact.json
+.gitignore
+.gitignore
+docs/research-workbench-report/research-workbench-report.html
+.gitignore
+docs/research-workbench-roadmap.md
