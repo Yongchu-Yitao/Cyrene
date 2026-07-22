@@ -750,6 +750,7 @@ function wbcAttachmentVisual(file) {
 function wbcAttachmentTypeLabel(file) {
   var kind = wbcAttachmentVisualKind(file);
   var fallbacks = {
+    image: "Image",
     pdf: "PDF document",
     doc: "Word document",
     sheet: "Spreadsheet",
@@ -3218,14 +3219,193 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
 // One stable layout box per transcript entry.  Browser avoidance is applied to
 // this wrapper so the existing child alignment stays intact: user bubbles keep
 // hugging the lane's right edge and assistant content keeps its left edge.
-function WbcThreadItem({ children }) {
-  return <div className="wbc-thread-item" data-wbc-thread-item="true">{children}</div>;
+function wbcNavigationPreview(value) {
+  return String(value == null ? "" : value)
+    .replace(/```[\s\S]*?```/g, function (block) { return block.replace(/```[^\n]*\n?/g, "").replace(/```/g, ""); })
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/(^|\s)[#>*_`~-]+/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 150);
+}
+
+function wbcUserMessageNavigationMeta(message) {
+  var msg = message || {};
+  var prefix = wbcT("workbenchChat.navigation.you", "You");
+  var contentPreview = wbcNavigationPreview(msg.content || "");
+  var attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+  var attachmentTypes = [];
+  attachments.forEach(function (file) {
+    var type = wbcAttachmentTypeLabel(file);
+    if (type && attachmentTypes.indexOf(type) === -1) attachmentTypes.push(type);
+  });
+  var attachmentPreview = attachmentTypes.slice(0, 2).join(" · ");
+  if (attachmentTypes.length === 1 && attachments.length > 1) attachmentPreview += " × " + attachments.length;
+  if (attachmentTypes.length > 2) attachmentPreview += " · +" + (attachmentTypes.length - 2);
+  var preview = contentPreview || attachmentPreview || prefix;
+  return {
+    role: "user",
+    label: contentPreview ? prefix + ": " + preview : preview,
+    text: preview,
+  };
+}
+
+function WbcThreadItem({ children, navigation }) {
+  var nav = navigation || null;
+  return (
+    <div
+      className="wbc-thread-item"
+      data-wbc-thread-item="true"
+      data-wbc-nav-item={nav ? "true" : undefined}
+      data-wbc-nav-role={nav ? nav.role : undefined}
+      data-wbc-nav-label={nav ? nav.label : undefined}
+      data-wbc-nav-text={nav ? nav.text : undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
+function WbcConversationNavigator({ threadRef, chatId }) {
+  var [snapshot, setSnapshot] = useWbcState({
+    visible: false,
+    active: -1,
+    markers: [],
+  });
+
+  useWbcEffect(function () {
+    var thread = threadRef.current;
+    if (!thread) return undefined;
+    var raf = 0;
+    var itemObserver = typeof ResizeObserver === "function"
+      ? new ResizeObserver(scheduleMeasure)
+      : null;
+    var observedItems = typeof WeakSet === "function" ? new WeakSet() : null;
+
+    function collectItems() {
+      var items = Array.prototype.slice.call(thread.querySelectorAll(":scope > [data-wbc-nav-item='true']"));
+      if (itemObserver) {
+        items.forEach(function (item) {
+          if (observedItems && observedItems.has(item)) return;
+          if (observedItems) observedItems.add(item);
+          itemObserver.observe(item);
+        });
+      }
+      return items;
+    }
+
+    function measure() {
+      raf = 0;
+      var clientHeight = Math.max(1, thread.clientHeight);
+      var items = collectItems();
+      var viewportCenter = thread.scrollTop + clientHeight * 0.42;
+      var active = -1;
+      var activeDistance = Infinity;
+      var markers = items.map(function (item, index) {
+        var center = item.offsetTop + item.offsetHeight / 2;
+        var distance = Math.abs(center - viewportCenter);
+        if (distance < activeDistance) {
+          activeDistance = distance;
+          active = index;
+        }
+        var role = String(item.dataset.wbcNavRole || "assistant");
+        return {
+          index: index,
+          role: role,
+          label: String(item.dataset.wbcNavLabel || ""),
+          text: String(item.dataset.wbcNavText || item.dataset.wbcNavLabel || ""),
+        };
+      });
+      setSnapshot({
+        visible: markers.length > 5,
+        active: active,
+        markers: markers,
+      });
+    }
+
+    function scheduleMeasure() {
+      if (raf) return;
+      raf = requestAnimationFrame(measure);
+    }
+
+    var threadObserver = typeof ResizeObserver === "function"
+      ? new ResizeObserver(scheduleMeasure)
+      : null;
+    if (threadObserver) threadObserver.observe(thread);
+    var mutationObserver = typeof MutationObserver === "function"
+      ? new MutationObserver(scheduleMeasure)
+      : null;
+    if (mutationObserver) mutationObserver.observe(thread, { childList: true, subtree: true, characterData: true });
+    thread.addEventListener("scroll", scheduleMeasure, { passive: true });
+    window.addEventListener("resize", scheduleMeasure);
+    scheduleMeasure();
+    return function () {
+      if (raf) cancelAnimationFrame(raf);
+      if (threadObserver) threadObserver.disconnect();
+      if (itemObserver) itemObserver.disconnect();
+      if (mutationObserver) mutationObserver.disconnect();
+      thread.removeEventListener("scroll", scheduleMeasure);
+      window.removeEventListener("resize", scheduleMeasure);
+    };
+  }, [threadRef, chatId]);
+
+  function jumpToMarker(index) {
+    var thread = threadRef.current;
+    if (!thread) return;
+    var items = thread.querySelectorAll(":scope > [data-wbc-nav-item='true']");
+    var target = items[index];
+    if (!target) return;
+    var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    thread.scrollTo({
+      top: Math.max(0, target.offsetTop - 18),
+      behavior: reducedMotion ? "auto" : "smooth",
+    });
+  }
+
+  if (!snapshot.visible) return null;
+  return (
+    <nav className="wbc-conversation-nav" aria-label={wbcT("workbenchChat.navigation.label", "Conversation navigation")}>
+      <button
+        type="button"
+        className="wbc-conversation-nav-trigger"
+        aria-label={wbcT("workbenchChat.navigation.label", "Conversation navigation")}
+      >
+        <span /><span /><span /><span /><span />
+      </button>
+      <div className="wbc-conversation-nav-panel">
+        <div className="wbc-conversation-nav-heading">
+          <span>{wbcT("workbenchChat.navigation.messages", "Your messages")}</span>
+          <span>{snapshot.markers.length}</span>
+        </div>
+        <div className="wbc-conversation-nav-list">
+          {snapshot.markers.map(function (marker) {
+            return (
+              <button
+                type="button"
+                key={marker.index}
+                className={"wbc-conversation-marker " + marker.role + (marker.index === snapshot.active ? " active" : "")}
+                aria-label={wbcT("workbenchChat.navigation.jump", "Jump to: {label}", { label: marker.label })}
+                aria-current={marker.index === snapshot.active ? "location" : undefined}
+                onClick={function () { jumpToMarker(marker.index); }}
+              >
+                <span className="wbc-conversation-marker-index">{marker.index + 1}</span>
+                <span className="wbc-conversation-marker-text">{marker.text}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </nav>
+  );
 }
 
 function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, sideVisible, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMinimize, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete }) {
   var stageRef = useWbcRef(null);
   var scrollRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
+  var [showScrollToBottom, setShowScrollToBottom] = useWbcState(false);
   var avoidanceRafRef = useWbcRef(0);
   var avoidancePreserveRef = useWbcRef(false);
   var avoidanceScrollingRef = useWbcRef(false);
@@ -3367,6 +3547,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     var el = scrollRef.current;
     if (!el) return;
     stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    setShowScrollToBottom(!stickRef.current);
     // A wheel/trackpad gesture owns both scrollTop and the visible message
     // anchor. Do not change avoided message widths during the gesture: their
     // height reflow would make the transcript jump in the opposite direction.
@@ -3387,6 +3568,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
 
   useWbcEffect(function () {
     stickRef.current = true;
+    setShowScrollToBottom(false);
     var el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
     scheduleBrowserAvoidance();
@@ -3441,6 +3623,15 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   useWbcEffect(function () {
     scheduleBrowserAvoidance();
   }, [messages.length, runtime && runtime.text, runtime && runtime.progress && runtime.progress.length, runtime && runtime.activities && runtime.activities.length, browserVisible, browserWindowMode, sideVisible]);
+
+  function scrollToConversationBottom() {
+    var el = scrollRef.current;
+    if (!el) return;
+    stickRef.current = true;
+    setShowScrollToBottom(false);
+    var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollTo({ top: el.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
+  }
 
   if (!project) {
     return <main className="wbc-main"><div className="workbench-empty">{wbcT("workbenchChat.noProject", "Select a project first.")}</div></main>;
@@ -3532,7 +3723,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
             ? { ...msg, trace: [] }
             : msg;
           return (
-            <WbcThreadItem key={msg.id}>
+            <WbcThreadItem key={msg.id} navigation={msg.role === "user" ? wbcUserMessageNavigationMeta(msg) : null}>
               {msg.role === "user"
                 ? <WbcUserMessage msg={visibleMessage} onOpenFile={onOpenFile} onEditMessage={onEditMessage} canEdit={canEdit} onRetryMessage={canRetryUser ? onRetryMessage : null} />
                 : <WbcAssistantMessage msg={visibleMessage} onOpenFile={onOpenFile} onRetryMessage={canRetryAssistant ? onRetryMessage : null} />}
@@ -3546,6 +3737,18 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
           <WbcThreadItem><WbcQuestionPrompt pending={chat.pendingQuestion} onAnswer={onAnswer} busy={running} /></WbcThreadItem>
         )}
       </div>
+      <WbcConversationNavigator threadRef={scrollRef} chatId={chat && chat.id} />
+      {showScrollToBottom && (
+        <button
+          type="button"
+          className="wbc-scroll-to-bottom"
+          onClick={scrollToConversationBottom}
+          title={wbcT("workbenchChat.navigation.backToBottom", "Back to latest message")}
+          aria-label={wbcT("workbenchChat.navigation.backToBottom", "Back to latest message")}
+        >
+          <span aria-hidden="true">{WBC_ICONS.chevronsRight}</span>
+        </button>
+      )}
       <div className="wbc-browser-movement-region">
         <WbcBrowserFloatingSurface
           browserState={browserState}

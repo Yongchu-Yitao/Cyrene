@@ -11100,7 +11100,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 .wbc-thread-stage {
   --wbc-thread-inset-top: 18px;
-  --wbc-thread-inset-inline: 22px;
+  --wbc-thread-inset-inline: 28px;
   --wbc-thread-inset-bottom: 8px;
   position: relative;
   flex: 1 1 auto;
@@ -11119,6 +11119,249 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* Long-conversation navigation. At rest this is only a quiet message cluster;
+   hover or keyboard focus opens a compact list of the user's messages. */
+.wbc-conversation-nav {
+  position: absolute;
+  z-index: 20;
+  top: 50%;
+  left: 4px;
+  width: 20px;
+  height: 38px;
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.wbc-conversation-nav-trigger {
+  position: absolute;
+  inset: 2px 3px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-line-2) 42%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 56%, transparent);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+  backdrop-filter: blur(8px);
+  color: var(--wb-muted);
+  cursor: default;
+  opacity: 0.8;
+  transition: opacity 100ms ease, transform 140ms ease, border-color 120ms ease;
+}
+
+.wbc-conversation-nav-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 42%, transparent);
+  outline-offset: 2px;
+}
+
+.wbc-conversation-nav-trigger > span {
+  width: 5px;
+  height: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-muted) 62%, transparent);
+}
+
+.wbc-conversation-nav-trigger > span:nth-child(2),
+.wbc-conversation-nav-trigger > span:nth-child(4) {
+  width: 7px;
+}
+
+.wbc-conversation-nav-trigger > span:nth-child(3) {
+  width: 9px;
+  background: color-mix(in srgb, var(--wb-accent) 76%, var(--wb-muted));
+}
+
+.wbc-conversation-nav:hover .wbc-conversation-nav-trigger,
+.wbc-conversation-nav:focus-within .wbc-conversation-nav-trigger {
+  opacity: 0;
+  transform: scale(0.92);
+}
+
+.wbc-conversation-nav-panel {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: min(280px, calc(100vw - 96px));
+  max-height: min(420px, calc(100vh - 180px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--wb-line-2);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 97%, transparent);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(16px);
+  opacity: 0;
+  transform: translateY(-50%) translateX(-4px) scale(0.97);
+  transform-origin: left center;
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity 120ms ease, transform 160ms cubic-bezier(.2, .8, .2, 1), visibility 0s linear 160ms;
+}
+
+.wbc-conversation-nav:hover .wbc-conversation-nav-panel,
+.wbc-conversation-nav:focus-within .wbc-conversation-nav-panel {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0) scale(1);
+  pointer-events: auto;
+  visibility: visible;
+  transition-delay: 55ms, 55ms, 0s;
+}
+
+.wbc-conversation-nav-heading {
+  flex: 0 0 auto;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--wb-line);
+  color: var(--wb-muted);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbc-conversation-nav-heading > span:last-child {
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-faint);
+  text-align: center;
+  font-size: calc(10.5px * var(--wb-ui-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-conversation-nav-list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  scrollbar-width: thin;
+}
+
+.wbc-conversation-marker {
+  width: 100%;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px 6px 7px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted);
+  text-align: left;
+  cursor: pointer;
+  transition: color 100ms ease, background 100ms ease;
+}
+
+.wbc-conversation-marker:hover,
+.wbc-conversation-marker:focus-visible {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+  outline: none;
+}
+
+.wbc-conversation-marker.active {
+  background: color-mix(in srgb, var(--wb-accent) 9%, transparent);
+  color: var(--wb-text);
+}
+
+.wbc-conversation-marker-index {
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--wb-muted) 8%, transparent);
+  color: var(--wb-faint);
+  font-size: calc(10px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.wbc-conversation-marker.active .wbc-conversation-marker-index {
+  background: color-mix(in srgb, var(--wb-accent) 16%, transparent);
+  color: var(--wb-accent);
+}
+
+.wbc-conversation-marker-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  line-height: 1.35;
+}
+
+.wbc-scroll-to-bottom {
+  position: absolute;
+  z-index: 21;
+  left: 50%;
+  bottom: 12px;
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--wb-line-2);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 96%, transparent);
+  color: var(--wb-muted);
+  box-shadow: 0 7px 20px rgba(15, 23, 42, 0.14), 0 1px 4px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(12px);
+  transform: translateX(-50%);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.wbc-scroll-to-bottom > span {
+  display: inline-flex;
+  transform: rotate(90deg);
+}
+
+.wbc-scroll-to-bottom svg {
+  width: 18px;
+  height: 18px;
+}
+
+.wbc-scroll-to-bottom:hover {
+  border-color: color-mix(in srgb, var(--wb-accent) 45%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-accent) 8%, var(--wb-card-bg-strong));
+  color: var(--wb-accent);
+  transform: translateX(-50%) translateY(-1px);
+}
+
+.wbc-scroll-to-bottom:active {
+  transform: translateX(-50%) scale(0.96);
+}
+
+.wbc-scroll-to-bottom:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 42%, transparent);
+  outline-offset: 2px;
+}
+
+html[data-theme="dark"] .wbc-conversation-nav-panel,
+html[data-theme="dark"] .wbc-scroll-to-bottom {
+  box-shadow: 0 9px 24px rgba(0, 0, 0, 0.34);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-conversation-nav-trigger,
+  .wbc-conversation-nav-panel,
+  .wbc-conversation-marker,
+  .wbc-scroll-to-bottom {
+    transition: none;
+    animation: none;
+  }
 }
 
 /* ---- floating browser window ---- */

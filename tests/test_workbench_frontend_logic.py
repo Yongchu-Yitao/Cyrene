@@ -41,6 +41,36 @@ def test_workbench_chat_restores_project_cache_before_background_refresh():
     assert "setChatLoading(!cachedChat);" in source
 
 
+def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function WbcConversationNavigator" in source
+    assert 'data-wbc-nav-item={nav ? "true" : undefined}' in source
+    assert 'className="wbc-conversation-nav"' in source
+    assert "scrollToConversationBottom" in source
+    assert 'className="wbc-scroll-to-bottom"' in source
+    assert 'navigation={msg.role === "user" ? wbcUserMessageNavigationMeta(msg) : null}' in source
+    assert "visible: markers.length > 5" in source
+    assert 'className="wbc-conversation-nav-trigger"' in source
+    assert 'className="wbc-conversation-nav-panel"' in source
+    assert 'className="wbc-conversation-nav-list"' in source
+    assert "hoveredIndex" not in source
+    assert "var contentPreview = wbcNavigationPreview(msg.content || \"\");" in source
+    assert "var attachmentPreview = attachmentTypes.slice(0, 2).join(\" · \");" in source
+    assert "contentPreview ? prefix + \": \" + preview : preview" in source
+    assert '"workbenchChat.attachmentType.image": "图片"' in (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    assert ".wbc-conversation-nav" in styles
+    assert ".wbc-conversation-nav:hover .wbc-conversation-nav-panel" in styles
+    assert ".wbc-conversation-nav-list" in styles
+    assert ".wbc-scroll-to-bottom" in styles
+
+
 def test_maximized_browser_has_compact_agent_chat_with_transient_status():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
