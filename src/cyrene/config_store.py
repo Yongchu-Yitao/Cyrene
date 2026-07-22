@@ -632,6 +632,11 @@ def ctx_limit_for_model(model_name: str) -> int:
             limit = _parse_ctx_str(model.get("ctx", ""))
             if limit:
                 return limit
+    return _known_ctx_limit_for_model(model_name)
+
+
+def _known_ctx_limit_for_model(model_name: str) -> int:
+    """Return only the built-in family window, without reading user config."""
     ml = model_name.lower()
     if "claude" in ml or any(x in ml for x in ("opus-4", "sonnet-4", "haiku-4")):
         return 200_000
@@ -690,7 +695,10 @@ def effective_ctx_limit_for_model(
     explicit = configured_ctx_limit_for_model(model_name, configured)
     if explicit > 0:
         return explicit
-    known_for_model = ctx_limit_for_model(model_name)
+    # Do not call ctx_limit_for_model() here: it reads the process-global model
+    # settings and can override the explicit ``models`` snapshot supplied by
+    # the caller (for example while evaluating a pending settings change).
+    known_for_model = _known_ctx_limit_for_model(model_name)
     if known_for_model > 0:
         return known_for_model
     limits: list[int] = []
@@ -702,7 +710,9 @@ def effective_ctx_limit_for_model(
         ).strip()
         if not candidate_name:
             continue
-        limit = ctx_limit_for_model(candidate_name)
+        limit = configured_ctx_limit_for_model(candidate_name, configured)
+        if limit <= 0:
+            limit = _known_ctx_limit_for_model(candidate_name)
         if limit > 0:
             limits.append(limit)
     if limits:
