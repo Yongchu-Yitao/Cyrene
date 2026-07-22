@@ -8,6 +8,13 @@ from functools import lru_cache
 from pathlib import Path
 
 
+def _public_version(value: str) -> str:
+    """Map PEP 440 local build metadata to Cyrene's public release label."""
+    if value.endswith("+fix"):
+        return value[:-4] + "-fix"
+    return value
+
+
 def _bundle_contents_dir() -> Path | None:
     exe = Path(sys.executable).resolve()
     parts = exe.parts
@@ -40,10 +47,10 @@ def get_version() -> str:
     for pyproject in _pyproject_candidates():
         if pyproject.exists():
             with open(pyproject, "rb") as f:
-                return tomllib.load(f)["project"]["version"]
+                return _public_version(tomllib.load(f)["project"]["version"])
 
     try:
-        return importlib.metadata.version("cyrene")
+        return _public_version(importlib.metadata.version("cyrene"))
     except importlib.metadata.PackageNotFoundError:
         return "0.0.0"
 

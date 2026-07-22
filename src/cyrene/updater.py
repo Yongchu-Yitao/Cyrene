@@ -28,6 +28,12 @@ _DEFAULT_UPDATE_CHECK_INTERVAL_SECONDS = 6 * 60 * 60
 _notified_update_keys: set[str] = set()
 
 
+def _release_version(value: str) -> Version:
+    """Parse public release labels, including the PEP 440 build alias for -fix."""
+    normalized = value[:-4] + "+fix" if value.endswith("-fix") else value
+    return Version(normalized)
+
+
 def _current_version() -> str:
     """从 pyproject.toml 读取当前版本。"""
     return get_version()
@@ -143,7 +149,7 @@ async def _fetch_target_release(
             continue
         candidate = str(rel.get("tag_name", "")).lstrip("v")
         try:
-            cand_v = Version(candidate)
+            cand_v = _release_version(candidate)
         except ValueError:
             continue
         if best_v is None or cand_v > best_v:
@@ -173,8 +179,8 @@ async def check_for_update(include_prerelease: bool | None = None) -> UpdateInfo
                 return UpdateInfo(available=False, current_version=current, latest_version="")
 
             try:
-                cur_v = Version(current)
-                new_v = Version(latest)
+                cur_v = _release_version(current)
+                new_v = _release_version(latest)
             except ValueError:
                 logger.debug("Invalid version format: cur=%s latest=%s", current, latest)
                 return UpdateInfo(available=False, current_version=current, latest_version=latest)

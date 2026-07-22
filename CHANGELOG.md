@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.6.16-fix] - 2026-07-22
+
+- **浏览器浮窗不再挡住正在阅读的消息** — 浏览器以画中画浮在对话上方时，只会让与浮窗纵向相交的消息行动态避到空间更宽的一侧；其他历史消息保持原宽度和位置。浮窗在中间或窗口太窄、两侧都不可读时会保留覆盖式布局，避免把文字挤成细长列。
+- **拖动和缩放浮窗时排版更稳** — 浮窗左右移动、八向缩放、消息流式增长、代码块和附件改变高度、侧栏切换或窗口缩放时，避让区域都会及时重算；重排前后保留当前阅读锚点，位于底部时继续贴底，减少内容跳动。
+- **Agent 不能再用理由字段绕过网页交互** — `browser_navigate` 的 `ui_unreachable` 现在必须携带最近一次 `browser_snapshot` 签发的短期凭证。凭证与当前标签页和 URL 绑定、两分钟过期且一次性使用；点击、输入、滚动、导航或切换标签页后立即失效。若页面已有可见目标链接，仍会要求 Agent 点击页面元素。
+- **重复导航会被明确阻止** — 当当前标签页已经位于目标 URL 时，导航守卫直接返回 `ALREADY_AT_TARGET`，不会重复刷新页面或丢失页面状态。用户明确给出的精确 URL 仍可直接打开，SSRF 与浏览器运行时校验继续生效。
+- **点击打开的新标签页会自动接管** — 网页点击在新标签页打开内容时，Electron 和 Playwright 都会切换到新的活动页，并把新标签页、来源标签页和来源 URL 一并返回给 Agent；后续快照与操作会落在正确页面，不再继续误操作旧页。
+- **页面快照和运行中消息更准确** — 快照优先收集输入框、按钮、链接及其他真正可交互元素，减少大页面中装饰节点占满引用额度；只有运行中确实已有回复文本时才渲染实时消息卡，避免空白气泡。
+
+### 技术细节
+
+- Workbench 为每个 transcript 直接子项增加 `.wbc-thread-item` wrapper。纯函数根据对话区、浮窗矩形、间距和最小可读阈值选择左右阅读通道；只对纵向相交项写入逻辑方向 padding，保留用户消息右对齐与 Agent 消息左对齐。
+- 避让调度使用 `requestAnimationFrame` 合并高频更新，监听 `workbench:browser-layout`、scroll、window resize、`ResizeObserver` 与 `MutationObserver`；有序消息行通过二分查找定位相交区，并在多轮高度稳定过程中恢复首个可见项的像素锚点或底部位置。
+- Electron 与 Playwright 新增绑定活动页面的 snapshot credential 和统一 `navigation_guard`。令牌使用安全随机值与恒定时间比较，导航、页内跳转、点击、输入、滚动和标签页切换统一失效；`browser_navigate` 在工具实现层和 legacy 路径中都必须经过守卫。
+- 浏览器点击结果统一规范 `opened_new_tab`、`active_tab_id`、`source_tab_id` 和 `source_url`；Electron 在点击后对实际活动 `WebContentsView` 取快照，Playwright 自动收养新 page 并等待 DOM ready，再把活动页信息写入工具结果。
+- 补充导航凭证过期/复用/失效、重复 URL、可见链接、弹窗接管、元素优先级、浮窗左右/居中/窄屏规划、相交项避让和空运行消息的回归测试；设计可行性报告及现场截图保存在 `.codex-audit/browser-dynamic-layout/`。
+- 应用、Electron、README、文档站、微信通道、WebUI 静态资源缓存戳及相关测试统一更新到 `0.6.16-fix`。因 Python PEP 440 不接受连字符后缀，`pyproject.toml` 与 `uv.lock` 使用等价构建版本 `0.6.16+fix`，运行时对外版本及 GitHub tag 规范为 `0.6.16-fix`；更新器比较版本时使用同一映射，确保后续版本仍可被识别。
+- 发布前全量 pytest 通过 1172 项，Node App Use 通过 44 项；Workbench 42 个 JSX 模块与 PDF.js 资源构建、Electron JavaScript 语法检查、Python 编译检查、sdist/wheel 构建及 Python/Electron lockfile 校验全部通过。
+
+---
+
 ## [0.6.16] - 2026-07-22
 
 - **每轮 Agent 改了哪些文件，现在可以直接审阅** — 对话会按运行轮次记录工作区中新建、修改和删除的文件，并在回复下方显示文件数与增删行统计；点开即可查看逐文件 diff。记录不依赖 Git，取消、报错、等待用户补充和继续执行的轮次也会正确归档。

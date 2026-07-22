@@ -28,6 +28,14 @@ import cyrene.updater as updater
 
 VERSION = "0.6.0b2"
 
+
+def test_fix_release_label_maps_to_pep440_local_version():
+    from cyrene.updater import _release_version
+
+    assert str(_release_version("0.6.16-fix")) == "0.6.16+fix"
+    assert _release_version("0.6.17") > _release_version("0.6.16-fix")
+
+
 # Ordered exactly as GitHub returns them: the macOS .dmg sorts first, which is
 # precisely the asset a broken platform match falls back to via assets[0].
 RELEASE_ASSETS = [
