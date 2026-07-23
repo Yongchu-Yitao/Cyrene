@@ -9,12 +9,13 @@ import mimetypes
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import aiosqlite
 from fastapi import APIRouter, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from cyrene.attachments import UPLOADS_DIR, safe_attachment_filename
+from cyrene.attachments import EXPORTS_DIR, UPLOADS_DIR, safe_attachment_filename
 from cyrene.knowledge import bibliography, ingest, library, retrieve, store, zotero
 from webui.api_errors import error_response
 from webui.routes_workbench_knowledge import _ensure_kb_db, _resolve_workspace_id
@@ -55,6 +56,52 @@ async def _find_raw_attachment(db_path: str, item_id: str) -> dict[str, Any] | N
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+
+async def _viewed_item_ids(
+    db_path: str, *, attachment_url: str = "", file_name: str = ""
+) -> list[str]:
+    await library.sync_knowledge_documents(db_path)
+    parsed_path = unquote(urlparse(str(attachment_url or "")).path)
+    raw_prefix = "/api/workbench/library/items/"
+    raw_suffix = "/raw"
+    if parsed_path.startswith(raw_prefix) and parsed_path.endswith(raw_suffix):
+        item_id = parsed_path[len(raw_prefix):-len(raw_suffix)].strip("/")
+        return [item_id] if item_id and await library.get_item(db_path, item_id) else []
+
+    candidate_paths: list[str] = []
+    safe_name = safe_attachment_filename(
+        Path(parsed_path).name, fallback_stem="attachment"
+    )
+    if parsed_path.startswith("/api/chat/upload/"):
+        candidate_paths.append(str((UPLOADS_DIR / safe_name).resolve()))
+    elif parsed_path.startswith("/api/chat/export/"):
+        candidate_paths.append(str((EXPORTS_DIR / safe_name).resolve()))
+
+    async with aiosqlite.connect(db_path, timeout=30) as db:
+        if candidate_paths:
+            placeholders = ",".join("?" for _ in candidate_paths)
+            cursor = await db.execute(
+                f"""SELECT DISTINCT a.item_id FROM library_attachments a
+                    LEFT JOIN kb_documents d ON d.id=a.kb_document_id
+                    WHERE a.path IN ({placeholders}) OR d.path IN ({placeholders})""",
+                [*candidate_paths, *candidate_paths],
+            )
+            ids = [str(row[0]) for row in await cursor.fetchall() if row[0]]
+            if ids:
+                return ids
+
+        normalized_name = Path(str(file_name or "")).name.strip()
+        if not normalized_name:
+            return []
+        cursor = await db.execute(
+            """SELECT DISTINCT a.item_id FROM library_attachments a
+               LEFT JOIN kb_documents d ON d.id=a.kb_document_id
+               WHERE lower(COALESCE(NULLIF(a.filename,''),NULLIF(d.name,''),''))=lower(?)""",
+            (normalized_name,),
+        )
+        ids = [str(row[0]) for row in await cursor.fetchall() if row[0]]
+        return ids if len(ids) == 1 else []
 
 
 async def _indexed_item_text(
@@ -236,6 +283,29 @@ def register_workbench_library_routes(router: APIRouter) -> None:
         except Exception:
             logger.exception("Failed to update literature item %s", item_id)
             return error_response("Update failed", 500, "library_update_failed")
+
+    @router.post("/api/workbench/library/read")
+    async def wb_library_mark_read(body: dict[str, Any], workspace: str = ""):
+        try:
+            db_path = await _ensure_kb_db(workspace)
+            item_ids = await _viewed_item_ids(
+                db_path,
+                attachment_url=str(body.get("attachment_url") or ""),
+                file_name=str(body.get("file_name") or ""),
+            )
+            updated = []
+            for item_id in item_ids:
+                item = await library.update_item(
+                    db_path, item_id, {"reading_status": "read"}
+                )
+                if item:
+                    updated.append(item)
+            return {"ok": True, "updated": len(updated), "items": updated}
+        except Exception:
+            logger.exception("Failed recording literature read event")
+            return error_response(
+                "Read event failed", 500, "library_read_event_failed"
+            )
 
     @router.delete("/api/workbench/library/items/{item_id}")
     async def wb_delete_library_item(
@@ -434,6 +504,7 @@ def register_workbench_library_routes(router: APIRouter) -> None:
                     attachment.get("document_content_type") or attachment.get("content_type")
                     or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
                 ), filename=str(attachment.get("filename") or path.name),
+                content_disposition_type="inline",
             )
         except Exception:
             logger.exception("Failed raw access for literature item %s", item_id)

@@ -88,3 +88,83 @@ def test_library_tools_are_registered_as_read_only():
     assert "SearchLibrary" in registry_tools.get_tool_names()
     assert registry_tools.get_tool_execution_metadata("ListLibraryItems")["read_only"] is True
     assert registry_tools.get_tool_execution_metadata("SearchLibrary")["read_only"] is True
+    assert "UpdateLibraryMetadata" in registry_tools.get_tool_names()
+    assert (
+        registry_tools.get_tool_execution_metadata("UpdateLibraryMetadata")["read_only"]
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_library_metadata_fills_only_missing_fields(library_db):
+    from cyrene.knowledge import library
+    from cyrene.tool_impl import update_library_metadata as tool
+
+    item = await library.create_item(
+        library_db,
+        {
+            "title": "paper.pdf",
+            "venue": "User-maintained venue",
+            "item_type": "document",
+        },
+    )
+
+    result = await tool._tool_update_library_metadata(
+        {
+            "paper_id": item["id"],
+            "metadata": {
+                "title": "Reliable Paper Title",
+                "authors": ["Ada Lovelace"],
+                "venue": "Searched venue",
+                "doi": "10.1000/reliable",
+                "abstract": "Evidence-based metadata.",
+                "year": 2025,
+                "item_type": "journalArticle",
+            },
+            "sources": ["https://doi.org/10.1000/reliable"],
+        },
+        None,
+        -1,
+        "ignored.db",
+        None,
+    )
+
+    updated = await library.get_item(library_db, item["id"])
+    assert updated["title"] == "paper.pdf"
+    assert updated["venue"] == "User-maintained venue"
+    assert updated["doi"] == "10.1000/reliable"
+    assert updated["abstract"] == "Evidence-based metadata."
+    assert updated["year"] == 2025
+    assert updated["item_type"] == "document"
+    assert updated["creators"][0]["name"] == "Ada Lovelace"
+    assert "Written fields:" in result
+    assert "Preserved existing fields: item_type, title, venue." in result
+    assert "Sources: https://doi.org/10.1000/reliable" in result
+
+
+@pytest.mark.asyncio
+async def test_update_library_metadata_can_correct_verified_existing_fields(library_db):
+    from cyrene.knowledge import library
+    from cyrene.tool_impl.update_library_metadata import _tool_update_library_metadata
+
+    item = await library.create_item(
+        library_db,
+        {"title": "Incorrect title", "year": 2020},
+    )
+    result = await _tool_update_library_metadata(
+        {
+            "paper_id": item["id"],
+            "metadata": {"title": "Correct title", "year": 2024},
+            "overwrite": True,
+            "sources": ["https://publisher.example/paper"],
+        },
+        None,
+        -1,
+        "ignored.db",
+        None,
+    )
+
+    updated = await library.get_item(library_db, item["id"])
+    assert updated["title"] == "Correct title"
+    assert updated["year"] == 2024
+    assert "Sources: https://publisher.example/paper" in result

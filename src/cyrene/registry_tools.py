@@ -44,6 +44,7 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.search_knowledge",  # SearchKnowledge
     "cyrene.tool_impl.list_library_items",  # ListLibraryItems
     "cyrene.tool_impl.search_library",  # SearchLibrary
+    "cyrene.tool_impl.update_library_metadata",  # UpdateLibraryMetadata
     "cyrene.tool_impl.start_shell",  # StartShell
     "cyrene.tool_impl.send_shell",  # SendShell
     "cyrene.tool_impl.list_shells",  # ListShells
@@ -182,6 +183,7 @@ _RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
     "SearchKnowledge": ("knowledge:project",),
     "ListLibraryItems": ("library:project",),
     "SearchLibrary": ("library:project", "knowledge:project"),
+    "UpdateLibraryMetadata": ("library:project",),
     "list_tasks": ("db:scheduled-tasks",),
     "list_entities": ("db:entities",),
     "query_entities": ("db:entities",),

@@ -11,7 +11,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from cyrene.db import init_knowledge_db
-from cyrene.knowledge import bibliography, library, zotero
+from cyrene.knowledge import bibliography, library, store, zotero
 from webui import routes_workbench_library as library_routes
 
 
@@ -313,6 +313,99 @@ def test_library_http_contract(monkeypatch, library_db):
     assert "author = {Ada Lovelace}" in citation.json()["bibtex"]
 
 
+@pytest.mark.asyncio
+async def test_library_raw_media_is_served_inline(
+    monkeypatch, library_db, tmp_path
+):
+    media_path = tmp_path / "sample.mp4"
+    media_path.write_bytes(b"video-bytes")
+    document = await store.upsert_document_by_path(
+        library_db,
+        path=str(media_path),
+        name=media_path.name,
+        content_type="video/mp4",
+        kind="file",
+        size=media_path.stat().st_size,
+        source="test",
+    )
+    item = await library.create_item(library_db, {"title": "Sample video"})
+    await library.add_attachment(
+        library_db,
+        item["id"],
+        {
+            "kb_document_id": document["id"],
+            "filename": media_path.name,
+            "content_type": "video/mp4",
+        },
+    )
+
+    async def ensure(_workspace):
+        return library_db
+
+    monkeypatch.setattr(library_routes, "_ensure_kb_db", ensure)
+    app = FastAPI()
+    router = APIRouter()
+    library_routes.register_workbench_library_routes(router)
+    app.include_router(router)
+    response = TestClient(app).get(
+        f"/api/workbench/library/items/{item['id']}/raw?workspace=p1"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("video/mp4")
+    assert response.headers["content-disposition"].startswith("inline;")
+    assert response.content == b"video-bytes"
+
+
+@pytest.mark.asyncio
+async def test_library_read_event_marks_unique_viewed_attachment(
+    monkeypatch, library_db, tmp_path
+):
+    media_path = tmp_path / "viewed.md"
+    media_path.write_text("# Viewed", encoding="utf-8")
+    document = await store.upsert_document_by_path(
+        library_db,
+        path=str(media_path),
+        name=media_path.name,
+        content_type="text/markdown",
+        kind="file",
+        size=media_path.stat().st_size,
+        source="test",
+    )
+    item = await library.create_item(library_db, {"title": "Viewed document"})
+    await library.add_attachment(
+        library_db,
+        item["id"],
+        {
+            "kb_document_id": document["id"],
+            "filename": media_path.name,
+            "content_type": "text/markdown",
+        },
+    )
+
+    async def ensure(_workspace):
+        return library_db
+
+    monkeypatch.setattr(library_routes, "_ensure_kb_db", ensure)
+    app = FastAPI()
+    router = APIRouter()
+    library_routes.register_workbench_library_routes(router)
+    app.include_router(router)
+    response = TestClient(app).post(
+        "/api/workbench/library/read?workspace=p1",
+        json={
+            "attachment_url": "/api/chat/export/not-the-same.md",
+            "file_name": media_path.name,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["updated"] == 1
+    viewed = await library.get_item(library_db, item["id"])
+    assert viewed["reading_status"] == "read"
+    assert viewed["last_read_at"]
+
+
 def test_bibliography_parsers_and_upload_contract(monkeypatch, library_db):
     ris = b"""TY  - JOUR\nTI  - Imported RIS Paper\nAU  - Lovelace, Ada\nPY  - 2024\nJO  - Computing\nDO  - 10.1/ris\nER  -\n"""
     bib = b"""@article{turing1936, title={On Computable Numbers}, author={Turing, Alan}, year={1936}, journal={Proceedings}}"""
@@ -405,3 +498,28 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert ".wb-lib-side-row.active {" in styles and "font-weight: 520;" in styles
     assert "font-weight: 520 !important;" in styles
     assert ".wb-lib-cloud button span" in styles and "font-weight: 400;" in styles
+    assert 'h("img", { src: props.rawUrl' in source
+    assert 'h("video", { src: props.rawUrl, controls: true' in source
+    assert 'h("audio", { src: props.rawUrl, controls: true' in source
+    assert 'h("iframe", { src: props.rawUrl + "#view=FitH"' in source
+    assert "暂无可显示内容。" in source
+    assert ".wb-lib-media-preview" in styles
+    assert "max-height: calc(100vh - 210px)" in styles
+    assert "window.DOMPurify.sanitize(window.marked.parse" in source
+    assert 'className: "wb-lib-markdown"' in source
+    assert ".wb-lib-markdown h1" in styles
+    assert "renderSafeHtmlDocument" in source
+    assert 'srcDoc: safeHtml' in source
+    assert 'sandbox: ""' in source
+    assert ".wb-lib-html-preview iframe" in styles
+    assert "createCollection" in source
+    assert '"新建收藏夹"' in source
+    assert '"将文献加入收藏夹"' in source
+    assert "collection_ids: collectionIds" in source
+    assert ".wb-lib-collection-chips" in styles
+    assert "scrollRef.current.scrollTop = 0" in source
+    assert 'className: "wb-lib-state-action"' in source
+    assert 'actionIcon: query || activeFilters || scope.type !== "all" ? "restore" : "upload"' in source
+    assert ".wb-lib-state-action {" in styles
+    assert "props.onContentViewed" in source
+    assert 'client.update(viewedId, { reading_status: "read" })' in source

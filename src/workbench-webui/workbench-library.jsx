@@ -118,10 +118,54 @@
   }
 
   function itemKind(item) {
-    var attachment = item && Array.isArray(item.attachments) && item.attachments[0];
+    var attachment = primaryAttachment(item);
     var name = String(attachment && (attachment.filename || attachment.name) || item && (item.filename || item.attachment_name) || "");
     if (/\.pdf$/i.test(name) || String(attachment && attachment.content_type || item && item.content_type || "").indexOf("pdf") >= 0) return "pdf";
     return item && (item.item_type || item.type) || "document";
+  }
+
+  function primaryAttachment(item) {
+    var attachments = item && Array.isArray(item.attachments) ? item.attachments : [];
+    return attachments.find(function (attachment) {
+      return String(attachment && attachment.content_type || "").toLowerCase().split(";")[0] === "application/pdf";
+    }) || attachments[0] || null;
+  }
+
+  function attachmentPreviewType(item) {
+    var attachment = primaryAttachment(item);
+    var contentType = String(attachment && attachment.content_type || item && item.content_type || "").toLowerCase().split(";")[0];
+    var filename = String(attachment && (attachment.filename || attachment.name) || item && (item.filename || item.attachment_name) || "").toLowerCase();
+    if (contentType.indexOf("image/") === 0 || /\.(avif|bmp|gif|jpe?g|png|webp)$/i.test(filename)) return "image";
+    if (contentType.indexOf("video/") === 0 || /\.(m4v|mov|mp4|ogv|webm)$/i.test(filename)) return "video";
+    if (contentType.indexOf("audio/") === 0 || /\.(aac|flac|m4a|mp3|oga|ogg|wav|weba)$/i.test(filename)) return "audio";
+    if (contentType === "application/pdf" || /\.pdf$/i.test(filename)) return "pdf";
+    if (contentType.indexOf("text/") === 0 || /\.(csv|html?|json|log|md|rtf|text|toml|tsv|txt|xml|ya?ml)$/i.test(filename)) return "text";
+    return attachment ? "file" : "text";
+  }
+
+  function renderMarkdownHtml(content) {
+    if (!window.marked || !window.DOMPurify) return "";
+    try {
+      return window.DOMPurify.sanitize(window.marked.parse(String(content || "")), {
+        ADD_ATTR: ["data-line", "data-language"],
+      });
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function renderSafeHtmlDocument(content) {
+    var source = String(content || "").replace(/<meta\b[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>/gi, "");
+    if (!window.DOMPurify) return source;
+    try {
+      return window.DOMPurify.sanitize(source, {
+        WHOLE_DOCUMENT: true,
+        FORBID_TAGS: ["script", "iframe", "object", "embed", "form"],
+        FORBID_ATTR: ["onerror", "onload", "onclick", "onfocus", "onmouseenter"],
+      });
+    } catch (error) {
+      return source;
+    }
   }
 
   function hasAttachment(item) {
@@ -158,6 +202,9 @@
       list: function (params) { return json("/items", { toast: false }, params); },
       stats: function () { return json("/stats", { toast: false }); },
       collections: function () { return json("/collections", { toast: false }); },
+      createCollection: function (value) { return json("/collections", body("POST", value)); },
+      updateCollection: function (id, value) { return json("/collections/" + encodeURIComponent(id), body("PATCH", value)); },
+      deleteCollection: function (id) { return json("/collections/" + encodeURIComponent(id), { method: "DELETE" }); },
       tags: function () { return json("/tags", { toast: false }); },
       detail: function (id) { return json("/items/" + encodeURIComponent(id), { toast: false }); },
       create: function (value) { return json("/items", body("POST", value)); },
@@ -215,7 +262,7 @@
         return Object.assign({}, prev, { [id]: !prev[id] });
       });
     }
-    function sectionHeading(id, label) {
+    function sectionHeading(id, label, action) {
       var expanded = !collapsed[id];
       return h("h2", null,
         h("button", {
@@ -225,7 +272,14 @@
           "aria-expanded": expanded,
         },
           h("span", { className: "wb-lib-side-caret" + (expanded ? " open" : "") }, icon("chevron", 13)),
-          h("span", null, label)));
+          h("span", null, label)),
+        action && h("button", {
+          type: "button",
+          className: "wb-lib-side-section-action",
+          onClick: action,
+          title: "新建收藏夹",
+          "aria-label": "新建收藏夹",
+        }, icon("plus", 15)));
     }
     var base = [
       { id: "all", label: "全部知识", icon: icon("book"), count: stats.total },
@@ -245,8 +299,8 @@
           !collapsed.library && base.map(function (row) {
             return h(SidebarRow, { key: row.id, label: row.label, icon: row.icon, count: row.count, active: props.scope.type === row.id, onClick: function () { props.onScope({ type: row.id }); } });
           })),
-        h("section", { className: "wb-lib-side-section" },
-          sectionHeading("collections", "我的收藏夹"),
+        h("section", { className: "wb-lib-side-section wb-lib-collections-section" },
+          sectionHeading("collections", "我的收藏夹", props.onCreateCollection),
           !collapsed.collections && (props.collections.length ? props.collections.map(function (collection, index) {
             var id = String(collection.id || collection.key || index);
             return h(SidebarRow, {
@@ -302,7 +356,9 @@
 
   function StatePanel(props) {
     return h("div", { className: "wb-lib-state " + (props.kind || "") }, props.loading ? h(Spinner) : icon(props.kind === "error" ? "restore" : "book", 42),
-      h("h3", null, props.title), props.body && h("p", null, props.body), props.action && h("button", { type: "button", className: "wb-lib-primary", onClick: props.action }, props.actionLabel));
+      h("h3", null, props.title), props.body && h("p", null, props.body),
+      props.action && h("button", { type: "button", className: "wb-lib-state-action", onClick: props.action },
+        props.actionIcon && icon(props.actionIcon, 15), h("span", null, props.actionLabel)));
   }
 
   function MetaLine(props) {
@@ -646,9 +702,48 @@
         h("button", { type: "submit", className: "wb-lib-primary", disabled: saving || !form.title.trim() }, saving ? h(Spinner) : null, saving ? "保存中" : "保存全部信息")));
   }
 
+  function CollectionMembership(props) {
+    var collections = Array.isArray(props.collections) ? props.collections : [];
+    var selected = (Array.isArray(props.item && props.item.collections) ? props.item.collections : []).map(function (collection) {
+      return String(collection.id || collection.collection_id || "");
+    }).filter(Boolean);
+    function update(next) {
+      if (props.onUpdate) props.onUpdate(next);
+    }
+    function add(event) {
+      var id = String(event.target.value || "");
+      event.target.value = "";
+      if (id && selected.indexOf(id) < 0) update(selected.concat([id]));
+    }
+    return h("section", { className: "wb-lib-right-collections" },
+      h("div", { className: "wb-lib-right-section-head" },
+        h("h3", null, "收藏夹"),
+        collections.length > 0 && h("select", { defaultValue: "", onChange: add, "aria-label": "将文献加入收藏夹" },
+          h("option", { value: "", disabled: true }, "加入收藏夹"),
+          collections.filter(function (collection) { return selected.indexOf(String(collection.id)) < 0; }).map(function (collection) {
+            return h("option", { key: collection.id, value: collection.id }, collectionName(collection));
+          }))),
+      h("div", { className: "wb-lib-right-card wb-lib-collection-chips" },
+        selected.map(function (id) {
+          var collection = collections.find(function (value) { return String(value.id) === id; });
+          if (!collection) return null;
+          return h("span", { key: id }, collectionName(collection), h("button", {
+            type: "button",
+            onClick: function () { update(selected.filter(function (value) { return value !== id; })); },
+            title: "从收藏夹移出",
+            "aria-label": "从 " + collectionName(collection) + " 移出",
+          }, icon("close", 12)));
+        }),
+        !selected.length && h("p", { className: "wb-lib-muted" }, collections.length ? "尚未加入收藏夹" : "请先在左侧新建收藏夹")));
+  }
+
   function RightPanel(props) {
     var editingState = useState(false); var editing = editingState[0]; var setEditing = editingState[1];
+    var scrollRef = useRef(null);
     useEffect(function () { setEditing(false); }, [props.item && props.item.id]);
+    useEffect(function () {
+      if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    }, [props.item && props.item.id, props.tab]);
     if (!props.item) return h("aside", { className: "wb-lib-right empty" }, h("div", null, icon("panel", 34), h("p", null, "选择一篇文献查看详情")));
     var item = props.item;
     var attachment = Array.isArray(item.attachments) && item.attachments[0];
@@ -656,10 +751,10 @@
     var annotations = Array.isArray(item.annotations) ? item.annotations : [];
     return h("aside", { className: "wb-lib-right" + (props.open ? " open" : "") },
       h("nav", { className: "wb-lib-right-tabs" },
-        [{ id: "detail", label: "详情" }, { id: "content", label: "内容" }, { id: "related", label: "关联" }].map(function (tab) { return h("button", { key: tab.id, type: "button", className: props.tab === tab.id ? "active" : "", onClick: function () { props.onTab(tab.id); } }, tab.label); }),
+        [{ id: "detail", label: "详情" }, { id: "content", label: "内容" }, { id: "related", label: "关联" }].map(function (tab) { return h("button", { key: tab.id, type: "button", className: props.tab === tab.id ? "active" : "", onClick: function () { props.onTab(tab.id); if (tab.id === "content" && props.onContentViewed) props.onContentViewed(); } }, tab.label); }),
         h("button", { type: "button", className: "wb-lib-right-delete", disabled: !props.onDelete, onClick: props.onDelete, title: "移至回收站", "aria-label": "移至回收站" }, icon("trash", 15)),
         h("button", { type: "button", className: "wb-lib-right-close", onClick: props.onClose, title: "关闭详情" }, icon("close", 15))),
-      h("div", { className: "wb-lib-right-scroll" },
+      h("div", { className: "wb-lib-right-scroll", ref: scrollRef },
         h("header", { className: "wb-lib-right-head" }, h(PdfMark, { item: item }), h("b", { title: itemTitle(item) }, itemTitle(item)), hasAttachment(item) && h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer", title: "查看附件" }, icon("eye", 17))),
         props.tab === "detail" && editing && h(RightMetadataEditor, { item: item, onSave: props.onUpdate, onCancel: function () { setEditing(false); } }),
         props.tab === "detail" && !editing && h(React.Fragment, null,
@@ -668,12 +763,66 @@
             h(MetaLine, { label: "文件大小", value: formatBytes(attachment && attachment.size) }), h(MetaLine, { label: "页数", value: attachment && attachment.page_count }),
             h(MetaLine, { label: "创建时间", value: formatDate(item.created_at, true) }), h(MetaLine, { label: "修改时间", value: formatDate(item.updated_at, true) }),
             h(MetaLine, { label: "来源", value: item.provider === "zotero" ? "Zotero" : (item.provider || "Cyrene") }))),
+          h(CollectionMembership, { item: item, collections: props.collections, onUpdate: props.onCollectionsUpdate }),
           h("section", null, h("div", { className: "wb-lib-right-section-head" }, h("h3", null, "引用格式"), h(CitationCopyControl, { citation: props.citation, bibtex: props.bibtex, onCopy: props.onCopyCitation })), h("div", { className: "wb-lib-right-card wb-lib-right-citation" }, props.citationLoading ? h(Spinner) : (props.citation || "暂无可用引用。"))),
           h("section", null, h("h3", null, "关联条目"), h("div", { className: "wb-lib-right-card wb-lib-right-relations" }, relations.slice(0, 3).map(function (relation, index) { return h("p", { key: relation.id || index }, (index + 1) + ". ", relation.other_title || relation.title || relation.target_title || "关联条目"); }), !relations.length && h("p", { className: "wb-lib-muted" }, "暂无关联条目"))),
           h("button", { type: "button", className: "wb-lib-right-edit-button", onClick: function () { setEditing(true); } }, icon("note", 15), "编辑信息")),
-        props.tab === "content" && h("div", { className: "wb-lib-content-panel" }, item.content || item.indexed_text ? h("pre", null, item.content || item.indexed_text) : h(React.Fragment, null, h("h3", null, "摘要"), h("p", null, item.abstract || "暂无可检索文本。"), annotations.length > 0 && h("section", null, h("h3", null, "PDF 批注"), annotations.map(function (annotation) { return h("blockquote", { key: annotation.id }, h("p", null, annotation.quote || annotation.text || annotation.comment), h("small", null, annotation.page_label ? "第 " + annotation.page_label + " 页" : "")); })))),
+        props.tab === "content" && h(ContentPreview, { item: item, rawUrl: props.rawUrl, annotations: annotations }),
         props.tab === "related" && h(RelationsWorkspace, { item: item })),
       h("button", { type: "button", className: "wb-lib-detail-fab", onClick: props.onClose, title: "关闭详情" }, icon("panel", 17)));
+  }
+
+  function ContentPreview(props) {
+    var item = props.item || {};
+    var attachment = primaryAttachment(item);
+    var previewType = attachmentPreviewType(item);
+    var content = item.content || item.indexed_text || "";
+    var filename = String(attachment && (attachment.filename || attachment.name) || itemTitle(item));
+    var isMarkdown = /\.(md|markdown|mdown|mkd)$/i.test(filename);
+    var isHtml = /\.html?$/i.test(filename);
+    var markdownHtml = isMarkdown && content ? renderMarkdownHtml(content) : "";
+    var safeHtml = isHtml && content ? renderSafeHtmlDocument(content) : "";
+    var media = null;
+    if (attachment && previewType === "image") {
+      media = h("figure", { className: "wb-lib-media-preview image" },
+        h("img", { src: props.rawUrl, alt: itemTitle(item), loading: "lazy" }),
+        h("figcaption", null, filename));
+    } else if (attachment && previewType === "video") {
+      media = h("figure", { className: "wb-lib-media-preview video" },
+        h("video", { src: props.rawUrl, controls: true, preload: "metadata", playsInline: true },
+          h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer" }, "打开视频")),
+        h("figcaption", null, filename));
+    } else if (attachment && previewType === "audio") {
+      media = h("figure", { className: "wb-lib-media-preview audio" },
+        h("audio", { src: props.rawUrl, controls: true, preload: "metadata" },
+          h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer" }, "打开音频")),
+        h("figcaption", null, filename));
+    } else if (attachment && previewType === "pdf") {
+      media = h("figure", { className: "wb-lib-media-preview pdf" },
+        h("iframe", { src: props.rawUrl + "#view=FitH", title: itemTitle(item) + " PDF 内容预览" }),
+        h("figcaption", null, filename));
+    } else if (attachment && previewType === "file" && !content) {
+      media = h("div", { className: "wb-lib-media-fallback" },
+        icon("file", 26),
+        h("p", null, "此文件格式暂不支持内嵌预览。"),
+        h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer" }, "打开文件"));
+    }
+    return h("div", { className: "wb-lib-content-panel" },
+      media || (safeHtml
+        ? h("div", { className: "wb-lib-html-preview" }, h("iframe", {
+          srcDoc: safeHtml,
+          sandbox: "",
+          referrerPolicy: "no-referrer",
+          title: itemTitle(item) + " HTML 内容预览",
+        }))
+        : markdownHtml
+        ? h("div", { className: "wb-lib-markdown", dangerouslySetInnerHTML: { __html: markdownHtml } })
+        : (content ? h("pre", null, content) : h("p", { className: "wb-lib-content-empty" }, "暂无可显示内容。"))),
+      Array.isArray(props.annotations) && props.annotations.length > 0 && h("section", null,
+        h("h3", null, "PDF 批注"),
+        props.annotations.map(function (annotation) {
+          return h("blockquote", { key: annotation.id }, h("p", null, annotation.quote || annotation.text || annotation.comment), h("small", null, annotation.page_label ? "第 " + annotation.page_label + " 页" : ""));
+        })));
   }
 
   function Dropdown(props) {
@@ -701,6 +850,27 @@
       h("footer", null, h("button", { type: "button", className: "wb-lib-secondary", onClick: props.onClose }, "取消"), h("button", { type: "submit", className: "wb-lib-primary", disabled: busy || !form.title.trim() }, busy && h(Spinner), " 添加条目"))));
   }
 
+  function CollectionModal(props) {
+    var nameState = useState(""); var name = nameState[0]; var setName = nameState[1];
+    var busyState = useState(false); var busy = busyState[0]; var setBusy = busyState[1];
+    function submit(event) {
+      event.preventDefault();
+      if (!name.trim() || busy) return;
+      setBusy(true);
+      props.onSave({ name: name.trim() }).then(function () {
+        setBusy(false);
+        props.onClose();
+      }, function () { setBusy(false); });
+    }
+    return h("div", { className: "wb-lib-modal-layer", role: "presentation", onMouseDown: function (event) { if (event.target === event.currentTarget) props.onClose(); } },
+      h("form", { className: "wb-lib-modal wb-lib-collection-modal", onSubmit: submit },
+        h("header", null, h("div", null, h("h2", null, "新建收藏夹"), h("p", null, "收藏夹仅保存在当前项目的知识库中。")), h("button", { type: "button", onClick: props.onClose }, icon("close"))),
+        h("label", null, "名称", h("input", { required: true, autoFocus: true, value: name, onChange: function (event) { setName(event.target.value); }, placeholder: "例如：论文综述" })),
+        h("footer", null,
+          h("button", { type: "button", className: "wb-lib-secondary", disabled: busy, onClick: props.onClose }, "取消"),
+          h("button", { type: "submit", className: "wb-lib-primary", disabled: busy || !name.trim() }, busy && h(Spinner), busy ? "创建中" : "创建"))));
+  }
+
   function WorkbenchLibraryPage(props) {
     var workspace = props.project && props.project.id ? String(props.project.id) : "";
     var client = useMemo(function () { return workspace ? libraryApi(workspace) : null; }, [workspace]);
@@ -725,6 +895,7 @@
     var rightOpenState = useState(true); var rightOpen = rightOpenState[0]; var setRightOpen = rightOpenState[1];
     var sidebarOpenState = useState(false); var sidebarOpen = sidebarOpenState[0]; var setSidebarOpen = sidebarOpenState[1];
     var manualState = useState(false); var manualOpen = manualState[0]; var setManualOpen = manualState[1];
+    var collectionModalState = useState(false); var collectionModalOpen = collectionModalState[0]; var setCollectionModalOpen = collectionModalState[1];
     var uploadingState = useState(false); var uploading = uploadingState[0]; var setUploading = uploadingState[1];
     var citationState = useState({ style: "ieee", text: "", bibtex: "", citekey: "", loading: false, error: "" }); var citation = citationState[0]; var setCitation = citationState[1];
     var fileRef = useRef(null);
@@ -831,6 +1002,24 @@
       if (!client || !selectedId) return Promise.reject(new Error("未选择文献"));
       return client.update(selectedId, value).then(function (payload) { var item = payload.item || payload; replaceItem(item); Toast("文献已更新"); reload({ itemsOnly: true }); return item; });
     }
+    function updateSelectedCollections(collectionIds) {
+      if (!client || !selectedId) return Promise.reject(new Error("未选择文献"));
+      return client.update(selectedId, { collection_ids: collectionIds }).then(function (payload) {
+        var item = payload.item || payload;
+        replaceItem(item);
+        Toast("收藏夹已更新");
+        reload();
+        return item;
+      });
+    }
+    function markSelectedRead() {
+      if (!client || !selectedId) return;
+      var viewedId = String(selectedId);
+      client.update(viewedId, { reading_status: "read" }).then(function (payload) {
+        replaceItem(payload.item || payload);
+        reload();
+      }).catch(function () { /* Reading history is best-effort and must not block content. */ });
+    }
     function toggleStar(item) { client.update(item.id, { starred: !item.starred }).then(function (payload) { replaceItem(payload.item || payload); }, function (err) { Toast(String(err.message || err), "error"); }); }
     function addNote(value) { return client.addNote(selectedId, value).then(function () { Toast("笔记已添加"); return client.detail(selectedId).then(function (payload) { setDetail(payload.item || payload); }); }); }
     function removeSelected() {
@@ -846,6 +1035,12 @@
       client.upload(files).then(function (payload) { setUploading(false); if (fileRef.current) fileRef.current.value = ""; Toast("已导入 " + ((payload.items && payload.items.length) || 0) + " 个条目"); reload(); }, function () { setUploading(false); if (fileRef.current) fileRef.current.value = ""; });
     }
     function createItem(value) { return client.create(value).then(function (payload) { var item = payload.item || payload; Toast("文献条目已添加"); reload(); if (item.id) select(item.id); return item; }); }
+    function createCollection(value) {
+      return client.createCollection(value).then(function (collection) {
+        Toast("收藏夹已创建");
+        return reload().then(function () { return collection; });
+      });
+    }
     function exportItems() {
       if (!client) return;
       var params = listParams(); params.limit = 1000; params.offset = 0;
@@ -884,7 +1079,7 @@
 
     return h("section", { className: "wb-lib-page" },
       h("input", { ref: fileRef, className: "wb-lib-file-input", type: "file", multiple: true, accept: ".pdf,.ris,.bib,.bibtex,.json,application/pdf", onChange: function (event) { handleFiles(event.target.files); } }),
-      h(LibrarySidebar, { open: sidebarOpen, onClose: function () { setSidebarOpen(false); }, onBack: props.onBack, stats: data.stats, collections: data.collections, tags: data.tags, scope: scope, onScope: function (next) { setScope(next); setSidebarOpen(false); setSelectedId(""); } }),
+      h(LibrarySidebar, { open: sidebarOpen, onClose: function () { setSidebarOpen(false); }, onBack: props.onBack, stats: data.stats, collections: data.collections, tags: data.tags, scope: scope, onCreateCollection: function () { setCollectionModalOpen(true); }, onScope: function (next) { setScope(next); setSidebarOpen(false); setSelectedId(""); } }),
       h("main", { className: "wb-lib-main" },
         h("header", { className: "wb-lib-main-head" },
           h("button", { type: "button", className: "wb-lib-sidebar-toggle", onClick: function () { setSidebarOpen(true); }, title: "打开文献分类" }, icon("panel", 18)),
@@ -907,14 +1102,15 @@
         checked.length > 0 && h("div", { className: "wb-lib-batch" }, h("b", null, "已选择 " + checked.length + " 项"), h("button", { type: "button", onClick: function () { setChecked([]); } }, "取消选择")),
         error && h("div", { className: "wb-lib-error" }, h("span", null, error), h("button", { type: "button", onClick: function () { reload(); } }, icon("restore", 14), " 重试")),
         h("section", { className: "wb-lib-results" + (selectedItem ? " with-workspace" : "") },
-          loading && !data.items.length ? h(StatePanel, { loading: true, title: "正在加载文献库…" }) : !data.items.length ? h(StatePanel, { title: query || activeFilters || scope.type !== "all" ? "没有匹配的文献" : "这个项目还没有文献", body: query || activeFilters || scope.type !== "all" ? "尝试调整搜索、分类或筛选条件。" : "导入 PDF、RIS 或 BibTeX；Zotero 导入请前往设置。", action: query || activeFilters || scope.type !== "all" ? function () { setQuery(""); setFilters({ item_type: "", status: "", year: "" }); setScope({ type: "all" }); } : function () { fileRef.current && fileRef.current.click(); }, actionLabel: query || activeFilters || scope.type !== "all" ? "清除条件" : "导入第一篇文献" }) :
+          loading && !data.items.length ? h(StatePanel, { loading: true, title: "正在加载文献库…" }) : !data.items.length ? h(StatePanel, { title: query || activeFilters || scope.type !== "all" ? "没有匹配的文献" : "这个项目还没有文献", body: query || activeFilters || scope.type !== "all" ? "尝试调整搜索、分类或筛选条件。" : "导入 PDF、RIS 或 BibTeX；Zotero 导入请前往设置。", action: query || activeFilters || scope.type !== "all" ? function () { setQuery(""); setFilters({ item_type: "", status: "", year: "" }); setScope({ type: "all" }); } : function () { fileRef.current && fileRef.current.click(); }, actionLabel: query || activeFilters || scope.type !== "all" ? "清除条件" : "导入第一篇文献", actionIcon: query || activeFilters || scope.type !== "all" ? "restore" : "upload" }) :
             view === "table" ? h("div", { className: "wb-lib-table", role: "table" }, h(TableHead, { allSelected: data.items.length > 0 && checked.length === data.items.length, onToggleAll: toggleAll }), h("div", { className: "wb-lib-table-body" }, data.items.map(function (item) { return h(LibraryRow, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, trash: scope.type === "trash", onSelect: select, onToggle: toggleChecked, onStar: toggleStar, onRestore: restore }); }))) :
               h("div", { className: "wb-lib-card-grid" }, data.items.map(function (item) { return h(LibraryCard, { key: item.id, item: item, active: String(item.id) === String(selectedId), onSelect: select, onStar: toggleStar }); })),
           data.items.length < data.total && h("button", { type: "button", className: "wb-lib-load-more", disabled: loadingMore, onClick: loadMore }, loadingMore ? h(Spinner) : null, loadingMore ? "加载中…" : "加载更多（" + data.items.length + " / " + data.total + "）"),
           loading && data.items.length > 0 && h("div", { className: "wb-lib-loading-bar" }, h(Spinner), " 正在更新…")),
         selectedItem && h(ItemWorkspace, { item: selectedItem, loading: detailLoading, tab: workTab, onTab: setWorkTab, onUpdate: updateSelected, onAddNote: addNote, rawUrl: client.rawUrl(selectedId), citationProps: citationProps })),
-      h(RightPanel, { item: selectedItem, open: rightOpen, onClose: function () { setRightOpen(false); }, tab: rightTab, onTab: setRightTab, rawUrl: selectedId ? client.rawUrl(selectedId) : "", citation: citation.text, bibtex: citation.bibtex, citationLoading: citation.loading, onCopyCitation: copyCitation, onUpdate: updateSelected, onDelete: scope.type !== "trash" ? removeSelected : null }),
-      manualOpen && h(ManualItemModal, { onClose: function () { setManualOpen(false); }, onSave: createItem }));
+      h(RightPanel, { item: selectedItem, open: rightOpen, onClose: function () { setRightOpen(false); }, tab: rightTab, onTab: setRightTab, onContentViewed: markSelectedRead, rawUrl: selectedId ? client.rawUrl(selectedId) : "", collections: data.collections, onCollectionsUpdate: updateSelectedCollections, citation: citation.text, bibtex: citation.bibtex, citationLoading: citation.loading, onCopyCitation: copyCitation, onUpdate: updateSelected, onDelete: scope.type !== "trash" ? removeSelected : null }),
+      manualOpen && h(ManualItemModal, { onClose: function () { setManualOpen(false); }, onSave: createItem }),
+      collectionModalOpen && h(CollectionModal, { onClose: function () { setCollectionModalOpen(false); }, onSave: createCollection }));
   }
 
   window.WorkbenchLibraryPage = WorkbenchLibraryPage;

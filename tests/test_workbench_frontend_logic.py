@@ -1911,6 +1911,10 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     assert 'window.pdfjsInstallCopyFix(container, viewer)' in source
     assert 'window.pdfjsInstallSelectionSanitizer(container, viewer, eventBus)' in source
     assert 'selectionSanitizer.abort();' in source
+    assert '"/api/workbench/library/read?workspace="' in source
+    assert '<WbcViewerTab file={viewerFile} onViewed={onViewerViewed} />' in source
+    assert 'onLoad={confirmViewed}' in source
+    assert 'return <WbcPdfJsViewer file={file} url={url} onViewed={confirmViewed} />;' in source
     assert '.wbc-viewer .pdfViewer .textLayer' not in styles
     assert "width: 100%;" in styles
     assert "height: 100%;" in styles

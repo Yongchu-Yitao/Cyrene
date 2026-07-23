@@ -1652,6 +1652,18 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     setSideVisible(true);
   }
 
+  function markViewerFileRead(file) {
+    if (!file || !projectId || !file.url) return;
+    fetch("/api/workbench/library/read?workspace=" + encodeURIComponent(projectId), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        attachment_url: String(file.url || ""),
+        file_name: String(file.name || ""),
+      }),
+    }).catch(function () { /* Reading history must never interrupt the viewer. */ });
+  }
+
   function loadSubagents(chatId, roundId) {
     if (!chatId) {
       setSubagentData({ rounds: [], activeRoundId: "", agents: [], messages: [] });
@@ -2543,6 +2555,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
         onTabChange={setSideTab}
         viewerFile={viewerFile}
         onOpenFile={openViewer}
+        onViewerViewed={markViewerFileRead}
         onRename={handleRename}
         onDelete={handleDelete}
         onToTask={handleToTask}
@@ -5187,6 +5200,7 @@ function WbcSide({
   onTabChange,
   viewerFile,
   onOpenFile,
+  onViewerViewed,
   onRename,
   onDelete,
   onToTask,
@@ -5306,7 +5320,7 @@ function WbcSide({
         {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} onOpenFile={onOpenFile} />}
         {activeTab === "changes" && <WbcChangesTab chatId={activeChatId} />}
         {activeTab === "branches" && <WbcBranchTab chats={chats} activeChatId={activeChatId} onSelectChat={onSelectChat} />}
-        {activeTab === "viewer" && <WbcViewerTab file={viewerFile} />}
+        {activeTab === "viewer" && <WbcViewerTab file={viewerFile} onViewed={onViewerViewed} />}
         {activeTab === "map" && <WbcMapTab chatId={chat ? chat.id : ""} active={true} />}
         {activeTab === "browser" && !browserSuppressed && (
           typeof window.BrowserViewportPanel !== "undefined"
@@ -5840,7 +5854,7 @@ function WbcPlanTab({ plan }) {
 
 // ---- PDF.js viewer (replaces <embed> for PDF files) -------------------------
 
-function WbcPdfJsViewer({ file, url }) {
+function WbcPdfJsViewer({ file, url, onViewed }) {
   var containerRef = useWbcRef(null);
   var viewerRef = useWbcRef(null);
   var [pageNum, setPageNum] = useWbcState(1);
@@ -5896,6 +5910,7 @@ function WbcPdfJsViewer({ file, url }) {
       setPageNum(1);
       setLoading(false);
       setScale(viewer.currentScale);
+      if (onViewed) onViewed();
     }).catch(function (err) {
       if (!cancelled) {
         clearTimeout(timer);
@@ -6088,13 +6103,20 @@ function WbcPdfJsViewer({ file, url }) {
 
 // ---- side viewer (PDF / HTML / Markdown / 代码 / 图片) ----------------------
 
-function WbcViewerTab({ file }) {
+function WbcViewerTab({ file, onViewed }) {
   var kind = wbcFileViewKind(file);
   var [text, setText] = useWbcState("");
   var [htmlMode, setHtmlMode] = useWbcState("rendered");
   var [failed, setFailed] = useWbcState(false);
   var codeRef = useWbcRef(null);
+  var viewedRef = useWbcRef("");
   var url = file && file.url;
+  function confirmViewed() {
+    var key = String(url || "") + "::" + String(file && file.name || "");
+    if (!key || viewedRef.current === key) return;
+    viewedRef.current = key;
+    if (onViewed) onViewed(file);
+  }
   var htmlPreview = useWbcMemo(function () {
     return kind === "html" ? wbcHtmlPreviewDocument(text, url) : "";
   }, [text, url, kind]);
@@ -6111,7 +6133,10 @@ function WbcViewerTab({ file }) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.text();
       }).then(function (body) {
-        if (!cancelled) setText(body);
+        if (!cancelled) {
+          setText(body);
+          confirmViewed();
+        }
       }).catch(function () { if (!cancelled) setFailed(true); });
     }
     return function () { cancelled = true; };
@@ -6128,7 +6153,7 @@ function WbcViewerTab({ file }) {
 
   // PDF is handled entirely by its own component — skip the wrapper.
   if (kind === "pdf") {
-    return <WbcPdfJsViewer file={file} url={url} />;
+    return <WbcPdfJsViewer file={file} url={url} onViewed={confirmViewed} />;
   }
 
   var head = (
@@ -6149,7 +6174,7 @@ function WbcViewerTab({ file }) {
   if (failed) {
     body = <p className="workbench-muted wbc-viewer-pad">{wbcT("workbenchChat.viewerLoadFailed", "File failed to load.")}{url ? " " + wbcT("workbenchChat.viewerOpenFallback", "Try opening it in a new window.") : ""}</p>;
   } else if (kind === "image") {
-    body = <div className="wbc-viewer-scroll center"><img className="wbc-viewer-img" src={url} alt={file.name || "image"} /></div>;
+    body = <div className="wbc-viewer-scroll center"><img className="wbc-viewer-img" src={url} alt={file.name || "image"} onLoad={confirmViewed} /></div>;
   } else if (kind === "html") {
     body = htmlMode === "rendered"
       ? <iframe key={url + "::" + (text ? "1" : "0")} className="wbc-viewer-iframe" sandbox="allow-scripts" srcDoc={htmlPreview} title={file.name || "HTML"} />
