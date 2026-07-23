@@ -2,8 +2,40 @@ import asyncio
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
+
+
+def test_direct_local_cli_file_bootstraps_source_imports(tmp_path):
+    entrypoint = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "cyrene"
+        / "local_cli.py"
+    )
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env["CYRENE_LOCAL_CLI_BOOTSTRAPPED"] = "1"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            (
+                "import runpy; "
+                f"runpy.run_path({str(entrypoint)!r}, run_name='direct_import')"
+            ),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_module_help_has_no_runtime_side_effects(tmp_path):

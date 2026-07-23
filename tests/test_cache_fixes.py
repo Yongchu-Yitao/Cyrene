@@ -13,7 +13,6 @@ sys.modules["PIL"].Image = MagicMock()
 sys.modules.setdefault("pypdf", MagicMock())
 
 from cyrene.agent import state as _agent_state
-from cyrene.agent import session as _agent_session
 from cyrene.agent import agent as _agent_core
 
 
@@ -117,7 +116,7 @@ async def test_phase1_retry_with_unified_system_prompt():
     _orig_llm = _patch(_agent_core, "_call_llm", fake_call_llm)
     _orig_save = _patch(_agent_core, "_save_session_messages", AsyncMock())
     try:
-        result = await agent._run_main_agent("check Toronto weather", [], None, 0, "db.sqlite3")
+        await agent._run_main_agent("check Toronto weather", [], None, 0, "db.sqlite3")
     finally:
         _patch(_agent_core, "_call_llm", _orig_llm)
         _patch(_agent_core, "_save_session_messages", _orig_save)
@@ -189,18 +188,12 @@ async def test_first_round_phase1_uses_full_wire_tools():
             "tool_calls": [{"id": "q1", "function": {"name": "quit", "arguments": json.dumps({"reply": "done"})}}],
         }
 
-    fake_active_tools = [
-        {"type": "function", "function": {"name": "Read", "parameters": {"type": "object", "properties": {}}}},
-    ]
-
     _orig_llm = _patch(_agent_core, "_call_llm", fake_call_llm)
-    _orig_tools = _patch(_agent_core, "get_active_tool_defs", lambda: fake_active_tools)
     _orig_save = _patch(_agent_core, "_save_session_messages", AsyncMock())
     try:
         result = await agent._run_main_agent("hi", [], None, 0, "db.sqlite3")
     finally:
         _patch(_agent_core, "_call_llm", _orig_llm)
-        _patch(_agent_core, "get_active_tool_defs", _orig_tools)
         _patch(_agent_core, "_save_session_messages", _orig_save)
 
     assert result == "direct answer"
@@ -211,7 +204,7 @@ async def test_first_round_phase1_uses_full_wire_tools():
 
 async def test_fixed_ephemeral_stays_before_user_across_tool_rounds():
     """Run-fixed ephemeral context is part of the append-only prompt prefix."""
-    from cyrene import agent, tools
+    from cyrene import agent
 
     llm_inputs = []
     responses = iter([
@@ -238,7 +231,6 @@ async def test_fixed_ephemeral_stays_before_user_across_tool_rounds():
         saved_messages.append(messages)
 
     _orig_llm = _patch(_agent_core, "_call_llm", fake_call_llm)
-    _orig_exec = _patch(tools, "_execute_tool", AsyncMock(return_value="file content"))
     _orig_core_exec = _patch(_agent_core, "_execute_tool", AsyncMock(return_value="file content"))
     _orig_save = _patch(_agent_core, "_save_session_messages", fake_save)
     try:
@@ -252,7 +244,6 @@ async def test_fixed_ephemeral_stays_before_user_across_tool_rounds():
         )
     finally:
         _patch(_agent_core, "_call_llm", _orig_llm)
-        _patch(tools, "_execute_tool", _orig_exec)
         _patch(_agent_core, "_execute_tool", _orig_core_exec)
         _patch(_agent_core, "_save_session_messages", _orig_save)
 
@@ -277,7 +268,8 @@ async def test_fixed_ephemeral_stays_before_user_across_tool_rounds():
 
 async def test_subagent_stable_system_prompt():
     """Subagent keeps messages[0] stable across rounds."""
-    from cyrene import subagent, agent, tools, inbox
+    from cyrene import subagent, inbox
+    import cyrene.tooling as tools
 
     llm_inputs = []
     responses = iter([
@@ -301,7 +293,7 @@ async def test_subagent_stable_system_prompt():
         return ""
 
     _orig_llm = _patch(_agent_state, "_call_llm", fake_call_llm)
-    _orig_exec = _patch(tools, "_execute_tool", AsyncMock(return_value="file content"))
+    _orig_exec = _patch(tools, "execute_wire_tool", AsyncMock(return_value="file content"))
     _orig_wait = _patch(subagent, "wait_for_others", fake_wait)
     _orig_save = _patch(subagent, "save_messages", AsyncMock())
     _orig_run = _patch(subagent, "set_running", AsyncMock())
@@ -312,10 +304,10 @@ async def test_subagent_stable_system_prompt():
     _orig_inbox_ctx = _patch(inbox, "get_inbox_context", lambda aid, session_id="": "")
     _orig_mark = _patch(inbox, "mark_all_read", AsyncMock())
     try:
-        result = await subagent._run_subagent("test_agent", "test task", None, 0, "db.sqlite3")
+        await subagent._run_subagent("test_agent", "test task", None, 0, "db.sqlite3")
     finally:
         _patch(_agent_state, "_call_llm", _orig_llm)
-        _patch(tools, "_execute_tool", _orig_exec)
+        _patch(tools, "execute_wire_tool", _orig_exec)
         _patch(subagent, "wait_for_others", _orig_wait)
         _patch(subagent, "save_messages", _orig_save)
         _patch(subagent, "set_running", _orig_run)
@@ -342,7 +334,8 @@ async def test_subagent_stable_system_prompt():
 
 async def test_subagent_empty_quit_exits_without_feedback_retry():
     """Subagent no longer retries empty quit with validator feedback."""
-    from cyrene import subagent, agent, tools, inbox
+    from cyrene import subagent, inbox
+    import cyrene.tooling as tools
 
     llm_inputs = []
     responses = iter([
@@ -361,7 +354,7 @@ async def test_subagent_empty_quit_exits_without_feedback_retry():
         return ""
 
     _orig_llm = _patch(_agent_state, "_call_llm", fake_call_llm)
-    _orig_exec = _patch(tools, "_execute_tool", AsyncMock(return_value="ok"))
+    _orig_exec = _patch(tools, "execute_wire_tool", AsyncMock(return_value="ok"))
     _orig_wait = _patch(subagent, "wait_for_others", fake_wait)
     _orig_save = _patch(subagent, "save_messages", AsyncMock())
     _orig_run = _patch(subagent, "set_running", AsyncMock())
@@ -375,7 +368,7 @@ async def test_subagent_empty_quit_exits_without_feedback_retry():
         result = await subagent._run_subagent("test_agent", "test task", None, 0, "db.sqlite3")
     finally:
         _patch(_agent_state, "_call_llm", _orig_llm)
-        _patch(tools, "_execute_tool", _orig_exec)
+        _patch(tools, "execute_wire_tool", _orig_exec)
         _patch(subagent, "wait_for_others", _orig_wait)
         _patch(subagent, "save_messages", _orig_save)
         _patch(subagent, "set_running", _orig_run)
@@ -393,7 +386,8 @@ async def test_subagent_empty_quit_exits_without_feedback_retry():
 
 async def test_subagent_resume_strips_old_context():
     """Resumed subagent strips old context messages from previous run."""
-    from cyrene import subagent, agent, tools, inbox
+    from cyrene import subagent, inbox
+    import cyrene.tooling as tools
 
     old_messages = [
         {"role": "system", "content": "You are a sub-agent..."},
@@ -419,7 +413,7 @@ async def test_subagent_resume_strips_old_context():
         return ""
 
     _orig_llm = _patch(_agent_state, "_call_llm", fake_call_llm)
-    _orig_exec = _patch(tools, "_execute_tool", AsyncMock(return_value="ok"))
+    _orig_exec = _patch(tools, "execute_wire_tool", AsyncMock(return_value="ok"))
     _orig_wait = _patch(subagent, "wait_for_others", fake_wait)
     _orig_save = _patch(subagent, "save_messages", AsyncMock())
     _orig_run = _patch(subagent, "set_running", AsyncMock())
@@ -430,13 +424,13 @@ async def test_subagent_resume_strips_old_context():
     _orig_inbox_ctx = _patch(inbox, "get_inbox_context", lambda aid, session_id="": "")
     _orig_mark = _patch(inbox, "mark_all_read", AsyncMock())
     try:
-        result = await subagent._run_subagent(
+        await subagent._run_subagent(
             "test_agent", "task", None, 0, "db.sqlite3",
             resume_messages=old_messages,
         )
     finally:
         _patch(_agent_state, "_call_llm", _orig_llm)
-        _patch(tools, "_execute_tool", _orig_exec)
+        _patch(tools, "execute_wire_tool", _orig_exec)
         _patch(subagent, "wait_for_others", _orig_wait)
         _patch(subagent, "save_messages", _orig_save)
         _patch(subagent, "set_running", _orig_run)

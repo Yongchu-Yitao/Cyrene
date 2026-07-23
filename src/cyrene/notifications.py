@@ -14,12 +14,10 @@ Agent tool ``send_notification`` lets the agent send notifications directly.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import platform
 import subprocess
-import sys
 import tempfile
 from datetime import datetime, timezone
 from typing import Any
@@ -180,7 +178,7 @@ def _notify_macos(title: str, body: str) -> dict[str, Any]:
     Telegram) rather than silently dropping the notification.
     """
     import shutil
-    from cyrene.config import ASSISTANT_NAME, BASE_DIR
+    from cyrene.config import ASSISTANT_NAME
 
     binary = shutil.which("terminal-notifier")
     if not binary:

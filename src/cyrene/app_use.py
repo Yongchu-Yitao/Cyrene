@@ -486,7 +486,7 @@ async def _execute_visual_click(session_id: str, parameters: dict[str, Any]) -> 
     try:
         max_attempts = max(1, min(2, int(parameters.get("max_attempts", 2))))
         min_confidence = max(0.0, min(1.0, float(parameters.get("min_confidence", 0.45))))
-        pointer_duration_ms = max(100, min(10000, int(parameters.get("pointer_duration_ms", 1200))))
+        _pointer_duration_ms = max(100, min(10000, int(parameters.get("pointer_duration_ms", 1200))))
     except (TypeError, ValueError):
         return {"status": "error", "type": "invalid_arguments", "message": "visual_click attempt, confidence, and pointer duration values are invalid."}
     fallback = parameters.get("fallback", ["semantic_press", "menu_command"])

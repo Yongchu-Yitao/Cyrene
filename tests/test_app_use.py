@@ -13,7 +13,7 @@ import PIL as _REAL_PIL
 from PIL import Image, ImageDraw as _REAL_IMAGE_DRAW
 
 _REAL_PIL_IMAGE = sys.modules["PIL.Image"]
-_REAL_PIL_IMAGE_DRAW = sys.modules["PIL.ImageDraw"]
+_REAL_PIL_IMAGE_DRAW = _REAL_IMAGE_DRAW
 
 
 def _png_base64(width: int, height: int, color: tuple[int, int, int] = (240, 240, 240)) -> str:
@@ -53,7 +53,7 @@ def clear_app_use_runtime_session_state():
 
 
 def test_app_use_is_one_stable_main_only_tool():
-    from cyrene.registry_tools import get_active_tool_defs_for_actor
+    from cyrene.tooling.catalog import get_active_tool_defs_for_actor
 
     main_before = get_active_tool_defs_for_actor("main")
     main_after = get_active_tool_defs_for_actor("main")
@@ -66,7 +66,7 @@ def test_app_use_is_one_stable_main_only_tool():
 
 
 def test_app_use_schema_keeps_runtime_capabilities_out_of_function_enum():
-    from cyrene.tool_impl.app_use import TOOL_DEF
+    from cyrene.tool_impl.desktop.app_use import TOOL_DEF
 
     function = TOOL_DEF["function"]
     description = function["description"]
@@ -101,7 +101,14 @@ async def test_app_use_round_keeps_identical_wire_tool_array(monkeypatch):
             "content": "",
             "tool_calls": [{
                 "id": "app1",
-                "function": {"name": "app_use", "arguments": json.dumps({"operation": "list_targets"})},
+                "function": {
+                    "name": "desktop_tools",
+                    "arguments": json.dumps({
+                        "operation": "invoke",
+                        "capability_id": "desktop.use",
+                        "arguments": {"operation": "list_targets"},
+                    }),
+                },
             }],
         },
         {
@@ -118,29 +125,15 @@ async def test_app_use_round_keeps_identical_wire_tool_array(monkeypatch):
         return next(responses)
 
     async def fake_execute(name, arguments, *_args, **_kwargs):
-        assert name == "app_use"
-        assert arguments == {"operation": "list_targets"}
+        assert name == "desktop_tools"
+        assert arguments == {
+            "operation": "invoke",
+            "capability_id": "desktop.use",
+            "arguments": {"operation": "list_targets"},
+        }
         return json.dumps({"status": "success", "targets": []})
-
-    app_tool = {
-        "type": "function",
-        "function": {
-            "name": "app_use",
-            "description": "stable gateway",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    }
-    quit_tool = {
-        "type": "function",
-        "function": {
-            "name": "quit",
-            "description": "finish",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    }
     monkeypatch.setattr(agent_core, "_call_llm", fake_llm)
     monkeypatch.setattr(agent_core, "_execute_tool", fake_execute)
-    monkeypatch.setattr(agent_core, "get_active_tool_defs", lambda: [app_tool, quit_tool])
     monkeypatch.setattr(agent_core, "_save_session_messages", AsyncMock())
     monkeypatch.setattr(agent_core, "_streaming_reply_requested", lambda: False)
 
@@ -148,7 +141,8 @@ async def test_app_use_round_keeps_identical_wire_tool_array(monkeypatch):
     assert result == "App Use cache stability was verified successfully."
     assert len(calls) == 3
     assert len(set(calls)) == 1
-    assert calls[0].count('"name": "app_use"') == 1
+    assert calls[0].count('"name": "desktop_tools"') == 1
+    assert '"name": "app_use"' not in calls[0]
 
 
 @pytest.mark.asyncio
@@ -382,7 +376,7 @@ async def test_connect_does_not_disclose_mac_only_or_focus_dependent_python_capa
 
 def test_app_use_timeout_covers_two_vision_passes():
     from cyrene.app_use import VISION_ANALYSIS_TIMEOUT_SECONDS
-    from cyrene.tool_executor import _tool_timeout_seconds
+    from cyrene.tooling.executor import _tool_timeout_seconds
 
     assert _tool_timeout_seconds("app_use", {}) >= (2 * VISION_ANALYSIS_TIMEOUT_SECONDS) + 30
 
@@ -1029,7 +1023,7 @@ async def test_visual_click_attributes_background_axpress_not_configured_keyboar
 @pytest.mark.asyncio
 async def test_app_use_tool_returns_structured_json(monkeypatch):
     from cyrene import app_use
-    from cyrene.tool_impl import app_use as tool
+    from cyrene.tool_impl.desktop import app_use as tool
 
     async def fake_execute(arguments):
         return {"status": "success", "operation": arguments["operation"], "targets": []}

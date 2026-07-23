@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from cyrene.tool_legacy import (
+from cyrene.tooling.runtime_support import (
     _guard_nonbash_shell_command,
     _guard_shell_command_workspace_write,
     _nonbash_command_writes,

@@ -88,7 +88,7 @@ class TestDocumentCRUD:
             path="/tmp/file1.pdf",
             kind="pdf",
         )
-        doc2 = await store.create_document(
+        await store.create_document(
             temp_db,
             name="file2.md",
             path="/tmp/file2.md",
@@ -559,12 +559,12 @@ class TestRelations:
             path="/tmp/doc3.md",
         )
 
-        rel1 = await store.create_relation(
+        await store.create_relation(
             temp_db,
             src_id=doc1["id"],
             dst_id=doc2["id"],
         )
-        rel2 = await store.create_relation(
+        await store.create_relation(
             temp_db,
             src_id=doc1["id"],
             dst_id=doc3["id"],
@@ -728,7 +728,7 @@ class TestStats:
         )
         doc1 = await store.update_document(temp_db, doc1["id"], status="indexed")
 
-        doc2 = await store.create_document(
+        await store.create_document(
             temp_db,
             name="doc2.md",
             path="/tmp/doc2.md",
@@ -963,7 +963,7 @@ class TestGetGraphWithoutAuto:
             path="/tmp/doc2.md",
         )
 
-        rel = await store.create_relation(
+        await store.create_relation(
             temp_db,
             src_id=doc1["id"],
             dst_id=doc2["id"],

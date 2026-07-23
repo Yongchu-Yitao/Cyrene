@@ -222,7 +222,7 @@ def test_html_links_resolve_text_and_image_links_and_skip_non_http():
 
 
 def test_browser_navigate_link_output_is_before_page_text():
-    from cyrene.tool_impl.browser_output import page_link_lines
+    from cyrene.tool_impl.browser.browser_output import page_link_lines
 
     lines = page_link_lines(
         {"links": [{"text": "Target result", "url": "https://example.com/video/1"}]}
@@ -290,7 +290,7 @@ def test_normalize_electron_page_signal_for_python_tools():
 async def test_browser_click_ref_surfaces_bounded_access_gate_recovery(monkeypatch):
     import importlib
 
-    module = importlib.import_module("cyrene.tool_impl.browser_click_ref")
+    module = importlib.import_module("cyrene.tool_impl.browser.browser_click_ref")
 
     async def fake_click_ref(_ref):
         return {
@@ -584,7 +584,7 @@ async def test_screencast_drops_frames_when_queue_full():
 async def test_browser_request_takeover_pauses_with_takeover_meta(monkeypatch):
     import json
 
-    from cyrene import tools as _tools
+    from cyrene.tool_impl.browser import browser_request_takeover as _tools
     from cyrene import debug as _debug
     from cyrene import browser as _browser
     from cyrene.agent import state as _state
@@ -643,7 +643,7 @@ async def test_browser_request_takeover_pauses_with_takeover_meta(monkeypatch):
 
 
 async def test_browser_request_takeover_rejects_non_main_agent(monkeypatch):
-    from cyrene import tools as _tools
+    from cyrene.tool_impl.browser import browser_request_takeover as _tools
     from cyrene.agent import state as _state
 
     agent_token = _state._current_agent_id.set("alice")
@@ -897,7 +897,7 @@ async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
     import os
     import tempfile
 
-    from cyrene.tool_impl import browser_screenshot as _mod
+    from cyrene.tool_impl.browser import browser_screenshot as _mod
     from cyrene import attachments as _attachments
 
     # Create a real temp file to simulate what screenshot() returns.
@@ -929,7 +929,7 @@ async def test_tool_browser_screenshot_returns_primary_model_visual_observation(
 
     from cyrene import attachments as _attachments
     from cyrene import browser as _browser
-    from cyrene.tool_impl import browser_screenshot as _mod
+    from cyrene.tool_impl.browser import browser_screenshot as _mod
 
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     tmp.write(b"not-decoded-in-this-mocked-test")
@@ -1472,7 +1472,7 @@ async def test_electron_scroll_forwards_nested_target_options(monkeypatch):
 
 
 async def test_browser_scroll_tool_reports_actual_nested_scroll(monkeypatch):
-    from cyrene.tool_impl import browser_scroll as tool
+    from cyrene.tool_impl.browser import browser_scroll as tool
 
     captured = {}
 
@@ -1498,7 +1498,7 @@ async def test_browser_scroll_tool_reports_actual_nested_scroll(monkeypatch):
 
 
 async def test_browser_scroll_tool_does_not_claim_success_without_movement(monkeypatch):
-    from cyrene.tool_impl import browser_scroll as tool
+    from cyrene.tool_impl.browser import browser_scroll as tool
 
     async def fake_scroll_page(**_kwargs):
         return {"ok": True, "moved": False, "actualDeltaY": 0, "x": 10, "y": 20}
@@ -1511,9 +1511,9 @@ async def test_browser_scroll_tool_does_not_claim_success_without_movement(monke
 
 
 async def test_browser_tab_tools_are_registered(monkeypatch):
-    from cyrene import registry_tools as _rt
+    from cyrene.tooling import catalog as _rt
 
-    names = _rt._NATIVE_TOOL_MODULES  # type: ignore
+    names = _rt.NATIVE_TOOL_MODULES
     modules = [m for m in names if "browser_tab_" in m or "browser_scroll" in m]
     assert any("browser_tab_list" in m for m in modules)
     assert any("browser_tab_new" in m for m in modules)
@@ -1523,7 +1523,7 @@ async def test_browser_tab_tools_are_registered(monkeypatch):
 
 
 async def test_browser_navigate_rejects_visible_target_link(monkeypatch):
-    from cyrene.tool_impl import browser_navigate as tool
+    from cyrene.tool_impl.browser import browser_navigate as tool
 
     navigated = False
 
@@ -1570,7 +1570,7 @@ async def test_browser_navigate_rejects_visible_target_link(monkeypatch):
 
 
 async def test_browser_navigate_allows_user_requested_exact_url(monkeypatch):
-    from cyrene.tool_impl import browser_navigate as tool
+    from cyrene.tool_impl.browser import browser_navigate as tool
 
     guard_args = None
 
@@ -1594,7 +1594,7 @@ async def test_browser_navigate_allows_user_requested_exact_url(monkeypatch):
 
 
 async def test_browser_navigate_returns_current_url_guard_error(monkeypatch):
-    from cyrene.tool_impl import browser_navigate as tool
+    from cyrene.tool_impl.browser import browser_navigate as tool
 
     async def fake_navigation_guard(url, reason, snapshot_token):
         return {
@@ -1622,7 +1622,7 @@ def test_browser_snapshot_prioritizes_interactive_elements_and_exposes_credentia
     import inspect
 
     from cyrene import browser
-    from cyrene.tool_impl import browser_snapshot
+    from cyrene.tool_impl.browser import browser_snapshot
 
     interactive = "input,textarea,select,button,a[href]"
     assert interactive in browser._BROWSER_INSPECT_JS
@@ -1631,7 +1631,7 @@ def test_browser_snapshot_prioritizes_interactive_elements_and_exposes_credentia
 
 
 async def test_browser_click_ref_reports_popup_as_new_active_tab(monkeypatch):
-    from cyrene.tool_impl import browser_click_ref as tool
+    from cyrene.tool_impl.browser import browser_click_ref as tool
 
     async def fake_click_ref(ref):
         assert ref == "e9"

@@ -1628,7 +1628,7 @@ async def complete_turn(
     # Tool telemetry is intentionally fire-and-forget during execution.  The
     # finalization barrier guarantees learning sees the complete turn.
     try:
-        from cyrene.tool_executor import flush_behavior_action_tasks
+        from cyrene.tooling.executor import flush_behavior_action_tasks
 
         await flush_behavior_action_tasks()
     except Exception:
@@ -4229,7 +4229,7 @@ async def run_learned_skill(skill_id: str, param_overrides: dict[str, Any] | Non
         return f"Learned skill '{skill_id}' not found."
     if str(skill.get("risk_level") or "none") == "high" or _has_auto_replay_blocked_step(skill.get("steps") or []):
         return f"Learned skill '{skill_id}' requires normal agent execution and fresh runtime approval."
-    from cyrene.tools import _execute_tool
+    from cyrene.tooling.executor import _execute_tool
 
     context_summary = ""
     extraction = {

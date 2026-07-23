@@ -61,7 +61,7 @@ def test_chat_plan_persists_markdown_and_tracks_step_progress(monkeypatch, tmp_p
 
 
 def test_workbench_plan_progress_tool_is_main_only():
-    from cyrene.registry_tools import AGENT_TOOL_GROUPS, get_tool_names
+    from cyrene.tooling.catalog import AGENT_TOOL_GROUPS, get_tool_names
 
     assert "update_plan_progress" in get_tool_names()
     assert "update_plan_progress" in AGENT_TOOL_GROUPS["subagent_blocklist"]

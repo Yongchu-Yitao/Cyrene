@@ -3,8 +3,10 @@ Debug logging for LLM calls. Logs every request/response to a file.
 Activated by `python -m cyrene.local_cli --verbose`.
 """
 
+import asyncio
 import json
 import logging
+import uuid as _uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -119,9 +121,6 @@ def get_log_path() -> str:
 # ---------------------------------------------------------------------------
 # Event bus — 实时事件推送给 Web UI
 # ---------------------------------------------------------------------------
-
-import asyncio
-import uuid as _uuid
 
 _event_queue: asyncio.Queue | None = None
 _recent_events: deque[dict] = deque(maxlen=500)

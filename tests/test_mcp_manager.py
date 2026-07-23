@@ -2,7 +2,6 @@
 Tests for MCP manager: config persistence and tool integration.
 """
 
-import json
 import sys
 import tempfile
 from pathlib import Path
@@ -130,9 +129,8 @@ def test_mcp_tool_def_conversion():
 
 def test_get_active_tool_defs_includes_mcp():
     """get_active_tool_defs() should include MCP tools when manager has them."""
-    from cyrene import tools
+    from cyrene.tooling import catalog as tools
     from cyrene import mcp_manager as mm
-    from cyrene.config_store import _DEFAULT_ENABLED_TOOLS
 
     with tempfile.TemporaryDirectory() as tmp:
         # Simulate a manager with tools
@@ -149,7 +147,7 @@ def test_get_active_tool_defs_includes_mcp():
 
 def test_execute_tool_unknown_fallback_to_mcp():
     """_execute_tool should try MCP for unknown tool names and raise ValueError if not found."""
-    from cyrene.tools import _execute_tool
+    from cyrene.tooling.executor import _execute_tool
     import asyncio
 
     # Calling a non-existent tool should raise ValueError (not crash)

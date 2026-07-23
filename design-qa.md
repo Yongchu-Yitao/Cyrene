@@ -257,6 +257,12 @@ final result: passed
 - List-scroll source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-3e13a162-92b0-47d5-ab8f-c09a01d187ee.png`.
 - Final list-scroll capture: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-list-scroll-final-1152x768.png`.
 - List-scroll comparison: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-list-scroll-comparison.png`.
+- Media-content source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-aa810695-9afb-47fc-a6a7-8c326b091f9e.png`.
+- Final image-content capture: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-content-image-final-1152x768.png`.
+- Image-content comparison: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-content-image-comparison.png`.
+- Markdown-content source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-d0313a01-e21f-4db4-8c4f-6b72e987ffd8.png`.
+- Final Markdown-content capture: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-content-markdown-final-1152x768.png`.
+- Markdown-content comparison: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-content-markdown-comparison.png`.
 - Viewport: Cyrene Electron at 1313 × 768 px. The dark selected-item state is used for source comparison; the light state verifies theme correctness.
 - Data state: the current project's 26 real knowledge documents. Reference sample records were intentionally not copied.
 
@@ -275,6 +281,8 @@ final result: passed
 - List scrolling: the table header remains fixed while the table body owns an independent vertical scroll viewport. With the lower detail workspace open, the body can still reach and fully expose the final project item without the detail workspace covering it. Card view uses the same independent vertical-scroll behavior.
 - Sidebar and selection treatment: tag-cloud typography is one step smaller, count badges share the tag-card outline treatment, and the sidebar is slightly wider. Sidebar choices, table rows, and cards use the same soft accent fill and thin accent outline without the previous orange browser-focus ring or a left-edge stripe.
 - Citation controls: the heading and copy dropdown share one centered baseline, the trigger has no theme-colored focus/active ring, and the menu exposes plain-text and BibTeX copy actions. The citation item uses a complete one-pixel theme-color outline with no separate left stripe.
+- Content rendering: the right `内容` tab now prioritizes the original attachment over indexed/OCR text. Images render inline, video and audio use native playable controls, PDFs render inline, and unsupported binary files receive an explicit open-file fallback. Markdown is parsed into headings, paragraphs, lists, code, tables, links, and images, then sanitized before insertion.
+- Content navigation: switching the selected item or entering the `内容` tab resets the inspector to its top, so a newly selected document never opens halfway through the previous document's content.
 - Image quality and assets: the screen uses existing Workbench/Electron icons and original document types; no generated raster replacements, CSS-drawn sample art, or external image assets were introduced.
 - Copy: the visible toolbar contains only `添加条目`, `导入`, and `导出`; the all-items state shows `共 26 个知识`; Zotero import copy identifies the active project.
 
@@ -299,12 +307,14 @@ final result: passed
 11. The information workspace was divided into independently scrollable metadata and summary/card columns, with a compact responsive single-column fallback.
 12. The classification rail was widened, tag-cloud type was reduced, counts adopted the tag-card outline, and all selected states were aligned to the Workbench soft-accent treatment without orange focus outlines.
 13. The literature table body was separated from the fixed header and lower detail workspace. Electron wheel-scroll verification reached the final item while the detail workspace remained open and stationary.
+14. The `内容` tab was extended from plain indexed text to attachment-aware presentation. Real project images now display inline; video/audio use native playback controls; PDFs embed inline; unsupported files remain openable.
+15. Markdown attachments now render as sanitized semantic HTML instead of showing source markers such as `#`, `##`, and `**`. Electron comparison evidence confirms the heading hierarchy and the automatic scroll-to-top behavior.
 
 ## Verification
 
-- Primary Electron interactions tested with Computer Use: reload the latest build, select a real document, open the lower workspace and inspector, scroll the independent table body to its final item, collapse and expand the classification group, switch dark/light/system themes, open General settings, and verify the active-project Zotero import control.
+- Primary Electron interactions tested with Computer Use: reload the latest build, select a real document, open the lower workspace and inspector, scroll the independent table body to its final item, collapse and expand the classification group, switch dark/light/system themes, open General settings, verify the active-project Zotero import control, display a real project image in `内容`, and render a real Markdown document after switching items.
 - Runtime: the Electron application remains running on `127.0.0.1:4242`; the final asset and API requests returned 200. No new frontend exception or application crash was observed.
-- Automated verification: `npm run build`; focused library, settings, and Agent-tool tests (19 passed); Ruff (all checks passed); `git diff --check`.
+- Automated verification: `npm run build`; focused library, settings, and Agent-tool tests (20 passed); the raw-video endpoint test confirms inline `video/mp4` delivery for native playback and seeking; Ruff (all checks passed); `git diff --check`.
 - Theme handoff: the application was restored to `跟随系统`, currently rendering light.
 
 ## Implementation checklist
@@ -330,5 +340,9 @@ final result: passed
 - [x] Fixed table header with an independently scrollable list body that reaches the final item while the detail workspace is open.
 - [x] Final list-scroll evidence: `docs/research-workbench-report/library-list-scroll-final-1152x768.png`.
 - [x] Final list-scroll comparison: `docs/research-workbench-report/library-list-scroll-comparison.png`.
+- [x] Attachment-aware content rendering for images, playable video/audio, inline PDFs, and unsupported-file fallback.
+- [x] Sanitized Markdown rendering with semantic typography and automatic inspector scroll reset.
+- [x] Final image-content comparison: `docs/research-workbench-report/library-content-image-comparison.png`.
+- [x] Final Markdown-content comparison: `docs/research-workbench-report/library-content-markdown-comparison.png`.
 
 final result: passed

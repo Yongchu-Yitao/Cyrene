@@ -206,14 +206,12 @@ function SettingsOverlay({
   var [notifyWechat, setNotifyWechat] = useStateSt(true);
 
   // ── Capabilities state ──
-  var [browserTools, setBrowserTools] = useStateSt(function () { return readCapability("browserTools", true); });
   var [redactSecrets, setRedactSecrets] = useStateSt(function () { return readCapability("redactSecrets", true); });
   var [mcpConfigs, setMcpConfigs] = useStateSt([]);
   var [mcpServers, setMcpServers] = useStateSt([]);
   var [mcpSaved, setMcpSaved] = useStateSt("");
   var [newMcpServer, setNewMcpServer] = useStateSt({ name: "", transport: "stdio", command: "", args: "", url: "", enabled: true });
-  var [toolList, setToolList] = useStateSt([]);
-  var [toolsExpanded, setToolsExpanded] = useStateSt(false);
+  var [toolGroups, setToolGroups] = useStateSt([]);
   var [toolsSaved, setToolsSaved] = useStateSt("");
 
   // ── Data state ──
@@ -309,13 +307,7 @@ function SettingsOverlay({
     });
 
     fetch("/api/settings/tools").then(function (r) { return r.json(); }).then(function (p) {
-      var tools = p.tools || [];
-      var browserToolNames = ["browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_click_ref", "browser_click_text", "browser_click_at", "browser_type", "browser_type_ref", "browser_upload_files", "browser_wait", "browser_network_log", "browser_tab_list", "browser_tab_new", "browser_tab_select", "browser_tab_close", "browser_scroll", "browser_user_events", "browser_request_takeover"];
-      setToolList(tools);
-      if (tools.length) {
-        var browserToolsList = tools.filter(function (tool) { return browserToolNames.indexOf(tool.name) >= 0; });
-        if (browserToolsList.length) setBrowserTools(browserToolsList.every(function (tool) { return tool.enabled !== false; }));
-      }
+      setToolGroups(p.tool_groups || []);
     }).catch(function () {});
     fetch("/api/settings/mcp").then(function (r) { return r.json(); }).then(function (p) { setMcpServers(p.servers || []); setMcpConfigs(p.configs || []); }).catch(function () {});
     fetch("/api/settings/keys").then(function (r) { return r.json(); }).then(function (p) {
@@ -378,15 +370,6 @@ function SettingsOverlay({
     });
   }
 
-  function saveTools() {
-    setToolsSaved(t("settings.saving"));
-    var map = {};
-    toolList.forEach(function (t) { map[t.name] = t.enabled; });
-    fetch("/api/settings/tools", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tools: map }) })
-      .then(function (r) { return r.ok ? (setToolsSaved(t("settings.saved")), setTimeout(function () { setToolsSaved(""); }, 1500)) : Promise.reject(); })
-      .catch(function () { setToolsSaved(t("settings.error")); });
-  }
-
   function saveAgents() {
     fetch("/api/settings/config", { method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -398,16 +381,30 @@ function SettingsOverlay({
     }).catch(function () {});
   }
 
-  function saveBrowserTools(nextEnabled) {
-    var browserToolNames = ["browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_click_ref", "browser_click_text", "browser_click_at", "browser_type", "browser_type_ref", "browser_upload_files", "browser_wait", "browser_network_log", "browser_tab_list", "browser_tab_new", "browser_tab_select", "browser_tab_close", "browser_scroll", "browser_user_events", "browser_request_takeover"];
-    var nextToolList = toolList.map(function (tool) {
-      return browserToolNames.indexOf(tool.name) >= 0 ? { ...tool, enabled: nextEnabled } : tool;
+  function saveToolGroup(groupId, nextEnabled) {
+    var previousGroups = toolGroups;
+    var nextGroups = toolGroups.map(function (group) {
+      return group.id === groupId
+        ? { ...group, enabled: nextEnabled }
+        : group;
     });
-    var map = {};
-    nextToolList.forEach(function (tool) { map[tool.name] = tool.enabled; });
-    setBrowserTools(nextEnabled);
-    setToolList(nextToolList);
-    fetch("/api/settings/tools", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tools: map }) }).catch(function () {});
+    var payload = { packages: {} };
+    payload.packages[groupId] = nextEnabled;
+    setToolGroups(nextGroups);
+    setToolsSaved(t("settings.saving"));
+    fetch("/api/settings/tools", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(function (response) {
+      if (!response.ok) return Promise.reject();
+      setToolsSaved(t("settings.saved"));
+      window.dispatchEvent(new Event("cyrene-tool-packages-change"));
+      setTimeout(function () { setToolsSaved(""); }, 1500);
+    }).catch(function () {
+      setToolGroups(previousGroups);
+      setToolsSaved(t("settings.error"));
+    });
   }
 
   function saveRedactSecrets(nextEnabled) {
@@ -484,7 +481,7 @@ function SettingsOverlay({
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
           tab === "appearance" && AppearancePanel({ t, tweaks, setTweak, actualTheme, theme: initialTheme }),
-          tab === "capabilities" && CapabilitiesPanel({ t, browserTools, saveBrowserTools, mcpConfigs, setMcpConfigs, mcpServers, toolList, toolsExpanded, setToolsExpanded, toolsSaved, saveTools, newMcpServer, setNewMcpServer, mcpSaved, saveMcp, config }),
+          tab === "capabilities" && CapabilitiesPanel({ t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved, saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp }),
           tab === "skills" && React.createElement(SkillsPanel, { t }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
           tab === "data" && DataPanel({ t, redactSecrets, saveRedactSecrets, config, configLoading, resetStatus, setResetStatus, resetting, setResetting, backupList, backupMsg, setBackupMsg, loadBackups, exportSid, setExportSid, exportFmt, setExportFmt, exportMsg, setExportMsg, formatBytes, formatDate }),
@@ -1303,7 +1300,7 @@ function AppearancePanel(p) {
 
 // ── Capabilities Panel ──
 function CapabilitiesPanel(p) {
-  var { t, browserTools, saveBrowserTools, mcpConfigs, setMcpConfigs, mcpServers, toolList, toolsExpanded, setToolsExpanded, toolsSaved, saveTools, newMcpServer, setNewMcpServer, mcpSaved, saveMcp, config } = p;
+  var { t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved, saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp } = p;
 
   function addMcp() {
     var name = (newMcpServer.name || "").trim();
@@ -1320,17 +1317,34 @@ function CapabilitiesPanel(p) {
 
   function removeMcp(name) { setMcpConfigs(mcpConfigs.filter(function (s) { return s.name !== name; })); }
   function toggleMcp(name) { setMcpConfigs(mcpConfigs.map(function (s) { return s.name === name ? { ...s, enabled: !s.enabled } : s; })); }
-  function toggleTool(name) { setToolList(toolList.map(function (t) { return t.name === name ? { ...t, enabled: !t.enabled } : t; })); }
 
   return React.createElement("div", { className: "settings-panel" },
     SectionTitle(t("settings.capabilities"), t("settings.capabilitiesSubtitle")),
-    FieldRow(t("settings.browserTools"), t("settings.browserToolsHint"), Toggle(browserTools, function () { saveBrowserTools(!browserTools); })),
 
-    // Web Search (read only)
-    SectionBlock(t("settings.webSearch"), null,
-      FieldRow(t("settings.searchBackend"), null, React.createElement("input", { className: "wb-input mono", value: t("settings.builtin"), readOnly: true, style: { maxWidth: 240 } })),
-      FieldRow(t("settings.builtinStatus"), null, React.createElement("input", { className: "wb-input mono", value: t("settings.autoStarted"), readOnly: true, style: { maxWidth: 240 } })),
-      FieldRow(t("settings.searchProxy"), null, React.createElement("input", { className: "wb-input mono", value: t("settings.searchProxyAuto"), readOnly: true, style: { maxWidth: 240 } })),
+    // Tool packages
+    SectionBlock(t("settings.toolPackages"), t("settings.toolPackagesHint"),
+      React.createElement("div", { className: "wb-tool-package-settings" },
+        toolGroups.filter(function (group) {
+          return group.kind === "package";
+        }).map(function (group) {
+          var packageEnabled = group.enabled !== false;
+          var groupName = t("toolName." + group.wire_name);
+          return FieldRow(
+            groupName,
+            t("toolPackageDesc." + group.id),
+            Toggle(
+              packageEnabled,
+              function () { saveToolGroup(group.id, !packageEnabled); },
+              false,
+              t("settings.packageToggleLabel", { name: groupName }),
+            ),
+            group.id,
+          );
+        }),
+      ),
+      toolsSaved && React.createElement("div", { className: "wb-save-actions" },
+        React.createElement("span", { className: "wb-hint saved" }, toolsSaved),
+      ),
     ),
 
     // MCP
@@ -1369,23 +1383,6 @@ function CapabilitiesPanel(p) {
       React.createElement("div", { className: "wb-save-actions" },
         React.createElement("button", { className: "wb-btn primary", onClick: saveMcp }, t("settings.saveRestartMcp")),
         mcpSaved && React.createElement("span", { className: "wb-hint saved" }, mcpSaved),
-      ),
-    ),
-
-    // Tools
-    React.createElement("div", null,
-      React.createElement("button", { className: "wb-collapse-head", onClick: function () { setToolsExpanded(!toolsExpanded); } },
-        React.createElement("b", null, t("settings.tools")),
-        React.createElement("span", { className: "wb-collapse-icon" + (toolsExpanded ? " open" : "") }, "⌖ ".concat(toolsExpanded ? t("settings.collapseTools") : t("settings.expandTools", { count: toolList.length }))),
-      ),
-      toolsExpanded && React.createElement("div", { className: "wb-tool-list" },
-        toolList.map(function (tool, idx) {
-          return FieldRow(React.createElement("span", { className: "mono" }, tool.name), tool.desc, Toggle(tool.enabled, function () { toggleTool(tool.name); }), tool.name || "tool-" + idx);
-        }),
-        React.createElement("div", { className: "wb-save-actions" },
-          React.createElement("button", { className: "wb-btn primary", onClick: saveTools }, t("settings.saveTools")),
-          toolsSaved && React.createElement("span", { className: "wb-hint saved" }, toolsSaved),
-        ),
       ),
     ),
   );

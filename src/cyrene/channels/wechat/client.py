@@ -119,7 +119,7 @@ class WeChatClient:
     # ── Internal helpers ────────────────────────────────────────────────
 
     def _base_info(self) -> dict:
-        return {"channel_version": "0.6.17", "bot_agent": "Cyrene/0.6.17"}
+        return {"channel_version": "0.7.0b1", "bot_agent": "Cyrene/0.7.0b1"}
 
     def _build_headers(self) -> dict[str, str]:
         uint32 = secrets.randbits(32)
@@ -373,7 +373,6 @@ class WeChatClient:
         The downloaded bytes are decrypted when a key is available; if no key
         can be resolved the raw CDN bytes are stored instead.
         """
-        import mimetypes
 
         item_type = item.get("type")
 

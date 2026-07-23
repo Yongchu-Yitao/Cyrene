@@ -51,9 +51,9 @@ async def main() -> None:
 
     try:
         from cyrene.updater import background_check
-        update_check_task = asyncio.create_task(background_check())
+        _update_check_task = asyncio.create_task(background_check())
     except Exception:
-        update_check_task = None
+        _update_check_task = None
 
     try:
         await run_web(bot, str(DB_PATH))

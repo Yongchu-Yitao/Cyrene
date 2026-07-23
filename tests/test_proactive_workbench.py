@@ -274,7 +274,7 @@ async def test_proactive_lang_is_pinned_in_ephemeral_system(monkeypatch):
 
 async def test_proactive_write_allows_only_new_files(monkeypatch, tmp_path):
     from cyrene.agent import state
-    from cyrene.tool_impl.write import _tool_write
+    from cyrene.tool_impl.core.write import _tool_write
     import cyrene.settings_store as settings_store
 
     workspace = tmp_path / "workspace"
@@ -312,7 +312,7 @@ async def test_proactive_write_allows_only_new_files(monkeypatch, tmp_path):
 
 async def test_proactive_rejects_edit_and_shell_file_mutations(monkeypatch):
     from cyrene.agent import state
-    from cyrene.tool_executor import _execute_tool
+    from cyrene.tooling.executor import _execute_tool
 
     meta_token = state._ui_round_assistant_meta.set({"system_initiated": True})
     try:

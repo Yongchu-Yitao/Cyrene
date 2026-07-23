@@ -1,7 +1,68 @@
+"""Local CLI and source-mode Electron backend entry point."""
+
+# Direct file execution must bootstrap the source checkout before Cyrene imports.
+# ruff: noqa: E402
+
 import asyncio
 import logging
+import os
 import socket
+import sys
 import uuid
+from pathlib import Path
+
+
+def _bootstrap_source_checkout() -> None:
+    """Make direct ``local_cli.py`` execution behave like an installed module.
+
+    Electron development launches this file by path. In that mode Python only
+    adds ``src/cyrene`` to ``sys.path``, so ``import cyrene`` would otherwise
+    fail. Prefer the checkout's virtual environment when it exists, then add
+    the repository's ``src`` directory before importing any Cyrene modules.
+    """
+    if __package__:
+        return
+
+    entrypoint = Path(__file__).resolve()
+    src_dir = entrypoint.parents[1]
+    project_dir = entrypoint.parents[2]
+    src_text = str(src_dir)
+    if src_text not in sys.path:
+        sys.path.insert(0, src_text)
+
+    if os.environ.get("CYRENE_LOCAL_CLI_BOOTSTRAPPED") == "1":
+        return
+
+    venv_dir = project_dir / ".venv"
+    venv_python = (
+        venv_dir / "Scripts" / "python.exe"
+        if os.name == "nt"
+        else venv_dir / "bin" / "python3"
+    )
+    try:
+        already_in_checkout_venv = (
+            Path(sys.prefix).resolve() == venv_dir.resolve()
+        )
+    except OSError:
+        already_in_checkout_venv = False
+    if not venv_python.is_file() or already_in_checkout_venv:
+        return
+
+    child_env = os.environ.copy()
+    child_env["CYRENE_LOCAL_CLI_BOOTSTRAPPED"] = "1"
+    child_env["PYTHONPATH"] = os.pathsep.join(
+        part
+        for part in (src_text, child_env.get("PYTHONPATH", ""))
+        if part
+    )
+    os.execve(
+        str(venv_python),
+        [str(venv_python), str(entrypoint), *sys.argv[1:]],
+        child_env,
+    )
+
+
+_bootstrap_source_checkout()
 
 from cyrene.agent import clear_session_id, run_agent
 from cyrene.agent.commands import DEEP_REFLECT_COMMAND_ID, parse_deep_reflect_command

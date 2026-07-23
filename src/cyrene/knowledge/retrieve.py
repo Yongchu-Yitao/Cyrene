@@ -3,7 +3,6 @@
 Provides hybrid search combining FTS5 and vector embeddings via Reciprocal Rank Fusion.
 """
 
-import re
 
 from cyrene.knowledge import store, embeddings
 
@@ -108,7 +107,6 @@ async def search_knowledge(
     # =========================================================================
     # Vector Path (if configured)
     # =========================================================================
-    vector_results = []
     if embeddings.is_configured():
         try:
             # Embed the query

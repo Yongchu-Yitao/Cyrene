@@ -3,7 +3,6 @@ Personality setup wizard. Runs once on first startup.
 Sets up SOUL.md with user's chosen personality.
 """
 
-import asyncio
 import logging
 
 from cyrene.config import DATA_DIR
@@ -183,7 +182,7 @@ async def _setup_custom() -> None:
     if content:
         soul_path = get_soul_path()
         soul_path.write_text(normalize_custom_soul_content(content), encoding="utf-8")
-        print(f"已写入自定义人格文件！")
+        print("已写入自定义人格文件！")
     else:
         print("内容为空，使用默认人格。")
 

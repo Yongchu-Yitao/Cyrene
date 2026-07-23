@@ -33,7 +33,7 @@ def _file(*, sha256: str = "a" * 64) -> dict:
 
 async def test_external_upload_requires_human_even_in_full_access(monkeypatch):
     from cyrene.agent import session, state
-    from cyrene.tool_legacy import _request_external_upload_confirmation
+    from cyrene.tooling.runtime_support import _request_external_upload_confirmation
 
     captured = {}
 
@@ -74,7 +74,7 @@ async def test_external_upload_requires_human_even_in_full_access(monkeypatch):
 async def test_upload_grant_is_consumed_once(monkeypatch, tmp_path):
     from cyrene import browser
     from cyrene.agent import state
-    from cyrene.tool_impl import browser_upload_files as tool
+    from cyrene.tool_impl.browser import browser_upload_files as tool
 
     target = _target()
     files = [_file()]
@@ -128,7 +128,7 @@ async def test_upload_grant_is_consumed_once(monkeypatch, tmp_path):
 async def test_changed_file_binding_cancels_after_approval(monkeypatch):
     from cyrene import browser
     from cyrene.agent import state
-    from cyrene.tool_impl import browser_upload_files as tool
+    from cyrene.tool_impl.browser import browser_upload_files as tool
 
     target = _target()
     before = [_file(sha256="a" * 64)]
@@ -178,7 +178,7 @@ async def test_changed_file_binding_cancels_after_approval(monkeypatch):
 
 async def test_non_http_destination_is_rejected_before_reading_files(monkeypatch):
     from cyrene import browser
-    from cyrene.tool_impl import browser_upload_files as tool
+    from cyrene.tool_impl.browser import browser_upload_files as tool
 
     async def fake_prepare(**_kwargs):
         target = _target()
@@ -272,7 +272,7 @@ async def test_electron_upload_transport_uses_dedicated_rpc(monkeypatch):
 
 
 async def test_intercepted_chooser_message_is_actionable():
-    from cyrene.tool_impl.browser_output import file_chooser_instruction
+    from cyrene.tool_impl.browser.browser_output import file_chooser_instruction
 
     message = file_chooser_instruction({
         "code": "FILE_CHOOSER_INTERCEPTED",
@@ -286,7 +286,7 @@ async def test_intercepted_chooser_message_is_actionable():
 
 
 async def test_approved_file_snapshot_preserves_exact_bytes_and_name(tmp_path):
-    from cyrene.tool_impl import browser_upload_files as tool
+    from cyrene.tool_impl.browser import browser_upload_files as tool
 
     source = tmp_path / "report.txt"
     source.write_bytes(b"approved bytes")
@@ -318,13 +318,16 @@ async def test_electron_upload_uses_guarded_cdp_path():
     assert "frameLoaderId" in main
 
 
-async def test_browser_upload_is_exposed_in_settings_and_prompt():
+async def test_browser_upload_is_managed_by_browser_package_and_prompt():
     from pathlib import Path
 
     root = Path(__file__).resolve().parent.parent
     settings = (root / "src" / "workbench-webui" / "settings-overlay.jsx").read_text(encoding="utf-8")
     prompt = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
 
-    assert settings.count('"browser_upload_files"') >= 2
+    assert '"browser_upload_files"' not in settings
+    assert "saveToolGroup(group.id, !packageEnabled)" in settings
+    assert 't("toolName." + group.wire_name)' in settings
+    assert 't("toolPackageDesc." + group.id)' in settings
     assert "FILE_CHOOSER_INTERCEPTED" in prompt
     assert "do not retry the click" in prompt

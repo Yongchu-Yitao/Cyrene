@@ -650,7 +650,7 @@ async def build_group_chat_messages(round_id: str) -> dict[str, Any]:
     """Build group-chat-formatted messages for a given round.
 
     Extracts:
-    - ``send_agent_message`` / ``broadcast_agent_message`` tool calls from
+    - ``subagent.send_message`` / ``subagent.broadcast`` module invocations from
       each subagent's message history, formatted as chat entries with
       ``@recipient`` / ``@所有人`` prepended to the body.
     - Each subagent's final ``result`` (when non-trivial).
@@ -743,7 +743,7 @@ async def build_group_chat_messages(round_id: str) -> dict[str, Any]:
         agent_created = str(info.get("created_at") or now)
         agent_msgs = info.get("messages") or []
 
-        # 1. Extract send_agent_message / broadcast_agent_message tool calls
+        # 1. Extract subagent communication module invocations.
         for msg_idx, msg in enumerate(agent_msgs):
             if not isinstance(msg, dict):
                 continue
@@ -756,13 +756,29 @@ async def build_group_chat_messages(round_id: str) -> dict[str, Any]:
                 if not isinstance(fn, dict):
                     continue
                 name = str(fn.get("name", "") or "").strip()
-                if name not in ("send_agent_message", "broadcast_agent_message", "send_message_to_user"):
-                    continue
                 try:
                     args = json.loads(fn.get("arguments", "{}"))
                 except (json.JSONDecodeError, TypeError):
                     continue
-                # send_message_to_user uses "text"; others use "content"
+                try:
+                    from cyrene.tooling import resolve_wire_call
+
+                    resolution = resolve_wire_call(
+                        name,
+                        args,
+                        actor="subagent",
+                    )
+                    name = resolution.concrete_name
+                    args = resolution.concrete_arguments
+                except Exception:
+                    continue
+                if name not in (
+                    "send_agent_message",
+                    "broadcast_agent_message",
+                    "send_message_to_user",
+                ):
+                    continue
+                # delivery.send_message_to_user uses "text"; peer messages use "content"
                 content = str(args.get("content", "") or args.get("text", "") or "").strip()
                 if not content:
                     continue
@@ -1183,7 +1199,7 @@ async def _run_subagent(
 ) -> str:
     """Run a sub-agent in its own loop.
 
-    Has its own agent loop, inbox checking, and full tool access.
+    Has its own agent loop, inbox checking, and actor-scoped progressive tools.
     Communicates with other agents via inbox.
 
     If *resume_messages* is provided, the agent picks up from that history
@@ -1193,8 +1209,9 @@ async def _run_subagent(
     Uses lazy imports from agent.py to avoid circular dependencies.
     """
     from cyrene.agent.prompts import (
-        _MAIN_AGENT_PROMPT, _DEEP_RESEARCH_SUBAGENT_PROMPT,
+        _MAIN_AGENT_PROMPT_TEMPLATE, _DEEP_RESEARCH_SUBAGENT_PROMPT,
         _DECISION_SUBAGENT_PROMPT, _LEARNING_SUBAGENT_PROMPT, _COMPARE_SUBAGENT_PROMPT,
+        prompt_for_enabled_tool_packs,
         workspace_scope_block,
     )
     from cyrene.agent.state import (
@@ -1203,16 +1220,29 @@ async def _run_subagent(
         _current_session_id, active_workspace_dir,
     )
     from cyrene.llm import _assistant_text, _truncate
-    from cyrene.tools import get_active_tool_defs_for_actor, is_tool_allowed_for_actor, _execute_tool
+    from cyrene.tooling import (
+        execute_wire_tool,
+        get_subagent_wire_tool_defs,
+        resolve_wire_call,
+    )
+    from cyrene.tooling.gateway import (
+        activate_catalog_snapshot,
+        reset_catalog_snapshot,
+    )
 
     caller_token = _caller_type.set(f"subagent_{agent_id}")
+    catalog_snapshot_token = activate_catalog_snapshot("subagent")
     round_id = await get_round_id(agent_id)
     round_token = _current_round_id.set(round_id) if round_id else None
     dm_token = _direct_message_mode.set(False)
     _subagent_session_id = _current_session_id.get()
     from cyrene.inbox import get_inbox_context as _get_inbox_base, mark_all_read as _mark_inbox_read_base
-    _get_inbox = lambda aid: _get_inbox_base(aid, session_id=_subagent_session_id)
-    _mark_inbox_read = lambda aid: _mark_inbox_read_base(aid, session_id=_subagent_session_id)
+
+    def _get_inbox(agent_id: str) -> str:
+        return _get_inbox_base(agent_id, session_id=_subagent_session_id)
+
+    async def _mark_inbox_read(agent_id: str) -> None:
+        await _mark_inbox_read_base(agent_id, session_id=_subagent_session_id)
 
     cmd = _current_command.get()
     if cmd == "help-me-decide":
@@ -1233,24 +1263,28 @@ async def _run_subagent(
         "- For current weather or travel recommendations, search for current forecast/current conditions. Do not invent or substitute old years unless the user explicitly asks for historical weather."
     )
     subagent_prompt = (
-        _MAIN_AGENT_PROMPT
+        _MAIN_AGENT_PROMPT_TEMPLATE
         + extra_prompt
         + """
 
 ## Sub-agent Context
 - You are a sub-agent. Complete the assigned task directly.
-- You can use regular work tools plus `send_agent_message` and `broadcast_agent_message` to coordinate with other sub-agents.
-- If you receive a [DIRECT_MESSAGE] from the user via your inbox, this is real-time guidance from the user. The user is steering your work — take it seriously. Use `send_message_to_user` ONCE to: (1) acknowledge the guidance, (2) briefly state what you will do differently. Then immediately continue working with your adjusted approach. Do NOT argue, ask follow-up questions, or chat — act on the guidance. The tool disables after one use.
-- You MUST NOT call `send_message`, `send_telegram`, `ask_user`, `spawn_subagent`, or `query_round`. If your task produced a deliverable file for the user, write it INSIDE the workspace and report its path in your `quit` summary — do NOT try to `send_file` it yourself (only the main agent can deliver files; the main agent will send it after you finish).
-- For normal rounds, report your result via `quit` — the main agent collects it. Do NOT use `send_message_to_user` in normal rounds.
+- Concrete deferred tools are grouped behind module gateways. Use
+  `operation=discover`, then `operation=describe`, then `operation=invoke`.
+  Capability IDs are not callable function names; call the owning gateway.
+- Use `subagent_tools` capability `subagent.send_message` or
+  `subagent.broadcast` to coordinate with peers.
+- If you receive a [DIRECT_MESSAGE] from the user via your inbox, this is real-time guidance from the user. The user is steering your work — take it seriously. Use `delivery_tools` capability `delivery.send_message_to_user` ONCE to: (1) acknowledge the guidance, (2) briefly state what you will do differently. Then immediately continue working with your adjusted approach. Do NOT argue, ask follow-up questions, or chat — act on the guidance. The capability disables after one use.
+- You cannot ask the user, spawn subagents, query the parent round, or send main-agent delivery messages. Actor policy enforces these limits. If your task produced a deliverable file for the user, write it INSIDE the workspace and report its path in your `quit` summary; only the main agent delivers files.
+- For normal rounds, report your result via `quit` — the main agent collects it. Do NOT use `delivery.send_message_to_user` in normal rounds.
 - Active sub-agents and inbox context may be injected as separate user messages before each turn.
 - Your final text is collected by the parent agent. Do not invent a separate coordinator or try to send the final answer to a non-existent agent such as "main" or "danny".
 
 ## Inter-Agent Coordination
-- **One person OR broadcast — never both, never multiple.** Each turn you may send at most ONE communication message, and it must be EITHER a targeted `send_agent_message` to ONE specific agent OR a `broadcast_agent_message` to ALL. Do NOT send multiple individual messages in the same turn. If something concerns everyone, broadcast once. If it concerns one peer, message them directly.
-- **Avoid broadcast when possible.** Broadcast interrupts all peers and fills inboxes with noise. Default to targeted `send_agent_message` — only broadcast when EVERY peer genuinely needs the information (e.g. a shared source URL).
-- **Share findings directly.** When you find something another sub-agent needs, `send_agent_message` them directly with the key info. Keep it brief — a few sentences max.
-- **Ask for help.** If you're stuck or need data another agent may have, just ask via `send_agent_message`. A short question is fine.
+- **One person OR broadcast — never both, never multiple.** Each turn you may send at most ONE communication message, and it must be EITHER a targeted `subagent.send_message` to ONE specific agent OR `subagent.broadcast` to ALL. Do NOT send multiple individual messages in the same turn. If something concerns everyone, broadcast once. If it concerns one peer, message them directly.
+- **Avoid broadcast when possible.** Broadcast interrupts all peers and fills inboxes with noise. Default to `subagent.send_message`; use `subagent.broadcast` only when EVERY peer genuinely needs the information.
+- **Share findings directly.** When you find something another sub-agent needs, invoke `subagent.send_message` with the key info. Keep it brief — a few sentences max.
+- **Ask for help.** If you're stuck or need data another agent may have, invoke `subagent.send_message`. A short question is fine.
 - **Read peer messages.** When another sub-agent sends you something, take a moment to consider it. Respond briefly if needed — remember the one-person-or-broadcast rule applies to your reply too.
 - **No handshake or readiness checks.** NEVER send messages like "ready", "waiting for moderator", "standing by", or "received". These waste tokens. Jump straight into substantive work or content.
 - **Know when to leave.** When your task is done, call `quit` immediately. No farewells, no confirmations, no waiting for permission. If you feel you're done, you're done.
@@ -1263,7 +1297,7 @@ async def _run_subagent(
 You are the **moderator** of this discussion. Your responsibilities:
 1. **Start immediately.** Your FIRST message must announce the topic and kick off the discussion. Do NOT wait for participants to confirm readiness — they are already listening.
 2. **Drive the discussion.** Call on participants by name, pose questions, redirect off-topic threads, and keep things moving.
-3. **Address one participant per turn.** Each turn, talk to ONE specific participant via `send_agent_message`. Do NOT address multiple participants in the same message — if something concerns everyone, use `broadcast_agent_message` instead.
+3. **Address one participant per turn.** Each turn, talk to ONE specific participant via `subagent.send_message`. Do NOT address multiple participants in the same message — if something concerns everyone, use `subagent.broadcast` instead.
 4. **Summarize and close.** When the discussion has covered enough ground, synthesize key points and wrap up.
 
 CRITICAL: Do NOT ask "is everyone ready?" or wait for confirmations. All participants are live and listening from the moment you speak. Begin the discussion in your very first turn.
@@ -1274,17 +1308,40 @@ CRITICAL: Do NOT ask "is everyone ready?" or wait for confirmations. All partici
 You are a **participant** in this discussion. Rules:
 1. **No readiness announcements.** Do NOT send "ready", "waiting", "standing by", or any greeting/confirmation. These are prohibited.
 2. **Respond substantively.** When the moderator or another participant addresses you, reply with actual content — arguments, evidence, opinions. Never reply with just an acknowledgment.
-3. **One person per reply.** Reply to ONE agent per turn via `send_agent_message`. If your point truly concerns everyone, use `broadcast_agent_message` instead. Do not send multiple individual replies.
-4. **Engage proactively.** If you have something relevant to say, speak up via `send_agent_message`. Don't wait to be called on for every point.
+3. **One person per reply.** Reply to ONE agent per turn via `subagent.send_message`. If your point truly concerns everyone, use `subagent.broadcast` instead. Do not send multiple individual replies.
+4. **Engage proactively.** If you have something relevant to say, speak up via `subagent.send_message`. Don't wait to be called on for every point.
 5. **Stay in character.** Focus on delivering value through the substance of your contributions.
 """
 
+    wire_tool_defs = get_subagent_wire_tool_defs()
+    enabled_wire_names = {
+        str((tool_def.get("function") or {}).get("name") or "")
+        for tool_def in wire_tool_defs
+        if str((tool_def.get("function") or {}).get("name") or "").endswith(
+            "_tools"
+        )
+    }
+    subagent_prompt = prompt_for_enabled_tool_packs(
+        subagent_prompt,
+        enabled_wire_names,
+    )
     try:
         from cyrene.shell_runtime import resolve_shell
         _shell_kind = resolve_shell()[0]
     except Exception:
         _shell_kind = "bash"
-    subagent_prompt += "\n\n" + temporal_context + "\n\n" + workspace_scope_block(active_workspace_dir(), shell_kind=_shell_kind)
+    subagent_prompt += (
+        "\n\n"
+        + temporal_context
+        + "\n\n"
+        + prompt_for_enabled_tool_packs(
+            workspace_scope_block(
+                active_workspace_dir(),
+                shell_kind=_shell_kind,
+            ),
+            enabled_wire_names,
+        )
+    )
     workbench_context = ""
     if _subagent_session_id:
         try:
@@ -1303,6 +1360,16 @@ You are a **participant** in this discussion. Rules:
     if resume_messages:
         # 被唤醒：从已有历史续跑，注入一条提示让 LLM 知道发生了什么
         messages = list(resume_messages)
+        for index, message in enumerate(messages):
+            if (
+                isinstance(message, dict)
+                and str(message.get("role") or "") == "system"
+            ):
+                messages[index] = {
+                    **message,
+                    "content": subagent_prompt,
+                }
+                break
         messages.append({"role": "user", "content": "[你已被唤醒 — inbox 中有新消息需要处理。处理完后再决定是否 quit。]"})
         if workbench_context:
             messages.append({"role": "user", "content": "[Workbench 任务共享上下文已刷新]\n" + workbench_context})
@@ -1317,6 +1384,16 @@ You are a **participant** in this discussion. Rules:
     final_text = ""
     tool_calls_since_checkpoint = 0
     _COORDINATION_CHECKPOINT_INTERVAL = 3
+
+    def _resolved_subagent_call(
+        name: str,
+        args: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        try:
+            resolution = resolve_wire_call(name, args, actor="subagent")
+            return resolution.capability_id, resolution.concrete_arguments
+        except Exception:
+            return str(name or ""), dict(args)
 
     async def _save_if_registered() -> None:
         """Keep registry messages resumable after any local history mutation."""
@@ -1358,7 +1435,7 @@ You are a **participant** in this discussion. Rules:
                     "role": "user",
                     "content": (
                         "[Coordination Checkpoint]\n"
-                        "Any updates worth sharing? Talk to ONE peer via `send_agent_message`, or broadcast to ALL via `broadcast_agent_message`. Not both, not multiple.\n"
+                        "Any updates worth sharing? Use `subagent_tools` to message ONE peer via `subagent.send_message`, or broadcast to ALL via `subagent.broadcast`. Not both, not multiple.\n"
                         "Any new messages from peers? Read and respond if needed — one person or broadcast."
                     ),
                 })
@@ -1377,7 +1454,12 @@ You are a **participant** in this discussion. Rules:
                     ),
                 })
 
-            response = await _call_llm(messages, tools=get_active_tool_defs_for_actor("subagent"), max_tokens=None, secondary=use_secondary)
+            response = await _call_llm(
+                messages,
+                tools=wire_tool_defs,
+                max_tokens=None,
+                secondary=use_secondary,
+            )
 
             entry: dict = {"role": "assistant", "content": response.get("content") or ""}
             if response.get("reasoning_content"):
@@ -1415,15 +1497,26 @@ You are a **participant** in this discussion. Rules:
                         continue
                     for tc in (msg.get("tool_calls") or []):
                         fn = tc.get("function", {})
-                        if fn.get("name") in ("send_agent_message", "broadcast_agent_message"):
-                            try:
-                                args = json.loads(fn.get("arguments", "{}"))
-                                content = args.get("content", "")
-                                target = args.get("to", "all") if fn.get("name") == "broadcast_agent_message" else args.get("to", "?")
+                        try:
+                            args = json.loads(fn.get("arguments", "{}"))
+                            capability_id, concrete_args = _resolved_subagent_call(
+                                str(fn.get("name") or ""),
+                                args,
+                            )
+                            if capability_id in {
+                                "subagent.send_message",
+                                "subagent.broadcast",
+                            }:
+                                content = concrete_args.get("content", "")
+                                target = (
+                                    concrete_args.get("to", "all")
+                                    if capability_id == "subagent.broadcast"
+                                    else concrete_args.get("to", "?")
+                                )
                                 if content:
                                     sent_output.append(f"[to {target}]\n{content}")
-                            except Exception:
-                                pass
+                        except Exception:
+                            pass
                 agent_text = _assistant_text(response).strip() or "Done."
                 if sent_output:
                     final_text = agent_text + "\n\n---\n\n" + "\n\n".join(sent_output)
@@ -1447,19 +1540,25 @@ You are a **participant** in this discussion. Rules:
             fresh_inbox = False
             for tc in tcs:
                 name = tc["function"]["name"]
-                if not is_tool_allowed_for_actor(name, "subagent"):
-                    result = f"Tool {name} is reserved for the main agent. Subagents must coordinate via send_agent_message and return their final result via quit."
-                    messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
-                    continue
                 try:
                     args = json.loads(tc["function"].get("arguments") or "{}")
+                    capability_id, _concrete_args = _resolved_subagent_call(name, args)
                     token = _current_agent_id.set(agent_id)
                     try:
-                        result = await _execute_tool(name, args, bot, chat_id, db_path, None)
+                        result = await execute_wire_tool(
+                            name,
+                            args,
+                            bot,
+                            chat_id,
+                            db_path,
+                            None,
+                            actor="subagent",
+                        )
                     finally:
                         _current_agent_id.reset(token)
                 except Exception as e:
                     result = f"Tool {name} failed: {e}"
+                    capability_id = str(name or "")
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": _truncate(result)})
                 # 每执行完一个工具检查 inbox，用户引导时能更快响应
                 inbox_text = _get_inbox(agent_id)
@@ -1467,7 +1566,10 @@ You are a **participant** in this discussion. Rules:
                     fresh_inbox = True
                     break
                 # 如果刚执行的是通讯类工具，重置检查点计数器（已满足协调要求）
-                if name in ("send_agent_message", "broadcast_agent_message"):
+                if capability_id in {
+                    "subagent.send_message",
+                    "subagent.broadcast",
+                }:
                     tool_calls_since_checkpoint = 0
                 else:
                     tool_calls_since_checkpoint += 1
@@ -1493,6 +1595,7 @@ You are a **participant** in this discussion. Rules:
         logger.exception("Sub-agent %s crashed", agent_id)
         final_text = f"Sub-agent crashed: {e}"
     finally:
+        reset_catalog_snapshot(catalog_snapshot_token)
         _caller_type.reset(caller_token)
         _direct_message_mode.reset(dm_token)
         if round_token is not None:

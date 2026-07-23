@@ -14,12 +14,11 @@ import sys
 from pathlib import Path
 
 import simplexng
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 _vendor = Path(simplexng.__path__[0]) / "_vendor"
 if str(_vendor) not in sys.path:
     sys.path.insert(0, str(_vendor))
-
-from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 datas, binaries, hiddenimports = collect_all("simplexng")
 

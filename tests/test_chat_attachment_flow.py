@@ -7,7 +7,7 @@ import pytest
 @pytest.mark.asyncio
 async def test_analyze_attachment_missing_file_returns_terminal_upload_error(tmp_path):
     from cyrene.attachments import UPLOADS_DIR
-    from cyrene.tool_impl.analyze_attachment import _tool_analyze_attachment
+    from cyrene.tool_impl.core.analyze_attachment import _tool_analyze_attachment
 
     result = await _tool_analyze_attachment(
         {"path": str(UPLOADS_DIR / "missing-test-attachment.png")},

@@ -858,6 +858,7 @@ def _record_token_usage_faf(
     caller: str,
     *,
     round_id: str = "",
+    session_id: str = "",
 ) -> None:
     """Fire-and-forget token usage recording."""
     from cyrene.db import record_token_usage
@@ -872,6 +873,7 @@ def _record_token_usage_faf(
         cache_miss_tokens=int(usage.get("prompt_cache_miss_tokens") or 0),
         duration_ms=duration_ms,
         round_id=round_id,
+        session_id=session_id,
         caller=caller,
     )))
 
@@ -1399,6 +1401,7 @@ async def call_llm(
                             _record_token_usage_faf(
                                 model, msg.get("usage") or {}, duration_ms, caller,
                                 round_id=round_id,
+                                session_id=session_id,
                             )
 
                         if return_text:

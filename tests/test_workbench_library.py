@@ -501,7 +501,14 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert 'h("img", { src: props.rawUrl' in source
     assert 'h("video", { src: props.rawUrl, controls: true' in source
     assert 'h("audio", { src: props.rawUrl, controls: true' in source
-    assert 'h("iframe", { src: props.rawUrl + "#view=FitH"' in source
+    assert "function LibraryPdfPreview" in source
+    assert "window.pdfjsSetupViewer(container)" in source
+    assert "window.pdfjsLoadPdf(props.url, viewer, abortLoader.signal)" in source
+    assert ".wb-lib-pdf-preview" in styles
+    assert 'rightTab === "content" && selectedId' in source
+    assert "markSelectedRead(selectedId)" in source
+    assert "onWheelCapture" in source
+    assert 'loading: "lazy", onLoad: props.onViewed' in source
     assert "暂无可显示内容。" in source
     assert ".wb-lib-media-preview" in styles
     assert "max-height: calc(100vh - 210px)" in styles

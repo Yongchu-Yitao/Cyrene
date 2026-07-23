@@ -656,6 +656,18 @@ html[data-theme="dark"] .wb-lib-primary { color: #ff8dd1; background: color-mix(
 .wb-lib-media-preview audio { display: block; width: 100%; min-height: 42px; }
 .wb-lib-media-preview iframe { display: block; width: 100%; height: min(560px, calc(100vh - 210px)); border: 1px solid var(--wb-line); border-radius: 9px; background: var(--wb-card-bg); }
 .wb-lib-media-preview figcaption { margin-top: 8px; overflow: hidden; color: var(--wb-faint); font-size: calc(11.5px * var(--wb-ui-font-scale, 1)); text-overflow: ellipsis; white-space: nowrap; }
+.wb-lib-pdf-preview { width: 100%; height: min(720px, calc(100vh - 165px)); min-height: 440px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--wb-line); border-radius: 9px; background: var(--wb-control-bg); }
+.wb-lib-pdf-preview-head { min-height: 38px; flex: 0 0 38px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px; border-bottom: 1px solid var(--wb-line); color: var(--wb-text); }
+.wb-lib-pdf-preview-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-lib-pdf-preview-head small { flex: 0 0 auto; color: var(--wb-faint); font-variant-numeric: tabular-nums; }
+.wb-lib-pdf-preview-body { min-height: 0; flex: 1 1 auto; position: relative; overflow: hidden; }
+.wb-lib-pdf-viewer { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; background: color-mix(in srgb, var(--wb-card-bg) 88%, var(--wb-muted)); }
+.wb-lib-pdf-viewer .pdfViewer .page { margin: 9px auto; border: 0; box-shadow: 0 1px 5px color-mix(in srgb, var(--wb-text) 18%, transparent); }
+.wb-lib-pdf-viewer .pdfViewer .canvasWrapper canvas { display: block; }
+.wb-lib-pdf-preview-state { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 20px; background: var(--wb-control-bg); color: var(--wb-muted); text-align: center; }
+.wb-lib-pdf-preview-state.error { flex-direction: column; }
+.wb-lib-pdf-preview-state p, .wb-lib-pdf-preview-state small { margin: 0; }
+.wb-lib-pdf-preview-state small { color: var(--wb-faint); }
 .wb-lib-media-fallback { min-height: 154px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 18px; border: 1px solid var(--wb-line); border-radius: 9px; background: var(--wb-card-bg); color: var(--wb-faint); text-align: center; }
 .wb-lib-media-fallback p { margin: 0; }
 .wb-lib-media-fallback a { color: var(--wb-text); text-decoration: underline; text-underline-offset: 3px; }

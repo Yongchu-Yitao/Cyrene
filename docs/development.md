@@ -103,10 +103,14 @@ Each module has a single responsibility. Cross-module communication uses:
 
 ### Adding New Tools
 
-1. Create a new module under `cyrene/tool_impl/` (e.g., `my_tool.py`)
+1. Create the module in the matching domain under `cyrene/tool_impl/`
+   (for example `cyrene/tool_impl/knowledge/my_tool.py`)
 2. Export `TOOL_DEF` (dict) and `handler` (async callable)
-3. Register the module in `cyrene/registry_tools.py::_NATIVE_TOOL_MODULES`
-4. Optionally add a UI/settings entry in `src/webui/static/app/settings.jsx`
+3. Add its module path to `cyrene/tool_impl/__init__.py::NATIVE_TOOL_MODULES`
+4. If it is deferred, assign one stable capability ID in
+   `cyrene/tooling/packs.py::CAPABILITY_BINDINGS`; direct tools must be an
+   intentional addition to the fixed wire contract
+5. Add policy metadata/tests and optionally a UI/settings entry
 
 For MCP server support, add servers through the Settings UI or `cyrene mcp add`.
 

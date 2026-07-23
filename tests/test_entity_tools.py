@@ -5,10 +5,10 @@ import pytest
 async def test_entity_tools_expose_ids_and_support_safe_delete_resolution(tmp_path):
     from cyrene.db import init_db
     from cyrene.entities import create_entity, get_entity
-    from cyrene.tool_impl.delete_entity import _tool_delete_entity
-    from cyrene.tool_impl.list_entities import _tool_list_entities
-    from cyrene.tool_impl.query_entities import _tool_query_entities
-    from cyrene.tool_impl.track_entity import _tool_track_entity
+    from cyrene.tool_impl.entity.delete_entity import _tool_delete_entity
+    from cyrene.tool_impl.entity.list_entities import _tool_list_entities
+    from cyrene.tool_impl.entity.query_entities import _tool_query_entities
+    from cyrene.tool_impl.entity.track_entity import _tool_track_entity
 
     db_path = str(tmp_path / "entities.db")
     await init_db(db_path)

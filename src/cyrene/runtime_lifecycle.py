@@ -10,7 +10,7 @@ async def shutdown_background_work() -> None:
     from cyrene.call_llm import shutdown_background_tasks as shutdown_llm_telemetry
     from cyrene.knowledge.ingest import cancel_pending_tasks as cancel_knowledge_indexing
     from cyrene.subagent import timeout_all_subagent_tasks
-    from cyrene.tool_executor import shutdown_background_tasks as shutdown_tool_telemetry
+    from cyrene.tooling.executor import shutdown_background_tasks as shutdown_tool_telemetry
 
     await shutdown_session_tasks()
     await shutdown_coordinator()

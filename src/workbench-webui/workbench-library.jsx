@@ -754,7 +754,16 @@
         [{ id: "detail", label: "详情" }, { id: "content", label: "内容" }, { id: "related", label: "关联" }].map(function (tab) { return h("button", { key: tab.id, type: "button", className: props.tab === tab.id ? "active" : "", onClick: function () { props.onTab(tab.id); if (tab.id === "content" && props.onContentViewed) props.onContentViewed(); } }, tab.label); }),
         h("button", { type: "button", className: "wb-lib-right-delete", disabled: !props.onDelete, onClick: props.onDelete, title: "移至回收站", "aria-label": "移至回收站" }, icon("trash", 15)),
         h("button", { type: "button", className: "wb-lib-right-close", onClick: props.onClose, title: "关闭详情" }, icon("close", 15))),
-      h("div", { className: "wb-lib-right-scroll", ref: scrollRef },
+      h("div", {
+        className: "wb-lib-right-scroll",
+        ref: scrollRef,
+        onScroll: function () {
+          if (props.tab === "content" && props.onContentViewed) props.onContentViewed();
+        },
+        onWheelCapture: function () {
+          if (props.tab === "content" && props.onContentViewed) props.onContentViewed();
+        },
+      },
         h("header", { className: "wb-lib-right-head" }, h(PdfMark, { item: item }), h("b", { title: itemTitle(item) }, itemTitle(item)), hasAttachment(item) && h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer", title: "查看附件" }, icon("eye", 17))),
         props.tab === "detail" && editing && h(RightMetadataEditor, { item: item, onSave: props.onUpdate, onCancel: function () { setEditing(false); } }),
         props.tab === "detail" && !editing && h(React.Fragment, null,
@@ -767,9 +776,97 @@
           h("section", null, h("div", { className: "wb-lib-right-section-head" }, h("h3", null, "引用格式"), h(CitationCopyControl, { citation: props.citation, bibtex: props.bibtex, onCopy: props.onCopyCitation })), h("div", { className: "wb-lib-right-card wb-lib-right-citation" }, props.citationLoading ? h(Spinner) : (props.citation || "暂无可用引用。"))),
           h("section", null, h("h3", null, "关联条目"), h("div", { className: "wb-lib-right-card wb-lib-right-relations" }, relations.slice(0, 3).map(function (relation, index) { return h("p", { key: relation.id || index }, (index + 1) + ". ", relation.other_title || relation.title || relation.target_title || "关联条目"); }), !relations.length && h("p", { className: "wb-lib-muted" }, "暂无关联条目"))),
           h("button", { type: "button", className: "wb-lib-right-edit-button", onClick: function () { setEditing(true); } }, icon("note", 15), "编辑信息")),
-        props.tab === "content" && h(ContentPreview, { item: item, rawUrl: props.rawUrl, annotations: annotations }),
+        props.tab === "content" && h(ContentPreview, { item: item, rawUrl: props.rawUrl, annotations: annotations, onViewed: props.onContentViewed }),
         props.tab === "related" && h(RelationsWorkspace, { item: item })),
       h("button", { type: "button", className: "wb-lib-detail-fab", onClick: props.onClose, title: "关闭详情" }, icon("panel", 17)));
+  }
+
+  function LibraryPdfPreview(props) {
+    var containerRef = useRef(null);
+    var viewerRef = useRef(null);
+    var loadingState = useState(true); var loading = loadingState[0]; var setLoading = loadingState[1];
+    var errorState = useState(""); var error = errorState[0]; var setError = errorState[1];
+    var pageState = useState({ current: 1, total: 0 }); var page = pageState[0]; var setPage = pageState[1];
+
+    useEffect(function () {
+      var container = containerRef.current;
+      if (!container || !props.url) {
+        setError("没有可用的 PDF 地址");
+        setLoading(false);
+        return;
+      }
+      if (!window.pdfjsLib || !window.pdfjsViewer || !window.pdfjsSetupViewer || !window.pdfjsLoadPdf) {
+        setError("PDF.js 尚未加载");
+        setLoading(false);
+        return;
+      }
+
+      var cancelled = false;
+      var abortLoader = new AbortController();
+      var loadTimedOut = false;
+      var timer = setTimeout(function () {
+        loadTimedOut = true;
+        abortLoader.abort(new DOMException("PDF loading timed out", "TimeoutError"));
+        setError("PDF 加载超时");
+        setLoading(false);
+      }, 60000);
+      var result = window.pdfjsSetupViewer(container);
+      var viewer = result.viewer;
+      var eventBus = result.eventBus;
+      viewerRef.current = viewer;
+      eventBus.on("pagechanging", function (event) {
+        if (!cancelled) setPage(function (old) { return { current: event.pageNumber, total: old.total }; });
+      });
+      var resizeObserver = new ResizeObserver(function () { viewer.update(); });
+      resizeObserver.observe(container);
+      var selectionSanitizer = window.pdfjsInstallSelectionSanitizer
+        ? window.pdfjsInstallSelectionSanitizer(container, viewer, eventBus)
+        : null;
+      var copyFix = window.pdfjsInstallCopyFix
+        ? window.pdfjsInstallCopyFix(container, viewer)
+        : null;
+      window.pdfjsLoadPdf(props.url, viewer, abortLoader.signal).then(function (document) {
+        if (cancelled) return;
+        clearTimeout(timer);
+        setPage({ current: 1, total: document.numPages });
+        setLoading(false);
+        if (props.onViewed) props.onViewed();
+      }).catch(function (error) {
+        if (!cancelled) {
+          clearTimeout(timer);
+          setError(loadTimedOut ? "PDF 加载超时" : String(error && error.message || "PDF 加载失败"));
+          setLoading(false);
+        }
+      });
+      return function () {
+        cancelled = true;
+        clearTimeout(timer);
+        abortLoader.abort();
+        if (selectionSanitizer) selectionSanitizer.abort();
+        if (copyFix) copyFix.abort();
+        resizeObserver.disconnect();
+        if (viewerRef.current) {
+          try { viewerRef.current.setDocument(null); } catch (error) {}
+        }
+        viewerRef.current = null;
+      };
+    }, [props.url]);
+
+    return h("div", { className: "wb-lib-pdf-preview" },
+      h("div", { className: "wb-lib-pdf-preview-head" },
+        h("span", { title: props.title }, props.title || "PDF"),
+        !loading && !error && h("small", null, page.current + " / " + page.total)),
+      h("div", { className: "wb-lib-pdf-preview-body" },
+        h("div", {
+          className: "wb-lib-pdf-viewer",
+          ref: containerRef,
+          onScroll: props.onViewed,
+          onWheelCapture: props.onViewed,
+        }),
+        loading && h("div", { className: "wb-lib-pdf-preview-state" }, h(Spinner), "正在加载 PDF…"),
+        error && h("div", { className: "wb-lib-pdf-preview-state error" },
+          h("p", null, "PDF 内容加载失败"),
+          h("small", null, error))));
   }
 
   function ContentPreview(props) {
@@ -785,7 +882,7 @@
     var media = null;
     if (attachment && previewType === "image") {
       media = h("figure", { className: "wb-lib-media-preview image" },
-        h("img", { src: props.rawUrl, alt: itemTitle(item), loading: "lazy" }),
+        h("img", { src: props.rawUrl, alt: itemTitle(item), loading: "lazy", onLoad: props.onViewed }),
         h("figcaption", null, filename));
     } else if (attachment && previewType === "video") {
       media = h("figure", { className: "wb-lib-media-preview video" },
@@ -798,9 +895,11 @@
           h("a", { href: props.rawUrl, target: "_blank", rel: "noreferrer" }, "打开音频")),
         h("figcaption", null, filename));
     } else if (attachment && previewType === "pdf") {
-      media = h("figure", { className: "wb-lib-media-preview pdf" },
-        h("iframe", { src: props.rawUrl + "#view=FitH", title: itemTitle(item) + " PDF 内容预览" }),
-        h("figcaption", null, filename));
+      media = h(LibraryPdfPreview, {
+        url: props.rawUrl,
+        title: filename,
+        onViewed: props.onViewed,
+      });
     } else if (attachment && previewType === "file" && !content) {
       media = h("div", { className: "wb-lib-media-fallback" },
         icon("file", 26),
@@ -901,6 +1000,7 @@
     var fileRef = useRef(null);
     var requestSeq = useRef(0);
     var detailSeq = useRef(0);
+    var readMarksRef = useRef({});
 
     useEffect(function () { var timer = setTimeout(function () { setDebouncedQuery(query.trim()); }, 240); return function () { clearTimeout(timer); }; }, [query]);
 
@@ -1012,14 +1112,23 @@
         return item;
       });
     }
-    function markSelectedRead() {
-      if (!client || !selectedId) return;
-      var viewedId = String(selectedId);
+    function markSelectedRead(itemId) {
+      var viewedId = String(itemId || selectedId || "");
+      if (!client || !viewedId) return;
+      var now = Date.now();
+      if (now - Number(readMarksRef.current[viewedId] || 0) < 2000) return;
+      readMarksRef.current[viewedId] = now;
       client.update(viewedId, { reading_status: "read" }).then(function (payload) {
         replaceItem(payload.item || payload);
         reload();
-      }).catch(function () { /* Reading history is best-effort and must not block content. */ });
+      }).catch(function () {
+        delete readMarksRef.current[viewedId];
+        /* Reading history is best-effort and must not block content. */
+      });
     }
+    useEffect(function () {
+      if (rightOpen && rightTab === "content" && selectedId) markSelectedRead(selectedId);
+    }, [rightOpen, rightTab, selectedId]);
     function toggleStar(item) { client.update(item.id, { starred: !item.starred }).then(function (payload) { replaceItem(payload.item || payload); }, function (err) { Toast(String(err.message || err), "error"); }); }
     function addNote(value) { return client.addNote(selectedId, value).then(function () { Toast("笔记已添加"); return client.detail(selectedId).then(function (payload) { setDetail(payload.item || payload); }); }); }
     function removeSelected() {
@@ -1108,7 +1217,7 @@
           data.items.length < data.total && h("button", { type: "button", className: "wb-lib-load-more", disabled: loadingMore, onClick: loadMore }, loadingMore ? h(Spinner) : null, loadingMore ? "加载中…" : "加载更多（" + data.items.length + " / " + data.total + "）"),
           loading && data.items.length > 0 && h("div", { className: "wb-lib-loading-bar" }, h(Spinner), " 正在更新…")),
         selectedItem && h(ItemWorkspace, { item: selectedItem, loading: detailLoading, tab: workTab, onTab: setWorkTab, onUpdate: updateSelected, onAddNote: addNote, rawUrl: client.rawUrl(selectedId), citationProps: citationProps })),
-      h(RightPanel, { item: selectedItem, open: rightOpen, onClose: function () { setRightOpen(false); }, tab: rightTab, onTab: setRightTab, onContentViewed: markSelectedRead, rawUrl: selectedId ? client.rawUrl(selectedId) : "", collections: data.collections, onCollectionsUpdate: updateSelectedCollections, citation: citation.text, bibtex: citation.bibtex, citationLoading: citation.loading, onCopyCitation: copyCitation, onUpdate: updateSelected, onDelete: scope.type !== "trash" ? removeSelected : null }),
+      h(RightPanel, { item: selectedItem, open: rightOpen, onClose: function () { setRightOpen(false); }, tab: rightTab, onTab: setRightTab, onContentViewed: function () { markSelectedRead(selectedId); }, rawUrl: selectedId ? client.rawUrl(selectedId) : "", collections: data.collections, onCollectionsUpdate: updateSelectedCollections, citation: citation.text, bibtex: citation.bibtex, citationLoading: citation.loading, onCopyCitation: copyCitation, onUpdate: updateSelected, onDelete: scope.type !== "trash" ? removeSelected : null }),
       manualOpen && h(ManualItemModal, { onClose: function () { setManualOpen(false); }, onSave: createItem }),
       collectionModalOpen && h(CollectionModal, { onClose: function () { setCollectionModalOpen(false); }, onSave: createCollection }));
   }

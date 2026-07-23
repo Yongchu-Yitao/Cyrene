@@ -1,8 +1,8 @@
 """Core two-phase agent loop.
 
 This module contains ONLY ``_run_main_agent``, the heart of the agent:
-Phase 1 (lightweight decision) → Phase 2 (full tool loop with subagent
-monitoring and deep research Phase 3).
+Phase 1 (policy-gated decision on the enabled-package wire bundle) → Phase 2
+(progressive tool loop with subagent monitoring and Deep Research Phase 3).
 """
 
 import asyncio
@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from cyrene.agent.guidance import (
+    _contains_visible_dsml_tool_markup,
     _delivery_fallback_text,
     _final_reply_from_history,
     _final_reply_with_tools,
@@ -31,8 +32,9 @@ from cyrene.agent.message import (
 )
 from cyrene.agent.prompts import (
     _DEEP_RESEARCH_PHASE1_DECISION,
-    _MAIN_AGENT_PROMPT,
+    _MAIN_AGENT_PROMPT_TEMPLATE,
     _PHASE1_DECISION_PROMPT,
+    prompt_for_enabled_tool_packs,
 )
 from cyrene.agent.session import _append_session_message, _save_session_messages
 from cyrene.agent.state import (
@@ -51,6 +53,7 @@ from cyrene.agent.state import (
     _last_final_reply_usage,
     _LIGHT_TOOL_DEFS,
     _get_max_tool_rounds,
+    _llm_phase_override,
     _publish_runtime_event,
     _streaming_reply_requested,
     _ui_round_assistant_meta,
@@ -59,14 +62,48 @@ from cyrene.agent.state import (
 from cyrene.llm import _assistant_text, _truncate
 from cyrene.context_trace import attach_context, context_block
 from cyrene.secret_redaction import redact_value
-from cyrene.tools import (
-    _execute_tool,
-    get_active_tool_defs,
-    get_tool_execution_metadata,
+from cyrene.tooling import (
+    execute_wire_tool,
+    get_main_wire_tool_defs,
+    get_wire_tool_execution_metadata,
+    resolve_wire_call,
 )
 from cyrene.workbench_inbox import current_workbench_inbox
 
 logger = logging.getLogger(__name__)
+
+
+async def _call_phase1_llm(
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Tag Phase-1 telemetry without changing its cache-stable tool array."""
+    token = _llm_phase_override.set("phase1")
+    try:
+        return await _call_llm(messages, tools=tools)
+    finally:
+        _llm_phase_override.reset(token)
+
+# Backward-compatible six-argument monkeypatch point used by integrations and
+# tests. The implementation routes the stable wire protocol as the main actor.
+async def _execute_tool(
+    name: str,
+    arguments: dict[str, Any],
+    bot: Any,
+    chat_id: int,
+    db_path: str,
+    notify_state: dict[str, bool] | None,
+) -> str:
+    return await execute_wire_tool(
+        name,
+        arguments,
+        bot,
+        chat_id,
+        db_path,
+        notify_state,
+        actor="main",
+    )
 
 
 async def _publish_tool_call_started(
@@ -90,11 +127,13 @@ async def _execute_tool_for_call(
     db_path: str,
 ) -> str:
     """Execute a tool while tagging its eventual completion with its call id."""
-    from cyrene.tool_executor import _active_tool_call_id
+    from cyrene.tooling.executor import _active_tool_call_id
 
     token = _active_tool_call_id.set(str(tool_call_id))
     try:
-        return await _execute_tool(tool_name, arguments, bot, chat_id, db_path, None)
+        return await _execute_tool(
+            tool_name, arguments, bot, chat_id, db_path, None
+        )
     finally:
         _active_tool_call_id.reset(token)
 
@@ -102,9 +141,29 @@ async def _execute_tool_for_call(
 def _inbox_tool_metadata(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Combine scheduler metadata with redacted arguments for the live UI."""
     return {
-        **get_tool_execution_metadata(tool_name, arguments),
+        **get_wire_tool_execution_metadata(tool_name, arguments, actor="main"),
         "arguments": redact_value(arguments),
     }
+
+
+def _resolved_capability_id(tool_name: str, arguments: dict[str, Any]) -> str:
+    try:
+        return resolve_wire_call(
+            tool_name,
+            arguments,
+            actor="main",
+        ).capability_id
+    except Exception:
+        return str(tool_name or "")
+
+
+def _wire_result_succeeded(result: Any) -> bool:
+    text = str(result or "")
+    try:
+        payload = json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        return not text.casefold().startswith(("tool failed:", "tool unavailable:"))
+    return not isinstance(payload, dict) or payload.get("status") != "error"
 
 
 def _tool_def_name(tool_def: dict[str, Any]) -> str:
@@ -163,17 +222,65 @@ def _materialize_quit_reply_for_history(response_obj: dict[str, Any], assistant_
         return
     if not str(assistant_entry.get("content") or "").strip():
         reply = _quit_reply_from_response(response_obj)
-        if reply:
+        if reply and not _contains_visible_dsml_tool_markup(reply):
             assistant_entry["content"] = reply
     if str(assistant_entry.get("content") or "").strip():
         assistant_entry.pop("tool_calls", None)
 
 
 def _wrap_final_text_from_response(wrap: dict[str, Any], messages: list[dict[str, Any]]) -> str:
-    final_text = _strip_visible_dsml_tool_blocks(wrap.get("content") or "") or _quit_reply_from_response(wrap)
+    content = _strip_visible_dsml_tool_blocks(wrap.get("content") or "")
+    if _contains_visible_dsml_tool_markup(content):
+        content = ""
+    quit_reply = _quit_reply_from_response(wrap)
+    if _contains_visible_dsml_tool_markup(quit_reply):
+        quit_reply = ""
+    final_text = content or quit_reply
     if _is_placeholder_reply(final_text):
         final_text = _delivery_fallback_text(messages)
     return final_text or "Done."
+
+
+def _history_has_tool_results(messages: list[dict[str, Any]]) -> bool:
+    return any(
+        (
+            str(message.get("role") or "") == "tool"
+            or (
+                str(message.get("role") or "") == "assistant"
+                and bool(message.get("tool_calls"))
+            )
+        )
+        for message in messages
+        if isinstance(message, dict)
+    )
+
+
+def _safe_terminal_reply_from_response(
+    response_obj: dict[str, Any],
+    base_messages: list[dict[str, Any]],
+) -> str:
+    """Return an existing terminal reply only when it is safe and complete.
+
+    Normal assistant content remains authoritative when the provider returns
+    both text and ``quit(reply=...)``; the explicit reply is the fallback for
+    the common tool-only terminal turn. DSML-bearing candidates are never delivered directly: the
+    upstream stream filter intentionally withheld that syntax from the UI, and
+    the guarded wrap-up path can still normalize or repair it. After real tool
+    work, placeholder-only replies also require wrap-up.
+    """
+    has_tool_results = _history_has_tool_results(base_messages)
+    candidates = (
+        _assistant_text(response_obj).strip(),
+        _quit_reply_from_response(response_obj),
+    )
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if not text or _contains_visible_dsml_tool_markup(text):
+            continue
+        if has_tool_results and _is_placeholder_reply(text):
+            continue
+        return text
+    return ""
 
 
 def _economy_compact_messages(messages: list[dict], current_round_id: str) -> list[dict]:
@@ -281,7 +388,7 @@ def _annotate_history_context(history: list) -> list[dict[str, Any]]:
     return annotated
 
 
-async def _run_main_agent(
+async def _run_main_agent_impl(
     user_message: str,
     history: list,
     bot: Any,
@@ -376,33 +483,18 @@ async def _run_main_agent(
             return [*msgs, {"role": "system", "content": ephemeral_system}]
         return msgs
 
-    # Freeze the tool set for this whole run. ``get_active_tool_defs()`` re-reads
-    # enablement flags + lazily-loaded MCP tools on every call; if that list changes
-    # mid-run (an MCP server finishes connecting, a flag is toggled) the tool block
-    # — part of the cached prefix — shifts and invalidates the cache. Snapshot once.
-    active_tool_defs = get_active_tool_defs()
-    if system_initiated:
-        active_tool_defs = _without_tool(active_tool_defs, "ask_user")
-    # ``send_wechat_file`` only works when the live channel is a WeChat client
-    # (it exposes ``send_file``). On the WebUI / workbench channel the bot has no
-    # such method, so offering the tool only invites a guaranteed-to-fail call
-    # before the model falls back to ``send_file`` — wasting a turn and leaving a
-    # misleading "sent WeChat file" card. Drop it when delivery can't work.
-    if not hasattr(bot, "send_file"):
-        active_tool_defs = _without_tool(active_tool_defs, "send_wechat_file")
-
-    # Option B prefix-cache discipline (tools edition). scripts/probe_deepseek_
-    # tools_cache.py confirmed DeepSeek serializes the ``tools`` array at the FRONT
-    # of the cached prefix: change the tool set and the whole prefix (system+history
-    # included) misses. Phase 1 used a 3-tool LIGHT set while Phase 2 used the full
-    # set, so every post-first round the Phase 1 decision call re-processed the
-    # entire prior tool history from scratch. Fix: wire one byte-identical array in
-    # BOTH phases. Phase 1 only needs the virtual ``use_tools`` gateway (absent from
-    # the real registry); fold it into the full set once. Phase 1's "only use_tools/
-    # ask_user/quit" rule is now enforced by the decision prompt + the
-    # ``phase1_allowed`` correction net below, not by withholding tools.
-    _use_tools_def = next((td for td in _LIGHT_TOOL_DEFS if _tool_def_name(td) == "use_tools"), None)
-    wire_tool_defs = [_use_tools_def, *active_tool_defs] if _use_tools_def else list(active_tool_defs)
+    # Phase 1 and Phase 2 use the same deterministic bundle for the current
+    # package settings. Disabling a package intentionally changes the cache key:
+    # its gateway schema and package-specific prompt lines are both omitted.
+    # Deep Research's length handshake keeps its dedicated tiny bundle.
+    wire_tool_defs = get_main_wire_tool_defs()
+    enabled_wire_names = {
+        str((tool_def.get("function") or {}).get("name") or "")
+        for tool_def in wire_tool_defs
+        if str((tool_def.get("function") or {}).get("name") or "").endswith(
+            "_tools"
+        )
+    }
 
     visible_user_message = user_message if public_user_message is None else str(public_user_message)
     user_message_id = f"user_{uuid4().hex}"
@@ -415,7 +507,14 @@ async def _run_main_agent(
         user_entry["client_request_id"] = client_request_id
     if persist_user_message:
         await _append_session_message(user_entry)
-    effective_system = system_prompt or _MAIN_AGENT_PROMPT
+    effective_system = (
+        str(system_prompt)
+        if str(system_prompt or "").strip()
+        else prompt_for_enabled_tool_packs(
+            _MAIN_AGENT_PROMPT_TEMPLATE,
+            enabled_wire_names,
+        )
+    )
     llm_user_entry = dict(user_entry)
     llm_user_entry["content"] = user_message
     system_blocks = list(system_context or [
@@ -495,27 +594,11 @@ async def _run_main_agent(
         base_messages: list[dict[str, Any]],
         fallback: str = "Done.",
     ) -> str:
-        text = _assistant_text(response_obj).strip()
-        # Prompt-cache discipline: the model signals "done" via the ``quit`` tool
-        # call and now carries its user-facing answer in quit's ``reply`` argument.
-        # Use it directly — this is the whole point of the ``reply`` param: it lets
-        # the common "quit with an answer" turn skip the tools=None reconstruction
-        # call below, which (lacking the tools array at the prefix front) shares no
-        # cache prefix with the main chain and re-processes the entire history.
-        if not text:
-            text = _quit_reply_from_response(response_obj)
-        has_tool_results = any(
-            (
-                str(message.get("role") or "") == "tool"
-                or (
-                    str(message.get("role") or "") == "assistant"
-                    and bool(message.get("tool_calls"))
-                )
-            )
-            for message in base_messages
-            if isinstance(message, dict)
-        )
-        if text and not (has_tool_results and _is_placeholder_reply(text)):
+        # A valid terminal answer has already paid for the main model call.
+        # Deliver it directly instead of rebuilding the full history. DSML-bearing
+        # or placeholder replies deliberately fall through to guarded recovery.
+        text = _safe_terminal_reply_from_response(response_obj, base_messages)
+        if text:
             if _streaming_reply_requested():
                 await _emit_reply_stream_event({"type": "reply_start"})
                 await _emit_reply_stream_event({"type": "reply_delta", "delta": text})
@@ -531,7 +614,7 @@ async def _run_main_agent(
         if isinstance(meta, dict) and meta.get("system_initiated"):
             return ""
         llm_base_messages = project_history_for_llm(base_messages)
-        if has_tool_results:
+        if _history_has_tool_results(base_messages):
             final_user_text = (await _final_user_reply_from_history(llm_base_messages, max_tokens=None)).strip()
             if final_user_text and not _is_placeholder_reply(final_user_text):
                 return final_user_text
@@ -573,7 +656,10 @@ async def _run_main_agent(
         phase1_tools if _deep_research_first_round.get() else wire_tool_defs
     )
     phase1_runtime_guidance_entries: list[dict[str, Any]] = []
-    response = await _call_llm(_pin_tail(project_history_for_llm(phase1_messages)), tools=phase1_wire_tools)
+    response = await _call_phase1_llm(
+        _pin_tail(project_history_for_llm(phase1_messages)),
+        tools=phase1_wire_tools,
+    )
     if runtime_inbox is not None:
         phase1_guidance = runtime_inbox.collect_guidance_nowait()
         if phase1_guidance:
@@ -589,7 +675,7 @@ async def _run_main_agent(
             phase1_runtime_guidance_entries = [
                 message for message in phase1_messages if message.get("runtime_guidance")
             ]
-            response = await _call_llm(
+            response = await _call_phase1_llm(
                 _pin_tail(project_history_for_llm(phase1_messages)),
                 tools=phase1_wire_tools,
             )
@@ -613,7 +699,7 @@ async def _run_main_agent(
                     f"[Decision-phase correction] You attempted unavailable tool(s): {', '.join(invalid_phase1_tools)}. "
                     + ("This is a proactive system-initiated round. `ask_user` is forbidden; use an available tool or finish without pausing for user input."
                        if system_initiated
-                       else f"Only `ask_user` and `quit` are available in this phase. You MUST ask the user about the report length before starting research."
+                       else "Only `ask_user` and `quit` are available in this phase. You MUST ask the user about the report length before starting research."
                        if _deep_research_first_round.get()
                        else "Only `use_tools`, `ask_user`, and `quit` are available in this phase. "
                             "If real tool work is needed, call `use_tools` with the user's exact original message. "
@@ -622,7 +708,10 @@ async def _run_main_agent(
                 ),
             },
         ]
-        response = await _call_llm(_pin_tail(project_history_for_llm(retry_messages)), tools=phase1_wire_tools)
+        response = await _call_phase1_llm(
+            _pin_tail(project_history_for_llm(retry_messages)),
+            tools=phase1_wire_tools,
+        )
     tool_calls = response.get("tool_calls") or []
     messages = [*run_prefix, llm_user_entry, *phase1_runtime_guidance_entries]
     assistant_entry = _assistant_entry_from_response(response, round_id)
@@ -646,7 +735,9 @@ async def _run_main_agent(
     if ask_user_call:
         try:
             args = json.loads(ask_user_call["function"].get("arguments") or "{}")
-            result = await _execute_tool("ask_user", args, bot, chat_id, db_path, None)
+            result = await execute_wire_tool(
+                "ask_user", args, bot, chat_id, db_path, None, actor="main"
+            )
         except Exception as exc:
             result = f"Tool failed: {exc}"
         truncated_result = _truncate(result)
@@ -717,11 +808,25 @@ async def _run_main_agent(
                 if done_via_quit:
                     await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
                 if _streaming_reply_requested():
-                    # The model signalled done. Regenerate the user-facing reply
-                    # with the tool channel still open: writing the answer often
-                    # surfaces a gap (a source never consulted, a check never run)
-                    # that the quit-time self-check missed. Honoring a late tool
-                    # call beats leaking it as textual markup or answering blind.
+                    # The intermediate call forwarded reasoning only, so a safe,
+                    # complete terminal answer can now be emitted and persisted
+                    # directly. This avoids an otherwise redundant full-history
+                    # model call and its cache miss.
+                    terminal_text = _safe_terminal_reply_from_response(
+                        response, messages
+                    )
+                    if terminal_text:
+                        messages[-1]["content"] = terminal_text
+                        messages[-1].pop("tool_calls", None)
+                        if client_request_id:
+                            messages[-1]["client_request_id"] = client_request_id
+                        await _save(_session_messages_to_save(messages))
+                        return await _ensure_text_reply(response, messages)
+
+                    # Empty, placeholder, or DSML-bearing terminal output still
+                    # needs guarded wrap-up. Keep the tool channel open so a
+                    # genuine late tool call can re-enter the shared loop instead
+                    # of leaking as markup or being silently discarded.
                     messages.pop()  # drop the bare quit/empty turn
                     wrap = await _final_reply_with_tools(project_history_for_llm(messages), wire_tool_defs, max_tokens=None)
                     wrap_real = [t for t in (wrap.get("tool_calls") or []) if str(t.get("function", {}).get("name") or "") != "quit"]
@@ -824,6 +929,7 @@ async def _run_main_agent(
                     )
             for index, t in enumerate(tcs):
                 tool_name = t.get("function", {}).get("name")
+                capability_id = str(tool_name or "")
                 if guidance_supersedes_batch and t["id"] not in inbox_batch_args:
                     skipped_tool_entry: dict[str, Any] = {
                         "role": "tool",
@@ -874,6 +980,7 @@ async def _run_main_agent(
                     args = inbox_batch_args.get(t["id"])
                     if args is None:
                         args = json.loads(t["function"].get("arguments") or "{}")
+                    capability_id = _resolved_capability_id(str(tool_name or ""), args)
                     if system_initiated and tool_name == "ask_user":
                         result = (
                             "Tool unavailable: proactive system-initiated rounds "
@@ -935,7 +1042,7 @@ async def _run_main_agent(
                 messages.append(tool_entry)
                 if _tool_result_requests_user_input(str(result)):
                     awaiting_user = True
-                if tool_name == "spawn_subagent":
+                if capability_id == "subagent.spawn" and _wire_result_succeeded(result):
                     spawned = True
             await _inject_runtime_guidance(messages)
             if pending_reflection_tool_calls:
@@ -981,7 +1088,13 @@ async def _run_main_agent(
                 )
                 from cyrene.inbox import get_unread_count as _inbox_unread_base
                 _agent_session_id = _current_session_id.get()
-                _inbox_unread = lambda aid: _inbox_unread_base(aid, session_id=_agent_session_id)
+
+                def _inbox_unread(agent_id: str) -> int:
+                    return _inbox_unread_base(
+                        agent_id,
+                        session_id=_agent_session_id,
+                    )
+
                 from cyrene.modules.deep_research import (
                     deduplicate_references as _deduplicate_references,
                     deep_research_pdf_attachment as _deep_research_pdf_attachment,
@@ -1149,7 +1262,10 @@ async def _run_main_agent(
                 ),
             },
         ]
-        response = await _call_llm(_pin_tail(project_history_for_llm(retry_messages)), tools=phase1_tools)
+        response = await _call_phase1_llm(
+            _pin_tail(project_history_for_llm(retry_messages)),
+            tools=phase1_tools,
+        )
         for tc in (response.get("tool_calls") or []):
             if tc.get("function", {}).get("name") == "ask_user":
                 ask_user_call = tc
@@ -1157,7 +1273,9 @@ async def _run_main_agent(
         if ask_user_call:
             try:
                 args = json.loads(ask_user_call["function"].get("arguments") or "{}")
-                result = await _execute_tool("ask_user", args, bot, chat_id, db_path, None)
+                result = await execute_wire_tool(
+                    "ask_user", args, bot, chat_id, db_path, None, actor="main"
+                )
             except Exception as exc:
                 result = f"Tool failed: {exc}"
             truncated_result = _truncate(result)
@@ -1194,3 +1312,47 @@ async def _run_main_agent(
         messages[-1]["client_request_id"] = client_request_id
     await _save(_session_messages_to_save(messages))
     return await _ensure_text_reply(response, messages)
+
+
+async def _run_main_agent(
+    user_message: str,
+    history: list,
+    bot: Any,
+    chat_id: int,
+    db_path: str,
+    system_prompt: str = "",
+    client_request_id: str = "",
+    persist_user_message: bool = True,
+    public_user_message: str | None = None,
+    public_attachments: list[dict[str, Any]] | None = None,
+    lang: str = "",
+    system_context: list[dict[str, Any]] | None = None,
+    ephemeral_system: str = "",
+    fixed_ephemeral_system: str = "",
+) -> str:
+    """Run one main-agent turn against an immutable capability snapshot."""
+    from cyrene.tooling.gateway import (
+        activate_catalog_snapshot,
+        reset_catalog_snapshot,
+    )
+
+    snapshot_token = activate_catalog_snapshot("main")
+    try:
+        return await _run_main_agent_impl(
+            user_message,
+            history,
+            bot,
+            chat_id,
+            db_path,
+            system_prompt=system_prompt,
+            client_request_id=client_request_id,
+            persist_user_message=persist_user_message,
+            public_user_message=public_user_message,
+            public_attachments=public_attachments,
+            lang=lang,
+            system_context=system_context,
+            ephemeral_system=ephemeral_system,
+            fixed_ephemeral_system=fixed_ephemeral_system,
+        )
+    finally:
+        reset_catalog_snapshot(snapshot_token)

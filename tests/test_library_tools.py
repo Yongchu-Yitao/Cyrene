@@ -29,7 +29,7 @@ async def library_db(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_list_library_items_reports_real_project_metadata(library_db):
     from cyrene.knowledge import library
-    from cyrene.tool_impl.list_library_items import _tool_list_library_items
+    from cyrene.tool_impl.knowledge.list_library_items import _tool_list_library_items
 
     item = await library.create_item(
         library_db,
@@ -58,7 +58,7 @@ async def test_list_library_items_reports_real_project_metadata(library_db):
 @pytest.mark.asyncio
 async def test_search_library_returns_stable_paper_id(library_db):
     from cyrene.knowledge import library
-    from cyrene.tool_impl.search_library import _tool_search_library
+    from cyrene.tool_impl.knowledge.search_library import _tool_search_library
 
     item = await library.create_item(
         library_db,
@@ -80,7 +80,7 @@ async def test_search_library_returns_stable_paper_id(library_db):
 
 
 def test_library_tools_are_registered_as_read_only():
-    from cyrene import registry_tools
+    from cyrene.tooling import catalog as registry_tools
 
     registry_tools._initialize_registry()
 
@@ -98,7 +98,7 @@ def test_library_tools_are_registered_as_read_only():
 @pytest.mark.asyncio
 async def test_update_library_metadata_fills_only_missing_fields(library_db):
     from cyrene.knowledge import library
-    from cyrene.tool_impl import update_library_metadata as tool
+    from cyrene.tool_impl.knowledge import update_library_metadata as tool
 
     item = await library.create_item(
         library_db,
@@ -145,7 +145,7 @@ async def test_update_library_metadata_fills_only_missing_fields(library_db):
 @pytest.mark.asyncio
 async def test_update_library_metadata_can_correct_verified_existing_fields(library_db):
     from cyrene.knowledge import library
-    from cyrene.tool_impl.update_library_metadata import _tool_update_library_metadata
+    from cyrene.tool_impl.knowledge.update_library_metadata import _tool_update_library_metadata
 
     item = await library.create_item(
         library_db,

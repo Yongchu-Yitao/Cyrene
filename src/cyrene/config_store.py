@@ -111,6 +111,7 @@ _DEFAULT_SETTINGS: dict = {
     "vision_models": _DEFAULT_VISION_MODELS,
     "secondary_model": {"model": "", "name": "", "api_key": "", "base_url": "", "ctx_limit": 0, "max_concurrency": 0},
     "enabled_tools": _DEFAULT_ENABLED_TOOLS,
+    "enabled_tool_packs": {},
     "workspace_history": [],
     "workspace_active": True,
     "soul_active": True,
@@ -781,6 +782,23 @@ def is_tool_enabled(name: str) -> bool:
     if name == "quit":
         return True
     return get_enabled_tools().get(name, True)
+
+
+def get_enabled_tool_packs() -> dict[str, bool]:
+    return dict(get_setting("enabled_tool_packs", {}))
+
+
+def save_enabled_tool_packs(packs: dict[str, bool]) -> None:
+    clean = {
+        str(name): bool(enabled)
+        for name, enabled in packs.items()
+        if str(name).strip()
+    }
+    set_setting("enabled_tool_packs", clean)
+
+
+def is_tool_pack_enabled(wire_name: str) -> bool:
+    return get_enabled_tool_packs().get(str(wire_name or ""), True)
 
 
 def get_spawn_policy() -> str:

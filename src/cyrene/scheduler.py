@@ -18,11 +18,10 @@ Responsibilities
 import asyncio
 import json
 import logging
-import os
 import random
 import re as _re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -36,7 +35,6 @@ from cyrene.agent import (
     run_steward_agent,
     run_task_agent,
 )
-from cyrene.channels.wechat import get_current_client
 from cyrene.config import BASE_DIR, DATA_DIR, OWNER_ID, SCHEDULER_INTERVAL, STATE_FILE, STEWARD_INTERVAL
 from cyrene.conversations import CONVERSATIONS_DIR, get_recent_conversations
 from cyrene.io_utils import atomic_write_json, read_json_safe

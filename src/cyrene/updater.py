@@ -7,7 +7,7 @@ import os
 import platform
 import shlex
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -15,7 +15,6 @@ import httpx
 from packaging.version import Version
 
 from cyrene.app_paths import TEMP_DIR
-from cyrene.config import BASE_DIR
 from cyrene.version import get_version
 
 logger = logging.getLogger(__name__)

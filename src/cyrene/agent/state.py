@@ -15,7 +15,12 @@ from typing import Any, Awaitable, Callable
 from contextvars import ContextVar
 
 from cyrene import debug
-from cyrene.config import ASSISTANT_NAME, DATA_DIR as _DATA_DIR, STATE_FILE as _STATE_FILE, WORKSPACE_DIR as _WORKSPACE_DIR
+from cyrene.config import (
+    ASSISTANT_NAME as ASSISTANT_NAME,
+    DATA_DIR as _DATA_DIR,
+    STATE_FILE as _STATE_FILE,
+    WORKSPACE_DIR as _WORKSPACE_DIR,
+)
 
 # Mutable references so tests that swap STATE_FILE/DATA_DIR are visible to all
 # ``agent.*`` sub-modules (which import ``state.STATE_FILE`` / ``state.DATA_DIR``).
@@ -218,6 +223,7 @@ _external_upload_confirmation_fingerprints: ContextVar[frozenset[str]] = Context
 #   "plan"        —— 先规划再执行（同意后回退默认模式）
 PERMISSION_MODES = ("default", "full_access", "auto", "plan")
 _permission_mode: ContextVar[str] = ContextVar("_permission_mode", default="default")
+_llm_phase_override: ContextVar[str] = ContextVar("_llm_phase_override", default="")
 
 _MAIN_INBOX_AGENT_ID = "main"
 _AWAITING_USER_SENTINEL = "[[cyrene.awaiting_user]]"
@@ -230,7 +236,7 @@ _REPORT_REF_MAX_PREVIEW = 280
 # ---------------------------------------------------------------------------
 
 _LIGHT_TOOL_DEFS = [
-    {"type": "function", "function": {"name": "use_tools", "description": "MANDATORY gateway to full tool access. Call this for ANY request that involves doing things — file ops, search, web, code, shell, scheduling, sub-agents, data, browser automation, notifications, etc. This is the ONLY way to reach real tools. Skip ONLY for pure conversation (opinions, greetings, conceptual explanations). IMPORTANT: set task to the user's EXACT original message, do not rewrite it.", "parameters": {"type": "object", "properties": {"task": {"type": "string"}}, "required": ["task"]}}},
+    {"type": "function", "function": {"name": "use_tools", "description": "MANDATORY gateway to the execution phase. Call this for ANY request that involves doing things — file ops, search, web, code, shell, scheduling, sub-agents, data, browser automation, notifications, etc. The execution phase keeps the same fixed wire definitions and enables direct tools plus progressive module discovery. Skip ONLY for pure conversation (opinions, greetings, conceptual explanations). IMPORTANT: set task to the user's EXACT original message, do not rewrite it.", "parameters": {"type": "object", "properties": {"task": {"type": "string"}}, "required": ["task"]}}},
     {"type": "function", "function": {"name": "ask_user", "description": "Ask the user a clarification question. Use this proactively whenever: the request is ambiguous, a critical detail is missing, multiple approaches exist and the choice matters, or you need confirmation before a destructive/irreversible action. Guessing is worse than asking. If you need to ask the user anything, use this tool instead of writing a question in assistant text. Use freeform text, or add a short options array when structured choices help. Do not combine with other tools in the same turn.", "parameters": {"type": "object", "properties": {"text": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}, "required": ["text"]}}},
     {"type": "function", "function": {"name": "quit", "description": "Call this when the interaction is done — pure conversation that needs no tools. Put your COMPLETE reply to the user in `reply`; the user is shown it verbatim, so write the actual answer here.", "parameters": {"type": "object", "properties": {"reply": {"type": "string", "description": "The final user-facing reply, in the user's language. Shown to the user verbatim."}}}}},
 ]
@@ -288,7 +294,12 @@ def _streaming_reply_requested() -> bool:
 # ---------------------------------------------------------------------------
 
 def _llm_phase_name(tools: list | None) -> str:
-    return "phase1" if tools is _LIGHT_TOOL_DEFS else ("phase2" if tools else "no_tools")
+    override = _llm_phase_override.get()
+    if override:
+        return override
+    if tools is _LIGHT_TOOL_DEFS or tools is _DEEP_RESEARCH_LIGHT_TOOL_DEFS:
+        return "phase1"
+    return "phase2" if tools else "no_tools"
 
 
 async def _call_llm(
@@ -345,7 +356,7 @@ async def _call_llm_stream(
         stream_callback=_reply_stream_writer.get(),
         tools=tools,
         caller=_caller_type.get(),
-        phase=_llm_phase_name(None),
+        phase=_llm_phase_name(tools),
         round_id=_current_round_id.get(),
         session_id=_current_session_id.get(),
     )
