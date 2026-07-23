@@ -38,6 +38,7 @@ from webui.routes_amap import register_amap_routes
 from webui.routes_entities import register_entity_routes
 from webui.routes_knowledge import register_knowledge_routes
 from webui.routes_workbench_knowledge import register_workbench_knowledge_routes
+from webui.routes_workbench_library import register_workbench_library_routes
 from webui.routes_workbench_memory import (
     add_agent_memory,
     memory_injection_ids,
@@ -6994,6 +6995,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     register_entity_routes(router, db_path)
     register_knowledge_routes(router)
     register_workbench_knowledge_routes(router)
+    register_workbench_library_routes(router)
     register_workbench_memory_routes(router, db_path)
     register_workbench_schedule_routes(router, db_path)
     register_workbench_chat_routes(router, bot, db_path)
@@ -9366,6 +9368,62 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             set_setting("budget_start_day", value)
             changed.append("budget_start_day")
         return {"ok": True, "changed": changed}
+
+    @router.get("/api/settings/integrations")
+    async def api_get_integration_settings():
+        """Return Zotero/embedding settings without exposing stored secrets."""
+        from cyrene.integration_settings import public_settings
+
+        return public_settings()
+
+    @router.put("/api/settings/integrations")
+    async def api_update_integration_settings(request: Request):
+        from cyrene.integration_settings import update_settings
+
+        body = await request.json()
+        if not isinstance(body, dict) or not ({"zotero", "embedding"} & set(body)):
+            return JSONResponse(
+                {"error": "zotero or embedding settings are required"}, status_code=400
+            )
+        try:
+            payload = update_settings(body)
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"ok": True, **payload}
+
+    @router.post("/api/settings/integrations/test")
+    async def api_test_integration(request: Request):
+        """Probe unsaved integration settings and return only safe metadata."""
+        from cyrene.integration_settings import (
+            merged_test_config,
+            test_embedding,
+            test_zotero,
+        )
+
+        body = await request.json()
+        service = str(body.get("service") or "").strip().lower() if isinstance(body, dict) else ""
+        draft = body.get("config", {}) if isinstance(body, dict) else {}
+        try:
+            integration_config = merged_test_config(service, draft)
+            if service == "zotero":
+                return await test_zotero(integration_config)
+            if service == "embedding":
+                return await test_embedding(integration_config)
+            raise ValueError("unknown integration service")
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            return JSONResponse(
+                {"error": f"remote service returned HTTP {status}"}, status_code=502
+            )
+        except httpx.RequestError:
+            return JSONResponse(
+                {"error": "could not reach the configured service"}, status_code=503
+            )
+        except Exception:
+            logger.info("Integration connectivity test failed", exc_info=True)
+            return JSONResponse({"error": "connection test failed"}, status_code=502)
 
     @router.put("/api/profile")
     async def api_update_profile(request: Request):

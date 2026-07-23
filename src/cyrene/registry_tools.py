@@ -42,6 +42,8 @@ _NATIVE_TOOL_MODULES = [
     "cyrene.tool_impl.update_task_plan",  # update_task_plan
     "cyrene.tool_impl.list_knowledge_documents",  # ListKnowledgeDocuments
     "cyrene.tool_impl.search_knowledge",  # SearchKnowledge
+    "cyrene.tool_impl.list_library_items",  # ListLibraryItems
+    "cyrene.tool_impl.search_library",  # SearchLibrary
     "cyrene.tool_impl.start_shell",  # StartShell
     "cyrene.tool_impl.send_shell",  # SendShell
     "cyrene.tool_impl.list_shells",  # ListShells
@@ -141,7 +143,7 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {}
 _READ_ONLY_TOOLS = {
     "Read", "AnalyzeAttachment", "Glob", "Grep", "RecallMemory",
     "RecallConversation", "search_project_memory", "ListKnowledgeDocuments",
-    "SearchKnowledge", "ListShells", "WebFetch", "WebSearch", "query_round",
+    "SearchKnowledge", "ListLibraryItems", "SearchLibrary", "ListShells", "WebFetch", "WebSearch", "query_round",
     "CheckClaudeCode", "ListSkills", "GetLearnedSkill", "list_tasks",
     "list_entities", "query_entities", "browser_user_events", "GitStatus",
     "GitDiff", "GitLog", "SearchSymbol", "FindReferences", "GetFileSymbols",
@@ -178,6 +180,8 @@ _RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
     "search_project_memory": ("memory:project",),
     "ListKnowledgeDocuments": ("knowledge:project",),
     "SearchKnowledge": ("knowledge:project",),
+    "ListLibraryItems": ("library:project",),
+    "SearchLibrary": ("library:project", "knowledge:project"),
     "list_tasks": ("db:scheduled-tasks",),
     "list_entities": ("db:entities",),
     "query_entities": ("db:entities",),

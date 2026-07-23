@@ -1578,7 +1578,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   }
 
   return (
-    <div className="workbench-shell" data-screen-label="Cyrene · workbench">
+    <div className={"workbench-shell" + (isKnowledge ? " is-library-mode" : "")} data-screen-label="Cyrene · workbench">
       <WorkbenchTopbar
         project={store.activeProject}
         session={store.activeSession}
@@ -1632,7 +1632,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           )}
           {showKnowledgePage && (
             <WorkbenchStableSurface active={isKnowledge}>
-              {React.createElement(window.WorkbenchKnowledgePage || function () { return <div className="workbench-empty">{t("workbench.knowledgeLoading")}</div>; }, {
+              {React.createElement(window.WorkbenchLibraryPage || window.WorkbenchKnowledgePage || function () { return <div className="workbench-empty">{t("workbench.knowledgeLoading")}</div>; }, {
                 active: isKnowledge,
                 project: store.activeProject,
                 onBack: function () { setFullPage(null); },
@@ -1751,6 +1751,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
           theme: theme,
           actualTheme: actualTheme,
           onToggleTheme: onToggleTheme,
+          project: store.activeProject,
         }
       )}
       {newProjectOpen && window.WorkbenchNewProjectModal && React.createElement(

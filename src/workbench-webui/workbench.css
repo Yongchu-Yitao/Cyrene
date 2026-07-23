@@ -4742,6 +4742,88 @@ html[data-theme="dark"] .workbench-shell {
   --wb-notif-item-hover: color-mix(in srgb, var(--accent) 8%, rgba(255, 255, 255, 0.02));
 }
 
+/* The literature workspace follows its dark reference composition without
+   changing the user's global theme preference. Leaving the Knowledge page
+   restores the normal light/dark theme immediately. */
+html[data-theme="dark"] .workbench-shell.is-library-mode {
+  --wb-accent: #f34fae;
+  --wb-bg: #06131f;
+  --wb-bg-2: #081a29;
+  --wb-surface: #071827;
+  --wb-shell-bg: #061522;
+  --wb-topbar-bg: #061522;
+  --wb-rail-bg: #071827;
+  --wb-task-rail-bg: #071827;
+  --wb-main-bg: #071a2a;
+  --wb-right-bg: #071827;
+  --wb-panel: #0a1d2d;
+  --wb-panel-2: #0c2234;
+  --wb-control-bg: #0b2133;
+  --wb-control-hover-bg: #102a3e;
+  --wb-row-hover-bg: rgba(74, 130, 170, 0.12);
+  --wb-active-bg: rgba(243, 79, 174, 0.15);
+  --wb-active-border: rgba(243, 79, 174, 0.36);
+  --wb-card-bg: #0a1d2d;
+  --wb-card-bg-strong: #0d2335;
+  --wb-line: rgba(131, 169, 198, 0.17);
+  --wb-line-2: rgba(144, 183, 211, 0.28);
+  --wb-text: #f1f5fa;
+  --wb-muted: #a9b8c8;
+  --wb-faint: #72869a;
+  --wb-accent-text: #ffffff;
+  color-scheme: dark;
+}
+
+.workbench-shell.is-library-mode .workbench-topbar {
+  height: 56px;
+  grid-template-columns: 302px minmax(0, 1fr) auto;
+  background: var(--wb-topbar-bg);
+}
+
+.workbench-shell.is-library-mode .workbench-grid {
+  height: calc(100vh - 56px);
+}
+
+.workbench-shell.is-library-mode .workbench-grid.is-knowledge {
+  --wb-rail-w: 74px;
+  --wb-rail-w-open: 290px;
+}
+
+.workbench-shell.is-library-mode .workbench-crumbs {
+  padding-left: 22px;
+}
+
+.workbench-shell.is-library-mode .workbench-search-box {
+  width: 255px;
+  background: var(--wb-control-bg);
+}
+
+html[data-theme="dark"] .workbench-shell.is-library-mode .brand-mark {
+  background-image: url("/static/app/logo-mark-dark.png");
+}
+
+.workbench-shell.is-library-mode .workbench-project-rail {
+  background: var(--wb-rail-bg);
+}
+
+@media (max-width: 1400px) {
+  .workbench-shell.is-library-mode .workbench-topbar {
+    grid-template-columns: 238px minmax(0, 1fr) auto;
+  }
+
+  .workbench-shell.is-library-mode .workbench-grid.is-knowledge {
+    --wb-rail-w: 58px;
+  }
+
+  .workbench-shell.is-library-mode .workbench-crumbs {
+    padding-left: 18px;
+  }
+
+  .workbench-shell.is-library-mode .workbench-search-box {
+    width: 200px;
+  }
+}
+
 html[data-theme="light"] .settings-overlay-panel {
   background: #ffffff;
   border-color: #d8dde5;
@@ -4892,6 +4974,18 @@ html[data-theme="light"] .wb-tool-list .mono {
 @keyframes settings-panel-slide {
   from { opacity: 0; transform: translateY(-16px) scale(0.97); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-overlay,
+  .settings-overlay-panel {
+    animation: none;
+  }
+
+  .wb-toggle,
+  .wb-toggle::after {
+    transition: none;
+  }
 }
 
 .settings-overlay-header {
@@ -5698,6 +5792,120 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 .wb-section-block-head > .wb-btn:last-child {
   flex-shrink: 0;
+}
+
+/* General > knowledge integrations */
+.wb-general-settings > .wb-section-block {
+  margin: 8px 0 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.wb-general-settings > .wb-section-block > .wb-section-block-head {
+  display: block;
+  margin: 0;
+  padding: 12px 0 8px;
+}
+
+.wb-general-settings > .wb-section-block > .wb-section-block-head b,
+.wb-general-settings > .wb-section-block > .wb-section-block-head small {
+  display: block;
+}
+
+.wb-general-settings > .wb-section-block > .wb-section-block-head small {
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.wb-general-settings > .wb-section-block > .wb-field {
+  padding: 8px 0;
+}
+
+.wb-general-settings > .wb-section-block > .wb-integration-footer {
+  padding: 8px 0 2px;
+}
+
+.wb-integration-control {
+  width: min(340px, 42vw);
+  min-width: 220px;
+}
+
+.wb-integration-control > .wb-input,
+.wb-integration-control > .wb-select {
+  width: 100%;
+  min-height: 36px;
+}
+
+.wb-integration-key {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wb-integration-key > .wb-input {
+  flex: 1 1 190px;
+}
+
+.wb-integration-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding-top: 12px;
+}
+
+.wb-integration-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wb-integration-status {
+  flex: 1 1 220px;
+  min-width: 0;
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  line-height: 1.4;
+  color: var(--wb-muted);
+}
+
+.wb-integration-status.success {
+  color: var(--wb-green);
+}
+
+.wb-integration-status.error {
+  color: var(--wb-red);
+}
+
+@media (max-width: 720px) {
+  .wb-integration-control {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .wb-section-block .wb-field {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .wb-section-block .wb-controls {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .wb-integration-footer,
+  .wb-integration-actions {
+    justify-content: stretch;
+  }
+
+  .wb-integration-actions > .wb-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
 }
 
 /* Field rows */

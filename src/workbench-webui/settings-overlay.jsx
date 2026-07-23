@@ -162,6 +162,7 @@ function SettingsOverlay({
   theme: initialTheme,
   actualTheme,
   onToggleTheme,
+  project,
 }) {
   var { t, lang, setLang } = useWorkbenchI18n();
   var [tab, setTab] = useStateSt(initialTab || "general");
@@ -478,7 +479,7 @@ function SettingsOverlay({
 
         // Content area
         React.createElement("div", { className: "settings-overlay-content" },
-          tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved }),
+          tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
           tab === "models" && ModelsPanel({ t, models, setModels, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, saveModels, config }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
@@ -510,6 +511,28 @@ function GeneralPanel(p) {
   var [quickChatEnabled, setQuickChatEnabled] = useStateSt(false);
   var [desktopBusy, setDesktopBusy] = useStateSt(false);
   var [desktopNotice, setDesktopNotice] = useStateSt("");
+  var [zoteroSettings, setZoteroSettings] = useStateSt({
+    base_url: "http://127.0.0.1:23119/api", auto_sync: false, copy_attachments: true,
+  });
+  var [embeddingSettings, setEmbeddingSettings] = useStateSt({
+    provider: "openai_compatible", base_url: "", model: "", dimensions: 0, api_key_configured: false,
+  });
+  var [embeddingApiKey, setEmbeddingApiKey] = useStateSt("");
+  var [zoteroStatus, setZoteroStatus] = useStateSt(null);
+  var [embeddingStatus, setEmbeddingStatus] = useStateSt(null);
+  var [integrationBusy, setIntegrationBusy] = useStateSt("");
+
+  useEffectSt(function () {
+    var cancelled = false;
+    fetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
+      if (cancelled) return;
+      if (payload.zotero) setZoteroSettings(payload.zotero);
+      if (payload.embedding) setEmbeddingSettings(payload.embedding);
+    }).catch(function () {
+      if (!cancelled) setEmbeddingStatus({ kind: "error", text: t("settings.integrationLoadFailed") });
+    });
+    return function () { cancelled = true; };
+  }, []);
 
   useEffectSt(function () {
     if (!supportsDesktop) return undefined;
@@ -554,7 +577,111 @@ function GeneralPanel(p) {
       }).catch(function () { setAmapKeySaved(t("settings.error")); setTimeout(function () { setAmapKeySaved(""); }, 3000); });
   }
 
-  return React.createElement("div", { className: "settings-panel" },
+  function embeddingDraft() {
+    var draft = {
+      provider: embeddingSettings.provider,
+      base_url: embeddingSettings.base_url,
+      model: embeddingSettings.model,
+      dimensions: Number(embeddingSettings.dimensions) || 0,
+    };
+    if (embeddingApiKey.trim()) draft.api_key = embeddingApiKey.trim();
+    return draft;
+  }
+
+  function saveIntegration(service) {
+    var setStatus = service === "zotero" ? setZoteroStatus : setEmbeddingStatus;
+    var section = service === "zotero" ? zoteroSettings : embeddingDraft();
+    setIntegrationBusy("save-" + service);
+    setStatus({ kind: "info", text: t("settings.saving") });
+    fetch("/api/settings/integrations", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [service]: section }),
+    }).then(readSettingsResponse).then(function (payload) {
+      if (payload.zotero) setZoteroSettings(payload.zotero);
+      if (payload.embedding) setEmbeddingSettings(payload.embedding);
+      if (service === "embedding") setEmbeddingApiKey("");
+      setStatus({ kind: "success", text: t("settings.saved") });
+    }).catch(function (error) {
+      setStatus({ kind: "error", text: t("settings.error") + ": " + (error.message || "") });
+    }).finally(function () { setIntegrationBusy(""); });
+  }
+
+  function testIntegration(service) {
+    var setStatus = service === "zotero" ? setZoteroStatus : setEmbeddingStatus;
+    var section = service === "zotero" ? zoteroSettings : embeddingDraft();
+    setIntegrationBusy("test-" + service);
+    setStatus({ kind: "info", text: t("settings.testingConnection") });
+    fetch("/api/settings/integrations/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service: service, config: section }),
+    }).then(readSettingsResponse).then(function (payload) {
+      var text = service === "embedding"
+        ? t("settings.embeddingConnected", { dimensions: payload.dimensions || 0 })
+        : t("settings.zoteroConnected");
+      setStatus({ kind: "success", text: text });
+    }).catch(function (error) {
+      setStatus({ kind: "error", text: t("settings.connectionFailed") + ": " + (error.message || "") });
+    }).finally(function () { setIntegrationBusy(""); });
+  }
+
+  function importFromZotero() {
+    if (!(p.project && p.project.id)) {
+      setZoteroStatus({ kind: "error", text: t("settings.zoteroImportNoProject") });
+      return;
+    }
+    setIntegrationBusy("import-zotero");
+    setZoteroStatus({ kind: "info", text: t("settings.zoteroImporting") });
+    fetch("/api/settings/integrations", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ zotero: zoteroSettings }),
+    }).then(readSettingsResponse).then(function (payload) {
+      if (payload.zotero) setZoteroSettings(payload.zotero);
+      return fetch("/api/workbench/library/zotero/sync?workspace=" + encodeURIComponent(String(p.project.id)), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ library_id: "0", library_type: "user", collection_key: "" }),
+      });
+    }).then(readSettingsResponse).then(function (result) {
+      setZoteroStatus({
+        kind: "success",
+        text: t("settings.zoteroImportDone", {
+          created: Number(result.created || result.imported || 0),
+          updated: Number(result.updated || 0),
+        }),
+      });
+    }).catch(function (error) {
+      setZoteroStatus({ kind: "error", text: t("settings.connectionFailed") + ": " + (error.message || "") });
+    }).finally(function () { setIntegrationBusy(""); });
+  }
+
+  function clearEmbeddingApiKey() {
+    setIntegrationBusy("clear-embedding");
+    fetch("/api/settings/integrations", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ embedding: { clear_api_key: true } }),
+    }).then(readSettingsResponse).then(function (payload) {
+      if (payload.embedding) setEmbeddingSettings(payload.embedding);
+      setEmbeddingApiKey("");
+      setEmbeddingStatus({ kind: "success", text: t("settings.embeddingKeyCleared") });
+    }).catch(function (error) {
+      setEmbeddingStatus({ kind: "error", text: t("settings.error") + ": " + (error.message || "") });
+    }).finally(function () { setIntegrationBusy(""); });
+  }
+
+  function integrationStatus(status) {
+    if (!status) return null;
+    return React.createElement("div", {
+      className: "wb-integration-status " + status.kind,
+      role: status.kind === "error" ? "alert" : "status",
+      "aria-live": "polite",
+    }, status.text);
+  }
+
+  return React.createElement("div", { className: "settings-panel wb-general-settings" },
     SectionTitle(t("settings.general")),
     FieldRow(t("settings.language"), t("settings.languageHint"),
       React.createElement("div", { className: "wb-seg" },
@@ -587,6 +714,118 @@ function GeneralPanel(p) {
     ),
     supportsDesktop && desktopNotice
       && React.createElement("div", { className: "wb-hint", style: { color: "var(--wb-error-text)" } }, desktopNotice),
+    SectionBlock(t("settings.zoteroIntegration"), t("settings.zoteroIntegrationHint"),
+      FieldRow(t("settings.zoteroLocalApiUrl"), t("settings.zoteroLocalApiUrlHint"),
+        React.createElement("div", { className: "wb-integration-control" },
+          React.createElement("input", {
+            className: "wb-input mono", type: "url", value: zoteroSettings.base_url,
+            "aria-label": t("settings.zoteroLocalApiUrl"),
+            onChange: function (e) { setZoteroSettings({ ...zoteroSettings, base_url: e.target.value }); },
+          }),
+        ),
+      ),
+      FieldRow(t("settings.zoteroAutoSync"), t("settings.zoteroAutoSyncHint"),
+        Toggle(zoteroSettings.auto_sync, function () { setZoteroSettings({ ...zoteroSettings, auto_sync: !zoteroSettings.auto_sync }); }, false, t("settings.zoteroAutoSync")),
+      ),
+      FieldRow(t("settings.zoteroCopyAttachments"), t("settings.zoteroCopyAttachmentsHint"),
+        Toggle(zoteroSettings.copy_attachments, function () { setZoteroSettings({ ...zoteroSettings, copy_attachments: !zoteroSettings.copy_attachments }); }, false, t("settings.zoteroCopyAttachments")),
+      ),
+      FieldRow(
+        t("settings.zoteroImport"),
+        t("settings.zoteroImportHint", { project: (p.project && p.project.name) || t("settings.zoteroImportNoProjectLabel") }),
+        React.createElement("button", {
+          className: "wb-btn primary",
+          disabled: !!integrationBusy || !(p.project && p.project.id),
+          onClick: importFromZotero,
+        }, integrationBusy === "import-zotero" ? t("settings.zoteroImporting") : t("settings.zoteroImportAction")),
+      ),
+      React.createElement("div", { className: "wb-integration-footer" },
+        integrationStatus(zoteroStatus),
+        React.createElement("div", { className: "wb-integration-actions" },
+          React.createElement("button", {
+            className: "wb-btn", disabled: !!integrationBusy,
+            onClick: function () { testIntegration("zotero"); },
+          }, integrationBusy === "test-zotero" ? t("settings.testingConnection") : t("settings.testConnection")),
+          React.createElement("button", {
+            className: "wb-btn", disabled: !!integrationBusy,
+            onClick: function () { saveIntegration("zotero"); },
+          }, integrationBusy === "save-zotero" ? t("settings.saving") : t("settings.save")),
+        ),
+      ),
+    ),
+    SectionBlock(t("settings.embeddingIntegration"), t("settings.embeddingIntegrationHint"),
+      FieldRow(t("settings.embeddingProvider"), t("settings.embeddingProviderHint"),
+        React.createElement("div", { className: "wb-integration-control" },
+          React.createElement("select", {
+            className: "wb-select", value: embeddingSettings.provider,
+            "aria-label": t("settings.embeddingProvider"),
+            onChange: function (e) {
+              var provider = e.target.value;
+              var nextBase = embeddingSettings.base_url;
+              if (provider === "ollama" && !nextBase) nextBase = "http://127.0.0.1:11434";
+              setEmbeddingSettings({ ...embeddingSettings, provider: provider, base_url: nextBase });
+            },
+          },
+            React.createElement("option", { value: "openai_compatible" }, t("settings.embeddingOpenAiCompatible")),
+            React.createElement("option", { value: "ollama" }, "Ollama"),
+          ),
+        ),
+      ),
+      FieldRow(t("settings.embeddingBaseUrl"), t("settings.embeddingBaseUrlHint"),
+        React.createElement("div", { className: "wb-integration-control" },
+          React.createElement("input", {
+            className: "wb-input mono", type: "url", value: embeddingSettings.base_url,
+            placeholder: embeddingSettings.provider === "ollama" ? "http://127.0.0.1:11434" : "https://api.openai.com/v1",
+            "aria-label": t("settings.embeddingBaseUrl"),
+            onChange: function (e) { setEmbeddingSettings({ ...embeddingSettings, base_url: e.target.value }); },
+          }),
+        ),
+      ),
+      FieldRow(t("settings.embeddingApiKey"), t("settings.embeddingApiKeyHint"),
+        React.createElement("div", { className: "wb-integration-control wb-integration-key" },
+          React.createElement("input", {
+            className: "wb-input mono", type: "password", value: embeddingApiKey,
+            autoComplete: "off", "aria-label": t("settings.embeddingApiKey"),
+            placeholder: embeddingSettings.api_key_configured ? t("settings.secretConfigured") : t("settings.optionalForLocal"),
+            onChange: function (e) { setEmbeddingApiKey(e.target.value); },
+          }),
+          embeddingSettings.api_key_configured && React.createElement("button", {
+            className: "wb-btn muted", disabled: !!integrationBusy, onClick: clearEmbeddingApiKey,
+          }, t("settings.clearStoredKey")),
+        ),
+      ),
+      FieldRow(t("settings.embeddingModel"), t("settings.embeddingModelHint"),
+        React.createElement("div", { className: "wb-integration-control" },
+          React.createElement("input", {
+            className: "wb-input mono", value: embeddingSettings.model,
+            placeholder: "text-embedding-3-small", "aria-label": t("settings.embeddingModel"),
+            onChange: function (e) { setEmbeddingSettings({ ...embeddingSettings, model: e.target.value }); },
+          }),
+        ),
+      ),
+      FieldRow(t("settings.embeddingDimensions"), t("settings.embeddingDimensionsHint"),
+        React.createElement("div", { className: "wb-integration-control" },
+          React.createElement("input", {
+            className: "wb-input mono", type: "number", min: "0", max: "65536", step: "1",
+            value: embeddingSettings.dimensions, "aria-label": t("settings.embeddingDimensions"),
+            onChange: function (e) { setEmbeddingSettings({ ...embeddingSettings, dimensions: e.target.value }); },
+          }),
+        ),
+      ),
+      React.createElement("div", { className: "wb-integration-footer" },
+        integrationStatus(embeddingStatus),
+        React.createElement("div", { className: "wb-integration-actions" },
+          React.createElement("button", {
+            className: "wb-btn", disabled: !!integrationBusy,
+            onClick: function () { testIntegration("embedding"); },
+          }, integrationBusy === "test-embedding" ? t("settings.testingConnection") : t("settings.testConnection")),
+          React.createElement("button", {
+            className: "wb-btn primary", disabled: !!integrationBusy,
+            onClick: function () { saveIntegration("embedding"); },
+          }, integrationBusy === "save-embedding" ? t("settings.saving") : t("settings.save")),
+        ),
+      ),
+    ),
   );
 }
 
@@ -2401,12 +2640,13 @@ function FieldRow(label, hint, controls, key) {
   );
 }
 
-function Toggle(on, onClick, disabled) {
+function Toggle(on, onClick, disabled, label) {
   return React.createElement("button", {
     type: "button",
     className: "wb-toggle" + (on ? " on" : ""),
     role: "switch",
     "aria-checked": on ? "true" : "false",
+    "aria-label": label || undefined,
     disabled: !!disabled,
     onClick: disabled ? undefined : onClick,
   });
