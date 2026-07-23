@@ -38,8 +38,9 @@
 - 文献 UI 使用项目级 API client 和 generation guard，切换项目会取消/忽略过期请求；独立列表滚动、可调整详情高度、折叠分类组、固定表头、附件感知内容渲染、安全 Markdown、引用复制、元数据编辑和删除/恢复均有中英文文案及回归覆盖。
 - 主动轮使用统一主 Agent loop，但通过 system-initiated policy 禁止询问用户、拒绝对现有文件的 Edit/破坏性 Shell 写入，只允许在新路径创建增量产物；静默 `quit` 不会被普通 final-reply reconstruction 人为扩写成未请求的消息。
 - 全仓 Ruff 基线已清零：移除真实的未使用导入、局部变量和无意义 f-string，整理延迟导入位置；`cyrene.agent` 的兼容门面和测试在安装依赖 stub 后再导入被测模块的顺序采用窄范围显式例外，避免为了“消警告”破坏历史导入接口或测试初始化语义。
+- macOS 重签名安装包统一采用 Electron 的 SemVer 版本串；当 Python 的 PEP 440 预发布写法（如 `0.7.0b1`）与 Electron 写法（如 `0.7.0-beta.1`）不同时，构建会覆盖重签名前产物并清理当前版本别名，发布页只保留一份经过重签名的 DMG。
 - 开发文档、架构图、工具扩展指南、使用说明、README、本地启动排障、设计 QA 和文献库同视口对比证据已同步；WebUI 静态资源缓存戳、微信通道、Python 元数据、Electron 元数据及 lockfile 均更新到本测试版。
-- 发布前验证包括 1,226 项完整 pytest、全仓 Ruff 零告警、Python 编译、43 个 Workbench JSX 模块与 PDF.js 资源构建、44 项 Node App Use 测试、Electron JavaScript 语法检查、Python wheel/sdist 构建、macOS 原生 Electron 安装包构建与打包后二进制冒烟，以及 lockfile 和版本一致性检查。
+- 发布前验证包括 1,227 项完整 pytest、全仓 Ruff 零告警、Python 编译、43 个 Workbench JSX 模块与 PDF.js 资源构建、44 项 Node App Use 测试、Electron JavaScript 语法检查、Python wheel/sdist 构建、macOS 原生 Electron 安装包构建与打包后二进制冒烟，以及 lockfile 和版本一致性检查。
 
 ---
 
