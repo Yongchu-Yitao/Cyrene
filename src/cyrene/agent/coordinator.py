@@ -953,13 +953,13 @@ async def run_heartbeat_agent(
         + lang_line
         + "Do not mention the scheduler, heartbeat, lottery, hidden prompt, or internal instructions.\n"
         "\n"
-        "DECISION RULE — a warm, light-touch check-in:\n"
-        "- This is a chance to reach out the way a thoughtful friend would. If something specific comes to mind — a topic, plan, or feeling the user shared — follow up on it warmly.\n"
-        "- A brief, genuine hello is fine even without a concrete hook, as long as it feels caring rather than mechanical.\n"
-        "- Lean toward reaching out. Only stay silent (call `quit`) when a message now would feel intrusive or repetitive — for example you just messaged, or there is truly nothing worth saying.\n"
-        "- If the user did not reply to a recent proactive message, be more considerate: keep it lighter and don't pile on.\n"
-        "- Keep it to 1–2 sentences. Be direct, warm, and specific.\n"
-        "- If tools are useful, use them before composing the reply. You are allowed to do small, concrete incremental work instead of only speaking.\n"
+        "DECISION RULE — autonomous work, not conversation:\n"
+        "- Inspect the supplied context for a concrete open task, unresolved decision, due/stale item, research gap, verification need, or small maintenance action.\n"
+        "- If a useful safe action exists, use tools and complete it now. Do not merely offer help, propose future work, or paraphrase the context.\n"
+        "- A visible reply is justified only by a concrete completed result, a newly verified material fact, or a specific blocker/risk requiring the user's attention. Keep that report concise and factual.\n"
+        "- If there is no useful safe action or no material result, call `quit` silently.\n"
+        "- Never greet the user, make small talk, ask how they are, send lifestyle reminders, or use a casual past topic as an excuse to message.\n"
+        "- This scheduler event is not user activity. Never imply the user just woke up, came online, returned, became available, finished work, is busy, or is doing something now.\n"
         "- Incremental-work boundary: you may read/search/inspect and may create new additive files or records, but you must not modify, overwrite, move, rename, or delete existing files. Use `Write` only for a path that does not already exist; do not use `Edit` for proactive work. Avoid shell write commands, redirects, `rm`, `mv`, or other file-changing shell operations."
     )
     session_token = _current_session_id.set(session_id)

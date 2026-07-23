@@ -1316,7 +1316,11 @@ async def test_heartbeat_proactive_check_uses_main_agent_loop(monkeypatch):
     assert seen["db_path"] == "db.sqlite3"
     assert "scheduler-initiated proactive check-in" in seen["prompt"]
     assert "Recent memories about the user" in seen["prompt"]
-    assert "If you speak, the final reply will be shown directly to the user" in seen["prompt"]
+    assert "autonomous work cycle, not a social check-in" in seen["prompt"]
+    assert "use tools and complete the work now" in seen["prompt"]
+    assert "Never claim or imply that the user just woke up" in seen["prompt"]
+    assert "Trigger: system scheduler; no new user activity" in seen["prompt"]
+    assert "Do not send a greeting, check-in, small talk" in seen["prompt"]
     # A delivered message advances the unanswered streak by exactly one.
     assert scheduler._LOTTERY_STATE["consecutive_unanswered"] == 1
     assert scheduler._LOTTERY_STATE["last_proactive_time"] > 0
@@ -1358,9 +1362,10 @@ async def test_heartbeat_proactive_check_stays_silent_when_agent_skips(monkeypat
     assert seen["notified"] is False
     assert scheduler._LOTTERY_STATE["consecutive_unanswered"] == 0
     assert "scheduler-initiated proactive check-in" in seen["prompt"]
-    # The softened prompt still lets the agent bow out via `quit` when reaching
-    # out would feel intrusive.
+    # A work cycle with nothing material to do must bow out silently instead
+    # of manufacturing a social check-in.
     assert "quit" in seen["prompt"].lower()
+    assert "If there is no useful safe action or no material result" in seen["prompt"]
 
 
 async def test_proactive_single_ignored_message_does_not_snowball_into_cooldown(monkeypatch):

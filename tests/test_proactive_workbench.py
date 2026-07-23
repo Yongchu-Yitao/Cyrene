@@ -259,6 +259,11 @@ async def test_proactive_lang_is_pinned_in_ephemeral_system(monkeypatch):
     assert "based on their past messages" not in captured["ephemeral_system"]
     assert captured["behavior_user_message"] == "Scheduled proactive check-in"
     assert captured["behavior_system_initiated"] is True
+    assert "DECISION RULE — autonomous work, not conversation" in captured["ephemeral_system"]
+    assert "use tools and complete it now" in captured["ephemeral_system"]
+    assert "Never greet the user, make small talk" in captured["ephemeral_system"]
+    assert "This scheduler event is not user activity" in captured["ephemeral_system"]
+    assert "Never imply the user just woke up" in captured["ephemeral_system"]
 
     # No persisted language falls back to inferring from past messages.
     await coordinator.run_heartbeat_agent(

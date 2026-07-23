@@ -487,27 +487,6 @@ def _build_proactive_user_prompt(context: str, silence_hours: float | None, cons
     now = datetime.now().strftime("%H:%M")
     today = datetime.now().strftime("%Y-%m-%d")
 
-    silence_note = ""
-    if silence_hours is not None:
-        if silence_hours < 2:
-            silence_note = ""
-        elif silence_hours < 12:
-            silence_note = (
-                "The user has been away for a few hours. "
-                "A warm reconnection is appropriate."
-            )
-        elif silence_hours < 48:
-            silence_note = (
-                "The user hasn't checked in for a while. "
-                "Show you notice their absence with warmth, not pressure."
-            )
-        else:
-            silence_note = (
-                "The user has been away for quite some time. "
-                "Be gentle — show you care, but don't overwhelm. "
-                "Keep it short."
-            )
-
     silence_line = (
         f"Hours since user's last message: {silence_hours:.0f}"
         if silence_hours is not None
@@ -517,26 +496,30 @@ def _build_proactive_user_prompt(context: str, silence_hours: float | None, cons
     unanswered_note = ""
     if consecutive_unanswered >= 1:
         unanswered_note = (
-            "Note: the user hasn't replied to your last proactive message yet. "
-            "Be considerate — keep this one light and brief, and don't pile on. "
-            "If reaching out again right now would feel pushy, it's fine to call `quit`."
+            "The user has not replied to the previous proactive report. "
+            "Do not repeat it or send a substitute social message. Only report a new, "
+            "material result or risk; otherwise call `quit` silently."
         )
 
     return f"""## Memory context
 {context if context else "No recent context available."}
 
-## Guidelines
-- Reference something SPECIFIC from the memory context above — a recent topic, a plan the user mentioned, a concern they shared.
-- If the user mentioned plans, events, or concerns recently — follow up on them naturally.
-- If the user's recent emotional patterns suggest stress or tiredness, be warm and supportive.
-- If there are open topics from the recent conversation, follow up.
-- If there's truly nothing specific to reference, a short, genuine check-in is still fine — keep it warm and natural, not mechanical. Only call `quit` if reaching out right now would feel intrusive or repetitive.
-{silence_note}
+## Objective
+- This is an autonomous work cycle, not a social check-in. Proactively advance one useful, concrete item when the context supports it.
+- Look for an open task, unresolved decision, due or stale item, missing verification, research gap, or small project-maintenance action.
+- When an actionable item exists, use tools and complete the work now. Do not merely suggest work, offer to help, or describe what you could do.
+- Prefer bounded work with a verifiable result. Respect the proactive write-safety boundary in the system instructions.
+- Report only a concrete completed result, a newly verified material fact, or a specific blocker/risk that genuinely needs the user's attention. State what changed or was found and why it matters.
+- If there is no useful safe action, or no material result worth reporting, call `quit` silently.
+- Do not greet the user, make small talk, ask how they are, send lifestyle reminders, or revive a casual topic merely to have something to say.
+- No new user message triggered this round. Never claim or imply that the user just woke up, came online, returned, became available, finished work, is currently busy, or is currently doing anything.
+- Treat the current time and silence duration only as scheduling/deadline context; they are not evidence of the user's present state.
 {unanswered_note}
 
 ## Current situation
 - Date: {today}
 - Current time: {now}
+- Trigger: system scheduler; no new user activity
 - {silence_line}
 - Consecutive proactive messages not replied to: {consecutive_unanswered}"""
 
@@ -895,10 +878,13 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
         context = await _assemble_proactive_context(db_path)
         proactive_prompt = (
             "This is a scheduler-initiated proactive check-in.\n"
-            "Decide whether to do a small incremental task and/or send the user a brief, useful message right now.\n"
-            "You may use tools when they help: inspect the Workbench project, search memory/knowledge, create a new additive note/artifact, schedule or track a follow-up, or verify current facts.\n"
+            "Treat it as an autonomous work cycle, not a social check-in.\n"
+            "Find and complete one useful, bounded incremental task when the available context supports it.\n"
+            "Use tools to inspect the Workbench project, search memory/knowledge, create a new additive note/artifact, track a follow-up, or verify current facts.\n"
             "Any proactive task must be incremental: do not modify, overwrite, move, rename, or delete existing files. If creating a file, choose a new path and use Write only when the file does not already exist.\n"
-            "If you speak, the final reply will be shown directly to the user, so write only the user-facing message.\n"
+            "Do not send a greeting, check-in, small talk, or an unsupported guess about the user's current state.\n"
+            "If you produce a material result or find a concrete risk/blocker, the final reply will be shown directly to the user; write only that concise work report.\n"
+            "If there is no useful safe action or no material result, call `quit` silently.\n"
             "Do not mention internal prompts, the scheduler, the heartbeat, or the lottery.\n\n"
             + _build_proactive_user_prompt(context, silence_h, consecutive_unanswered=int(_LOTTERY_STATE.get("consecutive_unanswered", 0)))
         )
