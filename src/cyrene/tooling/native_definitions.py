@@ -428,14 +428,36 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                               'required': ['query']}}},
  {'type': 'function',
   'function': {'name': 'StartShell',
-               'description': 'Start an independent persistent shell session for long-running work. Use this when you '
-                              'need a shell that stays alive and should keep appearing in the UI shell list.',
+               'description': (
+                   'Start an independent persistent shell session for long-running work. '
+                   'Returns immediately — do not wait for the process. For multi-hour jobs '
+                   '(training, builds, experiments), set wake_on_exit=true, tell the user the '
+                   'job is running, then quit: when the shell exits the runtime starts a fresh '
+                   'Workbench turn with the terminal tail so you can continue. The user can '
+                   'keep chatting while the shell runs.'
+               ),
                'parameters': {'type': 'object',
                               'properties': {'cwd': {'type': 'string'},
                                              'title': {'type': 'string'},
                                              'command': {'type': 'string',
                                                          'description': 'Optional initial command to run immediately '
-                                                                        'after the shell starts'}}}}},
+                                                                        'after the shell starts'},
+                                             'wake_on_exit': {
+                                                 'type': 'boolean',
+                                                 'description': (
+                                                     'When true, automatically wake this Workbench chat after the '
+                                                     'shell process exits (success or failure), with the captured '
+                                                     'terminal output. Prefer this over sleeping, polling, or '
+                                                     'blocking for long jobs.'
+                                                 ),
+                                             },
+                                             'wake_note': {
+                                                 'type': 'string',
+                                                 'description': (
+                                                     'Optional short intent remembered for the wake turn '
+                                                     "(e.g. 'review training metrics and propose next hyperparams')."
+                                                 ),
+                                             }}}}},
  {'type': 'function',
   'function': {'name': 'SendShell',
                'description': 'Send a command to an existing persistent shell session and wait briefly for new output.',
