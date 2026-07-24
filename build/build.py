@@ -6,6 +6,7 @@
     python build/build.py --clean  # 仅清理
 """
 
+import json
 import os
 import platform
 import shutil
@@ -40,6 +41,19 @@ def get_version() -> str:
     with open(pyproject, "rb") as f:
         data = tomllib.load(f)
     return data["project"]["version"]
+
+
+def get_electron_version() -> str:
+    """Read the SemVer-compatible version used in Electron artifact names."""
+    package_json = PROJECT_ROOT / "electron" / "package.json"
+    with open(package_json, encoding="utf-8") as f:
+        data = json.load(f)
+    return str(data["version"])
+
+
+def _mac_dmg_version_aliases() -> tuple[str, ...]:
+    """Return every current-version spelling that may name a macOS DMG."""
+    return tuple(dict.fromkeys((get_version(), get_electron_version())))
 
 
 def clean() -> None:
@@ -504,9 +518,15 @@ def run_electron_builder(arch: str = "x64") -> None:
             # hdiutil create with staging preserves resource forks and
             # extended attributes (code signatures) on macOS.
             import glob
-            version = get_version()
+            version = get_electron_version()
             dmg_path = PROJECT_ROOT / "dist-electron" / f"Cyrene-{version}-mac.dmg"
-            _old_dmgs = sorted(glob.glob(str(PROJECT_ROOT / "dist-electron" / f"Cyrene-{version}-mac*.dmg")))
+            _old_dmgs = sorted({
+                old_dmg
+                for version_alias in _mac_dmg_version_aliases()
+                for old_dmg in glob.glob(
+                    str(PROJECT_ROOT / "dist-electron" / f"Cyrene-{version_alias}-mac*.dmg")
+                )
+            })
             with tempfile.TemporaryDirectory(prefix="cyrene-dmg-") as tmp_dir:
                 staging_dir = Path(tmp_dir) / "Cyrene"
                 staging_dir.mkdir(parents=True, exist_ok=True)

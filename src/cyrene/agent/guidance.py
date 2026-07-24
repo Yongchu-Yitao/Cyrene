@@ -6,28 +6,26 @@ module-level cycle.
 """
 
 import asyncio
-import contextlib
 import json
 import logging
 import re
 from typing import Any
-from uuid import uuid4
 
 import httpx
 
 from cyrene import debug
-from cyrene.agent.message import _assistant_entry_from_response, _ensure_message_identity, _insert_intermediate_user_reply, _is_placeholder_reply
+from cyrene.agent.message import (
+    _ensure_message_identity,
+    _insert_intermediate_user_reply,
+)
 from cyrene.agent.state import (
     _agent_lock,
     _AWAITING_USER_SENTINEL,
     _call_llm,
     _call_llm_stream,
-    _caller_type,
     _interrupt_event,
     _MAIN_INBOX_AGENT_ID,
-    _pending_label_refreshes,
     _publish_runtime_event,
-    _reply_stream_writer,
     _session_state_lock,
     _streaming_reply_requested,
 )
@@ -37,13 +35,10 @@ from cyrene.agent.session import (
     _clear_pending_question,
     _guidance_persist_context_after_ack,
     _guidance_round_context,
-    _load_pending_question,
-    _load_session_messages,
     _load_session_state,
     _pending_question_resume_context,
     _pending_question_is_permission_elevation,
     _restore_pending_question,
-    _save_session_messages,
     _schedule_session_label_refresh,
     _write_session_messages_locked,
     get_session_labels,
@@ -55,6 +50,9 @@ logger = logging.getLogger(__name__)
 _VISIBLE_DSML_TOOL_BLOCK_RE = re.compile(
     r"<(?:｜｜|\|\|)DSML(?:｜｜|\|\|)tool_calls>.*?</(?:｜｜|\|\|)DSML(?:｜｜|\|\|)tool_calls>",
     re.DOTALL,
+)
+_VISIBLE_DSML_TOOL_MARKUP_RE = re.compile(
+    r"</?(?:｜｜|\|\|)DSML(?:｜｜|\|\|)"
 )
 
 
@@ -182,8 +180,6 @@ async def _insert_guidance_reply(
     client_request_id: str = "",
     subagent_flow_snapshot: dict[str, Any] | None = None,
 ) -> None:
-    from cyrene.agent.message import _ensure_message_identity
-
     from datetime import datetime, timezone
 
     assistant_entry: dict[str, Any] = {
@@ -257,8 +253,6 @@ async def _insert_guidance_ack(
     round_title: str = "",
     client_request_id: str = "",
 ) -> None:
-    from cyrene.agent.message import _ensure_message_identity
-
     from datetime import datetime, timezone
 
     assistant_entry: dict[str, Any] = {
@@ -435,18 +429,30 @@ async def _synthesize_subagent_results(
                     fn = tc.get("function", {})
                     name = fn.get("name", "")
                     args = fn.get("arguments", "{}")
-                    if name == "spawn_subagent":
-                        try:
-                            a = json.loads(args)
-                            context_lines.append(f"[Spawned subagent: {a.get('agent_id', '?')}]\nTask: {a.get('task', '')[:300]}")
-                        except Exception:
-                            context_lines.append("[Spawned subagent]")
-                    elif name == "send_agent_message":
-                        try:
-                            a = json.loads(args)
-                            context_lines.append(f"[Subagent msg: {a.get('from', '?')} -> {a.get('to', '?')}]")
-                        except Exception:
-                            pass
+                    try:
+                        a = json.loads(args)
+                        from cyrene.tooling import resolve_wire_call
+
+                        resolution = resolve_wire_call(
+                            str(name or ""),
+                            a,
+                            actor="main",
+                        )
+                        capability_id = resolution.capability_id
+                        concrete_args = resolution.concrete_arguments
+                    except Exception:
+                        capability_id = str(name or "")
+                        concrete_args = {}
+                    if capability_id == "subagent.spawn":
+                        context_lines.append(
+                            f"[Spawned subagent: {concrete_args.get('agent_id', '?')}]\n"
+                            f"Task: {str(concrete_args.get('task', ''))[:300]}"
+                        )
+                    elif capability_id == "subagent.send_message":
+                        context_lines.append(
+                            f"[Subagent msg: {concrete_args.get('from', '?')} -> "
+                            f"{concrete_args.get('to', '?')}]"
+                        )
     context_block = "\n\n".join(context_lines) if context_lines else "—"
 
     experts_block = summary.strip() or "(No subagent results.)"
@@ -664,6 +670,11 @@ def _strip_visible_dsml_tool_blocks(text: str) -> str:
     return _VISIBLE_DSML_TOOL_BLOCK_RE.sub("", str(text or "")).strip()
 
 
+def _contains_visible_dsml_tool_markup(text: str) -> bool:
+    """Return whether text still contains complete or partial DSML tool syntax."""
+    return bool(_VISIBLE_DSML_TOOL_MARKUP_RE.search(str(text or "")))
+
+
 def _record_final_reply_usage(*responses: Any) -> None:
     """Stash the merged usage of the final-reply call(s) for the persist layer.
 
@@ -692,7 +703,7 @@ async def _validated_final_no_tool_reply(messages: list[dict], max_tokens: int |
         response = await _call_llm(messages, tools=None, max_tokens=max_tokens)
     _record_final_reply_usage(response)
     text = _assistant_text(response).strip()
-    if not _VISIBLE_DSML_TOOL_BLOCK_RE.search(text):
+    if not _contains_visible_dsml_tool_markup(text):
         return text
 
     retry_messages = [
@@ -710,8 +721,10 @@ async def _validated_final_no_tool_reply(messages: list[dict], max_tokens: int |
     retry_response = await _call_llm(retry_messages, tools=None, max_tokens=max_tokens)
     _record_final_reply_usage(response, retry_response)
     retry_text = _assistant_text(retry_response).strip()
-    if _VISIBLE_DSML_TOOL_BLOCK_RE.search(retry_text):
-        return _strip_visible_dsml_tool_blocks(retry_text)
+    if _contains_visible_dsml_tool_markup(retry_text):
+        retry_text = _strip_visible_dsml_tool_blocks(retry_text)
+        if _contains_visible_dsml_tool_markup(retry_text):
+            return ""
     return retry_text
 
 

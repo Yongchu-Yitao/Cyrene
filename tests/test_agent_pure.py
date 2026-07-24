@@ -4,9 +4,7 @@ All functions tested here are pure data-transformation helpers.  They must
 remain stable after the agent.py → agent/ split.
 """
 
-import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -31,13 +29,14 @@ def test_main_agent_prompt_proactively_consults_knowledge_base():
         _PHASE1_DECISION_PROMPT,
     )
 
-    assert "Do not wait for the user to explicitly say" in _MAIN_AGENT_PROMPT
-    assert "call `SearchKnowledge` before deciding or acting" in _MAIN_AGENT_PROMPT
-    assert "retry with concrete entities, filenames, synonyms" in _MAIN_AGENT_PROMPT
+    assert "`knowledge_tools`" in _MAIN_AGENT_PROMPT
+    assert "`knowledge.search`" in _MAIN_AGENT_PROMPT
+    assert "`knowledge.list_documents`" in _MAIN_AGENT_PROMPT
+    assert "`knowledge.library.search`" in _MAIN_AGENT_PROMPT
+    assert "`knowledge.library.update_metadata`" in _MAIN_AGENT_PROMPT
     assert "may depend on project history" in _PHASE1_DECISION_PROMPT
-    assert "consult the knowledge base" in _EXECUTION_SYSTEM_PROMPT
-    assert "PAGE_SIGNAL: access_gate" in _EXECUTION_SYSTEM_PROMPT
-    assert "single cooldown/recovery attempt" in _EXECUTION_SYSTEM_PROMPT
+    assert "`knowledge.search`" in _EXECUTION_SYSTEM_PROMPT
+    assert "`knowledge.library.search`" in _EXECUTION_SYSTEM_PROMPT
 
 
 def test_browser_prompts_prefer_visible_clicks_over_direct_url_navigation():
@@ -45,13 +44,13 @@ def test_browser_prompts_prefer_visible_clicks_over_direct_url_navigation():
 
     for prompt in (_MAIN_AGENT_PROMPT, _EXECUTION_SYSTEM_PROMPT):
         assert "prefer" in prompt.lower()
-        assert "browser_snapshot" in prompt
-        assert "browser_click_ref" in prompt
-        assert "browser_click_text" in prompt
-        assert "exact URL explicitly requested by the user" in prompt
+        assert "browser.snapshot" in prompt
+        assert "browser.click_ref" in prompt
+        assert "browser.click_text" in prompt
+        assert "exact URL requested by the user" in prompt
 
     assert "Prefer clicking visible page UI over navigating by URL" in _MAIN_AGENT_PROMPT
-    assert "do not construct, copy, or re-enter a URL" in _MAIN_AGENT_PROMPT
+    assert "reconstructed URLs" in _MAIN_AGENT_PROMPT
     assert "call it repeatedly with different URLs" not in _MAIN_AGENT_PROMPT
 
 

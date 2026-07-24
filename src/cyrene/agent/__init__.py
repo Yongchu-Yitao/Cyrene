@@ -191,7 +191,7 @@ def _register_quit_handler() -> None:
     ``cyrene.agent`` can be imported without pulling in the full
     ``cyrene.tools`` dependency chain (PIL, pypdf, etc.).
     """
-    from cyrene.tools import TOOL_HANDLERS
+    from cyrene.tooling.catalog import TOOL_HANDLERS
     TOOL_HANDLERS["quit"] = _tool_quit
 
 

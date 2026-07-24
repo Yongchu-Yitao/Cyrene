@@ -16,19 +16,9 @@ import cyrene.agent.state as _state
 
 from cyrene.agent.commands import DEEP_REFLECT_COMMAND_ID, parse_deep_reflect_command
 from cyrene.agent.deep_reflection import create_deep_reflection_record
-from cyrene import debug
-from cyrene.agent.guidance import (
-    _final_reply_from_history,
-    _final_plain_reply_from_history,
-    _final_user_reply_from_history,
-    _is_placeholder_reply,
-    _tool_result_fallback_text,
-)
 from cyrene.agent.message import (
     _apply_assistant_meta,
-    _assistant_entry_from_response,
     _ensure_message_identity,
-    _flush_intermediate_user_replies,
 )
 from cyrene.agent.prompts import (
     _CLAUDE_CODE_PROMPT,
@@ -38,13 +28,13 @@ from cyrene.agent.prompts import (
     _EXECUTION_SYSTEM_PROMPT,
     _HELP_ME_DECIDE_PROMPT,
     _LEARNING_PLAN_PROMPT,
-    _MAIN_AGENT_PROMPT,
-    _PHASE1_DECISION_PROMPT,
+    _MAIN_AGENT_PROMPT_TEMPLATE,
     _QUICK_ANSWER_PROMPT,
     _WORKBENCH_TASK_REPLY_PROMPT,
     _WORKSPACE_SCOPE_BLOCK,
     _spawn_policy_prompt_block,
     conversation_identity_block,
+    prompt_for_enabled_tool_packs,
     workspace_scope_block,
 )
 from cyrene.agent.session import (
@@ -52,16 +42,10 @@ from cyrene.agent.session import (
     _load_session_messages,
     _schedule_session_label_refresh,
     _save_session_messages,
-    clear_session_id,
     get_session_labels,
 )
 from cyrene.agent.state import (
-    _active_main_round_id,
-    _active_main_round_prompt,
-    _active_main_round_public_prompt,
-    _active_main_round_started_at,
     _active_workspace_dir,
-    _agent_lock,
     _AWAITING_USER_SENTINEL,
     _call_llm,
     _caller_type,
@@ -73,30 +57,28 @@ from cyrene.agent.state import (
     _deep_research_mode,
     _economy_mode,
     _ensure_session,
-    _interrupt_event,
-    _LIGHT_TOOL_DEFS,
     _get_max_tool_rounds,
-    _pending_interrupt_clearers,
     _pending_intermediate_user_replies,
     _persist_base_messages,
     _persist_history_prefix_len,
     _persist_insert_at,
     _persist_merge_live_state,
     _publish_runtime_event,
-    _streaming_reply_requested,
-    _tool_quit,
     _ui_round_assistant_meta,
     _ui_round_hide_initial_detail,
     active_workspace_dir,
 )
-from cyrene.config import ASSISTANT_NAME
 from cyrene.context_trace import context_block
 from cyrene.llm import _assistant_text, _truncate
 from cyrene.memory import get_memory_context
 from cyrene.short_term import get_context
 from cyrene.skills_registry import build_skill_prompt_block
-from cyrene.settings_store import get as _get_setting, get_spawn_policy
-from cyrene.tools import TOOL_HANDLERS, _execute_tool, get_active_tool_defs
+from cyrene.settings_store import (
+    get as _get_setting,
+    get_spawn_policy,
+    is_tool_pack_enabled,
+)
+from cyrene.tooling import execute_wire_tool, get_main_wire_tool_defs
 from cyrene.task_lifecycle import cancel_and_wait, track_task
 
 logger = logging.getLogger(__name__)
@@ -140,19 +122,50 @@ async def _run_execution_agent(task: str, bot: Any, chat_id: int, db_path: str, 
         return ""
     async with default_ctx.lock:
         default_ctx.interrupt_event.clear()
-        return await _run_execution_agent_locked(task, bot, chat_id, db_path, notify_state)
+        from cyrene.tooling.gateway import (
+            activate_catalog_snapshot,
+            reset_catalog_snapshot,
+        )
+
+        snapshot_token = activate_catalog_snapshot("main")
+        try:
+            return await _run_execution_agent_locked(
+                task,
+                bot,
+                chat_id,
+                db_path,
+                notify_state,
+            )
+        finally:
+            reset_catalog_snapshot(snapshot_token)
 
 
 async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path: str, notify_state: dict[str, bool] | None = None) -> str:
     _caller_type.set("execution_agent")
+    wire_tool_defs = get_main_wire_tool_defs()
+    enabled_wire_names = {
+        str((tool_def.get("function") or {}).get("name") or "")
+        for tool_def in wire_tool_defs
+        if str((tool_def.get("function") or {}).get("name") or "").endswith(
+            "_tools"
+        )
+    }
     messages = [
-        {"role": "system", "content": _EXECUTION_SYSTEM_PROMPT + "\n\n" + _WORKSPACE_SCOPE_BLOCK},
+        {
+            "role": "system",
+            "content": prompt_for_enabled_tool_packs(
+                _EXECUTION_SYSTEM_PROMPT
+                + "\n\n"
+                + _WORKSPACE_SCOPE_BLOCK,
+                enabled_wire_names,
+            ),
+        },
         {"role": "user", "content": task},
     ]
 
     final_text = "Done."
     for _ in range(_get_max_tool_rounds()):
-        response = await _call_llm(messages, tools=get_active_tool_defs())
+        response = await _call_llm(messages, tools=wire_tool_defs)
 
         assistant_entry: dict[str, Any] = {"role": "assistant"}
         if response.get("content"):
@@ -180,7 +193,15 @@ async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path
             name = fn["name"]
             try:
                 args = json.loads(fn.get("arguments") or "{}")
-                result = await _execute_tool(name, args, bot, chat_id, db_path, notify_state)
+                result = await execute_wire_tool(
+                    name,
+                    args,
+                    bot,
+                    chat_id,
+                    db_path,
+                    notify_state,
+                    actor="main",
+                )
             except Exception as e:
                 result = f"Tool {name} failed: {e}"
             messages.append({"role": "tool", "tool_call_id": call_id, "content": _truncate(result)})
@@ -210,7 +231,7 @@ async def run_agent(
     volatile_ephemeral_system: str = "",
     static_system_extra: str = "",
 ) -> str:
-    """Main entry point. Runs the main agent loop with full tools.
+    """Main entry point. Runs the main agent loop with stable tool gateways.
 
     ``workspace_dir`` scopes the agent's file tools + Bash cwd to a specific
     directory (a Workbench project's workspacePath). Empty → global WORKSPACE_DIR.
@@ -428,7 +449,7 @@ async def _run_chat_agent(
             if "include_short_term" not in str(exc):
                 raise
             memory_context = get_memory_context()
-        main_system = _MAIN_AGENT_PROMPT
+        main_system = prompt_for_enabled_tool_packs(_MAIN_AGENT_PROMPT_TEMPLATE)
         now = datetime.now().astimezone()
         temporal_context = (
             "## Current Date\n"
@@ -442,7 +463,7 @@ async def _run_chat_agent(
                 "system",
                 source="cyrene.agent.prompts._MAIN_AGENT_PROMPT",
                 reason="base main-agent instructions",
-                content=_MAIN_AGENT_PROMPT,
+                content=main_system,
             ),
         ]
         plan_mode_active = _state._permission_mode.get() == "plan"
@@ -504,7 +525,11 @@ async def _run_chat_agent(
                 transforms=["concat_into_system"],
                 content=memory_context,
             ))
-        skill_prompt_block = build_skill_prompt_block()
+        skill_prompt_block = (
+            build_skill_prompt_block()
+            if is_tool_pack_enabled("skill_tools")
+            else ""
+        )
         if skill_prompt_block:
             main_system = main_system + "\n\n" + skill_prompt_block
             main_system_context.append(context_block(
@@ -516,7 +541,11 @@ async def _run_chat_agent(
                 content=skill_prompt_block,
             ))
         try:
-            learned_skill_block = await _behavior_learning.build_learned_skill_block()
+            learned_skill_block = (
+                await _behavior_learning.build_learned_skill_block()
+                if is_tool_pack_enabled("skill_tools")
+                else ""
+            )
             if learned_skill_block:
                 main_system = main_system + "\n\n" + learned_skill_block
                 main_system_context.append(context_block(
@@ -537,7 +566,12 @@ async def _run_chat_agent(
             _shell_kind = resolve_shell()[0]
         except Exception:
             _shell_kind = "bash"
-        current_workspace_scope = workspace_scope_block(active_workspace_dir(), shell_kind=_shell_kind)
+        current_workspace_scope = prompt_for_enabled_tool_packs(
+            workspace_scope_block(
+                active_workspace_dir(),
+                shell_kind=_shell_kind,
+            )
+        )
         main_system += "\n\n" + current_workspace_scope
         main_system_context.append(context_block(
             "runtime.workspace_scope",
@@ -642,27 +676,35 @@ async def _run_chat_agent(
             public_attachments = []
             persist_user_message = False
 
-        # Command-specific prompt injection
+        # Command-specific prompt injection. Package-specific lines are filtered
+        # before concatenation so disabled package metadata never enters the
+        # model-facing prompt.
         if command == "deep-research":
-            main_system = main_system + "\n\n" + _DEEP_RESEARCH_PROMPT
+            command_prompt = prompt_for_enabled_tool_packs(
+                _DEEP_RESEARCH_PROMPT
+            )
+            main_system = main_system + "\n\n" + command_prompt
             main_system_context.append(context_block(
                 "command.deep-research",
                 "command_prompt",
                 source="cyrene.agent.prompts._DEEP_RESEARCH_PROMPT",
                 reason="deep-research command selected",
                 transforms=["concat_into_system"],
-                content=_DEEP_RESEARCH_PROMPT,
+                content=command_prompt,
             ))
             deep_research_spawn_policy = (
                 "\n\n## Subagent Spawn Policy\n"
                 "Current policy: deep-research (maximum parallelism).\n"
-                "- You MUST spawn subagents for EVERY research track. Never do research yourself — your only job is to decompose, delegate, and synthesize.\n"
-                "- Launch ALL subagents at once in a single batch. Do not wait for some to finish before spawning others.\n"
-                "- If a research track is broad, split it further into narrower sub-tracks and spawn additional subagents.\n"
+                "- You MUST invoke `subagent.spawn` through `subagent_tools` for EVERY research track. Never do research yourself.\n"
+                "- Describe `subagent.spawn` once, then launch ALL invokes in one batch.\n"
+                "- If a track is broad, split it and invoke additional subagents.\n"
                 "- Err on the side of MORE subagents. 5–10 subagents is normal; 10+ is acceptable for complex questions.\n"
                 "- Even small, focused questions within a track deserve their own subagent. Granularity beats breadth per agent.\n"
-                "- If any subagent result is thin, contradictory, or incomplete, immediately spawn follow-up subagents to fill the gap.\n"
-                "- The ONLY reason not to spawn a subagent is if the task is already fully answered with high confidence. When in doubt, spawn."
+                "- If any result is thin, contradictory, or incomplete, immediately invoke follow-up subagents.\n"
+                "- The ONLY reason not to invoke a subagent is if the task is already fully answered with high confidence."
+            )
+            deep_research_spawn_policy = prompt_for_enabled_tool_packs(
+                deep_research_spawn_policy
             )
             main_system += deep_research_spawn_policy
             main_system_context.append(context_block(
@@ -674,34 +716,43 @@ async def _run_chat_agent(
                 content=deep_research_spawn_policy,
             ))
         elif command == "quick-answer":
-            main_system = main_system + "\n\n" + _QUICK_ANSWER_PROMPT
+            command_prompt = prompt_for_enabled_tool_packs(
+                _QUICK_ANSWER_PROMPT
+            )
+            main_system = main_system + "\n\n" + command_prompt
             main_system_context.append(context_block(
                 "command.quick-answer",
                 "command_prompt",
                 source="cyrene.agent.prompts._QUICK_ANSWER_PROMPT",
                 reason="quick-answer command selected",
                 transforms=["concat_into_system"],
-                content=_QUICK_ANSWER_PROMPT,
+                content=command_prompt,
             ))
         elif command == "workbench-task-reply":
-            main_system = main_system + "\n\n" + _WORKBENCH_TASK_REPLY_PROMPT
+            command_prompt = prompt_for_enabled_tool_packs(
+                _WORKBENCH_TASK_REPLY_PROMPT
+            )
+            main_system = main_system + "\n\n" + command_prompt
             main_system_context.append(context_block(
                 "command.workbench-task-reply",
                 "command_prompt",
                 source="cyrene.agent.prompts._WORKBENCH_TASK_REPLY_PROMPT",
                 reason="Workbench task reply mode selected",
                 transforms=["concat_into_system"],
-                content=_WORKBENCH_TASK_REPLY_PROMPT,
+                content=command_prompt,
             ))
         elif command == "help-me-decide":
-            main_system = main_system + "\n\n" + _HELP_ME_DECIDE_PROMPT
+            command_prompt = prompt_for_enabled_tool_packs(
+                _HELP_ME_DECIDE_PROMPT
+            )
+            main_system = main_system + "\n\n" + command_prompt
             main_system_context.append(context_block(
                 "command.help-me-decide",
                 "command_prompt",
                 source="cyrene.agent.prompts._HELP_ME_DECIDE_PROMPT",
                 reason="help-me-decide command selected",
                 transforms=["concat_into_system"],
-                content=_HELP_ME_DECIDE_PROMPT,
+                content=command_prompt,
             ))
             help_me_decide_spawn_policy = (
                 "\n\n## Subagent Spawn Policy\n"
@@ -709,6 +760,9 @@ async def _run_chat_agent(
                 "- Spawn exactly ONE subagent per option. Launch all simultaneously.\n"
                 "- Do NOT do any option research yourself — delegate every option to its own subagent.\n"
                 "- After all subagents return, synthesize into a decision report."
+            )
+            help_me_decide_spawn_policy = prompt_for_enabled_tool_packs(
+                help_me_decide_spawn_policy
             )
             main_system += help_me_decide_spawn_policy
             main_system_context.append(context_block(
@@ -720,14 +774,17 @@ async def _run_chat_agent(
                 content=help_me_decide_spawn_policy,
             ))
         elif command == "learning-plan":
-            main_system = main_system + "\n\n" + _LEARNING_PLAN_PROMPT
+            command_prompt = prompt_for_enabled_tool_packs(
+                _LEARNING_PLAN_PROMPT
+            )
+            main_system = main_system + "\n\n" + command_prompt
             main_system_context.append(context_block(
                 "command.learning-plan",
                 "command_prompt",
                 source="cyrene.agent.prompts._LEARNING_PLAN_PROMPT",
                 reason="learning-plan command selected",
                 transforms=["concat_into_system"],
-                content=_LEARNING_PLAN_PROMPT,
+                content=command_prompt,
             ))
             learning_plan_spawn_policy = (
                 "\n\n## Subagent Spawn Policy\n"
@@ -735,6 +792,9 @@ async def _run_chat_agent(
                 "- Spawn exactly ONE subagent per knowledge module. Launch all simultaneously.\n"
                 "- Do NOT research learning resources yourself — delegate every module to its own subagent.\n"
                 "- After all subagents return, synthesize into a structured learning plan."
+            )
+            learning_plan_spawn_policy = prompt_for_enabled_tool_packs(
+                learning_plan_spawn_policy
             )
             main_system += learning_plan_spawn_policy
             main_system_context.append(context_block(
@@ -746,16 +806,21 @@ async def _run_chat_agent(
                 content=learning_plan_spawn_policy,
             ))
         elif command == "daily-review":
-            main_system = main_system + "\n\n" + _DAILY_REVIEW_PROMPT
+            command_prompt = prompt_for_enabled_tool_packs(
+                _DAILY_REVIEW_PROMPT
+            )
+            main_system = main_system + "\n\n" + command_prompt
             main_system_context.append(context_block(
                 "command.daily-review",
                 "command_prompt",
                 source="cyrene.agent.prompts._DAILY_REVIEW_PROMPT",
                 reason="daily-review command selected",
                 transforms=["concat_into_system"],
-                content=_DAILY_REVIEW_PROMPT,
+                content=command_prompt,
             ))
-            spawn_policy_block = _spawn_policy_prompt_block("off")
+            spawn_policy_block = prompt_for_enabled_tool_packs(
+                _spawn_policy_prompt_block("off")
+            )
             main_system = main_system + "\n\n" + spawn_policy_block
             main_system_context.append(context_block(
                 "spawn_policy.off",
@@ -767,14 +832,17 @@ async def _run_chat_agent(
                 metadata={"policy": "off"},
             ))
         elif command == "deep-compare":
-            main_system = main_system + "\n\n" + _DEEP_COMPARE_PROMPT
+            command_prompt = prompt_for_enabled_tool_packs(
+                _DEEP_COMPARE_PROMPT
+            )
+            main_system = main_system + "\n\n" + command_prompt
             main_system_context.append(context_block(
                 "command.deep-compare",
                 "command_prompt",
                 source="cyrene.agent.prompts._DEEP_COMPARE_PROMPT",
                 reason="deep-compare command selected",
                 transforms=["concat_into_system"],
-                content=_DEEP_COMPARE_PROMPT,
+                content=command_prompt,
             ))
             deep_compare_spawn_policy = (
                 "\n\n## Subagent Spawn Policy\n"
@@ -782,6 +850,9 @@ async def _run_chat_agent(
                 "- Spawn exactly ONE subagent per comparison dimension. Launch all simultaneously.\n"
                 "- Do NOT do any comparison research yourself — delegate every dimension to its own subagent.\n"
                 "- After all subagents return, synthesize into a comparison matrix and recommendation."
+            )
+            deep_compare_spawn_policy = prompt_for_enabled_tool_packs(
+                deep_compare_spawn_policy
             )
             main_system += deep_compare_spawn_policy
             main_system_context.append(context_block(
@@ -793,18 +864,23 @@ async def _run_chat_agent(
                 content=deep_compare_spawn_policy,
             ))
         elif command == "claude-code":
-            main_system = main_system + "\n\n" + _CLAUDE_CODE_PROMPT
+            command_prompt = prompt_for_enabled_tool_packs(
+                _CLAUDE_CODE_PROMPT
+            )
+            main_system = main_system + "\n\n" + command_prompt
             main_system_context.append(context_block(
                 "command.claude-code",
                 "command_prompt",
                 source="cyrene.agent.prompts._CLAUDE_CODE_PROMPT",
                 reason="claude-code command selected",
                 transforms=["concat_into_system"],
-                content=_CLAUDE_CODE_PROMPT,
+                content=command_prompt,
             ))
         else:
             spawn_policy = get_spawn_policy()
-            spawn_policy_block = _spawn_policy_prompt_block(spawn_policy)
+            spawn_policy_block = prompt_for_enabled_tool_packs(
+                _spawn_policy_prompt_block(spawn_policy)
+            )
             main_system = main_system + "\n\n" + spawn_policy_block
             main_system_context.append(context_block(
                 f"spawn_policy.{spawn_policy}",
@@ -953,13 +1029,13 @@ async def run_heartbeat_agent(
         + lang_line
         + "Do not mention the scheduler, heartbeat, lottery, hidden prompt, or internal instructions.\n"
         "\n"
-        "DECISION RULE — a warm, light-touch check-in:\n"
-        "- This is a chance to reach out the way a thoughtful friend would. If something specific comes to mind — a topic, plan, or feeling the user shared — follow up on it warmly.\n"
-        "- A brief, genuine hello is fine even without a concrete hook, as long as it feels caring rather than mechanical.\n"
-        "- Lean toward reaching out. Only stay silent (call `quit`) when a message now would feel intrusive or repetitive — for example you just messaged, or there is truly nothing worth saying.\n"
-        "- If the user did not reply to a recent proactive message, be more considerate: keep it lighter and don't pile on.\n"
-        "- Keep it to 1–2 sentences. Be direct, warm, and specific.\n"
-        "- If tools are useful, use them before composing the reply. You are allowed to do small, concrete incremental work instead of only speaking.\n"
+        "DECISION RULE — autonomous work, not conversation:\n"
+        "- Inspect the supplied context for a concrete open task, unresolved decision, due/stale item, research gap, verification need, or small maintenance action.\n"
+        "- If a useful safe action exists, use tools and complete it now. Do not merely offer help, propose future work, or paraphrase the context.\n"
+        "- A visible reply is justified only by a concrete completed result, a newly verified material fact, or a specific blocker/risk requiring the user's attention. Keep that report concise and factual.\n"
+        "- If there is no useful safe action or no material result, call `quit` silently.\n"
+        "- Never greet the user, make small talk, ask how they are, send lifestyle reminders, or use a casual past topic as an excuse to message.\n"
+        "- This scheduler event is not user activity. Never imply the user just woke up, came online, returned, became available, finished work, is busy, or is doing something now.\n"
         "- Incremental-work boundary: you may read/search/inspect and may create new additive files or records, but you must not modify, overwrite, move, rename, or delete existing files. Use `Write` only for a path that does not already exist; do not use `Edit` for proactive work. Avoid shell write commands, redirects, `rm`, `mv`, or other file-changing shell operations."
     )
     session_token = _current_session_id.set(session_id)

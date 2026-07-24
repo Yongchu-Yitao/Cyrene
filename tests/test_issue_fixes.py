@@ -44,7 +44,8 @@ def test_interval_is_seconds_not_milliseconds():
 def test_rest_agent_and_runner_agree_on_next_run():
     """All three call sites route through compute_next_run, so identical inputs
     produce identical next_run values (the core of issue #50)."""
-    from cyrene import scheduler, tools
+    from cyrene import scheduler
+    from cyrene.tool_impl.task import schedule_task as tools
     from cyrene.schedule_spec import compute_next_run
 
     # The agent tool and the scheduler runner both import the shared helper.
@@ -699,14 +700,14 @@ BROWSER_TOOLS = [
 @pytest.mark.parametrize("tool", BROWSER_TOOLS)
 def test_subagent_cannot_use_browser_tools(tool):
     """The single shared browser session must not be driven by subagents (#52)."""
-    from cyrene import tools
+    from cyrene.tooling import catalog as tools
 
     assert tools.is_tool_allowed_for_actor(tool, "subagent") is False
     assert tools.is_tool_allowed_for_actor(tool, "main") is True
 
 
 def test_subagent_tool_defs_exclude_browser():
-    from cyrene import tools
+    from cyrene.tooling import catalog as tools
 
     names = {td["function"]["name"] for td in tools.get_active_tool_defs_for_actor("subagent")}
     assert names.isdisjoint(BROWSER_TOOLS)

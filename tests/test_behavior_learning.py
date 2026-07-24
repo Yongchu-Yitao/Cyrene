@@ -872,7 +872,7 @@ def _make_step(tool_name: str) -> dict:
 
 async def test_parameterized_runner_applies_typed_defaults(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)
-    from cyrene.tool_impl import run_learned_skill as runner
+    from cyrene.tool_impl.skills import run_learned_skill as runner
 
     skill = _make_skill_with_steps([{
         "enabled": True,
@@ -901,7 +901,7 @@ async def test_parameterized_runner_applies_typed_defaults(tmp_path, monkeypatch
 
 
 def test_parameterized_runner_detects_unsafe_legacy_wrapper():
-    from cyrene.tool_impl import run_learned_skill as runner
+    from cyrene.tool_impl.skills import run_learned_skill as runner
 
     wrapper = {
         "enabled": True,

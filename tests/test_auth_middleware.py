@@ -7,7 +7,6 @@ Covers the token enforcement and Host/Origin (DNS-rebinding) checks wired into
 import sys
 from pathlib import Path
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

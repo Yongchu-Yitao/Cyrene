@@ -313,7 +313,6 @@ async def test_get_raw_messages_returns_full_history():
 
 async def test_run_summary_subagent_collects_peer_messages():
     """总结 subagent 应该读取其他 subagent 的 transcript 和互发消息。"""
-    from cyrene import agent
     from cyrene.agent import state as agent_state
     from cyrene import inbox
     from cyrene import subagent

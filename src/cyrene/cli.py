@@ -20,7 +20,6 @@ Usage:
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -114,9 +113,6 @@ def cmd_start(args: argparse.Namespace) -> None:
 
     data = resp.json()
     sessions = data.get("sessions", [])
-    live = [s for s in sessions if s.get("id") == "run_live"]
-    session_info = live[0] if live else {}
-    msg_count = len(session_info.get("chat", {}).get("messages", []))
 
     print(f"Cyrene started at {DAEMON_URL}")
     print()
@@ -168,7 +164,7 @@ def cmd_do(args: argparse.Namespace) -> None:
         response = resp.get("response", "")
         if response:
             print(f"Cyrene: {response}")
-        print(f"---")
+        print("---")
         labels = _api_json("/api/sessions")
         current = next((s for s in labels.get("sessions", []) if s.get("id") == "run_live"), {})
         summary = current.get("summary", {})
@@ -205,7 +201,7 @@ def cmd_session_status(args: argparse.Namespace) -> None:
     """Show detailed session status."""
     session_id = args.session
 
-    data = _api_json(f"/api/sessions")
+    data = _api_json("/api/sessions")
     sessions = data.get("sessions", [])
     session = next((s for s in sessions if s.get("id") == session_id), None)
 
@@ -300,7 +296,7 @@ def cmd_flow(args: argparse.Namespace) -> None:
                 print(f"  tool: {event.get('tool', '?')}")
                 print(f"  args: {json.dumps(event.get('args', {}), ensure_ascii=False)}")
                 if args.verbose:
-                    print(f"\nFull result:")
+                    print("\nFull result:")
                     print(event.get("result", "")[:2000])
         return
 
@@ -493,7 +489,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
     metrics = data.get("metrics", [])
     if metrics:
-        print(f"\nMetrics:")
+        print("\nMetrics:")
         for m in metrics:
             label = m.get("label", "?")
             value = m.get("value", "?")
@@ -503,7 +499,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
     services = data.get("services", [])
     if services:
-        print(f"\nServices:")
+        print("\nServices:")
         for svc in services:
             name = svc.get("name", "?")
             status = svc.get("status", "?")
@@ -519,7 +515,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 
 def _mcp_call(method: str = "GET", **kwargs) -> dict | list:
-    return _api_json(f"/api/settings/mcp", method=method, **kwargs)
+    return _api_json("/api/settings/mcp", method=method, **kwargs)
 
 
 def cmd_mcp_list(args: argparse.Namespace) -> None:

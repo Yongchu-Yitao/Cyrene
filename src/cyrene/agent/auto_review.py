@@ -1,6 +1,7 @@
 """自动模式：审核 agent —— 对主 agent 的提权请求自主裁决，从不打扰用户。
 
-由 ``tool_legacy._request_scope_elevation`` 在 ``_permission_mode == "auto"`` 时调用。
+由 ``tooling.runtime_support._request_scope_elevation`` 在
+``_permission_mode == "auto"`` 时调用。
 裁决倾向：与用户请求一致且非破坏性 → 批准；高风险（递归删除、写系统目录、
 workspace 之外、命令替换等无法静态验证的 shell）→ 拒绝并给出安全建议。
 """

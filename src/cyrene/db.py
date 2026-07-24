@@ -424,11 +424,200 @@ CREATE TABLE IF NOT EXISTS kb_relations (
 );
 CREATE INDEX IF NOT EXISTS idx_kb_relations_src ON kb_relations(src_id);
 CREATE INDEX IF NOT EXISTS idx_kb_relations_dst ON kb_relations(dst_id);
+
+-- Structured literature-library records live beside, but do not replace, the
+-- generic knowledge documents.  Because this script is run against the
+-- workspace-specific kb_<project>.db, every row below is project isolated by
+-- construction and never needs a caller-supplied project discriminator.
+CREATE TABLE IF NOT EXISTS library_items (
+    id                    TEXT PRIMARY KEY,
+    provider              TEXT NOT NULL DEFAULT 'cyrene',
+    provider_library_id   TEXT NOT NULL DEFAULT '',
+    provider_item_key     TEXT NOT NULL DEFAULT '',
+    provider_version      INTEGER NOT NULL DEFAULT 0,
+    item_type             TEXT NOT NULL DEFAULT 'journalArticle',
+    title                 TEXT NOT NULL DEFAULT '',
+    abstract              TEXT NOT NULL DEFAULT '',
+    doi                   TEXT NOT NULL DEFAULT '',
+    isbn                  TEXT NOT NULL DEFAULT '',
+    url                   TEXT NOT NULL DEFAULT '',
+    venue                 TEXT NOT NULL DEFAULT '',
+    publisher             TEXT NOT NULL DEFAULT '',
+    volume                TEXT NOT NULL DEFAULT '',
+    issue                 TEXT NOT NULL DEFAULT '',
+    pages                 TEXT NOT NULL DEFAULT '',
+    language              TEXT NOT NULL DEFAULT '',
+    year                  INTEGER,
+    date_text             TEXT NOT NULL DEFAULT '',
+    citekey               TEXT NOT NULL DEFAULT '',
+    reading_status        TEXT NOT NULL DEFAULT 'unread',
+    last_read_at          TEXT,
+    starred               INTEGER NOT NULL DEFAULT 0,
+    tags                  TEXT NOT NULL DEFAULT '[]',
+    csl_json              TEXT NOT NULL DEFAULT '{}',
+    raw_json              TEXT NOT NULL DEFAULT '{}',
+    deleted_at            TEXT,
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL,
+    synced_at             TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_library_items_provider_key
+    ON library_items(provider, provider_library_id, provider_item_key)
+    WHERE provider_item_key <> '';
+CREATE INDEX IF NOT EXISTS idx_library_items_updated ON library_items(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_library_items_doi ON library_items(doi);
+CREATE INDEX IF NOT EXISTS idx_library_items_status ON library_items(reading_status);
+
+CREATE TABLE IF NOT EXISTS library_creators (
+    id            TEXT PRIMARY KEY,
+    item_id       TEXT NOT NULL,
+    creator_type  TEXT NOT NULL DEFAULT 'author',
+    first_name    TEXT NOT NULL DEFAULT '',
+    last_name     TEXT NOT NULL DEFAULT '',
+    name          TEXT NOT NULL DEFAULT '',
+    ordinal       INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_library_creators_item ON library_creators(item_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_library_creators_name ON library_creators(last_name, first_name);
+
+CREATE TABLE IF NOT EXISTS library_collections (
+    id                    TEXT PRIMARY KEY,
+    provider              TEXT NOT NULL DEFAULT 'cyrene',
+    provider_library_id   TEXT NOT NULL DEFAULT '',
+    provider_key          TEXT NOT NULL DEFAULT '',
+    provider_version      INTEGER NOT NULL DEFAULT 0,
+    name                  TEXT NOT NULL,
+    parent_id             TEXT,
+    sort_order            INTEGER NOT NULL DEFAULT 0,
+    raw_json              TEXT NOT NULL DEFAULT '{}',
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_library_collections_provider_key
+    ON library_collections(provider, provider_library_id, provider_key)
+    WHERE provider_key <> '';
+CREATE INDEX IF NOT EXISTS idx_library_collections_parent ON library_collections(parent_id);
+
+CREATE TABLE IF NOT EXISTS library_collection_items (
+    collection_id TEXT NOT NULL,
+    item_id       TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    PRIMARY KEY (collection_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_library_collection_items_item ON library_collection_items(item_id);
+
+CREATE TABLE IF NOT EXISTS library_attachments (
+    id                    TEXT PRIMARY KEY,
+    item_id               TEXT NOT NULL,
+    provider              TEXT NOT NULL DEFAULT 'cyrene',
+    provider_library_id   TEXT NOT NULL DEFAULT '',
+    provider_key          TEXT NOT NULL DEFAULT '',
+    provider_version      INTEGER NOT NULL DEFAULT 0,
+    kb_document_id        TEXT,
+    title                 TEXT NOT NULL DEFAULT '',
+    filename              TEXT NOT NULL DEFAULT '',
+    path                  TEXT NOT NULL DEFAULT '',
+    content_type          TEXT NOT NULL DEFAULT '',
+    link_mode             TEXT NOT NULL DEFAULT '',
+    content_hash          TEXT NOT NULL DEFAULT '',
+    raw_json              TEXT NOT NULL DEFAULT '{}',
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_library_attachments_provider_key
+    ON library_attachments(provider, provider_library_id, provider_key) WHERE provider_key <> '';
+CREATE INDEX IF NOT EXISTS idx_library_attachments_item ON library_attachments(item_id);
+CREATE INDEX IF NOT EXISTS idx_library_attachments_document ON library_attachments(kb_document_id);
+
+CREATE TABLE IF NOT EXISTS library_notes (
+    id                TEXT PRIMARY KEY,
+    item_id           TEXT NOT NULL,
+    provider          TEXT NOT NULL DEFAULT 'cyrene',
+    provider_library_id TEXT NOT NULL DEFAULT '',
+    provider_key      TEXT NOT NULL DEFAULT '',
+    provider_version  INTEGER NOT NULL DEFAULT 0,
+    title             TEXT NOT NULL DEFAULT '',
+    content           TEXT NOT NULL DEFAULT '',
+    author            TEXT NOT NULL DEFAULT '',
+    raw_json          TEXT NOT NULL DEFAULT '{}',
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_library_notes_provider_key
+    ON library_notes(provider, provider_library_id, provider_key) WHERE provider_key <> '';
+CREATE INDEX IF NOT EXISTS idx_library_notes_item ON library_notes(item_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS library_annotations (
+    id                TEXT PRIMARY KEY,
+    item_id           TEXT NOT NULL,
+    attachment_id     TEXT,
+    provider          TEXT NOT NULL DEFAULT 'cyrene',
+    provider_library_id TEXT NOT NULL DEFAULT '',
+    provider_key      TEXT NOT NULL DEFAULT '',
+    provider_version  INTEGER NOT NULL DEFAULT 0,
+    annotation_type   TEXT NOT NULL DEFAULT 'highlight',
+    page_label        TEXT NOT NULL DEFAULT '',
+    quote             TEXT NOT NULL DEFAULT '',
+    comment           TEXT NOT NULL DEFAULT '',
+    color             TEXT NOT NULL DEFAULT '',
+    position_json     TEXT NOT NULL DEFAULT '{}',
+    raw_json          TEXT NOT NULL DEFAULT '{}',
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_library_annotations_provider_key
+    ON library_annotations(provider, provider_library_id, provider_key) WHERE provider_key <> '';
+CREATE INDEX IF NOT EXISTS idx_library_annotations_item ON library_annotations(item_id);
+
+CREATE TABLE IF NOT EXISTS library_relations (
+    id          TEXT PRIMARY KEY,
+    src_item_id TEXT NOT NULL,
+    dst_item_id TEXT NOT NULL,
+    relation    TEXT NOT NULL DEFAULT 'related',
+    source      TEXT NOT NULL DEFAULT 'manual',
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    UNIQUE(src_item_id, dst_item_id, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_library_relations_src ON library_relations(src_item_id);
+CREATE INDEX IF NOT EXISTS idx_library_relations_dst ON library_relations(dst_item_id);
+
+CREATE TABLE IF NOT EXISTS library_sync_sources (
+    id                    TEXT PRIMARY KEY,
+    provider              TEXT NOT NULL,
+    provider_library_id   TEXT NOT NULL DEFAULT '',
+    collection_key        TEXT NOT NULL DEFAULT '',
+    name                  TEXT NOT NULL DEFAULT '',
+    last_library_version  INTEGER NOT NULL DEFAULT 0,
+    last_synced_at        TEXT,
+    last_error            TEXT NOT NULL DEFAULT '',
+    config_json           TEXT NOT NULL DEFAULT '{}',
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL,
+    UNIQUE(provider, provider_library_id, collection_key)
+);
+
+CREATE TABLE IF NOT EXISTS library_sync_tombstones (
+    provider              TEXT NOT NULL,
+    provider_library_id   TEXT NOT NULL DEFAULT '',
+    object_type           TEXT NOT NULL,
+    provider_key          TEXT NOT NULL,
+    version               INTEGER NOT NULL DEFAULT 0,
+    deleted_at            TEXT NOT NULL,
+    PRIMARY KEY (provider, provider_library_id, object_type, provider_key)
+);
 """
 
 KB_FTS_SQL: str = (
     "CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_fts USING fts5("
     "content, chunk_id UNINDEXED, document_id UNINDEXED, tokenize='trigram'"
+    ");"
+)
+
+LIBRARY_FTS_SQL: str = (
+    "CREATE VIRTUAL TABLE IF NOT EXISTS library_items_fts USING fts5("
+    "title, creators, abstract, doi, venue, tags, item_id UNINDEXED, tokenize='trigram'"
     ");"
 )
 
@@ -442,6 +631,7 @@ async def init_knowledge_db(db_path: str) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(KB_TABLES_SQL)
         await db.execute(KB_FTS_SQL)
+        await db.execute(LIBRARY_FTS_SQL)
         # Migration: add content_hash column to existing tables
         try:
             await db.execute("ALTER TABLE kb_documents ADD COLUMN content_hash TEXT DEFAULT ''")

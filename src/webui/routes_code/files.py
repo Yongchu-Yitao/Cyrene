@@ -51,7 +51,7 @@ class FileWriteBody(BaseModel):
 @router.get("/file")
 async def read_file(path: str = Query(...)):
     """Read a file from the workspace."""
-    from cyrene.tools import _resolve_workspace_path
+    from cyrene.tooling.runtime_support import _resolve_workspace_path
     try:
         resolved = _resolve_workspace_path(path)
     except ValueError as e:
@@ -75,7 +75,7 @@ async def read_file(path: str = Query(...)):
 @router.put("/file")
 async def write_file(body: FileWriteBody):
     """Write a file to the workspace."""
-    from cyrene.tools import _resolve_workspace_write_target
+    from cyrene.tooling.runtime_support import _resolve_workspace_write_target
     try:
         resolved = _resolve_workspace_write_target(body.path)
     except ValueError as e:

@@ -29,7 +29,7 @@ from PIL import Image
 from fastapi import APIRouter, BackgroundTasks, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
-from cyrene.cc_bridge import get_cc_preview, get_cc_status
+from cyrene.cc_bridge import get_cc_status
 from cyrene.cc_learner import analyze_session, learn_from_session
 from cyrene.cc_terminal import CCTerminalSession
 from cyrene import debug
@@ -38,6 +38,7 @@ from webui.routes_amap import register_amap_routes
 from webui.routes_entities import register_entity_routes
 from webui.routes_knowledge import register_knowledge_routes
 from webui.routes_workbench_knowledge import register_workbench_knowledge_routes
+from webui.routes_workbench_library import register_workbench_library_routes
 from webui.routes_workbench_memory import (
     add_agent_memory,
     memory_injection_ids,
@@ -58,7 +59,6 @@ from cyrene.attachments import (
     EXPORTS_DIR as _EXPORTS_DIR,
     attachment_kind_from_meta,
     build_public_attachment_payload,
-    model_supports_multimodal,
     run_vision_chat,
     safe_attachment_filename,
 )
@@ -68,7 +68,6 @@ from cyrene.agent import (
     _AWAITING_USER_SENTINEL,
     _append_session_message,
     _call_llm,
-    _publish_runtime_event,
     _remove_messages_by_request_id,
     _reply_stream_writer,
     answer_pending_question,
@@ -97,7 +96,7 @@ from cyrene.config import (
     TEMP_DIR,
     WORKSPACE_DIR,
 )
-from cyrene.conversations import CONVERSATIONS_DIR, archive_exchange, search_conversations, search_conversations_structured
+from cyrene.conversations import CONVERSATIONS_DIR, archive_exchange, search_conversations_structured
 from cyrene.onboarding import (
     get_onboarding_status,
     reset_onboarding_state,
@@ -110,7 +109,6 @@ from cyrene.skills_registry import (
     build_skills as _build_skills,
     install_skill_from_path,
     register_existing_skills as _register_existing_skills,
-    skill_payload_from_record as _skill_payload_from_record,
     toggle_skill as _toggle_skill,
     uninstall_skill as _uninstall_skill,
 )
@@ -4271,7 +4269,6 @@ def _workbench_relabel_diff_paths(diff: str, old_path: str, new_path: str) -> st
     new_left = f"--- a/{new_path}"
     new_right = f"+++ b/{new_path}"
     old_created = f"+++ b/{old_path}"
-    new_created = f"+++ b/{new_path}"
     lines = diff.splitlines(keepends=True)
     for idx, line in enumerate(lines[:4]):
         suffix = "\n" if line.endswith("\n") else ""
@@ -6994,6 +6991,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
     register_entity_routes(router, db_path)
     register_knowledge_routes(router)
     register_workbench_knowledge_routes(router)
+    register_workbench_library_routes(router)
     register_workbench_memory_routes(router, db_path)
     register_workbench_schedule_routes(router, db_path)
     register_workbench_chat_routes(router, bot, db_path)
@@ -9244,9 +9242,20 @@ def register_routes(app, bot: Any, db_path: str) -> None:
 
     @router.get("/api/settings/tools")
     async def api_get_tools():
-        from cyrene.settings_store import get_enabled_tools
-        from cyrene.tools import TOOL_DEFS
+        from cyrene.settings_store import (
+            get_enabled_tool_packs,
+            get_enabled_tools,
+            is_tool_pack_enabled,
+        )
+        from cyrene.tooling.catalog import TOOL_DEFS
+        from cyrene.tooling.packs import (
+            CAPABILITY_BINDINGS,
+            PACKS,
+            WIRE_NAME_BY_CONCRETE_TOOL,
+        )
+
         enabled = get_enabled_tools()
+        enabled_packs = get_enabled_tool_packs()
         tools = []
         for td in TOOL_DEFS:
             name = td["function"]["name"]
@@ -9254,6 +9263,19 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 "name": name,
                 "desc": td["function"]["description"],
                 "enabled": enabled.get(name, True),
+                "configured_enabled": enabled.get(name, True),
+                "effective_enabled": (
+                    is_tool_pack_enabled(
+                        WIRE_NAME_BY_CONCRETE_TOOL.get(name, "")
+                    )
+                    if name in WIRE_NAME_BY_CONCRETE_TOOL
+                    else True
+                ),
+                "package_id": WIRE_NAME_BY_CONCRETE_TOOL.get(
+                    name,
+                    "direct_tools",
+                ),
+                "locked": name == "quit",
             })
         # Include MCP tools from connected servers
         try:
@@ -9265,21 +9287,167 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                     "name": name,
                     "desc": mcp_td["function"]["description"],
                     "enabled": enabled.get(name, True),
+                    "configured_enabled": enabled.get(name, True),
+                    "effective_enabled": is_tool_pack_enabled(
+                        "integration_tools"
+                    ),
+                    "package_id": "integration_tools",
                     "source": "mcp",
                 })
         except Exception:
             pass
-        return {"tools": tools}
+
+        package_tools = {
+            wire_name: [
+                concrete_name
+                for _capability_id, concrete_name in bindings
+            ]
+            for wire_name, bindings in CAPABILITY_BINDINGS.items()
+        }
+        package_tools["integration_tools"] = [
+            item["name"]
+            for item in tools
+            if item.get("package_id") == "integration_tools"
+        ]
+        packages = []
+        for pack in PACKS:
+            member_names = set(package_tools.get(pack.wire_name, ()))
+            members = [
+                item
+                for item in tools
+                if item["name"] in member_names
+            ]
+            package_enabled = enabled_packs.get(pack.wire_name, True)
+            packages.append({
+                "id": pack.wire_name,
+                "wire_name": pack.wire_name,
+                "description": pack.description,
+                "enabled": package_enabled,
+                "enabled_count": sum(
+                    1
+                    for item in members
+                    if package_enabled
+                ),
+                "configured_enabled_count": sum(
+                    1 for item in members if item["enabled"]
+                ),
+                "tool_count": len(members),
+                "source": "integration"
+                if pack.wire_name == "integration_tools"
+                else "native",
+            })
+        tool_groups = [
+            {**package, "kind": "package"}
+            for package in packages
+        ]
+        return {
+            "tools": tools,
+            "packages": packages,
+            "tool_groups": tool_groups,
+        }
 
     @router.put("/api/settings/tools")
     async def api_update_tools(request: Request):
-        from cyrene.settings_store import save_enabled_tools
+        from cyrene.settings_store import (
+            get_enabled_tool_packs,
+            save_enabled_tool_packs,
+            save_enabled_tools,
+        )
+        from cyrene.tooling.packs import PACK_BY_WIRE_NAME
+
         body = await request.json()
-        updates = body.get("tools", {})
-        if not isinstance(updates, dict) or len(updates) == 0:
-            return JSONResponse({"error": "tools must be a non-empty dict"}, status_code=400)
-        save_enabled_tools(updates)
-        return {"ok": True, "updated": list(updates.keys())}
+        tool_updates = body.get("tools")
+        package_updates = body.get("packages")
+        has_tools = isinstance(tool_updates, dict) and bool(tool_updates)
+        has_packages = (
+            isinstance(package_updates, dict)
+            and bool(package_updates)
+        )
+        if not has_tools and not has_packages:
+            return JSONResponse(
+                {
+                    "error": (
+                        "tools or packages must be a non-empty dict"
+                    )
+                },
+                status_code=400,
+            )
+        if tool_updates is not None and not isinstance(tool_updates, dict):
+            return JSONResponse(
+                {"error": "tools must be a dict"},
+                status_code=400,
+            )
+        if (
+            package_updates is not None
+            and not isinstance(package_updates, dict)
+        ):
+            return JSONResponse(
+                {"error": "packages must be a dict"},
+                status_code=400,
+            )
+        invalid_tool_values = [
+            str(name)
+            for name, value in (tool_updates or {}).items()
+            if not isinstance(value, bool)
+        ]
+        if invalid_tool_values:
+            return JSONResponse(
+                {
+                    "error": (
+                        "tool values must be booleans: "
+                        + ", ".join(sorted(invalid_tool_values))
+                    )
+                },
+                status_code=400,
+            )
+        invalid_package_values = [
+            str(name)
+            for name, value in (package_updates or {}).items()
+            if not isinstance(value, bool)
+        ]
+        if invalid_package_values:
+            return JSONResponse(
+                {
+                    "error": (
+                        "package values must be booleans: "
+                        + ", ".join(sorted(invalid_package_values))
+                    )
+                },
+                status_code=400,
+            )
+        unknown_packages = sorted(
+            set(package_updates or {}) - set(PACK_BY_WIRE_NAME)
+        )
+        if unknown_packages:
+            return JSONResponse(
+                {
+                    "error": (
+                        "unknown tool package(s): "
+                        + ", ".join(unknown_packages)
+                    )
+                },
+                status_code=400,
+            )
+
+        if has_tools:
+            save_enabled_tools({
+                str(name): value
+                for name, value in tool_updates.items()
+            })
+        updated_packages = []
+        if has_packages:
+            next_packages = get_enabled_tool_packs()
+            next_packages.update({
+                str(name): value
+                for name, value in package_updates.items()
+            })
+            save_enabled_tool_packs(next_packages)
+            updated_packages = list(package_updates)
+        return {
+            "ok": True,
+            "updated": list(tool_updates or {}),
+            "updated_packages": updated_packages,
+        }
 
     @router.get("/api/settings/config")
     async def api_get_config():
@@ -9366,6 +9534,62 @@ def register_routes(app, bot: Any, db_path: str) -> None:
             set_setting("budget_start_day", value)
             changed.append("budget_start_day")
         return {"ok": True, "changed": changed}
+
+    @router.get("/api/settings/integrations")
+    async def api_get_integration_settings():
+        """Return Zotero/embedding settings without exposing stored secrets."""
+        from cyrene.integration_settings import public_settings
+
+        return public_settings()
+
+    @router.put("/api/settings/integrations")
+    async def api_update_integration_settings(request: Request):
+        from cyrene.integration_settings import update_settings
+
+        body = await request.json()
+        if not isinstance(body, dict) or not ({"zotero", "embedding"} & set(body)):
+            return JSONResponse(
+                {"error": "zotero or embedding settings are required"}, status_code=400
+            )
+        try:
+            payload = update_settings(body)
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"ok": True, **payload}
+
+    @router.post("/api/settings/integrations/test")
+    async def api_test_integration(request: Request):
+        """Probe unsaved integration settings and return only safe metadata."""
+        from cyrene.integration_settings import (
+            merged_test_config,
+            test_embedding,
+            test_zotero,
+        )
+
+        body = await request.json()
+        service = str(body.get("service") or "").strip().lower() if isinstance(body, dict) else ""
+        draft = body.get("config", {}) if isinstance(body, dict) else {}
+        try:
+            integration_config = merged_test_config(service, draft)
+            if service == "zotero":
+                return await test_zotero(integration_config)
+            if service == "embedding":
+                return await test_embedding(integration_config)
+            raise ValueError("unknown integration service")
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            return JSONResponse(
+                {"error": f"remote service returned HTTP {status}"}, status_code=502
+            )
+        except httpx.RequestError:
+            return JSONResponse(
+                {"error": "could not reach the configured service"}, status_code=503
+            )
+        except Exception:
+            logger.info("Integration connectivity test failed", exc_info=True)
+            return JSONResponse({"error": "connection test failed"}, status_code=502)
 
     @router.put("/api/profile")
     async def api_update_profile(request: Request):
@@ -9671,7 +9895,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 logger.exception("Failed to remove chats for project %s", project_id)
             if doomed_data_key != _WORKBENCH_LEGACY_DATA_KEY:
                 try:
-                    from cyrene.config import get_knowledge_db_path, STORE_DIR
+                    from cyrene.config import get_knowledge_db_path
                     from webui.routes_workbench_memory import delete_workspace_memory
 
                     # Knowledge db is keyed on the project id (memory key).
@@ -13120,8 +13344,9 @@ def _build_live_flow_round(
             "model": _get_model(),
             "detail": {
                 "systemPrompt": (
-                    f"You are {ASSISTANT_NAME}. Two-phase loop: lightweight tool decision, "
-                    "then full tool loop with subagent spawn. Chat filter applies SOUL.md voice."
+                    f"You are {ASSISTANT_NAME}. Two-phase loop: one fixed wire bundle, "
+                    "Phase 1 policy gating, then progressive module discovery in Phase 2. "
+                    "Chat filter applies SOUL.md voice."
                 ),
                 "reasoning": _main_reasoning,
                 "tokensIn": main_usage.get("prompt_tokens") or "—",
@@ -13460,8 +13685,6 @@ async def _build_dashboard(ui_tz=None) -> dict:
         _usage_totals(info.get("messages", []))
         for info in _registry.values()
     ])
-    combined_usage = _merge_usage_totals(session_usage, subagent_usage)
-
     reminder_items = []
     for task in sorted(tasks, key=lambda item: str(item.get("next_run") or "")):
         next_run = str(task.get("next_run") or "").strip()
@@ -14468,7 +14691,6 @@ def _build_comm_edges(
 
     # Track per-pair messages for threading and weight
     pair_messages: dict[tuple[str, str], list[dict]] = {}
-    pair_index: dict[tuple[str, str, str, str], int] = {}
     # Map to deduplicate: (from_agent, to_agent, content[:80]) -> edge_index
     content_index: dict[tuple[str, str, str], int] = {}
 

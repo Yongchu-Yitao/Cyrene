@@ -295,7 +295,6 @@ class TestKnowledgeRoutes:
     async def test_get_document_raw_missing_path(self, client, temp_db):
         """Test getting raw file for document without path."""
         from cyrene.knowledge import store
-        import asyncio
 
         # Create a document without a path (edge case)
         doc = await store.create_document(
@@ -326,7 +325,7 @@ class TestKnowledgeToolSearchKnowledge:
     @pytest.mark.asyncio
     async def test_search_knowledge_tool_empty(self, temp_db):
         """Test SearchKnowledge tool on empty database."""
-        from cyrene.tools import _tool_search_knowledge
+        from cyrene.tool_impl.knowledge.search_knowledge import _tool_search_knowledge
 
         result = await _tool_search_knowledge(
             {"query": "test", "k": 6},
@@ -341,7 +340,7 @@ class TestKnowledgeToolSearchKnowledge:
     @pytest.mark.asyncio
     async def test_search_knowledge_tool_missing_query(self, temp_db):
         """Test SearchKnowledge tool with missing query."""
-        from cyrene.tools import _tool_search_knowledge
+        from cyrene.tool_impl.knowledge.search_knowledge import _tool_search_knowledge
 
         result = await _tool_search_knowledge(
             {"k": 6},
@@ -357,8 +356,7 @@ class TestKnowledgeToolSearchKnowledge:
     async def test_search_knowledge_tool_with_chunk(self, temp_db):
         """Test SearchKnowledge tool finding a document."""
         from cyrene.knowledge import store
-        from cyrene.tools import _tool_search_knowledge
-        import asyncio
+        from cyrene.tool_impl.knowledge.search_knowledge import _tool_search_knowledge
 
         # Create a test document
         doc = await store.create_document(
@@ -402,7 +400,7 @@ class TestKnowledgeToolListDocuments:
     @pytest.mark.asyncio
     async def test_lists_all_documents_and_searchability(self, temp_db):
         from cyrene.knowledge import store
-        from cyrene.tools import _tool_list_knowledge_documents
+        from cyrene.tool_impl.knowledge.list_knowledge_documents import _tool_list_knowledge_documents
 
         searchable = await store.create_document(
             temp_db,

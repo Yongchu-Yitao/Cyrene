@@ -813,7 +813,8 @@ def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
     assert 'data-wbc-thread-item="true"' in source
     assert 'stage.querySelector(".wbc-browser-window.pip")' in source
     assert 'window.addEventListener("workbench:browser-layout", scheduleBrowserAvoidance)' in source
-    assert 'new ResizeObserver(function () { scheduleBrowserAvoidance(false); })' in source
+    assert "var scheduleStickyViewportRestore = useWbcCallback(function () {" in source
+    assert source.count("scheduleStickyViewportRestore();") >= 6
     assert "new MutationObserver(function ()" in source
     assert "for (var pass = 0; pass < 5; pass++)" in source
     assert 'item.offsetTop + item.offsetHeight <= contentTop' not in source
@@ -822,15 +823,23 @@ def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
     assert 'item.style.setProperty("--wbc-browser-avoid-end"' in source
     assert "if (!preserveViewport) return;" in source
     on_scroll_block = source.split("  function onScroll() {", 1)[1].split("\n  useWbcEffect", 1)[0]
-    assert "scheduleBrowserAvoidance(false);" in on_scroll_block
+    assert "scheduleBrowserAvoidance();" in on_scroll_block
+    assert "scheduleBrowserAvoidance(false);" not in on_scroll_block
     assert "avoidanceScrollingRef.current = true;" in on_scroll_block
-    assert "avoidancePreserveRef.current = false;" in on_scroll_block
     assert "}, 120);" in on_scroll_block
     schedule_block = source.split(
-        "var scheduleBrowserAvoidance = useWbcCallback(function (preserveViewport) {", 1
+        "var scheduleBrowserAvoidance = useWbcCallback(function () {", 1
     )[1].split("// Track whether the user is reading scrollback", 1)[0]
-    assert "if (preserveViewport === false) avoidancePreserveRef.current = false;" in schedule_block
     assert "if (avoidanceScrollingRef.current) return;" in schedule_block
+    assert "applyBrowserAvoidance(true);" in schedule_block
+    assert "applyBrowserAvoidance(false);" not in schedule_block
+    sticky_restore_block = source.split(
+        "var scheduleStickyViewportRestore = useWbcCallback(function () {", 1
+    )[1].split("var applyBrowserAvoidance", 1)[0]
+    assert "if (!stickRef.current || stickyRestoreRafRef.current) return;" in sticky_restore_block
+    assert "stickyRestoreRafRef.current = requestAnimationFrame(function () {" in sticky_restore_block
+    assert "thread.scrollTop = thread.scrollHeight;" in sticky_restore_block
+    assert "if (!thread || !stickRef.current) return;" in sticky_restore_block
     thread_item_styles = styles.split(".wbc-thread-item {", 1)[1].split("}", 1)[0]
     assert "padding-inline-start: var(--wbc-browser-avoid-start, 0px);" in thread_item_styles
     assert "padding-inline-end: var(--wbc-browser-avoid-end, 0px);" in thread_item_styles
@@ -1348,8 +1357,8 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "输入内容以引导正在运行的 Agent" in (
         root / "src" / "workbench-webui" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
-    assert "workbench-chat.js?v=0.6.17" in index
-    assert "workbench-i18n.js?v=0.6.17" in index
+    assert "workbench-chat.js?v=0.7.0b1" in index
+    assert "workbench-i18n.js?v=0.7.0b1" in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -1407,10 +1416,6 @@ def test_workbench_context_tab_has_live_session_inbox_card():
     css = (root / "src" / "workbench-webui" / "workbench.css").read_text(
         encoding="utf-8"
     )
-    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
-        encoding="utf-8"
-    )
-
     context_tab = source.split("function WbcContextTab", 1)[1].split(
         "function WbcArtifactsTab", 1
     )[0]
@@ -1425,7 +1430,7 @@ def test_workbench_context_tab_has_live_session_inbox_card():
         'workbenchChat.conversationContext'
     )
     assert context_tab.index('<WbcInboxCard chat={chat} running={!!runtime} />') < context_tab.index(
-        'workbenchChat.injectedContext'
+        'workbenchChat.usedToolPackages'
     )
     assert '"/inbox"' in source
     assert 'cache: "no-store"' in live_hook
@@ -1463,9 +1468,83 @@ def test_workbench_context_tab_has_live_session_inbox_card():
     assert "padding-bottom: 10px" in inbox_card_css
     assert "justify-content: flex-end" in inbox_meta_css
     assert ".wbc-inbox-event-meta code" not in css
+
+
+def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
+    root = Path(__file__).resolve().parents[1]
+    overlay = (
+        root / "src" / "workbench-webui" / "settings-overlay.jsx"
+    ).read_text(encoding="utf-8")
+    chat = (
+        root / "src" / "workbench-webui" / "workbench-chat.jsx"
+    ).read_text(encoding="utf-8")
+    i18n = (
+        root / "src" / "workbench-webui" / "workbench-i18n.jsx"
+    ).read_text(encoding="utf-8")
+    css = (
+        root / "src" / "workbench-webui" / "workbench.css"
+    ).read_text(encoding="utf-8")
+    legacy_settings = (
+        root / "src" / "webui" / "static" / "app" / "settings.jsx"
+    ).read_text(encoding="utf-8")
+
+    capabilities = overlay.split("function CapabilitiesPanel", 1)[1].split(
+        "function DataPanel", 1
+    )[0]
+    context_tab = chat.split("function WbcContextTab", 1)[1].split(
+        "function WbcArtifactsTab", 1
+    )[0]
+    assert 'group.kind === "package"' in capabilities
+    assert 'FieldRow(' in capabilities
+    assert 'saveToolGroup(group.id, !packageEnabled)' in capabilities
+    assert 't("toolName." + group.wire_name)' in capabilities
+    assert 't("toolPackageDesc." + group.id)' in capabilities
+    assert "toggleTool(" not in capabilities
+    assert "toolList.map" not in capabilities
+    assert "saveBrowserTools" not in overlay
+
+    disclosure = chat.split("function wbcUsedToolPackages", 1)[1].split(
+        "function WbcContextTab", 1
+    )[0]
+    assert 'fetch("/api/settings/tools"' not in context_tab
+    assert '"cyrene-tool-packages-change"' not in context_tab
+    assert "wbcUsedToolPackages(chat, runtime)" in context_tab
+    assert "message.tools" in disclosure
+    assert "runtime.activities" in disclosure
+    assert "runtime.segments" in disclosure
+    assert "WBC_PROGRESSIVE_TOOL_PACKAGES.has(name)" in disclosure
+    assert "workbenchChat.usedToolPackages" in context_tab
+    assert "workbenchChat.noUsedToolPackages" in context_tab
+    assert "toolPackage.enabled" not in context_tab
+    assert "workbenchChat.injectedContext" not in context_tab
+    assert "settings.soulMd" not in context_tab
+    assert "workspacePathLabel" not in context_tab
+
+    for package_id in (
+        "code_tools",
+        "browser_tools",
+        "desktop_tools",
+        "memory_tools",
+        "knowledge_tools",
+        "task_tools",
+        "entity_tools",
+        "map_tools",
+        "subagent_tools",
+        "delivery_tools",
+        "skill_tools",
+        "integration_tools",
+    ):
+        assert i18n.count(f'"toolPackageDesc.{package_id}"') == 2
+        assert i18n.count(f'"toolName.{package_id}"') == 2
+
+    assert "toolList.map" not in legacy_settings
+    assert "saveToolPackage(group.id" in legacy_settings
+    assert 't("toolPackageDesc." + group.id)' in legacy_settings
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert '"workbenchChat.inbox.title": "Session inbox"' in i18n
     assert '"workbenchChat.inbox.title": "Agent 收件箱"' in i18n
+    assert '"workbenchChat.usedToolPackages": "Used tool packages"' in i18n
+    assert '"workbenchChat.usedToolPackages": "已使用的工具包"' in i18n
     assert '"workbenchChat.inbox.live"' not in i18n
 
 
@@ -1911,6 +1990,10 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     assert 'window.pdfjsInstallCopyFix(container, viewer)' in source
     assert 'window.pdfjsInstallSelectionSanitizer(container, viewer, eventBus)' in source
     assert 'selectionSanitizer.abort();' in source
+    assert '"/api/workbench/library/read?workspace="' in source
+    assert '<WbcViewerTab file={viewerFile} onViewed={onViewerViewed} />' in source
+    assert 'onLoad={confirmViewed}' in source
+    assert 'return <WbcPdfJsViewer file={file} url={url} onViewed={confirmViewed} />;' in source
     assert '.wbc-viewer .pdfViewer .textLayer' not in styles
     assert "width: 100%;" in styles
     assert "height: 100%;" in styles
@@ -1960,7 +2043,7 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
     assert "padding-inline: 8px;" in compact_tabs[0]
     assert "padding-inline: 2px;" in compact_tabs[1]
     assert "font-size: calc(12px * var(--wb-ui-font-scale, 1));" in compact_tabs[1]
-    assert "workbench.css?v=0.6.17" in index
+    assert "workbench.css?v=0.7.0b1" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -1982,7 +2065,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.6.17" in index
+    assert "workbench.css?v=0.7.0b1" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -2055,7 +2138,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=0.6.17" in index
+    assert "settings-overlay.js?v=0.7.0b1" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -2089,7 +2172,7 @@ def test_electron_browser_panel_uses_native_browser_bridge():
     assert "ipcMain.handle('browser:set-bounds'" in main
     assert "setAudioMuted" in main
     assert "isCurrentlyAudible" in main
-    assert "browser_tab_new" in (root / "src" / "cyrene" / "registry_tools.py").read_text(encoding="utf-8")
+    assert "browser_tab_new" in (root / "src" / "cyrene" / "tooling" / "catalog.py").read_text(encoding="utf-8")
     assert "browser: {" in preload
     assert "ipcRenderer.invoke('browser:navigate'" in preload
     assert "ipcRenderer.invoke('browser:set-context'" in preload
@@ -2098,7 +2181,7 @@ def test_electron_browser_panel_uses_native_browser_bridge():
     assert "bridge.setBounds" in view
     assert "bridge.setContext" in view
     assert "bridge.setMuted" in view
-    assert "browser_user_events" in (root / "src" / "cyrene" / "registry_tools.py").read_text(encoding="utf-8")
+    assert "browser_user_events" in (root / "src" / "cyrene" / "tooling" / "catalog.py").read_text(encoding="utf-8")
 
 
 def test_electron_browser_tabs_are_per_session_while_login_state_is_shared():
@@ -2221,7 +2304,7 @@ def test_workbench_context_picker_contains_long_workspace_paths():
     assert "text-overflow: ellipsis;" in text_rule
     assert "white-space: nowrap;" in text_rule
     assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=0.6.17" in index
+    assert "workbench-chat.js?v=0.7.0b1" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -2237,8 +2320,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=0.6.17" in index
-    assert "workbench.js?v=0.6.17" in index
+    assert "workbench-model.js?v=0.7.0b1" in index
+    assert "workbench.js?v=0.7.0b1" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -2356,7 +2439,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.models || p.primary_candidates || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=0.6.17" in index
+    assert "settings-overlay.js?v=0.7.0b1" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -2723,7 +2806,7 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=0.6.17" in index
+    assert "compiled/workbench-shortcuts.js?v=0.7.0b1" in index
 
 
 def test_workbench_about_related_actions_only_click_right_button():

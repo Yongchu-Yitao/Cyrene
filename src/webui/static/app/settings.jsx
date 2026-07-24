@@ -282,7 +282,7 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
   const [newVisionModel, setNewVisionModel] = useStateSet(createEmptyModelCandidate());
   const [secondaryModel, setSecondaryModel] = useStateSet(null);
   const [modelsSaved, setModelsSaved] = useStateSet("");
-  const [toolList, setToolList] = useStateSet([]);
+  const [toolGroups, setToolGroups] = useStateSet([]);
   const [toolsSaved, setToolsSaved] = useStateSet("");
   const [mcpServers, setMcpServers] = useStateSet([]);
   const [mcpConfigs, setMcpConfigs] = useStateSet([]);
@@ -335,8 +335,6 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
   const [notifyTelegram, setNotifyTelegram] = useStateSet(true);
   const [notifyWechat, setNotifyWechat] = useStateSet(true);
   const [agentProactive, setAgentProactive] = useStateSet(true);
-  const [toolsExpanded, setToolsExpanded] = useStateSet(false);
-
   function toggleCapability(key) {
     var next = !capabilityToggles[key];
     setCapabilityToggles({ ...capabilityToggles, [key]: next });
@@ -396,12 +394,6 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
   function toggleMcpServer(name) {
     setMcpConfigs(mcpConfigs.map(function (server) {
       return server.name === name ? { ...server, enabled: !server.enabled } : server;
-    }));
-  }
-
-  function toggleTool(name) {
-    setToolList(toolList.map(function (tool) {
-      return tool.name === name ? { ...tool, enabled: !tool.enabled } : tool;
     }));
   }
 
@@ -467,7 +459,7 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
       });
     }).catch(() => {});
     fetch("/api/settings/tools").then((r) => r.json()).then((payload) => {
-      setToolList(payload.tools || []);
+      setToolGroups(payload.tool_groups || []);
     }).catch(() => {});
     fetch("/api/settings/mcp").then((r) => r.json()).then((payload) => {
       setMcpServers(payload.servers || []);
@@ -610,20 +602,26 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
     setNewVisionModel(createEmptyModelCandidate());
   }
 
-  async function saveTools() {
+  async function saveToolPackage(packageId, nextEnabled) {
+    const previousGroups = toolGroups;
+    setToolGroups(toolGroups.map(function (group) {
+      return group.id === packageId
+        ? { ...group, enabled: nextEnabled }
+        : group;
+    }));
     setToolsSaved(t("settings.saving"));
     try {
-      const map = {};
-      toolList.forEach(function (tool) { map[tool.name] = tool.enabled; });
       const response = await fetch("/api/settings/tools", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tools: map }),
+        body: JSON.stringify({ packages: { [packageId]: nextEnabled } }),
       });
       if (!response.ok) throw new Error("HTTP " + response.status);
       setToolsSaved(t("settings.saved"));
+      window.dispatchEvent(new Event("cyrene-tool-packages-change"));
       setTimeout(() => setToolsSaved(""), 1500);
     } catch (e) {
+      setToolGroups(previousGroups);
       setToolsSaved(t("settings.error") + ": " + e.message);
     }
   }
@@ -1465,9 +1463,45 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
             <h2>{t("settings.capabilities")}</h2>
             <p className="subtitle">{t("settings.capabilitiesSubtitle")}</p>
 
-            <div className="field">
-              <div className="label">{t("settings.browserTools")}<small>{t("settings.browserToolsHint")}</small></div>
-              <div className={"toggle " + (capabilityToggles.browserTools !== false ? "on" : "")} onClick={() => toggleCapability("browserTools")}></div>
+            <div className="settings-subpane">
+              <div className="settings-block-head">
+                <div>
+                  <h3>{t("settings.toolPackages")}</h3>
+                  <p>{t("settings.toolPackagesHint")}</p>
+                </div>
+              </div>
+              {toolGroups.filter(function (group) {
+                return group.kind === "package";
+              }).map(function (group) {
+                const packageName = t("toolName." + group.wire_name);
+                return (
+                  <div className="field" key={group.id}>
+                    <div className="label">
+                      {packageName}
+                      <small>{t("toolPackageDesc." + group.id)}</small>
+                    </div>
+                    <div
+                      className={"toggle " + (group.enabled !== false ? "on" : "")}
+                      role="switch"
+                      aria-checked={group.enabled !== false}
+                      aria-label={t("settings.packageToggleLabel", { name: packageName })}
+                      tabIndex="0"
+                      onClick={() => saveToolPackage(group.id, group.enabled === false)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          saveToolPackage(group.id, group.enabled === false);
+                        }
+                      }}
+                    ></div>
+                  </div>
+                );
+              })}
+              {toolsSaved ? (
+                <div className="settings-actions">
+                  <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-3)" }}>{toolsSaved}</span>
+                </div>
+              ) : null}
             </div>
 
             <div className="settings-subpane">
@@ -1555,41 +1589,6 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
                 )}
                 <button className="btn" onClick={addMcpServer}>{t("settings.add")}</button>
               </div>
-            </div>
-
-            <div className="settings-subpane">
-              <button className="settings-collapse-head" onClick={() => setToolsExpanded(!toolsExpanded)}>
-                <div>
-                  <h3>{t("settings.tools")}</h3>
-                </div>
-                <div className="settings-collapse-meta">
-                  <span className="settings-collapse-label">{toolsExpanded ? t("settings.collapseTools") : t("settings.expandTools", { count: toolList.length })}</span>
-                  <span className={"settings-collapse-icon" + (toolsExpanded ? " open" : "")}>⌄</span>
-                </div>
-              </button>
-
-              {toolsExpanded ? (
-                <>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    {toolList.map(function (tool) {
-                      return (
-                        <div className="field" key={tool.name}>
-                          <div className="label">
-                            <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--accent)" }}>{tool.name}</span>
-                            <small>{function (key) { const translated = t(key); return translated === key ? tool.desc : translated; }("tool.desc." + tool.name)}</small>
-                          </div>
-                          <div className={"toggle " + (tool.enabled ? "on" : "")} onClick={() => toggleTool(tool.name)}></div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  <div className="settings-actions">
-                    <button className="btn primary" onClick={saveTools}>{t("settings.saveTools")}</button>
-                    <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-3)" }}>{toolsSaved}</span>
-                  </div>
-                </>
-              ) : null}
             </div>
           </div>
         ) : null}

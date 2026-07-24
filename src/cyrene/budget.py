@@ -8,14 +8,11 @@ currency matches.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from cyrene.adaptive_budget import (
-    DEFAULT_ACTIVITY_DENSITY,
-    EPSILON,
     MIN_RECALCULATION_INTERVAL_SECONDS,
     BudgetState,
     UsageRecord,

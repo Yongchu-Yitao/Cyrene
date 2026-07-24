@@ -17,6 +17,9 @@ import os
 import pathlib
 from typing import Any
 
+from cyrene.config import DATA_DIR
+from cyrene.version import get_version
+
 # Environment variables that are safe to pass to MCP subprocesses.
 # Secrets (API keys, tokens, passwords) are intentionally excluded.
 _SAFE_ENV_KEYS = frozenset({
@@ -37,9 +40,6 @@ _BLOCKED_EXECUTABLES = frozenset({
     # env/xargs/script can be used to indirectly invoke blocked executables
     "env", "xargs", "script",
 })
-
-from cyrene.config import DATA_DIR
-from cyrene.version import get_version
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +177,7 @@ class MCPServerConnection:
 
         if self.transport == "stdio":
             # Initialize via raw JSON-RPC
-            init_result = await self._json_rpc_request("initialize", {
+            await self._json_rpc_request("initialize", {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {"name": "cyrene", "version": get_version()},

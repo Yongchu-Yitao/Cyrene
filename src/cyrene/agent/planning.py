@@ -182,14 +182,13 @@ async def run_plan_flow(
     modification: str = "",
 ) -> str:
     """生成计划 → 推送「计划」tab 事件 → ask_user 三选项 → 返回 awaiting_user。"""
-    import cyrene.agent.state as _state
     from cyrene.agent.state import _publish_runtime_event
     from cyrene.agent.session import (
         _append_session_message,
         _upsert_pending_question,
         get_session_labels,
     )
-    from cyrene.tool_legacy import _json_result
+    from cyrene.tooling.runtime_support import _json_result
 
     # 1. 持久化用户可见消息（新轮：原请求；修改：本次修改意见），让聊天里能看到
     if persist_user_message:

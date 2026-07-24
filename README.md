@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.6.17-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.7.0b1-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-beta-orange" alt="Status">
 </p>
@@ -81,7 +81,7 @@ Where you actually talk to Cyrene.
 
 ---
 
-## Limitations (current as of v0.6.17)
+## Limitations (current as of v0.7.0b1)
 
 - **Single-user** — one workspace, one `SOUL.md`, no user isolation
 - **Local-only Web UI** — binds to `127.0.0.1`; the desktop app uses OS keyring auth, but the raw web server has no auth layer
@@ -125,21 +125,17 @@ Open `http://localhost:4242`. First launch runs an onboarding wizard that guides
 ### Electron app from source (development)
 
 The Electron package lives in `electron/`, not at the repository root. Before
-launching it, activate the same Python environment in which the project
-dependencies were installed (`uv sync`, `pip install -e .`, or the equivalent).
-Then use:
+launching it, install the project dependencies into the repository's `.venv`
+(`uv sync`, `pip install -e .`, or the equivalent). Then use:
 
 ```bash
 cd electron
-
-# Keep both npm and the active environment's python3 visible to Electron, and
-# make the source checkout importable by the Python backend subprocess.
-CYRENE_ROOT="$(cd .. && pwd)"
-PYTHON3_DIR="$(dirname "$(command -v python3)")"
-env PATH="$PYTHON3_DIR:$PATH" PYTHONPATH="$CYRENE_ROOT/src" npm run dev
+npm run dev
 ```
 
-You can verify the selected interpreter before launching:
+`local_cli.py` detects direct source-file execution, adds the checkout's `src/`
+directory to Python's import path, and re-executes through `.venv` when it is
+available. You can verify the environment before launching:
 
 ```bash
 PYTHONPATH="$(cd ../src && pwd)" python3 -c \
@@ -150,13 +146,9 @@ Common launch pitfalls:
 
 - Running `npm run dev` from the repository root fails because the root has no
   `package.json`; run it from `electron/`.
-- `ModuleNotFoundError: No module named 'cyrene'` means the checkout's `src/`
-  directory is not on `PYTHONPATH`. Use the command above instead of launching
-  Electron with a bare `npm run dev`.
 - `ModuleNotFoundError: No module named 'cryptography'` (or another runtime
-  dependency) means Electron resolved a different system `python3` from the one
-  used to install Cyrene. Activate the intended environment and keep its binary
-  directory first in `PATH` as shown above.
+  dependency) means the checkout's `.venv` is missing or incomplete. Install
+  the project dependencies there, then run `npm run dev` again.
 - A raw request to `http://127.0.0.1:4242/` may return `401 Unauthorized` while
   the Electron backend is healthy: the desktop window supplies its generated
   authentication token. Confirm startup using the `UIMODE=workbench`,

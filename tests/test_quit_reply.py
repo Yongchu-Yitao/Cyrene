@@ -44,16 +44,18 @@ def test_quit_reply_absent_or_invalid_returns_empty():
 
 
 def test_all_quit_tool_defs_expose_reply_param():
-    """Every quit definition the model can see (phase1 light set, deep-research
-    light set, and the full registry set used in phase2) must carry the optional
-    `reply` string param — otherwise the model cannot deliver its answer through it."""
+    """Every phase-specific or fixed-wire quit schema exposes optional reply."""
     from cyrene.agent.state import _LIGHT_TOOL_DEFS, _DEEP_RESEARCH_LIGHT_TOOL_DEFS
-    from cyrene.tool_legacy import TOOL_DEFS
+    from cyrene.tooling import get_main_wire_tool_defs
 
     def _quit_def(defs):
         return next(d for d in defs if d["function"]["name"] == "quit")
 
-    for defs in (_LIGHT_TOOL_DEFS, _DEEP_RESEARCH_LIGHT_TOOL_DEFS, TOOL_DEFS):
+    for defs in (
+        _LIGHT_TOOL_DEFS,
+        _DEEP_RESEARCH_LIGHT_TOOL_DEFS,
+        get_main_wire_tool_defs(),
+    ):
         props = _quit_def(defs)["function"]["parameters"]["properties"]
         assert "reply" in props, "quit def is missing the reply param"
         assert props["reply"]["type"] == "string"
@@ -117,6 +119,36 @@ def test_streaming_wrapup_uses_quit_reply_before_done_fallback():
     assert _wrap_final_text_from_response(wrap, []) == "文件已经发给你了。"
 
 
+def test_streaming_wrapup_never_restores_dsml_from_quit_reply():
+    from cyrene.agent.agent import _wrap_final_text_from_response
+
+    wrap = _quit_call(json.dumps({
+        "reply": (
+            '<｜｜DSML｜｜tool_calls>'
+            '<｜｜DSML｜｜invoke name="WebSearch"/>'
+            '</｜｜DSML｜｜tool_calls>'
+        ),
+    }))
+
+    assert _wrap_final_text_from_response(wrap, []) == "Done."
+
+
+def test_terminal_reply_rejects_complete_and_partial_dsml_markup():
+    from cyrene.agent.agent import _safe_terminal_reply_from_response
+
+    complete = _quit_call(json.dumps({
+        "reply": (
+            '<｜｜DSML｜｜tool_calls>'
+            '<｜｜DSML｜｜invoke name="WebSearch"/>'
+            '</｜｜DSML｜｜tool_calls>'
+        ),
+    }))
+    partial = {"content": "准备查询 <｜｜DSML｜｜tool_ca"}
+
+    assert _safe_terminal_reply_from_response(complete, []) == ""
+    assert _safe_terminal_reply_from_response(partial, []) == ""
+
+
 async def test_streaming_wrapup_prompt_rejects_placeholder_after_delivery(monkeypatch):
     """The WebUI streaming quit path re-synthesizes the final answer; that call
     must carry the same no-placeholder rule as the normal final-answer path."""
@@ -172,7 +204,6 @@ async def test_quit_reply_is_persisted_as_assistant_content(monkeypatch):
         saved_messages.append(messages)
 
     monkeypatch.setattr(agent_core, "_call_llm", fake_call_llm)
-    monkeypatch.setattr(agent_core, "get_active_tool_defs", lambda: [])
     monkeypatch.setattr(agent_core, "_save_session_messages", fake_save)
     monkeypatch.setattr(agent_core, "_append_session_message", AsyncMock())
 

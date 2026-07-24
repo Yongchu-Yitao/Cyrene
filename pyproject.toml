@@ -1,6 +1,6 @@
 [project]
 name = "cyrene"
-version = "0.6.17"
+version = "0.7.0b1"
 description = "Cyrene AI Agent — self-evolving AI companion with SOUL.md memory"
 license = "Apache-2.0"
 requires-python = ">=3.12"
@@ -55,3 +55,12 @@ packages = ["src/cyrene", "src/webui"]
 
 [tool.ruff]
 line-length = 180
+
+[tool.ruff.lint.per-file-ignores]
+# This module is the intentional compatibility facade for the split agent
+# implementation. Its imports are the public surface consumed by integrations
+# and historical monkeypatch points.
+"src/cyrene/agent/__init__.py" = ["F401"]
+# Several tests install dependency stubs in sys.modules before importing the
+# modules under test. Moving those imports to the top would defeat the fixture.
+"tests/**/*.py" = ["E402"]

@@ -3,7 +3,7 @@ import json
 import pytest
 
 from cyrene import settings_store
-from cyrene import tool_legacy
+from cyrene.tooling import native_definitions
 from cyrene.agent import state as agent_state
 from webui import routes_workbench_memory as memory
 
@@ -116,7 +116,7 @@ async def test_failed_translation_does_not_persist_wrong_language(monkeypatch, t
 def test_save_project_memory_tool_requires_user_language():
     content_description = next(
         item
-        for item in tool_legacy.TOOL_DEFS
+        for item in native_definitions.get_native_tool_defs()
         if item["function"]["name"] == "save_project_memory"
     )["function"]["parameters"]["properties"]["content"]["description"]
 
@@ -282,7 +282,7 @@ def test_workbench_memory_payload_hides_internal_task_reports(monkeypatch, tmp_p
 @pytest.mark.asyncio
 async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_path):
     from cyrene.agent import state
-    from cyrene.tool_impl import search_project_memory as tool
+    from cyrene.tool_impl.memory import search_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-test.json").write_text(
@@ -328,7 +328,7 @@ async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_
 @pytest.mark.asyncio
 async def test_search_project_memory_allows_default_workbench_project(monkeypatch, tmp_path):
     from cyrene.agent import state
-    from cyrene.tool_impl import search_project_memory as tool
+    from cyrene.tool_impl.memory import search_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-default.json").write_text(json.dumps([{
@@ -457,7 +457,7 @@ def test_default_project_memory_does_not_alias_global_short_term(monkeypatch, tm
 
 
 def test_memory_tools_are_registered_with_distinct_contracts():
-    from cyrene import tools
+    from cyrene.tooling import catalog as tools
 
     defs = {
         item["function"]["name"]: item["function"]
@@ -485,7 +485,7 @@ async def test_retire_project_memory_tool_marks_exact_memory_stale(
     monkeypatch, tmp_path
 ):
     from cyrene.agent import state
-    from cyrene.tool_impl import retire_project_memory as tool
+    from cyrene.tool_impl.memory import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-test.json").write_text(
@@ -543,7 +543,7 @@ async def test_retire_project_memory_tool_marks_exact_memory_stale(
 @pytest.mark.asyncio
 async def test_retire_project_memory_tool_is_idempotent(monkeypatch, tmp_path):
     from cyrene.agent import state
-    from cyrene.tool_impl import retire_project_memory as tool
+    from cyrene.tool_impl.memory import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     (tmp_path / "wb_memory_project-test.json").write_text(
@@ -589,7 +589,7 @@ async def test_retire_project_memory_tool_supports_default_workbench_project(
     monkeypatch, tmp_path
 ):
     from cyrene.agent import state
-    from cyrene.tool_impl import retire_project_memory as tool
+    from cyrene.tool_impl.memory import retire_project_memory as tool
 
     _isolate_memory_store(monkeypatch, tmp_path, "zh")
     path = tmp_path / "wb_memory_project-default.json"

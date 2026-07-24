@@ -12,7 +12,6 @@ from typing import Any
 from uuid import uuid4
 
 from cyrene.agent.state import (
-    _current_round_id,
     _emit_reply_stream_event,
     _pending_intermediate_user_replies,
     _ui_round_assistant_meta,

@@ -7,7 +7,6 @@ from typing import Any
 
 from cyrene.adaptive_budget import (
     DEFAULT_ACTIVITY_DENSITY,
-    EPSILON,
     AdaptiveBudgetController,
     BudgetState,
     UsageRecord,

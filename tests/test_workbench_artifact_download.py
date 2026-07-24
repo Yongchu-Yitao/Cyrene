@@ -4,7 +4,6 @@ import pytest
 
 from webui.routes import (
     _workbench_artifact_download_target,
-    _workbench_compose_ephemeral_system,
     _workbench_compose_static_system,
 )
 

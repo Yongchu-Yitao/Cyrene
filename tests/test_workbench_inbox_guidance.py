@@ -521,7 +521,7 @@ async def test_read_only_calls_on_same_resource_run_in_parallel(tmp_path):
 
 
 def test_tool_registry_resolves_parallel_safety_metadata_from_arguments(tmp_path):
-    from cyrene.registry_tools import TOOL_DEFS, TOOL_METADATA, get_tool_execution_metadata
+    from cyrene.tooling.catalog import TOOL_DEFS, TOOL_METADATA, get_tool_execution_metadata
 
     target = tmp_path / "nested" / "file.txt"
     read_meta = get_tool_execution_metadata("Read", {"path": str(target)})
@@ -930,10 +930,6 @@ async def test_main_agent_resumes_from_tool_result_and_applies_runtime_guidance(
     monkeypatch.setattr(agent_mod, "_append_session_message", noop)
     monkeypatch.setattr(agent_mod, "_save_session_messages", noop)
     monkeypatch.setattr(agent_mod, "_publish_runtime_event", noop)
-    monkeypatch.setattr(agent_mod, "get_active_tool_defs", lambda: [
-        {"type": "function", "function": {"name": "Read", "description": "read", "parameters": {"type": "object"}}},
-        {"type": "function", "function": {"name": "quit", "description": "quit", "parameters": {"type": "object"}}},
-    ])
 
     round_token = state_mod._current_round_id.set("round_agent")
     inbox_token = _workbench_agent_inbox.set(inbox)
@@ -1012,10 +1008,6 @@ async def test_main_agent_runs_independent_read_calls_in_parallel(monkeypatch, t
     monkeypatch.setattr(agent_mod, "_append_session_message", noop)
     monkeypatch.setattr(agent_mod, "_save_session_messages", noop)
     monkeypatch.setattr(agent_mod, "_publish_runtime_event", noop)
-    monkeypatch.setattr(agent_mod, "get_active_tool_defs", lambda: [
-        {"type": "function", "function": {"name": "Read", "description": "read", "parameters": {"type": "object"}}},
-        {"type": "function", "function": {"name": "quit", "description": "quit", "parameters": {"type": "object"}}},
-    ])
 
     round_token = state_mod._current_round_id.set("round_parallel")
     inbox_token = _workbench_agent_inbox.set(inbox)
@@ -1077,7 +1069,6 @@ async def test_main_agent_applies_guidance_sent_while_model_call_is_in_flight(mo
     monkeypatch.setattr(agent_mod, "_append_session_message", noop)
     monkeypatch.setattr(agent_mod, "_save_session_messages", noop)
     monkeypatch.setattr(agent_mod, "_publish_runtime_event", noop)
-    monkeypatch.setattr(agent_mod, "get_active_tool_defs", lambda: [])
 
     round_token = state_mod._current_round_id.set("round_model_guidance")
     inbox_token = _workbench_agent_inbox.set(inbox)
@@ -1165,9 +1156,6 @@ async def test_main_agent_keeps_wrap_reply_and_continues_with_late_guidance(monk
     monkeypatch.setattr(agent_mod, "_append_session_message", noop)
     monkeypatch.setattr(agent_mod, "_save_session_messages", fake_save)
     monkeypatch.setattr(agent_mod, "_publish_runtime_event", noop)
-    monkeypatch.setattr(agent_mod, "get_active_tool_defs", lambda: [
-        {"type": "function", "function": {"name": "quit", "parameters": {}}},
-    ])
 
     async def stream_noop(_event):
         return None
@@ -1311,7 +1299,7 @@ def test_learned_skills_use_progressive_disclosure_without_auto_router():
     source = Path("src/cyrene/agent/agent.py").read_text(encoding="utf-8")
     assert "try_route_and_execute_skill" not in source
     assert "Progressive disclosure" in _MAIN_AGENT_PROMPT
-    assert "call `GetLearnedSkill` only for a plausibly relevant" in _MAIN_AGENT_PROMPT
+    assert "call `skill.get_learned` only for a plausibly relevant" in _MAIN_AGENT_PROMPT
 
 
 def test_subagent_monitoring_has_no_fixed_two_second_completion_sleep():

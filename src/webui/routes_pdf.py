@@ -4,7 +4,6 @@ import html
 import json
 import logging
 import re
-from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse

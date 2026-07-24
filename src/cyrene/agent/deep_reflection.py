@@ -369,7 +369,18 @@ def _failed_unknown_tool_call_ids(messages: list[dict[str, Any]]) -> set[str]:
         if not isinstance(message, dict) or message.get("role") != "tool":
             continue
         content = str(message.get("content") or "")
-        if "Unknown tool:" not in content:
+        unknown = "Unknown tool:" in content
+        if not unknown:
+            try:
+                payload = json.loads(content)
+                error = payload.get("error") if isinstance(payload, dict) else None
+                unknown = (
+                    isinstance(error, dict)
+                    and error.get("type") in {"unknown_tool", "unknown_capability"}
+                )
+            except (TypeError, json.JSONDecodeError):
+                unknown = False
+        if not unknown:
             continue
         call_id = str(message.get("tool_call_id") or "").strip()
         if call_id:

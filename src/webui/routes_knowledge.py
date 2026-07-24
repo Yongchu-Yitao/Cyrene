@@ -16,7 +16,7 @@ from cyrene.attachments import (
     is_exported_attachment_path,
     safe_attachment_filename,
 )
-from cyrene.tools import _resolve_workspace_path
+from cyrene.tooling.runtime_support import _resolve_workspace_path
 
 
 def _safe_upload_name(filename: str) -> str:

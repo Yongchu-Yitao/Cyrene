@@ -27,13 +27,9 @@ from cyrene.agent.state import (
     ASSISTANT_NAME,
     _call_llm,
     _caller_type,
-    _current_agent_id,
     _current_round_id,
-    _current_client_request_id,
     _current_session_id,
     _ensure_session,
-    _pending_compressors,
-    _pending_label_refreshes,
     _persist_base_messages,
     _persist_history_prefix_len,
     _persist_insert_at,
@@ -42,7 +38,6 @@ from cyrene.agent.state import (
     _REPORT_REF_MAX_PREVIEW,
     _REPORT_REF_PREFIX,
     _session_state_file,
-    _session_state_lock,
 )
 from cyrene.llm import _assistant_text
 from cyrene.task_lifecycle import cancel_and_wait, track_task

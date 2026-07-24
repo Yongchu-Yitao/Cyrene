@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.7.0b1] - 2026-07-23
+
+这是 `0.7.0` 的第一个测试版，完整包含 `v0.6.17` 之后的项目文献库、主动工作行为调整，以及渐进式工具包协议重构和缓存收尾。
+
+- **Workbench 新增项目隔离的文献库** — 知识页现在提供收藏夹、标签云、表格/卡片列表、检索与筛选、可调整高度的详情工作区和右侧检查器。可以管理题名、作者、摘要、DOI、ISBN、期刊/出版社、卷期页码、年份、语言、引用键、阅读状态、星标、标签、笔记、附件和条目关系；列表、详情、空态、错误态、响应式布局及明暗主题均保持既有 Workbench 风格。
+- **原有知识库文档无需迁移即可进入文献工作流** — 每个项目现有的 `kb_documents` 会在同一份 `kb_<project>.db` 中幂等映射为结构化文献条目，并复用原附件和索引记录，不复制文件、不跨项目读取、不制造重复条目。只有来源元数据明确提供的 abstract 才会显示为文献摘要，自动索引摘要与正文仍留在内容和检索路径中，不再被错误标成原文摘要。
+- **导入、同步和引用链路完整可用** — 支持上传普通文档/PDF、导入 CSL JSON、RIS 与 BibTeX，支持 Zotero Local API 连接测试、项目级同步、集合/笔记/批注/附件及删除状态同步，并可选择复制附件。条目可以生成 IEEE/APA/MLA/Chicago 文本引用和 BibTeX；引用菜单支持直接复制纯文本或 BibTeX。
+- **阅读器与文献状态联动** — 从 Workbench 打开文献附件会记录最后阅读时间并更新阅读状态；内容检查器优先显示原附件，图片内嵌、音视频原生播放、PDF 内嵌阅读、Markdown 安全渲染，其他二进制文件提供明确的打开文件入口。切换条目或内容页签会回到顶部，长列表和详情区域分别滚动，互不遮挡。
+- **Agent 可以按需检索文献证据并维护元数据** — 新增结构化文献列举、混合检索和元数据更新能力。检索将文献字段、项目知识全文/向量结果与附件关联起来；Agent 被要求先使用项目知识，缺失元数据才通过公开网页核验，并且只能写回已经验证的字段。
+- **工具不再把上百个完整 schema 一次性塞给模型** — 主 Agent 现在始终看到固定的直接工具，以及最多 12 个稳定工具包入口；进入某个包后按 `discover → describe → invoke` 渐进披露能力 ID、选中能力的参数 schema 和实际调用。代码、浏览器、桌面、记忆、知识、任务、实体、地图、子代理、交付、技能和集成各自成为独立模块，MCP 和已学习技能也通过适配器按需进入目录。
+- **Phase 1 与 Phase 2 保持缓存稳定，同时保留渐进披露** — 对普通主 Agent，同一轮的两个阶段使用字节稳定、顺序确定且完全相同的 wire tool 数组；Phase 1 通过运行时策略只允许决策动作，Phase 2 再执行模块能力。启用设置不变时，历史前缀和工具前缀可持续复用；Deep Research 的篇幅选择握手继续使用专用轻量工具集，不受这条缓存约束。
+- **工具包开关真正控制 schema、提示词和执行权限** — 设置 → 能力改为每个工具包一个与现有浏览器开关一致的开关，移除单个工具开关。关闭工具包后，其 gateway 不会出现在 Phase 1/Phase 2 的工具数组中，相应的系统提示词段落也不会被拼接；运行时仍会拒绝旧会话或重放中的过期调用。`AnalyzeAttachment` 与文件、Shell、网页搜索等直接工具始终暴露，不受工具包开关影响。
+- **对话侧栏现在显示“已使用的工具包”** — 右侧 Context 面板不再把设置中打开的全部工具包误称为已披露能力，而是从持久化消息、当前运行进度、活动和流式片段中汇总 Agent 实际调用过的 gateway；没有使用时显示明确空态。工具包和各具体工具名称/描述均复用中英文 i18n，设置页和运行卡片不再显示未经翻译的内部名称。
+- **最终回复少一次不必要的全历史重建** — Phase 2 已经返回完整正文或有效 `quit(reply)` 时，会直接交付并持久化该终止回复，不再无条件删除它并发起第二次 full-history wrap-up。空回复、占位回复或疑似 DSML 的输出仍进入受保护的收尾路径，并继续允许模型在确有需要时重新打开工具执行。
+- **DSML 防泄漏覆盖流式、终止参数和持久化路径** — 既有流式过滤器继续阻止工具标记进入界面；完整及被截断的 DSML 前缀现在也会在直接终止、`quit(reply)`、无工具重试和最终持久化前统一拦截。收尾模型仍输出标记时会重试纯文本，无法安全清理时不会把残留协议文本回显给用户。
+- **本地 Electron 开发启动更直接** — 在 `electron/` 目录执行 `npm run dev` 即可完整启动。`local_cli.py` 会识别源码直跑，补入 checkout 的 `src/`，并在仓库 `.venv` 可用时自动切换到该解释器；不再要求手工设置 `PYTHONPATH` 或拼接 Python 路径。
+- **主动 Agent 更像受约束的自主工作轮** — 主动触发会优先推进一个有依据、可验证的小任务，而不是生成社交式问候；不会抢占正在运行的最新 Workbench 对话，写入权限限制为新建增量文件/记录，禁止修改、覆盖、移动、重命名或删除现有文件，并继续遵循用户语言和未回复退避策略。
+
+### 技术细节
+
+- 新建 `cyrene.tooling` 控制平面：`types` 定义工具、快照与执行上下文；`catalog` 合并原生/MCP/已学习技能能力；`packs` 声明 12 个稳定模块及 capability 归属；`wire` 生成确定性主 Agent/子代理工具数组和 hash；`gateway` 解析 `discover`、`describe`、`invoke`；`validation`、`results`、`observability` 和 `executor` 统一参数校验、稳定错误协议、遥测及具体执行。
+- 每个 Agent run 会冻结一份 actor-specific capability snapshot。发现、描述、调用和并发调度都读取同一份快照，避免 MCP 连接完成、设置变化或动态技能注册在执行中途改变 schema；主 Agent 与子代理按 actor policy 返回不同能力，main-only 工具不会因为兼容旧名称而越权。
+- 直接工具契约固定为决策/控制工具、`Read`、`Write`、`Edit`、`Glob`、`Grep`、`Bash`、`WebSearch`、`WebFetch` 与 `AnalyzeAttachment`；其中 `AnalyzeAttachment` 的提示会在知识工具包启用时追加“先从 knowledge_tools 获取准确路径”，关闭知识工具包时自动删除这一依赖说明。
+- 工具实现从扁平 `tool_impl/`、`code_tools/`、`registry_tools.py`、`tool_executor.py` 和 `tool_legacy.py` 重组为 `tool_impl/{control,core,code,browser,desktop,memory,knowledge,task,entity,map,subagent,delivery,skills}`。公共 `cyrene.tools` 保持薄兼容门面，已保存对话、旧技能重放及现有导入点仍可解析 concrete tool name，但 concrete schema 不再暴露给模型。
+- 原有 `work_tools` 语义统一为 `task_tools`，`collaboration_tools` 统一为 `subagent_tools`，`research_tools` 统一为覆盖知识库和文献库的 `knowledge_tools`；实体与地图从混合分组拆为 `entity_tools` 和 `map_tools`。Deep Research 内部流程、篇幅确认和研究专用提示保持独立。
+- 主提示词改为带工具包边界的模板。渲染时只保留启用包的 inventory 和专属规则，关闭浏览器、桌面、记忆、知识、任务、实体、地图、子代理、交付、技能或集成包会同步移除其名称、能力 ID 和操作说明；主 Agent、内部执行 Agent、子代理、Deep Reflection、Planning、Auto Review 和行为学习涉及的旧工具名均已迁移或经兼容层处理。
+- Phase 1 仍接收完整稳定 wire 数组，但通过显式 phase override 记录为 `phase1`；普通执行和流式收尾按实际 tools 数组记录为 `phase2`，不再出现“携带 27 个工具却标成 `no_tools`”的错误遥测。token usage 记录补齐 session ID，便于按 Workbench 对话核对缓存命中。
+- 终止回复重构保留了原设计中“写最终答案时发现缺少来源，可以重新调用工具”的能力；只有当前响应已经是安全、非占位的最终文本时才跳过 wrap-up。终止正文优先于同时存在的 `quit(reply)`，避免较短 reply 覆盖完整回答；`quit(reply)` 仅作为无正文 tool-only 终止的兜底。
+- `_DsmlStreamFilter`、DSML tool-call 规范化和最终文本校验共同构成三层防护：实时 delta 不显示协议标记，provider 返回的文本工具调用可恢复为结构化调用，无法恢复的完整/半截标记不会进入终止回复或会话历史。
+- 工具包设置保存在独立 `enabled_tool_packs` 配置中；API 返回稳定的 package group、成员数、配置状态和实际状态，并对未知包、非布尔值及部分更新做原子校验。旧的单工具设置字段仅保留兼容读取/写入，当前 UI 不再提供单工具启停入口。
+- Classic WebUI 与 Workbench 设置页使用同一套 12 包顺序、标题与描述 i18n；浏览器开关不再是特殊配置字段，而是直接控制整个 `browser_tools`。所有 switch 带可访问名称，交互视觉、间距、动效和明暗主题沿用现有样式。
+- Workbench Context 面板的使用记录不读取设置 API，而是只接受实际消息和 runtime activity 中的 12 个 gateway 名称，去重后按首次使用顺序显示，避免把“可用”“启用”“已披露”和“已使用”混为一谈。
+- 文献库在项目知识 SQLite 中新增条目、作者、集合、成员关系、附件、笔记、批注、关系、同步状态和全文索引表；删除默认软删除并支持恢复，Zotero provider key、library version 与删除流用于幂等增量同步。
+- 文献搜索同时覆盖结构化字段、FTS 和现有 knowledge retrieval，并将命中的 `kb_document_id` 反向关联到条目；Agent 工具对返回数量、查询范围、元数据写入字段和错误结果做边界限制。
+- Zotero 与 Embedding 配置移入 General 设置的标准 field-row，支持连接测试、保存、密钥清除和当前项目导入；密钥只返回“已配置”状态。Embedding 支持 OpenAI-compatible 与 Ollama 端点、模型和维度设置。
+- 文献 UI 使用项目级 API client 和 generation guard，切换项目会取消/忽略过期请求；独立列表滚动、可调整详情高度、折叠分类组、固定表头、附件感知内容渲染、安全 Markdown、引用复制、元数据编辑和删除/恢复均有中英文文案及回归覆盖。
+- 主动轮使用统一主 Agent loop，但通过 system-initiated policy 禁止询问用户、拒绝对现有文件的 Edit/破坏性 Shell 写入，只允许在新路径创建增量产物；静默 `quit` 不会被普通 final-reply reconstruction 人为扩写成未请求的消息。
+- 全仓 Ruff 基线已清零：移除真实的未使用导入、局部变量和无意义 f-string，整理延迟导入位置；`cyrene.agent` 的兼容门面和测试在安装依赖 stub 后再导入被测模块的顺序采用窄范围显式例外，避免为了“消警告”破坏历史导入接口或测试初始化语义。
+- macOS 重签名安装包统一采用 Electron 的 SemVer 版本串；当 Python 的 PEP 440 预发布写法（如 `0.7.0b1`）与 Electron 写法（如 `0.7.0-beta.1`）不同时，构建会覆盖重签名前产物并清理当前版本别名，发布页只保留一份经过重签名的 DMG。
+- 开发文档、架构图、工具扩展指南、使用说明、README、本地启动排障、设计 QA 和文献库同视口对比证据已同步；WebUI 静态资源缓存戳、微信通道、Python 元数据、Electron 元数据及 lockfile 均更新到本测试版。
+- 发布前验证包括 1,227 项完整 pytest、全仓 Ruff 零告警、Python 编译、43 个 Workbench JSX 模块与 PDF.js 资源构建、44 项 Node App Use 测试、Electron JavaScript 语法检查、Python wheel/sdist 构建、macOS 原生 Electron 安装包构建与打包后二进制冒烟，以及 lockfile 和版本一致性检查。
+
+---
+
 ## [0.6.17] - 2026-07-23
 
 本版本完整包含 `0.6.16-fix` 的全部修复，并继续完善浏览器浮窗交互与 Workbench 长对话浏览体验。

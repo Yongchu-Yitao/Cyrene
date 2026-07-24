@@ -7,7 +7,6 @@ move the task to `review`, preserving the plan, its revision, and any artifacts.
 import json
 import asyncio
 
-import pytest
 
 
 def test_classify_intent_maps_done_to_finalize(monkeypatch):

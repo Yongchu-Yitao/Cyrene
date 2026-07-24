@@ -59,6 +59,9 @@ _DEFAULT_ENV: dict[str, str] = {
     "WECHAT_BOT_TOKEN": "",
     "WECHAT_OWNER_ID": "",
     "AMAP_API_KEY": "",
+    "EMBEDDING_BASE_URL": "",
+    "EMBEDDING_API_KEY": "",
+    "EMBEDDING_MODEL": "",
     "ASSISTANT_NAME": "Cyrene",
     "MAX_TOOL_ROUNDS": "15",
     "MAX_HISTORY_MESSAGES": "40",
@@ -108,6 +111,7 @@ _DEFAULT_SETTINGS: dict = {
     "vision_models": _DEFAULT_VISION_MODELS,
     "secondary_model": {"model": "", "name": "", "api_key": "", "base_url": "", "ctx_limit": 0, "max_concurrency": 0},
     "enabled_tools": _DEFAULT_ENABLED_TOOLS,
+    "enabled_tool_packs": {},
     "workspace_history": [],
     "workspace_active": True,
     "soul_active": True,
@@ -117,11 +121,24 @@ _DEFAULT_SETTINGS: dict = {
     "redact_secrets": True,
     "notify_telegram": True,
     "notify_wechat": True,
+    "zotero": {
+        "base_url": "http://127.0.0.1:23119/api",
+        "auto_sync": False,
+        "copy_attachments": True,
+    },
+    "embedding": {
+        "provider": "openai_compatible",
+        "base_url": "",
+        "api_key": "",
+        "model": "",
+        "dimensions": 0,
+    },
 }
 
 _EDITABLE_ENV_KEYS = {
     "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
     "TELEGRAM_BOT_TOKEN", "WECHAT_BOT_TOKEN", "AMAP_API_KEY",
+    "EMBEDDING_BASE_URL", "EMBEDDING_API_KEY", "EMBEDDING_MODEL",
 }
 
 # ---------------------------------------------------------------------------
@@ -529,6 +546,9 @@ def get_editable_env_meta() -> list[dict]:
         {"key": "TELEGRAM_BOT_TOKEN", "label": "Telegram Token", "masked": True},
         {"key": "WECHAT_BOT_TOKEN", "label": "WeChat Token", "masked": True},
         {"key": "AMAP_API_KEY", "label": "高德地图 Key", "masked": True},
+        {"key": "EMBEDDING_BASE_URL", "label": "Embedding Endpoint", "masked": False},
+        {"key": "EMBEDDING_API_KEY", "label": "Embedding API Key", "masked": True},
+        {"key": "EMBEDDING_MODEL", "label": "Embedding Model", "masked": False},
     ]
     result = []
     for m in meta:
@@ -762,6 +782,23 @@ def is_tool_enabled(name: str) -> bool:
     if name == "quit":
         return True
     return get_enabled_tools().get(name, True)
+
+
+def get_enabled_tool_packs() -> dict[str, bool]:
+    return dict(get_setting("enabled_tool_packs", {}))
+
+
+def save_enabled_tool_packs(packs: dict[str, bool]) -> None:
+    clean = {
+        str(name): bool(enabled)
+        for name, enabled in packs.items()
+        if str(name).strip()
+    }
+    set_setting("enabled_tool_packs", clean)
+
+
+def is_tool_pack_enabled(wire_name: str) -> bool:
+    return get_enabled_tool_packs().get(str(wire_name or ""), True)
 
 
 def get_spawn_policy() -> str:

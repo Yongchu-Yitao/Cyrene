@@ -1652,6 +1652,18 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     setSideVisible(true);
   }
 
+  function markViewerFileRead(file) {
+    if (!file || !projectId || !file.url) return;
+    fetch("/api/workbench/library/read?workspace=" + encodeURIComponent(projectId), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        attachment_url: String(file.url || ""),
+        file_name: String(file.name || ""),
+      }),
+    }).catch(function () { /* Reading history must never interrupt the viewer. */ });
+  }
+
   function loadSubagents(chatId, roundId) {
     if (!chatId) {
       setSubagentData({ rounds: [], activeRoundId: "", agents: [], messages: [] });
@@ -2543,6 +2555,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
         onTabChange={setSideTab}
         viewerFile={viewerFile}
         onOpenFile={openViewer}
+        onViewerViewed={markViewerFileRead}
         onRename={handleRename}
         onDelete={handleDelete}
         onToTask={handleToTask}
@@ -3407,7 +3420,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   var stickRef = useWbcRef(true);
   var [showScrollToBottom, setShowScrollToBottom] = useWbcState(false);
   var avoidanceRafRef = useWbcRef(0);
-  var avoidancePreserveRef = useWbcRef(false);
+  var stickyRestoreRafRef = useWbcRef(0);
   var avoidanceScrollingRef = useWbcRef(false);
   var avoidanceScrollTimerRef = useWbcRef(null);
   var durableMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
@@ -3443,6 +3456,22 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     }
     if (lastUserId && lastAssistantId) break;
   }
+
+  // Content can finish reflowing one frame after a message/ PiP resize. A
+  // scrollHeight change does not emit a scroll event, so the synchronous
+  // bottom restoration alone can still leave the live tail a few pixels above
+  // the real bottom. Re-assert it after layout settles, but only while the
+  // reader has not intentionally left the live tail.
+  var scheduleStickyViewportRestore = useWbcCallback(function () {
+    if (!stickRef.current || stickyRestoreRafRef.current) return;
+    stickyRestoreRafRef.current = requestAnimationFrame(function () {
+      stickyRestoreRafRef.current = 0;
+      var thread = scrollRef.current;
+      if (!thread || !stickRef.current) return;
+      thread.scrollTop = thread.scrollHeight;
+      setShowScrollToBottom(false);
+    });
+  }, []);
 
   var applyBrowserAvoidance = useWbcCallback(function (preserveViewport) {
     var stage = stageRef.current;
@@ -3524,21 +3553,20 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
       if (!changed) break;
       restoreViewport();
     }
-  }, []);
+    scheduleStickyViewportRestore();
+  }, [scheduleStickyViewportRestore]);
 
-  var scheduleBrowserAvoidance = useWbcCallback(function (preserveViewport) {
-    if (preserveViewport === false) avoidancePreserveRef.current = false;
-    else if (!avoidanceScrollingRef.current) avoidancePreserveRef.current = true;
+  var scheduleBrowserAvoidance = useWbcCallback(function () {
     if (avoidanceRafRef.current) return;
     avoidanceRafRef.current = requestAnimationFrame(function () {
-      var shouldPreserve = avoidancePreserveRef.current;
-      avoidancePreserveRef.current = false;
       avoidanceRafRef.current = 0;
       // Width changes while a wheel/trackpad gesture is active alter message
       // heights and fight the browser's scroll position. Keep the current lane
-      // assignment stable until the gesture settles, then recompute once.
+      // assignment stable until the gesture settles, then recompute once. Once
+      // it has settled, preserve either the live-tail bottom or the reader's
+      // first visible entry because the narrower lane can increase row height.
       if (avoidanceScrollingRef.current) return;
-      applyBrowserAvoidance(shouldPreserve);
+      applyBrowserAvoidance(true);
     });
   }, [applyBrowserAvoidance]);
 
@@ -3548,22 +3576,29 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     if (!el) return;
     stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     setShowScrollToBottom(!stickRef.current);
+    if (!stickRef.current && stickyRestoreRafRef.current) {
+      cancelAnimationFrame(stickyRestoreRafRef.current);
+      stickyRestoreRafRef.current = 0;
+    }
     // A wheel/trackpad gesture owns both scrollTop and the visible message
     // anchor. Do not change avoided message widths during the gesture: their
     // height reflow would make the transcript jump in the opposite direction.
     avoidanceScrollingRef.current = true;
-    avoidancePreserveRef.current = false;
     if (avoidanceScrollTimerRef.current) clearTimeout(avoidanceScrollTimerRef.current);
     avoidanceScrollTimerRef.current = setTimeout(function () {
       avoidanceScrollTimerRef.current = null;
       avoidanceScrollingRef.current = false;
-      scheduleBrowserAvoidance(false);
+      scheduleStickyViewportRestore();
+      scheduleBrowserAvoidance();
     }, 120);
   }
 
   useWbcEffect(function () {
     var el = scrollRef.current;
-    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+    if (el && stickRef.current) {
+      el.scrollTop = el.scrollHeight;
+      scheduleStickyViewportRestore();
+    }
   }, [messages.length, runtime && runtime.text, runtime && runtime.progress.length, runtime && runtime.activities && runtime.activities.length, runtime && runtime.segments && runtime.segments.length]);
 
   useWbcEffect(function () {
@@ -3571,6 +3606,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     setShowScrollToBottom(false);
     var el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
+    scheduleStickyViewportRestore();
     scheduleBrowserAvoidance();
   }, [chat && chat.id]);
 
@@ -3580,7 +3616,10 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     if (!stage || !thread) return undefined;
     var observedItems = typeof WeakSet === "function" ? new WeakSet() : null;
     var itemObserver = typeof ResizeObserver === "function"
-      ? new ResizeObserver(function () { scheduleBrowserAvoidance(false); })
+      ? new ResizeObserver(function () {
+          scheduleStickyViewportRestore();
+          scheduleBrowserAvoidance();
+        })
       : null;
     function observeItems() {
       if (!itemObserver) return;
@@ -3592,12 +3631,16 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     }
     observeItems();
     var stageObserver = typeof ResizeObserver === "function"
-      ? new ResizeObserver(scheduleBrowserAvoidance)
+      ? new ResizeObserver(function () {
+          scheduleStickyViewportRestore();
+          scheduleBrowserAvoidance();
+        })
       : null;
     if (stageObserver) stageObserver.observe(stage);
     var mutationObserver = typeof MutationObserver === "function"
       ? new MutationObserver(function () {
           observeItems();
+          scheduleStickyViewportRestore();
           scheduleBrowserAvoidance();
         })
       : null;
@@ -3608,7 +3651,8 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     return function () {
       if (avoidanceRafRef.current) cancelAnimationFrame(avoidanceRafRef.current);
       avoidanceRafRef.current = 0;
-      avoidancePreserveRef.current = false;
+      if (stickyRestoreRafRef.current) cancelAnimationFrame(stickyRestoreRafRef.current);
+      stickyRestoreRafRef.current = 0;
       avoidanceScrollingRef.current = false;
       if (avoidanceScrollTimerRef.current) clearTimeout(avoidanceScrollTimerRef.current);
       avoidanceScrollTimerRef.current = null;
@@ -3618,7 +3662,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
       window.removeEventListener("workbench:browser-layout", scheduleBrowserAvoidance);
       window.removeEventListener("resize", scheduleBrowserAvoidance);
     };
-  }, [scheduleBrowserAvoidance, project && project.id]);
+  }, [scheduleBrowserAvoidance, scheduleStickyViewportRestore, project && project.id]);
 
   useWbcEffect(function () {
     scheduleBrowserAvoidance();
@@ -3631,6 +3675,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     setShowScrollToBottom(false);
     var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     el.scrollTo({ top: el.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
+    scheduleStickyViewportRestore();
   }
 
   if (!project) {
@@ -5187,6 +5232,7 @@ function WbcSide({
   onTabChange,
   viewerFile,
   onOpenFile,
+  onViewerViewed,
   onRename,
   onDelete,
   onToTask,
@@ -5306,7 +5352,7 @@ function WbcSide({
         {activeTab === "artifacts" && <WbcArtifactsTab chat={chat} onOpenFile={onOpenFile} />}
         {activeTab === "changes" && <WbcChangesTab chatId={activeChatId} />}
         {activeTab === "branches" && <WbcBranchTab chats={chats} activeChatId={activeChatId} onSelectChat={onSelectChat} />}
-        {activeTab === "viewer" && <WbcViewerTab file={viewerFile} />}
+        {activeTab === "viewer" && <WbcViewerTab file={viewerFile} onViewed={onViewerViewed} />}
         {activeTab === "map" && <WbcMapTab chatId={chat ? chat.id : ""} active={true} />}
         {activeTab === "browser" && !browserSuppressed && (
           typeof window.BrowserViewportPanel !== "undefined"
@@ -5840,7 +5886,7 @@ function WbcPlanTab({ plan }) {
 
 // ---- PDF.js viewer (replaces <embed> for PDF files) -------------------------
 
-function WbcPdfJsViewer({ file, url }) {
+function WbcPdfJsViewer({ file, url, onViewed }) {
   var containerRef = useWbcRef(null);
   var viewerRef = useWbcRef(null);
   var [pageNum, setPageNum] = useWbcState(1);
@@ -5896,6 +5942,7 @@ function WbcPdfJsViewer({ file, url }) {
       setPageNum(1);
       setLoading(false);
       setScale(viewer.currentScale);
+      if (onViewed) onViewed();
     }).catch(function (err) {
       if (!cancelled) {
         clearTimeout(timer);
@@ -6088,13 +6135,20 @@ function WbcPdfJsViewer({ file, url }) {
 
 // ---- side viewer (PDF / HTML / Markdown / 代码 / 图片) ----------------------
 
-function WbcViewerTab({ file }) {
+function WbcViewerTab({ file, onViewed }) {
   var kind = wbcFileViewKind(file);
   var [text, setText] = useWbcState("");
   var [htmlMode, setHtmlMode] = useWbcState("rendered");
   var [failed, setFailed] = useWbcState(false);
   var codeRef = useWbcRef(null);
+  var viewedRef = useWbcRef("");
   var url = file && file.url;
+  function confirmViewed() {
+    var key = String(url || "") + "::" + String(file && file.name || "");
+    if (!key || viewedRef.current === key) return;
+    viewedRef.current = key;
+    if (onViewed) onViewed(file);
+  }
   var htmlPreview = useWbcMemo(function () {
     return kind === "html" ? wbcHtmlPreviewDocument(text, url) : "";
   }, [text, url, kind]);
@@ -6111,7 +6165,10 @@ function WbcViewerTab({ file }) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.text();
       }).then(function (body) {
-        if (!cancelled) setText(body);
+        if (!cancelled) {
+          setText(body);
+          confirmViewed();
+        }
       }).catch(function () { if (!cancelled) setFailed(true); });
     }
     return function () { cancelled = true; };
@@ -6128,7 +6185,7 @@ function WbcViewerTab({ file }) {
 
   // PDF is handled entirely by its own component — skip the wrapper.
   if (kind === "pdf") {
-    return <WbcPdfJsViewer file={file} url={url} />;
+    return <WbcPdfJsViewer file={file} url={url} onViewed={confirmViewed} />;
   }
 
   var head = (
@@ -6149,7 +6206,7 @@ function WbcViewerTab({ file }) {
   if (failed) {
     body = <p className="workbench-muted wbc-viewer-pad">{wbcT("workbenchChat.viewerLoadFailed", "File failed to load.")}{url ? " " + wbcT("workbenchChat.viewerOpenFallback", "Try opening it in a new window.") : ""}</p>;
   } else if (kind === "image") {
-    body = <div className="wbc-viewer-scroll center"><img className="wbc-viewer-img" src={url} alt={file.name || "image"} /></div>;
+    body = <div className="wbc-viewer-scroll center"><img className="wbc-viewer-img" src={url} alt={file.name || "image"} onLoad={confirmViewed} /></div>;
   } else if (kind === "html") {
     body = htmlMode === "rendered"
       ? <iframe key={url + "::" + (text ? "1" : "0")} className="wbc-viewer-iframe" sandbox="allow-scripts" srcDoc={htmlPreview} title={file.name || "HTML"} />
@@ -6954,15 +7011,52 @@ function WbcInboxCard({ chat, running }) {
   );
 }
 
+var WBC_PROGRESSIVE_TOOL_PACKAGES = new Set([
+  "code_tools",
+  "browser_tools",
+  "desktop_tools",
+  "memory_tools",
+  "knowledge_tools",
+  "task_tools",
+  "entity_tools",
+  "map_tools",
+  "subagent_tools",
+  "delivery_tools",
+  "skill_tools",
+  "integration_tools",
+]);
+
+function wbcUsedToolPackages(chat, runtime) {
+  var used = [];
+  var seen = new Set();
+  function addToolName(value) {
+    var name = String(value || "").trim();
+    if (!WBC_PROGRESSIVE_TOOL_PACKAGES.has(name) || seen.has(name)) return;
+    seen.add(name);
+    used.push(name);
+  }
+  (chat && Array.isArray(chat.messages) ? chat.messages : []).forEach(function (message) {
+    (message && Array.isArray(message.tools) ? message.tools : []).forEach(function (tool) {
+      addToolName(tool && tool.name);
+    });
+  });
+  function addProgress(items) {
+    (Array.isArray(items) ? items : []).forEach(function (entry) {
+      addToolName(entry && (entry.tool || entry.text));
+    });
+  }
+  addProgress(runtime && runtime.progress);
+  (runtime && Array.isArray(runtime.activities) ? runtime.activities : []).forEach(function (activity) {
+    addProgress(activity && activity.progress);
+  });
+  (runtime && Array.isArray(runtime.segments) ? runtime.segments : []).forEach(function (segment) {
+    addProgress(segment && segment.progress);
+  });
+  return used;
+}
+
 function WbcContextTab({ project, chat, runtime }) {
-  var [state, setState] = useWbcState(null);
-  useWbcEffect(function () {
-    var cancelled = false;
-    fetch("/api/context/state").then(function (r) { return r.json(); }).then(function (s) {
-      if (!cancelled) setState(s);
-    }).catch(function () {});
-    return function () { cancelled = true; };
-  }, [chat && chat.id]);
+  var usedToolPackages = wbcUsedToolPackages(chat, runtime);
   return (
     <div className="workbench-side-stack">
       <section className="workbench-side-section">
@@ -6971,16 +7065,17 @@ function WbcContextTab({ project, chat, runtime }) {
       </section>
       <WbcInboxCard chat={chat} running={!!runtime} />
       <section className="workbench-side-section">
-        <h3>{wbcT("workbenchChat.injectedContext", "Injected context")}</h3>
-        <div className="workbench-check">
-          <span className={"workbench-status-dot " + (!state || state.soul_active !== false ? "green" : "muted")}></span>
-          {wbcT("settings.soulMd", "SOUL.md")}
-        </div>
-        <div className="workbench-check wbc-ws-path-row">
-          <span className={"workbench-status-dot " + (!state || state.workspace_active !== false ? "green" : "muted")}></span>
-          <span className="wbc-ws-path-prefix">{wbcT("workbenchChat.workspacePathLabel", "Path")}</span>
-          <span className="wbc-ws-path-value" title={(state && state.workspace_dir) || ""}>{(state && state.workspace_dir) || "—"}</span>
-        </div>
+        <h3>{wbcT("workbenchChat.usedToolPackages", "Used tool packages")}</h3>
+        {usedToolPackages.length === 0 ? (
+          <p className="workbench-muted">{wbcT("workbenchChat.noUsedToolPackages", "The agent has not used a tool package in this chat.")}</p>
+        ) : usedToolPackages.map(function (wireName) {
+          return (
+            <div className="workbench-check wbc-tool-pack-row" key={wireName}>
+              <span className="workbench-status-dot green" aria-hidden="true"></span>
+              <span>{wbcT("toolName." + wireName, wireName)}</span>
+            </div>
+          );
+        })}
       </section>
       <section className="workbench-side-section">
         <h3>{wbcT("workbenchChat.stats", "Chat stats")}</h3>

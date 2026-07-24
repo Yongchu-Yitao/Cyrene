@@ -1,6 +1,5 @@
 """AMap (高德地图) API proxy endpoints for the Web UI."""
 
-import json
 
 import httpx
 from fastapi import APIRouter

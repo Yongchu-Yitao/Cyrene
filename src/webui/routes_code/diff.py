@@ -1,7 +1,6 @@
 """Diff computation API."""
 import asyncio
 import difflib
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -39,7 +38,7 @@ async def compute_diff(body: DiffBody):
     right_text = body.right
 
     if body.mode == "file":
-        from cyrene.tools import _resolve_workspace_path
+        from cyrene.tooling.runtime_support import _resolve_workspace_path
         try:
             left_path = _resolve_workspace_path(body.left)
             right_path = _resolve_workspace_path(body.right)
@@ -68,7 +67,7 @@ async def compute_git_diff(body: GitDiffBody):
     if body.staged:
         cmd.append("--staged")
     if body.path:
-        from cyrene.tools import _resolve_workspace_path
+        from cyrene.tooling.runtime_support import _resolve_workspace_path
         try:
             resolved = _resolve_workspace_path(body.path)
         except ValueError as e:

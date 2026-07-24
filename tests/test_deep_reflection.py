@@ -295,7 +295,7 @@ async def test_deep_reflect_mixed_tool_turn_compresses_same_turn_tool_results(mo
     assert "Tool failed:" not in next_after_reflection
     assert "NoSuchTool" not in next_after_reflection
     assert "[Deep reflection packet]" in next_after_reflection
-    assert any("Tool failed:" in _text_blob(call) for call in save_calls)
+    assert any("NoSuchTool" in _text_blob(call) for call in save_calls)
 
 
 @pytest.mark.asyncio

@@ -2181,7 +2181,7 @@ def test_workbench_task_plan_tool_helper_scopes_mutation_to_current_session(monk
 
 
 def test_update_task_plan_is_registered_main_only():
-    from cyrene import registry_tools
+    from cyrene.tooling import catalog as registry_tools
 
     registry_tools._initialize_registry()
 
