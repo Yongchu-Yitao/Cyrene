@@ -1300,6 +1300,7 @@ def test_main_prompt_prefers_inbox_wakeup_over_fixed_time_waits():
 
     assert "Prefer event-driven completion over elapsed-time waiting" in _MAIN_AGENT_PROMPT
     assert "inbox result automatically wakes you" in _MAIN_AGENT_PROMPT
+    assert "wake_on_exit=true" in _MAIN_AGENT_PROMPT
     assert "Never use Bash `sleep`" not in _MAIN_AGENT_PROMPT
 
 

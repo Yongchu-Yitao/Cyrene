@@ -26,7 +26,7 @@ TOOL_DEF = next(td for td in _legacy.TOOL_DEFS if td["function"]["name"] == TOOL
 
 
 async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.agent.state import _current_round_id
+    from cyrene.agent.state import _current_round_id, _current_session_id
 
     cwd_arg = str(args.get("cwd", ".") or ".")
     try:
@@ -77,18 +77,38 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
             delete_result = await _request_delete_confirmation(tool_name="StartShell", command=command)
             if delete_result is not None:
                 return delete_result
+    wake_on_exit = bool(args.get("wake_on_exit", False))
+    wake_note = str(args.get("wake_note", "") or "")
+    session_id = str(_current_session_id.get() or "").strip()
     snap = await _start_shell_session(
         command=command,
         cwd=cwd,
         title=str(args.get("title", "") or ""),
         round_id=_current_round_id.get(),
+        wake_on_exit=wake_on_exit,
+        wake_chat_id=session_id if wake_on_exit else "",
+        wake_note=wake_note,
     )
-    return _json_result({
+    result = {
         "shell_id": snap.get("id", ""),
         "status": snap.get("status", ""),
         "cwd": snap.get("cwd", "."),
         "title": snap.get("title", "independent shell"),
-    })
+        "wake_on_exit": bool(snap.get("wakeOnExit")),
+        "wake_id": snap.get("wakeId", ""),
+        "wake_chat_id": snap.get("wakeChatId", ""),
+    }
+    if wake_on_exit and not result["wake_on_exit"]:
+        result["wake_error"] = (
+            "wake_on_exit requested but no Workbench session_id is bound; "
+            "shell started without an exit wake."
+        )
+    elif result["wake_on_exit"]:
+        result["wake_hint"] = (
+            "Shell is running in the background. Do not wait or poll. "
+            "Quit this turn; you will be woken with the terminal output when it exits."
+        )
+    return _json_result(result)
 
 
 handler = _tool_start_shell

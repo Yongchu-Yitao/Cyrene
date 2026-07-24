@@ -1630,7 +1630,7 @@ async def _tool_search_knowledge(args: dict[str, Any], _bot: Any, _chat_id: int,
 
 
 async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.agent.state import _current_round_id
+    from cyrene.agent.state import _current_round_id, _current_session_id
 
     cwd = str(_resolve_workspace_path(str(args.get("cwd", ".") or ".")))
     command = str(args.get("command", "") or "")
@@ -1654,18 +1654,38 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
             status = json.loads(delete_result)
             if str(status.get("status", "")).strip() == "awaiting_user":
                 return delete_result
+    wake_on_exit = bool(args.get("wake_on_exit", False))
+    wake_note = str(args.get("wake_note", "") or "")
+    session_id = str(_current_session_id.get() or "").strip()
     snap = await _start_shell_session(
         command=command,
         cwd=cwd,
         title=str(args.get("title", "") or ""),
         round_id=_current_round_id.get(),
+        wake_on_exit=wake_on_exit,
+        wake_chat_id=session_id if wake_on_exit else "",
+        wake_note=wake_note,
     )
-    return _json_result({
+    result = {
         "shell_id": snap.get("id", ""),
         "status": snap.get("status", ""),
         "cwd": snap.get("cwd", "."),
         "title": snap.get("title", "independent shell"),
-    })
+        "wake_on_exit": bool(snap.get("wakeOnExit")),
+        "wake_id": snap.get("wakeId", ""),
+        "wake_chat_id": snap.get("wakeChatId", ""),
+    }
+    if wake_on_exit and not result["wake_on_exit"]:
+        result["wake_error"] = (
+            "wake_on_exit requested but no Workbench session_id is bound; "
+            "shell started without an exit wake."
+        )
+    elif result["wake_on_exit"]:
+        result["wake_hint"] = (
+            "Shell is running in the background. Do not wait or poll. "
+            "Quit this turn; you will be woken with the terminal output when it exits."
+        )
+    return _json_result(result)
 
 
 async def _tool_send_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
@@ -2586,13 +2606,35 @@ TOOL_DEFS = [
         "type": "function",
         "function": {
             "name": "StartShell",
-            "description": "Start an independent persistent shell session for long-running work. Use this when you need a shell that stays alive and should keep appearing in the UI shell list.",
+            "description": (
+                "Start an independent persistent shell session for long-running work. "
+                "Returns immediately — do not wait for the process. For multi-hour jobs "
+                "(training, builds, experiments), set wake_on_exit=true, tell the user the "
+                "job is running, then quit: when the shell exits the runtime starts a fresh "
+                "Workbench turn with the terminal tail so you can continue. The user can "
+                "keep chatting while the shell runs."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "cwd": {"type": "string"},
                     "title": {"type": "string"},
                     "command": {"type": "string", "description": "Optional initial command to run immediately after the shell starts"},
+                    "wake_on_exit": {
+                        "type": "boolean",
+                        "description": (
+                            "When true, automatically wake this Workbench chat after the shell "
+                            "process exits (success or failure), with the captured terminal "
+                            "output. Prefer this over sleeping, polling, or blocking for long jobs."
+                        ),
+                    },
+                    "wake_note": {
+                        "type": "string",
+                        "description": (
+                            "Optional short intent remembered for the wake turn "
+                            "(e.g. 'review training metrics and propose next hyperparams')."
+                        ),
+                    },
                 },
             },
         },
