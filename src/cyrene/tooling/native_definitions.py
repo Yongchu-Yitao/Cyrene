@@ -318,6 +318,31 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                               'properties': {'command': {'type': 'string'}, 'timeout_ms': {'type': 'integer'}},
                               'required': ['command']}}},
  {'type': 'function',
+  'function': {'name': 'ListMemories',
+               'description': 'List memories without requiring a search query. By default this combines cross-session '
+                              'short-term memory and the current Workbench project memory. Use this to inspect the '
+                              'memory inventory, know exact totals, or enumerate memories completely. Results can be '
+                              'filtered and paged with limit and offset.',
+               'parameters': {'type': 'object',
+                              'properties': {'scope': {'type': 'string',
+                                                       'enum': ['all', 'short_term', 'project'],
+                                                       'description': 'Memory store to include (default all). Project '
+                                                                      'memory is available only in a Workbench '
+                                                                      'project task/chat.'},
+                                             'type': {'type': 'string',
+                                                      'description': 'Optional memory type filter, such as fact, '
+                                                                     'preference, event, or emotion.'},
+                                             'status': {'type': 'string',
+                                                        'enum': ['active', 'retired', 'all'],
+                                                        'description': 'Lifecycle status to include (default active).'},
+                                             'limit': {'type': 'integer',
+                                                       'description': 'Maximum number of memories to return '
+                                                                      '(1-500, default 100).'},
+                                             'offset': {'type': 'integer',
+                                                        'description': 'Number of matching memories to skip for '
+                                                                       'pagination (minimum 0, default 0).'}},
+                              'required': []}}},
+ {'type': 'function',
   'function': {'name': 'RecallMemory',
                'description': 'Read the most recently mentioned short-term memories across sessions. Use this for '
                               'recent preferences, facts, events, or context remembered about the user. Use '
@@ -473,7 +498,22 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                                                        'description': "The final user-facing reply, in the user's "
                                                                       'language. Shown to the user verbatim — write '
                                                                       'the real answer, not a summary of your '
-                                                                      'actions.'}}}}},
+                                                                      'actions.'},
+                                             'completion_status': {'type': 'string',
+                                                                   'enum': ['completed', 'partial', 'blocked'],
+                                                                   'description': 'Subagents with explicit success '
+                                                                                  'criteria must state whether those '
+                                                                                  'criteria were completed.'},
+                                             'criteria_evidence': {'type': 'array',
+                                                                   'items': {'type': 'object',
+                                                                             'properties': {
+                                                                                 'criterion': {'type': 'string'},
+                                                                                 'evidence': {'type': 'string'},
+                                                                             },
+                                                                             'required': ['criterion', 'evidence']},
+                                                                   'description': 'Evidence for each explicit subagent '
+                                                                                  'success criterion when completion_status '
+                                                                                  'is completed.'}}}}},
  {'type': 'function',
   'function': {'name': 'send_agent_message',
                'description': 'Send a message to another sub-agent via inbox. Use this to communicate with other '
@@ -504,6 +544,32 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                                                           'description': 'Unique ID for the sub-agent'},
                                              'task': {'type': 'string',
                                                       'description': 'The task for the sub-agent to complete'},
+                                             'mode': {'type': 'string',
+                                                      'enum': ['execution', 'discussion'],
+                                                      'description': 'Worker mode. Use execution for independent '
+                                                                     'research/coding/file work; use discussion for '
+                                                                     'moderated peer conversation. Defaults to '
+                                                                     'execution, while moderator/participant roles '
+                                                                     'always imply discussion.'},
+                                             'success_criteria': {'type': 'array',
+                                                                  'items': {'type': 'string'},
+                                                                  'maxItems': 20,
+                                                                  'description': 'Concrete conditions that prove the '
+                                                                                 'execution task is complete. Discussion '
+                                                                                 'agents may use this for required topics '
+                                                                                 'or a synthesis requirement.'},
+                                             'max_messages': {'type': 'integer',
+                                                              'minimum': 1,
+                                                              'maximum': 50,
+                                                              'description': 'Optional per-agent message cap for a '
+                                                                             'discussion worker. Ignored by execution '
+                                                                             'workers; otherwise the configured '
+                                                                             'discussion default applies.'},
+                                             'discussion_id': {'type': 'string',
+                                                               'description': 'Optional stable discussion identifier. '
+                                                                              'Discussion workers with the same id share '
+                                                                              'round, message, and information-gain '
+                                                                              'budgets. Defaults to the parent round id.'},
                                              'use_secondary': {'type': 'boolean',
                                                                'description': 'Route this sub-agent to the secondary '
                                                                               '(local small) model for simple tasks '

@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -226,6 +227,83 @@ async def test_main_agent_publishes_tool_start_with_identity_and_redacted_args(m
     }
 
 
+@pytest.mark.parametrize(
+    ("arguments", "expected_status"),
+    [
+        ({"operation": "discover", "query": "memory"}, "completed"),
+        ({"operation": "invalid"}, "failed"),
+    ],
+)
+async def test_progressive_wire_call_always_publishes_terminal_lifecycle(
+    monkeypatch, arguments, expected_status
+):
+    from cyrene.agent import agent as agent_core
+
+    published = []
+
+    async def capture(event):
+        published.append(event)
+
+    monkeypatch.setattr(agent_core, "_publish_runtime_event", capture)
+
+    result = await agent_core._execute_tool_for_call(
+        "call_gateway_1",
+        "memory_tools",
+        arguments,
+        None,
+        0,
+        "",
+    )
+
+    assert result
+    assert published == [{
+        "type": "tool_call_finished",
+        "tool_call_id": "call_gateway_1",
+        "tool": "memory_tools",
+        "args": arguments,
+        "status": expected_status,
+        "failed": expected_status == "failed",
+    }]
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status"),
+    [
+        (RuntimeError("boom"), "failed"),
+        (asyncio.CancelledError(), "cancelled"),
+    ],
+)
+async def test_tool_call_terminal_lifecycle_covers_errors_and_cancellation(
+    monkeypatch, failure, expected_status
+):
+    from cyrene.agent import agent as agent_core
+
+    published = []
+
+    async def fail(*_args, **_kwargs):
+        raise failure
+
+    async def capture(event):
+        published.append(event)
+
+    monkeypatch.setattr(agent_core, "_execute_tool", fail)
+    monkeypatch.setattr(agent_core, "_publish_runtime_event", capture)
+
+    with pytest.raises(type(failure)):
+        await agent_core._execute_tool_for_call(
+            "call_failure_1",
+            "memory_tools",
+            {"operation": "discover"},
+            None,
+            0,
+            "",
+        )
+
+    assert published[-1]["type"] == "tool_call_finished"
+    assert published[-1]["status"] == expected_status
+    assert published[-1]["failed"] is (expected_status == "failed")
+
+
 def test_main_agent_inbox_metadata_includes_visible_tool_arguments():
     from cyrene.agent import agent as agent_core
 
@@ -329,6 +407,80 @@ async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkey
     assert saved["messages"][-1]["role"] == "assistant"
     assert saved["messages"][-1]["content"] == result
     assert saved["messages"][-1]["client_request_id"] == "req_limit"
+
+
+@pytest.mark.parametrize(
+    ("public_message", "expected_key", "expected_params"),
+    [
+        ("分析 Cyrene 的能耗", "phase.useTools", {"task": "分析 Cyrene 的能耗"}),
+        ("", "phase.useToolsAttachments", None),
+    ],
+)
+async def test_use_tools_phase_hides_internal_attachment_prompt(
+    monkeypatch, public_message, expected_key, expected_params
+):
+    from cyrene.agent import agent as _agent_core
+
+    internal_message = (
+        public_message
+        + "\n[Uploaded attachments]\n"
+        + "The user uploaded the following files into the local workspace-accessible runtime data directory."
+    )
+    responses = iter([
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "phase1",
+                "function": {"name": "use_tools", "arguments": '{"task":"inspect"}'},
+            }],
+        },
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "quit1",
+                "function": {
+                    "name": "quit",
+                    "arguments": '{"reply":"done"}',
+                },
+            }],
+        },
+    ])
+    events = []
+
+    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
+        return next(responses)
+
+    async def fake_publish_runtime_event(event):
+        events.append(dict(event))
+
+    _patch_call_llm(monkeypatch, fake_call_llm)
+    _patch_append_session(monkeypatch, AsyncMock())
+    _patch_save_session(monkeypatch, AsyncMock())
+    monkeypatch.setattr(_agent_core, "_publish_runtime_event", fake_publish_runtime_event)
+
+    await _agent_core._run_main_agent(
+        internal_message,
+        [],
+        None,
+        0,
+        "db.sqlite3",
+        public_user_message=public_message,
+        public_attachments=[{"name": "energy.png"}],
+    )
+
+    phase_event = next(
+        event
+        for event in events
+        if event.get("from") == "phase1_decision"
+        and event.get("to") == "phase2_execution"
+    )
+    assert phase_event["detail_key"] == expected_key
+    if expected_params is None:
+        assert "detail_params" not in phase_event
+    else:
+        assert phase_event["detail_params"] == expected_params
+    assert "[Uploaded attachments]" not in phase_event["detail"]
+    assert "The user uploaded" not in phase_event["detail"]
 
 
 def test_merge_live_block_preserves_distinct_empty_tool_call_assistants():
@@ -469,6 +621,93 @@ async def test_recall_memory_tool_returns_recent_short_term_entries(tmp_path):
     assert all(item["memory_id"].startswith("stm_") for item in payload["memories"])
     assert "matches" not in payload
     assert "soul_memory" not in payload
+
+
+async def test_list_memories_reports_total_and_supports_filters_and_pagination(
+    tmp_path,
+):
+    from cyrene import short_term
+    from cyrene.tool_impl.memory import list_memories as tools
+
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([
+        {
+            "content": "user prefers concise replies",
+            "type": "preference",
+            "first_seen": "2026-05-18",
+            "last_mentioned": "2026-05-20",
+            "mention_count": 1,
+        },
+        {
+            "content": "user uses macOS",
+            "type": "fact",
+            "first_seen": "2026-05-16",
+            "last_mentioned": "2026-05-21",
+            "mention_count": 2,
+        },
+        {
+            "content": "superseded preference",
+            "type": "preference",
+            "first_seen": "2026-05-15",
+            "last_mentioned": "2026-05-19",
+            "mention_count": 1,
+            "stale": True,
+            "retired_at": "2026-05-22T10:00:00+08:00",
+            "retire_reason": "corrected",
+        },
+    ])
+
+    result = await tools._tool_list_memories(
+        {"status": "all", "type": "preference", "limit": 1, "offset": 1},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    payload = json.loads(result)
+
+    assert payload["total"] == 2
+    assert payload["returned"] == 1
+    assert payload["has_more"] is False
+    assert payload["memories"][0]["status"] == "retired"
+    assert payload["memories"][0]["retire_reason"] == "corrected"
+
+
+async def test_list_memories_defaults_to_all_active_memories(tmp_path):
+    from cyrene import short_term
+    from cyrene.tool_impl.memory import list_memories as tools
+
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([
+        {
+            "content": f"memory {index}",
+            "type": "fact",
+            "first_seen": "2026-05-18",
+            "last_mentioned": f"2026-05-{index + 1:02d}",
+        }
+        for index in range(3)
+    ] + [{
+        "content": "retired memory",
+        "type": "fact",
+        "first_seen": "2026-05-01",
+        "last_mentioned": "2026-05-01",
+        "stale": True,
+    }])
+
+    result = await tools._tool_list_memories(
+        {},
+        None,
+        0,
+        "db.sqlite3",
+        None,
+    )
+    payload = json.loads(result)
+
+    assert payload["status"] == "active"
+    assert payload["total"] == 3
+    assert payload["total_by_scope"] == {"short_term": 3, "project": 0}
+    assert payload["returned"] == 3
+    assert payload["has_more"] is False
 
 
 async def test_retire_short_term_memory_tool_marks_entry_stale(tmp_path):

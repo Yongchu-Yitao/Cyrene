@@ -143,7 +143,9 @@ async def _upload_one(
     resolved = _resolve_workspace_id(workspace)
     target_dir = UPLOADS_DIR / f"library_{resolved}"
     target_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = safe_attachment_filename(file.filename or "literature.pdf", fallback_stem="literature")
+    safe_name = safe_attachment_filename(
+        file.filename or "knowledge-file", fallback_stem="knowledge-file"
+    )
     target = target_dir / f"{uuid.uuid4().hex}_{safe_name}"
     content = await file.read()
     target.write_bytes(content)
@@ -159,12 +161,12 @@ async def _upload_one(
     if not item_id:
         item = await library.create_item(db_path, {
             "title": Path(file.filename or safe_name).stem.replace("_", " "),
-            "item_type": "journalArticle" if target.suffix.lower() == ".pdf" else "document",
+            "item_type": "document",
         })
         item_id = item["id"]
     elif not await library.get_item(db_path, item_id):
         target.unlink(missing_ok=True)
-        raise ValueError("literature item not found")
+        raise ValueError("knowledge item not found")
     await library.add_attachment(db_path, item_id, {
         "kb_document_id": doc.get("id"), "title": file.filename or safe_name,
         "filename": file.filename or safe_name, "path": str(doc.get("path") or target.resolve()),
@@ -179,7 +181,8 @@ def register_workbench_library_routes(router: APIRouter) -> None:
     @router.get("/api/workbench/library/items")
     async def wb_library_items(
         workspace: str = "", q: str = "", collection: str = "", status: str = "",
-        tag: str = "", item_type: str = "", year: int | None = None, starred: str | None = None,
+        tag: str = "", item_type: str = "", file_type: str = "",
+        year: int | None = None, starred: str | None = None,
         trash: bool = False, sort: str = "updated_at", order: str = "desc",
         limit: int = 200, offset: int = 0,
     ):
@@ -187,7 +190,8 @@ def register_workbench_library_routes(router: APIRouter) -> None:
             db_path = await _ensure_kb_db(workspace)
             items, total = await library.list_items(
                 db_path, q=q, collection=collection, status=status, tag=tag,
-                item_type=item_type, year=year, starred=_bool_param(starred), trash=trash,
+                item_type=item_type, file_type=file_type, year=year,
+                starred=_bool_param(starred), trash=trash,
                 sort=sort, order=order, limit=limit, offset=offset,
             )
             return {"items": items, "total": total, "workspace": _resolve_workspace_id(workspace)}
@@ -255,6 +259,34 @@ def register_workbench_library_routes(router: APIRouter) -> None:
         except Exception:
             logger.exception("Failed to create literature item")
             return error_response("Create failed", 500, "library_create_failed")
+
+    @router.post("/api/workbench/library/items/batch-delete")
+    async def wb_delete_library_items(body: dict[str, Any], workspace: str = ""):
+        raw_item_ids = body.get("item_ids")
+        if not isinstance(raw_item_ids, list):
+            return JSONResponse({"error": "item_ids must be a list"}, status_code=400)
+        item_ids = list(
+            dict.fromkeys(str(item_id or "").strip() for item_id in raw_item_ids)
+        )
+        item_ids = [item_id for item_id in item_ids if item_id]
+        if not item_ids:
+            return JSONResponse({"error": "item_ids is required"}, status_code=400)
+        if len(item_ids) > 500:
+            return JSONResponse(
+                {"error": "at most 500 items can be deleted at once"},
+                status_code=400,
+            )
+        permanent = bool(_bool_param(body.get("permanent")))
+        try:
+            deleted = await library.delete_items(
+                await _ensure_kb_db(workspace),
+                item_ids,
+                permanent=permanent,
+            )
+            return {"ok": True, "deleted": deleted}
+        except Exception:
+            logger.exception("Failed to delete %s literature items", len(item_ids))
+            return error_response("Delete failed", 500, "library_delete_failed")
 
     @router.get("/api/workbench/library/items/{item_id}")
     async def wb_get_library_item(item_id: str, workspace: str = ""):

@@ -326,6 +326,62 @@ async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_list_memories_combines_short_term_and_current_project(
+    monkeypatch, tmp_path
+):
+    from cyrene import short_term
+    from cyrene.agent import state
+    from cyrene.tool_impl.memory import list_memories as tool
+
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    short_term.init_short_term(tmp_path)
+    short_term.save_entries([{
+        "content": "用户偏好简洁回答。",
+        "type": "preference",
+        "first_seen": "2026-06-19",
+        "last_mentioned": "2026-06-20",
+    }])
+    (tmp_path / "wb_memory_project-test.json").write_text(
+        json.dumps([{
+            "id": "mem_project",
+            "content": "项目必须使用 PostgreSQL。",
+            "type": "fact",
+            "category": "fact",
+            "source": "agent",
+            "first_seen": "2026-06-20",
+            "last_mentioned": "2026-06-21",
+            "mention_count": 1,
+        }], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "cyrene.workbench_context.resolve_workbench_project_id_for_session",
+        lambda session_id: "project-test",
+    )
+
+    token = state._current_session_id.set("chat-test")
+    try:
+        result = await tool._tool_list_memories(
+            {"scope": "all", "status": "all"},
+            None,
+            0,
+            "",
+            None,
+        )
+    finally:
+        state._current_session_id.reset(token)
+
+    payload = json.loads(result)
+    assert payload["total"] == 2
+    assert payload["total_by_scope"] == {"short_term": 1, "project": 1}
+    assert payload["project_memory_available"] is True
+    assert {item["scope"] for item in payload["memories"]} == {
+        "short_term",
+        "project",
+    }
+
+
+@pytest.mark.asyncio
 async def test_search_project_memory_allows_default_workbench_project(monkeypatch, tmp_path):
     from cyrene.agent import state
     from cyrene.tool_impl.memory import search_project_memory as tool
@@ -464,11 +520,14 @@ def test_memory_tools_are_registered_with_distinct_contracts():
         for item in tools.TOOL_DEFS
     }
 
+    assert "ListMemories" in defs
     assert "RecallMemory" in defs
     assert "RecallConversation" in defs
     assert "retire_short_term_memory" in defs
     assert "search_project_memory" in defs
     assert "retire_project_memory" in defs
+    assert defs["ListMemories"]["parameters"]["required"] == []
+    assert "query" not in defs["ListMemories"]["parameters"]["properties"]
     assert "session_id" not in defs["RecallMemory"]["parameters"]["properties"]
     assert "session_id" in defs["RecallConversation"]["parameters"]["properties"]
     assert defs["retire_short_term_memory"]["parameters"]["required"] == ["memory_id"]

@@ -426,11 +426,23 @@ function hasVisibleAssistantReplyForRequest(messages, requestId) {
 function formatProgressEvent(event) {
   switch (event.type) {
     case "phase_transition":
-      return { icon: "●", text: event.detail || event.from + " → " + event.to, type: "phase_transition", from: event.from, to: event.to };
+      var phaseFallback = event.detail || event.from + " → " + event.to;
+      var phaseText = event.detail_key && window.WorkbenchI18n && typeof window.WorkbenchI18n.tForLang === "function"
+        ? window.WorkbenchI18n.tForLang(
+            event.detail_key,
+            window.__i18nLang || "en",
+            event.detail_params || {},
+            phaseFallback
+          )
+        : phaseFallback;
+      return { icon: "●", text: phaseText, type: "phase_transition", from: event.from, to: event.to };
     case "tool_call": {
       const args = event.args || {};
       const argPreview = Object.values(args).filter(Boolean).map(String).join(", ").slice(0, 60);
-      return { icon: "▸", text: event.tool + (argPreview ? "(" + argPreview + ")" : "()"), type: "tool_call", tool: event.tool, args: args };
+      const toolLabel = window.WorkbenchI18n && typeof window.WorkbenchI18n.toolName === "function"
+        ? window.WorkbenchI18n.toolName(event.tool, window.__i18nLang || "en")
+        : event.tool;
+      return { icon: "▸", text: toolLabel + (argPreview ? "(" + argPreview + ")" : "()"), type: "tool_call", tool: event.tool, args: args };
     }
     case "llm_call":
       return { icon: "◎", text: (event.caller || "agent") + " · " + (event.phase || "thinking"), type: "llm_call", caller: event.caller, phase: event.phase };

@@ -514,7 +514,7 @@ function EvolutionPage({ tab, setTab }) {
                     <div className="card evolution-card">
                       <div className="card-head"><span className="card-title">{t("evolution.topTools")}</span></div>
                       <div className="evolution-pair-list">
-                        {ccData.tools.top_tools.map(([name, count], index) => <div key={index} className="evolution-pair-row"><span>{name}</span><span>{count}x</span></div>)}
+                        {ccData.tools.top_tools.map(([name, count], index) => <div key={index} className="evolution-pair-row"><span>{evolutionToolLabel(name)}</span><span>{count}x</span></div>)}
                       </div>
                     </div>
                   )}
@@ -830,10 +830,20 @@ function StepViewer({ steps }) {
   );
 }
 
+function evolutionToolLabel(name) {
+  var raw = String(name || "").trim();
+  if (!raw) return "?";
+  if (window.WorkbenchI18n && typeof window.WorkbenchI18n.toolName === "function") {
+    return window.WorkbenchI18n.toolName(raw, window.__i18nLang || "en");
+  }
+  return raw;
+}
+
 function StepCard({ step, index }) {
   const [expanded, setExpanded] = React.useState(false);
   const ref = step.implementation_reference || {};
   const toolName = ref.tool_name || step.type || "?";
+  const toolLabel = evolutionToolLabel(toolName);
   const args = ref.args_template || {};
   const hasItems = args._items && Array.isArray(args._items) && args._items.length > 0;
   const isComplex = hasItems || Object.keys(args).length > 4;
@@ -841,7 +851,7 @@ function StepCard({ step, index }) {
     <div className={"evolution-step-card" + (expanded ? " expanded" : "")}>
       <div className="evolution-step-top" onClick={() => isComplex && setExpanded(!expanded)}>
         <span className="evolution-step-num">{index + 1}</span>
-        <span className="evolution-step-tool">{toolName}</span>
+        <span className="evolution-step-tool">{toolLabel}</span>
         {step.description && step.description !== `${toolName} via learned candidate` && (
           <span className="evolution-step-desc">{step.description}</span>
         )}

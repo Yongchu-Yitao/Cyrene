@@ -21,18 +21,27 @@ async def _tool_broadcast_agent_message(args: dict[str, Any], _bot: Any, _chat_i
     content = str(args.get("content", ""))
     if not content:
         return "Error: 'content' is required."
-    from cyrene.agent.state import _current_agent_id, _current_round_id
-    from cyrene.subagent import _registry as _sub_registry, _lock as _reg_lock
-    current_round_id = _current_round_id.get()
+    from cyrene.agent.state import (
+        _current_agent_id,
+        _current_round_id,
+        _current_session_id,
+    )
+    from cyrene.subagent import (
+        DISCUSSION_MODE,
+        get_discussion_id,
+        get_mode,
+        get_round_id,
+        get_session_id,
+        list_discussion_peer_ids,
+    )
     from_agent = _current_agent_id.get()
+    current_round_id = await get_round_id(from_agent) or _current_round_id.get()
+    if await get_mode(from_agent) != DISCUSSION_MODE:
+        return "Error: peer communication requires discussion mode."
+    discussion_id = await get_discussion_id(from_agent)
+    session_id = await get_session_id(from_agent) or _current_session_id.get()
 
-    # Collect all peer agent IDs in the current round
-    async with _reg_lock:
-        peers = [
-            aid for aid, info in _sub_registry.items()
-            if aid != from_agent
-            and (not current_round_id or str(info.get("round_id", "")) == current_round_id)
-        ]
+    peers = await list_discussion_peer_ids(from_agent)
 
     if not peers:
         return "No peer sub-agents are available to receive the broadcast."
@@ -40,7 +49,13 @@ async def _tool_broadcast_agent_message(args: dict[str, Any], _bot: Any, _chat_i
     sent_count = 0
     errors: list[str] = []
     for peer_id in peers:
-        if await can_receive(peer_id, round_id=current_round_id):
+        if await can_receive(
+            peer_id,
+            round_id=current_round_id,
+            discussion_id=discussion_id,
+            session_id=session_id,
+            strict_session=True,
+        ):
             msg_id = await _send_inbox(from_agent, peer_id, "progress", content, round_id=current_round_id)
             if msg_id:
                 sent_count += 1
@@ -64,6 +79,7 @@ async def _tool_broadcast_agent_message(args: dict[str, Any], _bot: Any, _chat_i
         "msg_type": "progress",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "round_id": current_round_id,
+        "discussion_id": discussion_id,
         "broadcast": True,
     })
     return result

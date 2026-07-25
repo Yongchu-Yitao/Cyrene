@@ -9,12 +9,12 @@ def _names(defs):
     return [item["function"]["name"] for item in defs]
 
 
-def test_main_wire_bundle_is_the_fixed_27_tool_contract():
+def test_main_wire_bundle_is_the_fixed_28_tool_contract():
     from cyrene.tooling import get_main_wire_tool_defs
 
     defs = get_main_wire_tool_defs()
     assert _names(defs) == [
-        "use_tools", "ask_user", "quit", "enter_plan_mode",
+        "use_tools", "send_message", "ask_user", "quit", "enter_plan_mode",
         "update_plan_progress", "DeepReflect", "Read", "Write", "Edit",
         "Glob", "Grep", "Bash", "WebSearch", "WebFetch",
         "AnalyzeAttachment", "code_tools", "browser_tools",
@@ -47,6 +47,42 @@ def test_every_native_tool_is_either_direct_or_in_exactly_one_pack():
     assert len(concrete_names) == len(set(concrete_names))
     assert direct_names.isdisjoint(concrete_names)
     assert native_names == direct_names | set(concrete_names)
+
+
+def test_send_message_is_direct_even_when_delivery_package_is_disabled(
+    monkeypatch,
+):
+    from cyrene.tooling import catalog, snapshot, wire
+    from cyrene.tooling.gateway import resolve_wire_call
+
+    def enabled(wire_name):
+        return wire_name != "delivery_tools"
+
+    monkeypatch.setattr(catalog, "is_tool_pack_enabled", enabled)
+    monkeypatch.setattr(snapshot, "is_tool_pack_enabled", enabled)
+    monkeypatch.setattr(wire, "is_tool_pack_enabled", enabled)
+
+    assert "send_message" in _names(wire.get_main_wire_tool_defs())
+    assert "delivery_tools" not in _names(wire.get_main_wire_tool_defs())
+    assert "send_message" not in _names(wire.get_subagent_wire_tool_defs())
+    assert "send_message" in _names(catalog.get_active_tool_defs())
+    assert "delivery.send_message" not in {
+        item.capability_id
+        for item in catalog.capabilities_for_pack(
+            "delivery_tools",
+            include_disabled=True,
+        )
+    }
+
+    frozen = snapshot.build_catalog_snapshot("main")
+    assert "send_message" in frozen.enabled_capability_ids
+    resolution = resolve_wire_call(
+        "send_message",
+        {"text": "Working on it."},
+        catalog_snapshot=frozen,
+    )
+    assert resolution.capability_id == "send_message"
+    assert resolution.concrete_name == "send_message"
 
 
 def test_settings_and_dynamic_integrations_do_not_mutate_cached_wire_defs(monkeypatch):
@@ -99,6 +135,16 @@ def test_knowledge_pack_has_exact_boundary():
     assert "AnalyzeAttachment" not in ids
     assert "WebSearch" not in ids
     assert not any("deep_research" in item.casefold() for item in ids)
+
+
+def test_memory_pack_exposes_inventory_listing():
+    from cyrene.tooling import discover_capabilities
+
+    ids = {
+        item["id"]
+        for item in discover_capabilities("memory_tools", limit=50)
+    }
+    assert "memory.list" in ids
 
 
 def test_package_switch_omits_gateway_and_member_metadata_from_model_context(
@@ -159,7 +205,7 @@ def test_disabled_package_prompt_blocks_are_removed_as_complete_sections():
     }
     filtered = prompt_for_enabled_tool_packs(_MAIN_AGENT_PROMPT_TEMPLATE, enabled)
 
-    assert "Proactive progress reporting" not in filtered
+    assert "Proactive progress reporting" in filtered
     assert "## Memory" not in filtered
     assert "## Learned Skills" not in filtered
     assert "## 事务追踪" not in filtered

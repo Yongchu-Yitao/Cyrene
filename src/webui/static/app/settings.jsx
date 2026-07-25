@@ -637,6 +637,19 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
           heartbeat_interval: Number(config.heartbeat_interval) || 1800,
           agent_proactive: agentProactive,
           max_tool_rounds: Number(config.max_tool_rounds) || 15,
+          subagent_execution_max_tool_calls: Number(config.subagent_execution_max_tool_calls) || 200,
+          subagent_execution_max_wall_seconds: Number(config.subagent_execution_max_wall_seconds) || 1800,
+          subagent_execution_no_progress_turns: Number(config.subagent_execution_no_progress_turns) || 3,
+          subagent_execution_checkpoint_calls: Number(config.subagent_execution_checkpoint_calls) || 20,
+          subagent_execution_max_cost_usd: Number(config.subagent_execution_max_cost_usd ?? 5),
+          subagent_execution_max_context_tokens: Number(config.subagent_execution_max_context_tokens ?? 0),
+          subagent_discussion_max_rounds: Number(config.subagent_discussion_max_rounds) || 5,
+          subagent_discussion_max_messages_per_agent: Number(config.subagent_discussion_max_messages_per_agent) || 4,
+          subagent_discussion_max_total_messages: Number(config.subagent_discussion_max_total_messages) || 20,
+          subagent_discussion_max_message_chars: Number(config.subagent_discussion_max_message_chars) || 2000,
+          subagent_discussion_max_wall_seconds: Number(config.subagent_discussion_max_wall_seconds) || 600,
+          subagent_discussion_max_tool_calls: Number(config.subagent_discussion_max_tool_calls) || 50,
+          subagent_discussion_no_new_info_rounds: Number(config.subagent_discussion_no_new_info_rounds) || 2,
         }),
       });
       if (!response.ok) throw new Error("HTTP " + response.status);
@@ -1362,6 +1375,88 @@ function SettingsPage({ tweaks, setTweak, actualTheme, accentPresets }) {
                 value={config.max_tool_rounds != null ? config.max_tool_rounds : 15}
                 onChange={(e) => setConfig({ ...config, max_tool_rounds: Number(e.target.value) || 15 })}
                 style={{ maxWidth: 160 }} />
+            </div>
+
+            <div className="field">
+              <div className="label">{t("settings.executionSafetyToolCalls")}<small>{t("settings.executionSafetyToolCallsHint")}</small></div>
+              <input className="input mono" type="number" min="1" max="5000" step="1"
+                value={config.subagent_execution_max_tool_calls != null ? config.subagent_execution_max_tool_calls : 200}
+                onChange={(e) => setConfig({ ...config, subagent_execution_max_tool_calls: Number(e.target.value) || 200 })}
+                style={{ maxWidth: 160 }} />
+            </div>
+
+            <div className="field">
+              <div className="label">{t("settings.executionSafetyWallTime")}<small>{t("settings.executionSafetyWallTimeHint")}</small></div>
+              <input className="input mono" type="number" min="30" max="86400" step="30"
+                value={config.subagent_execution_max_wall_seconds != null ? config.subagent_execution_max_wall_seconds : 1800}
+                onChange={(e) => setConfig({ ...config, subagent_execution_max_wall_seconds: Number(e.target.value) || 1800 })}
+                style={{ maxWidth: 160 }} />
+            </div>
+
+            <div className="field">
+              <div className="label">{t("settings.executionNoProgress")}<small>{t("settings.executionNoProgressHint")}</small></div>
+              <input className="input mono" type="number" min="1" max="20" step="1"
+                value={config.subagent_execution_no_progress_turns != null ? config.subagent_execution_no_progress_turns : 3}
+                onChange={(e) => setConfig({ ...config, subagent_execution_no_progress_turns: Number(e.target.value) || 3 })}
+                style={{ maxWidth: 160 }} />
+            </div>
+
+            <div className="field">
+              <div className="label">{t("settings.executionCheckpoint")}<small>{t("settings.executionCheckpointHint")}</small></div>
+              <input className="input mono" type="number" min="1" max="500" step="1"
+                value={config.subagent_execution_checkpoint_calls != null ? config.subagent_execution_checkpoint_calls : 20}
+                onChange={(e) => setConfig({ ...config, subagent_execution_checkpoint_calls: Number(e.target.value) || 20 })}
+                style={{ maxWidth: 160 }} />
+            </div>
+
+            <div className="field">
+              <div className="label">{t("settings.executionCost")}<small>{t("settings.executionCostHint")}</small></div>
+              <input className="input mono" type="number" min="0" max="1000" step="0.1"
+                value={config.subagent_execution_max_cost_usd != null ? config.subagent_execution_max_cost_usd : 5}
+                onChange={(e) => setConfig({ ...config, subagent_execution_max_cost_usd: Number(e.target.value) })}
+                style={{ maxWidth: 160 }} />
+            </div>
+
+            <div className="field">
+              <div className="label">{t("settings.executionContext")}<small>{t("settings.executionContextHint")}</small></div>
+              <input className="input mono" type="number" min="0" max="4000000" step="1000"
+                value={config.subagent_execution_max_context_tokens != null ? config.subagent_execution_max_context_tokens : 0}
+                onChange={(e) => setConfig({ ...config, subagent_execution_max_context_tokens: Number(e.target.value) })}
+                style={{ maxWidth: 160 }} />
+            </div>
+
+            <div className="field">
+              <div className="label">{t("settings.discussionLimits")}<small>{t("settings.discussionLimitsHint")}</small></div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <input className="input mono" aria-label={t("settings.discussionRounds")} type="number" min="1" max="50"
+                  value={config.subagent_discussion_max_rounds != null ? config.subagent_discussion_max_rounds : 5}
+                  onChange={(e) => setConfig({ ...config, subagent_discussion_max_rounds: Number(e.target.value) || 5 })}
+                  style={{ maxWidth: 100 }} />
+                <input className="input mono" aria-label={t("settings.discussionMessagesPerAgent")} type="number" min="1" max="50"
+                  value={config.subagent_discussion_max_messages_per_agent != null ? config.subagent_discussion_max_messages_per_agent : 4}
+                  onChange={(e) => setConfig({ ...config, subagent_discussion_max_messages_per_agent: Number(e.target.value) || 4 })}
+                  style={{ maxWidth: 100 }} />
+                <input className="input mono" aria-label={t("settings.discussionTotalMessages")} type="number" min="1" max="500"
+                  value={config.subagent_discussion_max_total_messages != null ? config.subagent_discussion_max_total_messages : 20}
+                  onChange={(e) => setConfig({ ...config, subagent_discussion_max_total_messages: Number(e.target.value) || 20 })}
+                  style={{ maxWidth: 100 }} />
+                <input className="input mono" aria-label={t("settings.discussionMessageChars")} type="number" min="100" max="20000" step="100"
+                  value={config.subagent_discussion_max_message_chars != null ? config.subagent_discussion_max_message_chars : 2000}
+                  onChange={(e) => setConfig({ ...config, subagent_discussion_max_message_chars: Number(e.target.value) || 2000 })}
+                  style={{ maxWidth: 110 }} />
+                <input className="input mono" aria-label={t("settings.discussionWallTime")} type="number" min="30" max="86400" step="30"
+                  value={config.subagent_discussion_max_wall_seconds != null ? config.subagent_discussion_max_wall_seconds : 600}
+                  onChange={(e) => setConfig({ ...config, subagent_discussion_max_wall_seconds: Number(e.target.value) || 600 })}
+                  style={{ maxWidth: 110 }} />
+                <input className="input mono" aria-label={t("settings.discussionToolCalls")} type="number" min="1" max="1000"
+                  value={config.subagent_discussion_max_tool_calls != null ? config.subagent_discussion_max_tool_calls : 50}
+                  onChange={(e) => setConfig({ ...config, subagent_discussion_max_tool_calls: Number(e.target.value) || 50 })}
+                  style={{ maxWidth: 100 }} />
+                <input className="input mono" aria-label={t("settings.discussionNoNewInfo")} type="number" min="1" max="20"
+                  value={config.subagent_discussion_no_new_info_rounds != null ? config.subagent_discussion_no_new_info_rounds : 2}
+                  onChange={(e) => setConfig({ ...config, subagent_discussion_no_new_info_rounds: Number(e.target.value) || 2 })}
+                  style={{ maxWidth: 100 }} />
+              </div>
             </div>
 
             <div className="settings-actions">

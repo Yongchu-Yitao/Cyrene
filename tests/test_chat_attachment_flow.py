@@ -39,6 +39,40 @@ def test_attachment_prompt_forbids_device_scan_after_missing_upload():
 
 
 @pytest.mark.asyncio
+async def test_workbench_attachment_only_turn_preserves_empty_public_message(monkeypatch):
+    from webui import routes
+
+    captured = {}
+
+    async def fake_run_agent(**kwargs):
+        captured.update(kwargs)
+        return "done"
+
+    async def fake_check_budget_gate(session_id):
+        return None
+
+    monkeypatch.setattr(routes, "_check_budget_gate", fake_check_budget_gate)
+    monkeypatch.setattr(routes, "run_agent", fake_run_agent)
+
+    result = await routes._workbench_agent_reply(
+        "",
+        {"id": "session_attachment_only"},
+        [],
+        attachments=[{
+            "id": "upload_1",
+            "name": "energy.png",
+            "path": "/tmp/energy.png",
+            "content_type": "image/png",
+            "kind": "image",
+        }],
+    )
+
+    assert result == "done"
+    assert captured["public_user_message"] == ""
+    assert "[Uploaded attachments]" in captured["user_message"]
+
+
+@pytest.mark.asyncio
 async def test_chat_upload_hashing_runs_off_event_loop(tmp_path, monkeypatch):
     from cyrene import config, db
     from cyrene.knowledge import store

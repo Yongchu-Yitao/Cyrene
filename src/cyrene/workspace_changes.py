@@ -47,6 +47,7 @@ class WorkspaceFileState:
     size: int
     digest: str
     text: str | None
+    ctime_ns: int = 0
 
 
 @dataclass(frozen=True)
@@ -56,9 +57,14 @@ class WorkspaceSnapshot:
     captured_at: str
 
 
-def _read_file_state(path: Path, *, capture_text: bool) -> WorkspaceFileState | None:
+def _read_file_state(
+    path: Path,
+    *,
+    capture_text: bool,
+    stat_result: os.stat_result | None = None,
+) -> WorkspaceFileState | None:
     try:
-        stat = path.stat()
+        stat = stat_result or path.stat()
         if not path.is_file() or path.is_symlink():
             return None
         data: bytes | None = None
@@ -80,13 +86,23 @@ def _read_file_state(path: Path, *, capture_text: bool) -> WorkspaceFileState | 
             size=int(stat.st_size),
             digest=digest,
             text=text,
+            ctime_ns=int(stat.st_ctime_ns),
         )
     except OSError:
         return None
 
 
-def capture_workspace_snapshot(workspace_root: str | Path | None) -> WorkspaceSnapshot | None:
-    """Capture a bounded pre/post-run snapshot without consulting Git."""
+def capture_workspace_snapshot(
+    workspace_root: str | Path | None,
+    *,
+    previous: WorkspaceSnapshot | None = None,
+) -> WorkspaceSnapshot | None:
+    """Capture a bounded snapshot, reusing unchanged state when available.
+
+    The pre-run snapshot still owns the before-text needed for durable diffs.
+    During finalization, unchanged files can reuse that immutable state after a
+    cheap metadata check instead of being read and hashed for a second time.
+    """
     if not workspace_root:
         return None
     try:
@@ -95,6 +111,8 @@ def capture_workspace_snapshot(workspace_root: str | Path | None) -> WorkspaceSn
         return None
     if not root.exists() or not root.is_dir():
         return None
+    if previous is None or previous.root != root:
+        previous = None
 
     files: dict[str, WorkspaceFileState] = {}
     captured_text_bytes = 0
@@ -107,15 +125,29 @@ def capture_workspace_snapshot(workspace_root: str | Path | None) -> WorkspaceSn
                 target = current_path / filename
                 try:
                     rel = target.relative_to(root).as_posix()
-                    size = target.stat().st_size
+                    stat = target.stat()
+                    size = stat.st_size
                 except (OSError, ValueError):
                     continue
-                capture_text = (
-                    captured_text_files < _MAX_CAPTURED_TEXT_FILES
-                    and size <= _MAX_TEXT_FILE_BYTES
-                    and captured_text_bytes + size <= _MAX_CAPTURED_TEXT_BYTES
-                )
-                state = _read_file_state(target, capture_text=capture_text)
+                prior = previous.files.get(rel) if previous is not None else None
+                if (
+                    prior is not None
+                    and prior.mtime_ns == int(stat.st_mtime_ns)
+                    and prior.ctime_ns == int(stat.st_ctime_ns)
+                    and prior.size == int(size)
+                ):
+                    state = prior
+                else:
+                    capture_text = (
+                        captured_text_files < _MAX_CAPTURED_TEXT_FILES
+                        and size <= _MAX_TEXT_FILE_BYTES
+                        and captured_text_bytes + size <= _MAX_CAPTURED_TEXT_BYTES
+                    )
+                    state = _read_file_state(
+                        target,
+                        capture_text=capture_text,
+                        stat_result=stat,
+                    )
                 if state is None:
                     continue
                 files[rel] = state
@@ -130,7 +162,11 @@ def capture_workspace_snapshot(workspace_root: str | Path | None) -> WorkspaceSn
 def _same_file(before: WorkspaceFileState, after: WorkspaceFileState) -> bool:
     if before.digest and after.digest:
         return before.digest == after.digest
-    return before.mtime_ns == after.mtime_ns and before.size == after.size
+    return (
+        before.mtime_ns == after.mtime_ns
+        and before.ctime_ns == after.ctime_ns
+        and before.size == after.size
+    )
 
 
 def _unified_diff(path: str, before: str, after: str, change_type: str) -> str:
@@ -218,6 +254,8 @@ def build_change_set(
     before: WorkspaceSnapshot | None,
     after: WorkspaceSnapshot | None,
     status: str,
+    attribution: str = "exclusive",
+    overlapping_run_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     files = compare_workspace_snapshots(before, after)
     retained_diff_chars = 0
@@ -235,6 +273,14 @@ def build_change_set(
         "chatId": str(chat_id),
         "runId": str(run_id),
         "status": str(status or "completed"),
+        "attribution": (
+            "overlapping" if str(attribution) == "overlapping" else "exclusive"
+        ),
+        "overlappingRunIds": [
+            str(item)
+            for item in (overlapping_run_ids or [])
+            if str(item)
+        ],
         "workspacePath": str(before.root if before is not None else after.root if after is not None else ""),
         "startedAt": before.captured_at if before is not None else "",
         "completedAt": after.captured_at if after is not None else _utc_now_iso(),

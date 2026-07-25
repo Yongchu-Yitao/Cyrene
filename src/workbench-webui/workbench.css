@@ -4742,88 +4742,6 @@ html[data-theme="dark"] .workbench-shell {
   --wb-notif-item-hover: color-mix(in srgb, var(--accent) 8%, rgba(255, 255, 255, 0.02));
 }
 
-/* The literature workspace follows its dark reference composition without
-   changing the user's global theme preference. Leaving the Knowledge page
-   restores the normal light/dark theme immediately. */
-html[data-theme="dark"] .workbench-shell.is-library-mode {
-  --wb-accent: #f34fae;
-  --wb-bg: #06131f;
-  --wb-bg-2: #081a29;
-  --wb-surface: #071827;
-  --wb-shell-bg: #061522;
-  --wb-topbar-bg: #061522;
-  --wb-rail-bg: #071827;
-  --wb-task-rail-bg: #071827;
-  --wb-main-bg: #071a2a;
-  --wb-right-bg: #071827;
-  --wb-panel: #0a1d2d;
-  --wb-panel-2: #0c2234;
-  --wb-control-bg: #0b2133;
-  --wb-control-hover-bg: #102a3e;
-  --wb-row-hover-bg: rgba(74, 130, 170, 0.12);
-  --wb-active-bg: rgba(243, 79, 174, 0.15);
-  --wb-active-border: rgba(243, 79, 174, 0.36);
-  --wb-card-bg: #0a1d2d;
-  --wb-card-bg-strong: #0d2335;
-  --wb-line: rgba(131, 169, 198, 0.17);
-  --wb-line-2: rgba(144, 183, 211, 0.28);
-  --wb-text: #f1f5fa;
-  --wb-muted: #a9b8c8;
-  --wb-faint: #72869a;
-  --wb-accent-text: #ffffff;
-  color-scheme: dark;
-}
-
-.workbench-shell.is-library-mode .workbench-topbar {
-  height: 56px;
-  grid-template-columns: 302px minmax(0, 1fr) auto;
-  background: var(--wb-topbar-bg);
-}
-
-.workbench-shell.is-library-mode .workbench-grid {
-  height: calc(100vh - 56px);
-}
-
-.workbench-shell.is-library-mode .workbench-grid.is-knowledge {
-  --wb-rail-w: 74px;
-  --wb-rail-w-open: 290px;
-}
-
-.workbench-shell.is-library-mode .workbench-crumbs {
-  padding-left: 22px;
-}
-
-.workbench-shell.is-library-mode .workbench-search-box {
-  width: 255px;
-  background: var(--wb-control-bg);
-}
-
-html[data-theme="dark"] .workbench-shell.is-library-mode .brand-mark {
-  background-image: url("/static/app/logo-mark-dark.png");
-}
-
-.workbench-shell.is-library-mode .workbench-project-rail {
-  background: var(--wb-rail-bg);
-}
-
-@media (max-width: 1400px) {
-  .workbench-shell.is-library-mode .workbench-topbar {
-    grid-template-columns: 238px minmax(0, 1fr) auto;
-  }
-
-  .workbench-shell.is-library-mode .workbench-grid.is-knowledge {
-    --wb-rail-w: 58px;
-  }
-
-  .workbench-shell.is-library-mode .workbench-crumbs {
-    padding-left: 18px;
-  }
-
-  .workbench-shell.is-library-mode .workbench-search-box {
-    width: 200px;
-  }
-}
-
 html[data-theme="light"] .settings-overlay-panel {
   background: #ffffff;
   border-color: #d8dde5;
@@ -11039,6 +10957,16 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   padding-bottom: 8px;
 }
 
+.wbc-chat-list.is-loading {
+  align-items: center;
+  justify-content: center;
+}
+
+.wbc-rail-loading {
+  padding: 0;
+  text-align: center;
+}
+
 .wbc-chat-card {
   display: flex;
   flex-direction: column;
@@ -12778,6 +12706,16 @@ button.wbc-attach-file:focus-visible {
   animation: wbc-pulse 1.1s ease-in-out infinite;
 }
 
+.wbc-heartbeat.finalizing {
+  color: var(--wb-muted);
+}
+
+.wbc-heartbeat-check {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--wb-green);
+}
+
 .wbc-heartbeat-elapsed {
   font-variant-numeric: tabular-nums;
 }
@@ -14416,19 +14354,19 @@ button.wbc-attach-file:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
-.wbc-inbox-empty,
+.wbc-side-empty,
 .wbc-inbox-error {
   border-top: 1px solid var(--wb-line);
   padding: 10px 0 2px;
 }
 
-.wbc-inbox-empty {
+.wbc-side-empty {
   color: var(--wb-faint);
 }
 
-.wbc-inbox-empty p {
+.workbench-shell .wbc-side-empty p {
   color: inherit;
-  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+  font-size: calc(12px * var(--wb-ui-font-scale, 1)) !important;
 }
 
 .wbc-inbox-error {

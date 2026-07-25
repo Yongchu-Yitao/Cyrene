@@ -655,6 +655,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var [settingsTab, setSettingsTab] = useWorkbenchState("");
   var [newProjectOpen, setNewProjectOpen] = useWorkbenchState(false);
   var [newTaskOpen, setNewTaskOpen] = useWorkbenchState(false);
+  var [newChatRequestId, setNewChatRequestId] = useWorkbenchState(0);
   var [mountedPages, setMountedPages] = useWorkbenchState({});
   var [editProject, setEditProject] = useWorkbenchState(null);
   var [chatCrumb, setChatCrumb] = useWorkbenchState("");
@@ -665,7 +666,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var activeViewRef = useWorkbenchRef({ page: null, taskView: "board", chatId: "", sessionId: "" });
   var sessionLoadSeqRef = useWorkbenchRef(0);
   var launchReadyRef = useWorkbenchRef(false);
-  var menuActionsRef = useWorkbenchRef({ createProject: function () {}, createSession: function () {}, onToggleTheme: function () {} });
+  var menuActionsRef = useWorkbenchRef({ createProject: function () {}, createSession: function () {}, createChat: function () {}, onToggleTheme: function () {} });
 
   function projectForSession(snapshot, sessionId) {
     if (!snapshot || !sessionId) return null;
@@ -974,7 +975,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   // 原生菜单操作（macOS 菜单栏 → menu:action IPC）
   // 每次渲染更新 ref，避免菜单回调中捕获到 stale closure
   useWorkbenchEffect(function () {
-    menuActionsRef.current = { createProject: createProject, createSession: createSession, onToggleTheme: onToggleTheme };
+    menuActionsRef.current = { createProject: createProject, createSession: createSession, createChat: createChat, onToggleTheme: onToggleTheme };
   });
   useWorkbenchEffect(function () {
     var bridge = window.cyrene;
@@ -985,7 +986,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         "open-settings":  function () { setSettingsTab(""); setSettingsOpen(true); },
         "open-about":     function () { setSettingsTab("about"); setSettingsOpen(true); },
         "new-project":    function () { acts.createProject(); },
-        "new-chat":       function () { acts.createSession(); },
+        "new-chat":       function () { acts.createChat(); },
         "new-task":       function () { acts.createSession(); },
         "toggle-theme":   function () { acts.onToggleTheme(); },
         "toggle-sidebar": function () { setRailCollapsed(function (v) { var n = !v; try { localStorage.setItem("wb-rail-collapsed", n ? "1" : "0"); } catch (e) {} return n; }); },
@@ -1049,7 +1050,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       }
       if (sc.matches(event, "new-chat")) {
         event.preventDefault();
-        setFullPage("chat");
+        createChat();
         return;
       }
       if (sc.matches(event, "new-task")) {
@@ -1415,6 +1416,10 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   // the actual API calls; the rail buttons just open the modals.
   function createProject() { setNewProjectOpen(true); }
   function createSession() { if (store.activeProject) setNewTaskOpen(true); }
+  function createChat() {
+    setFullPage("chat");
+    setNewChatRequestId(function (value) { return value + 1; });
+  }
 
   function handleCreateProject(input) {
     // The backend opens the new project onto its agent-led init session and
@@ -1578,7 +1583,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   }
 
   return (
-    <div className={"workbench-shell" + (isKnowledge ? " is-library-mode" : "")} data-screen-label="Cyrene · workbench">
+    <div className="workbench-shell" data-screen-label="Cyrene · workbench">
       <WorkbenchTopbar
         project={store.activeProject}
         session={store.activeSession}
@@ -1624,6 +1629,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
               {React.createElement(window.WorkbenchChatPage || function () { return <div className="workbench-empty">{t("workbench.chatLoading")}</div>; }, {
                 active: isChat,
                 project: store.activeProject,
+                newChatRequestId: newChatRequestId,
                 onOpenTask: handleChatToTask,
                 onActiveChatChange: setChatCrumb,
                 onActiveChatIdChange: setActiveChatId,

@@ -64,6 +64,7 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "desktop_tools": (("desktop.use", "app_use"),),
     "memory_tools": (
+        ("memory.list", "ListMemories"),
         ("memory.recall", "RecallMemory"),
         ("memory.recall_conversation", "RecallConversation"),
         ("memory.short_term.retire", "retire_short_term_memory"),
@@ -106,7 +107,6 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "delivery_tools": (
         ("delivery.send_telegram", "send_telegram"),
-        ("delivery.send_message", "send_message"),
         ("delivery.send_message_to_user", "send_message_to_user"),
         ("delivery.send_file", "send_file"),
         ("delivery.send_wechat_file", "send_wechat_file"),

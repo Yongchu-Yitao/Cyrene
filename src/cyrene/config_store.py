@@ -78,7 +78,7 @@ _DEFAULT_ENV: dict[str, str] = {
     "SEARXNG_AUTO_START": "1",
     "SEARXNG_PORT": "8888",
     "SEARXNG_HOST": "127.0.0.1",
-    "STEWARD_INTERVAL": "1800",
+    "STEWARD_INTERVAL": "3600",
     "PATTERN_DETECTION_INTERVAL": "600",
     "WEB_PORT": "4242",
 }
@@ -118,6 +118,23 @@ _DEFAULT_SETTINGS: dict = {
     "agent_proactive": True,
     "app_language": "",
     "max_tool_rounds": 15,
+    # Execution workers are completion-driven. These are wide lease/safety
+    # controls, not the main agent's normal tool-round budget.
+    "subagent_execution_max_tool_calls": 200,
+    "subagent_execution_max_wall_seconds": 1800,
+    "subagent_execution_no_progress_turns": 3,
+    "subagent_execution_checkpoint_calls": 20,
+    "subagent_execution_max_cost_usd": 5.0,
+    # 0 means use the active model's configured context window.
+    "subagent_execution_max_context_tokens": 0,
+    # Discussion agents use conversational limits rather than execution turns.
+    "subagent_discussion_max_rounds": 5,
+    "subagent_discussion_max_messages_per_agent": 4,
+    "subagent_discussion_max_total_messages": 20,
+    "subagent_discussion_max_message_chars": 2000,
+    "subagent_discussion_max_wall_seconds": 600,
+    "subagent_discussion_max_tool_calls": 50,
+    "subagent_discussion_no_new_info_rounds": 2,
     "redact_secrets": True,
     "notify_telegram": True,
     "notify_wechat": True,

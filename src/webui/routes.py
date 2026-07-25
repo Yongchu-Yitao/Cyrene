@@ -4877,6 +4877,7 @@ def _workbench_subagent_status_text(status: Any) -> str:
         "waiting": "等待其他 subagent",
         "done": "已完成",
         "timeout": "已超时",
+        "incomplete": "部分完成",
     }
     return mapping.get(str(status or "").strip(), str(status or "").strip() or "状态更新")
 
@@ -6174,7 +6175,10 @@ async def _workbench_agent_reply(
             session_id=session_id,
             permission_mode=mode,
             command=str(command or "").strip(),
-            public_user_message=(str(user_input or "") or None),
+            # Preserve an intentionally empty public message for attachment-only
+            # turns. ``None`` means "show the model-facing message", which also
+            # contains the private attachment instruction block.
+            public_user_message=str(user_input or ""),
             public_attachments=public_attachments,
             workspace_dir=workspace_dir,
             ephemeral_system=str(ephemeral_system or ""),
@@ -7196,7 +7200,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                     continue
                 valid_mentions.append(agent_id)
                 status = str(info.get("status", "")).strip()
-                if status in ("done", "timeout"):
+                if status in ("done", "timeout", "incomplete"):
                     mention_text = f"User sent you a new task. This is a round — complete it and report your result via quit.\n\n{message}"
                     await send_message("user", agent_id, "guidance", mention_text)
                     reactivated = await reactivate(agent_id)
@@ -7541,7 +7545,7 @@ def register_routes(app, bot: Any, db_path: str) -> None:
         first_msg_id = ""
         for target in targets:
             info = _sub_reg.get(target)
-            is_done_timeout = info and str(info.get("status", "")).strip() in ("done", "timeout")
+            is_done_timeout = info and str(info.get("status", "")).strip() in ("done", "timeout", "incomplete")
 
             if is_done_timeout:
                 wrapped = f"User sent you a new task. This is a round — complete it and report your result via quit.\n\n{full_text}"
@@ -9485,6 +9489,49 @@ def register_routes(app, bot: Any, db_path: str) -> None:
                 return JSONResponse({"error": "max_tool_rounds must be between 5 and 200"}, status_code=400)
             set_setting("max_tool_rounds", value)
             changed.append("max_tool_rounds")
+        subagent_integer_settings = {
+            "subagent_execution_max_tool_calls": (1, 5000),
+            "subagent_execution_max_wall_seconds": (30, 86400),
+            "subagent_execution_no_progress_turns": (1, 20),
+            "subagent_execution_checkpoint_calls": (1, 500),
+            "subagent_execution_max_context_tokens": (0, 4000000),
+            "subagent_discussion_max_rounds": (1, 50),
+            "subagent_discussion_max_messages_per_agent": (1, 50),
+            "subagent_discussion_max_total_messages": (1, 500),
+            "subagent_discussion_max_message_chars": (100, 20000),
+            "subagent_discussion_max_wall_seconds": (30, 86400),
+            "subagent_discussion_max_tool_calls": (1, 1000),
+            "subagent_discussion_no_new_info_rounds": (1, 20),
+        }
+        for key, (minimum, maximum) in subagent_integer_settings.items():
+            if key not in body:
+                continue
+            try:
+                value = int(body.get(key))
+            except (TypeError, ValueError):
+                return JSONResponse({"error": f"{key} must be an integer"}, status_code=400)
+            if value < minimum or value > maximum:
+                return JSONResponse(
+                    {"error": f"{key} must be between {minimum} and {maximum}"},
+                    status_code=400,
+                )
+            set_setting(key, value)
+            changed.append(key)
+        if "subagent_execution_max_cost_usd" in body:
+            try:
+                value = float(body.get("subagent_execution_max_cost_usd"))
+            except (TypeError, ValueError):
+                return JSONResponse(
+                    {"error": "subagent_execution_max_cost_usd must be a number"},
+                    status_code=400,
+                )
+            if not math.isfinite(value) or value < 0 or value > 1000:
+                return JSONResponse(
+                    {"error": "subagent_execution_max_cost_usd must be between 0 and 1000"},
+                    status_code=400,
+                )
+            set_setting("subagent_execution_max_cost_usd", value)
+            changed.append("subagent_execution_max_cost_usd")
         if "notify_telegram" in body:
             set_setting("notify_telegram", bool(body["notify_telegram"]))
             changed.append("notify_telegram")
@@ -12245,7 +12292,7 @@ def _build_current_session() -> dict | None:
     for agent_id, info in subagent_registry.items():
         status = info.get("status", "running")
         ui_status = {"running": "running", "waiting": "queued", "resumed": "running",
-                     "done": "done", "timeout": "err"}.get(status, status)
+                     "done": "done", "timeout": "err", "incomplete": "err"}.get(status, status)
         created_at = info.get("created_at")
         subagents.append({
             "id": agent_id,
@@ -13248,7 +13295,7 @@ def _subagent_cards_from_registry(round_registry: dict[str, dict]) -> list[dict]
     for agent_id, info in round_registry.items():
         status = info.get("status", "done")
         ui_status = {"running": "running", "waiting": "queued", "resumed": "running",
-                     "done": "done", "timeout": "err"}.get(status, status)
+                     "done": "done", "timeout": "err", "incomplete": "err"}.get(status, status)
         created_at = info.get("created_at")
         cards.append({
             "id": agent_id,
@@ -13992,6 +14039,19 @@ def _build_config() -> dict:
         "agent_proactive": settings.get("agent_proactive", True),
         "app_language": settings.get("app_language", ""),
         "max_tool_rounds": settings.get("max_tool_rounds", 15),
+        "subagent_execution_max_tool_calls": settings.get("subagent_execution_max_tool_calls", 200),
+        "subagent_execution_max_wall_seconds": settings.get("subagent_execution_max_wall_seconds", 1800),
+        "subagent_execution_no_progress_turns": settings.get("subagent_execution_no_progress_turns", 3),
+        "subagent_execution_checkpoint_calls": settings.get("subagent_execution_checkpoint_calls", 20),
+        "subagent_execution_max_cost_usd": settings.get("subagent_execution_max_cost_usd", 5.0),
+        "subagent_execution_max_context_tokens": settings.get("subagent_execution_max_context_tokens", 0),
+        "subagent_discussion_max_rounds": settings.get("subagent_discussion_max_rounds", 5),
+        "subagent_discussion_max_messages_per_agent": settings.get("subagent_discussion_max_messages_per_agent", 4),
+        "subagent_discussion_max_total_messages": settings.get("subagent_discussion_max_total_messages", 20),
+        "subagent_discussion_max_message_chars": settings.get("subagent_discussion_max_message_chars", 2000),
+        "subagent_discussion_max_wall_seconds": settings.get("subagent_discussion_max_wall_seconds", 600),
+        "subagent_discussion_max_tool_calls": settings.get("subagent_discussion_max_tool_calls", 50),
+        "subagent_discussion_no_new_info_rounds": settings.get("subagent_discussion_no_new_info_rounds", 2),
         "notify_telegram": settings.get("notify_telegram", True),
         "notify_wechat": settings.get("notify_wechat", True),
         "redact_secrets": settings.get("redact_secrets", True),

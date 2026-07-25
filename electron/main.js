@@ -22,6 +22,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { AppUseManager } = require('./app-use');
+const { buildBrowserTypeTargetScript } = require('./browser-input');
 
 const APP_NAME = 'Cyrene';
 const TEMP_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -448,7 +449,10 @@ const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
     if (rect.bottom < 0 || rect.right < 0 || rect.top > viewportH || rect.left > viewportW) continue;
     const tag = String(el.tagName || '').toLowerCase();
     const role = roleOf(el, tag);
-    const text = clean(el.innerText || el.textContent || el.getAttribute('value') || el.getAttribute('title') || el.getAttribute('alt'));
+    const inputType = tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '';
+    const text = tag === 'input' || tag === 'textarea'
+      ? (inputType === 'password' ? '' : clean(el.value))
+      : clean(el.innerText || el.textContent || el.getAttribute('value') || el.getAttribute('title') || el.getAttribute('alt'));
     const ariaLabel = clean(el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt'));
     const placeholder = clean(el.getAttribute('placeholder'));
     const href = el.href ? String(el.href) : clean(el.getAttribute('href'), 300);
@@ -461,7 +465,7 @@ const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
       ref,
       tag,
       role,
-      inputType: tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '',
+      inputType,
       accept: tag === 'input' ? clean(el.getAttribute('accept'), 240) : '',
       multiple: tag === 'input' && el.hasAttribute('multiple'),
       text,
@@ -798,7 +802,7 @@ class BrowserTabManager {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        backgroundThrottling: false,
+        backgroundThrottling: true,
         // Cyrene owns the platform-specific fullscreen presentation. Prevent
         // Chromium's HTML fullscreen request from resizing whichever window
         // currently hosts this view before we can move/expand it ourselves.
@@ -1409,7 +1413,7 @@ class BrowserTabManager {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        backgroundThrottling: false,
+        backgroundThrottling: true,
       },
     });
     try { view.setBackgroundColor('#00000000'); } catch (_) {}
@@ -2135,49 +2139,87 @@ class BrowserTabManager {
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No page open. Call browser_navigate first.' };
     const wc = tab.view.webContents;
-    const script = `
-      (function(mode, value, textValue, submitValue) {
-        const find = ${BROWSER_FIND_TARGET_SCRIPT};
-        const info = find(mode, value, false, true);
-        if (!info || !info.ok) return { ok: false, error: 'Element ' + ((info && info.error) || 'not found') };
-        let el = null;
-        if (mode === 'ref') {
-          el = document.querySelector('[data-cyrene-ref="' + String(value || '').replace(/^e/i, '').replace(/"/g, '\\\\"') + '"]');
-        } else {
-          el = document.querySelector(String(value || ''));
-        }
-        if (!el) return { ok: false, error: 'Element not found' };
-        el.focus();
-        const tag = String(el.tagName || '').toLowerCase();
-        if ('value' in el) {
-          el.value = String(textValue || '');
-          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(textValue || '') }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        } else if (el.isContentEditable) {
-          el.textContent = String(textValue || '');
-          el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(textValue || '') }));
-        } else {
-          return { ok: false, error: 'Element is not text-editable' };
-        }
-        if (submitValue) {
-          const form = el.form || el.closest('form');
-          if (form && typeof form.requestSubmit === 'function') {
-            try { form.requestSubmit(); }
-            catch (_) { el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true })); }
-          } else {
-            el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
-          }
-        }
-        return { ok: true, tag, box: info.box };
-      })(${JSON.stringify(mode)}, ${JSON.stringify(value)}, ${JSON.stringify(String(text || ''))}, ${submit ? 'true' : 'false'})
-    `;
+    const desiredText = String(text ?? '');
+    const runPageOperation = (operation) => wc.executeJavaScript(
+      buildBrowserTypeTargetScript(BROWSER_FIND_TARGET_SCRIPT, {
+        mode,
+        value,
+        text: desiredText,
+        operation,
+      }),
+      true,
+    );
     this._markAgentInput(tab);
-    const result = await wc.executeJavaScript(script, true);
+    let result = await runPageOperation('set-native');
     if (!result || !result.ok) return { ok: false, error: (result && result.error) || 'Unable to type into element.', url: wc.getURL(), title: wc.getTitle(), tabId: tab.id };
-    if (submit) await this._waitNav(wc);
-    return { ok: true, url: wc.getURL(), title: wc.getTitle(), tabId: tab.id, box: result.box };
+
+    let strategy = 'native-setter';
+    if (!result.persisted || result.needsTrustedInput) {
+      const prepared = await runPageOperation('prepare-trusted');
+      if (!prepared || !prepared.ok) {
+        return {
+          ok: false,
+          error: (prepared && prepared.error) || 'Unable to prepare the element for trusted text input.',
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          tabId: tab.id,
+        };
+      }
+      try {
+        wc.focus();
+        if (desiredText) {
+          await wc.insertText(desiredText);
+        } else {
+          wc.delete();
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          error: 'Trusted text input failed: ' + String((err && err.message) || err),
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          tabId: tab.id,
+        };
+      }
+      result = await runPageOperation('verify');
+      strategy = 'trusted-editor';
+      if (!result || !result.ok || !result.persisted) {
+        return {
+          ok: false,
+          error: (result && result.error) || 'The page rejected or reverted the requested text.',
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          tabId: tab.id,
+        };
+      }
+    }
+
+    if (submit) {
+      const submitResult = await runPageOperation('submit');
+      if (!submitResult || !submitResult.ok) {
+        return {
+          ok: false,
+          error: (submitResult && submitResult.error) || 'Unable to submit the text input.',
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          tabId: tab.id,
+        };
+      }
+      if (submitResult.needsTrustedEnter) {
+        wc.focus();
+        wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+        wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+      }
+      await this._waitNav(wc);
+    }
+    return {
+      ok: true,
+      url: wc.getURL(),
+      title: wc.getTitle(),
+      tabId: tab.id,
+      box: result.box,
+      strategy,
+    };
   }
 
   async type({ selector, text = '', submit = false, tabId = '' } = {}) {
@@ -3516,7 +3558,7 @@ async function createQuickChatWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      backgroundThrottling: false,
+      backgroundThrottling: true,
     },
   });
 

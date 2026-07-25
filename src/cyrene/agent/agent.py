@@ -118,6 +118,35 @@ async def _publish_tool_call_started(
     })
 
 
+async def _publish_tool_call_finished(
+    tool_call_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    status: str,
+) -> None:
+    """Close the live lifecycle opened by ``_publish_tool_call_started``.
+
+    The wire wrapper owns this event because progressive ``discover`` and
+    ``describe`` calls return before reaching the concrete executor. Publishing
+    here guarantees that every started wire call has a matching terminal event,
+    regardless of which gateway branch handled it.
+    """
+    try:
+        await _publish_runtime_event({
+            "type": "tool_call_finished",
+            "tool_call_id": str(tool_call_id),
+            "tool": str(tool_name or ""),
+            "args": redact_value(arguments),
+            "status": str(status or "completed"),
+            "failed": str(status or "").casefold() == "failed",
+        })
+    except Exception:
+        # Live activity is observability. A disconnected SSE subscriber must not
+        # turn an otherwise successful tool result into an agent failure.
+        logger.debug("Failed to publish tool completion for %s", tool_name, exc_info=True)
+
+
 async def _execute_tool_for_call(
     tool_call_id: str,
     tool_name: str,
@@ -131,9 +160,33 @@ async def _execute_tool_for_call(
 
     token = _active_tool_call_id.set(str(tool_call_id))
     try:
-        return await _execute_tool(
+        result = await _execute_tool(
             tool_name, arguments, bot, chat_id, db_path, None
         )
+    except asyncio.CancelledError:
+        await _publish_tool_call_finished(
+            tool_call_id,
+            tool_name,
+            arguments,
+            status="cancelled",
+        )
+        raise
+    except Exception:
+        await _publish_tool_call_finished(
+            tool_call_id,
+            tool_name,
+            arguments,
+            status="failed",
+        )
+        raise
+    else:
+        await _publish_tool_call_finished(
+            tool_call_id,
+            tool_name,
+            arguments,
+            status="completed" if _wire_result_succeeded(result) else "failed",
+        )
+        return result
     finally:
         _active_tool_call_id.reset(token)
 
@@ -762,9 +815,14 @@ async def _run_main_agent_impl(
     if use_tools_call:
         event = {"type": "phase_transition", "from": "phase1_decision", "to": "phase2_execution"}
         if not suppress_initial_detail:
-            event["detail"] = f"Phase 1 decided to use tools. Task: {user_message[:120]}"
-            event["detail_key"] = "phase.useTools"
-            event["detail_params"] = {"task": user_message[:120]}
+            phase_task = visible_user_message.strip()[:120]
+            if phase_task:
+                event["detail"] = f"Phase 1 decided to use tools. Task: {phase_task}"
+                event["detail_key"] = "phase.useTools"
+                event["detail_params"] = {"task": phase_task}
+            else:
+                event["detail"] = "Phase 1 decided to use tools. Task: Analyze uploaded attachments"
+                event["detail_key"] = "phase.useToolsAttachments"
         await _publish_runtime_event(event)
         messages = [*run_prefix, dict(llm_user_entry), *phase1_runtime_guidance_entries]
 
@@ -1085,6 +1143,7 @@ async def _run_main_agent_impl(
                     clear as _sub_clear, get_snapshot as _sub_snapshot,
                     get_raw_messages as _sub_raw_msgs, reactivate as _sub_reactivate,
                     run_summary_subagent as _run_summary_subagent,
+                    timeout_subagents as _timeout_subagents,
                 )
                 from cyrene.inbox import get_unread_count as _inbox_unread_base
                 _agent_session_id = _current_session_id.get()
@@ -1110,8 +1169,15 @@ async def _run_main_agent_impl(
                 _interrupt_event_sess = _ensure_session(_current_session_id.get()).interrupt_event
                 _interrupt_event_sess.clear()
                 interrupted = False
+                monitoring_expired = False
                 quiet_ticks = 0
-                for _ in range(120):
+                from cyrene.settings_store import get as _get_runtime_setting
+                monitor_timeout_seconds = max(
+                    int(_get_runtime_setting("subagent_execution_max_wall_seconds", 1800) or 1800),
+                    int(_get_runtime_setting("subagent_discussion_max_wall_seconds", 600) or 600),
+                ) + 30
+                monitor_deadline = asyncio.get_running_loop().time() + monitor_timeout_seconds
+                while asyncio.get_running_loop().time() < monitor_deadline:
                     try:
                         await asyncio.wait_for(_interrupt_event_sess.wait(), timeout=0.5)
                         _interrupt_event_sess.clear()
@@ -1124,7 +1190,7 @@ async def _run_main_agent_impl(
                         break
                     resurrected = False
                     for aid, info in snap.items():
-                        if info["status"] in ("done", "timeout") and _inbox_unread(aid) > 0:
+                        if info["status"] in ("done", "timeout", "incomplete") and _inbox_unread(aid) > 0:
                             if await _sub_reactivate(aid):
                                 raw = await _sub_raw_msgs(aid)
                                 _spawn_subagent_task(
@@ -1134,7 +1200,7 @@ async def _run_main_agent_impl(
                                 resurrected = True
                     snap2 = await _sub_snapshot(round_id=round_id)
                     all_truly_done = all(
-                        info["status"] in ("done", "timeout") and _inbox_unread(aid) == 0
+                        info["status"] in ("done", "timeout", "incomplete") and _inbox_unread(aid) == 0
                         for aid, info in snap2.items()
                     )
                     if all_truly_done and not resurrected:
@@ -1143,11 +1209,25 @@ async def _run_main_agent_impl(
                             break
                     else:
                         quiet_ticks = 0
+                else:
+                    monitoring_expired = True
                 if interrupted:
                     await _save(_session_messages_to_save(messages))
                     # Cancel running subagents immediately and mark them done so
                     # the summary phase can start right away.
                     await _cancel_subagent_tasks(round_id=round_id)
+                elif monitoring_expired:
+                    expired_snapshot = await _sub_snapshot(round_id=round_id)
+                    active_ids = [
+                        aid
+                        for aid, info in expired_snapshot.items()
+                        if info.get("status") in ("running", "resumed")
+                    ]
+                    if active_ids:
+                        await _timeout_subagents(
+                            active_ids,
+                            reason="Subagent parent-monitor safety deadline reached.",
+                        )
                 await _publish_runtime_event({
                     "type": "phase_transition", "from": "subagent_monitoring", "to": "synthesis",
                     "detail": "All subagents done, starting summary subagent",

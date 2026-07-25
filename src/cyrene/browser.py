@@ -176,7 +176,13 @@ async def _ssrf_redirect_hook(response: httpx.Response) -> None:
     if 300 <= response.status_code < 400:
         location = response.headers.get("location", "")
         if location:
-            _check_url(urljoin(str(response.url), location))
+            # DNS resolution in _check_url is synchronous on every supported
+            # platform. Keep redirects from briefly blocking the shared agent
+            # event loop.
+            await asyncio.to_thread(
+                _check_url,
+                urljoin(str(response.url), location),
+            )
 
 
 _PLAYWRIGHT_AVAILABLE: bool | None = None
@@ -414,7 +420,10 @@ _BROWSER_INSPECT_JS = r"""
     if (rect.bottom < 0 || rect.right < 0 || rect.top > viewportH || rect.left > viewportW) continue;
     const tag = String(el.tagName || '').toLowerCase();
     const role = roleOf(el, tag);
-    const text = clean(el.innerText || el.textContent || el.getAttribute('value') || el.getAttribute('title') || el.getAttribute('alt'));
+    const inputType = tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '';
+    const text = tag === 'input' || tag === 'textarea'
+      ? (inputType === 'password' ? '' : clean(el.value))
+      : clean(el.innerText || el.textContent || el.getAttribute('value') || el.getAttribute('title') || el.getAttribute('alt'));
     const ariaLabel = clean(el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt'));
     const placeholder = clean(el.getAttribute('placeholder'));
     const href = el.href ? String(el.href) : clean(el.getAttribute('href'), 300);
@@ -427,7 +436,7 @@ _BROWSER_INSPECT_JS = r"""
       ref,
       tag,
       role,
-      inputType: tag === 'input' ? clean(el.getAttribute('type') || 'text', 40).toLowerCase() : '',
+      inputType,
       accept: tag === 'input' ? clean(el.getAttribute('accept'), 240) : '',
       multiple: tag === 'input' && el.hasAttribute('multiple'),
       text,

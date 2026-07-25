@@ -22,10 +22,16 @@ def test_new_workbench_chat_reuses_create_response_without_refetching():
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
+    shell = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
 
     assert 'var skipNextHydrationChatIdRef = useWbcRef("");' in source
     assert "skipNextHydrationChatIdRef.current = chat.id;" in source
     assert "skipNextHydrationChatIdRef.current === activeChatId" in source
+    assert "newChatRequestId: newChatRequestId" in shell
+    assert "handledNewChatRequestIdRef" in source
+    assert "handleCreateChat();" in source
 
 
 def test_workbench_chat_restores_project_cache_before_background_refresh():
@@ -163,11 +169,40 @@ process.stdout.write(JSON.stringify(result));
     return json.loads(completed.stdout)
 
 
+def _run_workbench_trace_i18n_js(expression: str):
+    root = Path(__file__).resolve().parent.parent
+    i18n_path = root / "src" / "workbench-webui" / "workbench-i18n.jsx"
+    chat_source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helper_source = "function wbcT(" + chat_source.split(
+        "function wbcT(", 1
+    )[1].split("function wbcThinkingPhrases", 1)[0]
+    script = f"""
+const fs = require("fs");
+global.window = {{}};
+global.localStorage = {{ getItem: () => "", setItem: () => {{}} }};
+global.navigator = {{ language: "zh-CN" }};
+global.document = {{ documentElement: {{ dataset: {{}} }} }};
+global.React = {{ useState: () => [0, () => {{}}], useEffect: () => {{}} }};
+eval(fs.readFileSync({json.dumps(str(i18n_path))}, "utf8"));
+eval({json.dumps(helper_source)});
+window.WorkbenchI18n.setLang("zh");
+const result = ({expression});
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
 def _run_workbench_runtime_js(expression: str):
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
+    args_preview_source = "function wbcToolArgsPreview(" + source.split(
+        "function wbcToolArgsPreview(", 1
+    )[1].split("function wbcThinkingPhrases", 1)[0]
     runtime_source = source.split(
         "var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {", 1
     )[1].split("// Page", 1)[0]
@@ -179,6 +214,7 @@ def _run_workbench_runtime_js(expression: str):
 global.window = {{ __sseHandlers: {{ add: (handler) => {{ global.__wbcSseHandler = handler; }} }} }};
 function wbcT(_key, fallback) {{ return fallback; }}
 function wbcSubagentStatusText(status) {{ return String(status || ""); }}
+eval({json.dumps(args_preview_source)});
 eval({json.dumps(runtime_source)});
 const result = ({expression});
 process.stdout.write(JSON.stringify(result));
@@ -255,6 +291,79 @@ wbcMergeChronologicalMessages(
     )
 
     assert result == ["first", "second"]
+
+
+def test_workbench_finalizing_runtime_closes_live_tool_activity():
+    result = _run_workbench_timeline_js(
+        """
+(() => {
+  const runtime = {
+    chatId: "chat_1",
+    startedAt: 1000,
+    replying: true,
+    progress: [{ kind: "tool", status: "running", toolCallId: "root_tool" }],
+    activities: [{
+      id: "activity_1",
+      startedAt: 1100,
+      reasoningActive: true,
+      progress: [{ kind: "tool", status: "running", toolCallId: "activity_tool" }]
+    }]
+  };
+  const finalized = wbcFinalizeRuntime(runtime);
+  const timeline = wbcRuntimeTimelineMessages(finalized);
+  return {
+    finalizing: finalized.finalizing,
+    replying: finalized.replying,
+    rootStatus: finalized.progress[0].status,
+    activityStatus: finalized.activities[0].progress[0].status,
+    timelineClosed: finalized.activities[0].timelineClosed,
+    heartbeatFinalizing: timeline[0].runtimeFinalizing,
+    activityActive: timeline[1].runtimeActivityActive
+  };
+})()
+"""
+    )
+
+    assert result == {
+        "finalizing": True,
+        "replying": False,
+        "rootStatus": "completed",
+        "activityStatus": "completed",
+        "timelineClosed": True,
+        "heartbeatFinalizing": True,
+        "activityActive": False,
+    }
+
+
+def test_workbench_terminal_tool_event_preserves_resolved_identity():
+    result = _run_workbench_timeline_js(
+        """
+wbcMergeToolLifecycleEntry(
+  {
+    kind: "tool",
+    toolCallId: "call_1",
+    text: "memory.project.search",
+    preview: "resolved query",
+    status: "completed",
+    failed: false
+  },
+  {
+    kind: "tool",
+    toolCallId: "call_1",
+    text: "memory_tools",
+    preview: "invoke, memory.project.search",
+    status: "completed",
+    failed: false
+  },
+  true
+)
+"""
+    )
+
+    assert result["text"] == "memory.project.search"
+    assert result["preview"] == "resolved query"
+    assert result["status"] == "completed"
+    assert result["failed"] is False
 
 
 def test_workbench_plan_revision_guard_only_blocks_unresolved_started_steps():
@@ -1306,6 +1415,22 @@ def test_workbench_chat_delete_detaches_local_fork_markers():
     assert "setActiveChat(function (prev) { return detachDeletedForkSource(prev); })" in handler
 
 
+def test_workbench_chat_card_menu_can_rename_the_target_chat():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    rail = source.split("function WbcRail(", 1)[1].split(
+        "// Conversation main (column 3)", 1
+    )[0]
+
+    assert "onRename={handleRenameChat}" in source
+    assert 'wbcT("workbenchChat.rename", "Rename chat")' in rail
+    assert "window.prompt(" in rail
+    assert "onRename(chat.id, next)" in rail
+    assert "prev && prev.id === chat.id" in source
+
+
 def test_workbench_branch_tree_uses_compact_git_history_layout():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
@@ -1397,15 +1522,38 @@ def test_workbench_tool_start_is_rendered_then_completed_in_place():
     activity_card = source.split("function WbcLiveActivityCard", 1)[1].split(
         "function WbcLiveMessage", 1
     )[0]
-    assert 'event.type === "tool_call_started" || event.type === "tool_call"' in runtime
+    assert (
+        'event.type === "tool_call_started" || event.type === "tool_call" || '
+        'event.type === "tool_call_finished"'
+    ) in runtime
     assert 'toolCallId: String(event.tool_call_id || "")' in runtime
     assert 'status: toolStarted ? "running" : "completed"' in runtime
-    assert 'return { ...item, ...entry };' in runtime
+    assert "wbcMergeToolLifecycleEntry(item, entry, terminalToolEvent)" in runtime
     assert "progress: mergeToolProgress(activity && activity.progress)" in runtime
     assert "matchedToolCall" in runtime
     assert 'entry.toolCallId || i' in source
     assert 'entry.kind === "tool" && entry.status === "running"' in activity_card
     assert "hasRunningTools && !hasReplyText" in activity_card
+    assert 'type === "run_finalizing" && handlers.onFinalizing' in source
+    assert "wbcFinalizeRuntime(cur)" in source
+
+
+def test_workbench_marks_run_finalizing_before_workspace_save():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "routes_workbench_chat.py").read_text(
+        encoding="utf-8"
+    )
+    run_streaming = source.split("async def run_streaming", 1)[1].split(
+        "run, _is_new", 1
+    )[0]
+    normal_completion = run_streaming.split("if not run.saw_reply_events:", 1)[1]
+
+    reply_done = normal_completion.index('"type": "reply_done"')
+    finalizing = normal_completion.index('"type": "run_finalizing"')
+    workspace_finalize = normal_completion.index("await _finalize_workspace_changes(")
+    saved = normal_completion.index('"type": "saved"')
+
+    assert reply_done < finalizing < workspace_finalize < saved
 
 
 def test_workbench_context_tab_has_live_session_inbox_card():
@@ -1448,6 +1596,7 @@ def test_workbench_context_tab_has_live_session_inbox_card():
     assert 'workbenchChat.inbox.queue' in inbox_card
     assert 'className={"wbc-inbox-queue-count"' in inbox_card
     assert 'queueDepth === null ? "—" : queueDepth' in inbox_card
+    assert 'className="wbc-side-empty"' in inbox_card
     assert 'className="wbc-inbox-summary"' not in inbox_card
     assert "liveView.error ? (" in inbox_card
     assert ") : feed.length === 0 ? (" in inbox_card
@@ -1515,6 +1664,8 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
     assert "WBC_PROGRESSIVE_TOOL_PACKAGES.has(name)" in disclosure
     assert "workbenchChat.usedToolPackages" in context_tab
     assert "workbenchChat.noUsedToolPackages" in context_tab
+    assert context_tab.count('className="wbc-side-empty"') == 1
+    assert ".workbench-shell .wbc-side-empty p" in css
     assert "toolPackage.enabled" not in context_tab
     assert "workbenchChat.injectedContext" not in context_tab
     assert "settings.soulMd" not in context_tab
@@ -1614,7 +1765,8 @@ def test_workbench_chat_does_not_render_previous_transcript_during_switch():
     assert 'String(activeChat.id || "") === String(activeChatId || "")' in source
     assert "chat={visibleChat}" in source
     assert "chat={visibleChat || selectedChatSummary}" in source
-    assert "loading={chatLoading}" in source
+    assert "var conversationLoading = loading || chatLoading;" in source
+    assert "loading={conversationLoading}" in source
 
 
 def test_workbench_chat_loading_keeps_lightweight_overview_visible():
@@ -1631,8 +1783,25 @@ def test_workbench_chat_loading_keeps_lightweight_overview_visible():
     assert "chatDetailed={!!visibleChat}" in source
     assert "loading && !chat" in source
     assert "messages.length === 0 && !runtime && !loading && !error" in source
-    assert '"workbenchChat.loadingConversation": "正在加载对话…"' in i18n
+    assert '"workbenchChat.loadingConversation": "加载对话中..."' in i18n
     assert '"workbenchChat.error.transcriptPrefix": "对话详情：{error}"' in i18n
+
+
+def test_workbench_chat_loading_is_centered_in_the_rail():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"wbc-chat-list" + (loading ? " is-loading" : "")' in source
+    assert 'className="workbench-muted wbc-rail-loading" role="status"' in source
+    assert "!loading && filtered.map" in source
+    loading_styles = styles.split(".wbc-chat-list.is-loading {", 1)[1].split("}", 1)[0]
+    assert "align-items: center;" in loading_styles
+    assert "justify-content: center;" in loading_styles
 
 
 def test_workbench_chat_plan_confirmation_can_continue_in_auto_mode():
@@ -1890,11 +2059,128 @@ def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
     assert '"toolName.browser_upload_files": "上传文件"' in i18n
 
 
+def test_progressive_capability_ids_resolve_to_existing_tool_name_i18n():
+    from cyrene.tooling.native_definitions import get_native_tool_defs
+    from cyrene.tooling.packs import CAPABILITY_BINDINGS
+
+    root = Path(__file__).resolve().parent.parent
+    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    # Runtime traces intentionally publish model-facing IDs such as
+    # browser.navigate. Every native progressive capability must map back to
+    # the existing localized concrete-tool label instead of leaking that ID.
+    for bindings in CAPABILITY_BINDINGS.values():
+        for capability_id, concrete_name in bindings:
+            assert f'"{capability_id}": "{concrete_name}"' in i18n
+            assert i18n.count(f'"toolName.{concrete_name}"') == 2
+    for tool_def in get_native_tool_defs():
+        tool_name = tool_def["function"]["name"]
+        assert i18n.count(f'"toolName.{tool_name}"') == 2
+
+    assert 'var alias = WORKBENCH_TOOL_NAME_ALIASES[toolName];' in i18n
+    assert 'resolvedKey = "toolName." + alias;' in i18n
+    assert '"browser.navigate": "browser_navigate"' in i18n
+    assert '"toolName.browser_navigate": "Navigate"' in i18n
+    assert '"toolName.browser_navigate": "浏览器导航"' in i18n
+
+
+def test_tool_i18n_fallbacks_and_legacy_surfaces_do_not_leak_internal_keys():
+    result = _run_workbench_trace_i18n_js(
+        """
+({
+  unknownTool: window.WorkbenchI18n.t("toolName.custom_mcp_tool", "custom_mcp_tool"),
+  unknownParam: window.WorkbenchI18n.t("memory.learning.toolParam.custom_arg", "custom_arg"),
+  planProgress: window.WorkbenchI18n.toolName("update_plan_progress", "zh"),
+  browserSubmit: window.WorkbenchI18n.toolName("browser.user.submit", "zh"),
+  browserNavigateEn: window.WorkbenchI18n.toolName("browser.navigate", "en"),
+  showSidebar: window.WorkbenchI18n.t("workbenchChat.showSidebar"),
+  hideSidebar: window.WorkbenchI18n.t("workbenchChat.hideSidebar"),
+  download: window.WorkbenchI18n.t("workbenchChat.download")
+})
+"""
+    )
+
+    assert result == {
+        "unknownTool": "custom_mcp_tool",
+        "unknownParam": "custom_arg",
+        "planProgress": "更新计划进度",
+        "browserSubmit": "用户提交表单",
+        "browserNavigateEn": "Navigate",
+        "showSidebar": "显示侧边栏",
+        "hideSidebar": "隐藏侧边栏",
+        "download": "下载",
+    }
+
+    root = Path(__file__).resolve().parent.parent
+    classic_chat = (root / "src" / "webui" / "static" / "app" / "chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    chat_surface = (
+        root / "src" / "webui" / "static" / "app" / "chat-surface.jsx"
+    ).read_text(encoding="utf-8")
+    evolution = (
+        root / "src" / "webui" / "static" / "app" / "evolution.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert "window.WorkbenchI18n.tForLang(" in classic_chat
+    assert "window.WorkbenchI18n.toolName(event.tool" in classic_chat
+    assert "window.WorkbenchI18n.toolName(raw, lang)" in chat_surface
+    assert "function evolutionToolLabel(name)" in evolution
+    assert "<span>{evolutionToolLabel(name)}</span>" in evolution
+    assert '<span className="evolution-step-tool">{toolLabel}</span>' in evolution
+
+
+def test_workbench_tool_trace_preview_localizes_protocol_values_only():
+    result = _run_workbench_trace_i18n_js(
+        """
+[
+  wbcToolPreviewText("discover"),
+  wbcToolPreviewText("invoke, memory.project.search"),
+  wbcToolPreviewText("待办 任务 task pending")
+]
+"""
+    )
+
+    assert result == [
+        "发现能力",
+        "调用能力, 搜索项目记忆",
+        "待办 任务 task pending",
+    ]
+
+
+def test_workbench_tool_trace_preview_serializes_nested_arguments():
+    result = _run_workbench_trace_i18n_js(
+        """
+(() => {
+  const preview = wbcToolArgsPreview({
+    operation: "invoke",
+    capability_id: "browser.click_text",
+    arguments: { text: "继续", exact: true }
+  });
+  return {
+    preview,
+    localized: wbcToolPreviewText(preview),
+    leakedObjectTag: preview.includes("[object Object]")
+  };
+})()
+"""
+    )
+
+    assert result == {
+        "preview": 'invoke, browser.click_text, {"text":"继续","exact":true}',
+        "localized": '调用能力, 点击文本, {"text":"继续","exact":true}',
+        "leakedObjectTag": False,
+    }
+
+
 def test_workbench_phase_events_publish_translation_keys():
     root = Path(__file__).resolve().parent.parent
     planning = (root / "src" / "cyrene" / "agent" / "planning.py").read_text(encoding="utf-8")
     guidance = (root / "src" / "cyrene" / "agent" / "guidance.py").read_text(encoding="utf-8")
     reflection = (root / "src" / "cyrene" / "agent" / "deep_reflection.py").read_text(encoding="utf-8")
+    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
     assert '"detail_key": "phase.planning"' in planning
     assert '"detail_key": "phase.applyingGuidanceToSubagents"' in guidance
@@ -1902,6 +2188,8 @@ def test_workbench_phase_events_publish_translation_keys():
     assert '"detail_key": "phase.guidedRoundContinuation"' in guidance
     assert '"detail_key": "phase.guidanceExecution"' in guidance
     assert '"detail_key": "phase.deepReflection"' in reflection
+    assert '"phase.useToolsAttachments": "Phase 1 decided to use tools. Task: Analyze uploaded attachments"' in i18n
+    assert '"phase.useToolsAttachments": "阶段一决定使用工具。任务：分析上传的附件"' in i18n
 
 
 def test_workbench_chat_last_user_message_has_retry_action():
@@ -2182,6 +2470,30 @@ def test_electron_browser_panel_uses_native_browser_bridge():
     assert "bridge.setContext" in view
     assert "bridge.setMuted" in view
     assert "browser_user_events" in (root / "src" / "cyrene" / "tooling" / "catalog.py").read_text(encoding="utf-8")
+
+
+def test_electron_browser_type_uses_react_compatible_native_setter():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    browser_input = (root / "electron" / "browser-input.js").read_text(encoding="utf-8")
+    package = (root / "electron" / "package.json").read_text(encoding="utf-8")
+    playwright_browser = (root / "src" / "cyrene" / "browser.py").read_text(encoding="utf-8")
+
+    assert "buildBrowserTypeTargetScript" in main
+    assert "runPageOperation('set-native')" in main
+    assert "prototypeSetter.call(element, desired);" in browser_input
+    assert "element.value = desired" not in browser_input
+    assert "await waitForControlledRender();" in browser_input
+    assert "runPageOperation('prepare-trusted')" in main
+    assert "wc.focus();" in main
+    assert "await wc.insertText(desiredText);" in main
+    assert "runPageOperation('verify')" in main
+    assert "wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });" in main
+    assert "browser-input.js" in package
+    assert "clean(el.value)" in main
+    assert "clean(el.value)" in playwright_browser
+    assert "inputType === 'password' ? '' : clean(el.value)" in main
+    assert "inputType === 'password' ? '' : clean(el.value)" in playwright_browser
 
 
 def test_electron_browser_tabs_are_per_session_while_login_state_is_shared():
@@ -2529,8 +2841,8 @@ def test_warning_toast_has_no_colored_left_accent():
 
 
 def test_workbench_subagent_payload_recovers_chat_scoped_snapshot(monkeypatch):
-    from webui import routes_workbench_chat
     from cyrene import subagent
+    from webui import routes_workbench_chat
 
     messages = [
         {"role": "user", "round_id": "round_1", "content": "Compare two approaches"},
@@ -2865,6 +3177,13 @@ def test_workbench_global_shortcut_handler_wired_in_workbench_app():
     assert 'sc.matches(event, "search")' in app_block
     assert 'sc.matches(event, "new-chat")' in app_block
     assert 'sc.matches(event, "new-task")' in app_block
+    new_chat_block = app_block.split('sc.matches(event, "new-chat")', 1)[1].split(
+        'sc.matches(event, "new-task")', 1
+    )[0]
+    assert "createChat();" in new_chat_block
+    assert 'setFullPage("chat");' not in new_chat_block
+    assert '"new-chat":       function () { acts.createChat(); }' in app_block
+    assert '"new-chat":       function () { acts.createSession(); }' not in app_block
     assert 'sc.matches(event, "settings")' in app_block
     assert 'sc.matches(event, "toggle-sidebar")' in app_block
     assert 'sc.matches(event, "switch-project")' in app_block

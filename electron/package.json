@@ -103,6 +103,7 @@
     },
     "files": [
       "main.js",
+      "browser-input.js",
       "preload.js",
       "browser-chat-overlay-preload.js",
       "app-use.js",

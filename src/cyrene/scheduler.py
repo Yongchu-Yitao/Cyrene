@@ -4,8 +4,8 @@ Responsibilities
 ----------------
 1. **Scheduled tasks** -- Check the SQLite database for due tasks and execute
    them (inherited from the original scheduler).
-2. **Heartbeat** -- A lightweight periodic tick that triggers the checks above
-   and, on a coarser cadence (every ~30 min), also runs the proactive lottery.
+2. **Heartbeat** -- A low-frequency proactive lottery job, independent from
+   the task poll so maintenance does not wake on every task-check interval.
 3. **Lottery** -- A probability-driven mechanism that occasionally prompts the
    assistant to send an unsolicited message to the user.  State is persisted
    to ``data/lottery_state.json`` so that it survives restarts.
@@ -13,6 +13,8 @@ Responsibilities
    receives short-term memory, recent conversation context, and relationship
    state from SOUL.md so the proactive message can reference real events
    instead of sending generic greetings.
+5. **Maintenance** -- Behavior learning, steward work, and cleanup each have
+   their own cadence and share a lock so model-backed jobs do not overlap.
 """
 
 import asyncio
@@ -35,7 +37,15 @@ from cyrene.agent import (
     run_steward_agent,
     run_task_agent,
 )
-from cyrene.config import BASE_DIR, DATA_DIR, OWNER_ID, SCHEDULER_INTERVAL, STATE_FILE, STEWARD_INTERVAL
+from cyrene.config import (
+    BASE_DIR,
+    DATA_DIR,
+    OWNER_ID,
+    PATTERN_DETECTION_INTERVAL,
+    SCHEDULER_INTERVAL,
+    STATE_FILE,
+    STEWARD_INTERVAL,
+)
 from cyrene.conversations import CONVERSATIONS_DIR, get_recent_conversations
 from cyrene.io_utils import atomic_write_json, read_json_safe
 from cyrene.notifications import notify
@@ -75,7 +85,7 @@ _PROACTIVE_COOLDOWN_SECONDS: int = 3 * 86400
 _STEWARD_STATE_FILE = DATA_DIR / "steward_state.json"
 
 # Big-heartbeat cadence: perform proactive checks.
-# Read from web_settings.json (default 1800s = 30 min), converted to ticks.
+# Read from web_settings.json (default 1800s = 30 min).
 _HEARTBEAT_INTERVAL_SECONDS: int = 0  # lazy-loaded on first use
 
 
@@ -90,15 +100,18 @@ def _get_heartbeat_interval() -> int:
     return _HEARTBEAT_INTERVAL_SECONDS
 
 
-_BIG_HEARTBEAT_INTERVAL: int = 0  # set during setup_scheduler
+_MAINTENANCE_LOCK: asyncio.Lock | None = None
+_MAINTENANCE_LOCK_LOOP: asyncio.AbstractEventLoop | None = None
 
-# Steward cadence: run steward agent every STEWARD_INTERVAL seconds.
-_STEWARD_TICK_INTERVAL = max(1, STEWARD_INTERVAL // SCHEDULER_INTERVAL)
 
-_heartbeat_tick: int = 0
-_steward_tick: int = 0
-_cleanup_tick: int = 0
-_CLEANUP_TICK_INTERVAL = max(1, 86400 // SCHEDULER_INTERVAL)  # once a day
+def _get_maintenance_lock() -> asyncio.Lock:
+    """Serialize heavyweight maintenance work without coupling its cadence."""
+    global _MAINTENANCE_LOCK, _MAINTENANCE_LOCK_LOOP
+    loop = asyncio.get_running_loop()
+    if _MAINTENANCE_LOCK is None or _MAINTENANCE_LOCK_LOOP is not loop:
+        _MAINTENANCE_LOCK = asyncio.Lock()
+        _MAINTENANCE_LOCK_LOOP = loop
+    return _MAINTENANCE_LOCK
 
 
 def _load_lottery_state() -> None:
@@ -1100,46 +1113,76 @@ async def _run_steward_if_needed(bot, db_path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Main heartbeat
+# Scheduled jobs
 # ---------------------------------------------------------------------------
 
-async def _heartbeat(bot, db_path: str) -> None:
-    """Periodic heartbeat invoked by APScheduler.
-
-    1. Check for due scheduled tasks and execute them.
-    2. On every Nth tick (N such that ``N * SCHEDULER_INTERVAL ~ 30 min``)
-       run the proactive lottery check.
-    3. On every Mth tick (M such that ``M * SCHEDULER_INTERVAL ~ STEWARD_INTERVAL``)
-       run the steward agent auto-trigger.
-    """
-    global _heartbeat_tick, _steward_tick, _cleanup_tick
-
+async def _scheduled_task_tick(bot, db_path: str) -> None:
+    """Keep due-task precision independent from low-frequency maintenance."""
     try:
         await _check_and_execute_tasks(bot, db_path)
+    except Exception:
+        logger.exception("Scheduled-task tick error")
 
-        # -- Lottery proactive check --
-        _heartbeat_tick += 1
-        if _heartbeat_tick >= _BIG_HEARTBEAT_INTERVAL:
-            _heartbeat_tick = 0
+
+async def _proactive_tick(bot, db_path: str) -> None:
+    try:
+        async with _get_maintenance_lock():
             await _heartbeat_proactive_check(bot, db_path)
+    except Exception:
+        logger.exception("Proactive heartbeat error")
 
-        # -- Steward auto-trigger --
-        _steward_tick += 1
-        if _steward_tick >= _STEWARD_TICK_INTERVAL:
-            _steward_tick = 0
+
+async def _steward_tick(bot, db_path: str) -> None:
+    try:
+        async with _get_maintenance_lock():
             await _run_steward_if_needed(bot, db_path)
+    except Exception:
+        logger.exception("Steward tick error")
 
-        # -- Pattern detection --
-        from cyrene.pattern import tick as _pattern_tick
-        await _pattern_tick(bot, db_path)
 
-        # -- Short-term memory cleanup (daily) --
-        _cleanup_tick += 1
-        if _cleanup_tick >= _CLEANUP_TICK_INTERVAL:
-            _cleanup_tick = 0
+async def _behavior_learning_tick(bot, db_path: str) -> None:
+    try:
+        async with _get_maintenance_lock():
+            # Import lazily so startup does not load the learning stack merely
+            # to register the scheduler.
+            from cyrene.pattern import tick as _pattern_tick
+
+            await _pattern_tick(bot, db_path)
+    except Exception:
+        logger.exception("Behavior-learning tick error")
+
+
+async def _cleanup_tick() -> None:
+    try:
+        async with _get_maintenance_lock():
             clear_old_entries(days=7)
     except Exception:
-        logger.exception("Heartbeat error")
+        logger.exception("Short-term cleanup error")
+
+
+async def _heartbeat(bot, db_path: str) -> None:
+    """Backward-compatible alias for the lightweight due-task poll."""
+    await _scheduled_task_tick(bot, db_path)
+
+
+def _add_interval_job(
+    scheduler: AsyncIOScheduler,
+    func,
+    *,
+    seconds: int,
+    job_id: str,
+    args: list | None = None,
+) -> None:
+    scheduler.add_job(
+        func,
+        "interval",
+        seconds=max(1, int(seconds)),
+        args=args or [],
+        id=job_id,
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1147,13 +1190,12 @@ async def _heartbeat(bot, db_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 def setup_scheduler(bot, db_path: str) -> AsyncIOScheduler:
-    """Create and return an :class:`AsyncIOScheduler` with the heartbeat job.
+    """Create a scheduler with independent task and maintenance cadences.
 
     The signature is kept stable so that ``bot._post_init`` continues to
     work without modification.
     """
     global _scheduler
-    global _BIG_HEARTBEAT_INTERVAL
     global _workbench_db_path
     _workbench_db_path = str(db_path)
     try:
@@ -1166,23 +1208,47 @@ def setup_scheduler(bot, db_path: str) -> AsyncIOScheduler:
         logger.debug("Could not configure Workbench SQLite stores for scheduler", exc_info=True)
     _load_lottery_state()
     hb_seconds = _get_heartbeat_interval()
-    _BIG_HEARTBEAT_INTERVAL = max(1, hb_seconds // SCHEDULER_INTERVAL)
     _scheduler = AsyncIOScheduler()
-    _scheduler.add_job(
-        _heartbeat,
-        "interval",
+    _add_interval_job(
+        _scheduler,
+        _scheduled_task_tick,
         seconds=SCHEDULER_INTERVAL,
+        job_id="scheduled_tasks",
         args=[bot, db_path],
-        id="heartbeat",
-        replace_existing=True,
     )
-    big_minutes = (_BIG_HEARTBEAT_INTERVAL * SCHEDULER_INTERVAL) // 60
+    _add_interval_job(
+        _scheduler,
+        _behavior_learning_tick,
+        seconds=PATTERN_DETECTION_INTERVAL,
+        job_id="behavior_learning",
+        args=[bot, db_path],
+    )
+    _add_interval_job(
+        _scheduler,
+        _proactive_tick,
+        seconds=hb_seconds,
+        job_id="proactive_heartbeat",
+        args=[bot, db_path],
+    )
+    _add_interval_job(
+        _scheduler,
+        _steward_tick,
+        seconds=STEWARD_INTERVAL,
+        job_id="steward",
+        args=[bot, db_path],
+    )
+    _add_interval_job(
+        _scheduler,
+        _cleanup_tick,
+        seconds=86400,
+        job_id="short_term_cleanup",
+    )
     logger.info(
-        "Scheduler configured: interval=%ds, big_heartbeat every %d ticks "
-        "(~%d min, configured=%ds)",
+        "Scheduler configured: tasks=%ds, behavior=%ds, proactive=%ds, "
+        "steward=%ds, cleanup=86400s",
         SCHEDULER_INTERVAL,
-        _BIG_HEARTBEAT_INTERVAL,
-        big_minutes,
+        PATTERN_DETECTION_INTERVAL,
         hb_seconds,
+        STEWARD_INTERVAL,
     )
     return _scheduler

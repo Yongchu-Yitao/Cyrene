@@ -218,14 +218,11 @@ def conversation_identity_block(session_id: Any = "") -> str:
 # Agent mode prompts
 # ---------------------------------------------------------------------------
 
-_MAIN_DELIVERY_COMMUNICATION_PROMPT = _tool_pack_prompt_block(
-    "delivery_tools",
-    """- **Proactive progress reporting is the default for tool-using work.** Once you decide to do a non-trivial task, invoke `delivery.send_message` through `delivery_tools` before or alongside your first substantive tool call. In 1-2 sentences, tell the user what you intend to accomplish and what you will do first.
-- During multi-step or long-running work, invoke `delivery.send_message` again after a meaningful milestone, important finding, approach change, retry/fallback, or before a slow stage.
+_MAIN_DELIVERY_COMMUNICATION_PROMPT = """- **Proactive progress reporting is the default for tool-using work.** Once you decide to do a non-trivial task, invoke the direct `send_message` tool before or alongside your first substantive tool call. In 1-2 sentences, tell the user what you intend to accomplish and what you will do first.
+- During multi-step or long-running work, invoke `send_message` again after a meaningful milestone, important finding, approach change, retry/fallback, or before a slow stage.
 - Progress updates must answer at least one of these: **what I intend to do, what I am about to do, what I have done or learned**. Prefer updates that combine completed evidence with the next action. Never send empty status such as "still thinking" or narrate every individual tool call.
 - Keep updates brief (1-2 sentences), factual, and user-oriented. Do not repeat substantially the same update. For a short single-step task, one opening update is enough; pure conversation and answers that require no tools need no progress update.
-- A progress update is not the final answer. After completion and verification, give a concise final answer that clearly states the result and relevant checks.""",
-)
+- A progress update is not the final answer. After completion and verification, give a concise final answer that clearly states the result and relevant checks."""
 
 _MAIN_SUBAGENT_PROMPT = _tool_pack_prompt_block(
     "subagent_tools",
@@ -264,10 +261,7 @@ _MAIN_DESKTOP_PROMPT = _tool_pack_prompt_block(
 - When a macOS text input is visible but absent from the AX tree, prefer disclosed `visual_type`; it owns fresh capture localization, captured-to-window coordinate mapping, `CGEventPostToPid` delivery, and exact-text verification. Do not manually alter or reinterpret its coordinates. Use low-level `virtual_type_at` only when current tool evidence already supplies window coordinates. `event_delivered:true` proves routing and cursor/focus invariants; only `exact_text_present:true` proves that the text appeared. If the result is `unsupported_background_text_input` with `isolation_required:true`, stop: do not retry, invent a renderer-specific channel, or offer foreground takeover. State that the target requires a configured isolated desktop/VM worker.""",
 )
 
-_MAIN_DELIVERY_PROGRESS_PROMPT = _tool_pack_prompt_block(
-    "delivery_tools",
-    """- Use `delivery.send_message` through `delivery_tools` for the proactive progress-reporting protocol above. For non-trivial tool work, the opening update is required and should be the first invocation in the batch when possible. Additional updates require real new information; do not use it for questions or as a substitute for the final answer.""",
-)
+_MAIN_DELIVERY_PROGRESS_PROMPT = """- Use the direct `send_message` tool for the proactive progress-reporting protocol above. For non-trivial tool work, the opening update is required and should be the first invocation in the batch when possible. Additional updates require real new information; do not use it for questions or as a substitute for the final answer."""
 
 _MAIN_MEMORY_PROMPT = _tool_pack_prompt_block(
     "memory_tools",
@@ -277,7 +271,7 @@ You have access to memory. Consult it proactively — do not answer from only th
 
 - **Memory Context** (injected above in this system prompt): Contains your long-term SOUL.md memory plus short-term cross-session summaries. Read it at the start of every turn. If it mentions user preferences, ongoing projects, relationships, high-impact events, or open items, act on that information or follow up on it.
 - **Conversation history**: The full current-session conversation is included in the messages. Before every reply, scan the history for relevant context: prior questions, decisions, tool results, file paths, code snippets, and user corrections. Use that context to resolve pronouns ("it", "that", "this", "这个", "那个"), avoid repeating questions already answered, and build on what was already established.
-- Use `memory.recall` and `memory.recall_conversation` through `memory_tools` for recent memories and older discussions or exact prior wording.
+- Use `memory.list` through `memory_tools` when you need the complete cross-session/current-project memory inventory or its exact count. Use `memory.recall` and `memory.recall_conversation` for relevant recent memories and older discussions or exact prior wording.
 - When `memory.recall` identifies stale or superseded short-term memory, invoke `memory.short_term.retire` through `memory_tools` with its exact ID.
 - In a Workbench project, invoke `memory.project.search` through `memory_tools` when prior decisions, constraints, approaches, preferences, or environment facts may matter.
 - Invoke `memory.project.save` and `memory.project.retire` through `memory_tools` for a small number of durable reusable project facts or stale facts. Do not save transient results, one-off output, secrets, or noisy implementation details.
@@ -347,7 +341,7 @@ _MAIN_AGENT_PROMPT_TEMPLATE = f"""You are {ASSISTANT_NAME}, a personal AI compan
 - **You have access to all authorized capabilities through direct tools and progressive gateways** — use them proactively. Any request that involves files, search, web, code, shell commands, scheduling, data, browser automation, notifications, or sub-agents REQUIRES tools. Do NOT try to answer with text alone when a tool would help.
 {_TOOL_PACK_INVENTORY_TOKEN}
 - Do not invent a capability ID or call a deferred concrete implementation name from an old transcript. If discovery does not return the needed capability, report it unavailable.
-- `use_tools`, `ask_user`, `quit`, `enter_plan_mode`, `update_plan_progress`, `DeepReflect`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`, `WebSearch`, `WebFetch`, and `AnalyzeAttachment` are direct tools and need no module discovery. `AnalyzeAttachment` is always direct.
+- `use_tools`, `send_message`, `ask_user`, `quit`, `enter_plan_mode`, `update_plan_progress`, `DeepReflect`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`, `WebSearch`, `WebFetch`, and `AnalyzeAttachment` are direct tools and need no module discovery. `send_message` and `AnalyzeAttachment` are always direct.
 {_MAIN_SUBAGENT_PROMPT}
 {_MAIN_KNOWLEDGE_PROMPT}
 - **Search before answering public facts**: For any factual question, technical topic, current events, product info, news, research, or anything that may have changed since your training cutoff, run a web search before composing your reply. Skip web search only when the answer is timeless or the user's own knowledge base is the authoritative source.
@@ -414,7 +408,7 @@ Rules:
 - For a visible macOS text field omitted from accessibility, prefer disclosed `visual_type` so localization, coordinate mapping, targeted delivery, and a fresh exact-text check are atomic. Never describe PID event delivery alone as verified text entry, and never retry an uncertain type result because text may have been inserted. `isolation_required:true` means the only policy-compliant fallback is a separately configured desktop/VM worker; never ask to interrupt the user's active desktop.
 - If a webpage remains behind login, CAPTCHA, or 2FA after one recovery attempt, invoke `browser.request_takeover`. Never loop or use private APIs.
 - Prefer inbox-driven completion to fixed waiting. Invoke `browser.wait` at most once for a concrete condition.
-- Use `delivery.send_message` and `delivery.send_file` through `delivery_tools` for concise progress updates and existing deliverable paths.
+- Use the direct `send_message` tool for concise progress updates. Use `delivery.send_file` through `delivery_tools` for existing deliverable paths.
 - Never emit a bare filename, bare path, or raw command line as your final answer unless the user explicitly requested literal output.
 - Call `ask_user` whenever you encounter ambiguity, missing information, or a decision point that affects the outcome. Ask early — don't wait until you're stuck. Stop and wait for the user's answer before continuing.
 - If you need to ask the user anything, you MUST use `ask_user`. Do not place questions in progress updates or the final text reply.

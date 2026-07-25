@@ -65,7 +65,7 @@ The following variables are read at startup. Most can also be edited at runtime 
 
 | Variable | Description | Default |
 |---|---|---|
-| `STEWARD_INTERVAL` | Seconds between SOUL.md steward runs | `1800` |
+| `STEWARD_INTERVAL` | Seconds between SOUL.md steward runs (minimum one hour) | `3600` |
 | `PATTERN_DETECTION_INTERVAL` | Seconds between behavior-pattern scans | `600` |
 | `LOTTERY_DELTA` | Base lottery probability increment | `0.15` |
 | `LOTTERY_MAX` | Lottery probability cap | `0.85` |
@@ -101,6 +101,7 @@ Most settings can be edited at runtime through the Web UI **Settings** page with
 - **API Keys** — Update `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`, `WECHAT_BOT_TOKEN`, `AMAP_API_KEY`, embedding credentials
 - **Models** — Add or remove model configurations
 - **Tools** — Enable or disable specific tools
+- **Agents** — Keep `max_tool_rounds` for the main agent only; configure execution subagent lease checkpoints, no-progress detection, wide tool/time/cost/context safety fuses, and separate discussion round/message/information-gain limits
 - **Search** — Built-in SimpleXNG only
 - **MCP Servers** — Add, remove, and restart MCP server connections
 - **SOUL.md** — Edit the personality document directly

@@ -69,6 +69,7 @@ from cyrene.agent.state import (
     active_workspace_dir,
 )
 from cyrene.context_trace import context_block
+from cyrene.config import PATTERN_DETECTION_INTERVAL
 from cyrene.llm import _assistant_text, _truncate
 from cyrene.memory import get_memory_context
 from cyrene.short_term import get_context
@@ -83,6 +84,7 @@ from cyrene.task_lifecycle import cancel_and_wait, track_task
 
 logger = logging.getLogger(__name__)
 _BACKGROUND_BEHAVIOR_TASKS: set[asyncio.Task[Any]] = set()
+_DEFERRED_BEHAVIOR_TASK: asyncio.Task[Any] | None = None
 
 
 def _track_background_behavior_task(task: asyncio.Task[Any]) -> None:
@@ -96,19 +98,53 @@ def _track_background_behavior_task(task: asyncio.Task[Any]) -> None:
 
 async def shutdown_background_tasks() -> None:
     """Stop coordinator-owned jobs before runtime teardown."""
+    global _DEFERRED_BEHAVIOR_TASK
     await cancel_and_wait(_BACKGROUND_BEHAVIOR_TASKS)
     _BACKGROUND_BEHAVIOR_TASKS.clear()
+    _DEFERRED_BEHAVIOR_TASK = None
 
 
 async def _kick_behavior_learning_processing() -> None:
+    """Coalesce completed turns instead of starting one LLM job per turn."""
+    global _DEFERRED_BEHAVIOR_TASK
     from cyrene import behavior_learning as _behavior_learning
 
-    task = asyncio.create_task(_behavior_learning.process_unprocessed_turns())
-    _track_background_behavior_task(task)
+    # Normal desktop/server runtimes already own the configured 10-minute
+    # behavior-learning job. Do not add a second offset timer after every turn.
     try:
-        await asyncio.wait_for(asyncio.shield(task), timeout=0.2)
-    except asyncio.TimeoutError:
-        return
+        from cyrene import scheduler as _scheduler_module
+
+        runtime_scheduler = getattr(_scheduler_module, "_scheduler", None)
+        if runtime_scheduler is not None and runtime_scheduler.running:
+            return
+    except Exception:
+        pass
+
+    loop = asyncio.get_running_loop()
+    existing = _DEFERRED_BEHAVIOR_TASK
+    if existing is not None and not existing.done():
+        try:
+            if existing.get_loop() is loop:
+                return
+            if not existing.get_loop().is_closed():
+                existing.cancel()
+        except RuntimeError:
+            pass
+
+    async def _run_after_quiet_period() -> None:
+        await asyncio.sleep(max(1, int(PATTERN_DETECTION_INTERVAL)))
+        await _behavior_learning.process_unprocessed_turns()
+
+    task = asyncio.create_task(_run_after_quiet_period())
+    _DEFERRED_BEHAVIOR_TASK = task
+    _track_background_behavior_task(task)
+
+    def _clear(completed: asyncio.Task[Any]) -> None:
+        global _DEFERRED_BEHAVIOR_TASK
+        if _DEFERRED_BEHAVIOR_TASK is completed:
+            _DEFERRED_BEHAVIOR_TASK = None
+
+    task.add_done_callback(_clear)
 
 
 # ---------------------------------------------------------------------------

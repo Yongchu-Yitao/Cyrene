@@ -157,6 +157,7 @@ var WorkbenchChatModel = (function () {
       else if (type === "reply_start" && handlers.onReplyStart) handlers.onReplyStart(event);
       else if (type === "reply_delta" && handlers.onReplyDelta) handlers.onReplyDelta(event.delta || "");
       else if (type === "reply_done" && handlers.onReplyDone) handlers.onReplyDone(event.response || "");
+      else if (type === "run_finalizing" && handlers.onFinalizing) handlers.onFinalizing(event);
       else if (type === "saved" && handlers.onSaved) handlers.onSaved(event);
       else if (type === "awaiting_user" && handlers.onAwaitingUser) handlers.onAwaitingUser(event);
       else if (type === "guidance_received" && handlers.onGuidanceReceived) handlers.onGuidanceReceived(event);
@@ -184,7 +185,7 @@ var WorkbenchChatModel = (function () {
     return pump();
   }
 
-  // Streaming send. handlers: { onAck, onReplyStart, onReplyDelta, onReplyDone, onSaved, onError }
+  // Streaming send. handlers: { onAck, onReplyStart, onReplyDelta, onReplyDone, onFinalizing, onSaved, onError }
   function sendMessage(chatId, input, handlers, signal) {
     return fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/messages", {
       method: "POST",
@@ -401,6 +402,7 @@ function wbcRuntimeTimelineMessages(runtime) {
     role: "assistant",
     createdAt: new Date(startedAt + 1).toISOString(),
     runtimeHeartbeat: true,
+    runtimeFinalizing: !!runtime.finalizing,
   }];
   activities.forEach(function (activity, index) {
     items.push({
@@ -408,11 +410,47 @@ function wbcRuntimeTimelineMessages(runtime) {
       role: "assistant",
       createdAt: new Date(Number(activity.createdAt || startedAt + index + 2)).toISOString(),
       runtimeActivity: activity,
-      runtimeActivityActive: index === activities.length - 1,
+      runtimeActivityActive: !runtime.finalizing && index === activities.length - 1,
       runtimeActivityHasReplyText: !!runtime.text,
     });
   });
   return items;
+}
+
+function wbcFinalizeRuntime(runtime) {
+  var current = runtime || {};
+  function settle(items) {
+    return (Array.isArray(items) ? items : []).map(function (entry) {
+      if (!entry || entry.kind !== "tool" || entry.status !== "running") return entry;
+      return { ...entry, status: "completed", inferredCompletion: true };
+    });
+  }
+  return {
+    ...current,
+    finalizing: true,
+    replying: false,
+    progress: settle(current.progress),
+    activities: (Array.isArray(current.activities) ? current.activities : []).map(function (activity) {
+      return {
+        ...activity,
+        reasoningActive: false,
+        timelineClosed: true,
+        progress: settle(activity && activity.progress),
+      };
+    }),
+  };
+}
+
+function wbcMergeToolLifecycleEntry(current, incoming, terminalOnly) {
+  if (!terminalOnly) return { ...current, ...incoming };
+  // The concrete executor may already have replaced a progressive package name
+  // with the resolved capability. A gateway terminal event owns lifecycle only;
+  // it must not regress that richer identity back to the package name.
+  return {
+    ...current,
+    status: incoming.status,
+    failed: incoming.failed,
+  };
 }
 
 function wbcTraceDedupeKey(trace) {
@@ -525,6 +563,40 @@ function wbcT(key, fallback, params) {
     });
   }
   return fallback || key;
+}
+
+function wbcToolPreviewText(preview) {
+  var text = String(preview || "");
+  if (!text) return "";
+  var operationKeys = {
+    discover: "toolOperation.discover",
+    describe: "toolOperation.describe",
+    invoke: "toolOperation.invoke",
+  };
+  return text.split(", ").map(function (part) {
+    var token = part.trim();
+    if (operationKeys[token]) return wbcT(operationKeys[token], token);
+    // Progressive calls expose stable capability IDs in their arguments.
+    // Resolve only values with an existing tool-name translation; arbitrary
+    // user input, paths, queries, and other arguments must remain untouched.
+    var localizedToolName = wbcT("toolName." + token, token);
+    return localizedToolName !== token ? localizedToolName : part;
+  }).join(", ");
+}
+
+function wbcToolArgsPreview(args) {
+  if (!args || typeof args !== "object") return "";
+  return Object.values(args).map(function (value) {
+    if (value == null || value === "") return "";
+    if (typeof value === "object") {
+      try {
+        return JSON.stringify(value) || "";
+      } catch (_) {
+        return "";
+      }
+    }
+    return String(value);
+  }).filter(Boolean).join(", ").slice(0, 60);
 }
 
 function wbcThinkingPhrases() {
@@ -1225,6 +1297,11 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
       onReplyDone: function (text) {
         update(chatId, function (cur) { return cur ? { ...cur, text: text || cur.text, lastEventAt: Date.now() } : null; });
       },
+      onFinalizing: function () {
+        update(chatId, function (cur) {
+          return cur ? { ...wbcFinalizeRuntime(cur), lastEventAt: Date.now() } : null;
+        });
+      },
       onIntermediateMessage: function (event) {
         appendIntermediate(chatId, event && event.message);
       },
@@ -1462,20 +1539,25 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
       return;
     }
     var entry = null;
-    if (event.type === "tool_call_started" || event.type === "tool_call") {
+    var terminalToolEvent = false;
+    if (event.type === "tool_call_started" || event.type === "tool_call" || event.type === "tool_call_finished") {
       var toolName = String(event.tool || "");
       if (["use_tools", "quit", "send_message", "update_plan_progress"].indexOf(toolName) >= 0) return;
       var args = event.args || {};
-      var preview = Object.values(args).filter(Boolean).map(String).join(", ").slice(0, 60);
+      var preview = wbcToolArgsPreview(args);
       var toolStarted = event.type === "tool_call_started";
+      terminalToolEvent = event.type === "tool_call_finished";
       var toolResult = String(event.result || "");
+      var toolFailed = !!event.failed
+        || String(event.status || "").toLowerCase() === "failed"
+        || (!toolStarted && toolResult.toLowerCase().startsWith("tool failed:"));
       entry = {
         kind: "tool",
         toolCallId: String(event.tool_call_id || ""),
         text: toolName || wbcT("settings.tools", "Tools"),
         preview: preview,
         status: toolStarted ? "running" : "completed",
-        failed: !toolStarted && toolResult.toLowerCase().startsWith("tool failed:"),
+        failed: toolFailed,
       };
     } else if (event.type === "phase_transition" && (event.detail || event.detail_key)) {
       entry = { kind: "phase", text: event.detail ? String(event.detail).slice(0, 80) : "", detailKey: event.detail_key || "", detailParams: event.detail_params || {}, preview: "" };
@@ -1508,7 +1590,7 @@ var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {
           return (Array.isArray(items) ? items : []).map(function (item) {
             if (String(item && item.toolCallId || "") !== entry.toolCallId) return item;
             matchedToolCall = true;
-            return { ...item, ...entry };
+            return wbcMergeToolLifecycleEntry(item, entry, terminalToolEvent);
           });
         }
         var mergedActivities = (Array.isArray(latest.activities) ? latest.activities : []).map(function (activity) {
@@ -1554,7 +1636,7 @@ window.WorkbenchChatRuntimes = WorkbenchChatRuntimes;
 // Page
 // ---------------------------------------------------------------------------
 
-function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, onActiveChatIdChange }) {
+function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onActiveChatChange, onActiveChatIdChange }) {
   window.useWorkbenchI18n();
   if (typeof window.useDataVersion === "function") window.useDataVersion();
   var isActive = active !== false;
@@ -1574,6 +1656,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   // POST /chats and /fork already return the complete conversation. Mark the
   // adopted id so the selection effect does not clear it and fetch it again.
   var skipNextHydrationChatIdRef = useWbcRef("");
+  var handledNewChatRequestIdRef = useWbcRef(0);
 
   useWbcEffect(function () {
     chatsRef.current = chats;
@@ -2341,7 +2424,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
   }
 
   function handleCreateChat() {
-    model.createChat(projectId).then(function (chat) {
+    return model.createChat(projectId).then(function (chat) {
       setChats(function (prev) { return [chat].concat(prev); });
       skipNextHydrationChatIdRef.current = chat.id;
       setActiveChatId(chat.id);
@@ -2349,14 +2432,37 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     }).catch(function (err) { setError(wbcErrorText(err)); });
   }
 
-  function handleRename(title) {
-    if (!activeChat) return Promise.resolve();
-    return model.renameChat(activeChat.id, title).then(function (chat) {
-      setActiveChat(function (prev) { return prev ? { ...prev, title: chat.title } : prev; });
+  // The shell-level menu/shortcut owns navigation, while this page owns chat
+  // persistence. A monotonically increasing request id bridges those layers and
+  // still works when the chat page is mounted by the same render as Cmd/Ctrl+N.
+  useWbcEffect(function () {
+    var requestId = Number(newChatRequestId || 0);
+    if (
+      !requestId
+      || requestId === handledNewChatRequestIdRef.current
+      || !isActive
+      || !projectId
+    ) return;
+    handledNewChatRequestIdRef.current = requestId;
+    handleCreateChat();
+  }, [newChatRequestId, isActive, projectId]);
+
+  function handleRenameChat(chatId, title) {
+    if (!chatId) return Promise.resolve();
+    return model.renameChat(chatId, title).then(function (chat) {
+      setActiveChat(function (prev) {
+        return prev && prev.id === chat.id ? { ...prev, title: chat.title } : prev;
+      });
       setChats(function (prev) {
         return prev.map(function (item) { return item.id === chat.id ? { ...item, title: chat.title } : item; });
       });
+      return chat;
     });
+  }
+
+  function handleRename(title) {
+    if (!activeChat) return Promise.resolve();
+    return handleRenameChat(activeChat.id, title);
   }
 
   function handleDelete() {
@@ -2476,6 +2582,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
     && sideTab === "browser"
     && browserWindowMode !== "maximized"
   );
+  var conversationLoading = loading || chatLoading;
 
   function setActiveBrowserWindowMode(mode) {
     var chatId = String(activeChatId || "");
@@ -2496,13 +2603,14 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
         runningChatIds={runtimes}
         onSelect={function (id) { setActiveChatId(id); }}
         onCreate={handleCreateChat}
+        onRename={handleRenameChat}
         onDelete={handleDeleteChat}
       />
       <WbcMain
         project={project}
         chat={visibleChat}
         chatSummary={selectedChatSummary}
-        loading={chatLoading}
+        loading={conversationLoading}
         runtime={activeRuntime}
         error={error}
         errorKind={errorKind}
@@ -2584,7 +2692,7 @@ function WorkbenchChatPage({ active, project, onOpenTask, onActiveChatChange, on
 // Conversation rail (column 2)
 // ---------------------------------------------------------------------------
 
-function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCreate, onDelete }) {
+function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCreate, onRename, onDelete }) {
   var [query, setQuery] = useWbcState("");
   var [menuId, setMenuId] = useWbcState("");
   var filtered = useWbcMemo(function () {
@@ -2614,12 +2722,16 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
         />
       </div>
       {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
-      {loading && <div className="workbench-muted">{wbcT("workbenchChat.loading", "Loading chats...")}</div>}
-      {!loading && filtered.length === 0 && (
-        <div className="workbench-muted">{query ? wbcT("workbenchChat.noMatches", "No matching chats.") : wbcT("workbenchChat.emptyRail", "No chats yet. Create one from the top right.")}</div>
-      )}
-      <div className="wbc-chat-list">
-        {filtered.map(function (chat) {
+      <div className={"wbc-chat-list" + (loading ? " is-loading" : "")}>
+        {loading && (
+          <div className="workbench-muted wbc-rail-loading" role="status">
+            {wbcT("workbenchChat.loading", "Loading chats...")}
+          </div>
+        )}
+        {!loading && filtered.length === 0 && (
+          <div className="workbench-muted">{query ? wbcT("workbenchChat.noMatches", "No matching chats.") : wbcT("workbenchChat.emptyRail", "No chats yet. Create one from the top right.")}</div>
+        )}
+        {!loading && filtered.map(function (chat) {
           var active = chat.id === activeChatId;
           var chatRunning = !!(runningChatIds && runningChatIds[chat.id]) || chat.status === "running";
           var isMenuOpen = menuId === chat.id;
@@ -2659,6 +2771,22 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
                     </button>
                     {isMenuOpen && (
                       <div className="wb-card-menu">
+                        {!chat.legacy && (
+                          <button type="button" onClick={function (e) {
+                            e.stopPropagation();
+                            setMenuId("");
+                            var next = window.prompt(
+                              wbcT("workbenchChat.titleLabel", "Chat title"),
+                              chat.title || ""
+                            );
+                            if (next == null) return;
+                            next = String(next).trim();
+                            if (!next || next === chat.title || !onRename) return;
+                            onRename(chat.id, next).catch(function (err) {
+                              window.showToast(err.message || String(err), "error");
+                            });
+                          }}>{wbcT("workbenchChat.rename", "Rename chat")}</button>
+                        )}
                         <button type="button" className="danger" onClick={function (e) {
                           e.stopPropagation();
                           setMenuId("");
@@ -3737,7 +3865,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
             && String(chat.pendingQuestion.id || "") === String(msg.questionId || "")
           );
           if (msg.runtimeHeartbeat) {
-            return <WbcThreadItem key={msg.id}><WbcHeartbeat startedAt={runtime && runtime.startedAt} lastEventAt={runtime && runtime.lastEventAt} /></WbcThreadItem>;
+            return <WbcThreadItem key={msg.id}><WbcHeartbeat startedAt={runtime && runtime.startedAt} lastEventAt={runtime && runtime.lastEventAt} finalizing={!!msg.runtimeFinalizing} /></WbcThreadItem>;
           }
           if (msg.runtimeActivity || msg.activityCard) {
             var activity = msg.runtimeActivity || {
@@ -4249,7 +4377,7 @@ function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, o
                         if (entry.detailKey) return wbcT(entry.detailKey, toolKey, entry.detailParams);
                         return toolKey;
                       })()}
-                      {(entry.preview) ? <small>（{entry.preview}）</small> : null}
+                      {(entry.preview) ? <small>（{wbcToolPreviewText(entry.preview)}）</small> : null}
                     </span>
                   </li>
                 );
@@ -4313,7 +4441,7 @@ var WBC_HEARTBEAT_STALL_MS = 10000;
 // random thinking phrase that fades out/in when cycling every ~4 s. Self-contained
 // interval so it re-renders only itself (a leaf), never the whole conversation.
 // Mounts/unmounts with the runtime, so the timer is torn down the moment the run settles.
-function WbcHeartbeat({ startedAt, lastEventAt }) {
+function WbcHeartbeat({ startedAt, lastEventAt, finalizing }) {
   var heartbeatI18n = useWorkbenchI18n();
   var heartbeatLang = heartbeatI18n.lang;
   var [now, setNow] = useWbcState(function () { return Date.now(); });
@@ -4330,16 +4458,25 @@ function WbcHeartbeat({ startedAt, lastEventAt }) {
   }
 
   useWbcEffect(function () {
+    if (finalizing) return undefined;
     var timer = setInterval(function () {
       setNow(Date.now());
       setAnimClass("wbc-still-leave");
     }, 4000);
     return function () { clearInterval(timer); };
-  }, []);
+  }, [finalizing]);
   useWbcEffect(function () {
     setDisplayText(wbcRandomThinkingPhrase());
   }, [heartbeatLang]);
   if (!startedAt) return null;
+  if (finalizing) {
+    return (
+      <div className="wbc-heartbeat finalizing" role="status" aria-live="polite">
+        <span className="wbc-heartbeat-check" aria-hidden="true">{WBC_ICONS.check}</span>
+        <span>{wbcT("workbenchChat.finalizing", "Reply complete · saving results…")}</span>
+      </div>
+    );
+  }
   var elapsed = Math.max(0, Math.round((now - startedAt) / 1000));
   var stalled = !!lastEventAt && (now - lastEventAt) > WBC_HEARTBEAT_STALL_MS;
   return (
@@ -6981,7 +7118,7 @@ function WbcInboxCard({ chat, running }) {
               <button type="button" onClick={liveView.retry}>{wbcT("workbenchChat.error.retry", "Retry")}</button>
             </div>
           ) : feed.length === 0 ? (
-            <div className="wbc-inbox-empty">
+            <div className="wbc-side-empty">
               <p>{wbcT("workbenchChat.inbox.empty", "No inbox events for this run yet.")}</p>
             </div>
           ) : (
@@ -7067,7 +7204,9 @@ function WbcContextTab({ project, chat, runtime }) {
       <section className="workbench-side-section">
         <h3>{wbcT("workbenchChat.usedToolPackages", "Used tool packages")}</h3>
         {usedToolPackages.length === 0 ? (
-          <p className="workbench-muted">{wbcT("workbenchChat.noUsedToolPackages", "The agent has not used a tool package in this chat.")}</p>
+          <div className="wbc-side-empty">
+            <p>{wbcT("workbenchChat.noUsedToolPackages", "The agent has not used a tool package in this chat.")}</p>
+          </div>
         ) : usedToolPackages.map(function (wireName) {
           return (
             <div className="workbench-check wbc-tool-pack-row" key={wireName}>

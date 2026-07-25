@@ -94,7 +94,9 @@ SEARXNG_PORT = int(_store.get_env("SEARXNG_PORT", "8888"))
 SEARXNG_HOST = _store.get_env("SEARXNG_HOST", "127.0.0.1")
 
 # === Steward 配置 ===
-STEWARD_INTERVAL = int(_store.get_env("STEWARD_INTERVAL", "1800"))
+# Steward runs are model-backed maintenance. Keep a one-hour floor so a stale
+# legacy default cannot wake the model twice per hour on an otherwise idle app.
+STEWARD_INTERVAL = max(3600, int(_store.get_env("STEWARD_INTERVAL", "3600")))
 
 PATTERN_DETECTION_INTERVAL = int(_store.get_env("PATTERN_DETECTION_INTERVAL", "600"))
 

@@ -327,6 +327,9 @@ function ModernRotatingText({ items, interval = 2600, className = "" }) {
 function modernToolLabel(name, lang) {
   var raw = String(name || "").trim();
   if (!raw) return lang === "zh" ? "工具" : "tool";
+  if (window.WorkbenchI18n && typeof window.WorkbenchI18n.toolName === "function") {
+    return window.WorkbenchI18n.toolName(raw, lang);
+  }
   var map = CYRENE_TOOL_NAME_I18N[lang === "zh" ? "zh" : "en"] || {};
   return map[raw] || raw.replace(/_/g, " ");
 }

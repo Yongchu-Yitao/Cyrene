@@ -15,6 +15,7 @@ from cyrene.tooling.types import WireToolBundle
 
 DIRECT_TOOL_NAMES = (
     "use_tools",
+    "send_message",
     "ask_user",
     "quit",
     "enter_plan_mode",

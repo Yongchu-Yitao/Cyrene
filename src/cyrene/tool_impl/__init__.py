@@ -22,6 +22,7 @@ NATIVE_TOOL_MODULES = (
     "cyrene.tool_impl.core.glob",
     "cyrene.tool_impl.core.grep",
     "cyrene.tool_impl.core.bash",
+    "cyrene.tool_impl.memory.list_memories",
     "cyrene.tool_impl.memory.recall_memory",
     "cyrene.tool_impl.memory.recall_conversation",
     "cyrene.tool_impl.memory.retire_short_term_memory",

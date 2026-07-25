@@ -24,7 +24,7 @@ import re
 import shutil
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -62,7 +62,7 @@ _CHAT_RUN_MANAGER = ChatRunManager()
 class _WorkspaceChangesLockEntry:
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
-        self.users = 0
+        self.active: dict[str, _WorkspaceChangesBaseline] = {}
 
 
 _WORKSPACE_CHANGES_LOCKS: dict[str, _WorkspaceChangesLockEntry] = {}
@@ -73,6 +73,8 @@ class _WorkspaceChangesBaseline:
     snapshot: WorkspaceSnapshot | None
     lock_entry: _WorkspaceChangesLockEntry | None = None
     workspace_key: str = ""
+    run_id: str = ""
+    overlapping_run_ids: set[str] = field(default_factory=set)
     released: bool = False
 
 
@@ -403,13 +405,15 @@ async def shutdown_chat_runs() -> None:
 
 async def _capture_workspace_changes_baseline(
     workspace_dir: str | Path | None,
+    run_id: str = "",
 ) -> _WorkspaceChangesBaseline:
-    """Acquire the workspace attribution lease, then take the pre-run image.
+    """Register a run and take its pre-run image.
 
-    Snapshot attribution is only unambiguous when two chat agents cannot span
-    the same workspace interval.  The lease therefore covers the agent run and
-    final snapshot, while still allowing runs in different workspaces to
-    proceed concurrently.
+    Only the snapshot/registry transition is serialized. Agent execution is not:
+    another conversation in the same workspace must be able to start while this
+    one is still producing output. When run intervals overlap, both baselines
+    record that fact so their eventual change sets can report non-exclusive
+    attribution instead of silently claiming another run's edits.
     """
     if not workspace_dir:
         return _WorkspaceChangesBaseline(snapshot=None)
@@ -420,52 +424,70 @@ async def _capture_workspace_changes_baseline(
     entry = _WORKSPACE_CHANGES_LOCKS.setdefault(
         workspace_key, _WorkspaceChangesLockEntry()
     )
-    entry.users += 1
-    try:
-        await entry.lock.acquire()
-    except BaseException:
-        entry.users -= 1
-        if entry.users == 0 and _WORKSPACE_CHANGES_LOCKS.get(workspace_key) is entry:
-            _WORKSPACE_CHANGES_LOCKS.pop(workspace_key, None)
-        raise
-    try:
-        snapshot = await asyncio.to_thread(capture_workspace_snapshot, workspace_key)
-    except asyncio.CancelledError:
-        entry.lock.release()
-        entry.users -= 1
-        if entry.users == 0 and _WORKSPACE_CHANGES_LOCKS.get(workspace_key) is entry:
-            _WORKSPACE_CHANGES_LOCKS.pop(workspace_key, None)
-        raise
-    except Exception:
-        logger.exception("Failed to capture Workbench workspace baseline")
-        entry.lock.release()
-        entry.users -= 1
-        if entry.users == 0 and _WORKSPACE_CHANGES_LOCKS.get(workspace_key) is entry:
-            _WORKSPACE_CHANGES_LOCKS.pop(workspace_key, None)
-        return _WorkspaceChangesBaseline(snapshot=None)
-    return _WorkspaceChangesBaseline(
-        snapshot=snapshot,
-        lock_entry=entry,
-        workspace_key=workspace_key,
-    )
+    normalized_run_id = str(run_id or f"snapshot_{uuid.uuid4().hex}")
+    async with entry.lock:
+        try:
+            snapshot = await asyncio.to_thread(
+                capture_workspace_snapshot, workspace_key
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to capture Workbench workspace baseline")
+            if not entry.active:
+                _WORKSPACE_CHANGES_LOCKS.pop(workspace_key, None)
+            return _WorkspaceChangesBaseline(snapshot=None)
+        if snapshot is None:
+            if not entry.active:
+                _WORKSPACE_CHANGES_LOCKS.pop(workspace_key, None)
+            return _WorkspaceChangesBaseline(snapshot=None)
+        baseline = _WorkspaceChangesBaseline(
+            snapshot=snapshot,
+            lock_entry=entry,
+            workspace_key=workspace_key,
+            run_id=normalized_run_id,
+        )
+        for other_run_id, other in entry.active.items():
+            baseline.overlapping_run_ids.add(other_run_id)
+            other.overlapping_run_ids.add(normalized_run_id)
+        entry.active[normalized_run_id] = baseline
+        return baseline
 
 
-def _release_workspace_changes_baseline(before: _WorkspaceChangesBaseline | None) -> None:
+async def _complete_workspace_changes_baseline(
+    before: _WorkspaceChangesBaseline | None,
+    workspace_dir: str | Path | None,
+) -> WorkspaceSnapshot | None:
+    """Take the post-run image and atomically unregister the active interval."""
     if before is None or before.released:
-        return
-    before.released = True
+        return None
     entry = before.lock_entry
-    if entry is not None and entry.lock.locked():
-        entry.lock.release()
-    if entry is not None:
-        entry.users = max(0, entry.users - 1)
-    if (
-        before.workspace_key
-        and entry is not None
-        and entry.users == 0
-        and _WORKSPACE_CHANGES_LOCKS.get(before.workspace_key) is entry
-    ):
-        _WORKSPACE_CHANGES_LOCKS.pop(before.workspace_key, None)
+    if entry is None:
+        before.released = True
+        return await asyncio.to_thread(
+            capture_workspace_snapshot,
+            workspace_dir,
+            previous=before.snapshot,
+        )
+    async with entry.lock:
+        if before.released:
+            return None
+        try:
+            return await asyncio.to_thread(
+                capture_workspace_snapshot,
+                workspace_dir,
+                previous=before.snapshot,
+            )
+        finally:
+            before.released = True
+            if entry.active.get(before.run_id) is before:
+                entry.active.pop(before.run_id, None)
+            if (
+                before.workspace_key
+                and not entry.active
+                and _WORKSPACE_CHANGES_LOCKS.get(before.workspace_key) is entry
+            ):
+                _WORKSPACE_CHANGES_LOCKS.pop(before.workspace_key, None)
 
 
 async def _finalize_workspace_changes(
@@ -477,11 +499,17 @@ async def _finalize_workspace_changes(
     status: str,
     run: ChatRun | None = None,
 ) -> dict[str, Any] | None:
-    """Persist and publish the authoritative non-Git change set for one run."""
+    """Persist and publish the non-Git change set for one run.
+
+    Snapshot attribution is exact for an exclusive interval. If another run
+    overlaps in the same workspace, the change set explicitly carries that
+    ambiguity instead of delaying either conversation.
+    """
     try:
         if before is None or before.snapshot is None:
             return None
-        after = await asyncio.to_thread(capture_workspace_snapshot, workspace_dir)
+        after = await _complete_workspace_changes_baseline(before, workspace_dir)
+        overlapping_run_ids = sorted(before.overlapping_run_ids)
         change_set = await asyncio.to_thread(
             build_change_set,
             chat_id=chat_id,
@@ -489,6 +517,8 @@ async def _finalize_workspace_changes(
             before=before.snapshot,
             after=after,
             status=status,
+            attribution="overlapping" if overlapping_run_ids else "exclusive",
+            overlapping_run_ids=overlapping_run_ids,
         )
         if change_set.get("fileCount"):
             await asyncio.to_thread(save_change_set, _STORE_DB_PATH, change_set)
@@ -501,6 +531,10 @@ async def _finalize_workspace_changes(
             "fileCount": int(change_set.get("fileCount") or 0),
             "additions": int(change_set.get("additions") or 0),
             "deletions": int(change_set.get("deletions") or 0),
+            "attribution": str(change_set.get("attribution") or "exclusive"),
+            "overlappingRunIds": list(
+                change_set.get("overlappingRunIds") or []
+            ),
         }
         if run is not None:
             await run.publish(event)
@@ -514,7 +548,8 @@ async def _finalize_workspace_changes(
         logger.exception("Failed to finalize workspace changes for chat %s", chat_id)
         return None
     finally:
-        _release_workspace_changes_baseline(before)
+        if before is not None and not before.released:
+            await _complete_workspace_changes_baseline(before, workspace_dir)
 
 
 def _mark_user_activity(chat: dict[str, Any], timestamp: str) -> None:
@@ -2993,7 +3028,9 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             return [_public_message(item) for item in saved_messages]
 
         async def run_non_streaming(run: ChatRun) -> None:
-            changes_before = await _capture_workspace_changes_baseline(workspace_dir)
+            changes_before = await _capture_workspace_changes_baseline(
+                workspace_dir, run.run_id
+            )
             try:
                 reply = await _run()
             except asyncio.CancelledError:
@@ -3110,7 +3147,9 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             ack["userMessage"] = _public_message(user_entry)
 
         async def run_streaming(run: ChatRun) -> None:
-            changes_before = await _capture_workspace_changes_baseline(workspace_dir)
+            changes_before = await _capture_workspace_changes_baseline(
+                workspace_dir, run.run_id
+            )
             live_segments_stop = asyncio.Event()
             live_segments_task = asyncio.create_task(
                 _publish_live_exchange_segments_loop(run, chat_id, state_ids_before, live_segments_stop)
@@ -3185,6 +3224,21 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                         "truncateAfterMessageId": truncate_after_id,
                     })
                     return
+                if not run.saw_reply_events:
+                    await run.publish({"type": "reply_start"})
+                    for chunk in R._reply_stream_chunks(reply):
+                        await run.publish({"type": "reply_delta", "delta": chunk})
+                    await run.publish({"type": "reply_done", "response": reply})
+                # ``reply_done`` belongs to an individual streamed model call and
+                # can precede a tool-channel reopen. This event is authoritative:
+                # the agent coroutine has returned and only durable finalization
+                # remains. The UI can stop tool animations without pretending the
+                # transcript and workspace change set are already saved.
+                await run.publish({
+                    "type": "run_finalizing",
+                    "chatId": chat_id,
+                    "runId": run.run_id,
+                })
                 await _finalize_workspace_changes(
                     chat_id=chat_id,
                     run_id=run.run_id,
@@ -3193,11 +3247,6 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                     status="completed",
                     run=run,
                 )
-                if not run.saw_reply_events:
-                    await run.publish({"type": "reply_start"})
-                    for chunk in R._reply_stream_chunks(reply):
-                        await run.publish({"type": "reply_delta", "delta": chunk})
-                    await run.publish({"type": "reply_done", "response": reply})
                 finalized = await _finalize_async(reply)
                 saved_event = {
                     "type": "saved",
@@ -3475,7 +3524,9 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             if mid:
                 state_ids_before_resume.add(mid)
         resume_run_id = f"resume_{uuid.uuid4().hex}"
-        changes_before = await _capture_workspace_changes_baseline(workspace_dir)
+        changes_before = await _capture_workspace_changes_baseline(
+            workspace_dir, resume_run_id
+        )
         try:
             if mode == "default":
                 reply = await R._workbench_answer_pending(

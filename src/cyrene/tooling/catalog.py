@@ -71,7 +71,7 @@ TOOL_HANDLERS: dict[str, Any] = {}
 TOOL_METADATA: dict[str, dict[str, Any]] = {}
 
 _READ_ONLY_TOOLS = {
-    "Read", "AnalyzeAttachment", "Glob", "Grep", "RecallMemory",
+    "Read", "AnalyzeAttachment", "Glob", "Grep", "ListMemories", "RecallMemory",
     "RecallConversation", "search_project_memory", "ListKnowledgeDocuments",
     "SearchKnowledge", "ListLibraryItems", "SearchLibrary", "ListShells", "WebFetch", "WebSearch", "query_round",
     "CheckClaudeCode", "ListSkills", "GetLearnedSkill", "list_tasks",
@@ -105,6 +105,7 @@ _RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
     "FindReferences": ("code-index:workspace",),
     "WebFetch": ("network:web",),
     "WebSearch": ("network:web",),
+    "ListMemories": ("memory:short-term", "memory:project"),
     "RecallMemory": ("memory:short-term",),
     "RecallConversation": ("memory:conversations",),
     "search_project_memory": ("memory:project",),

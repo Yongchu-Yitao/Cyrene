@@ -861,20 +861,51 @@ def _record_token_usage_faf(
     session_id: str = "",
 ) -> None:
     """Fire-and-forget token usage recording."""
-    from cyrene.db import record_token_usage
-
-    _bg_token_task(asyncio.create_task(record_token_usage(
-        str(DB_PATH),
-        model=model,
-        prompt_tokens=int(usage.get("prompt_tokens") or 0),
-        completion_tokens=int(usage.get("completion_tokens") or 0),
-        total_tokens=int(usage.get("total_tokens") or 0),
-        cache_hit_tokens=int(usage.get("prompt_cache_hit_tokens") or 0),
-        cache_miss_tokens=int(usage.get("prompt_cache_miss_tokens") or 0),
-        duration_ms=duration_ms,
+    _record_success_telemetry_faf(
+        model,
+        usage,
+        duration_ms,
+        caller,
         round_id=round_id,
         session_id=session_id,
-        caller=caller,
+    )
+
+
+def _record_success_telemetry_faf(
+    model: str,
+    usage: dict,
+    duration_ms: int,
+    caller: str,
+    *,
+    round_id: str = "",
+    session_id: str = "",
+    latency_event: dict[str, Any] | None = None,
+    record_usage: bool = True,
+) -> None:
+    """Persist the normal success-path telemetry with a single SQLite commit."""
+    from cyrene.db import record_llm_telemetry_batch
+
+    token_events = []
+    if record_usage:
+        token_events.append({
+            "model": model,
+            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+            "completion_tokens": int(usage.get("completion_tokens") or 0),
+            "total_tokens": int(usage.get("total_tokens") or 0),
+            "cache_hit_tokens": int(usage.get("prompt_cache_hit_tokens") or 0),
+            "cache_miss_tokens": int(usage.get("prompt_cache_miss_tokens") or 0),
+            "duration_ms": duration_ms,
+            "round_id": round_id,
+            "session_id": session_id,
+            "caller": caller,
+        })
+    latency_events = [latency_event] if latency_event is not None else []
+    if not token_events and not latency_events:
+        return
+    _bg_token_task(asyncio.create_task(record_llm_telemetry_batch(
+        str(DB_PATH),
+        token_events=token_events,
+        latency_events=latency_events,
     )))
 
 
@@ -1340,8 +1371,9 @@ async def call_llm(
                             else None
                         )
 
+                        success_latency_event = None
                         if latency_enabled:
-                            _record_latency_faf({
+                            success_latency_event = {
                             "call_id": call_id, "session_id": session_id,
                             "round_id": round_id, "caller": caller, "phase": phase,
                             "model_type": model_type,
@@ -1368,7 +1400,7 @@ async def call_llm(
                             ),
                             "client_pool_reused": client_pool_reused,
                             "connection_pool_key": connection_pool_key,
-                            })
+                            }
 
                         _clear_candidate_cooldown(
                             _candidate_key(candidate, session_id)
@@ -1397,11 +1429,13 @@ async def call_llm(
                                 session_id=session_id, round_id=round_id, status="completed",
                             )
 
-                        if record_usage:
-                            _record_token_usage_faf(
+                        if record_usage or success_latency_event is not None:
+                            _record_success_telemetry_faf(
                                 model, msg.get("usage") or {}, duration_ms, caller,
                                 round_id=round_id,
                                 session_id=session_id,
+                                latency_event=success_latency_event,
+                                record_usage=record_usage,
                             )
 
                         if return_text:

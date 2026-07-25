@@ -1449,14 +1449,9 @@ async def record_action(
                     _json_dumps(metadata),
                 ),
             )
-            await conn.execute(
-                "UPDATE behavior_turns SET updated_at = ?, processed_status = 0 WHERE turn_id = ?",
-                (now, turn_id),
-            )
-            await conn.execute(
-                "UPDATE behavior_sessions SET updated_at = ? WHERE session_id = ?",
-                (now, session_id),
-            )
+            # begin_turn already marks the turn unprocessed, and complete_turn
+            # updates both turn/session timestamps. Repeating those two UPDATEs
+            # for every tool action only amplifies WAL writes.
             await conn.commit()
     except Exception:
         # Behaviour-learning is fire-and-forget telemetry: a write failure here
@@ -3438,6 +3433,27 @@ def _is_skillworthy_chain(chain: list[dict[str, Any]]) -> bool:
     return all(str(item.get("source") or "") == "user_browser" for item in meaningful)
 
 
+def _reusable_turn_chain(
+    turn: dict[str, Any],
+    chain_record: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return cheap, locally validated learning evidence before any LLM call."""
+    if str(turn.get("outcome_status") or "") != "success":
+        return []
+    metadata = _json_loads(turn.get("metadata_json"), {})
+    message = str(turn.get("user_message") or "").strip()
+    if bool(metadata.get("system_initiated")) or any(
+        message.startswith(prefix) for prefix in _INTERNAL_LEARNING_MESSAGE_PREFIXES
+    ):
+        return []
+    meaningful = [
+        item
+        for item in (chain_record.get("chain") or [])
+        if _is_meaningful_candidate_item(item)
+    ]
+    return meaningful if _is_skillworthy_chain(meaningful) else []
+
+
 async def _candidate_evidence_for_turn(turn_id: str) -> dict[str, Any] | None:
     async with _conn() as conn:
         cursor = await conn.execute("SELECT * FROM behavior_turns WHERE turn_id = ?", (turn_id,))
@@ -3445,16 +3461,15 @@ async def _candidate_evidence_for_turn(turn_id: str) -> dict[str, Any] | None:
     if row is None or str(row["outcome_status"] or "") != "success":
         return None
     turn = dict(row)
-    metadata = _json_loads(turn.get("metadata_json"), {})
     message = str(turn.get("user_message") or "").strip()
-    if bool(metadata.get("system_initiated")) or any(message.startswith(prefix) for prefix in _INTERNAL_LEARNING_MESSAGE_PREFIXES):
-        return None
     chain_record = await _load_tool_chain_for_turn(turn_id)
+    meaningful = _reusable_turn_chain(turn, chain_record)
+    if not meaningful:
+        return None
     purpose = await _ensure_turn_purpose(turn, chain_record)
     if not purpose:
-        return None
-    meaningful = [item for item in (chain_record.get("chain") or []) if _is_meaningful_candidate_item(item)]
-    if not _is_skillworthy_chain(meaningful):
+        # Purpose and catalog assignment are model-owned decisions. Keep the
+        # reusable turn pending so a later maintenance pass can retry.
         return None
     return {
         "turn_id": turn_id,
@@ -4101,22 +4116,26 @@ async def _process_single_turn(
             )
             await conn.commit()
 
-    # Every real executed round first receives a short Skill-name-like purpose,
-    # including single-tool, failed, and browser-user rounds.  Only successful
-    # reusable chains continue into the three-occurrence skill state machine.
+    # Rebuild provenance locally first. Purpose generation is intentionally
+    # deferred until the cheap eligibility checks in
+    # _candidate_evidence_for_turn pass; single-tool, failed, internal, and
+    # otherwise non-reusable rounds must not spend an LLM call merely to label
+    # telemetry.
     await _rebuild_tool_chain_for_turn(turn_id)
     async with _conn() as conn:
-        cursor = await conn.execute("SELECT * FROM behavior_turns WHERE turn_id = ?", (turn_id,))
-        current_turn_row = await cursor.fetchone()
-    current_turn = dict(current_turn_row) if current_turn_row is not None else {}
-    current_metadata = _json_loads(current_turn.get("metadata_json"), {})
+        cursor = await conn.execute(
+            "SELECT * FROM behavior_turns WHERE turn_id = ?",
+            (turn_id,),
+        )
+        turn_row = await cursor.fetchone()
+    current_turn = dict(turn_row) if turn_row is not None else {}
     chain_record = await _load_tool_chain_for_turn(turn_id)
-    if chain_record.get("chain") and not bool(current_metadata.get("system_initiated")):
+    if _reusable_turn_chain(current_turn, chain_record):
         purpose = await _ensure_turn_purpose(current_turn, chain_record)
         if not purpose:
-            # Purpose and catalog assignment are model-owned decisions.  Keep
-            # the turn pending so the background worker can retry; never invent
-            # a local similarity result as a fallback.
+            # A genuinely reusable turn stays pending when its model-owned
+            # purpose could not be generated. Non-reusable turns never enter
+            # this branch and therefore never spend an LLM call.
             return False
     evidence = await _candidate_evidence_for_turn(turn_id)
     if not evidence:

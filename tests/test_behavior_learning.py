@@ -798,7 +798,9 @@ async def test_assignment_agent_receives_complete_purpose_catalog_in_one_call(tm
 
     assert len(assignments) == 3
     assert [item["purpose"] for item in assignments[2]["existing_candidates"]] == ["修复导出逻辑", "整理导出文档"]
-    assert [item["purpose"] for item in assignments[2]["all_historical_purposes"]] == ["查询天气", "修复导出逻辑", "整理导出文档"]
+    # A single-tool lookup is not reusable skill evidence and must not spend a
+    # background LLM call merely to populate the historical purpose catalog.
+    assert [item["purpose"] for item in assignments[2]["all_historical_purposes"]] == ["修复导出逻辑", "整理导出文档"]
     candidates = sorted(await bl.list_skill_candidates(), key=lambda item: item["purpose"])
     assert len(candidates) == 2
     assert next(item for item in candidates if item["purpose"] == "修复导出逻辑")["occurrence_count"] == 2

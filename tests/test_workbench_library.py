@@ -61,6 +61,80 @@ async def test_library_crud_filters_stats_and_project_isolation(library_db, tmp_
 
 
 @pytest.mark.asyncio
+async def test_library_batch_delete_supports_trash_and_permanent_removal(library_db):
+    first = await library.create_item(library_db, {"title": "First"})
+    second = await library.create_item(library_db, {"title": "Second"})
+
+    assert await library.delete_items(
+        library_db, [first["id"], second["id"], first["id"]]
+    ) == 2
+    assert (await library.list_items(library_db))[1] == 0
+    assert (await library.list_items(library_db, trash=True))[1] == 2
+
+    assert await library.delete_items(
+        library_db, [first["id"], second["id"]], permanent=True
+    ) == 2
+    assert (await library.list_items(library_db, trash=True))[1] == 0
+
+
+@pytest.mark.asyncio
+async def test_library_filters_general_knowledge_by_file_type(library_db):
+    image = await library.create_item(library_db, {"title": "Product mockup"})
+    audio = await library.create_item(library_db, {"title": "Interview recording"})
+    video = await library.create_item(library_db, {"title": "Demo video"})
+    sheet = await library.create_item(library_db, {"title": "Budget"})
+    archive = await library.create_item(library_db, {"title": "Source archive"})
+    await library.create_item(library_db, {"title": "Plain knowledge note"})
+    await library.create_item(
+        library_db, {"title": "Reference website", "item_type": "webpage"}
+    )
+
+    await library.add_attachment(
+        library_db,
+        image["id"],
+        {"filename": "mockup.png", "content_type": "image/png"},
+    )
+    await library.add_attachment(
+        library_db,
+        audio["id"],
+        {"filename": "interview.mp3", "content_type": "audio/mpeg"},
+    )
+    await library.add_attachment(
+        library_db,
+        video["id"],
+        {"filename": "demo.mp4", "content_type": "video/mp4"},
+    )
+    await library.add_attachment(
+        library_db,
+        sheet["id"],
+        {
+            "filename": "budget.xlsx",
+            "content_type": (
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+        },
+    )
+    await library.add_attachment(
+        library_db,
+        archive["id"],
+        {"filename": "source.zip", "content_type": "application/zip"},
+    )
+
+    async def titles(file_type: str) -> set[str]:
+        items, _ = await library.list_items(library_db, file_type=file_type)
+        return {item["title"] for item in items}
+
+    assert await titles("image") == {"Product mockup"}
+    assert await titles("audio") == {"Interview recording"}
+    assert await titles("video") == {"Demo video"}
+    assert await titles("spreadsheet") == {"Budget"}
+    assert await titles("document") == {"Plain knowledge note"}
+    assert await titles("link") == {"Reference website"}
+    assert await titles("other") == {"Source archive"}
+
+
+@pytest.mark.asyncio
 async def test_existing_knowledge_documents_are_bridged_without_cross_project_copy(
     library_db, tmp_path
 ):
@@ -311,6 +385,20 @@ def test_library_http_contract(monkeypatch, library_db):
     assert citation.json()["bibtex"].startswith("@article{")
     assert "title = {HTTP Paper, Revised}" in citation.json()["bibtex"]
     assert "author = {Ada Lovelace}" in citation.json()["bibtex"]
+    second = client.post(
+        "/api/workbench/library/items?workspace=p1",
+        json={"title": "Second HTTP Paper"},
+    )
+    batch_deleted = client.post(
+        "/api/workbench/library/items/batch-delete?workspace=p1",
+        json={"item_ids": [item_id, second.json()["id"]]},
+    )
+    assert batch_deleted.status_code == 200
+    assert batch_deleted.json() == {"ok": True, "deleted": 2}
+    assert client.get(
+        "/api/workbench/library/items",
+        params={"workspace": "p1", "trash": "true"},
+    ).json()["total"] == 2
 
 
 @pytest.mark.asyncio
@@ -435,6 +523,12 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     source = (root / "src" / "workbench-webui" / "workbench-library.jsx").read_text(
         encoding="utf-8"
     )
+    shell = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    shell_styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
     styles = (root / "src" / "workbench-webui" / "workbench-library.css").read_text(
         encoding="utf-8"
     )
@@ -458,6 +552,34 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert "flex: 0 0 auto" in styles
     assert ".wb-lib-right-section-head" in styles and "margin-bottom: 8px" in styles
     assert "wb-lib-work-resizer" in source
+    assert "removeMany" in source
+    assert "function removeChecked()" in source
+    assert "永久删除所选知识" in source
+    assert ".wb-lib-batch-actions" in styles
+    assert "filters.file_type" in source
+    assert "params.file_type = filters.file_type" in source
+    assert '"文件类型"' in source
+    assert '"图片"' in source and '"音频"' in source and '"视频"' in source
+    assert "wb-lib-card-description" in source
+    assert "wb-lib-card-foot" in source
+    assert 'className: "wb-lib-check wb-lib-card-check"' in source
+    assert "onToggle: toggleChecked" in source
+    assert "grid-template-columns: repeat(auto-fill, minmax(280px, 1fr))" in styles
+    assert "overflow-wrap: anywhere" in styles
+    assert ".wb-lib-view-toggle button { width: 40px; height: 100%; display: grid; place-items: center;" in styles
+    assert ".wb-lib-view-toggle svg { display: block; }" in styles
+    assert "inset: 1px 6px" in styles
+    assert ".wb-lib-row > * { position: relative; z-index: 1; }" in styles
+    assert "background: color-mix(in srgb, var(--wb-accent) 7%, var(--wb-card-bg));" in styles
+    assert "is-library-mode" not in shell
+    assert "is-library-mode" not in shell_styles
+    assert "is-library-mode" not in styles
+    assert "--wb-accent: #f34fae" not in shell_styles
+    assert "background: var(--wb-shell-bg)" in styles
+    assert "background: var(--wb-task-rail-bg)" in styles
+    assert "background: var(--wb-main-bg, var(--wb-surface))" in styles
+    assert "background: var(--wb-right-bg)" in styles
+    assert "#ee4caa" not in styles
     assert "cyrene.library.workspaceHeight" in source
     assert 'role: "separator"' in source
     assert "cursor: ns-resize" in styles
@@ -484,17 +606,17 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert ".wb-lib-row.active" in styles
     assert ".wb-lib-card.active" in styles
     assert (
-        "border: 1px solid color-mix(in srgb, var(--wb-accent) 42%, var(--wb-line));"
+        "border-color: color-mix(in srgb, var(--wb-accent) 36%, var(--wb-line));"
     ) in styles
     assert (
         ".wb-lib-table-body { min-height: 0; flex: 1 1 auto; "
         "overflow-y: auto; overscroll-behavior: contain;"
     ) in styles
     assert (
-        ".wb-lib-row { min-height: 41px; padding: 0 8px; "
+        ".wb-lib-row { min-height: 41px; padding: 0 14px; "
         "border: 0; border-radius: 0;"
     ) in styles
-    assert ".wb-lib-row.active {" in styles and "border-radius: 7px;" in styles
+    assert ".wb-lib-row.active::after {" in styles and "border-radius: 7px;" in styles
     assert ".wb-lib-side-row.active {" in styles and "font-weight: 520;" in styles
     assert "font-weight: 520 !important;" in styles
     assert ".wb-lib-cloud button span" in styles and "font-weight: 400;" in styles

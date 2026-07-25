@@ -327,7 +327,10 @@ async def test_subagent_stable_system_prompt():
 
     call1 = llm_inputs[0]
     registry_msgs = [m for m in call1 if m["role"] == "user" and "[活跃子 agent]" in m.get("content", "")]
-    assert len(registry_msgs) > 0, "Registry context should be injected as a user message"
+    assert registry_msgs == [], (
+        "Execution subagents are independent workers and should not receive "
+        "discussion registry context."
+    )
 
     print("PASS: test_subagent_stable_system_prompt")
 
@@ -441,10 +444,10 @@ async def test_subagent_resume_strips_old_context():
 
     call_msgs = llm_inputs[0]
     context_msgs = [m for m in call_msgs if "[活跃子 agent]" in str(m.get("content", ""))]
-    assert len(context_msgs) == 1, (
-        f"Should have exactly 1 context message, got {len(context_msgs)}"
+    assert context_msgs == [], (
+        "Execution-mode resume should remove stale coordination context and "
+        "should not inject fresh discussion context."
     )
-    assert "bob" in context_msgs[0]["content"], "Should contain new context, not old"
 
     print("PASS: test_subagent_resume_strips_old_context")
 

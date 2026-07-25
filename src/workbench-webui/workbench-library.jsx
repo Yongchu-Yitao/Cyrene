@@ -47,6 +47,11 @@
       restore: ["M3 12a9 9 0 1 0 2.6-6.3", "M3 4v5h5"],
       menu: ["M5 12h.01M12 12h.01M19 12h.01"],
       panel: [h("rect", { key: "r", x: 3, y: 3, width: 18, height: 18, rx: 2 }), "M9 3v18"],
+      image: [h("rect", { key: "r", x: 3, y: 3, width: 18, height: 18, rx: 2.5 }), h("circle", { key: "c", cx: 8.5, cy: 9, r: 1.6 }), "m21 16-5-5L5 21"],
+      audio: ["M9 18V5l11-2v13", h("circle", { key: "a", cx: 6, cy: 18, r: 3 }), h("circle", { key: "b", cx: 17, cy: 16, r: 3 })],
+      video: [h("rect", { key: "r", x: 3, y: 5, width: 18, height: 14, rx: 2.5 }), h("path", { key: "p", d: "m10 9 5 3-5 3Z" })],
+      sheet: [h("rect", { key: "r", x: 3, y: 4, width: 18, height: 16, rx: 2 }), "M3 9h18M3 14h18M9 4v16M15 4v16"],
+      slide: [h("rect", { key: "r", x: 3, y: 4, width: 18, height: 13, rx: 2 }), "M7.5 13V11M12 13V8.5M16.5 13v-3M12 17v4M8.5 21h7"],
     };
     var content = paths[name] || paths.file;
     return h.apply(null, ["svg", {
@@ -114,14 +119,11 @@
   }
 
   function itemTitle(item) {
-    return String(item && item.title || "未命名文献").trim();
+    return String(item && item.title || "未命名知识").trim();
   }
 
   function itemKind(item) {
-    var attachment = primaryAttachment(item);
-    var name = String(attachment && (attachment.filename || attachment.name) || item && (item.filename || item.attachment_name) || "");
-    if (/\.pdf$/i.test(name) || String(attachment && attachment.content_type || item && item.content_type || "").indexOf("pdf") >= 0) return "pdf";
-    return item && (item.item_type || item.type) || "document";
+    return itemFileType(item);
   }
 
   function primaryAttachment(item) {
@@ -141,6 +143,41 @@
     if (contentType === "application/pdf" || /\.pdf$/i.test(filename)) return "pdf";
     if (contentType.indexOf("text/") === 0 || /\.(csv|html?|json|log|md|rtf|text|toml|tsv|txt|xml|ya?ml)$/i.test(filename)) return "text";
     return attachment ? "file" : "text";
+  }
+
+  function itemFileType(item) {
+    var attachment = primaryAttachment(item);
+    var contentType = String(attachment && attachment.content_type || item && item.content_type || "").toLowerCase().split(";")[0];
+    var filename = String(attachment && (attachment.filename || attachment.name) || item && (item.filename || item.attachment_name) || "").toLowerCase();
+    if (contentType === "application/pdf" || /\.pdf$/i.test(filename)) return "pdf";
+    if (contentType.indexOf("image/") === 0 || /\.(avif|bmp|gif|jpe?g|png|webp)$/i.test(filename)) return "image";
+    if (contentType.indexOf("audio/") === 0 || /\.(aac|flac|m4a|mp3|oga|ogg|wav|weba)$/i.test(filename)) return "audio";
+    if (contentType.indexOf("video/") === 0 || /\.(m4v|mov|mp4|ogv|webm)$/i.test(filename)) return "video";
+    if (/spreadsheet|ms-excel|text\/csv|tab-separated/.test(contentType) || /\.(csv|numbers|tsv|xls|xlsm|xlsx)$/i.test(filename)) return "spreadsheet";
+    if (/powerpoint|presentation/.test(contentType) || /\.(key|odp|ppt|pptx)$/i.test(filename)) return "presentation";
+    if (contentType === "text/uri-list" || /\.(link|url|webloc)$/i.test(filename) || String(item && item.item_type || "") === "webpage") return "link";
+    if (/^text\//.test(contentType) || /msword|wordprocessing|opendocument\.text|rtf/.test(contentType) || /\.(doc|docx|html?|json|log|md|rtf|txt|xml|ya?ml)$/i.test(filename)) return "document";
+    return attachment || filename ? "other" : "document";
+  }
+
+  var FILE_TYPE_LABELS = {
+    pdf: "PDF", document: "文档与文本", spreadsheet: "电子表格",
+    presentation: "演示文稿", image: "图片", audio: "音频",
+    video: "视频", link: "网页与链接", other: "其他文件",
+  };
+
+  function itemFileTypeLabel(item) {
+    return FILE_TYPE_LABELS[itemFileType(item)] || "文件";
+  }
+
+  function cardDescription(item) {
+    var abstract = String(item && item.abstract || "").trim();
+    if (abstract) return abstract;
+    var author = authorText(item);
+    var venue = String(item && (item.venue || item.publication_title) || "").trim();
+    if (author !== "—") return [author, venue].filter(Boolean).join(" · ");
+    var filename = String(item && (item.attachment_name || item.filename) || "").trim();
+    return [itemFileTypeLabel(item), filename && filename !== itemTitle(item) ? filename : ""].filter(Boolean).join(" · ");
   }
 
   function renderMarkdownHtml(content) {
@@ -210,6 +247,7 @@
       create: function (value) { return json("/items", body("POST", value)); },
       update: function (id, value) { return json("/items/" + encodeURIComponent(id), body("PATCH", value)); },
       remove: function (id) { return json("/items/" + encodeURIComponent(id), { method: "DELETE" }); },
+      removeMany: function (ids, permanent) { return json("/items/batch-delete", body("POST", { item_ids: ids, permanent: !!permanent })); },
       restore: function (id) { return json("/items/" + encodeURIComponent(id) + "/restore", { method: "POST" }); },
       addNote: function (id, value) { return json("/items/" + encodeURIComponent(id) + "/notes", body("POST", value)); },
       upload: function (files) {
@@ -227,9 +265,14 @@
   window.WorkbenchLibraryAPI = libraryApi;
 
   function PdfMark(props) {
-    var pdf = itemKind(props.item) === "pdf";
-    return h("span", { className: "wb-lib-filemark " + (pdf ? "pdf" : "paper"), "aria-hidden": "true" },
-      pdf ? h(React.Fragment, null, icon("file", props.large ? 24 : 17), h("small", null, "PDF")) : icon("file", props.large ? 24 : 17));
+    var kind = itemFileType(props.item);
+    var iconName = {
+      image: "image", audio: "audio", video: "video", spreadsheet: "sheet",
+      presentation: "slide", link: "link",
+    }[kind] || "file";
+    return h("span", { className: "wb-lib-filemark " + kind + (props.large ? " large" : ""), "aria-hidden": "true" },
+      icon(iconName, props.large ? 22 : 17),
+      kind === "pdf" ? h("small", null, "PDF") : null);
   }
 
   function Spinner() { return h("span", { className: "wb-lib-spinner", "aria-hidden": "true" }); }
@@ -319,7 +362,7 @@
 
   function TableHead(props) {
     return h("div", { className: "wb-lib-table-head wb-lib-table-grid", role: "row" },
-      h("label", { className: "wb-lib-check" }, h("input", { type: "checkbox", checked: props.allSelected, onChange: props.onToggleAll, "aria-label": "选择全部文献" }), h("span")),
+      h("label", { className: "wb-lib-check" }, h("input", { type: "checkbox", checked: props.allSelected, onChange: props.onToggleAll, "aria-label": "选择全部知识" }), h("span")),
       h("span", null, "标题"), h("span", null, "作者"), h("span", null, "年份"), h("span", null, "发布源"), h("span", null, "添加时间"), h("span", null, "标签"));
   }
 
@@ -347,11 +390,38 @@
 
   function LibraryCard(props) {
     var item = props.item;
-    return h("article", { className: "wb-lib-card" + (props.active ? " active" : ""), onClick: function () { props.onSelect(item.id); }, tabIndex: 0 },
-      h("div", { className: "wb-lib-card-top" }, h(PdfMark, { item: item, large: true }), h("button", { type: "button", className: "wb-lib-star" + (item.starred ? " active" : ""), onClick: function (event) { event.stopPropagation(); props.onStar(item); } }, icon("star", 17))),
-      h("h3", null, itemTitle(item)), h("p", null, authorText(item)),
-      h("div", { className: "wb-lib-card-meta" }, h("span", null, item.year || "—"), h("span", null, item.venue || item.publication_title || "—")),
-      h("div", { className: "wb-lib-row-tags" }, itemTags(item).slice(0, 3).map(function (tag) { return h("span", { key: tag }, tag); })));
+    var tags = itemTags(item);
+    return h("article", {
+      className: "wb-lib-card" + (props.active ? " active" : ""),
+      onClick: function () { props.onSelect(item.id); },
+      onKeyDown: function (event) { if (event.key === "Enter") props.onSelect(item.id); },
+      tabIndex: 0,
+    },
+      h(PdfMark, { item: item, large: true }),
+      h("div", { className: "wb-lib-card-body" },
+        h("div", { className: "wb-lib-card-title-row" },
+          h("h3", { title: itemTitle(item) }, itemTitle(item)),
+          h(StopClick, null, h("label", { className: "wb-lib-check wb-lib-card-check" },
+            h("input", {
+              type: "checkbox",
+              checked: props.checked,
+              onChange: function () { props.onToggle(item.id); },
+              "aria-label": "选择 " + itemTitle(item),
+            }),
+            h("span"))),
+          h("button", {
+            type: "button",
+            className: "wb-lib-star" + (item.starred ? " active" : ""),
+            onClick: function (event) { event.stopPropagation(); props.onStar(item); },
+            title: item.starred ? "取消星标" : "添加星标",
+          }, icon("star", 17))),
+        h("p", { className: "wb-lib-card-description" }, cardDescription(item)),
+        tags.length > 0 && h("div", { className: "wb-lib-row-tags" },
+          tags.slice(0, 4).map(function (tag) { return h("span", { key: tag }, tag); }),
+          tags.length > 4 && h("small", null, "+" + (tags.length - 4))),
+        h("div", { className: "wb-lib-card-foot" },
+          h("span", null, itemFileTypeLabel(item) + (item.attachment_size ? " · " + formatBytes(item.attachment_size) : "")),
+          h("span", null, "更新于 " + formatDate(item.updated_at || item.created_at)))));
   }
 
   function StatePanel(props) {
@@ -744,7 +814,7 @@
     useEffect(function () {
       if (scrollRef.current) scrollRef.current.scrollTop = 0;
     }, [props.item && props.item.id, props.tab]);
-    if (!props.item) return h("aside", { className: "wb-lib-right empty" }, h("div", null, icon("panel", 34), h("p", null, "选择一篇文献查看详情")));
+    if (!props.item) return h("aside", { className: "wb-lib-right empty" }, h("div", null, icon("panel", 34), h("p", null, "选择一个知识条目查看详情")));
     var item = props.item;
     var attachment = Array.isArray(item.attachments) && item.attachments[0];
     var relations = Array.isArray(item.relations) ? item.relations : [];
@@ -930,7 +1000,7 @@
   }
 
   function ManualItemModal(props) {
-    var initial = { title: "", authors: "", year: "", venue: "", doi: "", item_type: "journalArticle" };
+    var initial = { title: "", authors: "", year: "", venue: "", url: "", doi: "", item_type: "document" };
     var formState = useState(initial); var form = formState[0]; var setForm = formState[1];
     var busyState = useState(false); var busy = busyState[0]; var setBusy = busyState[1];
     function field(name, value) { setForm(Object.assign({}, form, (function () { var o = {}; o[name] = value; return o; })())); }
@@ -940,11 +1010,12 @@
       props.onSave(Object.assign({}, form, { year: form.year ? Number(form.year) : null, creators: creators })).then(function () { setBusy(false); props.onClose(); }, function () { setBusy(false); });
     }
     return h("div", { className: "wb-lib-modal-layer", role: "presentation", onMouseDown: function (event) { if (event.target === event.currentTarget) props.onClose(); } }, h("form", { className: "wb-lib-modal", onSubmit: submit },
-      h("header", null, h("div", null, h("h2", null, "添加文献条目"), h("p", null, "条目只会添加到当前项目。")), h("button", { type: "button", onClick: props.onClose }, icon("close"))),
-      h("label", null, "标题", h("input", { required: true, autoFocus: true, value: form.title, onChange: function (event) { field("title", event.target.value); }, placeholder: "文献标题" })),
-      h("label", null, "作者", h("textarea", { value: form.authors, onChange: function (event) { field("authors", event.target.value); }, placeholder: "多个作者用分号分隔" })),
-      h("div", { className: "wb-lib-modal-grid" }, h("label", null, "年份", h("input", { type: "number", min: 0, max: 9999, value: form.year, onChange: function (event) { field("year", event.target.value); } })), h("label", null, "条目类型", h("select", { value: form.item_type, onChange: function (event) { field("item_type", event.target.value); } }, h("option", { value: "journalArticle" }, "期刊文章"), h("option", { value: "conferencePaper" }, "会议论文"), h("option", { value: "book" }, "图书"), h("option", { value: "thesis" }, "学位论文"), h("option", { value: "report" }, "报告")))),
-      h("label", null, "出版源", h("input", { value: form.venue, onChange: function (event) { field("venue", event.target.value); }, placeholder: "期刊、会议或出版社" })),
+      h("header", null, h("div", null, h("h2", null, "添加知识条目"), h("p", null, "条目只会添加到当前项目。")), h("button", { type: "button", onClick: props.onClose }, icon("close"))),
+      h("label", null, "标题", h("input", { required: true, autoFocus: true, value: form.title, onChange: function (event) { field("title", event.target.value); }, placeholder: "知识标题" })),
+      h("label", null, "作者或贡献者", h("textarea", { value: form.authors, onChange: function (event) { field("authors", event.target.value); }, placeholder: "多人可用分号分隔" })),
+      h("div", { className: "wb-lib-modal-grid" }, h("label", null, "年份", h("input", { type: "number", min: 0, max: 9999, value: form.year, onChange: function (event) { field("year", event.target.value); } })), h("label", null, "条目类型", h("select", { value: form.item_type, onChange: function (event) { field("item_type", event.target.value); } }, h("option", { value: "document" }, "普通知识条目"), h("option", { value: "webpage" }, "网页"), h("option", { value: "journalArticle" }, "期刊文章"), h("option", { value: "conferencePaper" }, "会议论文"), h("option", { value: "book" }, "图书"), h("option", { value: "thesis" }, "学位论文"), h("option", { value: "report" }, "报告")))),
+      h("label", null, "来源", h("input", { value: form.venue, onChange: function (event) { field("venue", event.target.value); }, placeholder: "网站、出版物或其他来源" })),
+      h("label", null, "来源链接", h("input", { type: "url", value: form.url, onChange: function (event) { field("url", event.target.value); }, placeholder: "https://…" })),
       h("label", null, "DOI", h("input", { value: form.doi, onChange: function (event) { field("doi", event.target.value); }, placeholder: "10.xxxx/xxxxx" })),
       h("footer", null, h("button", { type: "button", className: "wb-lib-secondary", onClick: props.onClose }, "取消"), h("button", { type: "submit", className: "wb-lib-primary", disabled: busy || !form.title.trim() }, busy && h(Spinner), " 添加条目"))));
   }
@@ -978,7 +1049,7 @@
     var debouncedState = useState(""); var debouncedQuery = debouncedState[0]; var setDebouncedQuery = debouncedState[1];
     var sortState = useState("updated_at"); var sort = sortState[0]; var setSort = sortState[1];
     var orderState = useState("desc"); var order = orderState[0]; var setOrder = orderState[1];
-    var filterState = useState({ item_type: "", status: "", year: "" }); var filters = filterState[0]; var setFilters = filterState[1];
+    var filterState = useState({ file_type: "", item_type: "", status: "", year: "" }); var filters = filterState[0]; var setFilters = filterState[1];
     var viewState = useState("table"); var view = viewState[0]; var setView = viewState[1];
     var dataState = useState({ items: [], total: 0, stats: {}, collections: [], tags: [] }); var data = dataState[0]; var setData = dataState[1];
     var loadingState = useState(false); var loading = loadingState[0]; var setLoading = loadingState[1];
@@ -988,6 +1059,7 @@
     var detailState = useState(null); var detail = detailState[0]; var setDetail = detailState[1];
     var detailLoadingState = useState(false); var detailLoading = detailLoadingState[0]; var setDetailLoading = detailLoadingState[1];
     var checkedState = useState([]); var checked = checkedState[0]; var setChecked = checkedState[1];
+    var batchDeletingState = useState(false); var batchDeleting = batchDeletingState[0]; var setBatchDeleting = batchDeletingState[1];
     var menuState = useState(""); var menu = menuState[0]; var setMenu = menuState[1];
     var workTabState = useState("info"); var workTab = workTabState[0]; var setWorkTab = workTabState[1];
     var rightTabState = useState("detail"); var rightTab = rightTabState[0]; var setRightTab = rightTabState[1];
@@ -1006,6 +1078,7 @@
 
     function listParams() {
       var params = { q: debouncedQuery, sort: sort, order: order, limit: PAGE_SIZE, offset: 0 };
+      if (filters.file_type) params.file_type = filters.file_type;
       if (filters.item_type) params.item_type = filters.item_type;
       if (filters.status) params.status = filters.status;
       if (filters.year) params.year = filters.year;
@@ -1038,8 +1111,8 @@
         if (selectedId && !nextItems.some(function (item) { return String(item.id) === String(selectedId); })) {
           setSelectedId("");
           setDetail(null);
-          setChecked(function (prev) { return prev.filter(function (id) { return nextItems.some(function (item) { return String(item.id) === String(id); }); }); });
         }
+        setChecked(function (prev) { return prev.filter(function (id) { return nextItems.some(function (item) { return String(item.id) === String(id); }); }); });
         setLoading(false);
       }).catch(function (err) { if (seq === requestSeq.current) { setError(String(err.message || err)); setLoading(false); } });
     }
@@ -1058,7 +1131,7 @@
     useEffect(function () {
       setScope({ type: "all" }); setSelectedId(""); setDetail(null); setChecked([]); setData({ items: [], total: 0, stats: {}, collections: [], tags: [] });
     }, [workspace]);
-    useEffect(function () { if (props.active !== false) reload(); }, [client, workspace, debouncedQuery, scope.type, scope.value, sort, order, filters.item_type, filters.status, filters.year, props.active]);
+    useEffect(function () { if (props.active !== false) reload(); }, [client, workspace, debouncedQuery, scope.type, scope.value, sort, order, filters.file_type, filters.item_type, filters.status, filters.year, props.active]);
 
     useEffect(function () {
       if (!client || !workspace || props.active === false || autoSyncChecked[workspace]) return;
@@ -1137,6 +1210,35 @@
       if (window.confirmModal) window.confirmModal({ title: "移至回收站？", body: "文献会保留在当前项目的回收站中。", confirmLabel: "移至回收站", danger: true }).then(function (ok) { if (ok) run(); }); else run();
     }
     function restore(item) { client.restore(item.id).then(function () { Toast("文献已恢复"); reload(); }); }
+    function removeChecked() {
+      if (!client || !checked.length || batchDeleting) return;
+      var ids = checked.slice();
+      var permanent = scope.type === "trash";
+      var title = permanent ? "永久删除所选知识？" : "将所选知识移至回收站？";
+      var bodyText = permanent
+        ? "将永久删除所选的 " + ids.length + " 项知识，此操作不可撤销。"
+        : "所选的 " + ids.length + " 项知识会保留在当前项目的回收站中。";
+      var confirmLabel = permanent ? "永久删除" : "移至回收站";
+      var run = function () {
+        setBatchDeleting(true);
+        client.removeMany(ids, permanent).then(function (payload) {
+          var deleted = Number(payload.deleted || 0);
+          if (ids.indexOf(String(selectedId)) >= 0) { setSelectedId(""); setDetail(null); }
+          setChecked([]);
+          Toast(permanent ? "已永久删除 " + deleted + " 项知识" : "已将 " + deleted + " 项知识移至回收站");
+          return reload();
+        }).catch(function (err) {
+          Toast(String(err.message || err), "error");
+        }).finally(function () {
+          setBatchDeleting(false);
+        });
+      };
+      if (window.confirmModal) {
+        window.confirmModal({ title: title, body: bodyText, confirmLabel: confirmLabel, danger: true }).then(function (ok) { if (ok) run(); });
+      } else {
+        run();
+      }
+    }
 
     function handleFiles(files) {
       if (!client || !files || !files.length) return;
@@ -1180,40 +1282,47 @@
       navigator.clipboard.writeText(value).then(function () { Toast(format === "bibtex" ? "BibTeX 已复制" : "引用已复制"); });
     }
 
-    var scopeTitle = scope.type === "all" ? "知识库" : scope.type === "unclassified" ? "未分类" : scope.type === "recent_added" ? "最近添加" : scope.type === "recent_read" ? "最近阅读" : scope.type === "starred" ? "星标文献" : scope.type === "trash" ? "回收站" : (scope.label || "文献库");
-    var activeFilters = [filters.item_type, filters.status, filters.year].filter(Boolean).length;
+    var scopeTitle = scope.type === "all" ? "知识库" : scope.type === "unclassified" ? "未分类" : scope.type === "recent_added" ? "最近添加" : scope.type === "recent_read" ? "最近阅读" : scope.type === "starred" ? "星标知识" : scope.type === "trash" ? "回收站" : (scope.label || "知识库");
+    var activeFilters = [filters.file_type, filters.item_type, filters.status, filters.year].filter(Boolean).length;
     var citationProps = { style: citation.style, citation: citation.text, bibtex: citation.bibtex, citekey: citation.citekey, loading: citation.loading, error: citation.error, onStyle: loadCitation, onCopy: copyCitation, onRetry: function () { loadCitation(citation.style); } };
 
-    if (!workspace) return h("section", { className: "wb-lib-page no-project" }, h(StatePanel, { title: "请先选择项目", body: "每个项目拥有相互隔离的文献库。" }));
+    if (!workspace) return h("section", { className: "wb-lib-page no-project" }, h(StatePanel, { title: "请先选择项目", body: "每个项目拥有相互隔离的知识库。" }));
 
     return h("section", { className: "wb-lib-page" },
-      h("input", { ref: fileRef, className: "wb-lib-file-input", type: "file", multiple: true, accept: ".pdf,.ris,.bib,.bibtex,.json,application/pdf", onChange: function (event) { handleFiles(event.target.files); } }),
-      h(LibrarySidebar, { open: sidebarOpen, onClose: function () { setSidebarOpen(false); }, onBack: props.onBack, stats: data.stats, collections: data.collections, tags: data.tags, scope: scope, onCreateCollection: function () { setCollectionModalOpen(true); }, onScope: function (next) { setScope(next); setSidebarOpen(false); setSelectedId(""); } }),
+      h("input", { ref: fileRef, className: "wb-lib-file-input", type: "file", multiple: true, onChange: function (event) { handleFiles(event.target.files); } }),
+      h(LibrarySidebar, { open: sidebarOpen, onClose: function () { setSidebarOpen(false); }, onBack: props.onBack, stats: data.stats, collections: data.collections, tags: data.tags, scope: scope, onCreateCollection: function () { setCollectionModalOpen(true); }, onScope: function (next) { setScope(next); setSidebarOpen(false); setSelectedId(""); setChecked([]); } }),
       h("main", { className: "wb-lib-main" },
         h("header", { className: "wb-lib-main-head" },
-          h("button", { type: "button", className: "wb-lib-sidebar-toggle", onClick: function () { setSidebarOpen(true); }, title: "打开文献分类" }, icon("panel", 18)),
+          h("button", { type: "button", className: "wb-lib-sidebar-toggle", onClick: function () { setSidebarOpen(true); }, title: "打开知识分类" }, icon("panel", 18)),
           h("div", { className: "wb-lib-heading" }, scope.type !== "all" && h("h2", null, scopeTitle), h("span", null, "共 " + Number(data.total || 0).toLocaleString() + " 个知识")),
           h("div", { className: "wb-lib-head-actions" },
-            h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-lib-primary", onClick: function () { setMenu(menu === "add" ? "" : "add"); } }, icon("plus", 16), " 添加条目"), h(Dropdown, { open: menu === "add", onClose: function () { setMenu(""); } }, h("button", { type: "button", onClick: function () { setMenu(""); setManualOpen(true); } }, icon("note", 16), h("span", null, h("b", null, "手动添加"), h("small", null, "创建书目信息"))), h("button", { type: "button", onClick: function () { setMenu(""); fileRef.current && fileRef.current.click(); } }, icon("upload", 16), h("span", null, h("b", null, "上传文件"), h("small", null, "PDF、RIS、BibTeX 或 JSON"))))),
+            h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-lib-primary", onClick: function () { setMenu(menu === "add" ? "" : "add"); } }, icon("plus", 16), " 添加条目"), h(Dropdown, { open: menu === "add", onClose: function () { setMenu(""); } }, h("button", { type: "button", onClick: function () { setMenu(""); setManualOpen(true); } }, icon("note", 16), h("span", null, h("b", null, "手动添加"), h("small", null, "创建知识条目"))), h("button", { type: "button", onClick: function () { setMenu(""); fileRef.current && fileRef.current.click(); } }, icon("upload", 16), h("span", null, h("b", null, "上传文件"), h("small", null, "文档、图片、音频、视频等"))))),
             h("button", { type: "button", className: "wb-lib-head-button", disabled: uploading, onClick: function () { fileRef.current && fileRef.current.click(); } }, uploading ? h(Spinner) : icon("upload", 16), uploading ? "导入中" : "导入"),
             h("button", { type: "button", className: "wb-lib-head-button", onClick: exportItems, disabled: !data.items.length }, icon("download", 16), "导出"))),
         h("div", { className: "wb-lib-toolbar" },
           h("label", { className: "wb-lib-search" }, icon("search", 17), h("input", { value: query, onChange: function (event) { setQuery(event.target.value); }, placeholder: "在当前项目的知识库中搜索…" }), query && h("button", { type: "button", onClick: function () { setQuery(""); }, title: "清空搜索" }, icon("close", 13))),
           h("div", { className: "wb-lib-tools" },
             h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-lib-tool" + (activeFilters ? " active" : ""), onClick: function () { setMenu(menu === "filter" ? "" : "filter"); } }, icon("filter", 16), "筛选", activeFilters ? h("small", null, activeFilters) : null), h(Dropdown, { open: menu === "filter", onClose: function () { setMenu(""); }, className: "filter" },
-              h("label", null, "条目类型", h("select", { value: filters.item_type, onChange: function (event) { setFilters(Object.assign({}, filters, { item_type: event.target.value })); } }, h("option", { value: "" }, "全部类型"), h("option", { value: "journalArticle" }, "期刊文章"), h("option", { value: "conferencePaper" }, "会议论文"), h("option", { value: "book" }, "图书"), h("option", { value: "thesis" }, "学位论文"), h("option", { value: "report" }, "报告"))),
+              h("label", null, "文件类型", h("select", { value: filters.file_type, onChange: function (event) { setFilters(Object.assign({}, filters, { file_type: event.target.value })); } }, h("option", { value: "" }, "全部文件类型"), h("option", { value: "pdf" }, "PDF"), h("option", { value: "document" }, "文档与文本"), h("option", { value: "spreadsheet" }, "电子表格"), h("option", { value: "presentation" }, "演示文稿"), h("option", { value: "image" }, "图片"), h("option", { value: "audio" }, "音频"), h("option", { value: "video" }, "视频"), h("option", { value: "link" }, "网页与链接"), h("option", { value: "other" }, "其他文件"))),
+              h("label", null, "书目类型", h("select", { value: filters.item_type, onChange: function (event) { setFilters(Object.assign({}, filters, { item_type: event.target.value })); } }, h("option", { value: "" }, "全部书目类型"), h("option", { value: "document" }, "普通知识条目"), h("option", { value: "webpage" }, "网页"), h("option", { value: "journalArticle" }, "期刊文章"), h("option", { value: "conferencePaper" }, "会议论文"), h("option", { value: "book" }, "图书"), h("option", { value: "thesis" }, "学位论文"), h("option", { value: "report" }, "报告"))),
               h("label", null, "阅读状态", h("select", { value: filters.status, onChange: function (event) { setFilters(Object.assign({}, filters, { status: event.target.value })); } }, h("option", { value: "" }, "全部状态"), h("option", { value: "unread" }, "待读"), h("option", { value: "reading" }, "阅读中"), h("option", { value: "read" }, "已读"))),
               h("label", null, "年份", h("input", { type: "number", value: filters.year, onChange: function (event) { setFilters(Object.assign({}, filters, { year: event.target.value })); }, placeholder: "例如 2025" })),
-              activeFilters > 0 && h("button", { type: "button", className: "wb-lib-clear-filter", onClick: function () { setFilters({ item_type: "", status: "", year: "" }); } }, "清除筛选"))),
+              activeFilters > 0 && h("button", { type: "button", className: "wb-lib-clear-filter", onClick: function () { setFilters({ file_type: "", item_type: "", status: "", year: "" }); } }, "清除筛选"))),
             h("div", { className: "wb-lib-menu-wrap" }, h("button", { type: "button", className: "wb-lib-tool", onClick: function () { setMenu(menu === "sort" ? "" : "sort"); } }, icon("sort", 16), "排序"), h(Dropdown, { open: menu === "sort", onClose: function () { setMenu(""); }, className: "sort" }, [{ id: "updated_at", label: "最近更新" }, { id: "created_at", label: "最近添加" }, { id: "title", label: "标题" }, { id: "year", label: "年份" }].map(function (option) { return h("button", { key: option.id, type: "button", className: sort === option.id ? "selected" : "", onClick: function () { setSort(option.id); setMenu(""); } }, option.label, sort === option.id && icon("check", 14)); }), h("button", { type: "button", onClick: function () { setOrder(order === "desc" ? "asc" : "desc"); setMenu(""); } }, order === "desc" ? "降序" : "升序"))),
             h("div", { className: "wb-lib-view-toggle" }, h("button", { type: "button", className: view === "table" ? "active" : "", onClick: function () { setView("table"); }, title: "表格视图" }, icon("list", 16)), h("button", { type: "button", className: view === "grid" ? "active" : "", onClick: function () { setView("grid"); }, title: "卡片视图" }, icon("grid", 16))),
             !rightOpen && selectedItem && h("button", { type: "button", className: "wb-lib-tool compact", onClick: function () { setRightOpen(true); }, title: "打开详情" }, icon("panel", 16)))),
-        checked.length > 0 && h("div", { className: "wb-lib-batch" }, h("b", null, "已选择 " + checked.length + " 项"), h("button", { type: "button", onClick: function () { setChecked([]); } }, "取消选择")),
+        checked.length > 0 && h("div", { className: "wb-lib-batch" },
+          h("b", null, "已选择 " + checked.length + " 项"),
+          h("div", { className: "wb-lib-batch-actions" },
+            h("button", { type: "button", className: "danger", disabled: batchDeleting, onClick: removeChecked },
+              batchDeleting ? h(Spinner) : icon("trash", 14),
+              batchDeleting ? "删除中…" : (scope.type === "trash" ? "永久删除" : "移至回收站")),
+            h("button", { type: "button", disabled: batchDeleting, onClick: function () { setChecked([]); } }, "取消选择"))),
         error && h("div", { className: "wb-lib-error" }, h("span", null, error), h("button", { type: "button", onClick: function () { reload(); } }, icon("restore", 14), " 重试")),
         h("section", { className: "wb-lib-results" + (selectedItem ? " with-workspace" : "") },
-          loading && !data.items.length ? h(StatePanel, { loading: true, title: "正在加载文献库…" }) : !data.items.length ? h(StatePanel, { title: query || activeFilters || scope.type !== "all" ? "没有匹配的文献" : "这个项目还没有文献", body: query || activeFilters || scope.type !== "all" ? "尝试调整搜索、分类或筛选条件。" : "导入 PDF、RIS 或 BibTeX；Zotero 导入请前往设置。", action: query || activeFilters || scope.type !== "all" ? function () { setQuery(""); setFilters({ item_type: "", status: "", year: "" }); setScope({ type: "all" }); } : function () { fileRef.current && fileRef.current.click(); }, actionLabel: query || activeFilters || scope.type !== "all" ? "清除条件" : "导入第一篇文献", actionIcon: query || activeFilters || scope.type !== "all" ? "restore" : "upload" }) :
+          loading && !data.items.length ? h(StatePanel, { loading: true, title: "正在加载知识库…" }) : !data.items.length ? h(StatePanel, { title: query || activeFilters || scope.type !== "all" ? "没有匹配的知识" : "这个项目还没有知识条目", body: query || activeFilters || scope.type !== "all" ? "尝试调整搜索、分类或筛选条件。" : "上传文档、图片、音频或视频，也可以导入 RIS、BibTeX 和 Zotero 书目。", action: query || activeFilters || scope.type !== "all" ? function () { setQuery(""); setFilters({ file_type: "", item_type: "", status: "", year: "" }); setScope({ type: "all" }); } : function () { fileRef.current && fileRef.current.click(); }, actionLabel: query || activeFilters || scope.type !== "all" ? "清除条件" : "导入第一个知识条目", actionIcon: query || activeFilters || scope.type !== "all" ? "restore" : "upload" }) :
             view === "table" ? h("div", { className: "wb-lib-table", role: "table" }, h(TableHead, { allSelected: data.items.length > 0 && checked.length === data.items.length, onToggleAll: toggleAll }), h("div", { className: "wb-lib-table-body" }, data.items.map(function (item) { return h(LibraryRow, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, trash: scope.type === "trash", onSelect: select, onToggle: toggleChecked, onStar: toggleStar, onRestore: restore }); }))) :
-              h("div", { className: "wb-lib-card-grid" }, data.items.map(function (item) { return h(LibraryCard, { key: item.id, item: item, active: String(item.id) === String(selectedId), onSelect: select, onStar: toggleStar }); })),
+              h("div", { className: "wb-lib-card-grid" }, data.items.map(function (item) { return h(LibraryCard, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, onSelect: select, onToggle: toggleChecked, onStar: toggleStar }); })),
           data.items.length < data.total && h("button", { type: "button", className: "wb-lib-load-more", disabled: loadingMore, onClick: loadMore }, loadingMore ? h(Spinner) : null, loadingMore ? "加载中…" : "加载更多（" + data.items.length + " / " + data.total + "）"),
           loading && data.items.length > 0 && h("div", { className: "wb-lib-loading-bar" }, h(Spinner), " 正在更新…")),
         selectedItem && h(ItemWorkspace, { item: selectedItem, loading: detailLoading, tab: workTab, onTab: setWorkTab, onUpdate: updateSelected, onAddNote: addNote, rawUrl: client.rawUrl(selectedId), citationProps: citationProps })),

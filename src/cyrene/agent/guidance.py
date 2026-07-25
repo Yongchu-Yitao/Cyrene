@@ -332,7 +332,7 @@ async def _fan_out_guidance_to_subagents(target_round_id: str, content: str, bot
         sent.append(agent_id)
 
     for agent_id, info in snapshot.items():
-        if info.get("status") not in ("done", "timeout"):
+        if info.get("status") not in ("done", "timeout", "incomplete"):
             continue
         if await _sub_reactivate(agent_id):
             raw_messages = await _sub_raw_msgs(agent_id)
@@ -372,7 +372,7 @@ async def _wait_for_subagent_round(round_id: str, bot: Any, chat_id: int, db_pat
 
         resurrected = False
         for agent_id, info in snapshot.items():
-            if info.get("status") not in ("done", "timeout") or _inbox_unread(agent_id) == 0:
+            if info.get("status") not in ("done", "timeout", "incomplete") or _inbox_unread(agent_id) == 0:
                 continue
             if await _sub_reactivate(agent_id):
                 raw_messages = await _sub_raw_msgs(agent_id)
@@ -384,7 +384,7 @@ async def _wait_for_subagent_round(round_id: str, bot: Any, chat_id: int, db_pat
 
         snapshot = await _sub_snapshot(round_id=round_id)
         all_truly_done = all(
-            info.get("status") in ("done", "timeout") and _inbox_unread(agent_id) == 0
+            info.get("status") in ("done", "timeout", "incomplete") and _inbox_unread(agent_id) == 0
             for agent_id, info in snapshot.items()
         )
         if all_truly_done and not resurrected:

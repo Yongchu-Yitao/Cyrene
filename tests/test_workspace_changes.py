@@ -74,6 +74,23 @@ def test_workspace_diff_keeps_rows_separate_without_final_newline(tmp_path):
     assert "\n-old\n+new\n" in diff
 
 
+def test_incremental_workspace_snapshot_reuses_unchanged_file_state(tmp_path):
+    from cyrene.workspace_changes import capture_workspace_snapshot
+
+    unchanged = tmp_path / "unchanged.txt"
+    changed = tmp_path / "changed.txt"
+    unchanged.write_text("same\n", encoding="utf-8")
+    changed.write_text("before\n", encoding="utf-8")
+    before = capture_workspace_snapshot(tmp_path)
+
+    changed.write_text("after and a different size\n", encoding="utf-8")
+    after = capture_workspace_snapshot(tmp_path, previous=before)
+
+    assert after.files["unchanged.txt"] is before.files["unchanged.txt"]
+    assert after.files["changed.txt"] is not before.files["changed.txt"]
+    assert after.files["changed.txt"].text == "after and a different size\n"
+
+
 def test_change_store_keeps_diff_private_until_file_fetch(tmp_path):
     from cyrene.workspace_changes import (
         get_chat_file_change,
@@ -108,19 +125,55 @@ def test_change_store_keeps_diff_private_until_file_fetch(tmp_path):
     assert "+new" in fetched["diff"]
 
 
-def test_workspace_change_baselines_serialize_the_same_workspace(tmp_path):
+def test_workspace_change_baselines_allow_overlapping_runs_in_same_workspace(tmp_path):
     from webui import routes_workbench_chat as chat_routes
 
-    async def exercise_lock():
-        first = await chat_routes._capture_workspace_changes_baseline(tmp_path)
-        second_task = asyncio.create_task(
-            chat_routes._capture_workspace_changes_baseline(tmp_path)
+    async def exercise_overlap():
+        first = await chat_routes._capture_workspace_changes_baseline(
+            tmp_path, "run_first"
         )
-        await asyncio.sleep(0.02)
-        assert not second_task.done()
-        chat_routes._release_workspace_changes_baseline(first)
-        second = await asyncio.wait_for(second_task, timeout=1)
-        chat_routes._release_workspace_changes_baseline(second)
+        second = await asyncio.wait_for(
+            chat_routes._capture_workspace_changes_baseline(
+                tmp_path, "run_second"
+            ),
+            timeout=1,
+        )
+        assert first.overlapping_run_ids == {"run_second"}
+        assert second.overlapping_run_ids == {"run_first"}
 
-    asyncio.run(exercise_lock())
+        (tmp_path / "shared.txt").write_text("changed\n", encoding="utf-8")
+        first_after = await chat_routes._complete_workspace_changes_baseline(
+            first, tmp_path
+        )
+        assert first_after is not None
+        workspace_key = str(tmp_path.resolve())
+        assert set(chat_routes._WORKSPACE_CHANGES_LOCKS[workspace_key].active) == {
+            "run_second"
+        }
+        second_after = await chat_routes._complete_workspace_changes_baseline(
+            second, tmp_path
+        )
+        assert second_after is not None
+
+    asyncio.run(exercise_overlap())
     assert str(tmp_path.resolve()) not in chat_routes._WORKSPACE_CHANGES_LOCKS
+
+
+def test_overlapping_change_set_reports_nonexclusive_attribution(tmp_path):
+    from cyrene.workspace_changes import build_change_set, capture_workspace_snapshot
+
+    before = capture_workspace_snapshot(tmp_path)
+    (tmp_path / "shared.txt").write_text("changed\n", encoding="utf-8")
+    after = capture_workspace_snapshot(tmp_path)
+    change_set = build_change_set(
+        chat_id="chat_first",
+        run_id="run_first",
+        before=before,
+        after=after,
+        status="completed",
+        attribution="overlapping",
+        overlapping_run_ids=["run_second"],
+    )
+
+    assert change_set["attribution"] == "overlapping"
+    assert change_set["overlappingRunIds"] == ["run_second"]

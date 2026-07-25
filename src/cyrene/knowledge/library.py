@@ -394,7 +394,7 @@ async def create_item(db_path: str, payload: dict[str, Any]) -> dict[str, Any]:
                 str(payload.get("provider_library_id") or ""),
                 str(payload.get("provider_item_key") or ""),
                 int(payload.get("provider_version") or 0),
-                str(values.get("item_type") or "journalArticle"),
+                str(values.get("item_type") or "document"),
                 str(values.get("title") or ""), str(values.get("abstract") or ""),
                 str(values.get("doi") or ""), str(values.get("isbn") or ""),
                 str(values.get("url") or ""), str(values.get("venue") or ""),
@@ -502,6 +502,7 @@ async def list_items(
     status: str = "",
     tag: str = "",
     item_type: str = "",
+    file_type: str = "",
     year: int | str | None = None,
     starred: bool | None = None,
     trash: bool = False,
@@ -543,6 +544,127 @@ async def list_items(
     if item_type:
         where.append("i.item_type=?")
         params.append(item_type)
+    if file_type:
+        attachment_prefix = """EXISTS (
+            SELECT 1 FROM library_attachments a
+            WHERE a.item_id=i.id AND """
+        attachment_suffix = ")"
+        file_type_sql = {
+            "pdf": """(
+                lower(a.content_type)='application/pdf'
+                OR lower(a.filename) GLOB '*.pdf'
+            )""",
+            "image": """(
+                lower(a.content_type) LIKE 'image/%'
+                OR lower(a.filename) GLOB '*.avif'
+                OR lower(a.filename) GLOB '*.bmp'
+                OR lower(a.filename) GLOB '*.gif'
+                OR lower(a.filename) GLOB '*.jpeg'
+                OR lower(a.filename) GLOB '*.jpg'
+                OR lower(a.filename) GLOB '*.png'
+                OR lower(a.filename) GLOB '*.webp'
+            )""",
+            "audio": """(
+                lower(a.content_type) LIKE 'audio/%'
+                OR lower(a.filename) GLOB '*.aac'
+                OR lower(a.filename) GLOB '*.flac'
+                OR lower(a.filename) GLOB '*.m4a'
+                OR lower(a.filename) GLOB '*.mp3'
+                OR lower(a.filename) GLOB '*.oga'
+                OR lower(a.filename) GLOB '*.ogg'
+                OR lower(a.filename) GLOB '*.wav'
+                OR lower(a.filename) GLOB '*.weba'
+            )""",
+            "video": """(
+                lower(a.content_type) LIKE 'video/%'
+                OR lower(a.filename) GLOB '*.m4v'
+                OR lower(a.filename) GLOB '*.mov'
+                OR lower(a.filename) GLOB '*.mp4'
+                OR lower(a.filename) GLOB '*.ogv'
+                OR lower(a.filename) GLOB '*.webm'
+            )""",
+            "spreadsheet": """(
+                lower(a.content_type) IN ('text/csv','text/tab-separated-values')
+                OR lower(a.content_type) LIKE '%spreadsheet%'
+                OR lower(a.content_type) LIKE '%ms-excel%'
+                OR lower(a.filename) GLOB '*.csv'
+                OR lower(a.filename) GLOB '*.numbers'
+                OR lower(a.filename) GLOB '*.tsv'
+                OR lower(a.filename) GLOB '*.xls'
+                OR lower(a.filename) GLOB '*.xlsm'
+                OR lower(a.filename) GLOB '*.xlsx'
+            )""",
+            "presentation": """(
+                lower(a.content_type) LIKE '%powerpoint%'
+                OR lower(a.content_type) LIKE '%presentation%'
+                OR lower(a.filename) GLOB '*.key'
+                OR lower(a.filename) GLOB '*.odp'
+                OR lower(a.filename) GLOB '*.ppt'
+                OR lower(a.filename) GLOB '*.pptx'
+            )""",
+            "document": """(
+                (
+                    lower(a.content_type) LIKE 'text/%'
+                    AND lower(a.content_type) NOT IN (
+                        'text/csv','text/tab-separated-values','text/uri-list'
+                    )
+                )
+                OR lower(a.content_type) LIKE '%msword%'
+                OR lower(a.content_type) LIKE '%wordprocessing%'
+                OR lower(a.content_type) LIKE '%opendocument.text%'
+                OR lower(a.content_type) LIKE '%rtf%'
+                OR lower(a.filename) GLOB '*.doc'
+                OR lower(a.filename) GLOB '*.docx'
+                OR lower(a.filename) GLOB '*.html'
+                OR lower(a.filename) GLOB '*.htm'
+                OR lower(a.filename) GLOB '*.json'
+                OR lower(a.filename) GLOB '*.log'
+                OR lower(a.filename) GLOB '*.md'
+                OR lower(a.filename) GLOB '*.rtf'
+                OR lower(a.filename) GLOB '*.txt'
+                OR lower(a.filename) GLOB '*.xml'
+                OR lower(a.filename) GLOB '*.yaml'
+                OR lower(a.filename) GLOB '*.yml'
+            )""",
+            "link": """(
+                lower(a.content_type)='text/uri-list'
+                OR lower(a.filename) GLOB '*.link'
+                OR lower(a.filename) GLOB '*.url'
+                OR lower(a.filename) GLOB '*.webloc'
+            )""",
+        }
+        condition = file_type_sql.get(file_type)
+        if file_type == "link":
+            where.append(
+                f"(i.item_type='webpage' OR {attachment_prefix}{condition}{attachment_suffix})"
+            )
+        elif file_type == "document":
+            where.append(
+                f"""(
+                    (i.item_type='document' AND NOT EXISTS (
+                        SELECT 1 FROM library_attachments a WHERE a.item_id=i.id
+                    ))
+                    OR {attachment_prefix}{condition}{attachment_suffix}
+                )"""
+            )
+        elif condition:
+            where.append(attachment_prefix + condition + attachment_suffix)
+        elif file_type == "other":
+            recognized = " OR ".join(
+                f"({value})" for value in file_type_sql.values()
+            )
+            where.append(
+                f"""(
+                    EXISTS (
+                        SELECT 1 FROM library_attachments a WHERE a.item_id=i.id
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM library_attachments a
+                        WHERE a.item_id=i.id AND ({recognized})
+                    )
+                    AND i.item_type<>'webpage'
+                )"""
+            )
     if year not in (None, ""):
         try:
             normalized_year = int(year)
@@ -567,7 +689,9 @@ async def list_items(
         (SELECT COUNT(*) FROM library_attachments a WHERE a.item_id=i.id) AS attachment_count,
         (SELECT COUNT(*) FROM library_notes n WHERE n.item_id=i.id) AS note_count,
         (SELECT a.filename FROM library_attachments a WHERE a.item_id=i.id ORDER BY a.created_at LIMIT 1) AS attachment_name,
-        (SELECT a.content_type FROM library_attachments a WHERE a.item_id=i.id ORDER BY a.created_at LIMIT 1) AS content_type
+        (SELECT a.content_type FROM library_attachments a WHERE a.item_id=i.id ORDER BY a.created_at LIMIT 1) AS content_type,
+        (SELECT d.size FROM library_attachments a JOIN kb_documents d ON d.id=a.kb_document_id
+            WHERE a.item_id=i.id ORDER BY a.created_at LIMIT 1) AS attachment_size
         FROM library_items i"""
     async with aiosqlite.connect(db_path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
@@ -589,28 +713,54 @@ async def list_items(
         return items, total
 
 
-async def delete_item(db_path: str, item_id: str, *, permanent: bool = False) -> bool:
+async def delete_items(
+    db_path: str, item_ids: Iterable[str], *, permanent: bool = False
+) -> int:
+    normalized_ids = list(
+        dict.fromkeys(str(item_id or "").strip() for item_id in item_ids)
+    )
+    normalized_ids = [item_id for item_id in normalized_ids if item_id]
+    if not normalized_ids:
+        return 0
+
+    placeholders = ",".join("?" for _ in normalized_ids)
     async with aiosqlite.connect(db_path, timeout=30) as db:
         if permanent:
             for table in (
                 "library_creators", "library_collection_items", "library_attachments",
                 "library_notes", "library_annotations",
             ):
-                await db.execute(f"DELETE FROM {table} WHERE item_id = ?", (item_id,))
+                await db.execute(
+                    f"DELETE FROM {table} WHERE item_id IN ({placeholders})",
+                    normalized_ids,
+                )
             await db.execute(
-                "DELETE FROM library_relations WHERE src_item_id=? OR dst_item_id=?",
-                (item_id, item_id),
+                f"""DELETE FROM library_relations
+                    WHERE src_item_id IN ({placeholders})
+                       OR dst_item_id IN ({placeholders})""",
+                normalized_ids + normalized_ids,
             )
-            cursor = await db.execute("DELETE FROM library_items WHERE id=?", (item_id,))
+            cursor = await db.execute(
+                f"DELETE FROM library_items WHERE id IN ({placeholders})",
+                normalized_ids,
+            )
         else:
             now = _now()
             cursor = await db.execute(
-                "UPDATE library_items SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at IS NULL",
-                (now, now, item_id),
+                f"""UPDATE library_items SET deleted_at=?, updated_at=?
+                    WHERE id IN ({placeholders}) AND deleted_at IS NULL""",
+                [now, now] + normalized_ids,
             )
-        await db.execute("DELETE FROM library_items_fts WHERE item_id=?", (item_id,))
+        await db.execute(
+            f"DELETE FROM library_items_fts WHERE item_id IN ({placeholders})",
+            normalized_ids,
+        )
         await db.commit()
-        return cursor.rowcount > 0
+        return max(cursor.rowcount, 0)
+
+
+async def delete_item(db_path: str, item_id: str, *, permanent: bool = False) -> bool:
+    return await delete_items(db_path, [item_id], permanent=permanent) > 0
 
 
 async def restore_item(db_path: str, item_id: str) -> dict[str, Any] | None:
@@ -1129,7 +1279,7 @@ def render_bibtex(item: dict[str, Any]) -> str:
 __all__ = [
     "sync_knowledge_documents", "create_item", "get_item", "get_item_by_provider_key",
     "update_item", "list_items",
-    "delete_item", "restore_item", "create_collection", "upsert_collection", "list_collections",
+    "delete_item", "delete_items", "restore_item", "create_collection", "upsert_collection", "list_collections",
     "update_collection", "delete_collection", "create_note", "update_note", "delete_note",
     "add_attachment", "upsert_attachment", "add_annotation", "create_relation", "delete_relation",
     "list_tags", "get_stats", "set_sync_state", "get_sync_state", "zotero_to_item",
