@@ -17,8 +17,8 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from cyrene.attachments import EXPORTS_DIR, UPLOADS_DIR, safe_attachment_filename
 from cyrene.knowledge import bibliography, ingest, library, retrieve, store, zotero
-from webui.api_errors import error_response
-from webui.routes_workbench_knowledge import _ensure_kb_db, _resolve_workspace_id
+from route.errors import error_response
+from cyrene.workbench_knowledge_service import _ensure_kb_db, _resolve_workspace_id
 
 
 logger = logging.getLogger(__name__)

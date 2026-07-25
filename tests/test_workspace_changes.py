@@ -126,7 +126,7 @@ def test_change_store_keeps_diff_private_until_file_fetch(tmp_path):
 
 
 def test_workspace_change_baselines_allow_overlapping_runs_in_same_workspace(tmp_path):
-    from webui import routes_workbench_chat as chat_routes
+    from cyrene import workbench_chat_service as chat_routes
 
     async def exercise_overlap():
         first = await chat_routes._capture_workspace_changes_baseline(

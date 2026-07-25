@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from route.registry import register_routes
+
 
 def _client(monkeypatch):
     from cyrene import settings_store
-    from webui import routes
 
     state = {
         "packages": {"browser_tools": False},
@@ -43,7 +44,7 @@ def _client(monkeypatch):
     )
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path="test.db")
+    register_routes(app, bot=None, db_path="test.db")
     return TestClient(app), state
 
 

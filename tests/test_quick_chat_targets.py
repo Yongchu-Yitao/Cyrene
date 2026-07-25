@@ -23,14 +23,15 @@ pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
 from cyrene import db
-from webui.routes import register_routes
+from route.registry import register_routes
 
 
 @pytest.fixture
 def targets_env(monkeypatch, tmp_path):
     from cyrene import io_utils
-    from webui import routes as routes_mod
-    from webui import routes_workbench_chat as chat_mod
+    from cyrene import workbench_chat_service as chat_service
+    from cyrene import workbench_runtime as routes_mod
+    from route.workbench import chat as chat_mod
     from webui.workbench_chat_runs import ChatRunManager
 
     data_dir = tmp_path / "data"
@@ -44,8 +45,8 @@ def targets_env(monkeypatch, tmp_path):
     monkeypatch.setattr(cyrene_config, "WORKSPACE_DIR", workspace_dir)
     monkeypatch.setattr(routes_mod, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes_mod, "WORKSPACE_DIR", workspace_dir)
-    monkeypatch.setattr(chat_mod, "DATA_DIR", data_dir)
-    chat_mod._CHATS_STORE = data_dir / "workbench_chats.json"
+    monkeypatch.setattr(chat_service, "DATA_DIR", data_dir)
+    chat_service._CHATS_STORE = data_dir / "workbench_chats.json"
     monkeypatch.setattr(chat_mod, "_CHAT_RUN_MANAGER", ChatRunManager(retention_seconds=0))
     routes_mod._WORKBENCH_STORE = data_dir / "workbench_projects.json"
 

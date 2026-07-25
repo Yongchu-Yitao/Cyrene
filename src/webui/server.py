@@ -45,7 +45,7 @@ class WebBot:
 
 def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "workbench") -> FastAPI:
     from cyrene.channels.wechat import setup_wechat as _setup_wechat
-    from webui.routes import register_routes
+    from route.registry import register_routes
 
     from webui.auth import LocalAuthMiddleware
 
@@ -68,14 +68,10 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     app.mount("/static/workbench-ui", StaticFiles(directory=str(_WORKBENCH_UI_DIR)), name="workbench-ui")
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
-    @app.get("/api/instance-id")
-    async def api_instance_id() -> dict[str, str]:
-        return {"instance_id": str(app.state.instance_id or "")}
-
     register_routes(app, bot, db_path)
 
     async def _start_workbench_chat_runs() -> None:
-        from webui.routes_workbench_chat import startup_chat_runs
+        from cyrene.workbench_chat_service import startup_chat_runs
 
         startup_chat_runs()
         manager = getattr(app.state, "goal_loop_manager", None)
@@ -150,7 +146,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
                 logger.warning("Goal-loop shutdown failed", exc_info=True)
 
         try:
-            from webui.routes_workbench_chat import shutdown_chat_runs
+            from cyrene.workbench_chat_service import shutdown_chat_runs
 
             await shutdown_chat_runs()
         except Exception:

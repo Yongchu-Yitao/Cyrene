@@ -73,7 +73,7 @@ def test_silence_detection_includes_workbench_user_activity(monkeypatch, tmp_pat
 
 def test_mark_user_activity_resets_lottery(monkeypatch):
     from cyrene import scheduler
-    from webui import routes_workbench_chat
+    from cyrene import workbench_chat_service as routes_workbench_chat
 
     reset = MagicMock()
     monkeypatch.setattr(scheduler, "reset_lottery", reset)
@@ -124,7 +124,7 @@ async def test_proactive_is_persisted_to_latest_workbench_chat(
     monkeypatch, tmp_path
 ):
     from cyrene import debug, scheduler
-    from webui import routes_workbench_chat
+    from cyrene import workbench_chat_service as routes_workbench_chat
 
     chats_path = tmp_path / "workbench_chats.json"
     workspace = tmp_path / "workspace"

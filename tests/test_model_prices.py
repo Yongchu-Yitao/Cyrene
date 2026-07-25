@@ -86,7 +86,7 @@ def test_unset_price_is_zero_for_unknown_model(monkeypatch):
 
 
 def test_zero_price_renders_as_exact_zero(monkeypatch):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(
         routes,
@@ -150,7 +150,7 @@ def test_to_usd_preserves_usd_and_converts_cny():
 
 
 def test_session_spend_prices_each_actual_fallback_model(monkeypatch):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     prices = {
         "primary": {"input": 1.0, "output": 2.0, "currency": "CNY"},

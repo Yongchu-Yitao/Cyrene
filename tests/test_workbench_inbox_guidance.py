@@ -726,7 +726,8 @@ async def test_acknowledging_one_guidance_does_not_clear_newer_guidance_signal(t
 async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tmp_path):
     import httpx
     from fastapi import FastAPI
-    from webui import routes_workbench_chat as chat_mod
+    from cyrene import workbench_chat_service as chat_service
+    from route.workbench import chat as chat_mod
     from webui.workbench_chat_runs import ChatRunManager
 
     db_path = tmp_path / "workbench.db"
@@ -746,8 +747,8 @@ async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tm
         encoding="utf-8",
     )
     manager = ChatRunManager(retention_seconds=0)
-    monkeypatch.setattr(chat_mod, "_CHATS_STORE", chats_path)
-    monkeypatch.setattr(chat_mod, "_CONFIGURED_CHATS_STORE", None)
+    monkeypatch.setattr(chat_service, "_CHATS_STORE", chats_path)
+    monkeypatch.setattr(chat_service, "_CONFIGURED_CHATS_STORE", None)
     monkeypatch.setattr(chat_mod, "_CHAT_RUN_MANAGER", manager)
 
     app = FastAPI()
@@ -793,7 +794,7 @@ async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tm
     queued = run.inbox.collect_guidance_nowait()
     assert [event["payload"]["text"] for event in queued] == ["先做后端"]
     run.inbox.acknowledge(queued)
-    stored = chat_mod._read_chats_store()
+    stored = chat_service._read_chats_store()
     assert stored["chats"][0]["messages"][-1]["guidance"] is True
     assert stored["chats"][0]["messages"][-1]["content"] == "先做后端"
     assert any(event.get("type") == "guidance_received" for event in run.events)
@@ -819,7 +820,7 @@ async def test_startup_reconciles_durable_guidance_missing_from_transcript(
     monkeypatch, tmp_path
 ):
     from cyrene.workbench_inbox import WorkbenchAgentInbox
-    from webui import routes_workbench_chat as chat_mod
+    from cyrene import workbench_chat_service as chat_mod
 
     db_path = tmp_path / "workbench.db"
     chats_path = tmp_path / "workbench_chats.json"

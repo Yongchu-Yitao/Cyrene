@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from route.registry import register_routes
+
 
 def _patch_paths(monkeypatch, tmp_path, soul_content, default_content):
     from cyrene import onboarding, setup, conversations
@@ -139,7 +141,6 @@ def test_settings_model_save_persists_vision_probe_result(monkeypatch, tmp_path)
     from fastapi.testclient import TestClient
 
     from cyrene import config, onboarding, settings_store
-    from webui import routes
 
     saved = {}
 
@@ -162,7 +163,7 @@ def test_settings_model_save_persists_vision_probe_result(monkeypatch, tmp_path)
     monkeypatch.setattr(config, "write_env_keys", lambda values: None)
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
     response = TestClient(app).put("/api/settings/models", json={
         "models": [{"id": "primary", "model": "visual-primary", "api_key": "sk-test", "base_url": "https://example.test/v1"}],
         "vision_models": [{"id": "vision", "model": "visual-primary", "api_key": "sk-test", "base_url": "https://example.test/v1"}],

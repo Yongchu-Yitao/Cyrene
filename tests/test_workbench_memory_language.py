@@ -5,7 +5,7 @@ import pytest
 from cyrene import settings_store
 from cyrene.tooling import native_definitions
 from cyrene.agent import state as agent_state
-from webui import routes_workbench_memory as memory
+from cyrene import workbench_memory_service as memory
 
 
 def _isolate_memory_store(monkeypatch, tmp_path, language):
@@ -456,7 +456,7 @@ def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp
 
 def test_default_project_memory_does_not_alias_global_short_term(monkeypatch, tmp_path):
     from cyrene import short_term
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(memory, "STORE_DIR", tmp_path)
     monkeypatch.setattr(memory, "_STORE_DB_PATH", "")

@@ -24,7 +24,7 @@ pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
 from cyrene import db
-from webui.routes import register_routes
+from route.registry import register_routes
 
 
 @pytest.fixture
@@ -211,7 +211,7 @@ class TestKnowledgeRoutes:
     @pytest.mark.asyncio
     async def test_upload_duplicate_file_reuses_document(self, client, temp_db, tmp_path, monkeypatch):
         """Uploading identical bytes twice should return the canonical document."""
-        import webui.routes_knowledge as routes_knowledge
+        import route.knowledge as routes_knowledge
 
         monkeypatch.setattr(routes_knowledge, "_UPLOADS_DIR", tmp_path)
 
@@ -243,9 +243,9 @@ class TestKnowledgeRoutes:
         self, client, temp_db, tmp_path, monkeypatch
     ):
         """KB deduplication must not delete paths returned to chat sessions."""
-        import webui.routes as routes
+        from route.agent import chat as chat_routes
 
-        monkeypatch.setattr(routes, "_UPLOADS_DIR", tmp_path)
+        monkeypatch.setattr(chat_routes, "_UPLOADS_DIR", tmp_path)
         payload = b"same chat attachment bytes"
 
         first = client.post(

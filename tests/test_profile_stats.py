@@ -9,7 +9,7 @@ import pytest
 import aiosqlite
 
 from cyrene import db as cy_db
-from webui import routes
+from cyrene import workbench_runtime as routes
 
 
 @pytest.mark.asyncio

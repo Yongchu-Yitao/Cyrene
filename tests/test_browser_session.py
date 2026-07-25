@@ -388,7 +388,7 @@ def test_browser_runtime_error_filters_install_commands():
 def test_browser_live_frames_do_not_ride_sse_as_base64():
     root = Path(__file__).resolve().parent.parent
     browser_source = (root / "src" / "cyrene" / "browser.py").read_text(encoding="utf-8")
-    routes_source = (root / "src" / "webui" / "routes.py").read_text(encoding="utf-8")
+    routes_source = (root / "src" / "route" / "agent" / "browser.py").read_text(encoding="utf-8")
     view_source = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
 
     emit_frame_body = browser_source.split("async def _emit_frame", 1)[1].split("# -- Screencast", 1)[0]

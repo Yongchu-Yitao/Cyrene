@@ -499,7 +499,7 @@ def test_workbench_memory_skill_learning_selects_tool_chains():
     source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
     i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
-    routes = (root / "src" / "webui" / "routes.py").read_text(encoding="utf-8")
+    routes = (root / "src" / "route" / "learning.py").read_text(encoding="utf-8")
     pattern = (root / "src" / "cyrene" / "pattern.py").read_text(encoding="utf-8")
     prompts = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
 
@@ -1540,7 +1540,7 @@ def test_workbench_tool_start_is_rendered_then_completed_in_place():
 
 def test_workbench_marks_run_finalizing_before_workspace_save():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "src" / "webui" / "routes_workbench_chat.py").read_text(
+    source = (root / "src" / "route" / "workbench" / "chat.py").read_text(
         encoding="utf-8"
     )
     run_streaming = source.split("async def run_streaming", 1)[1].split(
@@ -2302,7 +2302,7 @@ def test_workbench_artifact_rows_download_registered_files():
     source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
     model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
-    routes = (root / "src" / "webui" / "routes.py").read_text(encoding="utf-8")
+    routes = (root / "src" / "route" / "workbench" / "task_sessions.py").read_text(encoding="utf-8")
 
     assert "WorkbenchModel.ensureArtifacts(session)" in source
     assert 'className="workbench-artifact-row wb-artifact-download"' in source
@@ -2501,7 +2501,7 @@ def test_electron_browser_tabs_are_per_session_while_login_state_is_shared():
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
     browser = (root / "src" / "cyrene" / "browser.py").read_text(encoding="utf-8")
-    chat_routes = (root / "src" / "webui" / "routes_workbench_chat.py").read_text(encoding="utf-8")
+    chat_routes = (root / "src" / "route" / "workbench" / "chat.py").read_text(encoding="utf-8")
     view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
     chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
 
@@ -2526,7 +2526,7 @@ def test_electron_browser_tabs_are_per_session_while_login_state_is_shared():
 def test_electron_browser_user_events_are_recorded_for_learning():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    routes = (root / "src" / "webui" / "routes.py").read_text(encoding="utf-8")
+    routes = (root / "src" / "route" / "agent" / "browser.py").read_text(encoding="utf-8")
     view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
 
     assert "BROWSER_USER_EVENT_CONSOLE_PREFIX" in main
@@ -2623,7 +2623,7 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
     model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
-    routes = (root / "src" / "webui" / "routes.py").read_text(encoding="utf-8")
+    routes = (root / "src" / "route" / "workbench" / "projects.py").read_text(encoding="utf-8")
     index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
 
     assert 'window.prompt("后续任务标题"' not in source
@@ -2842,7 +2842,7 @@ def test_warning_toast_has_no_colored_left_accent():
 
 def test_workbench_subagent_payload_recovers_chat_scoped_snapshot(monkeypatch):
     from cyrene import subagent
-    from webui import routes_workbench_chat
+    from cyrene import workbench_chat_service as routes_workbench_chat
 
     messages = [
         {"role": "user", "round_id": "round_1", "content": "Compare two approaches"},

@@ -19,15 +19,16 @@ pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
 from cyrene import db
-from webui.routes import register_routes
+from route.registry import register_routes
 
 
 @pytest.fixture
 def fork_env(monkeypatch, tmp_path):
     """Prepare isolated DATA_DIR / STORE_DIR / WORKSPACE_DIR for fork tests."""
     from cyrene import io_utils
-    from webui import routes as routes_mod
-    from webui import routes_workbench_chat as chat_mod
+    from cyrene import workbench_chat_service as chat_service
+    from cyrene import workbench_runtime as routes_mod
+    from route.workbench import chat as chat_mod
     from webui.workbench_chat_runs import ChatRunManager
 
     data_dir = tmp_path / "data"
@@ -42,7 +43,7 @@ def fork_env(monkeypatch, tmp_path):
     monkeypatch.setattr(cyrene_config, "WORKSPACE_DIR", workspace_dir)
     monkeypatch.setattr(routes_mod, "DATA_DIR", data_dir)
     monkeypatch.setattr(routes_mod, "WORKSPACE_DIR", workspace_dir)
-    monkeypatch.setattr(chat_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(chat_service, "DATA_DIR", data_dir)
     # The agent state module captures DATA_DIR at import time as _DATA_DIR;
     # patch both aliases so _session_state_file resolves to the temp data_dir.
     from cyrene.agent import state as agent_state
@@ -51,7 +52,7 @@ def fork_env(monkeypatch, tmp_path):
     # Clear cached SessionContext entries so they re-resolve against the new
     # DATA_DIR (otherwise stale paths from prior tests leak in).
     agent_state._sessions.clear()
-    chat_mod._CHATS_STORE = data_dir / "workbench_chats.json"
+    chat_service._CHATS_STORE = data_dir / "workbench_chats.json"
     monkeypatch.setattr(
         chat_mod,
         "_CHAT_RUN_MANAGER",
@@ -437,7 +438,7 @@ def test_non_streaming_send_is_owned_by_chat_run_manager(
     client, fork_env, monkeypatch
 ):
     from cyrene import agent
-    from webui import routes_workbench_chat as chat_mod
+    from route.workbench import chat as chat_mod
 
     _write_chat(fork_env, "chat_owned", [])
     calls = []
@@ -471,7 +472,7 @@ def test_non_streaming_send_is_owned_by_chat_run_manager(
 def test_existing_run_rejects_new_send_and_has_explicit_reconnect_endpoint(
     client, fork_env, monkeypatch
 ):
-    from webui import routes_workbench_chat as chat_mod
+    from route.workbench import chat as chat_mod
 
     _write_chat(fork_env, "chat_running", [])
 

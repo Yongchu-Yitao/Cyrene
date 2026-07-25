@@ -49,8 +49,8 @@ def test_normalized_usage_reads_provider_prompt_cache_fields():
 
 
 def test_workbench_new_session_memory_moves_to_volatile_tail(monkeypatch, tmp_path):
-    from webui import routes
-    from webui import routes_workbench_memory as memory
+    from cyrene import workbench_runtime as routes
+    from cyrene import workbench_memory_service as memory
 
     monkeypatch.setattr(memory, "STORE_DIR", tmp_path)
     monkeypatch.setattr(memory, "_STORE_DB_PATH", "")

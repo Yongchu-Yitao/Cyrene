@@ -87,7 +87,7 @@ async def _tool_update_task_plan(
         return "update_task_plan is only available inside Workbench task sessions."
 
     operation = str(args.get("operation") or "").strip().lower()
-    from webui.routes import update_task_plan_for_session
+    from cyrene.workbench_runtime import update_task_plan_for_session
 
     result = update_task_plan_for_session(
         session_id,

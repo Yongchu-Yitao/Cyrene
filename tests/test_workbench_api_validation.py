@@ -5,9 +5,11 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from route.registry import register_routes
+
 
 def _client(monkeypatch, tmp_path: Path) -> TestClient:
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -51,7 +53,7 @@ def _client(monkeypatch, tmp_path: Path) -> TestClient:
     monkeypatch.setattr(routes, "_WORKBENCH_STORE", store_path)
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
     return TestClient(app)
 
 
@@ -85,7 +87,7 @@ def test_session_patch_accepts_existing_statuses(monkeypatch, tmp_path):
 def test_activate_returns_small_selection_payload_without_heavy_store_read(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
 
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(
         routes,
@@ -121,7 +123,7 @@ def test_unstarted_session_cannot_be_paused(monkeypatch, tmp_path):
 
 
 def test_projects_summary_keeps_active_session_full_and_compacts_inactive(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     client = _client(monkeypatch, tmp_path)
     store_path = routes._WORKBENCH_STORE
@@ -182,7 +184,7 @@ def test_projects_summary_keeps_active_session_full_and_compacts_inactive(monkey
 
 
 def test_session_detail_returns_project_shell_without_full_sibling_history(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     client = _client(monkeypatch, tmp_path)
     store_path = routes._WORKBENCH_STORE
@@ -284,7 +286,7 @@ def test_project_creation_accepts_snake_case_workspace_alias(monkeypatch, tmp_pa
 def test_project_creation_rejects_workspace_outside_allowed_roots(
     monkeypatch, tmp_path
 ):
-    from webui import workspace_validation
+    from route import workspace as workspace_validation
 
     allowed = tmp_path / "allowed"
     allowed.mkdir()
@@ -309,7 +311,7 @@ def test_project_creation_rejects_workspace_outside_allowed_roots(
 def test_project_update_cannot_bypass_workspace_root_validation(
     monkeypatch, tmp_path
 ):
-    from webui import workspace_validation
+    from route import workspace as workspace_validation
 
     allowed = tmp_path / "allowed"
     allowed.mkdir()
@@ -333,7 +335,7 @@ def test_project_update_cannot_bypass_workspace_root_validation(
 
 
 def test_default_project_cannot_be_deleted(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     client = _client(monkeypatch, tmp_path)
     store_path = routes._WORKBENCH_STORE
@@ -366,7 +368,7 @@ def test_default_project_cannot_be_deleted(monkeypatch, tmp_path):
 
 
 def test_non_default_project_can_be_deleted(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     client = _client(monkeypatch, tmp_path)
     store_path = routes._WORKBENCH_STORE
@@ -407,7 +409,7 @@ def test_non_default_project_can_be_deleted(monkeypatch, tmp_path):
 
 
 def test_workspace_validation_rejects_unwritable_directory(monkeypatch, tmp_path):
-    from webui import workspace_validation
+    from route import workspace as workspace_validation
 
     target = tmp_path / "workspace"
     target.mkdir()
@@ -431,7 +433,7 @@ def test_workspace_validation_rejects_unwritable_directory(monkeypatch, tmp_path
 
 
 def test_unhandled_api_error_returns_500_and_logs_traceback(caplog):
-    from webui.api_errors import install_api_exception_handlers
+    from route.errors import install_api_exception_handlers
 
     app = FastAPI()
     install_api_exception_handlers(app)
@@ -440,7 +442,7 @@ def test_unhandled_api_error_returns_500_and_logs_traceback(caplog):
     async def explode():
         raise RuntimeError("boom")
 
-    with caplog.at_level(logging.ERROR, logger="webui.api_errors"):
+    with caplog.at_level(logging.ERROR, logger="route.errors"):
         response = TestClient(app, raise_server_exceptions=False).get("/explode")
 
     assert response.status_code == 500
@@ -452,7 +454,7 @@ def test_unhandled_api_error_returns_500_and_logs_traceback(caplog):
 
 
 def test_workbench_storage_error_is_500_and_logged(monkeypatch, tmp_path, caplog):
-    from webui import routes_workbench_memory
+    from route.workbench import memory as routes_workbench_memory
 
     client = _client(monkeypatch, tmp_path)
 
@@ -460,7 +462,7 @@ def test_workbench_storage_error_is_500_and_logged(monkeypatch, tmp_path, caplog
         raise OSError("disk failed")
 
     monkeypatch.setattr(routes_workbench_memory, "_build_payload", fail)
-    with caplog.at_level(logging.ERROR, logger="webui.routes_workbench_memory"):
+    with caplog.at_level(logging.ERROR, logger="route.workbench.memory"):
         response = client.get("/api/workbench/memory?workspace=project_1")
 
     assert response.status_code == 500

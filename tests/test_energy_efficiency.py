@@ -21,7 +21,8 @@ async def test_scheduler_uses_independent_maintenance_cadences(
     monkeypatch,
 ):
     from cyrene import scheduler
-    from webui import routes_workbench_chat, workbench_notifications
+    from cyrene import workbench_chat_service as routes_workbench_chat
+    from webui import workbench_notifications
 
     monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_get_heartbeat_interval", lambda: 1800)

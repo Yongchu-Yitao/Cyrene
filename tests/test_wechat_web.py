@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
 def test_qr_image_data_uri_is_self_contained():
-    from cyrene.channels.wechat.web import _qr_image_data_uri
+    from route.channels.wechat import _qr_image_data_uri
 
     data_uri = _qr_image_data_uri(
         "https://liteapp.weixin.qq.com/q/example?qrcode=test&bot_type=3"
@@ -24,7 +24,7 @@ def test_qr_image_data_uri_is_self_contained():
 
 def test_qr_login_route_returns_local_qr_image(monkeypatch):
     from cyrene.channels.wechat import auth
-    from cyrene.channels.wechat.web import register_wechat_routes
+    from route.channels.wechat import register_wechat_routes
 
     async def fake_get_qr_code(self):
         return "qr-id", "https://liteapp.weixin.qq.com/q/example?qrcode=qr-id&bot_type=3"

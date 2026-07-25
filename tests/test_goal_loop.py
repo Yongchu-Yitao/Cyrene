@@ -7,6 +7,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from route.registry import register_routes
+
 
 def _store(tmp_path, *, status="planning", revision=3):
     data_dir = tmp_path / "data"
@@ -67,7 +69,7 @@ def _store(tmp_path, *, status="planning", revision=3):
 
 
 def _app(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
     from webui import workbench_goal_loop as goal_loop
 
     data_dir, store_path = _store(tmp_path)
@@ -78,12 +80,12 @@ def _app(monkeypatch, tmp_path):
     monkeypatch.setattr(goal_loop, "append_notification", lambda **_kwargs: {})
     monkeypatch.setattr(goal_loop.GoalLoopManager, "wake", lambda self, run_id: None)
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=db_path)
+    register_routes(app, bot=None, db_path=db_path)
     return app, db_path, store_path
 
 
 def test_goal_loop_preview_and_start_without_changing_goal(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     async def unexpected_generation(*_args, **_kwargs):
         raise AssertionError("existing user acceptance criteria must be preserved")
@@ -175,6 +177,7 @@ async def test_goal_loop_concurrent_start_returns_conflict_not_server_error(monk
 
 
 async def test_goal_loop_start_rolls_back_run_when_projection_write_fails(monkeypatch, tmp_path):
+    from route.workbench import goal_loop as goal_loop_routes
     from webui import workbench_goal_loop as goal_loop
 
     app, db_path, _store_path = _app(monkeypatch, tmp_path)
@@ -192,7 +195,7 @@ async def test_goal_loop_start_rolls_back_run_when_projection_write_fails(monkey
             },
         )
         draft_id = preview.json()["draftId"]
-        monkeypatch.setattr(goal_loop, "_write_session", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")))
+        monkeypatch.setattr(goal_loop_routes, "_write_session", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")))
         with pytest.raises(OSError, match="disk full"):
             await client.post(
                 "/api/task-sessions/session_1/goal-loop/start",
@@ -204,7 +207,7 @@ async def test_goal_loop_start_rolls_back_run_when_projection_write_fails(monkey
 
 async def test_goal_loop_startup_recovers_hard_crash_state_and_stale_lease(monkeypatch, tmp_path):
     """Persisted running state is the exact state left by SIGKILL/power loss."""
-    from webui import routes
+    from cyrene import workbench_runtime as routes
     from webui import workbench_goal_loop as goal_loop
 
     data_dir, store_path = _store(tmp_path, status="running")
@@ -258,7 +261,7 @@ async def test_goal_loop_startup_recovers_hard_crash_state_and_stale_lease(monke
 
 
 async def test_goal_loop_graceful_restart_pauses_then_recovers(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
     from webui import workbench_goal_loop as goal_loop
 
     data_dir, store_path = _store(tmp_path, status="running")
@@ -299,7 +302,7 @@ async def test_goal_loop_graceful_restart_pauses_then_recovers(monkeypatch, tmp_
 
 
 def test_goal_loop_changed_goal_regenerates_plan_and_requires_full_access_confirmation(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     async def fake_plan(session, project, feedback="", requested_operation="auto", **_kwargs):
         assert session["goal"] == "改为实现短信登录"
@@ -382,7 +385,7 @@ def test_acceptance_patch_auto_completes_task_when_all_criteria_pass(monkeypatch
 
 
 def test_independent_verification_auto_completes_task(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     async def fake_verify(_session, _project):
         return {
@@ -407,7 +410,8 @@ def test_goal_loop_preview_returns_service_unavailable_before_generation_when_st
     monkeypatch,
     tmp_path,
 ):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
+    from route.workbench import goal_loop as goal_loop_routes
     from webui import workbench_goal_loop as goal_loop
 
     generation_called = False
@@ -425,7 +429,7 @@ def test_goal_loop_preview_returns_service_unavailable_before_generation_when_st
         return await original_execute(db_path, sql, args)
 
     monkeypatch.setattr(routes, "_workbench_generate_plan_steps", fake_plan)
-    monkeypatch.setattr(goal_loop, "_execute", locked_execute)
+    monkeypatch.setattr(goal_loop_routes, "_execute", locked_execute)
     app, _db_path, _store_path = _app(monkeypatch, tmp_path)
     client = TestClient(app)
 
@@ -447,7 +451,7 @@ def test_goal_loop_preview_returns_service_unavailable_before_generation_when_st
 
 
 async def test_goal_loop_runner_completes_after_independent_verification(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
     from webui import workbench_goal_loop as goal_loop
 
     data_dir, store_path = _store(tmp_path)
@@ -504,7 +508,7 @@ async def test_goal_loop_runner_completes_after_independent_verification(monkeyp
 
 
 async def test_goal_loop_runner_blocks_after_repeated_step_verification_failure(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
     from webui import workbench_goal_loop as goal_loop
 
     data_dir, store_path = _store(tmp_path)
@@ -570,7 +574,7 @@ async def test_resume_after_answer_does_not_re_execute_the_answered_step(monkeyp
     """Answering a goal-loop clarification must resume the loop WITHOUT resetting
     the answered step back to pending — otherwise the runner re-executes the same
     step and the agent re-asks the same question."""
-    from webui import routes
+    from cyrene import workbench_runtime as routes
     from webui import workbench_goal_loop as goal_loop
 
     data_dir, store_path = _store(tmp_path, status="running")
@@ -613,7 +617,7 @@ async def test_resume_after_answer_does_not_re_execute_the_answered_step(monkeyp
 
 
 async def test_resume_after_answer_pauses_on_permission_denied(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
     from webui import workbench_goal_loop as goal_loop
 
     data_dir, store_path = _store(tmp_path, status="running")
@@ -644,7 +648,7 @@ async def test_resume_after_answer_pauses_on_permission_denied(monkeypatch, tmp_
 
 
 async def test_begin_async_answer_tags_step_and_resumes_run(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
     from webui import workbench_goal_loop as goal_loop
 
     data_dir, store_path = _store(tmp_path, status="waiting_for_user")
@@ -694,7 +698,7 @@ async def test_begin_async_answer_tags_step_and_resumes_run(monkeypatch, tmp_pat
 
 
 async def test_goal_loop_worker_resumes_via_answer_pending_and_completes(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
     from webui import workbench_goal_loop as goal_loop
 
     data_dir, store_path = _store(tmp_path, status="running")

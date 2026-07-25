@@ -19,6 +19,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from route.registry import register_routes
+
 # attachments.py imports PIL/pypdf at module load; stub them so the suite runs
 # without those heavy deps installed (mirrors tests/test_runtime_fixes.py).
 sys.modules.setdefault("PIL", MagicMock())
@@ -406,7 +408,7 @@ async def test_macos_desktop_reports_notifier_failure(monkeypatch):
 
 
 def test_update_restart_missing_package_skips_spawn(tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     popen = MagicMock()
     ok, message, code, status = routes._launch_update_restart(
@@ -423,7 +425,7 @@ def test_update_restart_missing_package_skips_spawn(tmp_path):
 
 
 def test_update_restart_empty_package_skips_spawn(tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"")
@@ -443,7 +445,7 @@ def test_update_restart_empty_package_skips_spawn(tmp_path):
 
 
 def test_update_restart_incomplete_package_skips_spawn(tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"partial")
@@ -463,7 +465,7 @@ def test_update_restart_incomplete_package_skips_spawn(tmp_path):
 
 
 def test_update_restart_missing_checksum_skips_spawn(tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"fake update")
@@ -483,7 +485,7 @@ def test_update_restart_missing_checksum_skips_spawn(tmp_path):
 
 
 def test_update_restart_checksum_mismatch_skips_spawn(tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"fake update")
@@ -509,7 +511,7 @@ def test_update_restart_checksum_mismatch_skips_spawn(tmp_path):
 
 
 def test_update_restart_unverified_package_skips_spawn(tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"fake update")
@@ -537,7 +539,7 @@ def test_update_restart_unverified_package_skips_spawn(tmp_path):
 
 
 def test_update_restart_spawn_failure_reports_error(tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"fake update")
@@ -564,7 +566,7 @@ def test_update_restart_spawn_failure_reports_error(tmp_path):
 
 
 def test_update_restart_success_spawns_detached_script(tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"fake update")
@@ -604,10 +606,9 @@ def test_update_restart_success_spawns_detached_script(tmp_path):
 def _update_restart_client(tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from webui import routes
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
     return TestClient(app)
 
 
@@ -630,7 +631,7 @@ def test_update_restart_api_missing_package_keeps_process_running(monkeypatch, t
 
 def test_update_restart_api_spawn_failure_keeps_process_running(monkeypatch, tmp_path):
     from cyrene import updater
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     package = tmp_path / "Cyrene-update.dmg"
     package.write_bytes(b"fake update")
@@ -655,7 +656,7 @@ def test_update_restart_api_spawn_failure_keeps_process_running(monkeypatch, tmp
 
 def test_update_restart_api_success_exits_with_restart_code(monkeypatch, tmp_path):
     from cyrene import updater
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setitem(updater._download_progress, "downloaded", 1)
     monkeypatch.setitem(updater._download_progress, "total", 1)

@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from cyrene.db import init_knowledge_db
 from cyrene.knowledge import bibliography, library, store, zotero
-from webui import routes_workbench_library as library_routes
+from route.workbench import library as library_routes
 
 
 @pytest.fixture

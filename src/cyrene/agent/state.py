@@ -161,7 +161,7 @@ _economy_mode: ContextVar[bool] = ContextVar("_economy_mode", default=False)
 _current_command: ContextVar[str] = ContextVar("_current_command", default="")
 _conversation_source: ContextVar[str] = ContextVar("_conversation_source", default="")
 # Map from filename (and original name without uuid prefix) → full absolute path
-# Populated by routes.py when the user sends a message with attachments.
+# Populated by the chat route adapter when the user sends attachments.
 # Allows tools to auto-resolve agent-guessed paths (e.g. /tmp/file.txt) to the
 # correct webui_uploads path without requiring a permission prompt.
 _attachment_paths_by_name: ContextVar[dict[str, str] | None] = ContextVar("_attachment_paths_by_name", default=None)

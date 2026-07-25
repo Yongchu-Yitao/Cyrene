@@ -19,8 +19,8 @@ import json
 
 import pytest
 
-from webui import routes as R
-from webui import routes_workbench_knowledge as kb
+from cyrene import workbench_runtime as R
+from cyrene import workbench_knowledge_service as kb
 
 
 @pytest.fixture

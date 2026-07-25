@@ -1243,7 +1243,7 @@ async def test_final_reply_retries_visible_dsml_tool_markup(monkeypatch):
 
 
 def test_retry_safe_guide_round_id_drops_completed_round_target():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     assert routes._retry_safe_guide_round_id("round_old", retry=True) == ""
     assert routes._retry_safe_guide_round_id(" round_live ", retry=False) == "round_live"
@@ -1354,7 +1354,7 @@ async def test_run_vision_chat_uses_vision_candidates_after_primary_failure(monk
 
 
 async def test_chat_with_uploaded_images_falls_back_to_vision_model(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     image_path = tmp_path / "sample.png"
     image_path.write_bytes(b"fake-image")
@@ -1458,7 +1458,7 @@ async def test_proactive_round_hides_internal_prompt_and_initial_detail(tmp_path
 
 
 def test_build_live_flow_round_skips_input_for_system_initiated_messages():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     raw_msgs = [
         {
@@ -2747,12 +2747,23 @@ async def test_start_shell_allows_external_cwd_in_full_access(monkeypatch, tmp_p
     outside.mkdir()
     seen = {}
 
-    async def fake_start_shell_session(command, cwd, title, round_id):
+    async def fake_start_shell_session(
+        command,
+        cwd,
+        title,
+        round_id,
+        wake_on_exit=False,
+        wake_chat_id="",
+        wake_note="",
+    ):
         seen.update({
             "command": command,
             "cwd": cwd,
             "title": title,
             "round_id": round_id,
+            "wake_on_exit": wake_on_exit,
+            "wake_chat_id": wake_chat_id,
+            "wake_note": wake_note,
         })
         return {"id": "shell_1", "status": "running", "cwd": cwd, "title": title}
 
@@ -2778,6 +2789,7 @@ async def test_start_shell_allows_external_cwd_in_full_access(monkeypatch, tmp_p
     assert payload["status"] == "running"
     assert payload["cwd"] == str(outside)
     assert seen["cwd"] == str(outside)
+    assert seen["wake_on_exit"] is False
 
 
 async def test_send_wechat_file_uses_auto_review_without_prompt(monkeypatch, tmp_path):
@@ -2995,7 +3007,7 @@ async def test_send_message_posts_intermediate_reply_without_permission(monkeypa
 
 
 def test_build_current_session_exposes_pending_question(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(routes, "_SERVER_STARTED_AT", 0)
@@ -3030,7 +3042,7 @@ def test_build_current_session_exposes_pending_question(monkeypatch, tmp_path):
 
 
 def test_reply_stream_chunks_reconstructs_original_text():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     text = "第一段先说重点。\n\n第二段补充更多细节，而且这一段稍微长一点，方便验证分块逻辑。"
     chunks = routes._reply_stream_chunks(text, target_chars=12)
@@ -3041,7 +3053,7 @@ def test_reply_stream_chunks_reconstructs_original_text():
 
 
 async def test_stream_reply_payload_emits_ndjson_events():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     response = await routes._stream_reply_payload("你好，世界")
     body = b""
@@ -3455,7 +3467,7 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
 
 async def test_stream_agent_reply_forwards_live_events_before_completion(monkeypatch):
     from cyrene import agent
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     seen = {"archived": None}
 
@@ -4303,7 +4315,7 @@ async def test_run_subagent_persists_quit_tool_messages_before_resume(monkeypatc
 def test_live_flow_contains_tool_nodes_and_comm_edges(tmp_path, monkeypatch):
     from cyrene import debug
     from cyrene import inbox
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     inbox.INBOX_DIR = tmp_path / "inbox"
     asyncio.run(inbox.send_message("alice", "bob", "chat", "Discuss firewall baselines"))
@@ -4377,7 +4389,7 @@ def test_live_flow_contains_tool_nodes_and_comm_edges(tmp_path, monkeypatch):
 
 def test_live_flow_marks_empty_tool_outputs_done(monkeypatch):
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4398,7 +4410,7 @@ def test_live_flow_marks_empty_tool_outputs_done(monkeypatch):
 
 def test_live_flow_marks_tool_without_captured_output_done_after_followup(monkeypatch):
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4418,7 +4430,7 @@ def test_live_flow_marks_tool_without_captured_output_done_after_followup(monkey
 
 def test_live_flow_marks_recent_overlay_tools_done(monkeypatch):
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [
         {
@@ -4445,7 +4457,7 @@ def test_live_flow_marks_recent_overlay_tools_done(monkeypatch):
 
 
 def test_build_current_session_uses_live_shell_snapshots(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -4482,7 +4494,7 @@ def test_build_current_session_done_event_clears_recent_activity(monkeypatch, tm
     from datetime import datetime, timedelta, timezone
 
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     routes.STATE_FILE.write_text(
@@ -4526,7 +4538,7 @@ def test_build_current_session_detects_activity_after_done_event(monkeypatch, tm
     from datetime import datetime, timedelta, timezone
 
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     routes.STATE_FILE.write_text(
@@ -4545,7 +4557,7 @@ def test_build_current_session_detects_activity_after_done_event(monkeypatch, tm
 
 
 def test_build_sessions_includes_today_archive_when_live_session_exists(tmp_path, monkeypatch):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(routes, "CONVERSATIONS_DIR", tmp_path / "conversations")
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
@@ -4569,7 +4581,7 @@ def test_build_sessions_includes_today_archive_when_live_session_exists(tmp_path
 
 
 def test_build_sessions_skips_archive_copy_of_current_live_session(tmp_path, monkeypatch):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(routes, "CONVERSATIONS_DIR", tmp_path / "conversations")
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
@@ -4607,7 +4619,7 @@ def test_build_sessions_skips_archive_copy_of_current_live_session(tmp_path, mon
 
 def test_build_current_session_recovers_subagents_from_state_and_inbox(tmp_path, monkeypatch):
     from cyrene import inbox
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -4651,7 +4663,7 @@ async def test_clear_session_id_removes_live_flow_residue(tmp_path, monkeypatch)
     from cyrene.agent import session as _agent_session
     from cyrene import inbox
     from cyrene import subagent
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -4692,7 +4704,7 @@ async def test_clear_session_id_removes_live_flow_residue(tmp_path, monkeypatch)
 
 
 def test_build_user_reads_local_username(monkeypatch):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setenv("USER", "localtester")
     monkeypatch.delenv("USERNAME", raising=False)
@@ -4708,7 +4720,7 @@ def test_build_user_reads_local_username(monkeypatch):
 
 def test_live_flow_staggers_subagents_when_tool_stacks_are_tall(monkeypatch):
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4776,7 +4788,7 @@ def test_live_flow_staggers_subagents_when_tool_stacks_are_tall(monkeypatch):
 def test_live_flow_stacks_multiple_rounds_and_keeps_comm_edges(tmp_path, monkeypatch):
     from cyrene import inbox
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -4808,7 +4820,7 @@ def test_live_flow_stacks_multiple_rounds_and_keeps_comm_edges(tmp_path, monkeyp
 
 def test_live_flow_prunes_extra_user_only_tail_rounds(monkeypatch):
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4827,7 +4839,7 @@ def test_live_flow_prunes_extra_user_only_tail_rounds(monkeypatch):
 
 def test_live_flow_keeps_guided_continuation_inside_same_round(monkeypatch):
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4852,7 +4864,7 @@ def test_live_flow_keeps_guided_continuation_inside_same_round(monkeypatch):
 
 def test_live_flow_attaches_live_registry_to_latest_substantive_round(monkeypatch):
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -4899,7 +4911,7 @@ def test_live_flow_attaches_live_registry_to_latest_substantive_round(monkeypatc
 def test_live_flow_filters_comm_edges_by_round_id(tmp_path, monkeypatch):
     from cyrene import inbox
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -4933,7 +4945,7 @@ def test_live_flow_filters_comm_edges_by_round_id(tmp_path, monkeypatch):
 
 def test_live_flow_filters_recent_events_to_current_round(monkeypatch):
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [
         {
@@ -4973,7 +4985,7 @@ def test_live_flow_filters_recent_events_to_current_round(monkeypatch):
 
 def test_live_flow_does_not_merge_stale_subagent_card_into_new_round(monkeypatch):
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [])
     raw_msgs = [
@@ -5025,7 +5037,7 @@ def test_live_flow_does_not_merge_stale_subagent_card_into_new_round(monkeypatch
 
 
 def test_infer_subagent_entries_prefers_latest_spawn_round_over_stale_registry():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     raw_msgs = [
         {"role": "user", "content": "old", "round_id": "round_old"},
@@ -5060,7 +5072,7 @@ def test_infer_subagent_entries_prefers_latest_spawn_round_over_stale_registry()
 
 def test_live_flow_uses_registry_when_state_is_empty(monkeypatch):
     from cyrene import debug
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(debug, "get_recent_events", lambda limit=200: [
         {"type": "phase_transition", "detail": "Live subagents spawned"},
@@ -5097,7 +5109,7 @@ def test_live_flow_uses_registry_when_state_is_empty(monkeypatch):
 
 
 def test_convert_messages_keeps_assistant_entries_with_thinking_or_tools():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     raw_msgs = [
         {"role": "user", "content": "start"},
@@ -5116,7 +5128,7 @@ def test_convert_messages_keeps_assistant_entries_with_thinking_or_tools():
 
 
 def test_convert_messages_merges_adjacent_trace_only_assistant_entries():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     raw_msgs = [
         {"role": "assistant", "content": "", "reasoning_content": "first pass", "round_id": "round_1"},
@@ -5136,7 +5148,7 @@ def test_convert_messages_merges_adjacent_trace_only_assistant_entries():
 
 
 def test_convert_messages_merges_adjacent_trace_only_entries_with_same_client_request_id():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     raw_msgs = [
         {"role": "assistant", "content": "", "reasoning_content": "first", "round_id": "round_1", "client_request_id": "req_1"},
@@ -5157,7 +5169,7 @@ def test_convert_messages_merges_adjacent_trace_only_entries_with_same_client_re
 
 
 def test_convert_messages_merges_trace_only_assistant_into_following_body_reply():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     raw_msgs = [
         {
@@ -5186,7 +5198,7 @@ def test_convert_messages_merges_trace_only_assistant_into_following_body_reply(
 
 
 def test_convert_messages_collapses_consecutive_duplicate_user_messages():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     raw_msgs = [
         {"role": "user", "content": "介绍你自己和你能做的事", "round_id": "round_1", "client_request_id": "req_1"},
@@ -5203,7 +5215,7 @@ def test_convert_messages_collapses_consecutive_duplicate_user_messages():
 
 
 def test_convert_messages_dedupes_repeated_message_ids_even_when_not_adjacent():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     raw_msgs = [
         {"role": "user", "content": "same prompt", "message_id": "u1", "round_id": "round_1", "client_request_id": "req_1"},
@@ -5218,7 +5230,7 @@ def test_convert_messages_dedupes_repeated_message_ids_even_when_not_adjacent():
 
 
 def test_convert_messages_collapses_repeated_user_bodies_within_one_user_block():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     raw_msgs = [
         {"role": "user", "content": "check", "message_id": "u1"},
@@ -5236,7 +5248,7 @@ def test_convert_messages_collapses_repeated_user_bodies_within_one_user_block()
 
 
 def test_convert_messages_marks_intermediate_replies():
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     raw_msgs = [
         {
@@ -5575,7 +5587,7 @@ async def test_refresh_session_labels_persists_titles(monkeypatch, tmp_path):
 
 
 def test_build_current_session_uses_saved_session_and_round_titles(tmp_path, monkeypatch):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -5601,7 +5613,7 @@ def test_build_current_session_uses_saved_session_and_round_titles(tmp_path, mon
 
 
 def test_build_current_session_uses_latest_round_id_for_chat_sidebar(tmp_path, monkeypatch):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
@@ -5624,7 +5636,7 @@ def test_build_current_session_uses_latest_round_id_for_chat_sidebar(tmp_path, m
 
 
 def test_build_archive_sessions_reads_titles_and_splits_rounds(tmp_path, monkeypatch):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(routes, "CONVERSATIONS_DIR", tmp_path / "conversations")
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
@@ -5659,7 +5671,7 @@ def test_build_archive_sessions_reads_titles_and_splits_rounds(tmp_path, monkeyp
 
 
 def test_build_archive_sessions_splits_multiple_same_day_sessions_by_archive_session_id(tmp_path, monkeypatch):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(routes, "CONVERSATIONS_DIR", tmp_path / "conversations")
     monkeypatch.setattr(routes, "STATE_FILE", tmp_path / "state.json")
@@ -5720,7 +5732,7 @@ async def test_stream_agent_reply_surfaces_model_failure_instead_of_done(monkeyp
     """Issue #7: a failing agent run (model timeout/5xx/network) must surface an
     `error` event and publish session status `error` — never get swallowed into a
     silent `done` (the symptom users hit as "模型失败只回 done")."""
-    from webui import routes
+    from cyrene import workbench_runtime as routes
     from cyrene import debug
 
     events = []
@@ -5751,7 +5763,7 @@ async def test_stream_agent_reply_surfaces_model_failure_instead_of_done(monkeyp
 async def test_stream_agent_reply_still_publishes_done_on_success(monkeypatch):
     """Regression guard for the issue-#7 finally gating: a successful run must
     still stream the reply and publish session status `done` (and no `error`)."""
-    from webui import routes
+    from cyrene import workbench_runtime as routes
     from cyrene import debug
 
     events = []

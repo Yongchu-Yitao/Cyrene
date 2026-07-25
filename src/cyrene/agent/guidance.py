@@ -1369,7 +1369,7 @@ async def _handle_plan_confirmation_answer(
     if approve:
         try:
             from cyrene.agent.state import _current_session_id
-            from webui.routes_workbench_chat import activate_chat_plan
+            from cyrene.workbench_chat_service import activate_chat_plan
 
             plan = activate_chat_plan(str(_current_session_id.get() or ""), plan)
         except Exception:
@@ -1398,7 +1398,7 @@ async def _handle_plan_confirmation_answer(
     if reject:
         try:
             from cyrene.agent.state import _current_session_id
-            from webui.routes_workbench_chat import reject_chat_plan
+            from cyrene.workbench_chat_service import reject_chat_plan
 
             plan = reject_chat_plan(str(_current_session_id.get() or ""), plan)
         except Exception:

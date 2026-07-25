@@ -42,7 +42,7 @@ async def _tool_set_task_goal(
 
     # Lazy import: the store lives in the webui layer (loaded in the server
     # process); importing it at module load would invert package layering.
-    from webui.routes import set_task_goal_for_session
+    from cyrene.workbench_runtime import set_task_goal_for_session
 
     result = set_task_goal_for_session(session_id, goal, title, summary)
     if not result.get("ok"):

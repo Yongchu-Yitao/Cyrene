@@ -203,6 +203,10 @@ src/
 │   ├── cc_bridge.py / cc_terminal.py # Claude Code integration
 │   ├── behavior_learning.py         # Purpose/tool-chain skill learning
 │   ├── skills_registry.py           # Installed skill storage
+│   ├── workbench_runtime.py         # Shared Workbench application/presenter services
+│   ├── workbench_chat_service.py    # Workbench conversation persistence and helpers
+│   ├── workbench_knowledge_service.py # Workbench knowledge application services
+│   ├── workbench_memory_service.py  # Workbench memory application services
 │   ├── context_trace.py             # Context provenance tagging
 │   ├── context_debug.py             # Verbose log inspector
 │   ├── config.py                    # Environment config
@@ -211,10 +215,17 @@ src/
 │   ├── cli.py                       # CLI HTTP client
 │   ├── local_cli.py                 # Interactive local CLI + web entry points
 │   └── __main__.py                  # Default entry (Telegram / workbench flags)
-├── webui/                           # FastAPI + React SPA backend
-│   ├── server.py                    # FastAPI app factory
-│   ├── routes.py                    # REST API + SSE streams
-│   ├── routes_*.py                  # Knowledge, entities, workbench, code, map
+├── route/                           # All FastAPI HTTP/WebSocket adapters
+│   ├── registry.py                  # Single route composition root
+│   ├── schemas.py / errors.py       # Request contracts and API errors
+│   ├── agent/                       # Chat, browser, sessions, collaboration
+│   ├── workbench/                   # Projects, chats, tasks, knowledge, memory
+│   ├── system/                      # Events, shell, updates, instance identity
+│   ├── settings/ / code/ / maps/    # Domain-specific adapters
+│   └── channels/                    # Channel-specific HTTP callbacks
+├── webui/                           # FastAPI app lifecycle + React SPA hosting
+│   ├── server.py                    # FastAPI app factory; installs route.registry
+│   ├── workbench_*.py               # Background managers and UI support services
 │   ├── auth.py                      # Local auth middleware
 │   └── static/app/                  # JSX front-end components
 ├── workbench-webui/                 # Workbench UI front-end assets

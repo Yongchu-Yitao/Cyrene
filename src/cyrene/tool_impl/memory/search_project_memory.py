@@ -43,7 +43,7 @@ async def _tool_search_project_memory(
             "message": "Project memory is only available inside a Workbench project task/chat.",
         })
 
-    from webui.routes_workbench_memory import configure_store, search_project_memories
+    from cyrene.workbench_memory_service import configure_store, search_project_memories
 
     configure_store(_db_path)
 

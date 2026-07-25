@@ -1,9 +1,9 @@
 """Code-related API routes — file operations, formatting, and diff."""
 from fastapi import APIRouter
 
-from webui.routes_code.diff import router as diff_router
-from webui.routes_code.files import router as files_router
-from webui.routes_code.format import router as format_router
+from route.code.diff import router as diff_router
+from route.code.files import router as files_router
+from route.code.format import router as format_router
 
 router = APIRouter(prefix="/api/code", tags=["code"])
 

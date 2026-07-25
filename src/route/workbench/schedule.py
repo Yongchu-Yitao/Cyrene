@@ -1,7 +1,7 @@
 """Schedule / calendar API for the new Workbench UI.
 
 This module is intentionally INDEPENDENT from the legacy scheduled-tasks
-endpoints (``/api/tasks`` in ``routes.py``) that the old ``--agent`` UI uses.
+endpoints (``/api/tasks`` in ``route/tasks.py``) that the old ``--agent`` UI uses.
 It exposes a parallel set of endpoints under ``/api/workbench/schedule/*`` so the
 two UIs never share request code.
 
@@ -36,8 +36,8 @@ import aiosqlite
 from croniter import croniter
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from webui import api_models
-from webui.api_errors import error_response
+from route import schemas as api_models
+from route.errors import error_response
 from webui.workbench_notifications import append_notification
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ _MAX_OCC_PER_TASK = 200
 # Default visual block length for an (instantaneous) task trigger, in minutes.
 _DEFAULT_EVENT_MINUTES = 30
 
-# Mirrors ``routes.py``'s ``_CHAT_ID`` — the web/local chat the task belongs to.
+# Mirrors ``route/tasks.py``'s ``_CHAT_ID`` — the web/local chat the task belongs to.
 _DEFAULT_CHAT_ID = -1
 
 
@@ -66,7 +66,7 @@ def _safe_workspace_id(workspace_id: str | None) -> str:
 def _resolve_workspace_id(workspace_id: str | None) -> str:
     wid = _safe_workspace_id(workspace_id)
     try:
-        from webui import routes as R
+        from cyrene import workbench_runtime as R
 
         raw = str(workspace_id or "").strip()
         # Canonical ids are the frontend's normal path. A lightweight lookup

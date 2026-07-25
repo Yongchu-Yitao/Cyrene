@@ -901,7 +901,7 @@ async def _heartbeat_proactive_check(bot, db_path: str) -> None:
         )
         delivered_target = workbench_target
         if target_session_id:
-            from webui.routes_workbench_chat import append_proactive_message
+            from cyrene.workbench_chat_service import append_proactive_message
 
             workspace_dir = _workbench_workspace_dir_for_project(
                 str((workbench_target or {}).get("project_id") or "")
@@ -1199,7 +1199,7 @@ def setup_scheduler(bot, db_path: str) -> AsyncIOScheduler:
     global _workbench_db_path
     _workbench_db_path = str(db_path)
     try:
-        from webui import routes_workbench_chat as _chat_store
+        from cyrene import workbench_chat_service as _chat_store
         from webui.workbench_notifications import configure_store as _configure_notifications
 
         _chat_store.configure_store(str(db_path))

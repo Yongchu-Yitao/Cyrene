@@ -11,7 +11,7 @@ window. These tests pin two invariants:
 """
 
 from cyrene import config_store
-from webui import routes_workbench_chat as rwc
+from cyrene import workbench_chat_service as rwc
 from cyrene.call_llm import _message_token_estimate
 
 

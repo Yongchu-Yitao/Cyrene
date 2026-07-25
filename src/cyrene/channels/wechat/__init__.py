@@ -18,8 +18,6 @@ from fastapi import FastAPI
 from .auth import WeChatAuth, WeChatAuthError
 from .bot import WeChatUpdater
 from .client import WeChatClient, WeChatConfig
-from .web import register_wechat_routes
-
 __all__ = [
     "setup_wechat",
     "get_current_client",
@@ -44,7 +42,7 @@ def get_current_client() -> WeChatClient | None:
 
 
 def set_current_client(client: WeChatClient | None) -> None:
-    """Set the current WeChatClient (used by web.py at startup)."""
+    """Set the current WeChatClient used by the HTTP adapter and scheduler."""
     global _current_client
     _current_client = client
 
@@ -52,16 +50,14 @@ def set_current_client(client: WeChatClient | None) -> None:
 async def setup_wechat(app: FastAPI, db_path: str) -> None:
     """Initialise the WeChat channel.
 
-    Registers ``/api/wechat/*`` routes regardless of token presence.
-    If ``WECHAT_BOT_TOKEN`` is already set in ``.env``, also starts the
+    HTTP routes are installed by :mod:`route.registry`. If
+    ``WECHAT_BOT_TOKEN`` is already set in ``.env``, this function starts the
     long-polling background task immediately.
     After a QR-login from the UI, the token is written to ``.env`` and
     the user calls ``POST /api/wechat/start`` — no restart needed.
     """
     from cyrene.config import WECHAT_BOT_TOKEN
 
-    # Routes and shared state are needed even without a token (for QR login)
-    register_wechat_routes(app)
     app.state.wechat_db_path = str(db_path)
 
     if WECHAT_BOT_TOKEN:

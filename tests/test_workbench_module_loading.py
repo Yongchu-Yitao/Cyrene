@@ -34,9 +34,9 @@ def test_workbench_project_modules_restore_project_scoped_cache_before_refresh()
 
 
 def test_workbench_module_routes_use_lightweight_canonical_project_lookup(monkeypatch):
-    from webui import routes as routes
-    from webui import routes_workbench_knowledge as knowledge
-    from webui import routes_workbench_schedule as schedule
+    from cyrene import workbench_runtime as routes
+    from cyrene import workbench_knowledge_service as knowledge
+    from route.workbench import schedule as schedule
 
     project = {"id": "project_fast", "dataKey": "schedule-fast"}
     monkeypatch.setattr(

@@ -253,7 +253,7 @@ async def test_transient_network_disconnect_stops_after_retry_limit(stub_server_
 
 
 def test_workbench_network_error_message_requests_resend():
-    from webui.routes_workbench_chat import _workbench_chat_run_error_message
+    from cyrene.workbench_chat_service import _workbench_chat_run_error_message
 
     exc = httpx.RemoteProtocolError("Server disconnected without sending a response.")
 

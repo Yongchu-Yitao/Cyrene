@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from route.registry import register_routes
+
 
 @pytest.fixture
 def integration_store(monkeypatch):
@@ -171,10 +173,8 @@ def test_integration_settings_routes_hide_secrets_and_probe_drafts(monkeypatch, 
         }),
     )
 
-    from webui import routes
-
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path="test.db")
+    register_routes(app, bot=None, db_path="test.db")
     client = TestClient(app)
 
     get_response = client.get("/api/settings/integrations")

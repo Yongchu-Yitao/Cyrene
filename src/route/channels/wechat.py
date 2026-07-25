@@ -62,7 +62,7 @@ def register_wechat_routes(app: FastAPI) -> None:
     @app.post("/api/wechat/qr-login")
     async def wechat_qr_login():
         """Fetch a QR code for WeChat login."""
-        from .auth import WeChatAuth
+        from cyrene.channels.wechat.auth import WeChatAuth
 
         auth = WeChatAuth()
         qrcode_id, qrcode_img = await auth.get_qr_code()
@@ -75,7 +75,7 @@ def register_wechat_routes(app: FastAPI) -> None:
     @app.post("/api/wechat/poll-login")
     async def wechat_poll_login(data: dict):
         """Poll QR code status; writes token to .env on success."""
-        from .auth import WeChatAuth
+        from cyrene.channels.wechat.auth import WeChatAuth
 
         auth = WeChatAuth()
         token = await auth.poll_login(data.get("qrcode_id", ""), timeout=120)
@@ -107,8 +107,8 @@ def register_wechat_routes(app: FastAPI) -> None:
         if not db_path:
             raise HTTPException(500, "wechat_db_path not initialised")
 
-        from .bot import WeChatUpdater
-        from .client import WeChatClient, WeChatConfig
+        from cyrene.channels.wechat.bot import WeChatUpdater
+        from cyrene.channels.wechat.client import WeChatClient, WeChatConfig
         from cyrene.channels.wechat import get_current_client, set_current_client
 
         # Close old client before creating a new one

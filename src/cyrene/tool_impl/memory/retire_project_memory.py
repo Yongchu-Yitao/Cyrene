@@ -48,7 +48,7 @@ async def _tool_retire_project_memory(
             ),
         })
 
-    from webui.routes_workbench_memory import (
+    from cyrene.workbench_memory_service import (
         configure_store,
         retire_project_memory,
     )

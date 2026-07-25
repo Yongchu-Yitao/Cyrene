@@ -2,7 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from webui.routes_pdf import (
+from route.pdf import (
     _MAX_CONTEXT_CHARS,
     _MAX_CONTEXT_PAGES,
     _MAX_SELECTED_TEXT_CHARS,
@@ -169,7 +169,7 @@ const viewer = {{
 
 def test_both_pdf_viewers_submit_automatic_context():
     workbench = (ROOT / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    routes = (ROOT / "src" / "webui" / "routes_pdf.py").read_text(encoding="utf-8")
+    routes = (ROOT / "src" / "route" / "pdf.py").read_text(encoding="utf-8")
 
     assert "window.pdfjsBuildAnalysisInventory(containerRef.current, viewerRef.current, pageNum)" in workbench
     assert "window.pdfjsExtractAnalysisContext(" in workbench

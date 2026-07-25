@@ -18,7 +18,7 @@ async def _tool_update_plan_progress(
     _notify_state: dict[str, bool] | None,
 ) -> str:
     from cyrene.agent.state import _current_agent_id, _current_session_id, _publish_runtime_event
-    from webui.routes_workbench_chat import update_chat_plan_progress
+    from cyrene.workbench_chat_service import update_chat_plan_progress
 
     if _current_agent_id.get() != "main":
         return "Only the main agent can update plan progress."

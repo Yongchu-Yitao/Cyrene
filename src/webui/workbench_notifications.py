@@ -31,7 +31,7 @@ def _resolve_project_ref(project_ref: str | None) -> dict[str, str]:
     if not raw:
         return out
     try:
-        from webui import routes as R
+        from cyrene import workbench_runtime as R
 
         payload = R._read_workbench_store()
         for project in payload.get("projects", []):

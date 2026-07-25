@@ -907,7 +907,7 @@ def _project_scope_for_session(session_id: str | None) -> dict[str, str]:
     project_id = project_id or project_key or "global"
     project_key = project_key or project_id
     # When falling back to dataKey, resolve to project UUID so stored
-    # project_id is consistent with _learning_project_id in routes.py
+    # project_id is consistent with _learning_project_id in route/learning.py.
     # (which resolves dataKey -> UUID). Without this, a project whose
     # dataKey == "default" but UUID != "default" would never see chains
     # from non-project-scoped sessions.

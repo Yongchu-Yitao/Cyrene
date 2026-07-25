@@ -6,9 +6,11 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from route.registry import register_routes
+
 
 def test_cc_status_route_exposes_expected_session(monkeypatch):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     monkeypatch.setattr(
         routes,
@@ -29,7 +31,7 @@ def test_cc_status_route_exposes_expected_session(monkeypatch):
     )
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path="db.sqlite3")
+    register_routes(app, bot=None, db_path="db.sqlite3")
     client = TestClient(app)
 
     response = client.get("/api/cc/status")

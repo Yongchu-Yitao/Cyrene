@@ -9,8 +9,8 @@ used to make ``_resolve_workspace_id`` miss the project and read an empty
 
 import pytest
 
-from webui import routes as R
-from webui import routes_workbench_memory as memory
+from cyrene import workbench_runtime as R
+from cyrene import workbench_memory_service as memory
 
 
 @pytest.fixture

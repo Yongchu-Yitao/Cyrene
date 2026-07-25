@@ -209,7 +209,7 @@ async def test_workbench_knowledge_list_returns_total(tmp_path, monkeypatch):
 
     from cyrene import config, db
     from cyrene.knowledge import store
-    from webui import routes_workbench_knowledge
+    from route.workbench import knowledge as routes_workbench_knowledge
 
     monkeypatch.setattr(config, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(routes_workbench_knowledge, "_resolve_workspace_id", lambda ws: str(ws))
@@ -249,7 +249,7 @@ async def test_workbench_knowledge_supports_paged_list_and_light_detail(tmp_path
 
     from cyrene import db
     from cyrene.knowledge import store
-    from webui import routes_workbench_knowledge
+    from route.workbench import knowledge as routes_workbench_knowledge
 
     db_path = str(tmp_path / "knowledge.db")
     await db.init_knowledge_db(db_path)
@@ -305,7 +305,7 @@ async def test_workbench_knowledge_shows_final_archives_by_default(tmp_path, mon
 
     from cyrene import db
     from cyrene.knowledge import store
-    from webui import routes_workbench_knowledge
+    from route.workbench import knowledge as routes_workbench_knowledge
 
     db_path = str(tmp_path / "knowledge.db")
     await db.init_knowledge_db(db_path)
@@ -373,7 +373,7 @@ async def test_workbench_knowledge_search_includes_final_archives_by_default(tmp
 
     from cyrene import db
     from cyrene.knowledge import store
-    from webui import routes_workbench_knowledge
+    from route.workbench import knowledge as routes_workbench_knowledge
 
     db_path = str(tmp_path / "knowledge.db")
     await db.init_knowledge_db(db_path)
@@ -425,9 +425,9 @@ async def test_workbench_knowledge_related_returns_tasks_chats_and_reverse_relat
 
     from cyrene import db
     from cyrene.knowledge import store
-    from webui import routes
-    from webui import routes_workbench_chat
-    from webui import routes_workbench_knowledge
+    from cyrene import workbench_runtime as routes
+    from cyrene import workbench_chat_service as routes_workbench_chat
+    from route.workbench import knowledge as routes_workbench_knowledge
 
     db_path = str(tmp_path / "knowledge.db")
     await db.init_knowledge_db(db_path)

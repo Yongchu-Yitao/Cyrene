@@ -226,7 +226,7 @@ async def run_plan_flow(
     # Lazy import keeps the agent package usable without the web UI server.
     try:
         from cyrene.agent.state import _current_session_id, active_workspace_dir
-        from webui.routes_workbench_chat import persist_chat_plan
+        from cyrene.workbench_chat_service import persist_chat_plan
 
         plan = persist_chat_plan(
             str(_current_session_id.get() or ""),

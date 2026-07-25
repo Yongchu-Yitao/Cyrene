@@ -7,10 +7,11 @@ move the task to `review`, preserving the plan, its revision, and any artifacts.
 import json
 import asyncio
 
+from route.registry import register_routes
 
 
 def test_classify_intent_maps_done_to_finalize(monkeypatch):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     async def fake_call_llm(*_args, **_kwargs):
         return {"content": '{"kind":"done"}'}
@@ -70,7 +71,7 @@ def _seed_store(store_path, workspace):
 def test_dispatch_finalize_summarizes_without_replanning(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -103,7 +104,7 @@ def test_dispatch_finalize_summarizes_without_replanning(monkeypatch, tmp_path):
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
     client = TestClient(app)
 
     resp = client.post("/api/task-sessions/session_1/dispatch", json={"input": "任务完成了，给我成果"})
@@ -127,7 +128,7 @@ def test_dispatch_finalize_summarizes_without_replanning(monkeypatch, tmp_path):
 def test_dispatch_answer_uses_task_reply_mode_and_reply_card(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -161,7 +162,7 @@ def test_dispatch_answer_uses_task_reply_mode_and_reply_card(monkeypatch, tmp_pa
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
     client = TestClient(app)
 
     resp = client.post("/api/task-sessions/session_1/dispatch", json={"input": "现在进展到哪一步了？"})
@@ -181,7 +182,7 @@ def test_dispatch_acceptance_repair_does_not_return_500(monkeypatch, tmp_path):
     """A failed verification can be repaired through the normal dispatch path."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -211,7 +212,7 @@ def test_dispatch_acceptance_repair_does_not_return_500(monkeypatch, tmp_path):
     monkeypatch.setattr(routes, "append_notification", lambda **_kwargs: {})
 
     app = FastAPI()
-    routes.register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
     client = TestClient(app)
 
     resp = client.post(

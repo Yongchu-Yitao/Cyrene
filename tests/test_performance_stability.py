@@ -79,7 +79,7 @@ def test_workbench_schema_cache_reinitializes_deleted_database(monkeypatch, tmp_
 
 
 def test_lightweight_project_lookup_skips_workspace_repairs(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     store_path = tmp_path / "workbench_projects.json"
     store_path.write_text(
@@ -105,7 +105,7 @@ def test_lightweight_project_lookup_skips_workspace_repairs(monkeypatch, tmp_pat
 
 
 def test_lightweight_project_store_read_skips_workspace_repairs(monkeypatch, tmp_path):
-    from webui import routes
+    from cyrene import workbench_runtime as routes
 
     payload = {
         "projects": [

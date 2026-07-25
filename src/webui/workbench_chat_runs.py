@@ -112,7 +112,7 @@ class ChatRun:
         """
         if str(event.get("type") or "") == "intermediate_message" and isinstance(event.get("message"), dict):
             try:
-                from webui.routes_workbench_chat import _persist_live_public_message
+                from cyrene.workbench_chat_service import _persist_live_public_message
                 await asyncio.to_thread(
                     _persist_live_public_message, self.chat_id, event["message"]
                 )
@@ -276,7 +276,7 @@ class ChatRunManager:
             except Exception:
                 logger.exception("Failed to publish chat driver error for %s", run.chat_id)
             try:
-                from webui.routes_workbench_chat import _settle_chat_running_status
+                from cyrene.workbench_chat_service import _settle_chat_running_status
 
                 await asyncio.to_thread(_settle_chat_running_status, run.chat_id)
             except Exception:
@@ -384,7 +384,7 @@ class ChatRunManager:
         store has no live task in this fresh process, so reset it to ``idle`` and
         clear any stale pending question that can no longer be resumed."""
         self.closed = False
-        from webui import routes_workbench_chat as chat_mod
+        from cyrene import workbench_chat_service as chat_mod
 
         try:
             payload = chat_mod._read_chats_store()

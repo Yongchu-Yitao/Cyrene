@@ -3,7 +3,7 @@
 All three task entry points compute ``next_run`` through here so a task fires at
 the same wall-clock time no matter how it was created:
 
-* the REST API (``POST/PUT /api/tasks`` in ``webui/routes.py``),
+* the REST API (``POST/PUT /api/tasks`` in ``route/tasks.py``),
 * the agent ``schedule_task`` tool (``cyrene/tools.py``), and
 * the scheduler runner that re-arms recurring tasks after each run
   (``cyrene/scheduler.py``).

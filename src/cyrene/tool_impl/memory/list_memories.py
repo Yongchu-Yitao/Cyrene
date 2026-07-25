@@ -100,7 +100,7 @@ async def _tool_list_memories(
             _current_session_id.get()
         )
         if project_id is not None:
-            from webui.routes_workbench_memory import (
+            from cyrene.workbench_memory_service import (
                 _build_payload,
                 configure_store,
             )

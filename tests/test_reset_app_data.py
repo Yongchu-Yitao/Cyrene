@@ -3,8 +3,8 @@ import asyncio
 import pytest
 
 from cyrene.knowledge import ingest
-from webui import routes
-from webui import routes_workbench_knowledge
+from cyrene import workbench_runtime as routes
+from cyrene import workbench_knowledge_service as routes_workbench_knowledge
 
 
 @pytest.mark.asyncio
