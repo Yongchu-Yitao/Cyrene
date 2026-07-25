@@ -242,7 +242,8 @@ _MAIN_DELIVERY_FILE_PROMPT = _tool_pack_prompt_block(
 
 _MAIN_CODE_PROMPT = _tool_pack_prompt_block(
     "code_tools",
-    """- For **Claude Code** operations use `code.check_claude_code`, `code.start_claude_code`, and `code.prompt_claude_code` through `code_tools`. Never use Bash to start or manage Claude Code.""",
+    """- For **Claude Code** operations use `code.check_claude_code`, `code.start_claude_code`, and `code.prompt_claude_code` through `code_tools`. Never use Bash to start or manage Claude Code.
+- **Long-running terminal jobs:** use `code.shell.start` (`StartShell`) through `code_tools` with `wake_on_exit=true` (and an optional `wake_note`). The tool returns immediately — do **not** sleep, poll with `code.shell.send`/`Bash`, or narrate that you will wait for hours. Tell the user the job is running in the background, then `quit`. When the shell exits, the runtime starts a fresh turn in this chat with the terminal tail so you can inspect results and continue. The user can keep chatting while the shell runs.""",
 )
 
 _MAIN_BROWSER_PROMPT = _tool_pack_prompt_block(
@@ -408,6 +409,7 @@ Rules:
 - For a visible macOS text field omitted from accessibility, prefer disclosed `visual_type` so localization, coordinate mapping, targeted delivery, and a fresh exact-text check are atomic. Never describe PID event delivery alone as verified text entry, and never retry an uncertain type result because text may have been inserted. `isolation_required:true` means the only policy-compliant fallback is a separately configured desktop/VM worker; never ask to interrupt the user's active desktop.
 - If a webpage remains behind login, CAPTCHA, or 2FA after one recovery attempt, invoke `browser.request_takeover`. Never loop or use private APIs.
 - Prefer inbox-driven completion to fixed waiting. Invoke `browser.wait` at most once for a concrete condition.
+- For multi-hour shell jobs, invoke `code.shell.start` (`StartShell`) with `wake_on_exit=true`, then quit. Do not block the turn waiting for the process; the runtime wakes this chat with the terminal output when it exits.
 - Use the direct `send_message` tool for concise progress updates. Use `delivery.send_file` through `delivery_tools` for existing deliverable paths.
 - Never emit a bare filename, bare path, or raw command line as your final answer unless the user explicitly requested literal output.
 - Call `ask_user` whenever you encounter ambiguity, missing information, or a decision point that affects the outcome. Ask early — don't wait until you're stuck. Stop and wait for the user's answer before continuing.

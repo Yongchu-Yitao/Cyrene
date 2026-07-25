@@ -2129,12 +2129,279 @@ async def _summarize_chat_to_brief(chat: dict[str, Any], project: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
+# Shell-exit wake → Workbench chat run
+# ---------------------------------------------------------------------------
+
+async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: str) -> str:
+    """Start a Workbench conversation run for a shell-exit wake.
+
+    Returns one of: ``started``, ``busy``, ``missing``, ``error``.
+    """
+    from cyrene.agent import run_agent
+    from cyrene.agent.state import PERMISSION_MODES
+    from webui import routes as legacy_routes
+
+    chat_id = str(wake.get("chat_id") or "").strip()
+    prompt = str(wake.get("prompt") or "").strip()
+    if not chat_id or not prompt:
+        return "missing"
+    if _CHAT_RUN_MANAGER.get(chat_id) is not None:
+        return "busy"
+
+    payload = await asyncio.to_thread(_read_chats_store)
+    chat = _find_chat(payload, chat_id)
+    if not chat:
+        return "missing"
+    project_id = str(chat.get("projectId") or "")
+    project_store = await asyncio.to_thread(legacy_routes._read_workbench_store)
+    project = legacy_routes._workbench_find_project(project_store, project_id)
+    if not project:
+        return "missing"
+    workspace_dir = legacy_routes._workbench_resolve_workspace_dir(project)
+
+    now = _utc_now_iso()
+    user_entry = {
+        "id": _short_id("msg"),
+        "role": "user",
+        "content": prompt,
+        "createdAt": now,
+        "systemInitiated": True,
+        "shellWake": True,
+        "shellId": str(wake.get("shell_id") or ""),
+        "wakeId": str(wake.get("wake_id") or ""),
+    }
+    chat.setdefault("messages", []).append(user_entry)
+    chat["status"] = "running"
+    chat["model"] = legacy_routes._get_model()
+    chat["updatedAt"] = now
+    await asyncio.to_thread(_write_chats_store, payload)
+
+    state_ids_before: set[str] = set()
+    for message in await asyncio.to_thread(_session_state_messages, chat_id):
+        mid = str(message.get("message_id") or message.get("id") or "").strip()
+        if mid:
+            state_ids_before.add(mid)
+
+    async def _run_agent() -> str:
+        return await run_agent(
+            user_message=prompt,
+            bot=bot,
+            chat_id=legacy_routes._CHAT_ID,
+            db_path=db_path,
+            session_id=chat_id,
+            permission_mode="auto" if "auto" in PERMISSION_MODES else "default",
+            public_user_message=prompt,
+            workspace_dir=workspace_dir,
+            static_system_extra=(
+                "This turn was triggered by an automatic shell-exit wake. "
+                "Inspect the provided terminal output, continue the prior work, "
+                "and do not wait for the same process again."
+            ),
+        )
+
+    def _finalize(reply_text: str) -> dict[str, Any]:
+        state_messages = _session_state_messages(chat_id)
+        timeline_entries, usage, files = _extract_exchange_timeline(
+            state_messages, state_ids_before
+        )
+        fresh = _read_chats_store()
+        fresh_chat = _find_chat(fresh, chat_id)
+        if not fresh_chat:
+            return {}
+        configured_model = str(fresh_chat.get("model") or "")
+        model_name = _last_exchange_model(state_messages, state_ids_before) or configured_model
+        for entry in timeline_entries:
+            entry.setdefault("model", model_name)
+        assistant_entry: dict[str, Any] = {
+            "id": _short_id("msg"),
+            "role": "assistant",
+            "content": str(reply_text or ""),
+            "createdAt": _utc_now_iso(),
+            "model": model_name,
+            "shellWake": True,
+            "wakeId": str(wake.get("wake_id") or ""),
+        }
+        if any(usage.values()):
+            assistant_entry["usage"] = usage
+        if files:
+            assistant_entry["attachments"] = files
+        fresh_chat["lastModel"] = model_name
+        saved_messages = [*timeline_entries, assistant_entry]
+        _merge_chat_messages_chronologically(fresh_chat, saved_messages)
+        fresh_chat["status"] = "idle"
+        fresh_chat.pop("pendingQuestion", None)
+        fresh_chat["updatedAt"] = assistant_entry["createdAt"]
+        _write_chats_store(fresh)
+        try:
+            archive_session_exchange(
+                chat_id,
+                prompt,
+                str(reply_text or ""),
+                workspace_dir=workspace_dir,
+                session_title=str(fresh_chat.get("title") or ""),
+            )
+        except Exception:
+            logger.exception("Failed to archive shell-wake conversation %s", chat_id)
+        try:
+            append_notification(
+                title="Shell 任务结束，Agent 已接续",
+                body=f"后台 shell 已退出，Agent 在「{fresh_chat.get('title') or '新对话'}」中继续处理。",
+                tab="mention",
+                project_ref=project_id,
+                source="shell_wake",
+                source_label="Shell wake",
+                link_label=str(fresh_chat.get("title") or ""),
+                meta={
+                    "chatId": chat_id,
+                    "shellId": str(wake.get("shell_id") or ""),
+                    "wakeId": str(wake.get("wake_id") or ""),
+                },
+            )
+        except Exception:
+            logger.exception("Failed to notify shell-wake completion for %s", chat_id)
+        return {
+            "assistantMessage": assistant_entry,
+            "assistantMessages": saved_messages,
+            "userMessage": user_entry,
+        }
+
+    def _settle_status() -> None:
+        fresh = _read_chats_store()
+        fresh_chat = _find_chat(fresh, chat_id)
+        if fresh_chat and fresh_chat.get("status") == "running":
+            fresh_chat["status"] = "idle"
+            _write_chats_store(fresh)
+
+    async def runner(run: ChatRun) -> None:
+        changes_before = await _capture_workspace_changes_baseline(workspace_dir)
+        try:
+            reply = await _run_agent()
+        except asyncio.CancelledError:
+            await _finalize_workspace_changes(
+                chat_id=chat_id,
+                run_id=run.run_id,
+                workspace_dir=workspace_dir,
+                before=changes_before,
+                status="cancelled",
+                run=run,
+            )
+            await asyncio.to_thread(_settle_status)
+            raise
+        except Exception as exc:
+            logger.exception("Shell-wake chat run failed for %s", chat_id)
+            await _finalize_workspace_changes(
+                chat_id=chat_id,
+                run_id=run.run_id,
+                workspace_dir=workspace_dir,
+                before=changes_before,
+                status="error",
+                run=run,
+            )
+            await asyncio.to_thread(_settle_status)
+            run.outcome = {"kind": "error", "exc": exc}
+            await run.publish({
+                "type": "error",
+                "error": "shell_wake_run_failed",
+                "message": "The shell-exit wake run failed. Please retry from chat.",
+            })
+            return
+
+        run.status = "finishing"
+        if reply == legacy_routes._AWAITING_USER_SENTINEL:
+            await _finalize_workspace_changes(
+                chat_id=chat_id,
+                run_id=run.run_id,
+                workspace_dir=workspace_dir,
+                before=changes_before,
+                status="awaiting_user",
+                run=run,
+            )
+            pending = await asyncio.to_thread(legacy_routes._workbench_pending_question_for, chat_id)
+            fresh = await asyncio.to_thread(_read_chats_store)
+            fresh_chat = _find_chat(fresh, chat_id)
+            if fresh_chat:
+                fresh_chat["status"] = "idle"
+                if pending:
+                    fresh_chat["pendingQuestion"] = pending
+                else:
+                    fresh_chat.pop("pendingQuestion", None)
+                fresh_chat["updatedAt"] = _utc_now_iso()
+                await asyncio.to_thread(_write_chats_store, fresh)
+            run.outcome = {"kind": "awaiting", "pending": pending}
+            await run.publish({
+                "type": "awaiting_user",
+                "pendingQuestion": pending,
+                "userMessage": _public_message(user_entry),
+            })
+            return
+
+        await _finalize_workspace_changes(
+            chat_id=chat_id,
+            run_id=run.run_id,
+            workspace_dir=workspace_dir,
+            before=changes_before,
+            status="completed",
+            run=run,
+        )
+        finalized = await asyncio.to_thread(_finalize, reply)
+        run.outcome = {"kind": "reply", "payload": finalized}
+        await run.publish({
+            "type": "saved",
+            "userMessage": _public_message(user_entry),
+            "assistantMessage": finalized.get("assistantMessage") or {},
+            "assistantMessages": finalized.get("assistantMessages") or [],
+            "shellWake": True,
+        })
+
+    ack = {
+        "type": "ack",
+        "chatId": chat_id,
+        "shellWake": True,
+        "userMessage": _public_message(user_entry),
+    }
+    _run, is_new = _CHAT_RUN_MANAGER.start_or_get(chat_id, ack, runner, stream=True)
+    if not is_new:
+        # Roll back the synthetic user message if we lost the race.
+        def _rollback() -> None:
+            fresh = _read_chats_store()
+            fresh_chat = _find_chat(fresh, chat_id)
+            if not fresh_chat:
+                return
+            messages = fresh_chat.get("messages") or []
+            fresh_chat["messages"] = [
+                item for item in messages
+                if not (
+                    isinstance(item, dict)
+                    and str(item.get("id") or "") == user_entry["id"]
+                )
+            ]
+            if fresh_chat.get("status") == "running" and _CHAT_RUN_MANAGER.get(chat_id) is None:
+                fresh_chat["status"] = "idle"
+            _write_chats_store(fresh)
+
+        await asyncio.to_thread(_rollback)
+        return "busy"
+    return "started"
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
 def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     configure_store(db_path)
     _CHAT_RUN_MANAGER.configure(db_path)
+
+    from cyrene.shell_wake import get_shell_wake_service
+
+    async def _shell_wake_dispatcher(wake: dict[str, Any]) -> str:
+        return await dispatch_shell_wake_run(wake, bot=bot, db_path=db_path)
+
+    get_shell_wake_service().configure(
+        dispatcher=_shell_wake_dispatcher,
+        is_busy=lambda chat_id: _CHAT_RUN_MANAGER.get(str(chat_id)) is not None,
+    )
+
     # Heavyweight helpers (store access, attachments, agent entrypoints) live in
     # webui.routes; import lazily at call time to avoid a circular import.
 

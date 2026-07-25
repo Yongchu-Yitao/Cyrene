@@ -311,6 +311,15 @@ class ChatRunManager:
                     queue.put_nowait(None)
                 except Exception:
                     pass
+            # A shell-exit wake may have been queued while this chat was busy.
+            try:
+                from cyrene.shell_wake import get_shell_wake_service
+
+                await get_shell_wake_service().try_dispatch(run.chat_id)
+            except Exception:
+                logger.exception(
+                    "Failed to dispatch pending shell wake for chat %s", run.chat_id
+                )
             self._schedule_cleanup(run)
 
     def _schedule_cleanup(self, run: ChatRun) -> None:

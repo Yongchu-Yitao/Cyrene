@@ -111,10 +111,36 @@ async def _watch_shell(shell_id: str) -> None:
         shell["status"] = "done" if code == 0 else "err"
         shell["exit_code"] = code
         shell["updated_at"] = datetime.now(timezone.utc).isoformat()
+        wake_on_exit = bool(shell.get("wake_on_exit"))
     await _publish_shell_update(shell_id)
+    if wake_on_exit:
+        try:
+            from cyrene.shell_wake import notify_shell_exit
+
+            await notify_shell_exit(
+                shell_id,
+                status="done" if code == 0 else "err",
+                exit_code=code,
+                snapshot=get_shell_snapshot(shell_id),
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "Failed to dispatch shell-exit wake for %s", shell_id
+            )
 
 
-async def start_shell(command: str = "", cwd: str = ".", title: str = "", round_id: str = "") -> dict[str, Any]:
+async def start_shell(
+    command: str = "",
+    cwd: str = ".",
+    title: str = "",
+    round_id: str = "",
+    *,
+    wake_on_exit: bool = False,
+    wake_chat_id: str = "",
+    wake_note: str = "",
+) -> dict[str, Any]:
     """Start an independent persistent shell session."""
     global _shell_counter
     shell_kind, shell_argv = interactive_argv()
@@ -134,6 +160,23 @@ async def start_shell(command: str = "", cwd: str = ".", title: str = "", round_
     _shell_counter += 1
     shell_id = f"shell_{int(time.time() * 1000)}_{_shell_counter}"
     now = datetime.now(timezone.utc).isoformat()
+    want_wake = bool(wake_on_exit)
+    chat_id = str(wake_chat_id or "").strip()
+    note = str(wake_note or "").strip()
+    wake_record: dict[str, Any] | None = None
+    if want_wake and chat_id:
+        from cyrene.shell_wake import get_shell_wake_service
+
+        wake_record = await get_shell_wake_service().register_wake(
+            shell_id=shell_id,
+            chat_id=chat_id,
+            note=note,
+            title=title.strip() or "independent shell",
+            round_id=round_id,
+        )
+    elif want_wake and not chat_id:
+        want_wake = False
+
     async with _shell_lock:
         _shells[shell_id] = {
             "id": shell_id,
@@ -147,11 +190,23 @@ async def start_shell(command: str = "", cwd: str = ".", title: str = "", round_
             "exit_code": None,
             "proc": proc,
             "lines": deque(maxlen=240),
+            "wake_on_exit": want_wake,
+            "wake_chat_id": chat_id if want_wake else "",
+            "wake_note": note if want_wake else "",
+            "wake_id": str((wake_record or {}).get("wake_id") or ""),
         }
         _shells[shell_id]["stdout_task"] = asyncio.create_task(_pump_stream(shell_id, proc.stdout, "out"))
         _shells[shell_id]["stderr_task"] = asyncio.create_task(_pump_stream(shell_id, proc.stderr, "err"))
         _shells[shell_id]["watch_task"] = asyncio.create_task(_watch_shell(shell_id))
     await _append_lines(shell_id, "meta", f"[shell started: {shell_kind} ({shell_argv[0]})]")
+    if want_wake:
+        await _append_lines(
+            shell_id,
+            "meta",
+            f"[wake_on_exit registered for chat {chat_id}"
+            + (f"; note={note[:120]}" if note else "")
+            + "]",
+        )
     if command.strip():
         await send_shell(shell_id, command)
     return get_shell_snapshot(shell_id) or {}
@@ -202,18 +257,23 @@ def get_shell_snapshot(shell_id: str) -> dict[str, Any] | None:
             elapsed = _format_duration((datetime.now(timezone.utc) - created_dt).total_seconds())
         except Exception:
             elapsed = "—"
-    return {
+    snapshot = {
         "id": shell_id,
         "title": shell.get("title", "independent shell"),
         "cwd": shell.get("cwd", "."),
         "pid": shell.get("pid", "—"),
         "status": shell.get("status", "running"),
+        "exitCode": shell.get("exit_code"),
         "roundId": shell.get("round_id", ""),
         "createdAt": _short_time(shell.get("created_at")),
         "updatedAt": _short_time(shell.get("updated_at")),
         "elapsed": elapsed,
         "lines": list(shell.get("lines", [])),
+        "wakeOnExit": bool(shell.get("wake_on_exit")),
+        "wakeChatId": shell.get("wake_chat_id", ""),
+        "wakeId": shell.get("wake_id", ""),
     }
+    return snapshot
 
 
 def list_shells(include_exited: bool = False) -> list[dict[str, Any]]:
