@@ -78,16 +78,4 @@ gaia_*.json
 # Scripts and tools
 scripts/
 finetune/
-docs/research-workbench-report/artifact.json
-
-# Local literature-library visual QA captures
-docs/research-workbench-report/library-clear-conditions-final-1152x768.png
-docs/research-workbench-report/library-content-image-comparison.png
-docs/research-workbench-report/library-content-image-final-1152x768.png
-docs/research-workbench-report/library-content-markdown-comparison.png
-docs/research-workbench-report/library-content-markdown-final-1152x768.png
-.gitignore
-.gitignore
-docs/research-workbench-report/research-workbench-report.html
-.gitignore
-docs/research-workbench-roadmap.md
+docs/research-workbench-report/

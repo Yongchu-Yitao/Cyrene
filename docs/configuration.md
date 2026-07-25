@@ -1,10 +1,31 @@
 # Configuration
 
+[English](configuration.md) · [简体中文](configuration.zh-CN.md)
+
 ## Encrypted Config Store
 
 Cyrene stores most configuration in a Fernet-encrypted JSON config blob (`data/config.enc` by default). You do **not** need a `.env` file for normal operation. The first-run onboarding wizard writes the required values, and the Web UI Settings page can update them at runtime.
 
 A legacy `.env.example` is still shipped for backward compatibility, but new installs should use the onboarding wizard or Settings UI.
+
+## Runtime Paths and Persistence
+
+Source runs default to the checkout root. Packaged runs use the operating
+system's application-data and cache locations. Tests and portable deployments
+can override the resolved paths before Python imports Cyrene:
+
+| Variable | Purpose |
+|---|---|
+| `CYRENE_BASE_DIR` | Runtime base containing `workspace/`, `store/`, and `data/` |
+| `CYRENE_USER_DATA_DIR` | OS/user application-data root |
+| `CYRENE_CACHE_DIR` | Cache root |
+| `CYRENE_TEMP_DIR` | Temporary artifact root |
+| `CYRENE_INSTALL_RESOURCES_DIR` | Packaged/static resource override |
+| `CYRENE_ALLOWED_WORKSPACE_ROOTS` | Additional allowed project roots |
+
+The active main database is `store/cyrene.runtime.database`. On first startup,
+an existing `store/cyrene.db` is migrated only when the new target is absent or
+row-empty. The source remains in place as a rollback copy.
 
 ## Environment Variables
 
@@ -100,7 +121,9 @@ Most settings can be edited at runtime through the Web UI **Settings** page with
 
 - **API Keys** — Update `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`, `WECHAT_BOT_TOKEN`, `AMAP_API_KEY`, embedding credentials
 - **Models** — Add or remove model configurations
-- **Tools** — Enable or disable specific tools
+- **Tool packages** — Enable or disable complete progressive-disclosure
+  packages; direct control/filesystem/web tools remain part of the stable wire
+  contract
 - **Agents** — Keep `max_tool_rounds` for the main agent only; configure execution subagent lease checkpoints, no-progress detection, wide tool/time/cost/context safety fuses, and separate discussion round/message/information-gain limits
 - **Search** — Built-in SimpleXNG only
 - **MCP Servers** — Add, remove, and restart MCP server connections
@@ -109,6 +132,10 @@ Most settings can be edited at runtime through the Web UI **Settings** page with
 ## Browser Configuration
 
 Browser-specific settings are documented in [browser-live-view.md](browser-live-view.md). They use the `CYRENE_BROWSER_*` key namespace and are read from the encrypted config store.
+
+Electron injects `CYRENE_AUTH_TOKEN`, `CYRENE_ELECTRON_RPC_PORT`, and
+`CYRENE_ELECTRON_RPC_TOKEN` into its child runtime. These are internal
+per-launch security values and should not be persisted manually.
 
 ## Model Pricing
 

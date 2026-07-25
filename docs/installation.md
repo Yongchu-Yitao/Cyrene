@@ -1,12 +1,31 @@
 # Installation
 
+[English](installation.md) · [简体中文](installation.zh-CN.md)
+
 ## Prerequisites
 
 - Python 3.12+
-- Conda (recommended) or venv
+- [uv](https://docs.astral.sh/uv/) (recommended), Conda, or `venv`
 - Git
+- Node.js 20+ when building Web UI assets or running Electron from source
 
 ## Linux / macOS
+
+```bash
+git clone https://github.com/Yongchu-Yitao/Cyrene.git
+cd Cyrene
+uv sync
+
+# Build JSX assets when the checkout does not already contain compiled output.
+cd src/webui
+npm install
+node build-jsx.mjs
+cd ../..
+
+python -m cyrene --workbench
+```
+
+Conda/pip remains supported:
 
 ```bash
 conda create -n cyrene python=3.12 -y
@@ -20,7 +39,10 @@ On first run, the onboarding wizard will ask for your API key and guide you thro
 
 ## Windows
 
-Windows requires extra steps because `uvloop` (used by the built-in SimpleXNG) is Unix-only.
+The pre-built Windows installer is recommended. Source installs include
+`winloop`, but some SimpleXNG releases still vendor Unix-specific SearXNG code;
+use the following compatibility steps only when a source launch reports the
+corresponding import/process error.
 
 ### 1. Environment
 
@@ -96,6 +118,10 @@ search:
 
 ```bash
 python -m cyrene --workbench
+
+# Or use the installed background daemon client:
+cyrene start
+cyrene status
 ```
 
 The onboarding wizard will run on first launch.
@@ -114,6 +140,11 @@ python -m cyrene --workbench
 
 Open `http://localhost:4242`. You should see the onboarding wizard on first launch.
 
+The active runtime database is `store/cyrene.runtime.database`. If an older
+checkout has `store/cyrene.db`, first startup migrates it with SQLite's backup
+API, verifies the new database, and retains the old file for rollback. A
+populated new database is never overwritten.
+
 To test the agent without the web server:
 
 ```bash
@@ -124,6 +155,7 @@ python -m cyrene.runtime.host
 
 - **Browser live view & login takeover outside Electron**: `pip install -e ".[browser]"` then `playwright install chromium` (desktop releases use embedded Chromium)
 - **Development/test dependencies**: `pip install -e ".[dev]"`
+- **Electron development app**: `cd electron && npm install && npm run dev`
 
 ## Next Steps
 

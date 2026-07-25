@@ -1,5 +1,7 @@
 # Usage
 
+[English](usage.md) · [简体中文](usage.zh-CN.md)
+
 ## Starting Cyrene
 
 ### Workbench UI (default)
@@ -33,6 +35,20 @@ cyrene stop
 Open `http://localhost:4242` for the web UI.
 
 > The first launch runs an onboarding wizard for API key and personality setup.
+
+The active main database is `store/cyrene.runtime.database`. Older
+`store/cyrene.db` data is migrated automatically on startup when the new target
+is not populated; the old database is retained for rollback.
+
+### Electron desktop development
+
+```bash
+cd electron
+npm run dev
+```
+
+This launches the Electron window and starts the Python backend through the
+physical `src/cyrene/local_cli.py` launcher.
 
 ---
 
@@ -91,7 +107,9 @@ The classic UI is still available with `--agent`:
 
 ## CLI
 
-The `cyrene` command is a thin HTTP client that communicates with the daemon at `http://localhost:4242`.
+The `cyrene` command is a thin HTTP client that communicates with the daemon at
+`http://localhost:4242`. Loopback readiness and API calls explicitly ignore
+environment proxy settings.
 
 ```bash
 # Start daemon (background)
@@ -126,6 +144,10 @@ cyrene do "your task" --session run_live
 | `cyrene mcp toggle <name>` | Enable/disable an MCP server |
 
 Use `--json` for machine-readable output.
+
+`cyrene start` is idempotent: if a healthy Cyrene daemon already owns port
+4242, it reports that instance instead of launching a duplicate. `cyrene stop`
+only targets the detected daemon.
 
 ---
 

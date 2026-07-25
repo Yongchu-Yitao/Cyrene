@@ -1,5 +1,7 @@
 # Development
 
+[English](development.md) · [简体中文](development.zh-CN.md)
+
 ## Debugging
 
 ### Verbose Mode
@@ -68,20 +70,30 @@ The **Status** page shows live debug logs, system metrics, worker status, and se
 
 ## Testing
 
-The project uses `pytest` with async support and a 60-second thread-based timeout to avoid deadlocks.
+The project uses `pytest` with async support and a 60-second thread-based
+timeout to avoid deadlocks. Runtime paths are isolated by test fixtures.
 
 ```bash
 # Fresh dev test setup (installs package + test dependencies)
 uv pip install -e ".[dev]"
 
 # Run all tests
-uv run pytest -q
+uv run pytest -q -W error::pytest.PytestUnhandledThreadExceptionWarning
 
 # Run a specific test file
 python -m pytest tests/test_context_trace.py -v
 ```
 
-Some tests require an LLM endpoint to be configured. Set `OPENAI_API_KEY` and `OPENAI_BASE_URL` before running those tests.
+The normal suite uses fakes/local fixtures and must not require a live LLM
+credential. Live provider/channel checks are separate manual integration tests.
+
+Additional release-relevant checks:
+
+```bash
+node --test electron/app-use.test.js
+python -m compileall -q src
+git diff --check
+```
 
 ## Project Conventions
 
@@ -92,14 +104,22 @@ Some tests require an LLM endpoint to be configured. Set `OPENAI_API_KEY` and `O
 - Type hints for all function signatures
 - Async/await throughout (asyncio)
 
-### Module Pattern
+### Module and Dependency Pattern
 
 Each module has a single responsibility. Cross-module communication uses:
 
 - Function calls for direct imports
-- Event bus (`debug.publish_event` / `debug.subscribe`) for real-time UI updates
-- File-based inbox (`inbox.py`) for inter-agent messaging
+- Event bus (`cyrene.observability.debug`) for real-time UI updates
+- Runtime inbox (`cyrene.runtime.inbox`) for inter-agent messaging
 - SQLite for structured persistence
+
+Canonical implementation packages are `agent`, `workbench`, `model_runtime`,
+`learning`, `runtime`, `observability`, `knowledge`, `channels`, `tooling`, and
+`tool_impl`. Historical imports are maintained in
+`cyrene.runtime.module_compat`; do not add duplicate top-level shim files.
+
+FastAPI adapters belong under `src/route/`. Domain code must not import route or
+Web UI modules.
 
 ### Adding New Tools
 
@@ -123,4 +143,19 @@ The repository uses GitHub Actions for release builds:
 - Builds: PyInstaller + Electron for macOS, Windows (x64/ARM64), and Linux
 - Smoke test: packaged app `--smoke-test`
 
-There is currently no continuous-integration test job; run tests locally before tagging a release.
+The frozen smoke test imports critical compiled dependencies and all legacy
+module aliases. There is currently no pull-request CI test job; run the full
+local validation before tagging a release.
+
+### Electron Development
+
+```bash
+uv sync --extra dev
+cd electron
+npm install
+npm run dev
+```
+
+Electron directly executes `src/cyrene/local_cli.py`, which bootstraps the
+checkout and delegates to `cyrene.runtime.host`. Keep that physical launcher
+until Electron's process contract changes.

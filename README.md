@@ -11,6 +11,8 @@
 
 <h1 align="center">Cyrene — AI Agent That Evolves</h1>
 
+<p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
+
 <p align="center">
   An open-source AI agent framework with a living personality, parallel subagents,<br>
   a workbench-style desktop UI, and zero infrastructure. No Docker, no Redis, just Python.
@@ -29,6 +31,9 @@ A quick map of the moving parts:
 - **One process** hosts the agent loop, the FastAPI web server, the scheduler, and the bundled search engine.
 - **Two UIs** ship side by side — a project-centric **Workbench** (default) and the classic single-agent **Legacy** UI — sharing the same backend.
 - **Any OpenAI-compatible API** works (DeepSeek by default; Claude, GPT, Qwen, and local models all fit).
+- **Domain packages** separate agent, Workbench, model runtime, learning,
+  lifecycle, observability, knowledge, channels, and tooling without breaking
+  historical Python imports.
 
 ---
 
@@ -90,7 +95,9 @@ Where you actually talk to Cyrene.
 - **No API versioning** — all endpoints live under a bare `/api/`
 - **No rate/cost limiting** — there is no LLM call quota or spend protection
 - **Windows from source** — requires manual patching of vendored dependencies; the pre-built installer is recommended
-- **Testing** — unit tests exist (`uv run pytest -q`) but the pytest suite is not run in CI (CI only smoke-tests the packaged app), and there are no integration/E2E tests
+- **CI coverage** — the repository has a comprehensive local pytest suite and
+  Electron/package smoke tests, but GitHub Actions currently runs release
+  packaging rather than the complete pytest matrix
 
 ---
 
@@ -116,11 +123,19 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..
 # 3. Run
 python -m cyrene --workbench     # Workbench UI (default)
 python -m cyrene --agent         # Classic agent UI (legacy)
+
+# Or launch the Workbench daemon through the installed CLI
+cyrene start
 ```
 
 Open `http://localhost:4242`. First launch runs an onboarding wizard that guides you through API key configuration and personality setup.
 
 > No `.env` file is required. All configuration is stored in an encrypted store (`data/config.enc` by default) and managed through the Web UI settings or onboarding wizard. A legacy `.env.example` is kept for backward compatibility.
+
+Runtime state uses `store/cyrene.runtime.database`. When an older
+`store/cyrene.db` is present and the new database has not been populated,
+startup creates a verified SQLite snapshot in the new location, records a
+migration marker, and retains the old file as the rollback copy.
 
 ### Electron app from source (development)
 
@@ -174,6 +189,18 @@ Optional extras:
 - [Configuration](docs/configuration.md) — Environment variables reference
 - [Development](docs/development.md) — Debugging, verbose logging, testing
 - [Browser Live View](docs/browser-live-view.md) — Browser screencasting and login takeover
+- [Changelog](CHANGELOG.en.md) — Release history
+- [Current Architecture Handoff](project-notes/refactor-handoff.md) — Canonical module
+  ownership, compatibility rules, validation baseline, and remaining work
+- [Current Development Progress](project-notes/CONTEXT_DEV_PROGRESS.md) — Audited
+  implementation status and unresolved work
+- [Research Workbench Roadmap](project-notes/research-workbench-roadmap.md) — Current
+  Library status and proposed Experiments/Manuscripts phases
+- [WebUI / Workbench Consolidation Plan](project-notes/webui-workbench-consolidation-refactor-plan.en.md) —
+  Planned, not implemented
+- [Design QA](project-notes/design-qa.md) — Historical visual acceptance evidence
+- [Browser PiP Feasibility Study](project-notes/browser-dynamic-layout-feasibility.en.md) —
+  Historical design research
 
 ---
 

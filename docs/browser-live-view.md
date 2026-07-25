@@ -1,5 +1,8 @@
 # Browser Live View & Login Takeover
 
+[English](browser-live-view.md) ·
+[简体中文](browser-live-view.zh-CN.md)
+
 When the agent uses the browser, the chat UI shows a **live view** of the page —
 what the agent sees and the actions it takes — in the right-hand panel. When the
 agent hits a login wall, CAPTCHA, or 2FA, it can **hand the browser to you**: a real
@@ -103,6 +106,10 @@ headless, screencast, and locale settings apply to non-Electron Playwright mode;
 | `CYRENE_BROWSER_ACCEPT_LANGUAGE` | `zh-CN,zh;q=0.9,en;q=0.8` | `Accept-Language` header used by the browser session. |
 
 The profile directory is `<DATA_DIR>/browser_profile`.
+
+For Electron development, run `npm run dev` from `electron/`. The Electron
+process starts the Python backend through `src/cyrene/local_cli.py`; successful
+startup prints `UIMODE=workbench` and `PORT=4242`.
 
 ## Permissions
 

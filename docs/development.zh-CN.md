@@ -1,0 +1,147 @@
+# 开发
+
+[English](development.md) · [简体中文](development.zh-CN.md)
+
+## 调试
+
+### Verbose Mode
+
+记录每次 LLM 调用、Tool、Response、耗时和 Context Trace：
+
+```bash
+python -m cyrene.runtime.host --verbose
+# 或
+python -m cyrene --workbench --verbose
+```
+
+日志写入 `data/debug_*.jsonl`，每行是一个 JSON Event，例如：
+
+```json
+{"type": "llm_call", "caller": "main_agent", "phase": "phase1",
+ "messages": [], "response": {}, "duration_ms": 423.0}
+```
+
+### Context Debugger
+
+`_ctx` Metadata 描述每个 Context Block 的来源。可从 Web UI Context
+Debugger 或 API 查看：
+
+```bash
+curl http://localhost:4242/api/context-debug/events?limit=10
+curl http://localhost:4242/api/context-debug/events/evt_3b22f9a5c0cb
+```
+
+CLI：
+
+```bash
+cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb
+```
+
+历史 Event API 仍可用：
+
+```bash
+curl http://localhost:4242/api/events/list
+curl http://localhost:4242/api/events/evt_3b22f9a5c0cb
+```
+
+Status 页面显示 Debug Log、System Metric、Worker 和 Service Health；
+Agent Flow 页面展示 LLM/Tool/Subagent 执行时间线。
+
+## 测试
+
+pytest 使用 Async Support 和 60 秒 Thread Timeout。Fixture 会隔离 Runtime
+Path。普通测试不得依赖真实 LLM Credential。
+
+```bash
+# 安装开发依赖
+uv pip install -e ".[dev]"
+
+# 完整测试，并把未处理线程异常视为错误
+uv run pytest -q \
+  -W error::pytest.PytestUnhandledThreadExceptionWarning
+
+# 单个文件
+python -m pytest tests/test_context_trace.py -v
+```
+
+Release 相关检查：
+
+```bash
+node --test electron/app-use.test.js
+python -m compileall -q src
+git diff --check
+```
+
+真实 LLM、Telegram、WeChat、远程 MCP 等属于带凭据的手工集成测试。
+
+## 项目约定
+
+### Code Style
+
+- Python 3.12+
+- Ruff，行长 180
+- 公共 Function 使用 Type Hint
+- Async IO 使用 `asyncio`
+
+### 模块与依赖
+
+正式实现包：
+
+- `agent`
+- `workbench`
+- `model_runtime`
+- `learning`
+- `runtime`
+- `observability`
+- `knowledge`
+- `channels`
+- `tooling`
+- `tool_impl`
+
+历史 Import 由 `cyrene.runtime.module_compat` 维护，不要创建重复顶层 Shim。
+FastAPI Adapter 位于 `src/route/`；领域代码不得依赖 Route 或 Web UI。
+
+跨模块通信使用：
+
+- 显式 Function/Service 调用；
+- `cyrene.observability.debug` Event Bus；
+- `cyrene.runtime.inbox` Agent Message；
+- SQLite/Document Store 持久化。
+
+### 新增 Tool
+
+1. 在匹配领域的 `cyrene/tool_impl/` 创建模块；
+2. 导出 `TOOL_DEF` 和 Async `handler`；
+3. 加入 Native Tool Module Registry；
+4. Deferred Tool 分配稳定 Capability ID；Direct Tool 变更固定 Wire Contract
+   必须有明确理由；
+5. 增加 Policy、Schema、Actor 和 UI/Setting 测试。
+
+MCP Server 通过 Settings 或 `cyrene mcp add` 配置。
+
+## Electron 开发
+
+```bash
+uv sync --extra dev
+cd electron
+npm install
+npm run dev
+```
+
+Electron 直接执行 `src/cyrene/local_cli.py`，后者 Bootstrap Checkout 并委托
+给 `cyrene.runtime.host`。在 Electron Process Contract 改变前必须保留这个
+物理文件。
+
+## CI / Release
+
+`.github/workflows/release.yml` 在 Version Tag 或手工 Dispatch 时构建
+PyInstaller + Electron：
+
+- macOS；
+- Windows x64/ARM64；
+- Linux；
+- 可选择默认 Workbench 或 Agent UI；
+- 执行冻结产物 `--smoke-test`。
+
+冻结 Smoke 会导入关键编译依赖和全部历史模块 Alias。目前没有常规 PR Test
+Workflow，因此 Tag 前必须本地执行完整验证。

@@ -38,6 +38,35 @@ def test_direct_local_cli_file_bootstraps_source_imports(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_direct_local_cli_prefers_checkout_virtualenv(tmp_path):
+    project_dir = Path(__file__).resolve().parents[1]
+    entrypoint = project_dir / "src" / "cyrene" / "local_cli.py"
+    venv_python = (
+        project_dir / ".venv" / "Scripts" / "python.exe"
+        if os.name == "nt"
+        else project_dir / ".venv" / "bin" / "python3"
+    )
+    if not venv_python.is_file():
+        pytest.skip("checkout virtual environment is not available")
+
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env.pop("CYRENE_LOCAL_CLI_BOOTSTRAPPED", None)
+    result = subprocess.run(
+        [sys.executable, str(entrypoint), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Cyrene CLI mode." in result.stdout
+    assert "ModuleNotFoundError" not in result.stderr
+
+
 def test_module_help_has_no_runtime_side_effects(tmp_path):
     runtime_dir = tmp_path / "runtime"
     env = os.environ.copy()

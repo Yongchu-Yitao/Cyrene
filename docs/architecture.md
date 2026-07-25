@@ -1,5 +1,7 @@
 # Architecture
 
+[English](architecture.md) · [简体中文](architecture.zh-CN.md)
+
 ## Two-Phase Agent Loop
 
 Cyrene uses a two-phase decision loop that keeps the model-facing wire schema
@@ -39,6 +41,22 @@ reuse that prefix until settings change again. Direct tools, including
 `AnalyzeAttachment`, are not controlled by package switches.
 Deep Research keeps a dedicated lightweight length-preference handshake and is
 intentionally outside this cache invariant.
+
+## Runtime Startup and Migration
+
+All host modes share `RuntimeContext`, `ApplicationLifecycle`, and the ordered
+bootstrap in `cyrene.runtime`:
+
+```text
+resolve paths → create runtime directories → migrate legacy database
+→ initialize database/memory/learning → start managed services → serve UI
+```
+
+The active main database is `store/cyrene.runtime.database`. If the historical
+`store/cyrene.db` exists and the new target is not populated, startup uses the
+SQLite backup API, verifies the snapshot, writes an idempotent migration marker,
+and retains the source for rollback. Ambiguous populated targets stop startup
+instead of overwriting data.
 
 ## Key Features
 
@@ -193,7 +211,7 @@ src/
 
 Historical imports such as `cyrene.db`, `cyrene.scheduler`, and
 `cyrene.workbench_runtime` are resolved lazily by
-`runtime/module_compat.py` to the exact canonical module object; they do not
+`cyrene/runtime/module_compat.py` to the exact canonical module object; they do not
 require duplicate top-level implementation files. `local_cli.py` is the sole
 physical compatibility launcher because the previous desktop development
 flow executes that exact file path.

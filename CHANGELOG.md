@@ -1,5 +1,50 @@
 # Changelog
 
+[中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
+
+## [Unreleased] - 2026-07-26
+
+- **核心源码按领域完成重组** — `src/cyrene/` 现在以 `agent/`、
+  `workbench/`、`model_runtime/`、`learning/`、`runtime/`、
+  `observability/`、`knowledge/`、`channels/`、`tooling/` 和
+  `tool_impl/` 为正式所有权边界。根目录只保留稳定公共入口和
+  Electron 仍需按物理路径执行的 `local_cli.py` 启动垫片。
+- **旧 Python 导入继续解析到同一个模块对象** —
+  `runtime/module_compat.py` 通过惰性 import finder 维护历史模块名，
+  保留 monkeypatch、模块元数据和 `python -m` 可执行别名语义，不再为每个
+  旧路径保留重复实现文件。
+- **旧数据库在首次启动时安全迁移** — 当
+  `store/cyrene.db` 存在且 `store/cyrene.runtime.database` 尚未承载数据时，
+  Runtime 会使用 SQLite backup API 复制包含 WAL 的一致快照，执行
+  `quick_check`、写入幂等迁移标记并原子启用新库；旧库始终保留作为回滚副本，
+  已有新库数据不会被覆盖。
+- **启动与生命周期统一** — Web、交互 CLI、Electron、PyInstaller 和后台
+  daemon 共享 RuntimeContext、初始化顺序和关闭路径。`cyrene start`、
+  `status`、API 连接与 `stop` 已通过真实隔离运行验证；Electron 开发模式继续
+  从 `src/cyrene/local_cli.py` 启动当前源码。
+- **兼容性与构建验证扩大** — 当前测试套件 1,381 项通过；上一 commit 的
+  1,286 项功能性测试通过，仅排除读取已删除 `pattern.py` 源码文本的形状测试。
+  Electron App Use 44 项通过。最终 PyInstaller 产物验证 60 个旧模块别名、
+  259 个 OpenAPI 操作、Web 启动、数据库迁移和干净退出。
+- **文档与源码边界同步** — README、架构、安装、使用、配置、开发、
+  重构 handoff、Research Workbench 路线图和设计 QA 统一到当前包结构、
+  数据库文件名和启动命令；开发过程截图与来源记录保留在本机，不上传 GitHub。
+
+### 技术细节
+
+- `cyrene.runtime.application`、`bootstrap`、`context`、`lifecycle` 和
+  `paths` 组成共享生命周期；数据库迁移发生在任何数据库初始化之前。
+- `cyrene.call_llm`、`browser`、`subagent`、`memory` 和 `tools` 保持稳定
+  公共入口；实现分别下沉到 `model_runtime/`、领域服务和 tooling 控制面。
+- `local_cli.py` 保留源码直跑时切换到仓库 `.venv` 的行为，并新增真实路径
+  启动回归测试，避免 Electron 开发模式误用缺少依赖的系统 Python。
+- FastAPI 适配器统一位于 `src/route/`，Workbench 业务逻辑位于
+  `src/cyrene/workbench/`，Web 生命周期和静态资源托管位于 `src/webui/`。
+- 冻结产物 smoke test 会导入全部历史模块别名，并确认别名与正式模块是同一
+  对象，从而捕获只在 PyInstaller 环境中出现的动态导入遗漏。
+
+---
+
 ## [0.7.0b1] - 2026-07-23
 
 这是 `0.7.0` 的第一个测试版，完整包含 `v0.6.17` 之后的项目文献库、主动工作行为调整，以及渐进式工具包协议重构和缓存收尾。
