@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 @pytest.fixture
 async def library_db(tmp_path, monkeypatch):
-    from cyrene import db
-    from cyrene import workbench_context
+    from cyrene.runtime import database as db
+    from cyrene.workbench import context as workbench_context
 
     db_path = str(tmp_path / "kb_project-a.db")
     await db.init_knowledge_db(db_path)

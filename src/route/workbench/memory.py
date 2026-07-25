@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from route import schemas as api_models
 from route.errors import error_response
-from cyrene import workbench_memory_service as _service
+from cyrene.workbench import memory as _service
 
 globals().update({
     name: value

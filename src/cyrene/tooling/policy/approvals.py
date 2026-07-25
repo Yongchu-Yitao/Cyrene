@@ -1,13 +1,6 @@
 """Approval-policy helpers."""
 
-from cyrene.tooling.runtime_support import (
-    _request_destructive_confirmation,
-    _request_external_delivery_confirmation,
-    _request_external_upload_confirmation,
-    _request_read_elevation,
-    _request_scope_elevation,
-    _request_write_elevation,
-)
+from cyrene.tooling import runtime_support as _implementation
 
 __all__ = [
     "_request_destructive_confirmation",
@@ -16,4 +9,24 @@ __all__ = [
     "_request_read_elevation",
     "_request_scope_elevation",
     "_request_write_elevation",
+    "request_destructive_confirmation",
+    "request_external_delivery_confirmation",
+    "request_external_upload_confirmation",
+    "request_read_elevation",
+    "request_scope_elevation",
+    "request_write_elevation",
 ]
+
+request_destructive_confirmation = _implementation._request_destructive_confirmation
+request_external_delivery_confirmation = _implementation._request_external_delivery_confirmation
+request_external_upload_confirmation = _implementation._request_external_upload_confirmation
+request_read_elevation = _implementation._request_read_elevation
+request_scope_elevation = _implementation._request_scope_elevation
+request_write_elevation = _implementation._request_write_elevation
+
+_request_destructive_confirmation = request_destructive_confirmation
+_request_external_delivery_confirmation = request_external_delivery_confirmation
+_request_external_upload_confirmation = request_external_upload_confirmation
+_request_read_elevation = request_read_elevation
+_request_scope_elevation = request_scope_elevation
+_request_write_elevation = request_write_elevation

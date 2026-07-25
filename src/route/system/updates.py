@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 from route.errors import error_response
 
 
@@ -29,8 +29,8 @@ def register_update_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.get("/api/update/check")
     async def api_update_check():
         """Check for updates via GitHub Releases."""
-        from cyrene.updater import check_for_update, set_cached_update_info
-        from cyrene.settings_store import set_ as set_setting
+        from cyrene.runtime.updater import check_for_update, set_cached_update_info
+        from cyrene.runtime.settings_store import set_ as set_setting
 
         info = await check_for_update()
         set_cached_update_info(info)
@@ -60,8 +60,8 @@ def register_update_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.get("/api/update/changelog")
     async def api_update_changelog():
         """Return the latest locally saved release notes."""
-        from cyrene.updater import check_for_update
-        from cyrene.settings_store import get as get_setting, set_ as set_setting
+        from cyrene.runtime.updater import check_for_update
+        from cyrene.runtime.settings_store import get as get_setting, set_ as set_setting
 
         changelog = get_setting("update_changelog", {}) or {}
         if not isinstance(changelog, dict):
@@ -85,7 +85,7 @@ def register_update_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.post("/api/update/download")
     async def api_update_download():
         """下载更新包。返回下载状态。"""
-        from cyrene.updater import (
+        from cyrene.runtime.updater import (
             get_cached_update_info,
             download_update,
             _download_progress,
@@ -162,13 +162,13 @@ def register_update_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.get("/api/update/progress")
     async def api_update_progress():
         """查询下载进度。"""
-        from cyrene.updater import get_download_progress
+        from cyrene.runtime.updater import get_download_progress
         return get_download_progress()
 
     @router.post("/api/update/restart")
     async def api_update_restart():
         """写入重启脚本并退出进程（安装更新后调用）。"""
-        from cyrene.updater import _download_progress
+        from cyrene.runtime.updater import _download_progress
 
         ok, message, code, status_code = _launch_update_restart(_download_progress)
         if not ok:

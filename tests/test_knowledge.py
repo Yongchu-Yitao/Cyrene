@@ -20,7 +20,7 @@ pil_mock.__version__ = "9.0.0"
 sys.modules["PIL"] = pil_mock
 pil_mock.Image = MagicMock()
 
-from cyrene import db
+from cyrene.runtime import database as db
 from cyrene.knowledge import store, embeddings
 
 
@@ -813,8 +813,8 @@ class TestSyncFilesystem:
                 (exports_path / "generated.txt").write_text("Generated content")
 
                 # Monkeypatch the directories
-                monkeypatch.setattr("cyrene.attachments.UPLOADS_DIR", uploads_path)
-                monkeypatch.setattr("cyrene.attachments.EXPORTS_DIR", exports_path)
+                monkeypatch.setattr("cyrene.runtime.attachments.UPLOADS_DIR", uploads_path)
+                monkeypatch.setattr("cyrene.runtime.attachments.EXPORTS_DIR", exports_path)
 
                 # Sync should find 3 new files
                 result = await store.sync_filesystem(temp_db)

@@ -427,7 +427,7 @@ async def import_records(
             except ZoteroLocalError as exc:
                 errors.append({"key": _zotero_key(raw), "error": str(exc)})
         if local_path and local_path.is_absolute() and local_path.is_file() and copy_attachments:
-            from cyrene.attachments import UPLOADS_DIR, safe_attachment_filename
+            from cyrene.runtime.attachments import UPLOADS_DIR, safe_attachment_filename
 
             target_dir = UPLOADS_DIR / "zotero" / Path(db_path).stem
             target_dir.mkdir(parents=True, exist_ok=True)

@@ -12,10 +12,10 @@ from cyrene.agent import (
     get_session_labels,
     run_agent,
 )
-from cyrene.agent.state import _conversation_source
-from cyrene.conversations import archive_exchange
+from cyrene.agent.context import with_run_context
+from cyrene.runtime.memory.conversations import archive_exchange
 from cyrene.config import ASSISTANT_NAME, DB_PATH, OWNER_ID, TELEGRAM_BOT_TOKEN
-from cyrene.scheduler import reset_lottery, setup_scheduler
+from cyrene.runtime.scheduler import reset_lottery, setup_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,7 @@ async def _send_response(update: Update, bot, chat_id: int, response: str) -> No
         await update.message.reply_text(chunk)
 
 
+@with_run_context(conversation_source="telegram")
 async def _handle_message(update: Update, context) -> None:
     if not _is_owner(update) or not update.message or not update.message.text:
         return
@@ -80,8 +81,6 @@ async def _handle_message(update: Update, context) -> None:
     reset_lottery()
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-
-    _conversation_source.set("telegram")
 
     # If there is a pending question, route this message as the answer
     pending = get_pending_question()

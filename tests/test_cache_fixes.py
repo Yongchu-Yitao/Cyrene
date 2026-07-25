@@ -49,8 +49,8 @@ def test_normalized_usage_reads_provider_prompt_cache_fields():
 
 
 def test_workbench_new_session_memory_moves_to_volatile_tail(monkeypatch, tmp_path):
-    from cyrene import workbench_runtime as routes
-    from cyrene import workbench_memory_service as memory
+    from cyrene.workbench import runtime as routes
+    from cyrene.workbench import memory as memory
 
     monkeypatch.setattr(memory, "STORE_DIR", tmp_path)
     monkeypatch.setattr(memory, "_STORE_DB_PATH", "")
@@ -268,7 +268,8 @@ async def test_fixed_ephemeral_stays_before_user_across_tool_rounds():
 
 async def test_subagent_stable_system_prompt():
     """Subagent keeps messages[0] stable across rounds."""
-    from cyrene import subagent, inbox
+    from cyrene import subagent
+    from cyrene.runtime import inbox
     import cyrene.tooling as tools
 
     llm_inputs = []
@@ -337,7 +338,8 @@ async def test_subagent_stable_system_prompt():
 
 async def test_subagent_empty_quit_exits_without_feedback_retry():
     """Subagent no longer retries empty quit with validator feedback."""
-    from cyrene import subagent, inbox
+    from cyrene import subagent
+    from cyrene.runtime import inbox
     import cyrene.tooling as tools
 
     llm_inputs = []
@@ -389,7 +391,8 @@ async def test_subagent_empty_quit_exits_without_feedback_retry():
 
 async def test_subagent_resume_strips_old_context():
     """Resumed subagent strips old context messages from previous run."""
-    from cyrene import subagent, inbox
+    from cyrene import subagent
+    from cyrene.runtime import inbox
     import cyrene.tooling as tools
 
     old_messages = [

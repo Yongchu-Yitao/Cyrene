@@ -1,8 +1,8 @@
 import os
 from pathlib import Path
 
-from cyrene import app_paths
-from cyrene import config_store as _store
+from cyrene.runtime import paths as app_paths
+from cyrene.runtime import config_store as _store
 
 
 def _strip_wrapping_quotes(value: str | None) -> str:
@@ -10,6 +10,11 @@ def _strip_wrapping_quotes(value: str | None) -> str:
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
         return text[1:-1].strip()
     return text
+
+
+def strip_wrapping_quotes(value: str | None) -> str:
+    """Public normalization used by configuration consumers."""
+    return _strip_wrapping_quotes(value)
 
 
 SOURCE_ROOT = app_paths.INSTALL_RESOURCES_DIR
@@ -23,7 +28,7 @@ STORE_DIR = BASE_DIR / "store"              # 持久化存储，数据库文件
 DATA_DIR = BASE_DIR / "data"                # 运行时数据，状态文件、收件箱等
 CACHE_DIR = app_paths.CACHE_DIR             # 平台特定缓存目录
 TEMP_DIR = app_paths.TEMP_DIR               # 应用临时产物目录（启动时按 TTL 清理）
-DB_PATH = STORE_DIR / "cyrene.db"           # SQLite 数据库路径
+DB_PATH = STORE_DIR / "cyrene.runtime.database"           # SQLite 数据库路径
 STATE_FILE = DATA_DIR / "state.json"        # 运行时状态持久化
 LOTTERY_FILE = DATA_DIR / "lottery_state.json"  # 抽奖状态持久化
 INBOX_DIR = DATA_DIR / "inbox"              # 收件箱目录，存放外部消息
@@ -225,7 +230,7 @@ def get_knowledge_db_path(workspace_id: str = "default") -> Path:
 
 
 async def migrate_knowledge_to_workspace_db(workspace_id: str = "default") -> dict:
-    """One-time migration: copy knowledge tables from global cyrene.db to workspace-specific db.
+    """One-time migration: copy knowledge tables from the global runtime database to a workspace-specific db.
 
     Returns {"migrated": True/False, "documents": N, "reason": "..."}.
     No-op if the target db already exists or the source has no data.
@@ -255,7 +260,7 @@ async def migrate_knowledge_to_workspace_db(workspace_id: str = "default") -> di
             return {"migrated": False, "documents": 0, "reason": "source_empty"}
 
     # Initialize the new db with tables
-    from cyrene.db import init_knowledge_db
+    from cyrene.runtime.database import init_knowledge_db
     await init_knowledge_db(str(new_path))
 
     # Copy data via ATTACH

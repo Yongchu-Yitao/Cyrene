@@ -8,7 +8,7 @@ import pytest
 @pytest.mark.asyncio
 async def test_resolve_and_initialize_session_scoped_knowledge_db(tmp_path, monkeypatch):
     from cyrene import config
-    from cyrene import workbench_context
+    from cyrene.workbench import context as workbench_context
 
     projects_path = tmp_path / "workbench_projects.json"
     projects_path.write_text(
@@ -36,7 +36,8 @@ async def test_resolve_and_initialize_session_scoped_knowledge_db(tmp_path, monk
 
 @pytest.mark.asyncio
 async def test_archive_workbench_run_indexes_summary_and_file(tmp_path, monkeypatch):
-    from cyrene import attachments, config
+    from cyrene import config
+    from cyrene.runtime import attachments
     from cyrene.knowledge import store
     from cyrene.knowledge import workbench
 
@@ -123,7 +124,7 @@ async def test_extensionless_docx_text_is_detected_from_zip_structure(tmp_path):
 
 @pytest.mark.asyncio
 async def test_changed_document_is_marked_pending_for_reindex(tmp_path):
-    from cyrene import db
+    from cyrene.runtime import database as db
     from cyrene.knowledge import store
 
     db_path = str(tmp_path / "knowledge.db")
@@ -153,7 +154,7 @@ async def test_changed_document_is_marked_pending_for_reindex(tmp_path):
 
 @pytest.mark.asyncio
 async def test_list_documents_with_limit_zero_returns_all(tmp_path):
-    from cyrene import db
+    from cyrene.runtime import database as db
     from cyrene.knowledge import store
 
     db_path = str(tmp_path / "knowledge.db")
@@ -177,7 +178,7 @@ async def test_list_documents_with_limit_zero_returns_all(tmp_path):
 
 @pytest.mark.asyncio
 async def test_count_documents_matches_list_without_limit(tmp_path):
-    from cyrene import db
+    from cyrene.runtime import database as db
     from cyrene.knowledge import store
 
     db_path = str(tmp_path / "knowledge.db")
@@ -207,7 +208,8 @@ async def test_workbench_knowledge_list_returns_total(tmp_path, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from cyrene import config, db
+    from cyrene import config
+    from cyrene.runtime import database as db
     from cyrene.knowledge import store
     from route.workbench import knowledge as routes_workbench_knowledge
 
@@ -247,7 +249,7 @@ async def test_workbench_knowledge_supports_paged_list_and_light_detail(tmp_path
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from cyrene import db
+    from cyrene.runtime import database as db
     from cyrene.knowledge import store
     from route.workbench import knowledge as routes_workbench_knowledge
 
@@ -303,7 +305,7 @@ async def test_workbench_knowledge_shows_final_archives_by_default(tmp_path, mon
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from cyrene import db
+    from cyrene.runtime import database as db
     from cyrene.knowledge import store
     from route.workbench import knowledge as routes_workbench_knowledge
 
@@ -371,7 +373,7 @@ async def test_workbench_knowledge_search_includes_final_archives_by_default(tmp
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from cyrene import db
+    from cyrene.runtime import database as db
     from cyrene.knowledge import store
     from route.workbench import knowledge as routes_workbench_knowledge
 
@@ -423,10 +425,10 @@ async def test_workbench_knowledge_related_returns_tasks_chats_and_reverse_relat
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from cyrene import db
+    from cyrene.runtime import database as db
     from cyrene.knowledge import store
-    from cyrene import workbench_runtime as routes
-    from cyrene import workbench_chat_service as routes_workbench_chat
+    from cyrene.workbench import runtime as routes
+    from cyrene.workbench import chat as routes_workbench_chat
     from route.workbench import knowledge as routes_workbench_knowledge
 
     db_path = str(tmp_path / "knowledge.db")

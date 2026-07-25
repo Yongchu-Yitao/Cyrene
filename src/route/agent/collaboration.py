@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 
 
 def register_collaboration_routes(router: APIRouter, bot: Any, db_path: str) -> None:
@@ -23,8 +23,8 @@ def register_collaboration_routes(router: APIRouter, bot: Any, db_path: str) -> 
     @router.post("/api/chat/send-to-agents")
     async def api_send_to_agents(body: dict[str, Any]):
         from cyrene.subagent import _registry as _sub_reg
-        from cyrene.inbox import send_message as _send_inbox, clear_inbox as _clear_inbox
-        from cyrene import debug as _debug_comm
+        from cyrene.runtime.inbox import send_message as _send_inbox, clear_inbox as _clear_inbox
+        from cyrene.observability import debug as _debug_comm
 
         round_id = str(body.get("round_id", "") or "").strip()
         text = str(body.get("text", "") or "").strip()

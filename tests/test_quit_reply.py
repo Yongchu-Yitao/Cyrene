@@ -67,7 +67,7 @@ def test_assistant_text_empty_for_quit_so_reply_is_used():
     """The wiring assumption: a bare quit call (no content) makes _assistant_text
     return "", which is what triggers _ensure_text_reply to fall back to the quit
     reply instead of the model's (absent) prose."""
-    from cyrene.llm import _assistant_text
+    from cyrene.model_runtime.messages import _assistant_text
 
     assert _assistant_text(_quit_call(json.dumps({"reply": "x"}))) == ""
 
@@ -152,7 +152,7 @@ def test_terminal_reply_rejects_complete_and_partial_dsml_markup():
 async def test_streaming_wrapup_prompt_rejects_placeholder_after_delivery(monkeypatch):
     """The WebUI streaming quit path re-synthesizes the final answer; that call
     must carry the same no-placeholder rule as the normal final-answer path."""
-    from cyrene.agent import guidance
+    from cyrene.agent import guidance, replies
 
     seen = {}
 
@@ -161,7 +161,7 @@ async def test_streaming_wrapup_prompt_rejects_placeholder_after_delivery(monkey
         seen["tools"] = tools
         return {"content": "Done."}
 
-    monkeypatch.setattr(guidance, "_call_llm_stream", fake_call_llm_stream)
+    monkeypatch.setattr(replies, "_call_llm_stream", fake_call_llm_stream)
 
     tools = [{"type": "function", "function": {"name": "quit", "parameters": {"type": "object", "properties": {}}}}]
     response = await guidance._final_reply_with_tools(

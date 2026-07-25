@@ -21,8 +21,8 @@ sys.modules["PIL"] = pil_mock
 pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
-from cyrene import db
-from cyrene.workbench_runtime import _search_matches, _search_snippet, _search_workbench_items
+from cyrene.runtime import database as db
+from cyrene.workbench.runtime import _search_matches, _search_snippet, _search_workbench_items
 from route.registry import register_routes
 
 
@@ -67,9 +67,9 @@ def temp_db():
 def search_env(monkeypatch, tmp_path, temp_db):
     """Prepare isolated DATA_DIR / STORE_DIR / WORKSPACE_DIR for search tests."""
     from cyrene import config as cyrene_config
-    from cyrene import io_utils
-    from cyrene import workbench_chat_service as chat_service
-    from cyrene import workbench_runtime as routes_mod
+    from cyrene.runtime import io as io_utils
+    from cyrene.workbench import chat as chat_service
+    from cyrene.workbench import runtime as routes_mod
 
     data_dir = tmp_path / "data"
     store_dir = tmp_path / "store"
@@ -370,7 +370,7 @@ async def test_search_workbench_items_memory(search_env):
 
 @pytest.mark.asyncio
 async def test_search_workbench_items_hides_internal_task_reports(search_env):
-    from cyrene import io_utils
+    from cyrene.runtime import io as io_utils
 
     io_utils.atomic_write_json(
         search_env["store_dir"] / "wb_memory_project_1.json",
@@ -426,7 +426,7 @@ async def test_search_workbench_items_no_query():
 
 @pytest.mark.asyncio
 async def test_search_uses_lightweight_store_without_blocking_event_loop(monkeypatch):
-    from cyrene import workbench_runtime as routes_mod
+    from cyrene.workbench import runtime as routes_mod
 
     payload = {
         "projects": [{
@@ -690,7 +690,7 @@ def test_workspace_scope_block_uses_runtime_workspace(tmp_path):
 def test_workbench_chat_answer_resumes_in_project_workspace(
     client, search_env, monkeypatch,
 ):
-    from cyrene import workbench_runtime as routes_mod
+    from cyrene.workbench import runtime as routes_mod
 
     chats_path = search_env["data_dir"] / "workbench_chats.json"
     chats = json.loads(chats_path.read_text(encoding="utf-8"))

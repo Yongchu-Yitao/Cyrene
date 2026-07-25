@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
-    _request_external_delivery_confirmation,
-    _resolve_exportable_path,
+from cyrene.tooling.runtime_api import (
+    request_external_delivery_confirmation,
+    resolve_exportable_path,
     logger,
 )
 
@@ -25,14 +25,14 @@ async def _tool_send_wechat_file(args: dict[str, Any], bot: Any, chat_id: int, _
     if not path_arg:
         return "Error: 'path' is required."
 
-    from cyrene.agent.state import _current_agent_id, _current_round_id, _current_client_request_id
-    from cyrene.agent.message import _insert_intermediate_user_reply
+    from cyrene.agent.context import get_current_agent_id, get_current_round_id, get_current_client_request_id
+    from cyrene.agent.message import insert_intermediate_user_reply
     from cyrene.agent.session import append_system_message
 
-    if _current_agent_id.get() != "main":
+    if get_current_agent_id() != "main":
         return "Only the main agent can send files via WeChat."
 
-    path = _resolve_exportable_path(path_arg)
+    path = resolve_exportable_path(path_arg)
     if not path.exists() or not path.is_file():
         return f"Error: file not found: {path}"
 
@@ -45,7 +45,7 @@ async def _tool_send_wechat_file(args: dict[str, Any], bot: Any, chat_id: int, _
         if dedupe_key in sent_wechat_files:
             return f"Skipped duplicate WeChat file send: {name}"
 
-    confirm = await _request_external_delivery_confirmation(
+    confirm = await request_external_delivery_confirmation(
         tool_name="send_wechat_file",
         operation="外发 WeChat 文件",
         detail=f"文件：{path}\n名称：{name}\n附言：{text[:200]}",
@@ -73,10 +73,10 @@ async def _tool_send_wechat_file(args: dict[str, Any], bot: Any, chat_id: int, _
     if text:
         desc += f" — {text}"
     try:
-        round_id = str(_current_round_id.get() or "").strip()
+        round_id = str(get_current_round_id() or "").strip()
         if round_id:
-            client_request_id = str(_current_client_request_id.get() or "").strip()
-            await _insert_intermediate_user_reply(desc, round_id=round_id, client_request_id=client_request_id)
+            client_request_id = str(get_current_client_request_id() or "").strip()
+            await insert_intermediate_user_reply(desc, round_id=round_id, client_request_id=client_request_id)
         else:
             await append_system_message(desc, message_meta={})
     except Exception:

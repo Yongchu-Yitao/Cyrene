@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 from route import schemas as api_models
 from route.errors import error_response
 from route.workspace import WorkspacePathError, validate_workspace_path

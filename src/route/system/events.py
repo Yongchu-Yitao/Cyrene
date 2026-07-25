@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 
 
 def register_event_routes(router: APIRouter, bot: Any, db_path: str) -> None:
@@ -14,7 +14,7 @@ def register_event_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/events")
     async def api_events(request: Request, session_id: str = ""):
-        from cyrene.debug import subscribe
+        from cyrene.observability.debug import subscribe
 
         async def event_stream():
             async for event in subscribe(session_id=session_id):
@@ -35,7 +35,7 @@ def register_event_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.get("/api/events/list")
     async def api_events_list(session_id: str = ""):
         """List recent event IDs."""
-        from cyrene.debug import get_recent_events
+        from cyrene.observability.debug import get_recent_events
         events = get_recent_events(50)
         result = []
         for e in events:
@@ -48,7 +48,7 @@ def register_event_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/events/{event_id}")
     async def api_event_detail(event_id: str):
-        from cyrene.debug import get_full_event
+        from cyrene.observability.debug import get_full_event
         event = get_full_event(event_id)
         if event is None:
             return JSONResponse({"error": "event not found"}, status_code=404)

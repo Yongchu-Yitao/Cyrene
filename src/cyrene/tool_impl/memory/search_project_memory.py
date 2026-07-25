@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import _json_result
-from cyrene.workbench_context import resolve_workbench_project_id_for_session
+from cyrene.tooling.runtime_api import json_result
+from cyrene.workbench.context import resolve_workbench_project_id_for_session
 
 TOOL_NAME = "search_project_memory"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -20,11 +20,11 @@ async def _tool_search_project_memory(
     _notify_state: dict[str, bool] | None,
 ) -> str:
     """Search durable memory scoped to the current Workbench project."""
-    from cyrene.agent.state import _current_session_id
+    from cyrene.agent.context import get_current_session_id
 
     query = str(args.get("query", "") or "").strip()
     if not query:
-        return _json_result({
+        return json_result({
             "status": "error",
             "type": "invalid_arguments",
             "message": "query is required",
@@ -35,15 +35,15 @@ async def _tool_search_project_memory(
     limit = max(1, min(int(args.get("limit", 10) or 10), 20))
     include_stale = bool(args.get("include_stale", False))
 
-    project_id = resolve_workbench_project_id_for_session(_current_session_id.get())
+    project_id = resolve_workbench_project_id_for_session(get_current_session_id())
     if project_id is None:
-        return _json_result({
+        return json_result({
             "status": "error",
             "type": "not_found",
             "message": "Project memory is only available inside a Workbench project task/chat.",
         })
 
-    from cyrene.workbench_memory_service import configure_store, search_project_memories
+    from cyrene.workbench.memory import configure_store, search_project_memories
 
     configure_store(_db_path)
 
@@ -55,7 +55,7 @@ async def _tool_search_project_memory(
         limit=limit,
         include_stale=include_stale,
     )
-    return _json_result({
+    return json_result({
         "status": "success",
         "query": query,
         "category": category,

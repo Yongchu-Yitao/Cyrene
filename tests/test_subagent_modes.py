@@ -47,7 +47,7 @@ def _patch_runtime(monkeypatch, responses, *, tool_result="ok"):
 
 
 def _patch_limits(monkeypatch, **overrides):
-    from cyrene import settings_store
+    from cyrene.runtime import settings_store
 
     original_get = settings_store.get
 

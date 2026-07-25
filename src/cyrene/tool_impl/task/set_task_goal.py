@@ -26,7 +26,7 @@ async def _tool_set_task_goal(
     _notify_state: dict[str, bool] | None,
 ) -> str:
     """Set/correct the current Workbench task's goal, title, and/or summary."""
-    from cyrene.agent.state import _current_session_id
+    from cyrene.agent.context import get_current_session_id
 
     goal = str(args.get("goal", "") or "").strip()
     title = str(args.get("title", "") or "").strip()
@@ -36,13 +36,13 @@ async def _tool_set_task_goal(
     if goal and len(goal) < 3:
         return "Not set: 'goal' is too short."
 
-    session_id = str(_current_session_id.get() or "").strip()
+    session_id = str(get_current_session_id() or "").strip()
     if not session_id:
         return "Not set: set_task_goal is only available inside a Workbench task."
 
     # Lazy import: the store lives in the webui layer (loaded in the server
     # process); importing it at module load would invert package layering.
-    from cyrene.workbench_runtime import set_task_goal_for_session
+    from cyrene.workbench.runtime import set_task_goal_for_session
 
     result = set_task_goal_for_session(session_id, goal, title, summary)
     if not result.get("ok"):

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
+from cyrene.tooling.runtime_api import (
     db,
 )
 

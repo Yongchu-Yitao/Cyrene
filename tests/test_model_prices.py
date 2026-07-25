@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from cyrene import db
-from cyrene.model_prices import (
+from cyrene.runtime import database as db
+from cyrene.model_runtime.pricing import (
     effective_price,
     estimate_cost,
     lookup_price,
@@ -56,7 +56,7 @@ def test_price_hint_and_user_price_parsing():
 
 
 def test_explicit_user_price_overrides_built_in(monkeypatch):
-    monkeypatch.setattr("cyrene.model_prices.configured_user_price", lambda model: None)
+    monkeypatch.setattr("cyrene.model_runtime.pricing.configured_user_price", lambda model: None)
     assert effective_price("gpt-5.5", "9/10") == {
         "input": 9.0,
         "output": 10.0,
@@ -65,7 +65,7 @@ def test_explicit_user_price_overrides_built_in(monkeypatch):
 
 
 def test_unset_price_uses_catalog_for_known_model(monkeypatch):
-    monkeypatch.setattr("cyrene.model_prices.configured_user_price", lambda model: None)
+    monkeypatch.setattr("cyrene.model_runtime.pricing.configured_user_price", lambda model: None)
 
     assert effective_price("deepseek-v4-flash") == {
         "input": 1.0,
@@ -76,7 +76,7 @@ def test_unset_price_uses_catalog_for_known_model(monkeypatch):
 
 
 def test_unset_price_is_zero_for_unknown_model(monkeypatch):
-    monkeypatch.setattr("cyrene.model_prices.configured_user_price", lambda model: None)
+    monkeypatch.setattr("cyrene.model_runtime.pricing.configured_user_price", lambda model: None)
 
     assert effective_price("private-unknown-model") == {
         "input": 0.0,
@@ -86,7 +86,7 @@ def test_unset_price_is_zero_for_unknown_model(monkeypatch):
 
 
 def test_zero_price_renders_as_exact_zero(monkeypatch):
-    from cyrene import workbench_runtime as routes
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(
         routes,
@@ -133,7 +133,7 @@ def test_estimate_cost_uses_cache_hit_price():
 
 def test_db_estimate_cost_uses_saved_custom_price(monkeypatch):
     monkeypatch.setattr(
-        "cyrene.model_prices.configured_user_price",
+        "cyrene.model_runtime.pricing.configured_user_price",
         lambda model: {"input": 7.25, "output": 14.5, "currency": "CNY"},
     )
     assert db._estimate_cost("custom-model", 1_000_000, 1_000_000) == pytest.approx(21.75)
@@ -150,7 +150,7 @@ def test_to_usd_preserves_usd_and_converts_cny():
 
 
 def test_session_spend_prices_each_actual_fallback_model(monkeypatch):
-    from cyrene import workbench_runtime as routes
+    from cyrene.workbench import runtime as routes
 
     prices = {
         "primary": {"input": 1.0, "output": 2.0, "currency": "CNY"},

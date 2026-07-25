@@ -8,9 +8,13 @@ import time
 from contextvars import ContextVar
 from typing import Any
 
+from cyrene.agent.context import current_assistant_meta, current_run_context
 from cyrene.tooling.catalog import TOOL_HANDLERS
-from cyrene.secret_redaction import redact_text, redact_value
-from cyrene.task_lifecycle import drain_or_cancel, track_task
+from cyrene.tooling.execution_context import (
+    is_system_initiated_round as _is_system_initiated_round,
+)
+from cyrene.runtime.secret_redaction import redact_text, redact_value
+from cyrene.runtime.task_lifecycle import drain_or_cancel, track_task
 from cyrene.tooling.types import ToolExecutionContext
 
 # Set to True to suppress background action recording (used by RunLearnedSkill replay).
@@ -26,17 +30,51 @@ _pending_action_record_tasks: set[asyncio.Task[Any]] = set()
 _pending_timed_out_tool_tasks: set[asyncio.Task[Any]] = set()
 
 
+class ToolExecutionBinding:
+    """Reset handle for one tool-execution ContextVar assignment."""
+
+    def __init__(self, variable: ContextVar[Any], token: Any):
+        self._variable = variable
+        self._token = token
+
+    def reset(self) -> None:
+        if self._token is None:
+            return
+        token, self._token = self._token, None
+        self._variable.reset(token)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback) -> None:
+        self.reset()
+
+
+def bind_active_tool_call(tool_call_id: str) -> ToolExecutionBinding:
+    return ToolExecutionBinding(
+        _active_tool_call_id,
+        _active_tool_call_id.set(str(tool_call_id or "")),
+    )
+
+
+def suspend_action_recording() -> ToolExecutionBinding:
+    return ToolExecutionBinding(
+        _skip_action_recording,
+        _skip_action_recording.set(True),
+    )
+
+
 def _tool_call_event(name: str, arguments: dict[str, Any], result: Any) -> dict[str, Any]:
     """Build a completion event, preserving the originating tool-call id."""
-    from cyrene.agent.state import _caller_type, _current_round_id
+    run_context = current_run_context()
 
     event: dict[str, Any] = {
         "type": "tool_call",
-        "caller": _caller_type.get(),
+        "caller": run_context.caller,
         "tool": name,
         "args": redact_value(arguments),
         "result": redact_text(str(result)),
-        "round_id": _current_round_id.get(),
+        "round_id": run_context.round_id,
     }
     tool_call_id = _active_tool_call_id.get()
     if tool_call_id:
@@ -49,7 +87,7 @@ def _record_action_background(*args: Any, **kwargs: Any) -> None:
     if _skip_action_recording.get():
         return
     try:
-        from cyrene.pattern import record_action
+        from cyrene.learning import record_action
 
         task = asyncio.create_task(record_action(*args, **kwargs))
     except Exception:
@@ -157,16 +195,6 @@ async def _run_with_tool_timeout(
     return f"Tool failed: {name} timed out after {timeout:g} seconds."
 
 
-def _is_system_initiated_round() -> bool:
-    try:
-        from cyrene.agent.state import _ui_round_assistant_meta
-
-        meta = _ui_round_assistant_meta.get()
-        return isinstance(meta, dict) and bool(meta.get("system_initiated"))
-    except Exception:
-        return False
-
-
 def _proactive_tool_refusal(name: str, arguments: dict[str, Any]) -> str | None:
     """Hard-stop non-incremental filesystem tools during proactive rounds."""
     if not _is_system_initiated_round():
@@ -181,15 +209,15 @@ def _proactive_tool_refusal(name: str, arguments: dict[str, Any]) -> str | None:
         if not command:
             return None
         try:
-            from cyrene.tooling.runtime_support import (
-                _classify_destructive_shell_command,
-                _command_is_file_deletion,
-                _shell_command_requires_write_guard,
+            from cyrene.tooling.runtime_api import (
+                classify_destructive_shell_command,
+                command_is_file_deletion,
+                shell_command_requires_write_guard,
             )
 
-            writes = _shell_command_requires_write_guard(command)
-            destructive = _classify_destructive_shell_command(command) is not None
-            deletes = _command_is_file_deletion(command)
+            writes = shell_command_requires_write_guard(command)
+            destructive = classify_destructive_shell_command(command) is not None
+            deletes = command_is_file_deletion(command)
         except Exception:
             writes = any(token in command for token in (">", ">>"))
             destructive = False
@@ -208,46 +236,44 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
     if proactive_refusal is not None:
         return proactive_refusal
     if name == "ask_user":
-        from cyrene.agent.state import _ui_round_assistant_meta
-
-        assistant_meta = _ui_round_assistant_meta.get()
+        assistant_meta = current_assistant_meta()
         if isinstance(assistant_meta, dict) and assistant_meta.get("system_initiated"):
             return (
                 "Tool unavailable: proactive system-initiated rounds cannot ask "
                 "the user to clarify or pause for an answer."
             )
     if name == "spawn_subagent":
-        from cyrene.settings_store import get_spawn_policy
+        from cyrene.runtime.settings_store import get_spawn_policy
         if get_spawn_policy() == "off":
             return "Subagent spawning is disabled by the current spawn policy (`off`). Stay in single-agent mode unless the user explicitly changes this setting."
     if name in _BROWSER_TOOL_NAMES:
-        from cyrene.settings_store import is_tool_pack_enabled
+        from cyrene.runtime.settings_store import is_tool_pack_enabled
         if not is_tool_pack_enabled("browser_tools"):
             return "Browser automation tools are disabled in settings. Re-enable browser tools before using this action."
     handler = TOOL_HANDLERS.get(name)
     if handler is None:
-        from cyrene import debug as _debug
-        from cyrene.agent.state import _caller_type, _current_round_id, _current_session_id
-        from cyrene.mcp_manager import get_manager as _get_mcp_mgr
+        from cyrene.observability import debug as _debug
+        from cyrene.tooling.backends.mcp_manager import get_manager as _get_mcp_mgr
 
         _t0 = time.monotonic()
         try:
+            run_context = current_run_context()
             manager = _get_mcp_mgr()
             result = await _run_with_tool_timeout(
                 name, arguments, manager.execute_tool(name, arguments)
             )
             if _debug.VERBOSE:
-                _debug.log_tool_call(_caller_type.get(), name, redact_value(arguments), redact_text(result), (time.monotonic() - _t0) * 1000)
+                _debug.log_tool_call(run_context.caller, name, redact_value(arguments), redact_text(result), (time.monotonic() - _t0) * 1000)
             await _debug.publish_event(
                 _tool_call_event(name, arguments, result),
-                session_id=_current_session_id.get(),
+                session_id=run_context.session_id,
             )
             tool_success = not str(result).lower().startswith("tool failed:")
             _record_action_background(
                 name,
                 redact_value(arguments),
-                _caller_type.get(),
-                _current_round_id.get(),
+                run_context.caller,
+                run_context.round_id,
                 (time.monotonic() - _t0) * 1000,
                 result=redact_text(result),
                 success=tool_success,
@@ -257,11 +283,12 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
         except ValueError:
             raise ValueError(f"Unknown tool: {name}")
         except Exception as e:
+            run_context = current_run_context()
             _record_action_background(
                 name,
                 redact_value(arguments),
-                _caller_type.get(),
-                _current_round_id.get(),
+                run_context.caller,
+                run_context.round_id,
                 (time.monotonic() - _t0) * 1000,
                 result=redact_text(f"Tool {name} failed: {e}"),
                 success=False,
@@ -277,38 +304,37 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
             handler(arguments, bot, chat_id, db_path, notify_state),
         )
     except Exception as e:
-        from cyrene import debug
-        from cyrene.agent.state import _caller_type, _current_round_id, _current_session_id
+        from cyrene.observability import debug
+        run_context = current_run_context()
         await debug.publish_event(
             _tool_call_event(name, arguments, f"Tool failed: {e}"),
-            session_id=_current_session_id.get(),
+            session_id=run_context.session_id,
         )
         _record_action_background(
             name,
             redact_value(arguments),
-            _caller_type.get(),
-            _current_round_id.get(),
+            run_context.caller,
+            run_context.round_id,
             (time.monotonic() - _t0) * 1000,
             result=redact_text(f"Tool failed: {e}"),
             success=False,
             error=redact_text(str(e)),
         )
         raise
-    from cyrene import debug
+    from cyrene.observability import debug
+    run_context = current_run_context()
     if debug.VERBOSE:
-        from cyrene.agent.state import _caller_type
-        debug.log_tool_call(_caller_type.get(), name, redact_value(arguments), redact_text(result), (time.monotonic() - _t0) * 1000)
-    from cyrene.agent.state import _caller_type, _current_round_id, _current_session_id
+        debug.log_tool_call(run_context.caller, name, redact_value(arguments), redact_text(result), (time.monotonic() - _t0) * 1000)
     await debug.publish_event(
         _tool_call_event(name, arguments, result),
-        session_id=_current_session_id.get(),
+        session_id=run_context.session_id,
     )
     tool_success = not str(result).lower().startswith("tool failed:")
     _record_action_background(
         name,
         redact_value(arguments),
-        _caller_type.get(),
-        _current_round_id.get(),
+        run_context.caller,
+        run_context.round_id,
         (time.monotonic() - _t0) * 1000,
         result=redact_text(result),
         success=tool_success,
@@ -330,4 +356,23 @@ async def execute_concrete_tool(
         context.chat_id,
         context.db_path,
         context.notify_state,
+    )
+
+
+async def execute_tool(
+    name: str,
+    arguments: dict[str, Any],
+    bot: Any,
+    chat_id: int,
+    database_path: str,
+    notify_state: dict[str, bool] | None,
+) -> str:
+    """Public compatibility boundary for direct execution consumers."""
+    return await _execute_tool(
+        name,
+        arguments,
+        bot,
+        chat_id,
+        database_path,
+        notify_state,
     )

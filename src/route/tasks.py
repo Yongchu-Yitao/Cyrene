@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 
 
 def register_task_routes(router: APIRouter, bot: Any, db_path: str) -> None:
@@ -14,14 +14,14 @@ def register_task_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/tasks")
     async def api_list_tasks():
-        from cyrene import db as cy_db
+        from cyrene.runtime import database as cy_db
         tasks = await cy_db.get_all_tasks(_db_path)
         return {"tasks": tasks}
 
     @router.post("/api/tasks")
     async def api_create_task(request: Request):
-        from cyrene import db as cy_db
-        from cyrene.schedule_spec import compute_next_run
+        from cyrene.runtime import database as cy_db
+        from cyrene.runtime.schedule_spec import compute_next_run
         body = await request.json()
         stype = body["schedule_type"]
         svalue = body["schedule_value"]
@@ -52,8 +52,8 @@ def register_task_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.put("/api/tasks/{task_id}")
     async def api_update_task(task_id: str, request: Request):
-        from cyrene import db as cy_db
-        from cyrene.schedule_spec import compute_next_run
+        from cyrene.runtime import database as cy_db
+        from cyrene.runtime.schedule_spec import compute_next_run
         body = await request.json()
         # Build SET clause dynamically from provided fields
         sets = []
@@ -88,7 +88,7 @@ def register_task_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.delete("/api/tasks/{task_id}")
     async def api_delete_task(task_id: str):
-        from cyrene import db as cy_db
+        from cyrene.runtime import database as cy_db
         await cy_db.delete_task(_db_path, task_id)
         tasks = await cy_db.get_all_tasks(_db_path)
         return {"ok": True, "tasks": tasks}

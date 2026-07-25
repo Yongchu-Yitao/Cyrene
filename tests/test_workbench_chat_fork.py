@@ -18,18 +18,18 @@ sys.modules["PIL"] = pil_mock
 pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
-from cyrene import db
+from cyrene.runtime import database as db
 from route.registry import register_routes
 
 
 @pytest.fixture
 def fork_env(monkeypatch, tmp_path):
     """Prepare isolated DATA_DIR / STORE_DIR / WORKSPACE_DIR for fork tests."""
-    from cyrene import io_utils
-    from cyrene import workbench_chat_service as chat_service
-    from cyrene import workbench_runtime as routes_mod
+    from cyrene.runtime import io as io_utils
+    from cyrene.workbench import chat as chat_service
+    from cyrene.workbench import runtime as routes_mod
     from route.workbench import chat as chat_mod
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     data_dir = tmp_path / "data"
     store_dir = tmp_path / "store"
@@ -109,7 +109,7 @@ def client(fork_env):
 
 def _write_chat(fork_env, chat_id, messages, **extra):
     """Write a single chat into the workbench chats store."""
-    from cyrene import io_utils
+    from cyrene.runtime import io as io_utils
 
     chat = {
         "id": chat_id,
@@ -155,7 +155,7 @@ def test_create_chat_skips_full_project_repair(client, fork_env, monkeypatch):
 
 def _write_chats(fork_env, chats):
     """Write multiple chats into the workbench chats store."""
-    from cyrene import io_utils
+    from cyrene.runtime import io as io_utils
 
     io_utils.atomic_write_json(
         fork_env["data_dir"] / "workbench_chats.json",
@@ -165,7 +165,7 @@ def _write_chats(fork_env, chats):
 
 def _write_state(fork_env, session_id, messages):
     """Write a raw agent state file for a session."""
-    from cyrene import io_utils
+    from cyrene.runtime import io as io_utils
 
     state_dir = fork_env["data_dir"] / "sessions" / session_id
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -333,7 +333,7 @@ def test_fork_replay_send_does_not_retruncate_state(client, fork_env, monkeypatc
             {"role": "user", "content": str(kwargs.get("user_message") or "")},
             {"role": "assistant", "content": "new reply"},
         ])
-        from cyrene import io_utils
+        from cyrene.runtime import io as io_utils
         io_utils.atomic_write_json(state_path, state)
         return "new reply"
 
@@ -414,7 +414,7 @@ def test_successful_retry_replaces_old_reply_only_after_new_reply_is_ready(
             {"role": "user", "content": kwargs["user_message"]},
             {"role": "assistant", "content": "new answer"},
         ])
-        from cyrene import io_utils
+        from cyrene.runtime import io as io_utils
         io_utils.atomic_write_json(state_path, state)
         return "new answer"
 
@@ -503,7 +503,7 @@ def test_existing_run_rejects_new_send_and_has_explicit_reconnect_endpoint(
 async def test_chat_run_continues_after_stream_subscriber_disconnects():
     """Dropping the HTTP subscriber must not cancel the owned agent task."""
     import asyncio
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     release = asyncio.Event()
     manager = ChatRunManager(retention_seconds=0)

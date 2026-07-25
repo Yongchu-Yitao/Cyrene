@@ -5,7 +5,7 @@ import threading
 
 
 async def test_backup_export_runs_blocking_work_off_event_loop(monkeypatch, tmp_path):
-    from cyrene import backup
+    from cyrene.runtime import backup
 
     event_loop_thread = threading.get_ident()
     worker_threads: list[int] = []
@@ -24,7 +24,7 @@ async def test_backup_export_runs_blocking_work_off_event_loop(monkeypatch, tmp_
 async def test_session_shutdown_awaits_owned_task_finalizers():
     from cyrene.agent import state
     from cyrene.agent.session import shutdown_session_tasks
-    from cyrene.task_lifecycle import track_task
+    from cyrene.runtime.task_lifecycle import track_task
 
     ctx = state._ensure_session("lifecycle-test")
     started = asyncio.Event()
@@ -50,7 +50,7 @@ async def test_session_shutdown_awaits_owned_task_finalizers():
 
 
 def test_workbench_schema_cache_reinitializes_deleted_database(monkeypatch, tmp_path):
-    from cyrene import workbench_store
+    from cyrene.workbench import store as workbench_store
 
     db_path = tmp_path / "workbench.db"
     cache_key = str(db_path.resolve())
@@ -79,7 +79,7 @@ def test_workbench_schema_cache_reinitializes_deleted_database(monkeypatch, tmp_
 
 
 def test_lightweight_project_lookup_skips_workspace_repairs(monkeypatch, tmp_path):
-    from cyrene import workbench_runtime as routes
+    from cyrene.workbench import runtime as routes
 
     store_path = tmp_path / "workbench_projects.json"
     store_path.write_text(
@@ -105,7 +105,7 @@ def test_lightweight_project_lookup_skips_workspace_repairs(monkeypatch, tmp_pat
 
 
 def test_lightweight_project_store_read_skips_workspace_repairs(monkeypatch, tmp_path):
-    from cyrene import workbench_runtime as routes
+    from cyrene.workbench import runtime as routes
 
     payload = {
         "projects": [
@@ -133,7 +133,7 @@ def test_lightweight_project_store_read_skips_workspace_repairs(monkeypatch, tmp
 def test_web_app_uses_single_lifespan_manager(tmp_path):
     from webui.server import WebBot, create_app
 
-    app = create_app(WebBot(), str(tmp_path / "cyrene.db"))
+    app = create_app(WebBot(), str(tmp_path / "cyrene.runtime.database"))
 
     assert app.router.on_startup == []
     assert app.router.on_shutdown == []

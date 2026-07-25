@@ -8,7 +8,7 @@ async def _run_git(args: list[str], timeout: float = 30.0) -> dict:
     """Run a git command and return {stdout, stderr, returncode}."""
     # Follow the active Workbench project's workspace (per-round ContextVar),
     # falling back to the global WORKSPACE_DIR outside a project — same as Bash.
-    from cyrene.agent.state import active_workspace_dir
+    from cyrene.agent.context import active_workspace_dir
     try:
         proc = await asyncio.create_subprocess_exec(
             "git", *args,
@@ -122,13 +122,13 @@ async def _tool_git_commit(args: dict, bot=None, chat_id=None, db_path=None, not
     if not message:
         return json.dumps({"error": "Commit message is required"}, ensure_ascii=False)
 
-    from cyrene.tooling.runtime_support import _request_scope_elevation
-    from cyrene.agent.state import _temporary_full_access
+    from cyrene.tooling.runtime_api import request_scope_elevation
+    from cyrene.agent.context import has_temporary_full_access
 
     # Ask user for confirmation (skip if already granted this round)
-    if not _temporary_full_access.get():
+    if not has_temporary_full_access():
         files_hint = ", ".join(files) if files else "all changes"
-        elevation_result = await _request_scope_elevation(
+        elevation_result = await request_scope_elevation(
             tool_name="GitCommit",
             path_hint=files_hint,
             operation=f"commit: {message}",

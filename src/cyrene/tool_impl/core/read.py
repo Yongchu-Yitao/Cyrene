@@ -6,10 +6,10 @@ import asyncio
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
-    _request_read_elevation,
-    _resolve_tool_path,
-    _truncate,
+from cyrene.tooling.runtime_api import (
+    request_read_elevation,
+    resolve_tool_path,
+    truncate,
 )
 
 TOOL_NAME = 'Read'
@@ -17,13 +17,13 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_read(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.settings_store import is_workspace_active
+    from cyrene.runtime.settings_store import is_workspace_active
     if not is_workspace_active():
         return "Workspace access is disabled. Ask the user to add workspace via '+ add context' in the chat input, or set a workspace directory in Settings."
     try:
-        path = _resolve_tool_path(str(args["path"]))
+        path = resolve_tool_path(str(args["path"]))
     except ValueError:
-        elev = await _request_read_elevation(
+        elev = await request_read_elevation(
             tool_name="Read",
             path_hint=str(args.get("path", "")),
             reason="Agent 想要读取此文件。",
@@ -31,8 +31,8 @@ async def _tool_read(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
         if elev is not None:
             return elev
         # 已放行（完全访问 / 审核 agent 批准）：full-access 已置位，重新解析即成功
-        path = _resolve_tool_path(str(args["path"]))
-    return _truncate(await asyncio.to_thread(path.read_text, encoding="utf-8"))
+        path = resolve_tool_path(str(args["path"]))
+    return truncate(await asyncio.to_thread(path.read_text, encoding="utf-8"))
 
 
 handler = _tool_read

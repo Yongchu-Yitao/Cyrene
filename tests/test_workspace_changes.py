@@ -4,7 +4,7 @@ import asyncio
 
 
 def test_workspace_snapshot_records_created_modified_deleted_and_binary(tmp_path):
-    from cyrene.workspace_changes import (
+    from cyrene.workbench.workspace_changes import (
         capture_workspace_snapshot,
         compare_workspace_snapshots,
     )
@@ -40,7 +40,7 @@ def test_workspace_snapshot_records_created_modified_deleted_and_binary(tmp_path
 
 
 def test_workspace_snapshot_ignores_git_and_detects_dotfiles(tmp_path):
-    from cyrene.workspace_changes import (
+    from cyrene.workbench.workspace_changes import (
         capture_workspace_snapshot,
         compare_workspace_snapshots,
     )
@@ -59,7 +59,7 @@ def test_workspace_snapshot_ignores_git_and_detects_dotfiles(tmp_path):
 
 
 def test_workspace_diff_keeps_rows_separate_without_final_newline(tmp_path):
-    from cyrene.workspace_changes import (
+    from cyrene.workbench.workspace_changes import (
         capture_workspace_snapshot,
         compare_workspace_snapshots,
     )
@@ -75,7 +75,7 @@ def test_workspace_diff_keeps_rows_separate_without_final_newline(tmp_path):
 
 
 def test_incremental_workspace_snapshot_reuses_unchanged_file_state(tmp_path):
-    from cyrene.workspace_changes import capture_workspace_snapshot
+    from cyrene.workbench.workspace_changes import capture_workspace_snapshot
 
     unchanged = tmp_path / "unchanged.txt"
     changed = tmp_path / "changed.txt"
@@ -92,13 +92,13 @@ def test_incremental_workspace_snapshot_reuses_unchanged_file_state(tmp_path):
 
 
 def test_change_store_keeps_diff_private_until_file_fetch(tmp_path):
-    from cyrene.workspace_changes import (
+    from cyrene.workbench.workspace_changes import (
         get_chat_file_change,
         list_chat_change_sets,
         save_change_set,
     )
 
-    db_path = str(tmp_path / "cyrene.db")
+    db_path = str(tmp_path / "cyrene.runtime.database")
     change_set = {
         "id": "run_1",
         "chatId": "chat_1",
@@ -126,7 +126,7 @@ def test_change_store_keeps_diff_private_until_file_fetch(tmp_path):
 
 
 def test_workspace_change_baselines_allow_overlapping_runs_in_same_workspace(tmp_path):
-    from cyrene import workbench_chat_service as chat_routes
+    from cyrene.workbench import chat as chat_routes
 
     async def exercise_overlap():
         first = await chat_routes._capture_workspace_changes_baseline(
@@ -160,7 +160,7 @@ def test_workspace_change_baselines_allow_overlapping_runs_in_same_workspace(tmp
 
 
 def test_overlapping_change_set_reports_nonexclusive_attribution(tmp_path):
-    from cyrene.workspace_changes import build_change_set, capture_workspace_snapshot
+    from cyrene.workbench.workspace_changes import build_change_set, capture_workspace_snapshot
 
     before = capture_workspace_snapshot(tmp_path)
     (tmp_path / "shared.txt").write_text("changed\n", encoding="utf-8")

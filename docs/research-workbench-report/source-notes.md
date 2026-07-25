@@ -19,7 +19,7 @@
 
 ## Evidence inventory
 
-- Repository: `README.md`, `docs/architecture.md`, `src/cyrene/db.py`, `src/cyrene/report_export.py`, `src/cyrene/knowledge/`, `src/route/workbench/knowledge.py`, `src/workbench-webui/workbench.jsx`, and `src/workbench-webui/workbench-model.jsx`.
+- Repository: `README.md`, `docs/architecture.md`, `src/cyrene/runtime/database.py`, `src/cyrene/workbench/report_export.py`, `src/cyrene/knowledge/`, `src/route/workbench/knowledge.py`, `src/workbench-webui/workbench.jsx`, and `src/workbench-webui/workbench-model.jsx`.
 - Official external documentation: Zotero Web API v3, Crossref REST API, OpenAlex API, Semantic Scholar Academic Graph API, Jupyter Server REST API, uv project locking, MLflow Tracking, Quarto Manuscripts, Pandoc citeproc, and Typst bibliography.
 
 ## Omission and QA notes

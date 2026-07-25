@@ -1,7 +1,7 @@
 """Entity-related API endpoints for the Web UI."""
 
 from fastapi import APIRouter
-from cyrene.entities import (
+from cyrene.tool_impl.entity.store import (
     create_entity,
     update_entity,
     delete_entity,

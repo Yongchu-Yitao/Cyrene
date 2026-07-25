@@ -55,11 +55,11 @@ async def _tool_list_library_items(
     _notify_state: dict[str, bool] | None,
 ) -> str:
     try:
-        from cyrene.agent.state import _current_session_id
+        from cyrene.agent.context import get_current_session_id
         from cyrene.knowledge import library
-        from cyrene.workbench_context import ensure_knowledge_db_for_session
+        from cyrene.workbench.context import ensure_knowledge_db_for_session
 
-        db_path = await ensure_knowledge_db_for_session(_current_session_id.get())
+        db_path = await ensure_knowledge_db_for_session(get_current_session_id())
         limit = max(1, min(int(args.get("limit") or 50), 200))
         items, total = await library.list_items(
             db_path,

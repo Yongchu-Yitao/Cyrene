@@ -10,8 +10,8 @@ window. These tests pin two invariants:
    and compaction state derived from that raw state.
 """
 
-from cyrene import config_store
-from cyrene import workbench_chat_service as rwc
+from cyrene.runtime import config_store
+from cyrene.workbench import chat as rwc
 from cyrene.call_llm import _message_token_estimate
 
 

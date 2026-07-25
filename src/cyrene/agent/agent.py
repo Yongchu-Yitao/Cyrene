@@ -11,12 +11,12 @@ import logging
 from typing import Any
 from uuid import uuid4
 
-from cyrene.agent.guidance import (
+from cyrene.agent.replies import (
     _contains_visible_dsml_tool_markup,
     _delivery_fallback_text,
+    _final_plain_reply_from_history,
     _final_reply_from_history,
     _final_reply_with_tools,
-    _final_plain_reply_from_history,
     _final_user_reply_from_history,
     _is_placeholder_reply,
     _strip_visible_dsml_tool_blocks,
@@ -36,6 +36,7 @@ from cyrene.agent.prompts import (
     _PHASE1_DECISION_PROMPT,
     prompt_for_enabled_tool_packs,
 )
+from cyrene.agent.model_service import take_final_reply_usage
 from cyrene.agent.session import _append_session_message, _save_session_messages
 from cyrene.agent.state import (
     _AWAITING_USER_SENTINEL,
@@ -50,7 +51,6 @@ from cyrene.agent.state import (
     _economy_mode,
     _emit_reply_stream_event,
     _ensure_session,
-    _last_final_reply_usage,
     _LIGHT_TOOL_DEFS,
     _get_max_tool_rounds,
     _llm_phase_override,
@@ -59,16 +59,16 @@ from cyrene.agent.state import (
     _ui_round_assistant_meta,
     _ui_round_hide_initial_detail,
 )
-from cyrene.llm import _assistant_text, _truncate
-from cyrene.context_trace import attach_context, context_block
-from cyrene.secret_redaction import redact_value
+from cyrene.model_runtime.messages import assistant_text, truncate
+from cyrene.observability.context_trace import attach_context, context_block
+from cyrene.runtime.secret_redaction import redact_value
 from cyrene.tooling import (
     execute_wire_tool,
     get_main_wire_tool_defs,
     get_wire_tool_execution_metadata,
     resolve_wire_call,
 )
-from cyrene.workbench_inbox import current_workbench_inbox
+from cyrene.workbench.inbox import current_workbench_inbox
 
 logger = logging.getLogger(__name__)
 
@@ -156,9 +156,9 @@ async def _execute_tool_for_call(
     db_path: str,
 ) -> str:
     """Execute a tool while tagging its eventual completion with its call id."""
-    from cyrene.tooling.executor import _active_tool_call_id
+    from cyrene.tooling.executor import bind_active_tool_call
 
-    token = _active_tool_call_id.set(str(tool_call_id))
+    binding = bind_active_tool_call(str(tool_call_id))
     try:
         result = await _execute_tool(
             tool_name, arguments, bot, chat_id, db_path, None
@@ -188,7 +188,7 @@ async def _execute_tool_for_call(
         )
         return result
     finally:
-        _active_tool_call_id.reset(token)
+        binding.reset()
 
 
 def _inbox_tool_metadata(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -229,10 +229,9 @@ def _without_tool(tool_defs: list[dict[str, Any]], tool_name: str) -> list[dict[
 
 def _attach_final_usage(entry: dict[str, Any]) -> dict[str, Any]:
     """Carry the final-reply call's token usage onto the persisted entry."""
-    usage = _last_final_reply_usage.get()
+    usage = take_final_reply_usage()
     if usage:
         entry["usage"] = dict(usage)
-        _last_final_reply_usage.set(None)
     return entry
 
 
@@ -323,7 +322,7 @@ def _safe_terminal_reply_from_response(
     """
     has_tool_results = _history_has_tool_results(base_messages)
     candidates = (
-        _assistant_text(response_obj).strip(),
+        assistant_text(response_obj).strip(),
         _quit_reply_from_response(response_obj),
     )
     for candidate in candidates:
@@ -502,7 +501,7 @@ async def _run_main_agent_impl(
         msgs.append(attach_context(entry, context_block(
             f"runtime.guidance.{entry['message_id']}",
             "user",
-            source="cyrene.workbench_inbox",
+            source="cyrene.workbench.inbox",
             reason="user guidance delivered while the Workbench chat run was active",
             content=content,
         )))
@@ -744,7 +743,7 @@ async def _run_main_agent_impl(
             *phase1_messages,
             {
                 **_assistant_entry_from_response(response, round_id="", include_tool_calls=False),
-                "content": _assistant_text(response) or (response.get("content") or ""),
+                "content": assistant_text(response) or (response.get("content") or ""),
             },
             {
                 "role": "user",
@@ -793,7 +792,7 @@ async def _run_main_agent_impl(
             )
         except Exception as exc:
             result = f"Tool failed: {exc}"
-        truncated_result = _truncate(result)
+        truncated_result = truncate(result)
         tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": ask_user_call["id"], "content": truncated_result}
         tool_entry = attach_context(tool_entry, context_block(
             f"tool.result.ask_user.{ask_user_call['id']}",
@@ -1084,7 +1083,7 @@ async def _run_main_agent_impl(
                             guidance_supersedes_batch = runtime_inbox.has_guidance_nowait()
                 except Exception as e:
                     result = f"Tool failed: {e}"
-                truncated_result = _truncate(result)
+                truncated_result = truncate(result)
                 tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": t["id"], "content": truncated_result}
                 tool_entry = attach_context(tool_entry, context_block(
                     f"tool.result.{tool_name}.{t['id']}",
@@ -1136,7 +1135,7 @@ async def _run_main_agent_impl(
                     "detail_key": "phase.subagentMonitoring",
                 })
                 from cyrene.subagent import (
-                    _run_subagent, _spawn_subagent_task,
+                    run_subagent, spawn_subagent_task,
                     build_deep_research_source as _build_deep_research_source,
                     build_flow_snapshot as _build_subagent_flow_snapshot,
                     cancel_subagent_tasks as _cancel_subagent_tasks,
@@ -1145,7 +1144,7 @@ async def _run_main_agent_impl(
                     run_summary_subagent as _run_summary_subagent,
                     timeout_subagents as _timeout_subagents,
                 )
-                from cyrene.inbox import get_unread_count as _inbox_unread_base
+                from cyrene.runtime.inbox import get_unread_count as _inbox_unread_base
                 _agent_session_id = _current_session_id.get()
 
                 def _inbox_unread(agent_id: str) -> int:
@@ -1154,7 +1153,7 @@ async def _run_main_agent_impl(
                         session_id=_agent_session_id,
                     )
 
-                from cyrene.modules.deep_research import (
+                from cyrene.agent.research import (
                     deduplicate_references as _deduplicate_references,
                     deep_research_pdf_attachment as _deep_research_pdf_attachment,
                     expansion_pass as _expansion_pass,
@@ -1171,7 +1170,7 @@ async def _run_main_agent_impl(
                 interrupted = False
                 monitoring_expired = False
                 quiet_ticks = 0
-                from cyrene.settings_store import get as _get_runtime_setting
+                from cyrene.runtime.settings_store import get as _get_runtime_setting
                 monitor_timeout_seconds = max(
                     int(_get_runtime_setting("subagent_execution_max_wall_seconds", 1800) or 1800),
                     int(_get_runtime_setting("subagent_discussion_max_wall_seconds", 600) or 600),
@@ -1193,8 +1192,8 @@ async def _run_main_agent_impl(
                         if info["status"] in ("done", "timeout", "incomplete") and _inbox_unread(aid) > 0:
                             if await _sub_reactivate(aid):
                                 raw = await _sub_raw_msgs(aid)
-                                _spawn_subagent_task(
-                                    _run_subagent(aid, info["task"], bot, chat_id, db_path, resume_messages=raw),
+                                spawn_subagent_task(
+                                    run_subagent(aid, info["task"], bot, chat_id, db_path, resume_messages=raw),
                                     aid,
                                 )
                                 resurrected = True
@@ -1331,7 +1330,7 @@ async def _run_main_agent_impl(
             *phase1_messages,
             {
                 **_assistant_entry_from_response(response, round_id="", include_tool_calls=False),
-                "content": _assistant_text(response) or (response.get("content") or ""),
+                "content": assistant_text(response) or (response.get("content") or ""),
             },
             {
                 "role": "user",
@@ -1358,7 +1357,7 @@ async def _run_main_agent_impl(
                 )
             except Exception as exc:
                 result = f"Tool failed: {exc}"
-            truncated_result = _truncate(result)
+            truncated_result = truncate(result)
             tool_entry: dict[str, Any] = {"role": "tool", "tool_call_id": ask_user_call["id"], "content": truncated_result}
             tool_entry = attach_context(tool_entry, context_block(
                 f"tool.result.ask_user.{ask_user_call['id']}",

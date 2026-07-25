@@ -6,9 +6,9 @@ import uuid
 
 def _state_get(state: dict, key: str, default=None):
     """Access a key in the session state dict with lazy imports."""
-    from cyrene.agent.session import _load_session_state
+    from cyrene.agent.session import load_session_state
 
-    state = _load_session_state()
+    state = load_session_state()
     val = state.get(key, default or [])
     return state, val
 
@@ -89,15 +89,15 @@ async def _tool_pin_location(
     db_path=None,
     notify_state: dict | None = None,
 ) -> str:
-    from cyrene.agent.session import _load_session_state, _write_session_state
-    from cyrene import debug
+    from cyrene.agent.session import load_session_state, write_session_state
+    from cyrene.observability import debug
 
     lat = float(args["lat"])
     lng = float(args["lng"])
     name = str(args.get("name", ""))
     note = str(args.get("note", ""))
 
-    state = _load_session_state()
+    state = load_session_state()
     pins: list[dict] = state.get("map_pins", [])
     routes: list[dict] = state.get("map_routes", [])
 
@@ -112,7 +112,7 @@ async def _tool_pin_location(
 
     pins.append(pin)
     state["map_pins"] = pins
-    _write_session_state(state)
+    write_session_state(state)
 
     await debug.publish_event({
         "type": "map_pin",
@@ -138,15 +138,15 @@ async def _tool_connect_pins(
     db_path=None,
     notify_state: dict | None = None,
 ) -> str:
-    from cyrene.agent.session import _load_session_state, _write_session_state
-    from cyrene import debug
+    from cyrene.agent.session import load_session_state, write_session_state
+    from cyrene.observability import debug
 
     from_name = str(args["from_name"])
     to_name = str(args["to_name"])
     transport = str(args.get("transport", ""))
     route_note = str(args.get("route_note", ""))
 
-    state = _load_session_state()
+    state = load_session_state()
     pins: list[dict] = state.get("map_pins", [])
     routes: list[dict] = state.get("map_routes", [])
 
@@ -166,7 +166,7 @@ async def _tool_connect_pins(
     }
     routes.append(route)
     state["map_routes"] = routes
-    _write_session_state(state)
+    write_session_state(state)
 
     await debug.publish_event({
         "type": "map_pin",

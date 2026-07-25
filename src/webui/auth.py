@@ -32,7 +32,7 @@ TOKEN_HEADER = b"x-cyrene-token"
 
 # Paths exempt from token auth so health probes keep working without the token.
 # ``/api/instance-id`` is used by the CLI/browser-fallback health check
-# (see ``cyrene.local_cli._fallback_to_browser``).
+# (see ``cyrene.runtime.host._fallback_to_browser``).
 _EXEMPT_PATHS = frozenset({"/api/instance-id"})
 
 # Hostnames considered local (port suffix is validated separately).

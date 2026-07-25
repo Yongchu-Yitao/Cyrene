@@ -8,7 +8,7 @@ def _write_chats(path, chats):
 
 
 def test_latest_workbench_user_activity_uses_user_timestamp(monkeypatch, tmp_path):
-    from cyrene import scheduler
+    from cyrene.runtime import scheduler
 
     chats_path = tmp_path / "workbench_chats.json"
     _write_chats(chats_path, [
@@ -50,7 +50,7 @@ def test_latest_workbench_user_activity_uses_user_timestamp(monkeypatch, tmp_pat
 
 
 def test_silence_detection_includes_workbench_user_activity(monkeypatch, tmp_path):
-    from cyrene import scheduler
+    from cyrene.runtime import scheduler
 
     _write_chats(tmp_path / "workbench_chats.json", [
         {
@@ -72,8 +72,8 @@ def test_silence_detection_includes_workbench_user_activity(monkeypatch, tmp_pat
 
 
 def test_mark_user_activity_resets_lottery(monkeypatch):
-    from cyrene import scheduler
-    from cyrene import workbench_chat_service as routes_workbench_chat
+    from cyrene.runtime import scheduler
+    from cyrene.workbench import chat as routes_workbench_chat
 
     reset = MagicMock()
     monkeypatch.setattr(scheduler, "reset_lottery", reset)
@@ -91,7 +91,7 @@ def test_mark_user_activity_resets_lottery(monkeypatch):
 async def test_proactive_skips_when_latest_workbench_chat_is_running(
     monkeypatch, tmp_path
 ):
-    from cyrene import scheduler
+    from cyrene.runtime import scheduler
 
     _write_chats(tmp_path / "workbench_chats.json", [
         {
@@ -123,8 +123,9 @@ async def test_proactive_skips_when_latest_workbench_chat_is_running(
 async def test_proactive_is_persisted_to_latest_workbench_chat(
     monkeypatch, tmp_path
 ):
-    from cyrene import debug, scheduler
-    from cyrene import workbench_chat_service as routes_workbench_chat
+    from cyrene.observability import debug
+    from cyrene.runtime import scheduler
+    from cyrene.workbench import chat as routes_workbench_chat
 
     chats_path = tmp_path / "workbench_chats.json"
     workspace = tmp_path / "workspace"
@@ -179,7 +180,7 @@ async def test_proactive_is_persisted_to_latest_workbench_chat(
         await on_reply("How did the launch go?")
         return "How did the launch go?"
 
-    import cyrene.settings_store as settings_store
+    import cyrene.runtime.settings_store as settings_store
     monkeypatch.setattr(
         settings_store, "get",
         lambda key, default=None: "zh" if key == "app_language" else default,
@@ -275,7 +276,7 @@ async def test_proactive_lang_is_pinned_in_ephemeral_system(monkeypatch):
 async def test_proactive_write_allows_only_new_files(monkeypatch, tmp_path):
     from cyrene.agent import state
     from cyrene.tool_impl.core.write import _tool_write
-    import cyrene.settings_store as settings_store
+    import cyrene.runtime.settings_store as settings_store
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()

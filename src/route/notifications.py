@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 
 
 def register_notification_routes(router: APIRouter, bot: Any, db_path: str) -> None:
@@ -14,7 +14,7 @@ def register_notification_routes(router: APIRouter, bot: Any, db_path: str) -> N
 
     @router.post("/api/notifications/send")
     async def api_notifications_send(request: Request):
-        from cyrene.notifications import notify
+        from cyrene.runtime.notifications import notify
         body = await request.json()
         title = str(body.get("title") or "Cyrene").strip()
         text = str(body.get("text") or "").strip()

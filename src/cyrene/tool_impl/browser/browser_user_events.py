@@ -46,7 +46,7 @@ _OUTPUT_TEXTS: dict[str, dict[str, str]] = {
 def _t(key: str) -> str:
     """Return translated output string for the current language."""
     try:
-        from cyrene.config_store import get_setting
+        from cyrene.runtime.config_store import get_setting
         lang = str(get_setting("app_language", "") or "").strip().lower()
         lang = lang if lang in ("en", "zh") else "en"
     except Exception:
@@ -93,17 +93,17 @@ async def _tool_browser_user_events(
     _db_path: str,
     _notify_state: dict[str, bool] | None,
 ) -> str:
-    from cyrene import behavior_learning
-    from cyrene.agent.state import _current_round_id, _current_session_id
+    from cyrene.learning import engine as behavior_learning
+    from cyrene.agent.context import get_current_round_id, get_current_session_id
 
     try:
         limit = int(args.get("limit") or 20)
     except (TypeError, ValueError):
         limit = 20
-    session_id = str(_current_session_id.get() or "").strip()
+    session_id = str(get_current_session_id() or "").strip()
     round_id = str(args.get("round_id") or "").strip()
     if round_id == "current":
-        round_id = str(_current_round_id.get() or "").strip()
+        round_id = str(get_current_round_id() or "").strip()
     events = await behavior_learning.list_recent_browser_user_events(
         session_id=session_id,
         round_id=round_id,

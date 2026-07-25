@@ -25,7 +25,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
-from cyrene import debug
+from cyrene.observability import debug
 from cyrene.config import DATA_DIR
 
 logger = logging.getLogger(__name__)
@@ -51,8 +51,8 @@ _SUMMARY_AGENT_PREFIX = "agent_summary_"
 
 def _is_deep_research() -> bool:
     try:
-        from cyrene.agent.state import _deep_research_mode
-        return _deep_research_mode.get()
+        from cyrene.agent.context import deep_research_enabled
+        return deep_research_enabled()
     except Exception:
         return False
 
@@ -180,7 +180,7 @@ async def register(
     *role* 可选，目前支持 "moderator"（主持人）/ "participant"（参与者），
     用于多 agent 讨论时区分谁负责开场、谁负责等待发言。
     """
-    from cyrene.inbox import clear_inbox
+    from cyrene.runtime.inbox import clear_inbox
 
     async with _lock:
         existing = _registry.get(agent_id)
@@ -960,6 +960,31 @@ async def get_snapshot(round_id: str = "", session_id: str = "") -> dict:
         return snapshot
 
 
+def registry_snapshot(
+    *,
+    round_id: str = "",
+    session_id: str = "",
+) -> dict[str, dict[str, Any]]:
+    """Return a shallow, read-only-style copy for synchronous UI projections."""
+    return {
+        agent_id: dict(info)
+        for agent_id, info in _registry.items()
+        if _matches_round(info, round_id, session_id)
+    }
+
+
+def active_subagent_task_ids() -> set[str]:
+    return {
+        agent_id
+        for agent_id, task in _subagent_tasks.items()
+        if task is not None and not task.done()
+    }
+
+
+def direct_message_mode_enabled() -> bool:
+    return bool(_direct_message_mode.get())
+
+
 def _flow_message_copy(message: dict[str, Any]) -> dict[str, Any]:
     """Return a compact, JSON-safe message copy for flow persistence."""
     role = str(message.get("role", "") or "").strip()
@@ -1423,12 +1448,13 @@ async def run_summary_subagent(
     subagent transcripts directly — the main agent will synthesise from the
     full raw material without any intermediate compression.
     """
-    from cyrene.agent.state import _call_llm, _current_session_id
-    from cyrene.llm import _assistant_text
+    from cyrene.agent.context import get_current_session_id
+    from cyrene.agent.model_service import call_agent_model
+    from cyrene.model_runtime.messages import assistant_text
 
     summary_agent_id = _summary_agent_id(round_id)
     transcript = await build_round_summary_transcript(round_id=round_id, exclude_ids={summary_agent_id})
-    summary_session_id = _current_session_id.get()
+    summary_session_id = get_current_session_id()
 
     # Deep research: return raw concatenated transcript, no LLM compression
     if _is_deep_research():
@@ -1498,7 +1524,7 @@ async def run_summary_subagent(
     await save_messages(summary_agent_id, messages)
 
     try:
-        response = await _call_llm(messages, tools=None, max_tokens=None)
+        response = await call_agent_model(messages, tools=None, max_tokens=None)
         assistant_entry: dict[str, Any] = {"role": "assistant", "content": response.get("content") or ""}
         if response.get("reasoning_content"):
             assistant_entry["reasoning_content"] = response["reasoning_content"]
@@ -1506,7 +1532,7 @@ async def run_summary_subagent(
             assistant_entry["usage"] = response["usage"]
         messages.append(assistant_entry)
         await save_messages(summary_agent_id, messages)
-        final_text = _assistant_text(response).strip() or "No summary was produced."
+        final_text = assistant_text(response).strip() or "No summary was produced."
     except Exception as exc:
         logger.exception("Summary sub-agent %s crashed", summary_agent_id)
         final_text = f"Summary sub-agent crashed: {exc}"
@@ -1544,8 +1570,13 @@ def _spawn_subagent_task(coro, agent_id: str) -> asyncio.Task:
     return task
 
 
+def spawn_subagent_task(coro, agent_id: str) -> asyncio.Task:
+    """Public task-ownership boundary for agent orchestration."""
+    return _spawn_subagent_task(coro, agent_id)
+
+
 def _bounded_int_setting(name: str, default: int, minimum: int, maximum: int) -> int:
-    from cyrene.settings_store import get as get_setting
+    from cyrene.runtime.settings_store import get as get_setting
 
     try:
         value = int(get_setting(name, default) or default)
@@ -1560,7 +1591,7 @@ def _bounded_float_setting(
     minimum: float,
     maximum: float,
 ) -> float:
-    from cyrene.settings_store import get as get_setting
+    from cyrene.runtime.settings_store import get as get_setting
 
     try:
         raw = get_setting(name, default)
@@ -1572,7 +1603,7 @@ def _bounded_float_setting(
 
 def _optional_int_setting(name: str, default: int, maximum: int) -> int:
     """Read an integer setting where zero explicitly disables the override."""
-    from cyrene.settings_store import get as get_setting
+    from cyrene.runtime.settings_store import get as get_setting
 
     try:
         raw = get_setting(name, default)
@@ -1632,7 +1663,7 @@ def _effective_subagent_context_limit(
     *,
     use_secondary: bool = False,
 ) -> int:
-    from cyrene.config_store import get_current_ctx_limit, get_secondary_model
+    from cyrene.runtime.config_store import get_current_ctx_limit, get_secondary_model
 
     if use_secondary:
         secondary = get_secondary_model() or {}
@@ -1652,12 +1683,12 @@ def _compact_subagent_context(
     reserved_tokens: int = 0,
 ) -> tuple[list[dict[str, Any]], int, int, bool]:
     """Mechanically compact a worker history while preserving its task contract."""
-    from cyrene.agent.session import _compact_messages_for_storage
-    from cyrene.call_llm import _message_token_estimate
+    from cyrene.model_runtime.client import message_token_estimate
+    from cyrene.model_runtime.compaction import compact_messages_for_storage
 
     reserved = max(0, int(reserved_tokens or 0))
     before = (
-        sum(_message_token_estimate(message) for message in messages)
+        sum(message_token_estimate(message) for message in messages)
         + reserved
     )
     if max_context_tokens <= 0 or before <= int(max_context_tokens * 0.60):
@@ -1666,33 +1697,33 @@ def _compact_subagent_context(
         return messages, before, before, False
 
     system_message = messages[0]
-    system_tokens = _message_token_estimate(system_message)
+    system_tokens = message_token_estimate(system_message)
     tail_limit = max(200, max_context_tokens - reserved - system_tokens)
-    tail = _compact_messages_for_storage(
+    tail = compact_messages_for_storage(
         list(messages[1:]),
         ctx_limit=tail_limit,
     )
     compacted = [system_message, *tail]
     after = (
-        sum(_message_token_estimate(message) for message in compacted)
+        sum(message_token_estimate(message) for message in compacted)
         + reserved
     )
     if after > int(max_context_tokens * 0.90):
-        tail = _compact_messages_for_storage(
+        tail = compact_messages_for_storage(
             list(messages[1:]),
             ctx_limit=tail_limit,
             force=True,
         )
         compacted = [system_message, *tail]
         after = (
-            sum(_message_token_estimate(message) for message in compacted)
+            sum(message_token_estimate(message) for message in compacted)
             + reserved
         )
     return compacted, before, after, compacted != messages
 
 
 def _response_usage_cost_usd(response: dict[str, Any]) -> tuple[dict[str, int], float]:
-    from cyrene.model_prices import effective_price, estimate_cost, to_usd
+    from cyrene.model_runtime.pricing import effective_price, estimate_cost, to_usd
 
     usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
     normalized = {
@@ -2011,17 +2042,20 @@ async def _run_subagent(
 ) -> str:
     """Run a completion-driven execution worker or a bounded discussion peer."""
     from cyrene.agent.prompts import (
-        _DEEP_RESEARCH_SUBAGENT_PROMPT,
-        _DECISION_SUBAGENT_PROMPT, _LEARNING_SUBAGENT_PROMPT, _COMPARE_SUBAGENT_PROMPT,
+        COMPARE_SUBAGENT_PROMPT,
+        DECISION_SUBAGENT_PROMPT,
+        DEEP_RESEARCH_SUBAGENT_PROMPT,
+        LEARNING_SUBAGENT_PROMPT,
         prompt_for_enabled_tool_packs,
         workspace_scope_block,
     )
-    from cyrene.agent.state import (
-        _deep_research_mode, _current_command,
-        _call_llm, _caller_type, _current_agent_id, _current_round_id,
-        _current_session_id, active_workspace_dir,
+    from cyrene.agent.context import (
+        active_workspace_dir,
+        bind_run_context,
+        current_run_context,
     )
-    from cyrene.llm import _assistant_text, _truncate
+    from cyrene.agent.model_service import call_agent_model
+    from cyrene.model_runtime.messages import assistant_text, truncate
     from cyrene.tooling import (
         execute_wire_tool,
         get_subagent_wire_tool_defs,
@@ -2032,7 +2066,7 @@ async def _run_subagent(
         reset_catalog_snapshot,
     )
 
-    caller_token = _caller_type.set(f"subagent_{agent_id}")
+    parent_context = current_run_context()
     catalog_snapshot_token = activate_catalog_snapshot("subagent")
     round_id = await get_round_id(agent_id)
     persisted_role = await get_role(agent_id)
@@ -2052,13 +2086,16 @@ async def _run_subagent(
                 limits["max_messages_per_agent"],
                 per_agent_override,
             )
-    round_token = _current_round_id.set(round_id) if round_id else None
+    run_binding = bind_run_context(
+        caller=f"subagent_{agent_id}",
+        **({"round_id": round_id} if round_id else {}),
+    )
     dm_token = _direct_message_mode.set(False)
     _subagent_session_id = (
         await get_session_id(agent_id)
-        or _current_session_id.get()
+        or parent_context.session_id
     )
-    from cyrene.inbox import get_inbox_context as _get_inbox_base, mark_all_read as _mark_inbox_read_base
+    from cyrene.runtime.inbox import get_inbox_context as _get_inbox_base, mark_all_read as _mark_inbox_read_base
 
     def _get_inbox(agent_id: str) -> str:
         return _get_inbox_base(agent_id, session_id=_subagent_session_id)
@@ -2066,15 +2103,15 @@ async def _run_subagent(
     async def _mark_inbox_read(agent_id: str) -> None:
         await _mark_inbox_read_base(agent_id, session_id=_subagent_session_id)
 
-    cmd = _current_command.get()
+    cmd = parent_context.command
     if cmd == "help-me-decide":
-        extra_prompt = _DECISION_SUBAGENT_PROMPT
+        extra_prompt = DECISION_SUBAGENT_PROMPT
     elif cmd == "learning-plan":
-        extra_prompt = _LEARNING_SUBAGENT_PROMPT
+        extra_prompt = LEARNING_SUBAGENT_PROMPT
     elif cmd == "deep-compare":
-        extra_prompt = _COMPARE_SUBAGENT_PROMPT
-    elif _deep_research_mode.get():
-        extra_prompt = _DEEP_RESEARCH_SUBAGENT_PROMPT
+        extra_prompt = COMPARE_SUBAGENT_PROMPT
+    elif parent_context.deep_research:
+        extra_prompt = DEEP_RESEARCH_SUBAGENT_PROMPT
     else:
         extra_prompt = ""
     now = datetime.now(timezone.utc).astimezone()
@@ -2171,7 +2208,7 @@ You are a **participant** in this discussion. Rules:
         enabled_wire_names,
     )
     try:
-        from cyrene.shell_runtime import resolve_shell
+        from cyrene.tooling.backends.shell_runtime import resolve_shell
         _shell_kind = resolve_shell()[0]
     except Exception:
         _shell_kind = "bash"
@@ -2190,7 +2227,7 @@ You are a **participant** in this discussion. Rules:
     workbench_context = ""
     if _subagent_session_id:
         try:
-            from cyrene.workbench_task_context import build_subagent_context, resolve_task_scope
+            from cyrene.workbench.task_context import build_subagent_context, resolve_task_scope
 
             _payload, workbench_project, workbench_session = resolve_task_scope(
                 _subagent_session_id,
@@ -2409,12 +2446,12 @@ You are a **participant** in this discussion. Rules:
                 })
 
             if effective_mode == EXECUTION_MODE and context_limit > 0:
-                from cyrene.call_llm import _approx_token_count
+                from cyrene.model_runtime.client import approx_token_count
 
                 active_tool_defs = (
                     quit_tool_defs if finalization_requested else wire_tool_defs
                 )
-                reserved_tool_tokens = _approx_token_count(
+                reserved_tool_tokens = approx_token_count(
                     json.dumps(
                         active_tool_defs,
                         ensure_ascii=False,
@@ -2449,7 +2486,7 @@ You are a **participant** in this discussion. Rules:
                     await _save_if_registered()
                     break
 
-            response = await _call_llm(
+            response = await call_agent_model(
                 messages,
                 tools=quit_tool_defs if finalization_requested else wire_tool_defs,
                 max_tokens=None,
@@ -2546,7 +2583,7 @@ You are a **participant** in this discussion. Rules:
                 and criteria
                 and not finalization_requested
             ):
-                final_text = _assistant_text(response).strip() or "No completion evidence was provided."
+                final_text = assistant_text(response).strip() or "No completion evidence was provided."
                 stop_reason = "completion_evidence_missing"
                 incomplete_outcome = "partial"
                 break
@@ -2580,7 +2617,7 @@ You are a **participant** in this discussion. Rules:
                     if str(item.get("content") or "").strip()
                 ]
                 agent_text = (
-                    _assistant_text(response).strip()
+                    assistant_text(response).strip()
                     or _quit_reply(response)
                     or "Done."
                 )
@@ -2625,7 +2662,7 @@ You are a **participant** in this discussion. Rules:
                         "tool_call_id": tc.get("id") or f"finalize_{model_turns}",
                         "content": "Skipped: runtime finalization allows only quit.",
                     })
-                final_text = _assistant_text(response).strip() or (
+                final_text = assistant_text(response).strip() or (
                     f"Stopped before completion: {force_finalize_reason}."
                 )
                 stop_reason = force_finalize_reason or "runtime_finalization"
@@ -2715,13 +2752,10 @@ You are a **participant** in this discussion. Rules:
                                 total_tool_calls += 1
                                 counted_tool_call = True
                                 discussion_messages += 1
-                                token = _current_agent_id.set(agent_id)
-                                try:
+                                with bind_run_context(agent_id=agent_id):
                                     result = await execute_wire_tool(
                                         name, args, bot, chat_id, db_path, None, actor="subagent"
                                     )
-                                finally:
-                                    _current_agent_id.reset(token)
                                 if _communication_delivery_succeeded(capability_id, result):
                                     await _record_delivered_communication(
                                         agent_id,
@@ -2750,13 +2784,10 @@ You are a **participant** in this discussion. Rules:
                         tool_calls_used += 1
                         total_tool_calls += 1
                         counted_tool_call = True
-                        token = _current_agent_id.set(agent_id)
-                        try:
+                        with bind_run_context(agent_id=agent_id):
                             result = await execute_wire_tool(
                                 name, args, bot, chat_id, db_path, None, actor="subagent"
                             )
-                        finally:
-                            _current_agent_id.reset(token)
                         if not is_communication:
                             round_had_execution_work = True
                             signature = _tool_signature(capability_id, concrete_args)
@@ -2782,7 +2813,7 @@ You are a **participant** in this discussion. Rules:
                     capability_id = str(name or "")
                     if effective_mode == EXECUTION_MODE:
                         round_had_execution_work = True
-                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": _truncate(result)})
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": truncate(result)})
                 # 每执行完一个工具检查 inbox，用户引导时能更快响应
                 inbox_text = _get_inbox(agent_id)
                 if inbox_text:
@@ -2818,14 +2849,12 @@ You are a **participant** in this discussion. Rules:
         incomplete_outcome = "blocked"
     finally:
         reset_catalog_snapshot(catalog_snapshot_token)
-        _caller_type.reset(caller_token)
+        run_binding.reset()
         _direct_message_mode.reset(dm_token)
-        if round_token is not None:
-            _current_round_id.reset(round_token)
 
     if _subagent_session_id and final_text:
         try:
-            from cyrene.workbench_task_context import append_shared_outcome
+            from cyrene.workbench.task_context import append_shared_outcome
 
             append_shared_outcome(
                 db_path=db_path,
@@ -2846,3 +2875,8 @@ You are a **participant** in this discussion. Rules:
     else:
         await mark_done(agent_id, final_text, reason=stop_reason)
     return final_text
+
+
+async def run_subagent(*args: Any, **kwargs: Any) -> str:
+    """Public execution boundary retained while the runner is split."""
+    return await _run_subagent(*args, **kwargs)

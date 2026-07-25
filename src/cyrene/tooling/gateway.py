@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
@@ -17,7 +18,7 @@ from cyrene.tooling.catalog import (
     get_tool_execution_metadata,
     module_wire_names,
 )
-from cyrene.settings_store import is_tool_pack_enabled
+from cyrene.runtime.settings_store import is_tool_pack_enabled
 from cyrene.tooling.results import (
     ToolProtocolError,
     serialize_error,
@@ -540,9 +541,10 @@ async def execute_wire_tool(
                 "permission_denied",
                 unavailable_reason,
             )
-        from cyrene.tooling.executor import _execute_tool
-
-        result = await _execute_tool(
+        execute_tool = importlib.import_module(
+            "cyrene.tooling.executor"
+        )._execute_tool
+        result = await execute_tool(
             resolution.concrete_name,
             resolution.concrete_arguments,
             bot,

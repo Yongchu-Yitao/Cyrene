@@ -21,7 +21,7 @@ def test_onboarding_timezone_row_uses_wrapping_long_value_layout():
 
 
 def test_ui_timezone_resolver_accepts_browser_iana_timezone():
-    from cyrene.workbench_runtime import _resolve_ui_tz
+    from cyrene.workbench.runtime import _resolve_ui_tz
 
     shanghai = _resolve_ui_tz("Asia/Shanghai")
     new_york = _resolve_ui_tz("America/New_York")

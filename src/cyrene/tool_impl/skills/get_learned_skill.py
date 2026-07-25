@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import json
+from cyrene.tooling.runtime_api import json
 
 TOOL_NAME = "GetLearnedSkill"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -17,7 +17,7 @@ async def _tool_get_learned_skill(args: dict[str, Any], _bot: Any, _chat_id: int
         return json.dumps({"ok": False, "error": "name is required"}, ensure_ascii=False)
 
     try:
-        from cyrene import behavior_learning as _bl
+        from cyrene.learning import engine as _bl
 
         skill = await _bl.get_learned_skill_by_name(name)
         if skill is None:

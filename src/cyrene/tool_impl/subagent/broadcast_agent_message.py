@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
-    _send_inbox,
+from cyrene.tooling.runtime_api import (
+    send_inbox,
     can_receive,
     datetime,
     timezone,
@@ -21,10 +21,10 @@ async def _tool_broadcast_agent_message(args: dict[str, Any], _bot: Any, _chat_i
     content = str(args.get("content", ""))
     if not content:
         return "Error: 'content' is required."
-    from cyrene.agent.state import (
-        _current_agent_id,
-        _current_round_id,
-        _current_session_id,
+    from cyrene.agent.context import (
+        get_current_agent_id,
+        get_current_round_id,
+        get_current_session_id,
     )
     from cyrene.subagent import (
         DISCUSSION_MODE,
@@ -34,12 +34,12 @@ async def _tool_broadcast_agent_message(args: dict[str, Any], _bot: Any, _chat_i
         get_session_id,
         list_discussion_peer_ids,
     )
-    from_agent = _current_agent_id.get()
-    current_round_id = await get_round_id(from_agent) or _current_round_id.get()
+    from_agent = get_current_agent_id()
+    current_round_id = await get_round_id(from_agent) or get_current_round_id()
     if await get_mode(from_agent) != DISCUSSION_MODE:
         return "Error: peer communication requires discussion mode."
     discussion_id = await get_discussion_id(from_agent)
-    session_id = await get_session_id(from_agent) or _current_session_id.get()
+    session_id = await get_session_id(from_agent) or get_current_session_id()
 
     peers = await list_discussion_peer_ids(from_agent)
 
@@ -56,7 +56,7 @@ async def _tool_broadcast_agent_message(args: dict[str, Any], _bot: Any, _chat_i
             session_id=session_id,
             strict_session=True,
         ):
-            msg_id = await _send_inbox(from_agent, peer_id, "progress", content, round_id=current_round_id)
+            msg_id = await send_inbox(from_agent, peer_id, "progress", content, round_id=current_round_id)
             if msg_id:
                 sent_count += 1
             else:
@@ -69,7 +69,7 @@ async def _tool_broadcast_agent_message(args: dict[str, Any], _bot: Any, _chat_i
         result += f" Skipped: {', '.join(errors)}"
 
     # Publish SSE event for real-time flow diagram updates
-    from cyrene import debug as _debug_comm
+    from cyrene.observability import debug as _debug_comm
     await _debug_comm.publish_event({
         "type": "agent_comm",
         "from": from_agent,

@@ -17,31 +17,26 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_enter_plan_mode(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    import cyrene.agent.state as _state
-    from cyrene.agent.state import _current_agent_id, _current_client_request_id, _current_round_id
-    from cyrene.agent.session import _load_session_messages
+    from cyrene.agent.context import active_round_prompt, get_current_agent_id, get_current_client_request_id, get_current_round_id
+    from cyrene.agent.session import load_session_messages
     from cyrene.agent.planning import run_plan_flow
 
-    if _current_agent_id.get() != "main":
+    if get_current_agent_id() != "main":
         return "Only the main agent can enter plan mode."
-    round_id = str(_current_round_id.get() or "").strip()
+    round_id = str(get_current_round_id() or "").strip()
     if not round_id:
         return "Cannot enter plan mode outside an active chat round."
 
-    user_message = str(
-        _state._active_main_round_public_prompt
-        or _state._active_main_round_prompt
-        or ""
-    ).strip()
+    user_message = active_round_prompt(public=True).strip()
     focus = str(args.get("focus", "") or "").strip()
-    history = _load_session_messages()
+    history = load_session_messages()
 
     # 用户消息在本轮开始时已持久化，这里不重复持久化。
     return await run_plan_flow(
         user_message=user_message,
         history=history,
         round_id=round_id,
-        client_request_id=str(_current_client_request_id.get() or "").strip(),
+        client_request_id=str(get_current_client_request_id() or "").strip(),
         persist_user_message=False,
         modification=focus,
     )

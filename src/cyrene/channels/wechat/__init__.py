@@ -12,11 +12,12 @@ Usage in ``server.py``::
 from __future__ import annotations
 
 import logging
+from importlib import import_module
+from typing import Any
 
 from fastapi import FastAPI
 
 from .auth import WeChatAuth, WeChatAuthError
-from .bot import WeChatUpdater
 from .client import WeChatClient, WeChatConfig
 __all__ = [
     "setup_wechat",
@@ -47,6 +48,14 @@ def set_current_client(client: WeChatClient | None) -> None:
     _current_client = client
 
 
+def __getattr__(name: str) -> Any:
+    if name != "WeChatUpdater":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = import_module("cyrene.channels.wechat.bot").WeChatUpdater
+    globals()[name] = value
+    return value
+
+
 async def setup_wechat(app: FastAPI, db_path: str) -> None:
     """Initialise the WeChat channel.
 
@@ -61,9 +70,12 @@ async def setup_wechat(app: FastAPI, db_path: str) -> None:
     app.state.wechat_db_path = str(db_path)
 
     if WECHAT_BOT_TOKEN:
+        updater_type = import_module(
+            "cyrene.channels.wechat.bot"
+        ).WeChatUpdater
         config = WeChatConfig(bot_token=WECHAT_BOT_TOKEN)
         client = WeChatClient(config)
-        updater = WeChatUpdater(client, str(db_path))
+        updater = updater_type(client, str(db_path))
 
         set_current_client(client)
         app.state.wechat_updater = updater

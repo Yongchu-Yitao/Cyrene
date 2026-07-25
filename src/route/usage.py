@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 
 
 def register_usage_routes(router: APIRouter, bot: Any, db_path: str) -> None:
@@ -14,6 +14,6 @@ def register_usage_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/usage/tokens")
     async def api_token_usage(days: int = 7, model: str = ""):
-        from cyrene.db import get_token_usage_stats
+        from cyrene.runtime.database import get_token_usage_stats
         stats = await get_token_usage_stats(str(DB_PATH), days=max(1, min(days, 90)), model=model.strip())
         return {"ok": True, "stats": stats}

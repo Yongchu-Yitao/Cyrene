@@ -35,18 +35,21 @@ def _api(path: str, method: str = "GET", **kwargs) -> httpx.Response:
     """Make an API call to the daemon."""
     url = f"{DAEMON_URL}{path}"
     kwargs.setdefault("timeout", CLIENT_TIMEOUT)
-    client = httpx.Client()
     try:
-        if method == "GET":
-            resp = client.get(url, **kwargs)
-        elif method == "POST":
-            resp = client.post(url, **kwargs)
-        elif method == "PUT":
-            resp = client.put(url, **kwargs)
-        elif method == "DELETE":
-            resp = client.delete(url, **kwargs)
-        else:
-            raise ValueError(f"Unsupported method: {method}")
+        # A loopback daemon request must never inherit HTTP(S) proxy settings.
+        # System-level proxy discovery can otherwise turn localhost calls into
+        # remote 502 responses even when no proxy variables are exported.
+        with httpx.Client(trust_env=False) as client:
+            if method == "GET":
+                resp = client.get(url, **kwargs)
+            elif method == "POST":
+                resp = client.post(url, **kwargs)
+            elif method == "PUT":
+                resp = client.put(url, **kwargs)
+            elif method == "DELETE":
+                resp = client.delete(url, **kwargs)
+            else:
+                raise ValueError(f"Unsupported method: {method}")
         resp.raise_for_status()
         return resp
     except httpx.ConnectError:
@@ -75,7 +78,11 @@ def cmd_start(args: argparse.Namespace) -> None:
     """Start the Cyrene daemon in background."""
     # Check if already running
     try:
-        resp = httpx.get(f"{DAEMON_URL}/api/status", timeout=5.0)
+        resp = httpx.get(
+            f"{DAEMON_URL}/api/status",
+            timeout=5.0,
+            trust_env=False,
+        )
         if resp.status_code == 200:
             print(f"Cyrene is already running at {DAEMON_URL}")
             return
@@ -95,12 +102,17 @@ def cmd_start(args: argparse.Namespace) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        start_new_session=sys.platform != "win32",
     )
 
     # Wait for it to be ready
     for _ in range(30):
         try:
-            resp = httpx.get(f"{DAEMON_URL}/api/ui-data", timeout=3.0)
+            resp = httpx.get(
+                f"{DAEMON_URL}/api/ui-data",
+                timeout=3.0,
+                trust_env=False,
+            )
             if resp.status_code == 200:
                 break
         except Exception:
@@ -132,8 +144,8 @@ def cmd_start(args: argparse.Namespace) -> None:
     print("  cyrene --help")
     print()
     print("Extra notes:")
-    print("  This terminal is now running the daemon. Close it to stop the agent.")
-    print("  Open a new terminal to run CLI commands.")
+    print("  The daemon is running in the background.")
+    print("  Use 'cyrene stop' when you want to stop it.")
 
 
 def cmd_stop(args: argparse.Namespace) -> None:

@@ -10,8 +10,8 @@ import re
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene import short_term
-from cyrene.tooling.runtime_support import _json_result
+from cyrene.runtime.memory import short_term
+from cyrene.tooling.runtime_api import json_result
 
 TOOL_NAME = 'RecallMemory'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -94,7 +94,7 @@ async def _tool_recall_memory(args: dict[str, Any], _bot: Any, _chat_id: int, _d
     }
     if not payload["memories"]:
         payload["note"] = "No recent memory matches found for the given filters."
-    return _json_result(payload)
+    return json_result(payload)
 
 
 handler = _tool_recall_memory

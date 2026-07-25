@@ -13,10 +13,14 @@ from cyrene.agent.deep_reflection_prompts import (
     DEEP_REFLECTION_SCHEMA,
     render_deep_reflection_packet,
 )
+from cyrene.agent.context import (
+    bind_run_context,
+    publish_runtime_event as _publish_runtime_event,
+)
 from cyrene.agent.message import _ensure_message_identity
-from cyrene.agent.state import _call_llm, _caller_type, _publish_runtime_event
-from cyrene.context_trace import attach_context, content_fingerprint, context_block
-from cyrene.llm import _assistant_text
+from cyrene.agent.model_service import call_agent_model as _call_llm
+from cyrene.observability.context_trace import attach_context, content_fingerprint, context_block
+from cyrene.model_runtime.messages import assistant_text
 
 _MAX_SOURCE_MESSAGES = 36
 _MAX_TEXT_PREVIEW = 700
@@ -130,8 +134,7 @@ async def create_deep_reflection_record(
 
 
 async def run_clean_reflection(evidence: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    token = _caller_type.set("deep_reflection")
-    try:
+    with bind_run_context(caller="deep_reflection"):
         response = await _call_llm(
             [
                 {"role": "system", "content": DEEP_REFLECTION_PROMPT_V1},
@@ -142,10 +145,8 @@ async def run_clean_reflection(evidence: dict[str, Any]) -> tuple[dict[str, Any]
             secondary=True,
             thinking="disabled",
         )
-    finally:
-        _caller_type.reset(token)
 
-    text = (_assistant_text(response) or "").strip()
+    text = (assistant_text(response) or "").strip()
     payload = _extract_json_object(text)
     if not isinstance(payload, dict) or not payload:
         logger.warning(

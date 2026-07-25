@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
 def test_resolve_cc_session_name_prefers_env(monkeypatch, tmp_path):
-    from cyrene import cc_bridge
+    from cyrene.tooling.backends import claude_code_bridge as cc_bridge
 
     monkeypatch.setenv("CYRENE_CC_TMUX_SESSION", "claude-explicit")
 
@@ -15,7 +15,7 @@ def test_resolve_cc_session_name_prefers_env(monkeypatch, tmp_path):
 
 
 def test_resolve_cc_session_name_falls_back_for_invalid_env(monkeypatch, tmp_path):
-    from cyrene import cc_bridge
+    from cyrene.tooling.backends import claude_code_bridge as cc_bridge
 
     monkeypatch.setenv("CYRENE_CC_TMUX_SESSION", "bad session name")
 
@@ -25,7 +25,7 @@ def test_resolve_cc_session_name_falls_back_for_invalid_env(monkeypatch, tmp_pat
 
 
 def test_get_cc_status_only_matches_expected_session(monkeypatch, tmp_path):
-    from cyrene import cc_bridge
+    from cyrene.tooling.backends import claude_code_bridge as cc_bridge
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -50,7 +50,7 @@ def test_get_cc_status_only_matches_expected_session(monkeypatch, tmp_path):
 
 
 def test_get_cc_status_registers_expected_running_session(monkeypatch, tmp_path):
-    from cyrene import cc_bridge
+    from cyrene.tooling.backends import claude_code_bridge as cc_bridge
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -75,7 +75,7 @@ def test_get_cc_status_registers_expected_running_session(monkeypatch, tmp_path)
 
 
 def test_launch_cc_tmux_reuses_existing_session_and_registers(monkeypatch, tmp_path):
-    from cyrene import cc_bridge
+    from cyrene.tooling.backends import claude_code_bridge as cc_bridge
 
     repo = tmp_path / "repo"
     repo.mkdir()

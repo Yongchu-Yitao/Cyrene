@@ -68,8 +68,8 @@ def test_module_help_has_no_runtime_side_effects(tmp_path):
 
 @pytest.mark.asyncio
 async def test_interactive_cli_drains_background_work_before_loop_closes(monkeypatch):
-    from cyrene import local_cli
-    from cyrene import runtime_lifecycle
+    from cyrene.runtime import host as local_cli
+    from cyrene.runtime import lifecycle as runtime_lifecycle
 
     events = []
 

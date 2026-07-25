@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
-    _install_skill,
-    _resolve_tool_path,
+from cyrene.tooling.runtime_api import (
+    install_skill_from_path,
+    resolve_tool_path,
     json,
 )
 
@@ -20,13 +20,13 @@ async def _tool_install_skill(args: dict[str, Any], _bot: Any, _chat_id: int, _d
     if not path_str:
         return json.dumps({"ok": False, "error": "path is required"}, ensure_ascii=False)
     try:
-        source = _resolve_tool_path(path_str)
+        source = resolve_tool_path(path_str)
     except ValueError:
         return json.dumps({"ok": False, "error": "skill source must be within workspace"}, ensure_ascii=False)
     source = source.resolve()
     if not source.exists():
         return json.dumps({"ok": False, "error": f"path does not exist: {source}"}, ensure_ascii=False)
-    result = _install_skill(source)
+    result = install_skill_from_path(source)
     if result.get("ok"):
         skill = result.get("skill", {})
         summary = {

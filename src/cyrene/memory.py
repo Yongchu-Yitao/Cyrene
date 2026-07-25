@@ -7,9 +7,9 @@ the Steward Agent can read, write, and evolve over time.
 import logging
 
 from cyrene.config import WORKSPACE_DIR
-from cyrene.conversations import ensure_conversations_dir
-from cyrene.short_term import get_context as get_short_term_context
-from cyrene.soul import ensure_soul, read_shallow_memory
+from cyrene.runtime.memory.conversations import ensure_conversations_dir
+from cyrene.runtime.memory.short_term import get_context as get_short_term_context
+from cyrene.runtime.memory.soul import ensure_soul, read_shallow_memory
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def get_memory_context(include_short_term: bool = True) -> str:
 
     # 1. SOUL.md shallow memory (core sections + non-expired temporaries)
     try:
-        from cyrene.settings_store import is_soul_active
+        from cyrene.runtime.settings_store import is_soul_active
         if is_soul_active():
             shallow = read_shallow_memory()
             if shallow:

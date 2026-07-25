@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from cyrene.workbench_runtime import (
+from cyrene.workbench.runtime import (
     _workbench_artifact_download_target,
     _workbench_compose_static_system,
 )

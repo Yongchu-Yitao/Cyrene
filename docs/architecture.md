@@ -140,7 +140,7 @@ Every LLM call is tagged with provenance metadata (`_ctx`) describing where each
 Two CLI surfaces exist:
 
 - **`cyrene <command>`** — a thin HTTP client that talks to the daemon at `localhost:4242` (`start`, `stop`, `do`, `session`, `flow`, `memory`, `status`, `mcp`).
-- **`python -m cyrene.local_cli`** — an interactive, headless REPL that runs the agent directly without starting a web server.
+- **`python -m cyrene.runtime.host`** — an interactive, headless REPL that runs the agent directly without starting a web server.
 
 ## Security & Local Auth
 
@@ -151,70 +151,26 @@ The raw web server binds only to `127.0.0.1` and has no authentication layer. Th
 ```
 src/
 ├── cyrene/                          # Core engine
-│   ├── agent/                       # Two-phase loop, sessions, rounds, planning
-│   │   ├── agent.py                 # Main agent orchestration
-│   │   ├── coordinator.py           # Phase routing and context assembly
-│   │   ├── session.py               # Session persistence and state
-│   │   ├── round.py                 # Tool round lifecycle
-│   │   ├── state.py                 # In-memory session state
-│   │   ├── prompts.py               # System and phase prompts
-│   │   ├── deep_reflection.py       # Deep Reflection capability
-│   │   ├── commands.py              # Slash-command parsing
-│   │   └── ...
-│   ├── tooling/                     # Stable tool control plane
-│   │   ├── types.py                 # ToolSpec, snapshots, execution context
-│   │   ├── catalog.py               # Native + MCP capability catalog
-│   │   ├── snapshot.py              # Run-fixed capability snapshots
-│   │   ├── wire.py                  # Deterministic main/subagent bundles
-│   │   ├── packs.py                 # 12 declarative capability modules
-│   │   ├── gateway.py               # discover / describe / invoke router
-│   │   ├── executor.py              # Concrete handler execution
-│   │   ├── validation.py            # Gateway argument validation
-│   │   ├── results.py               # Stable result/error protocol
-│   │   ├── policy/                  # Actor, path, shell, approval policy
-│   │   └── adapters/                # MCP and learned-skill adapters
-│   ├── tool_impl/                   # Native implementations by domain
-│   │   ├── control/                 # ask/quit/plan/reflection
-│   │   ├── core/                    # file, Bash, web, attachment
-│   │   ├── code/                    # code analysis, Git, shells, Claude Code
-│   │   ├── browser/                 # persistent browser operations
-│   │   ├── desktop/                 # App Use
-│   │   ├── memory/                  # short-term/conversation/project memory
-│   │   ├── knowledge/               # documents and literature library
-│   │   ├── task/                    # scheduled tasks and task plans
-│   │   ├── entity/                  # durable entity tracking
-│   │   ├── map/                     # pins and routes
-│   │   ├── subagent/                # spawn/query/communication
-│   │   ├── delivery/                # progress, messages, files
-│   │   └── skills/                  # installed and learned skills
-│   ├── knowledge/                   # Document ingestion, embeddings, store
-│   ├── channels/                    # Telegram and WeChat bots
-│   ├── modules/                     # Deep research and other pipelines
-│   ├── tools.py                     # Thin public tooling facade
-│   ├── mcp_manager.py               # MCP server lifecycle
-│   ├── search.py                    # Deep search pipeline
-│   ├── searxng_manager.py           # SimpleXNG subprocess lifecycle
-│   ├── scheduler.py                 # Heartbeat, cron, lottery, steward
-│   ├── soul.py                      # SOUL.md read/write
-│   ├── short_term.py                # Short-term memory compression
+│   ├── agent/                       # Agent loop and internal public API
+│   ├── workbench/                   # Workbench business services
+│   ├── model_runtime/               # Provider/model runtime (separate from legacy llm.py)
+│   ├── learning/                    # Behavior and skill learning
+│   ├── runtime/                     # Bootstrap, lifecycle, scheduling, persistence
+│   ├── observability/               # Traces, debugging, and telemetry
+│   ├── knowledge/                   # Document ingestion, embeddings, and storage
+│   ├── channels/                    # Telegram and WeChat adapters
+│   ├── tooling/                     # Stable tool control plane and backends
+│   ├── tool_impl/                   # Native tool implementations by domain
+│   ├── config.py                    # Environment configuration
+│   ├── call_llm.py                  # Stable model-call facade
+│   ├── browser.py                   # Browser session facade/runtime
+│   ├── subagent.py                  # Subagent orchestration
 │   ├── memory.py                    # Memory context assembly
-│   ├── shells.py                    # Persistent shell sessions
-│   ├── browser.py                   # Persistent browser context / screencast
-│   ├── cc_bridge.py / cc_terminal.py # Claude Code integration
-│   ├── behavior_learning.py         # Purpose/tool-chain skill learning
-│   ├── skills_registry.py           # Installed skill storage
-│   ├── workbench_runtime.py         # Shared Workbench application/presenter services
-│   ├── workbench_chat_service.py    # Workbench conversation persistence and helpers
-│   ├── workbench_knowledge_service.py # Workbench knowledge application services
-│   ├── workbench_memory_service.py  # Workbench memory application services
-│   ├── context_trace.py             # Context provenance tagging
-│   ├── context_debug.py             # Verbose log inspector
-│   ├── config.py                    # Environment config
-│   ├── settings_store.py            # Runtime settings persistence
-│   ├── setup.py / onboarding.py     # Personality setup / onboarding wizard
-│   ├── cli.py                       # CLI HTTP client
-│   ├── local_cli.py                 # Interactive local CLI + web entry points
-│   └── __main__.py                  # Default entry (Telegram / workbench flags)
+│   ├── cli.py                       # `cyrene` daemon HTTP client
+│   ├── tools.py                     # Public tooling facade
+│   ├── __init__.py                  # Installs lazy legacy module aliases
+│   ├── __main__.py                  # `python -m cyrene`
+│   └── local_cli.py                 # Physical previous-release launcher shim
 ├── route/                           # All FastAPI HTTP/WebSocket adapters
 │   ├── registry.py                  # Single route composition root
 │   ├── schemas.py / errors.py       # Request contracts and API errors
@@ -234,3 +190,10 @@ src/
 ├── workspace/                       # SOUL.md, patterns, conversations
 └── store/                           # SQLite databases
 ```
+
+Historical imports such as `cyrene.db`, `cyrene.scheduler`, and
+`cyrene.workbench_runtime` are resolved lazily by
+`runtime/module_compat.py` to the exact canonical module object; they do not
+require duplicate top-level implementation files. `local_cli.py` is the sole
+physical compatibility launcher because the previous desktop development
+flow executes that exact file path.

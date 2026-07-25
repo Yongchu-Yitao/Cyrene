@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
-    _reg_subagent,
-    _run_subagent,
-    _spawn_subagent_task,
+from cyrene.tooling.runtime_api import (
+    register_subagent,
+    run_subagent,
+    spawn_subagent_task,
 )
 
 TOOL_NAME = 'spawn_subagent'
@@ -42,14 +42,14 @@ async def _tool_spawn_subagent(args: dict[str, Any], bot: Any, chat_id: int, db_
             max_messages = None
     if not agent_id or not task:
         return "Error: agent_id and task are required."
-    from cyrene.agent.state import _current_agent_id, _current_round_id, _current_session_id
-    if _current_agent_id.get() != "main":
+    from cyrene.agent.context import get_current_agent_id, get_current_round_id, get_current_session_id
+    if get_current_agent_id() != "main":
         return "Only the main agent can spawn subagents."
-    session_id = _current_session_id.get()
-    registered = await _reg_subagent(
+    session_id = get_current_session_id()
+    registered = await register_subagent(
         agent_id,
         task,
-        round_id=_current_round_id.get(),
+        round_id=get_current_round_id(),
         role=role,
         session_id=session_id,
         mode=mode,
@@ -62,8 +62,8 @@ async def _tool_spawn_subagent(args: dict[str, Any], bot: Any, chat_id: int, db_
             f"Error: sub-agent id '{agent_id}' is already active. "
             "Choose a unique id for this session/round."
         )
-    _spawn_subagent_task(
-        _run_subagent(
+    spawn_subagent_task(
+        run_subagent(
             agent_id,
             task,
             bot,

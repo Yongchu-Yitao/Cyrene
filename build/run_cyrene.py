@@ -22,7 +22,8 @@ from playwright_bundle import find_bundled_browser_dir
 
 def _run_smoke_test() -> None:
     """Verify frozen runtime can import critical dependencies before release."""
-    from cyrene.version import get_version
+    from cyrene.runtime.module_compat import LEGACY_MODULE_ALIASES
+    from cyrene.runtime.version import get_version
 
     modules = {
         "httpx": httpx.__version__,
@@ -39,6 +40,20 @@ def _run_smoke_test() -> None:
         "simplexng": getattr(simplexng, "__version__", "unknown"),
         "multipart": getattr(multipart, "__version__", "unknown"),
     }
+    compatibility_aliases = {
+        **LEGACY_MODULE_ALIASES,
+        "webui.workbench_chat_runs": "cyrene.workbench.chat_runs",
+        "webui.workbench_goal_loop": "cyrene.workbench.goal_loop",
+        "webui.workbench_notifications": "cyrene.workbench.notifications",
+    }
+    for legacy_name, canonical_name in compatibility_aliases.items():
+        legacy_module = importlib.import_module(legacy_name)
+        canonical_module = importlib.import_module(canonical_name)
+        if legacy_module is not canonical_module:
+            raise RuntimeError(
+                f"legacy module alias {legacy_name!r} did not resolve to "
+                f"{canonical_name!r}"
+            )
     # Smoke-test imports for modules with C extensions that are
     # historically fragile in PyInstaller frozen builds.
     _smoke_imports = {
@@ -62,6 +77,7 @@ def _run_smoke_test() -> None:
         print(f"{name}={version}")
     for _name, _ver in _smoke_imports.items():
         print(f"{_name}={_ver}")
+    print(f"legacy_module_aliases={len(compatibility_aliases)}")
 
     import os
 
@@ -134,7 +150,7 @@ if __name__ == "__main__":
     # These flags let the frozen binary act as a trampoline for bundled modules.
     if "--launch-simplexng" in sys.argv:
         sys.argv.remove("--launch-simplexng")
-        from cyrene.simplexng_child import main as _run_simplexng_child
+        from cyrene.tooling.backends.simplexng_child import main as _run_simplexng_child
         _run_simplexng_child()
         raise SystemExit(0)
 
@@ -145,12 +161,12 @@ if __name__ == "__main__":
             sys.argv.append("--electron-mode")
         else:
             try:
-                from cyrene._buildinfo import DEFAULT_UI_MODE as _ui_mode
+                from cyrene.runtime.buildinfo import DEFAULT_UI_MODE as _ui_mode
             except Exception:
                 _ui_mode = "workbench"
             sys.argv.append("--workbench" if _ui_mode != "legacy" else "--agent")
         try:
-            from cyrene.local_cli import main
+            from cyrene.runtime.host import main
             main()
         except Exception as _exc:
             _write_crash_log(_exc)
@@ -161,7 +177,7 @@ if __name__ == "__main__":
         sys.argv.append("--gui")
 
     try:
-        from cyrene.local_cli import main
+        from cyrene.runtime.host import main
         main()
     except Exception as _exc:
         _write_crash_log(_exc)

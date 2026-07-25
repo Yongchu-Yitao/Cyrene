@@ -1,15 +1,12 @@
-"""Tool definition entry for quit.
-
-The handler is registered lazily by ``cyrene.agent`` to avoid importing the
-agent package from the tool registry during startup.
-"""
+"""Tool definition entry for quit."""
 
 from __future__ import annotations
 
+from cyrene.agent.actions import complete_interaction
 from cyrene.tooling.native_definitions import get_native_tool_def
 
 TOOL_NAME = "quit"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
-handler = None
+handler = complete_interaction
 
 __all__ = ["TOOL_NAME", "TOOL_DEF", "handler"]

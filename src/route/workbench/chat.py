@@ -13,8 +13,8 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from cyrene import workbench_chat_service as _service
-from cyrene.workspace_changes import (
+from cyrene.workbench import chat as _service
+from cyrene.workbench.workspace_changes import (
     delete_chat_change_sets,
     get_chat_file_change,
     list_chat_change_sets,
@@ -32,7 +32,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
     configure_store(db_path)
     _CHAT_RUN_MANAGER.configure(db_path)
 
-    from cyrene.shell_wake import get_shell_wake_service
+    from cyrene.runtime.shell_wake import get_shell_wake_service
 
     async def _shell_wake_dispatcher(wake: dict[str, Any]) -> str:
         return await dispatch_shell_wake_run(wake, bot=bot, db_path=db_path)
@@ -46,7 +46,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
     # Workbench runtime; import lazily at call time to avoid a circular import.
 
     def _routes():
-        from cyrene import workbench_runtime as legacy_routes
+        from cyrene.workbench import runtime as legacy_routes
         return legacy_routes
 
     def _project_data_key(project_id: str) -> str:
@@ -259,7 +259,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
     async def api_workbench_chat_context(chat_id: str):
         """Live context-window gauge + composition for the overview panel."""
         from cyrene import config
-        from cyrene.config_store import get_current_ctx_limit
+        from cyrene.runtime.config_store import get_current_ctx_limit
 
         # Keep the gauge denominator identical to automatic persistence
         # compaction. The latest assistant call may have used a fallback model,
@@ -294,7 +294,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         """Let the user explicitly run the normal session compaction flow."""
         from cyrene import config
         from cyrene.agent import compact_session_if_needed
-        from cyrene.config_store import effective_ctx_limit_for_model
+        from cyrene.runtime.config_store import effective_ctx_limit_for_model
 
         if chat_id.startswith("legacy:"):
             return JSONResponse(
@@ -661,7 +661,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         # can reply in the same language even with no HTTP request to read.
         if lang in {"en", "zh"}:
             try:
-                from cyrene.settings_store import get as _get_setting, set_ as _set_setting
+                from cyrene.runtime.settings_store import get as _get_setting, set_ as _set_setting
                 if str(_get_setting("app_language", "") or "") != lang:
                     _set_setting("app_language", lang)
             except Exception:
@@ -674,7 +674,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             return JSONResponse({"error": "message is required"}, status_code=400)
 
         # ── Budget gate ──
-        from cyrene.workbench_runtime import _check_budget_gate as _chat_budget_gate
+        from cyrene.workbench.runtime import _check_budget_gate as _chat_budget_gate
         _bgt = await _chat_budget_gate(chat_id)
         if _bgt:
             return JSONResponse(_bgt, status_code=403)

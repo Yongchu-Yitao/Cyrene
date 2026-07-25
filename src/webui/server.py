@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from cyrene.config import WEB_PORT
-from cyrene.task_lifecycle import cancel_and_wait
+from cyrene.runtime.task_lifecycle import cancel_and_wait
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     register_routes(app, bot, db_path)
 
     async def _start_workbench_chat_runs() -> None:
-        from cyrene.workbench_chat_service import startup_chat_runs
+        from cyrene.workbench.chat import startup_chat_runs
 
         startup_chat_runs()
         manager = getattr(app.state, "goal_loop_manager", None)
@@ -96,7 +96,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     async def _sync_knowledge_catalog() -> None:
         try:
             from cyrene.config import get_knowledge_db_path
-            from cyrene.db import init_knowledge_db
+            from cyrene.runtime.database import init_knowledge_db
             from cyrene.knowledge import store, ingest
             _kb_db_path = str(get_knowledge_db_path())
             await init_knowledge_db(_kb_db_path)
@@ -146,7 +146,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
                 logger.warning("Goal-loop shutdown failed", exc_info=True)
 
         try:
-            from cyrene.workbench_chat_service import shutdown_chat_runs
+            from cyrene.workbench.chat import shutdown_chat_runs
 
             await shutdown_chat_runs()
         except Exception:
@@ -185,7 +185,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         # Cancel and await all agent/telemetry/indexing work while the event loop
         # and SQLite worker threads are still alive.
         try:
-            from cyrene.runtime_lifecycle import shutdown_background_work
+            from cyrene.runtime.lifecycle import shutdown_background_work
 
             await shutdown_background_work()
         except Exception:

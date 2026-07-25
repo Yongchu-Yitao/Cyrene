@@ -8,7 +8,7 @@ from copy import deepcopy
 from functools import lru_cache
 from typing import Any
 
-from cyrene.settings_store import is_tool_pack_enabled
+from cyrene.runtime.settings_store import is_tool_pack_enabled
 from cyrene.tooling.catalog import TOOL_DEFS
 from cyrene.tooling.packs import MODULE_TOOL_NAMES, PACK_BY_WIRE_NAME
 from cyrene.tooling.types import WireToolBundle

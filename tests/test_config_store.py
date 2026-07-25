@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 @pytest.fixture
 def isolated_config_store(tmp_path, monkeypatch):
     """Return a config_store module whose paths point into a temp directory."""
-    from cyrene import config_store
+    from cyrene.runtime import config_store
 
     monkeypatch.setattr(config_store, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config_store, "_ENCRYPTED_PATH", tmp_path / "data" / "config.enc")
@@ -112,7 +112,7 @@ def test_portable_snapshot_is_detached_reencrypted_and_activated(
 
 
 def test_unknown_model_context_uses_smallest_known_candidate_window(monkeypatch):
-    from cyrene import config_store
+    from cyrene.runtime import config_store
 
     models = [
         {"model": "unknown-custom"},
@@ -125,7 +125,7 @@ def test_unknown_model_context_uses_smallest_known_candidate_window(monkeypatch)
 
 
 def test_explicit_model_context_is_not_reduced_by_fallbacks(monkeypatch):
-    from cyrene import config_store
+    from cyrene.runtime import config_store
 
     models = [
         {"model": "primary", "ctx": "500K"},
@@ -137,7 +137,7 @@ def test_explicit_model_context_is_not_reduced_by_fallbacks(monkeypatch):
 
 
 def test_known_model_default_is_not_reduced_by_fallbacks(monkeypatch):
-    from cyrene import config_store
+    from cyrene.runtime import config_store
 
     models = [
         {"model": "mimo-v2.5", "ctx": ""},
@@ -149,6 +149,6 @@ def test_known_model_default_is_not_reduced_by_fallbacks(monkeypatch):
 
 
 def test_unknown_context_preserves_zero_without_known_candidates():
-    from cyrene import config_store
+    from cyrene.runtime import config_store
 
     assert config_store.effective_ctx_limit_for_model("custom", []) == 0

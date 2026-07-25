@@ -75,19 +75,19 @@ async def _tool_update_task_plan(
     _db_path: str,
     _notify_state: dict[str, bool] | None,
 ) -> str:
-    from cyrene.agent.state import _current_agent_id, _current_session_id, _publish_runtime_event
-    from cyrene.workbench_context import resolve_workbench_session_kind
+    from cyrene.agent.context import get_current_agent_id, get_current_session_id, publish_runtime_event
+    from cyrene.workbench.context import resolve_workbench_session_kind
 
-    if _current_agent_id.get() != "main":
+    if get_current_agent_id() != "main":
         return "Only the main agent can update a Workbench task plan."
-    session_id = str(_current_session_id.get() or "").strip()
+    session_id = str(get_current_session_id() or "").strip()
     if not session_id:
         return "No active Workbench task session."
     if resolve_workbench_session_kind(session_id) != "task":
         return "update_task_plan is only available inside Workbench task sessions."
 
     operation = str(args.get("operation") or "").strip().lower()
-    from cyrene.workbench_runtime import update_task_plan_for_session
+    from cyrene.workbench.runtime import update_task_plan_for_session
 
     result = update_task_plan_for_session(
         session_id,
@@ -102,7 +102,7 @@ async def _tool_update_task_plan(
     if not result.get("ok"):
         return "Task plan not updated: " + str(result.get("error") or "unknown error")
 
-    await _publish_runtime_event({
+    await publish_runtime_event({
         "type": "task_plan_updated",
         "operation": operation,
         "plan": result.get("plan") or [],

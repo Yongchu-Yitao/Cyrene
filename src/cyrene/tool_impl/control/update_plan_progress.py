@@ -17,12 +17,12 @@ async def _tool_update_plan_progress(
     _db_path: str,
     _notify_state: dict[str, bool] | None,
 ) -> str:
-    from cyrene.agent.state import _current_agent_id, _current_session_id, _publish_runtime_event
-    from cyrene.workbench_chat_service import update_chat_plan_progress
+    from cyrene.agent.context import get_current_agent_id, get_current_session_id, publish_runtime_event
+    from cyrene.workbench.chat import update_chat_plan_progress
 
-    if _current_agent_id.get() != "main":
+    if get_current_agent_id() != "main":
         return "Only the main agent can update plan progress."
-    session_id = str(_current_session_id.get() or "").strip()
+    session_id = str(get_current_session_id() or "").strip()
     if not session_id:
         return "No active Workbench conversation plan."
     try:
@@ -34,7 +34,7 @@ async def _tool_update_plan_progress(
     plan = update_chat_plan_progress(session_id, step, status, note)
     if not plan:
         return "No active approved plan was found."
-    await _publish_runtime_event({
+    await publish_runtime_event({
         "type": "plan_progress",
         "plan": plan,
         "step": step,

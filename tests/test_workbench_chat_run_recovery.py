@@ -5,8 +5,8 @@ import threading
 
 
 def test_startup_recovers_crashed_running_chat_and_clears_stale_question(monkeypatch):
-    from cyrene import workbench_chat_service as chat_mod
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench import chat as chat_mod
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     payload = {
         "chats": [
@@ -37,8 +37,8 @@ def test_startup_recovers_crashed_running_chat_and_clears_stale_question(monkeyp
 async def test_chat_run_driver_error_always_publishes_terminal_event_and_wakes_waiters(
     monkeypatch,
 ):
-    from cyrene import workbench_chat_service as chat_mod
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench import chat as chat_mod
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     monkeypatch.setattr(chat_mod, "_settle_chat_running_status", lambda _chat_id: None)
     manager = ChatRunManager(retention_seconds=0)
@@ -63,7 +63,7 @@ async def test_chat_run_driver_error_always_publishes_terminal_event_and_wakes_w
 
 
 async def test_finished_run_remains_replayable_during_retention_window():
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     manager = ChatRunManager(retention_seconds=45)
 
@@ -84,8 +84,8 @@ async def test_finished_run_remains_replayable_during_retention_window():
 
 
 async def test_chat_run_storage_setup_runs_off_the_event_loop(monkeypatch, tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     started = threading.Event()
     release = threading.Event()
@@ -131,7 +131,7 @@ async def test_chat_detail_load_does_not_block_other_event_loop_work(monkeypatch
     import httpx
     from fastapi import FastAPI
     from route.workbench import chat as chat_routes
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     started = threading.Event()
     release = threading.Event()

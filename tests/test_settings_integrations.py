@@ -13,7 +13,7 @@ from route.registry import register_routes
 
 @pytest.fixture
 def integration_store(monkeypatch):
-    from cyrene import integration_settings
+    from cyrene.runtime import integration_settings
 
     settings = {
         "zotero": {
@@ -84,7 +84,7 @@ def test_update_embedding_keeps_blank_secret_and_syncs_legacy_slots(integration_
 
 
 def test_zotero_local_api_rejects_non_loopback_urls():
-    from cyrene.integration_settings import normalize_zotero
+    from cyrene.runtime.integration_settings import normalize_zotero
 
     with pytest.raises(ValueError, match="localhost:23119"):
         normalize_zotero({"base_url": "https://example.com/api"})
@@ -123,6 +123,7 @@ def test_embedding_probe_requires_endpoint_and_model(integration_store):
 @pytest.mark.asyncio
 async def test_ollama_embedding_request_and_response(monkeypatch):
     from cyrene.knowledge import embeddings
+    from cyrene.knowledge import embedding_client
 
     captured = {}
 
@@ -144,7 +145,11 @@ async def test_ollama_embedding_request_and_response(monkeypatch):
             captured.update({"endpoint": endpoint, **kwargs})
             return FakeResponse()
 
-    monkeypatch.setattr(embeddings.httpx, "AsyncClient", lambda: FakeClient())
+    monkeypatch.setattr(
+        embedding_client.httpx,
+        "AsyncClient",
+        lambda: FakeClient(),
+    )
 
     result = await embeddings.embed_texts_with_config(["hello"], {
         "provider": "ollama",

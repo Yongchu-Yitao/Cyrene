@@ -64,11 +64,11 @@ async def _tool_search_library(
         return "Error: query is required."
 
     try:
-        from cyrene.agent.state import _current_session_id
+        from cyrene.agent.context import get_current_session_id
         from cyrene.knowledge import library, retrieve
-        from cyrene.workbench_context import ensure_knowledge_db_for_session
+        from cyrene.workbench.context import ensure_knowledge_db_for_session
 
-        db_path = await ensure_knowledge_db_for_session(_current_session_id.get())
+        db_path = await ensure_knowledge_db_for_session(get_current_session_id())
         k = max(1, min(int(args.get("k") or 8), 30))
         metadata_items, _total = await library.list_items(
             db_path,

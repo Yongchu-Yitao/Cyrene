@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import _request_external_delivery_confirmation
+from cyrene.tooling.runtime_api import request_external_delivery_confirmation
 
 TOOL_NAME = 'send_telegram'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -13,7 +13,7 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 async def _tool_send_message(args: dict[str, Any], bot: Any, chat_id: int, _db_path: str, notify_state: dict[str, bool] | None) -> str:
     text = str(args.get("text", ""))
-    confirm = await _request_external_delivery_confirmation(
+    confirm = await request_external_delivery_confirmation(
         tool_name="send_telegram",
         operation="外发 Telegram 消息",
         detail=f"消息内容：{text[:240]}",

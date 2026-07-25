@@ -8,13 +8,13 @@ import math
 import os
 from array import array
 
-import httpx
+from cyrene.knowledge.embedding_client import embed_texts_with_config, httpx
 
 
 def _persisted() -> dict:
     """Read the current encrypted runtime settings without caching secrets."""
     try:
-        from cyrene.integration_settings import get_embedding_settings
+        from cyrene.runtime.integration_settings import get_embedding_settings
 
         return get_embedding_settings()
     except Exception:
@@ -97,89 +97,6 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
         "dimensions": int(os.environ.get("EMBEDDING_DIMENSIONS") or persisted.get("dimensions") or 0),
     }
     return await embed_texts_with_config(texts, config)
-
-
-async def embed_texts_with_config(texts: list[str], config: dict) -> list[list[float]]:
-    """Embed texts with an explicit, already validated provider config.
-
-    This is also used by the settings connectivity probe so draft values can be
-    tested without saving them first.
-    """
-    if not texts:
-        return []
-
-    provider = str(config.get("provider") or "openai_compatible").strip().lower().replace("-", "_")
-    base_url = str(config.get("base_url") or "").strip().rstrip("/")
-    api_key = str(config.get("api_key") or "").strip()
-    model = str(config.get("model") or "").strip()
-    try:
-        dimensions = int(config.get("dimensions") or 0)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("Invalid embedding dimensions") from exc
-    if provider not in {"openai_compatible", "ollama"}:
-        raise RuntimeError("Unsupported embedding provider")
-    if dimensions < 0 or dimensions > 65_536:
-        raise RuntimeError("Invalid embedding dimensions")
-    if not base_url or not model:
-        raise RuntimeError("Embeddings not configured")
-
-    payload = {
-        "model": model,
-        "input": texts,
-    }
-    if dimensions > 0:
-        payload["dimensions"] = dimensions
-
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    endpoint = f"{base_url}/embeddings"
-    if provider == "ollama":
-        endpoint = f"{base_url}/api/embed"
-
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            endpoint,
-            json=payload,
-            headers=headers,
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    # Parse embeddings from response
-    result_vectors = []
-    if provider == "ollama":
-        candidates = data.get("embeddings", [])
-        if candidates and isinstance(candidates[0], (int, float)):
-            candidates = [candidates]
-        result_vectors = [item for item in candidates if isinstance(item, list)]
-    else:
-        ordered = sorted(
-            [item for item in data.get("data", []) if isinstance(item, dict)],
-            key=lambda item: int(item.get("index", 0)),
-        )
-        result_vectors = [item.get("embedding") for item in ordered if isinstance(item.get("embedding"), list)]
-
-    if len(result_vectors) != len(texts):
-        raise RuntimeError(
-            f"Expected {len(texts)} embeddings, got {len(result_vectors)}"
-        )
-
-    vector_size = len(result_vectors[0]) if result_vectors else 0
-    if vector_size == 0 or any(len(vector) != vector_size for vector in result_vectors):
-        raise RuntimeError("Embedding provider returned inconsistent vector dimensions")
-    if any(
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(float(value))
-        for vector in result_vectors
-        for value in vector
-    ):
-        raise RuntimeError("Embedding provider returned an invalid vector")
-
-    return result_vectors
 
 
 def pack_vector(vec: list[float] | array) -> bytes:

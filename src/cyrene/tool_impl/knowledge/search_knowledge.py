@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
+from cyrene.tooling.runtime_api import (
     logger,
 )
 
@@ -23,10 +23,10 @@ async def _tool_search_knowledge(args: dict[str, Any], _bot: Any, _chat_id: int,
 
     try:
         from cyrene.knowledge import retrieve
-        from cyrene.workbench_context import ensure_knowledge_db_for_session
-        from cyrene.agent.state import _current_session_id
+        from cyrene.workbench.context import ensure_knowledge_db_for_session
+        from cyrene.agent.context import get_current_session_id
 
-        db_path = await ensure_knowledge_db_for_session(_current_session_id.get())
+        db_path = await ensure_knowledge_db_for_session(get_current_session_id())
         results = await retrieve.search_knowledge(db_path, query, k=k)
         if not results:
             return "No matching documents found in the knowledge base."

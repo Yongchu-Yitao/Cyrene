@@ -10,7 +10,7 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
-from cyrene.db import init_knowledge_db
+from cyrene.runtime.database import init_knowledge_db
 from cyrene.knowledge import bibliography, library, store, zotero
 from route.workbench import library as library_routes
 

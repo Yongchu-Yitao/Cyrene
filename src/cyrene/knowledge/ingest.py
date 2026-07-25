@@ -10,54 +10,16 @@ import aiosqlite
 from pathlib import Path
 from xml.etree import ElementTree
 
-from cyrene.attachments import (
+from cyrene.runtime.attachments import (
     is_pdf_path,
     is_image_path,
-    _vision_analysis,
+    vision_analysis,
 )
-from cyrene.call_llm import _approx_token_count
+from cyrene.model_runtime.client import approx_token_count
 from cyrene.knowledge import store, embeddings
-
-
-def _extract_office_xml_text(path: Path) -> str:
-    """Extract Office XML text, including uploads whose extension was lost."""
-    suffix = path.suffix.lower()
-    try:
-        with zipfile.ZipFile(path) as archive:
-            names = archive.namelist()
-            slide_names = sorted(
-                name for name in names
-                if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
-            )
-            sheet_names = [
-                name for name in names
-                if name == "xl/sharedStrings.xml"
-                or re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
-            ]
-            if suffix == ".docx" or "word/document.xml" in names:
-                targets = [name for name in names if name == "word/document.xml"]
-            elif suffix == ".pptx" or slide_names:
-                targets = slide_names
-            elif suffix == ".xlsx" or sheet_names:
-                targets = sheet_names
-            else:
-                return ""
-            blocks: list[str] = []
-            for name in targets:
-                try:
-                    root = ElementTree.fromstring(archive.read(name))
-                except Exception:
-                    continue
-                text = " ".join(
-                    node.text.strip()
-                    for node in root.iter()
-                    if node.text and node.text.strip()
-                )
-                if text:
-                    blocks.append(text)
-            return "\n\n".join(blocks)
-    except (OSError, zipfile.BadZipFile):
-        return ""
+from cyrene.knowledge.extractors import (
+    extract_office_xml_text as _extract_office_xml_text,
+)
 
 
 async def extract_document_text(path: Path, kind: str) -> str:
@@ -96,7 +58,7 @@ async def extract_document_text(path: Path, kind: str) -> str:
 
         if kind == "image" or is_image_path(path):
             try:
-                result = await _vision_analysis(path, prompt="")
+                result = await vision_analysis(path, prompt="")
                 return result.get("vision_text", "").strip()
             except Exception:
                 return ""
@@ -243,7 +205,7 @@ async def _index_document_inner(db_path: str, doc_id: str) -> None:
                 "content": chunk_text_str,
                 "char_start": char_start,
                 "char_end": char_end,
-                "token_count": _approx_token_count(chunk_text_str),
+                "token_count": approx_token_count(chunk_text_str),
                 "embedding": None,
                 "embedding_dim": 0,
                 "embedding_model": "",

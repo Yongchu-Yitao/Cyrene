@@ -5,7 +5,7 @@ from route.registry import register_routes
 
 
 def _client(monkeypatch):
-    from cyrene import settings_store
+    from cyrene.runtime import settings_store
 
     state = {
         "packages": {"browser_tools": False},

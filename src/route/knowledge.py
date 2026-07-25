@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, UploadFile
 from fastapi.responses import JSONResponse, FileResponse
 
-from cyrene.attachments import (
+from cyrene.runtime.attachments import (
     UPLOADS_DIR as _UPLOADS_DIR,
     attachment_kind_from_meta,
     is_uploaded_attachment_path,
@@ -27,7 +27,7 @@ def _safe_upload_name(filename: str) -> str:
 def register_knowledge_routes(router: APIRouter, workspace_id: str = "default") -> None:
     """Register knowledge base API routes."""
     from cyrene.config import get_knowledge_db_path
-    from cyrene.db import init_knowledge_db
+    from cyrene.runtime.database import init_knowledge_db
     from cyrene.knowledge import store, ingest, retrieve
 
     db_path = str(get_knowledge_db_path(workspace_id))

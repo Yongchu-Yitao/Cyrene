@@ -1,17 +1,24 @@
 """Knowledge base document store.
 
 Provides CRUD operations for documents, chunks, and relations.
-Mirrors the style of cyrene.entities with aiosqlite, JSON serialization, and ISO-8601 timestamps.
+Mirrors the style of cyrene.tool_impl.entity.store with aiosqlite, JSON serialization, and ISO-8601 timestamps.
 """
 
-import json
 import hashlib
+import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import aiosqlite
+
+from cyrene.runtime.sqlite_json import (
+    deserialize_dict as _deserialize_dict,
+    deserialize_list as _deserialize_list,
+    serialize_dict as _serialize_dict,
+    serialize_list as _serialize_list,
+)
 
 
 def _now() -> str:
@@ -22,36 +29,6 @@ def _now() -> str:
 def _new_id() -> str:
     """Generate a new UUID string."""
     return str(uuid.uuid4())
-
-
-def _serialize_list(items: list | None) -> str:
-    """Serialize a list to JSON string."""
-    return json.dumps(items or [])
-
-
-def _serialize_dict(d: dict | None) -> str:
-    """Serialize a dict to JSON string."""
-    return json.dumps(d or {})
-
-
-def _deserialize_list(s: str | None) -> list:
-    """Deserialize a JSON string to list."""
-    if not s:
-        return []
-    try:
-        return json.loads(s)
-    except Exception:
-        return []
-
-
-def _deserialize_dict(s: str | None) -> dict:
-    """Deserialize a JSON string to dict."""
-    if not s:
-        return {}
-    try:
-        return json.loads(s)
-    except Exception:
-        return {}
 
 
 def _row_to_document(row: aiosqlite.Row) -> dict:
@@ -411,7 +388,7 @@ async def deduplicate_documents(db_path: str) -> dict:
     KB records/chunks/relations, and only deletes duplicate files that live in
     Cyrene-managed upload/export directories.
     """
-    from cyrene.attachments import is_uploaded_attachment_path, is_exported_attachment_path
+    from cyrene.runtime.attachments import is_uploaded_attachment_path, is_exported_attachment_path
 
     updated_hashes = 0
     removed_duplicates = 0
@@ -621,7 +598,7 @@ async def sync_filesystem(db_path: str) -> dict:
 
     Returns {"added": N, "total": M} where added is newly registered and total is all now in DB.
     """
-    from cyrene.attachments import UPLOADS_DIR, EXPORTS_DIR, attachment_kind_from_meta
+    from cyrene.runtime.attachments import UPLOADS_DIR, EXPORTS_DIR, attachment_kind_from_meta
     import mimetypes
 
     dedupe_result = await deduplicate_documents(db_path)
@@ -1055,7 +1032,7 @@ async def get_graph(
         elif include_auto:
             # No embeddings configured -> connect documents by shared significant
             # terms (lexical fallback, zero extra deps) so the map still shows links.
-            from cyrene.db import _extract_topic_terms
+            from cyrene.runtime.database import extract_topic_terms
 
             cursor = await db.execute("SELECT document_id, content FROM kb_chunks ORDER BY document_id")
             chunk_rows = await cursor.fetchall()
@@ -1066,7 +1043,7 @@ async def get_graph(
                     bucket.append(row["content"] or "")
             doc_terms: dict[str, set] = {}
             for d_id, parts in doc_text.items():
-                terms = set(_extract_topic_terms(" ".join(parts), limit=40))
+                terms = set(extract_topic_terms(" ".join(parts), limit=40))
                 if len(terms) >= 3:
                     doc_terms[d_id] = terms
             ids = list(doc_terms.keys())

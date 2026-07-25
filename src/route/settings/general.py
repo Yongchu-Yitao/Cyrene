@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 
 
 def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
@@ -64,7 +64,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/context/state")
     async def api_context_state():
-        from cyrene.settings_store import is_workspace_active, is_soul_active, get_workspace_history
+        from cyrene.runtime.settings_store import is_workspace_active, is_soul_active, get_workspace_history
         # When inside a Workbench project, reflect the project's actual workspace
         # path instead of the global fallback so the UI chip and context-picker
         # defaults match the project the user is working in.
@@ -89,25 +89,25 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.post("/api/context/remove-soul")
     async def api_remove_soul():
-        from cyrene.settings_store import set_soul_active
+        from cyrene.runtime.settings_store import set_soul_active
         set_soul_active(False)
         return {"ok": True}
 
     @router.post("/api/context/add-soul")
     async def api_add_soul():
-        from cyrene.settings_store import set_soul_active
+        from cyrene.runtime.settings_store import set_soul_active
         set_soul_active(True)
         return {"ok": True}
 
     @router.post("/api/context/remove-workspace")
     async def api_remove_workspace():
-        from cyrene.settings_store import set_workspace_active
+        from cyrene.runtime.settings_store import set_workspace_active
         set_workspace_active(False)
         return {"ok": True}
 
     @router.post("/api/context/add-workspace")
     async def api_add_workspace(request: Request):
-        from cyrene.settings_store import set_workspace_active, add_workspace_to_history
+        from cyrene.runtime.settings_store import set_workspace_active, add_workspace_to_history
         body = await request.json()
         path = str(body.get("path", "")).strip()
         set_workspace_active(True)
@@ -170,9 +170,9 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/settings/models")
     async def api_get_models():
-        from cyrene.settings_store import get_models, get_vision_models, get_secondary_model
+        from cyrene.runtime.settings_store import get_models, get_vision_models, get_secondary_model
         from cyrene.config import OPENAI_API_KEY, DEFAULT_OPENAI_BASE_URL, read_env_file
-        from cyrene.model_prices import price_hint as _price_hint
+        from cyrene.model_runtime.pricing import price_hint as _price_hint
 
         def _normalize_candidates(raw_items: list[dict[str, Any]] | None, fallback_api_key: str, fallback_base_url: str) -> list[dict[str, Any]]:
             normalized_items: list[dict[str, Any]] = []
@@ -186,7 +186,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 if not model_identifier:
                     continue
                 model_base_url = str(model.get("base_url") or fallback_base_url or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL
-                raw_model_api_key = _strip_wrapping_quotes(str(model.get("api_key") or "").strip())
+                raw_model_api_key = strip_wrapping_quotes(str(model.get("api_key") or "").strip())
                 if raw_model_api_key:
                     model_api_key = raw_model_api_key
                 elif model_base_url.rstrip("/") == (fallback_base_url or DEFAULT_OPENAI_BASE_URL).rstrip("/"):
@@ -217,7 +217,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         raw_secondary = get_secondary_model()
         active_model_name, base_url = _live_llm_config()
         env_keys = read_env_file()
-        active_api_key = _strip_wrapping_quotes(str(env_keys.get("OPENAI_API_KEY") or OPENAI_API_KEY or "").strip())
+        active_api_key = strip_wrapping_quotes(str(env_keys.get("OPENAI_API_KEY") or OPENAI_API_KEY or "").strip())
         normalized = _normalize_candidates(raw_models, active_api_key, base_url)
         normalized_vision = _normalize_candidates(raw_vision_models, active_api_key, base_url)
 
@@ -227,7 +227,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         max_concurrency = int(raw_secondary.get("max_concurrency") or 0)
         if sec_model:
             sec_base_url = str(raw_secondary.get("base_url") or base_url or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL
-            sec_raw_api_key = _strip_wrapping_quotes(str(raw_secondary.get("api_key") or "").strip())
+            sec_raw_api_key = strip_wrapping_quotes(str(raw_secondary.get("api_key") or "").strip())
             if sec_raw_api_key:
                 sec_api_key = sec_raw_api_key
             elif sec_base_url.rstrip("/") == (base_url or DEFAULT_OPENAI_BASE_URL).rstrip("/"):
@@ -313,10 +313,10 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.put("/api/settings/models")
     async def api_update_models(request: Request):
-        from cyrene.settings_store import save_models, save_vision_models, save_secondary_model, get_secondary_model
+        from cyrene.runtime.settings_store import save_models, save_vision_models, save_secondary_model, get_secondary_model
         from cyrene.config import DEFAULT_OPENAI_BASE_URL, write_env_keys
-        from cyrene.model_prices import price_hint as _price_hint
-        from cyrene.onboarding import _test_llm_connection, _test_llm_vision_capability
+        from cyrene.model_runtime.pricing import price_hint as _price_hint
+        from cyrene.runtime.onboarding import _test_llm_connection, _test_llm_vision_capability
         body = await request.json()
         raw_models = body.get("models")
         raw_vision_models = body.get("vision_models")
@@ -345,7 +345,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                         "desc": str(model.get("desc") or "").strip(),
                         "ctx": str(model.get("ctx") or "").strip(),
                         "price": str(model.get("price") or "").strip(),
-                        "api_key": _strip_wrapping_quotes(str(model.get("api_key") or "").strip()),
+                        "api_key": strip_wrapping_quotes(str(model.get("api_key") or "").strip()),
                         "base_url": str(model.get("base_url") or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL,
                     }
                 )
@@ -362,7 +362,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         primary = normalized[0]
         primary_model = str(primary.get("model") or "").strip()
         primary_base_url = str(primary.get("base_url") or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL
-        primary_api_key = _strip_wrapping_quotes(str(primary.get("api_key") or "").strip())
+        primary_api_key = strip_wrapping_quotes(str(primary.get("api_key") or "").strip())
 
         try:
             await _test_llm_connection(primary_api_key, primary_base_url, primary_model)
@@ -422,7 +422,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 "desc": "",
                 "ctx": "",
                 "price": "",
-                "api_key": _strip_wrapping_quotes(str(saved_secondary.get("api_key") or "").strip()),
+                "api_key": strip_wrapping_quotes(str(saved_secondary.get("api_key") or "").strip()),
                 "base_url": str(saved_secondary.get("base_url") or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL,
                 "ctx_limit": ctx_limit,
                 "max_concurrency": max_concurrency,
@@ -470,7 +470,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/settings/tools")
     async def api_get_tools():
-        from cyrene.settings_store import (
+        from cyrene.runtime.settings_store import (
             get_enabled_tool_packs,
             get_enabled_tools,
             is_tool_pack_enabled,
@@ -507,7 +507,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             })
         # Include MCP tools from connected servers
         try:
-            from cyrene.mcp_manager import get_manager as _get_mcp_mgr
+            from cyrene.tooling.backends.mcp_manager import get_manager as _get_mcp_mgr
             manager = _get_mcp_mgr()
             for mcp_td in manager.get_tool_defs():
                 name = mcp_td["function"]["name"]
@@ -576,7 +576,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.put("/api/settings/tools")
     async def api_update_tools(request: Request):
-        from cyrene.settings_store import (
+        from cyrene.runtime.settings_store import (
             get_enabled_tool_packs,
             save_enabled_tool_packs,
             save_enabled_tools,
@@ -683,7 +683,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.put("/api/settings/config")
     async def api_update_config(request: Request):
-        from cyrene.settings_store import set_ as set_setting
+        from cyrene.runtime.settings_store import set_ as set_setting
         body = await request.json()
         changed = []
         if "spawn_policy" in body:
@@ -809,13 +809,13 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.get("/api/settings/integrations")
     async def api_get_integration_settings():
         """Return Zotero/embedding settings without exposing stored secrets."""
-        from cyrene.integration_settings import public_settings
+        from cyrene.runtime.integration_settings import public_settings
 
         return public_settings()
 
     @router.put("/api/settings/integrations")
     async def api_update_integration_settings(request: Request):
-        from cyrene.integration_settings import update_settings
+        from cyrene.runtime.integration_settings import update_settings
 
         body = await request.json()
         if not isinstance(body, dict) or not ({"zotero", "embedding"} & set(body)):
@@ -831,7 +831,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.post("/api/settings/integrations/test")
     async def api_test_integration(request: Request):
         """Probe unsaved integration settings and return only safe metadata."""
-        from cyrene.integration_settings import (
+        from cyrene.runtime.integration_settings import (
             merged_test_config,
             test_embedding,
             test_zotero,
@@ -865,7 +865,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.put("/api/profile")
     async def api_update_profile(request: Request):
         """Persist the user's custom identity (name / avatar / bio)."""
-        from cyrene.settings_store import set_ as set_setting
+        from cyrene.runtime.settings_store import set_ as set_setting
         body = await request.json()
         changed: list[str] = []
         if "name" in body:
@@ -903,7 +903,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.put("/api/settings/search")
     async def api_update_search(request: Request):
-        from cyrene.settings_store import set_ as set_setting
+        from cyrene.runtime.settings_store import set_ as set_setting
         await request.json()
         set_setting("search_mode", "builtin")
         set_setting("search_external_url", "")
@@ -915,9 +915,9 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     async def api_budget_stats():
         import calendar
         from datetime import datetime, timezone
-        from cyrene.db import get_token_usage_stats as _usage_stats
-        from cyrene.model_prices import CNY_PER_USD as _CNY2USD
-        from cyrene.settings_store import get_all as _gsett
+        from cyrene.runtime.database import get_token_usage_stats as _usage_stats
+        from cyrene.model_runtime.pricing import CNY_PER_USD as _CNY2USD
+        from cyrene.runtime.settings_store import get_all as _gsett
 
         currency = str(_gsett().get("budget_currency") or "CNY").upper()
         start_day = int(_gsett().get("budget_start_day") or 1)
@@ -967,8 +967,8 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.get("/api/budget/status")
     async def api_budget_status():
         """Return current budget state (weekly + 5-hour block)."""
-        from cyrene.settings_store import get_all as _get_sett
-        from cyrene.budget import get_budget_state as _budget_state
+        from cyrene.runtime.settings_store import get_all as _get_sett
+        from cyrene.agent.budget import get_budget_state as _budget_state
 
         sett = _get_sett()
         state = await _budget_state(
@@ -982,7 +982,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/settings/mcp")
     async def api_get_mcp_servers():
-        from cyrene.mcp_manager import get_manager as _get_mcp_mgr, get_mcp_servers as _get_servers
+        from cyrene.tooling.backends.mcp_manager import get_manager as _get_mcp_mgr, get_mcp_servers as _get_servers
         manager = _get_mcp_mgr()
         return {
             "servers": manager.get_server_status(),
@@ -991,7 +991,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.put("/api/settings/mcp")
     async def api_update_mcp_servers(request: Request):
-        from cyrene.mcp_manager import save_mcp_servers as _save_servers, restart_mcp as _restart_mcp
+        from cyrene.tooling.backends.mcp_manager import save_mcp_servers as _save_servers, restart_mcp as _restart_mcp
         body = await request.json()
         servers = body.get("servers", [])
         _save_servers(servers)

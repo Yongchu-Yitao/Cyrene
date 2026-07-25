@@ -11,8 +11,8 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_send_notification(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.notifications import notify
-    from cyrene.agent.state import _conversation_source
+    from cyrene.runtime.notifications import notify
+    from cyrene.agent.context import get_current_conversation_source
 
     title = str(args.get("title") or "Cyrene").strip()
     text = str(args.get("text") or "").strip()
@@ -20,7 +20,7 @@ async def _tool_send_notification(args: dict[str, Any], _bot: Any, _chat_id: int
     if not text:
         return "No notification text provided."
 
-    source = _conversation_source.get()
+    source = get_current_conversation_source()
 
     # When the conversation started from WebUI (default), skip Telegram and WeChat
     # so that WebUI interactions don't leak to external messaging channels.

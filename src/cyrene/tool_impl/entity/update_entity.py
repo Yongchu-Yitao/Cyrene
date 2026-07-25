@@ -9,7 +9,7 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_update_entity(args, bot, chat_id, db_path, notify_state):
-    from cyrene.entities import update_entity
+    from cyrene.tool_impl.entity.store import update_entity
     field = args["field"]
     value = args["value"]
     entity = await update_entity(db_path, args["id"], **{field: value})

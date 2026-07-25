@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
-    _truncate,
+from cyrene.tooling.runtime_api import (
+    truncate,
     httpx,
 )
 
@@ -19,7 +19,7 @@ async def _tool_webfetch(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pat
     async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
         response = await client.get(url)
         response.raise_for_status()
-    return _truncate(response.text)
+    return truncate(response.text)
 
 
 handler = _tool_webfetch

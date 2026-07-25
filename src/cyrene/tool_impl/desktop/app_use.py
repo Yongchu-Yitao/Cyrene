@@ -67,7 +67,7 @@ async def _tool_app_use(
     _db_path: str,
     _notify_state: dict[str, bool] | None,
 ) -> str:
-    from cyrene.app_use import execute_app_use, format_app_use_result
+    from cyrene.tooling.backends.app_use import execute_app_use, format_app_use_result
 
     return format_app_use_result(await execute_app_use(args))
 

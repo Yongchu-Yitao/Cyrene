@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 
 
 def register_browser_routes(router: APIRouter, bot: Any, db_path: str) -> None:
@@ -66,7 +66,7 @@ def register_browser_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
         async def _record_browser_event(kind: str, payload: dict[str, Any]) -> None:
             try:
-                from cyrene import behavior_learning as _behavior_learning
+                from cyrene.learning import engine as _behavior_learning
 
                 meta = await _browser_page_meta()
                 await _behavior_learning.record_browser_user_event(
@@ -171,7 +171,7 @@ def register_browser_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         if not isinstance(body, dict):
             body = {}
         try:
-            from cyrene import behavior_learning as _behavior_learning
+            from cyrene.learning import engine as _behavior_learning
 
             await _behavior_learning.record_browser_user_event(
                 session_id=str(body.get("sessionId") or body.get("session_id") or ""),

@@ -15,17 +15,17 @@ import aiosqlite
 from fastapi import APIRouter, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from cyrene.attachments import EXPORTS_DIR, UPLOADS_DIR, safe_attachment_filename
+from cyrene.runtime.attachments import EXPORTS_DIR, UPLOADS_DIR, safe_attachment_filename
 from cyrene.knowledge import bibliography, ingest, library, retrieve, store, zotero
 from route.errors import error_response
-from cyrene.workbench_knowledge_service import _ensure_kb_db, _resolve_workspace_id
+from cyrene.workbench.knowledge import _ensure_kb_db, _resolve_workspace_id
 
 
 logger = logging.getLogger(__name__)
 
 
 def _zotero_config() -> dict[str, Any]:
-    from cyrene.integration_settings import get_zotero_settings
+    from cyrene.runtime.integration_settings import get_zotero_settings
 
     return get_zotero_settings()
 

@@ -8,9 +8,9 @@ two UIs never share request code.
 The only thing shared is the pure data layer — that *is* the backend interface
 we reuse:
 
-* ``cyrene.db``            — scheduled-task CRUD + run logs (agent 定时任务)
-* ``cyrene.schedule_spec`` — the single source of truth for ``next_run`` / cron
-* ``cyrene.entities``      — entities that carry a ``due_date`` (任务截止)
+* ``cyrene.runtime.database``            — scheduled-task CRUD + run logs (agent 定时任务)
+* ``cyrene.runtime.schedule_spec`` — the single source of truth for ``next_run`` / cron
+* ``cyrene.tool_impl.entity.store``      — entities that carry a ``due_date`` (任务截止)
 
 The headline endpoint is ``GET /occurrences``: it expands every active/paused
 scheduled task (cron / interval / once) **and** every entity deadline into
@@ -38,7 +38,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from route import schemas as api_models
 from route.errors import error_response
-from webui.workbench_notifications import append_notification
+from cyrene.workbench.notifications import append_notification
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ def _safe_workspace_id(workspace_id: str | None) -> str:
 def _resolve_workspace_id(workspace_id: str | None) -> str:
     wid = _safe_workspace_id(workspace_id)
     try:
-        from cyrene import workbench_runtime as R
+        from cyrene.workbench import runtime as R
 
         raw = str(workspace_id or "").strip()
         # Canonical ids are the frontend's normal path. A lightweight lookup
@@ -263,8 +263,8 @@ def _entity_events(entities: list[dict], start: datetime, end: datetime) -> list
 
 def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
     """Register the Workbench calendar/schedule routes."""
-    from cyrene import db as cy_db
-    from cyrene.schedule_spec import compute_next_run
+    from cyrene.runtime import database as cy_db
+    from cyrene.runtime.schedule_spec import compute_next_run
 
     async def _all_tasks(workspace: str = "default") -> list[dict]:
         return await cy_db.get_all_tasks(db_path, project_id=_resolve_workspace_id(workspace))
@@ -295,7 +295,7 @@ def register_workbench_schedule_routes(router: APIRouter, db_path: str) -> None:
             resolved_workspace = _resolve_workspace_id(workspace)
             async def _entities_for_window() -> list[dict]:
                 try:
-                    from cyrene.entities import list_entities
+                    from cyrene.tool_impl.entity.store import list_entities
 
                     return await list_entities(
                         db_path,

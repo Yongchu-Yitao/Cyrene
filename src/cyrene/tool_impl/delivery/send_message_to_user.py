@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
+from cyrene.tooling.runtime_api import (
     datetime,
     time,
     timezone,
@@ -28,10 +28,10 @@ async def _tool_send_message_to_user(args: dict[str, Any], _bot: Any, _chat_id: 
             "user message via @mention. Use quit with your result for normal rounds."
         )
 
-    from cyrene.agent.state import _current_agent_id, _current_round_id
-    from cyrene import debug as _debug_module
-    agent_id = _current_agent_id.get() or "subagent"
-    round_id = str(_current_round_id.get() or "").strip()
+    from cyrene.agent.context import get_current_agent_id, get_current_round_id
+    from cyrene.observability import debug as _debug_module
+    agent_id = get_current_agent_id() or "subagent"
+    round_id = str(get_current_round_id() or "").strip()
     await _debug_module.publish_event({
         "type": "agent_comm",
         "from": agent_id,

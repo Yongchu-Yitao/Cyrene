@@ -7,13 +7,13 @@ import re
 from pathlib import Path
 from typing import Any
 
-from cyrene.attachments import (
+from cyrene.runtime.attachments import (
     EXPORTS_DIR,
     attachment_kind_from_meta,
     register_generated_attachment,
 )
 from cyrene.config import get_knowledge_db_path
-from cyrene.db import init_knowledge_db
+from cyrene.runtime.database import init_knowledge_db
 from cyrene.knowledge import ingest, store
 
 
@@ -169,7 +169,7 @@ async def migrate_default_project_knowledge() -> dict[str, Any]:
     id db, leaving ``kb_default.db`` intact for the ``--agent`` UI. Idempotent:
     paths already present in the target are skipped.
     """
-    from cyrene import workbench_context as wc
+    from cyrene.workbench import context as wc
 
     projects = wc._read_projects()
     default_project = next(

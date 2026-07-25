@@ -54,7 +54,7 @@ class _FakePage:
 
 def _capture_publish(monkeypatch):
     """Patch debug.publish_event and return the list it appends events to."""
-    from cyrene import debug
+    from cyrene.observability import debug
 
     captured: list[dict] = []
 
@@ -146,7 +146,7 @@ async def test_emit_frame_normalizes_box_and_target(monkeypatch):
 async def test_emit_frame_is_best_effort(monkeypatch):
     """A metadata publish failure must not raise out of _emit_frame."""
     from cyrene import browser
-    from cyrene import debug
+    from cyrene.observability import debug
 
     session = browser._BrowserSession()
     session._page = _FakePage()
@@ -585,7 +585,7 @@ async def test_browser_request_takeover_pauses_with_takeover_meta(monkeypatch):
     import json
 
     from cyrene.tool_impl.browser import browser_request_takeover as _tools
-    from cyrene import debug as _debug
+    from cyrene.observability import debug as _debug
     from cyrene import browser as _browser
     from cyrene.agent import state as _state
     from cyrene.agent import session as _session
@@ -898,7 +898,7 @@ async def test_tool_browser_screenshot_returns_tmp_file(monkeypatch):
     import tempfile
 
     from cyrene.tool_impl.browser import browser_screenshot as _mod
-    from cyrene import attachments as _attachments
+    from cyrene.runtime import attachments as _attachments
 
     # Create a real temp file to simulate what screenshot() returns.
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
@@ -927,7 +927,7 @@ async def test_tool_browser_screenshot_returns_primary_model_visual_observation(
     import os
     import tempfile
 
-    from cyrene import attachments as _attachments
+    from cyrene.runtime import attachments as _attachments
     from cyrene import browser as _browser
     from cyrene.tool_impl.browser import browser_screenshot as _mod
 

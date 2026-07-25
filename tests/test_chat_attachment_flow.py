@@ -6,7 +6,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_analyze_attachment_missing_file_returns_terminal_upload_error(tmp_path):
-    from cyrene.attachments import UPLOADS_DIR
+    from cyrene.runtime.attachments import UPLOADS_DIR
     from cyrene.tool_impl.core.analyze_attachment import _tool_analyze_attachment
 
     result = await _tool_analyze_attachment(
@@ -24,7 +24,7 @@ async def test_analyze_attachment_missing_file_returns_terminal_upload_error(tmp
 
 
 def test_attachment_prompt_forbids_device_scan_after_missing_upload():
-    from cyrene.workbench_runtime import _attachment_prompt_block
+    from cyrene.workbench.runtime import _attachment_prompt_block
 
     prompt = _attachment_prompt_block([
         {
@@ -40,7 +40,7 @@ def test_attachment_prompt_forbids_device_scan_after_missing_upload():
 
 @pytest.mark.asyncio
 async def test_workbench_attachment_only_turn_preserves_empty_public_message(monkeypatch):
-    from cyrene import workbench_runtime as routes
+    from cyrene.workbench import runtime as routes
 
     captured = {}
 
@@ -74,9 +74,10 @@ async def test_workbench_attachment_only_turn_preserves_empty_public_message(mon
 
 @pytest.mark.asyncio
 async def test_chat_upload_hashing_runs_off_event_loop(tmp_path, monkeypatch):
-    from cyrene import config, db
+    from cyrene import config
+    from cyrene.runtime import database as db
     from cyrene.knowledge import store
-    from cyrene import workbench_runtime as routes
+    from cyrene.workbench import runtime as routes
 
     db_path = str(tmp_path / "knowledge.db")
     await db.init_knowledge_db(db_path)

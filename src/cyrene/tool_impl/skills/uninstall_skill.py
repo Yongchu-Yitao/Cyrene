@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
-    _build_skills,
-    _uninstall_skill,
+from cyrene.tooling.runtime_api import (
+    build_skills,
+    uninstall_skill,
     json,
 )
 
@@ -19,7 +19,7 @@ async def _tool_uninstall_skill(args: dict[str, Any], _bot: Any, _chat_id: int, 
     skill_id = str(args.get("skill_id", "")).strip()
     if not skill_id:
         return json.dumps({"ok": False, "error": "skill_id is required"}, ensure_ascii=False)
-    skills = _build_skills()
+    skills = build_skills()
     match = None
     for s in skills:
         if s.get("id") == skill_id or s.get("name", "").lower() == skill_id.lower():
@@ -27,7 +27,7 @@ async def _tool_uninstall_skill(args: dict[str, Any], _bot: Any, _chat_id: int, 
             break
     if not match:
         return json.dumps({"ok": False, "error": f"skill not found: {skill_id}"}, ensure_ascii=False)
-    removed = _uninstall_skill(match["id"])
+    removed = uninstall_skill(match["id"])
     return json.dumps({"ok": removed, "skill_id": match["id"], "name": match.get("name")}, ensure_ascii=False)
 
 

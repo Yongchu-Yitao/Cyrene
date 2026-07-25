@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 
 
 def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
@@ -113,7 +113,7 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     async def _learning_is_known_media_path(target: Path) -> bool:
         try:
-            from cyrene import pattern as _pattern
+            from cyrene import learning as _pattern
 
             chains = await _pattern.list_tool_chains("", 500)
         except Exception:
@@ -149,7 +149,7 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.get("/api/evolution")
     async def api_evolution(project: str = "", compact: bool = False):
         """Aggregated data for the Evolution page."""
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         project_id = _learning_project_id(project)
         raw_project = str(project or "").strip()
         project_ids = [project_id] if project_id else []
@@ -175,22 +175,22 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/learned-skills")
     async def api_learned_skills(project: str = ""):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         return {"skills": await _pattern.list_learned_skills(_learning_project_id(project))}
 
     @router.get("/api/tool-chains")
     async def api_tool_chains(project: str = "", limit: int = 80):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         return {"tool_chains": _learning_enrich_tool_chains(await _pattern.list_tool_chains(_learning_project_ids(project), limit))}
 
     @router.get("/api/skill-candidates")
     async def api_skill_candidates(project: str = "", status: str = "all"):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         return {"candidates": await _pattern.list_skill_candidates(_learning_project_id(project), status)}
 
     @router.post("/api/skill-candidates/{candidate_id}/decision")
     async def api_skill_candidate_decision(candidate_id: str, request: Request):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         try:
             payload = await request.json()
         except Exception:
@@ -202,7 +202,7 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/learned-skills/{skill_id}")
     async def api_learned_skill_detail(skill_id: str):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         skill = await _pattern.get_learned_skill(skill_id)
         if skill is None:
             return JSONResponse({"error": "skill not found"}, status_code=404)
@@ -210,22 +210,22 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/learned-skills/{skill_id}/versions")
     async def api_learned_skill_versions(skill_id: str):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         return {"versions": await _pattern.list_learned_skill_versions(skill_id)}
 
     @router.get("/api/learned-skills/{skill_id}/patches")
     async def api_learned_skill_patches(skill_id: str, status: str = "all"):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         return {"patches": await _pattern.list_learned_skill_patches(skill_id, status)}
 
     @router.get("/api/learned-skills/{skill_id}/runs")
     async def api_learned_skill_runs(skill_id: str, limit: int = 50):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         return {"runs": await _pattern.list_learned_skill_runs(skill_id, limit)}
 
     @router.post("/api/learned-skills/{skill_id}/update")
     async def api_update_learned_skill(skill_id: str, request: Request):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
 
         payload = await request.json()
         updates = payload.get("updates") if isinstance(payload, dict) else None
@@ -237,7 +237,7 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.post("/api/learned-skills/{skill_id}/rollback")
     async def api_rollback_learned_skill(skill_id: str, request: Request):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
 
         payload = await request.json()
         version = int((payload or {}).get("version") or 0)
@@ -248,7 +248,7 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.post("/api/learned-skills/{skill_id}/patches/{patch_id}/apply")
     async def api_apply_learned_skill_patch(skill_id: str, patch_id: str):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         result = await _pattern.apply_skill_patch(skill_id, patch_id)
         if not result.get("ok"):
             return JSONResponse(result, status_code=400)
@@ -256,7 +256,7 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.post("/api/learned-skills/{skill_id}/patches/{patch_id}/reject")
     async def api_reject_learned_skill_patch(skill_id: str, patch_id: str):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         ok = await _pattern.reject_skill_patch(skill_id, patch_id)
         if not ok:
             return JSONResponse({"error": "patch not found"}, status_code=404)
@@ -264,38 +264,38 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.post("/api/learned-skills/{skill_id}/activate")
     async def api_activate_learned_skill(skill_id: str):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         ok = await _pattern.activate_learned_skill(skill_id)
         return {"ok": ok}
 
     @router.post("/api/learned-skills/{skill_id}/deprecate")
     async def api_deprecate_learned_skill(skill_id: str):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         ok = await _pattern.deprecate_learned_skill(skill_id)
         return {"ok": ok}
 
     @router.post("/api/learned-skills/{skill_id}/delete")
     async def api_delete_learned_skill(skill_id: str):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         ok = await _pattern.delete_learned_skill(skill_id)
         return {"ok": ok}
 
     @router.post("/api/learned-skills/{skill_id}/run")
     async def api_run_learned_skill(skill_id: str):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
         result = await _pattern.run_learned_skill(skill_id)
         ok = not str(result).startswith("Learned skill")
         return {"ok": ok, "result": result}
 
     @router.post("/api/learning/process")
     async def api_learning_process(project: str = "", turn_id: str = ""):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
 
         tid = turn_id.strip() if turn_id else ""
         if tid:
             stats = await _pattern.learn_from_turn(tid)
             # Use the turn's actual project for the response so the UI sees the new skill.
-            from cyrene import behavior_learning as _bl
+            from cyrene.learning import engine as _bl
             scope = await _bl._project_scope_for_turn(tid)
             project_id = scope["project_id"]
         else:
@@ -312,7 +312,7 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.post("/api/learning/rebuild")
     async def api_learning_rebuild(project: str = ""):
-        from cyrene import pattern as _pattern
+        from cyrene import learning as _pattern
 
         project_id = _learning_project_id(project)
         project_ids = _learning_project_ids(project)

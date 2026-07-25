@@ -6,11 +6,11 @@ import re as _re
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.behavior_learning import (
+from cyrene.learning.engine import (
     _AUTO_REPLAY_BLOCKED_TOOLS as _BL_BLOCKED_TOOLS,
     _HIGH_RISK_TOOLS as _BL_HIGH_RISK_TOOLS,
 )
-from cyrene.tooling.runtime_support import json
+from cyrene.tooling.runtime_api import json
 from cyrene.tooling.executor import _execute_tool, _skip_action_recording
 from cyrene.tooling.adapters.learned_skills import normalize_learned_step
 
@@ -129,7 +129,7 @@ async def _tool_run_learned_skill(args: dict[str, Any], bot: Any, chat_id: int, 
     params = dict(args.get("params") or {})
 
     try:
-        from cyrene import behavior_learning as _bl
+        from cyrene.learning import engine as _bl
 
         skill = await _bl.get_learned_skill_by_name(name)
         if skill is None:

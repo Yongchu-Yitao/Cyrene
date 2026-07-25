@@ -2,10 +2,10 @@ import json
 
 import pytest
 
-from cyrene import settings_store
+from cyrene.runtime import settings_store
 from cyrene.tooling import native_definitions
 from cyrene.agent import state as agent_state
-from cyrene import workbench_memory_service as memory
+from cyrene.workbench import memory as memory
 
 
 def _isolate_memory_store(monkeypatch, tmp_path, language):
@@ -329,7 +329,7 @@ async def test_search_project_memory_tool_uses_current_project(monkeypatch, tmp_
 async def test_list_memories_combines_short_term_and_current_project(
     monkeypatch, tmp_path
 ):
-    from cyrene import short_term
+    from cyrene.runtime.memory import short_term
     from cyrene.agent import state
     from cyrene.tool_impl.memory import list_memories as tool
 
@@ -355,7 +355,7 @@ async def test_list_memories_combines_short_term_and_current_project(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "cyrene.workbench_context.resolve_workbench_project_id_for_session",
+        "cyrene.workbench.context.resolve_workbench_project_id_for_session",
         lambda session_id: "project-test",
     )
 
@@ -420,7 +420,7 @@ async def test_search_project_memory_allows_default_workbench_project(monkeypatc
 
 
 def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp_path):
-    from cyrene import workbench_context
+    from cyrene.workbench import context as workbench_context
 
     projects_path = tmp_path / "workbench_projects.json"
     chats_path = tmp_path / "workbench_chats.json"
@@ -455,8 +455,8 @@ def test_workbench_scope_resolver_distinguishes_default_project(monkeypatch, tmp
 
 
 def test_default_project_memory_does_not_alias_global_short_term(monkeypatch, tmp_path):
-    from cyrene import short_term
-    from cyrene import workbench_runtime as routes
+    from cyrene.runtime.memory import short_term
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(memory, "STORE_DIR", tmp_path)
     monkeypatch.setattr(memory, "_STORE_DB_PATH", "")

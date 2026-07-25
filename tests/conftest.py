@@ -132,6 +132,6 @@ def pytest_runtest_call(item):
     if loop.is_closed() or loop.is_running():
         return
 
-    from cyrene.runtime_lifecycle import shutdown_background_work
+    from cyrene.runtime.lifecycle import shutdown_background_work
 
     loop.run_until_complete(shutdown_background_work())

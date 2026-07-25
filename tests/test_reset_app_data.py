@@ -3,8 +3,8 @@ import asyncio
 import pytest
 
 from cyrene.knowledge import ingest
-from cyrene import workbench_runtime as routes
-from cyrene import workbench_knowledge_service as routes_workbench_knowledge
+from cyrene.workbench import runtime as routes
+from cyrene.workbench import knowledge as routes_workbench_knowledge
 
 
 @pytest.mark.asyncio
@@ -22,7 +22,7 @@ async def test_clear_knowledge_data_removes_workspace_databases_and_cache(tmp_pa
     for path in knowledge_paths:
         path.write_bytes(b"knowledge")
 
-    unrelated = store_dir / "cyrene.db"
+    unrelated = store_dir / "cyrene.runtime.database"
     unrelated.write_bytes(b"main")
 
     cancelled = False

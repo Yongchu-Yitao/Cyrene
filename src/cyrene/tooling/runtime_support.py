@@ -5,6 +5,7 @@ model-facing tool catalog and contains no tool handlers.
 """
 
 import asyncio
+import importlib
 import json
 import logging
 import os
@@ -17,37 +18,65 @@ from typing import Any
 
 import httpx
 
-from cyrene.attachments import (
+from cyrene.runtime.attachments import (
     analyze_attachment,
     build_public_attachment_payload,
     is_exported_attachment_path,
     is_uploaded_attachment_path,
     register_generated_attachment,
 )
-from cyrene import db
+from cyrene.runtime import database as db
 from cyrene.config import (
     DATA_DIR,
     STATE_FILE,
     WORKSPACE_DIR,
 )
-from cyrene.llm import _truncate
-from cyrene.schedule_spec import compute_next_run
-from cyrene.search import deep_search
-from cyrene.shells import close_shell as _close_shell_session
-from cyrene.shells import list_shells as _list_shell_sessions
-from cyrene.shells import send_shell as _send_shell_session
-from cyrene.shells import start_shell as _start_shell_session
-from cyrene.skills_registry import (
+from cyrene.model_runtime.messages import truncate
+from cyrene.runtime.schedule_spec import compute_next_run
+from cyrene.tooling.backends.search import deep_search
+from cyrene.tooling.backends.shells import close_shell as _close_shell_session
+from cyrene.tooling.backends.shells import list_shells as _list_shell_sessions
+from cyrene.tooling.backends.shells import send_shell as _send_shell_session
+from cyrene.tooling.backends.shells import start_shell as _start_shell_session
+from cyrene.learning.skills import (
     build_skills as _build_skills,
     install_skill_from_path as _install_skill,
     uninstall_skill as _uninstall_skill,
 )
-from cyrene.subagent import register as _reg_subagent, can_receive, _run_subagent, _spawn_subagent_task
-from cyrene.inbox import send_message as _send_inbox
-from cyrene.workbench_context import resolve_project_data_key_for_session
+from cyrene.runtime.inbox import send_message as _send_inbox
+from cyrene.workbench.context import resolve_project_data_key_for_session
 
 logger = logging.getLogger(__name__)
 _CC_PROJECT_DIR = WORKSPACE_DIR.parent
+_truncate = truncate
+
+
+async def _reg_subagent(*args: Any, **kwargs: Any) -> Any:
+    return await importlib.import_module("cyrene.subagent").register(
+        *args,
+        **kwargs,
+    )
+
+
+async def can_receive(*args: Any, **kwargs: Any) -> bool:
+    return await importlib.import_module("cyrene.subagent").can_receive(
+        *args,
+        **kwargs,
+    )
+
+
+async def _run_subagent(*args: Any, **kwargs: Any) -> Any:
+    return await importlib.import_module("cyrene.subagent")._run_subagent(
+        *args,
+        **kwargs,
+    )
+
+
+def _spawn_subagent_task(*args: Any, **kwargs: Any) -> asyncio.Task[Any]:
+    return importlib.import_module("cyrene.subagent")._spawn_subagent_task(
+        *args,
+        **kwargs,
+    )
 __all__ = [
     "DATA_DIR",
     "STATE_FILE",
@@ -83,6 +112,7 @@ __all__ = [
     "_spawn_subagent_task",
     "_start_shell_session",
     "_truncate",
+    "truncate",
     "_uninstall_skill",
     "analyze_attachment",
     "asyncio",
@@ -107,7 +137,7 @@ __all__ = [
 
 
 def _resolve_workspace_path(path_str: str) -> Path:
-    from cyrene.agent.state import active_workspace_dir
+    from cyrene.agent.context import active_workspace_dir
     workspace = active_workspace_dir()
     candidate = Path(path_str)
     path = candidate if candidate.is_absolute() else workspace / candidate
@@ -128,18 +158,19 @@ def _workspace_permission_error() -> str:
 
 
 def _has_full_path_access() -> bool:
-    from cyrene.agent.state import _permission_mode, _temporary_full_access
-    from cyrene.settings_store import get_write_permission_mode
+    from cyrene.agent.context import current_run_context
+    from cyrene.runtime.settings_store import get_write_permission_mode
 
+    run_context = current_run_context()
     return (
-        _permission_mode.get() == "full_access"
-        or _temporary_full_access.get()
+        run_context.permission_mode == "full_access"
+        or run_context.temporary_full_access
         or get_write_permission_mode() == "full_access"
     )
 
 
 def _resolve_workspace_write_target(path_str: str) -> Path:
-    from cyrene.agent.state import active_workspace_dir
+    from cyrene.agent.context import active_workspace_dir
     if _has_full_path_access():
         candidate = Path(path_str)
         path = candidate if candidate.is_absolute() else active_workspace_dir() / candidate
@@ -181,31 +212,29 @@ async def _request_scope_elevation(
         permission_kind: Meta field to identify the permission type.
         options: Custom options for the question UI.
     """
-    import cyrene.agent.state as _state
-    from cyrene.agent.state import (
-        _current_agent_id,
-        _current_client_request_id,
-        _current_command,
-        _current_round_id,
-        _publish_runtime_event,
+    from cyrene.agent.context import (
+        current_run_context,
+        grant_temporary_full_access,
+        publish_runtime_event,
     )
     from cyrene.agent.session import (
-        _upsert_pending_question,
         get_session_labels,
+        upsert_pending_question,
     )
-    if _current_agent_id.get() != "main":
+    run_context = current_run_context()
+    if run_context.agent_id != "main":
         return (
             f"⛔ 已禁止：{operation} 超出 workspace 范围。\n"
             f"Subagent 无权申请权限提升，请向主 agent 报告。"
         )
-    round_id = str(_current_round_id.get() or "").strip()
+    round_id = run_context.round_id.strip()
     if not round_id:
         return (
             f"⛔ 已禁止：{operation} 超出 workspace 范围。\n"
             f"当前不在活动对话轮次中，无法申请权限。"
         )
 
-    mode = _state._permission_mode.get()
+    mode = run_context.permission_mode
     # 破坏性/不可逆操作必须由真人确认，不能被 full_access 或 auto mode 短路。
     requires_human_confirmation = permission_kind in {
         "destructive_confirmation",
@@ -223,7 +252,7 @@ async def _request_scope_elevation(
             path_hint=path_hint,
             reason=reason,
         )
-        await _publish_runtime_event({
+        await publish_runtime_event({
             "type": "auto_review",
             "approved": approved,
             "operation": operation,
@@ -233,7 +262,7 @@ async def _request_scope_elevation(
             "round_id": round_id,
         })
         if approved:
-            _state._temporary_full_access.set(True)
+            grant_temporary_full_access()
             return None
         return (
             f"⛔ 审核 agent 拒绝了此操作（{operation}）。\n"
@@ -252,11 +281,11 @@ async def _request_scope_elevation(
         "path_hint": path_hint,
         "reason": reason,
         "operation": operation,
-        "command": _current_command.get() or "",
+        "command": run_context.command,
     }
     if meta_extra:
         meta.update(meta_extra)
-    question = await _upsert_pending_question({
+    question = await upsert_pending_question({
         "text": (
             f"⚠️ Agent 尝试执行 {scope_hint}{operation}\n\n"
             f"工具：{tool_name}{detail}{why}\n\n"
@@ -264,7 +293,7 @@ async def _request_scope_elevation(
         ),
         "round_id": round_id,
         "round_title": labels.get("round_title", ""),
-        "client_request_id": str(_current_client_request_id.get() or "").strip(),
+        "client_request_id": run_context.client_request_id.strip(),
         "options": effective_options,
         "allow_custom": True,
         "meta": meta,
@@ -371,7 +400,10 @@ async def _request_destructive_confirmation(
     risk_level: str = "high",
 ) -> str | None:
     """Require human confirmation before irreversible/destructive side effects."""
-    from cyrene.agent import state as _state
+    from cyrene.agent.context import (
+        has_destructive_confirmation,
+        publish_runtime_event,
+    )
 
     fingerprint = _destructive_operation_fingerprint(
         tool_name=tool_name,
@@ -380,12 +412,10 @@ async def _request_destructive_confirmation(
         path_hint=path_hint,
         destructive_kind=destructive_kind,
     )
-    if _state._destructive_confirmation_allow_all.get():
-        return None
-    if fingerprint in _state._destructive_confirmation_fingerprints.get():
+    if has_destructive_confirmation(fingerprint):
         return None
 
-    await _state._publish_runtime_event({
+    await publish_runtime_event({
         "type": "destructive_confirmation",
         "decision": "requested",
         "tool_name": tool_name,
@@ -424,9 +454,10 @@ async def _request_external_delivery_confirmation(
     a destructive filesystem operation. Full-access mode promises not to
     interrupt, and auto mode should let the review agent decide.
     """
-    from cyrene.agent import state as _state
+    from cyrene.agent.context import current_run_context
 
-    if _state._permission_mode.get() == "full_access" or _state._temporary_full_access.get():
+    run_context = current_run_context()
+    if run_context.permission_mode == "full_access" or run_context.temporary_full_access:
         return None
     return await _request_scope_elevation(
         tool_name=tool_name,
@@ -447,10 +478,13 @@ async def _request_external_upload_confirmation(
     reason: str = "",
 ) -> str | None:
     """Require a human, single-use approval before exposing files to a website."""
-    from cyrene.agent import state as _state
+    from cyrene.agent.context import (
+        has_external_upload_grant,
+        publish_runtime_event,
+    )
 
     normalized_fingerprint = str(fingerprint or "").strip()
-    if normalized_fingerprint in _state._external_upload_confirmation_fingerprints.get():
+    if has_external_upload_grant(normalized_fingerprint):
         return None
 
     safe_target = {
@@ -471,7 +505,7 @@ async def _request_external_upload_confirmation(
         }
         for item in files
     ]
-    await _state._publish_runtime_event({
+    await publish_runtime_event({
         "type": "external_upload_confirmation",
         "decision": "requested",
         "tool_name": "browser_upload_files",
@@ -800,8 +834,11 @@ def _resolve_tool_path(path_str: str) -> Path:
     if is_uploaded_attachment_path(path_str) or is_exported_attachment_path(path_str):
         return Path(path_str).resolve()
     # Auto-resolve filename to the correct upload path when the agent guesses wrong paths.
-    from cyrene.agent.state import _attachment_paths_by_name, active_workspace_dir
-    att_map = _attachment_paths_by_name.get()
+    from cyrene.agent.context import (
+        active_workspace_dir,
+        current_attachment_paths,
+    )
+    att_map = current_attachment_paths()
     if att_map:
         basename = Path(path_str).name
         if basename in att_map:
@@ -820,7 +857,7 @@ def _resolve_exportable_path(path_str: str) -> Path:
     # unchanged. This is where the agent's file tools (Write/Bash) actually
     # write, so a deliverable created inside the project workspace must be
     # sendable even when that workspace lives outside the global WORKSPACE_DIR.
-    from cyrene.agent.state import active_workspace_dir
+    from cyrene.agent.context import active_workspace_dir
     active_ws = active_workspace_dir().resolve()
     candidate = Path(path_str)
     path = candidate if candidate.is_absolute() else active_ws / candidate

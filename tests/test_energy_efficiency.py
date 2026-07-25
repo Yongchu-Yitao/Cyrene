@@ -20,9 +20,9 @@ async def test_scheduler_uses_independent_maintenance_cadences(
     tmp_path,
     monkeypatch,
 ):
-    from cyrene import scheduler
-    from cyrene import workbench_chat_service as routes_workbench_chat
-    from webui import workbench_notifications
+    from cyrene.runtime import scheduler
+    from cyrene.workbench import chat as routes_workbench_chat
+    from cyrene.workbench import notifications as workbench_notifications
 
     monkeypatch.setattr(scheduler, "_load_lottery_state", lambda: None)
     monkeypatch.setattr(scheduler, "_get_heartbeat_interval", lambda: 1800)
@@ -33,7 +33,7 @@ async def test_scheduler_uses_independent_maintenance_cadences(
     monkeypatch.setattr(routes_workbench_chat, "configure_store", lambda _path: None)
     monkeypatch.setattr(workbench_notifications, "configure_store", lambda _path: None)
 
-    instance = scheduler.setup_scheduler(None, str(tmp_path / "cyrene.db"))
+    instance = scheduler.setup_scheduler(None, str(tmp_path / "cyrene.runtime.database"))
     jobs = {job.id: job for job in instance.get_jobs()}
 
     assert set(jobs) == {
@@ -51,7 +51,7 @@ async def test_scheduler_uses_independent_maintenance_cadences(
 
 
 async def test_due_task_poll_does_not_run_heavy_maintenance(monkeypatch):
-    from cyrene import scheduler
+    from cyrene.runtime import scheduler
 
     due_tasks = AsyncMock()
     proactive = AsyncMock()
@@ -62,16 +62,16 @@ async def test_due_task_poll_does_not_run_heavy_maintenance(monkeypatch):
     monkeypatch.setattr(scheduler, "_run_steward_if_needed", steward)
     monkeypatch.setattr(scheduler, "_behavior_learning_tick", learning)
 
-    await scheduler._scheduled_task_tick(None, "cyrene.db")
+    await scheduler._scheduled_task_tick(None, "cyrene.runtime.database")
 
-    due_tasks.assert_awaited_once_with(None, "cyrene.db")
+    due_tasks.assert_awaited_once_with(None, "cyrene.runtime.database")
     proactive.assert_not_awaited()
     steward.assert_not_awaited()
     learning.assert_not_awaited()
 
 
 async def test_behavior_learning_kicks_are_coalesced(monkeypatch):
-    from cyrene import behavior_learning
+    from cyrene.learning import engine as behavior_learning
     from cyrene.agent import coordinator
 
     process = AsyncMock()
@@ -89,7 +89,7 @@ async def test_behavior_learning_kicks_are_coalesced(monkeypatch):
 
 
 async def test_single_tool_turn_skips_learning_llm(tmp_path, monkeypatch):
-    from cyrene import behavior_learning as learning
+    from cyrene.learning import engine as learning
 
     await learning.init(tmp_path, tmp_path)
     calls: list[str] = []
@@ -135,7 +135,7 @@ async def test_single_tool_turn_skips_learning_llm(tmp_path, monkeypatch):
 
 
 async def test_llm_usage_and_latency_can_share_one_batch(tmp_path):
-    from cyrene import db
+    from cyrene.runtime import database as db
 
     db_path = tmp_path / "telemetry.db"
     await db.init_db(str(db_path))

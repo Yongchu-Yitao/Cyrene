@@ -10,8 +10,8 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import _json_result
-from cyrene.workbench_context import resolve_workbench_project_id_for_session
+from cyrene.tooling.runtime_api import json_result
+from cyrene.workbench.context import resolve_workbench_project_id_for_session
 
 TOOL_NAME = "retire_project_memory"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -25,21 +25,21 @@ async def _tool_retire_project_memory(
     _notify_state: dict[str, bool] | None,
 ) -> str:
     """Retire one durable memory in the current Workbench project."""
-    from cyrene.agent.state import _current_session_id
+    from cyrene.agent.context import get_current_session_id
 
     memory_id = str(args.get("memory_id", "") or "").strip()
     if not memory_id:
-        return _json_result({
+        return json_result({
             "status": "error",
             "type": "invalid_arguments",
             "message": "memory_id is required",
         })
 
     project_id = resolve_workbench_project_id_for_session(
-        _current_session_id.get()
+        get_current_session_id()
     )
     if project_id is None:
-        return _json_result({
+        return json_result({
             "status": "error",
             "type": "not_found",
             "message": (
@@ -48,7 +48,7 @@ async def _tool_retire_project_memory(
             ),
         })
 
-    from cyrene.workbench_memory_service import (
+    from cyrene.workbench.memory import (
         configure_store,
         retire_project_memory,
     )
@@ -60,13 +60,13 @@ async def _tool_retire_project_memory(
         reason=str(args.get("reason", "") or "").strip(),
     )
     if retired is None:
-        return _json_result({
+        return json_result({
             "status": "error",
             "type": "not_found",
             "message": f"Project memory {memory_id} was not found.",
         })
 
-    return _json_result({
+    return json_result({
         "status": "success",
         "memory_id": memory_id,
         "changed": changed,

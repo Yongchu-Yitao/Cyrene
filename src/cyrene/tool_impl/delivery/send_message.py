@@ -14,11 +14,11 @@ async def _tool_send_user_message(args: dict[str, Any], _bot: Any, _chat_id: int
     text = str(args.get("text", "") or "").strip()
     if not text:
         return "Error: 'text' is required."
-    from cyrene.agent.state import _current_agent_id, _current_client_request_id, _current_round_id
+    from cyrene.agent.context import get_current_agent_id, get_current_client_request_id, get_current_round_id
     from cyrene.agent.session import append_system_message
-    from cyrene.agent.message import _insert_intermediate_user_reply
+    from cyrene.agent.message import insert_intermediate_user_reply
 
-    sender = str(_current_agent_id.get() or "").strip()
+    sender = str(get_current_agent_id() or "").strip()
     if sender not in {"main", "scheduler"}:
         return "Only the main agent can send a user-visible WebUI message. Subagents must report via quit or send_agent_message."
 
@@ -32,15 +32,15 @@ async def _tool_send_user_message(args: dict[str, Any], _bot: Any, _chat_id: int
             _notify_state["sent"] = True
         return "Scheduled message sent to the user."
 
-    round_id = str(_current_round_id.get() or "").strip()
+    round_id = str(get_current_round_id() or "").strip()
     if not round_id:
         await append_system_message(text)
         if _notify_state is not None:
             _notify_state["sent"] = True
         return "System message sent to the user."
 
-    client_request_id = str(_current_client_request_id.get() or "").strip()
-    await _insert_intermediate_user_reply(
+    client_request_id = str(get_current_client_request_id() or "").strip()
+    await insert_intermediate_user_reply(
         text,
         round_id=round_id,
         client_request_id=client_request_id,

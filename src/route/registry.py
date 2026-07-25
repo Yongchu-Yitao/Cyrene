@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI
 
-from cyrene import workbench_runtime as shared
+from cyrene.workbench import runtime as shared
 from route.agent.browser import register_browser_routes
 from route.agent.chat import register_chat_routes
 from route.agent.claude_code import register_claude_code_routes
@@ -75,8 +75,8 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
     shared._db_path = db_path
     shared._configure_workbench_store(db_path)
 
-    from cyrene.workbench_context import configure_store as configure_workbench_context
-    from webui.workbench_notifications import (
+    from cyrene.workbench.context import configure_store as configure_workbench_context
+    from cyrene.workbench.notifications import (
         configure_store as configure_notifications_store,
     )
 

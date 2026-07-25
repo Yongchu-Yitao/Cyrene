@@ -17,7 +17,7 @@ python -m cyrene --agent
 ### Interactive local CLI (no web server)
 
 ```bash
-python -m cyrene.local_cli
+python -m cyrene.runtime.host
 ```
 
 ### Via the `cyrene` command-line client
@@ -132,7 +132,7 @@ Use `--json` for machine-readable output.
 ## Interactive Local CLI
 
 ```bash
-python -m cyrene.local_cli
+python -m cyrene.runtime.host
 ```
 
 This starts the agent directly without a web server. Available in-conversation commands:

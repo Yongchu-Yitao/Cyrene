@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter
 
 from route import schemas as api_models
-from webui import workbench_goal_loop as _service
+from cyrene.workbench import goal_loop as _service
 
 # The execution engine remains a UI-independent service.  Bind its private
 # operations into this adapter namespace so the moved handlers retain their
@@ -32,7 +32,7 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
     async def preview_goal_loop(
         session_id: str, body_model: api_models.GoalLoopPreviewBody
     ):
-        from cyrene import workbench_runtime as R
+        from cyrene.workbench import runtime as R
 
         body = api_models.body_dict(body_model)
         limits, error = _validate_limits(body)
@@ -245,7 +245,7 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
                 "body": "用户确认启动持续执行到验收通过。",
             })
 
-        from cyrene import workbench_runtime as R
+        from cyrene.workbench import runtime as R
 
         try:
             payload, project, session = _write_session(session_id, apply)

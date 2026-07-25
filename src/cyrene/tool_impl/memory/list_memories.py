@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from cyrene import short_term
+from cyrene.runtime.memory import short_term
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import _json_result
+from cyrene.tooling.runtime_api import json_result
 
 TOOL_NAME = "ListMemories"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -91,16 +91,16 @@ async def _tool_list_memories(
         )
 
     if scope in {"all", "project"}:
-        from cyrene.agent.state import _current_session_id
-        from cyrene.workbench_context import (
+        from cyrene.agent.context import get_current_session_id
+        from cyrene.workbench.context import (
             resolve_workbench_project_id_for_session,
         )
 
         project_id = resolve_workbench_project_id_for_session(
-            _current_session_id.get()
+            get_current_session_id()
         )
         if project_id is not None:
-            from cyrene.workbench_memory_service import (
+            from cyrene.workbench.memory import (
                 _build_payload,
                 configure_store,
             )
@@ -113,7 +113,7 @@ async def _tool_list_memories(
                 if isinstance(entry, dict)
             )
         elif scope == "project":
-            return _json_result({
+            return json_result({
                 "status": "error",
                 "type": "not_found",
                 "message": (
@@ -165,7 +165,7 @@ async def _tool_list_memories(
     }
     if not page:
         payload["note"] = "No memories match the requested filters."
-    return _json_result(payload)
+    return json_result(payload)
 
 
 handler = _tool_list_memories

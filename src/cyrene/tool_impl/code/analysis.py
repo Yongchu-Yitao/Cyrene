@@ -59,8 +59,8 @@ async def _run_ruff_format(path: str, check_only: bool = False) -> dict:
 
 def analyze_structure(path: str) -> dict:
     """Analyze Python file structure: functions, classes, complexity, imports."""
-    from cyrene.tooling.runtime_support import _resolve_workspace_path
-    resolved = _resolve_workspace_path(path)
+    from cyrene.tooling.runtime_api import resolve_workspace_path
+    resolved = resolve_workspace_path(path)
     try:
         source = resolved.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -123,10 +123,10 @@ def analyze_structure(path: str) -> dict:
 # ── Tool handlers ──
 
 async def _tool_lint_code(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
-    from cyrene.tooling.runtime_support import _resolve_workspace_path
+    from cyrene.tooling.runtime_api import resolve_workspace_path
     path = str(args.get("path", "."))
     try:
-        resolved = _resolve_workspace_path(path)
+        resolved = resolve_workspace_path(path)
     except ValueError as e:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
     results = await _run_ruff_check(str(resolved))
@@ -134,11 +134,11 @@ async def _tool_lint_code(args: dict, bot=None, chat_id=None, db_path=None, noti
 
 
 async def _tool_format_code(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
-    from cyrene.tooling.runtime_support import _resolve_workspace_path
+    from cyrene.tooling.runtime_api import resolve_workspace_path
     path = str(args.get("path", "."))
     check_only = bool(args.get("check_only", False))
     try:
-        resolved = _resolve_workspace_path(path)
+        resolved = resolve_workspace_path(path)
     except ValueError as e:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
     result = await _run_ruff_format(str(resolved), check_only=check_only)
@@ -146,10 +146,10 @@ async def _tool_format_code(args: dict, bot=None, chat_id=None, db_path=None, no
 
 
 async def _tool_code_review(args: dict, bot=None, chat_id=None, db_path=None, notify_state=None) -> str:
-    from cyrene.tooling.runtime_support import _resolve_workspace_path
+    from cyrene.tooling.runtime_api import resolve_workspace_path
     path = str(args.get("path", "."))
     try:
-        resolved = _resolve_workspace_path(path)
+        resolved = resolve_workspace_path(path)
     except ValueError as e:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
 

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
-def tool_allowed_for_actor(concrete_name: str, actor: str) -> bool:
-    from cyrene.tooling.catalog import is_tool_allowed_for_actor
 
-    return is_tool_allowed_for_actor(concrete_name, actor)
+def tool_allowed_for_actor(concrete_name: str, actor: str) -> bool:
+    return import_module(
+        "cyrene.tooling.catalog"
+    ).is_tool_allowed_for_actor(concrete_name, actor)
 
 
 def capability_available(

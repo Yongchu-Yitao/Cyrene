@@ -24,13 +24,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-import cyrene.updater as updater
+import cyrene.runtime.updater as updater
 
 VERSION = "0.6.0b2"
 
 
 def test_fix_release_label_maps_to_pep440_local_version():
-    from cyrene.updater import _release_version
+    from cyrene.runtime.updater import _release_version
 
     assert str(_release_version("0.6.16-fix")) == "0.6.16+fix"
     assert _release_version("0.6.17") > _release_version("0.6.16-fix")
@@ -200,7 +200,7 @@ def test_no_compatible_asset_does_not_fall_back(monkeypatch):
 
 
 def test_update_available_appends_workbench_notification_once(tmp_path, monkeypatch):
-    from webui import workbench_notifications as notifications
+    from cyrene.workbench import notifications as notifications
 
     store = tmp_path / "workbench_notifications.json"
     monkeypatch.setattr(notifications, "_NOTIFICATIONS_STORE", store)

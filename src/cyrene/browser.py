@@ -39,7 +39,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from cyrene.app_paths import TEMP_DIR
+from cyrene.runtime.paths import TEMP_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +198,7 @@ _CHROME_VERSION_CACHE: str | None = None
 
 def _cfg(key: str, default: str) -> str:
     try:
-        from cyrene.config_store import get_env
+        from cyrene.runtime.config_store import get_env
         return str(get_env(key, default) or default)
     except Exception:
         return default
@@ -315,10 +315,11 @@ async def _electron_browser_rpc(
         raise RuntimeError("Electron browser RPC is unavailable.")
     url = f"http://127.0.0.1:{port}/browser/rpc"
     try:
-        from cyrene.agent.state import _current_round_id, _current_session_id
+        from cyrene.agent.context import current_run_context
 
-        current_session_id = str(_current_session_id.get() or "").strip()
-        current_round_id = str(_current_round_id.get() or "").strip()
+        run_context = current_run_context()
+        current_session_id = run_context.session_id.strip()
+        current_round_id = run_context.round_id.strip()
     except Exception:
         current_session_id = ""
         current_round_id = ""
@@ -544,9 +545,10 @@ _BROWSER_TEXT_LINKS_JS = r"""
 async def _emit_electron_frame(action: str, result: dict[str, Any], *, target: str | None = None, box: Any = None) -> None:
     """Publish the same lightweight browser_frame metadata for Electron tabs."""
     try:
-        from cyrene import debug
-        from cyrene.agent.state import _current_round_id, _current_session_id
+        from cyrene.observability import debug
+        from cyrene.agent.context import current_run_context
 
+        run_context = current_run_context()
         norm_box = None
         if isinstance(box, dict) and box:
             norm_box = {
@@ -557,8 +559,8 @@ async def _emit_electron_frame(action: str, result: dict[str, Any], *, target: s
             }
         await debug.publish_event({
             "type": "browser_frame",
-            "session_id": _current_session_id.get(),
-            "round_id": _current_round_id.get(),
+            "session_id": run_context.session_id,
+            "round_id": run_context.round_id,
             "url": str(result.get("url") or ""),
             "title": str(result.get("title") or ""),
             "action": action,
@@ -849,8 +851,8 @@ class _BrowserSession:
             await self._relaunch(headless=False, url=target)
             self._takeover_active = True
             try:
-                from cyrene.agent.state import _current_session_id
-                self._takeover_session_id = str(_current_session_id.get() or "").strip()
+                from cyrene.agent.context import current_session_id
+                self._takeover_session_id = current_session_id().strip()
             except Exception:
                 self._takeover_session_id = ""
             try:
@@ -887,7 +889,7 @@ class _BrowserSession:
         except Exception:
             logger.debug("auto return-to-headless failed", exc_info=True)
         try:
-            from cyrene import debug
+            from cyrene.observability import debug
             event = {"type": "browser_takeover_cancelled"}
             if self._takeover_session_id:
                 event["session_id"] = self._takeover_session_id
@@ -898,7 +900,7 @@ class _BrowserSession:
     async def _publish_takeover_cancelled(self) -> None:
         self._takeover_active = False
         try:
-            from cyrene import debug
+            from cyrene.observability import debug
             event = {"type": "browser_takeover_cancelled"}
             if self._takeover_session_id:
                 event["session_id"] = self._takeover_session_id
@@ -1505,12 +1507,13 @@ class _BrowserSession:
         shared notification/chat SSE bus.
         """
         try:
-            from cyrene import debug
-            from cyrene.agent.state import _current_round_id, _current_session_id
+            from cyrene.observability import debug
+            from cyrene.agent.context import current_run_context
 
             page = self._page
             if page is None:
                 return
+            run_context = current_run_context()
             norm_box = None
             if isinstance(box, dict) and box:
                 norm_box = {
@@ -1521,8 +1524,8 @@ class _BrowserSession:
                 }
             await debug.publish_event({
                 "type": "browser_frame",
-                "session_id": _current_session_id.get(),
-                "round_id": _current_round_id.get(),
+                "session_id": run_context.session_id,
+                "round_id": run_context.round_id,
                 "url": url or page.url,
                 "title": title,
                 "action": action,
@@ -1780,10 +1783,10 @@ async def end_browser_takeover(url: str = "") -> None:
     """Return the shared session to headless after a login takeover (M3 resume hook)."""
     if electron_browser_available():
         try:
-            from cyrene import debug
-            from cyrene.agent.state import _current_session_id
+            from cyrene.observability import debug
+            from cyrene.agent.context import current_session_id
             event = {"type": "browser_takeover_cancelled"}
-            session_id = str(_current_session_id.get() or "").strip()
+            session_id = current_session_id().strip()
             if session_id:
                 event["session_id"] = session_id
             await debug.publish_event(event)
@@ -1795,10 +1798,10 @@ async def end_browser_takeover(url: str = "") -> None:
         await session.end_takeover(url)
     # Clear the panel's "waiting for login" placeholder so the live view returns.
     try:
-        from cyrene import debug
-        from cyrene.agent.state import _current_session_id
+        from cyrene.observability import debug
+        from cyrene.agent.context import current_session_id
         event = {"type": "browser_takeover_cancelled"}
-        session_id = str(_current_session_id.get() or getattr(session, "_takeover_session_id", "") or "").strip()
+        session_id = str(current_session_id() or getattr(session, "_takeover_session_id", "") or "").strip()
         if session_id:
             event["session_id"] = session_id
         await debug.publish_event(event)

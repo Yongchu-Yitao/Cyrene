@@ -5,21 +5,21 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
-    _request_scope_elevation,
+from cyrene.tooling.runtime_api import (
+    request_scope_elevation,
     compute_next_run,
     datetime,
     db,
     timezone,
 )
-from cyrene.workbench_context import resolve_project_data_key_for_session
+from cyrene.workbench.context import resolve_project_data_key_for_session
 
 TOOL_NAME = 'schedule_task'
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_schedule_task(args: dict[str, Any], _bot: Any, chat_id: int, db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.agent.state import _current_session_id
+    from cyrene.agent.context import get_current_session_id
 
     stype = str(args["schedule_type"])
     svalue = str(args["schedule_value"])
@@ -36,10 +36,10 @@ async def _tool_schedule_task(args: dict[str, Any], _bot: Any, chat_id: int, db_
 
     # 如果任务需要 full_access 权限，先向用户申请（已授权时跳过）
     if permission_mode == "full_access":
-        from cyrene.agent.state import _temporary_full_access
-        if not _temporary_full_access.get():
+        from cyrene.agent.context import has_temporary_full_access
+        if not has_temporary_full_access():
             prompt_preview = str(args.get("prompt", ""))[:120]
-            elevation_result = await _request_scope_elevation(
+            elevation_result = await request_scope_elevation(
                 tool_name="schedule_task",
                 path_hint="",
                 operation="定时任务的外部文件访问权限",
@@ -52,7 +52,7 @@ async def _tool_schedule_task(args: dict[str, Any], _bot: Any, chat_id: int, db_
             if elevation_result is not None:
                 return elevation_result
 
-    project_id = resolve_project_data_key_for_session(_current_session_id.get())
+    project_id = resolve_project_data_key_for_session(get_current_session_id())
     task_id = await db.create_task(
         db_path,
         chat_id,

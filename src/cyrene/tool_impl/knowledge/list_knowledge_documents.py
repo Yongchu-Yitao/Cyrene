@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import logger
+from cyrene.tooling.runtime_api import logger
 
 TOOL_NAME = "ListKnowledgeDocuments"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -23,11 +23,11 @@ async def _tool_list_knowledge_documents(
     status = str(args.get("status", "") or "").strip() or None
 
     try:
-        from cyrene.agent.state import _current_session_id
+        from cyrene.agent.context import get_current_session_id
         from cyrene.knowledge import store
-        from cyrene.workbench_context import ensure_knowledge_db_for_session
+        from cyrene.workbench.context import ensure_knowledge_db_for_session
 
-        db_path = await ensure_knowledge_db_for_session(_current_session_id.get())
+        db_path = await ensure_knowledge_db_for_session(get_current_session_id())
         documents = await store.list_documents(db_path, status=status, limit=limit)
         if not documents:
             return "The knowledge base contains no documents matching the requested filters."

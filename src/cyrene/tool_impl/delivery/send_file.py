@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
-    _json_result,
-    _resolve_exportable_path,
+from cyrene.tooling.runtime_api import (
+    json_result,
+    resolve_exportable_path,
     asyncio,
     build_public_attachment_payload,
     logger,
@@ -23,19 +23,19 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
     if not path_arg:
         return "Error: 'path' is required."
 
-    from cyrene.agent.state import (
-        _current_agent_id,
-        _current_client_request_id,
-        _current_round_id,
-        _current_session_id,
+    from cyrene.agent.context import (
+        get_current_agent_id,
+        get_current_client_request_id,
+        get_current_round_id,
+        get_current_session_id,
     )
     from cyrene.agent.session import append_system_message
-    from cyrene.agent.message import _insert_intermediate_user_reply
+    from cyrene.agent.message import insert_intermediate_user_reply
 
-    if _current_agent_id.get() != "main":
+    if get_current_agent_id() != "main":
         return "Only the main agent can send a file to the WebUI."
 
-    path = _resolve_exportable_path(path_arg)
+    path = resolve_exportable_path(path_arg)
     if not path.exists() or not path.is_file():
         return f"Error: file not found: {path}"
 
@@ -48,23 +48,23 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
     # a file mid-run must not immediately pollute project knowledge.
     try:
         from cyrene.knowledge import store, ingest
-        from cyrene.workbench_context import (
+        from cyrene.workbench.context import (
             ensure_knowledge_db_for_session,
             resolve_workbench_session_kind,
         )
         import mimetypes
         doc_path = registered.get("path", "")
-        current_session_id = str(_current_session_id.get() or "")
+        current_session_id = str(get_current_session_id() or "")
         session_kind = resolve_workbench_session_kind(current_session_id)
         if doc_path and session_kind not in {"task", "init"}:
             from pathlib import Path
             import mimetypes
             doc_file = Path(doc_path)
             content_type = mimetypes.guess_type(str(doc_file))[0] or "application/octet-stream"
-            from cyrene.attachments import attachment_kind_from_meta
+            from cyrene.runtime.attachments import attachment_kind_from_meta
             kind = attachment_kind_from_meta(content_type, doc_file.name)
             content_hash = store.content_hash_file(doc_file)
-            _kb_db_path = await ensure_knowledge_db_for_session(_current_session_id.get())
+            _kb_db_path = await ensure_knowledge_db_for_session(get_current_session_id())
             doc = await store.upsert_document_by_path(
                 _kb_db_path,
                 path=str(doc_file.resolve()),
@@ -75,7 +75,7 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
                 size=doc_file.stat().st_size if doc_file.exists() else 0,
                 metadata={
                     "sent_to_chat": True,
-                    "session_id": str(_current_session_id.get() or ""),
+                    "session_id": str(get_current_session_id() or ""),
                 },
                 content_hash=content_hash,
             )
@@ -84,10 +84,10 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
     except Exception as e:
         logger.debug(f"Failed to register generated file in knowledge base: {e}")
 
-    round_id = str(_current_round_id.get() or "").strip()
-    client_request_id = str(_current_client_request_id.get() or "").strip()
+    round_id = str(get_current_round_id() or "").strip()
+    client_request_id = str(get_current_client_request_id() or "").strip()
     if round_id:
-        await _insert_intermediate_user_reply(
+        await insert_intermediate_user_reply(
             text,
             round_id=round_id,
             client_request_id=client_request_id,
@@ -100,7 +100,7 @@ async def _tool_send_file(args: dict[str, Any], _bot: Any, _chat_id: int, _db_pa
         )
     if _notify_state is not None:
         _notify_state["sent"] = True
-    return _json_result({
+    return json_result({
         "status": "sent",
         "attachment": attachment,
     })

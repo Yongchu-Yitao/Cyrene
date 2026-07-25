@@ -5,19 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
-    _classify_destructive_shell_command,
-    _command_is_file_deletion,
-    _guard_shell_command_workspace_write,
-    _is_dangerous_subshell,
-    _json_result,
-    _request_delete_confirmation,
-    _request_destructive_confirmation,
-    _request_read_elevation,
-    _request_scope_elevation,
-    _request_write_elevation,
-    _resolve_tool_path,
-    _start_shell_session,
+from cyrene.tooling.runtime_api import (
+    classify_destructive_shell_command,
+    command_is_file_deletion,
+    guard_shell_command_workspace_write,
+    is_dangerous_subshell,
+    json_result,
+    request_delete_confirmation,
+    request_destructive_confirmation,
+    request_read_elevation,
+    request_scope_elevation,
+    request_write_elevation,
+    resolve_tool_path,
+    start_shell_session as _start_shell_session,
 )
 
 TOOL_NAME = 'StartShell'
@@ -25,27 +25,27 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.agent.state import _current_round_id, _current_session_id
+    from cyrene.agent.context import get_current_round_id, get_current_session_id
 
     cwd_arg = str(args.get("cwd", ".") or ".")
     try:
-        cwd_path = _resolve_tool_path(cwd_arg)
+        cwd_path = resolve_tool_path(cwd_arg)
     except ValueError:
-        elev = await _request_read_elevation(
+        elev = await request_read_elevation(
             tool_name="StartShell",
             path_hint=cwd_arg,
             reason="Agent 想要在 workspace 之外的目录启动 shell。",
         )
         if elev is not None:
             return elev
-        cwd_path = _resolve_tool_path(cwd_arg)
+        cwd_path = resolve_tool_path(cwd_arg)
     cwd = str(cwd_path)
-    from cyrene.agent.state import _temporary_full_access
+    from cyrene.agent.context import has_temporary_full_access
     command = str(args.get("command", "") or "")
-    _full_access = _temporary_full_access.get()
+    _full_access = has_temporary_full_access()
     if command:
-        if not _full_access and _is_dangerous_subshell(command):
-            elev = await _request_scope_elevation(
+        if not _full_access and is_dangerous_subshell(command):
+            elev = await request_scope_elevation(
                 tool_name="StartShell",
                 path_hint="",
                 operation="包含命令替换的 Shell 操作",
@@ -57,14 +57,14 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
             if elev is not None:
                 return elev
         try:
-            _guard_shell_command_workspace_write(command)
+            guard_shell_command_workspace_write(command)
         except ValueError:
-            elev = await _request_write_elevation(tool_name="StartShell", path_hint=cwd, reason=command[:240])
+            elev = await request_write_elevation(tool_name="StartShell", path_hint=cwd, reason=command[:240])
             if elev is not None:
                 return elev
-        destructive = _classify_destructive_shell_command(command)
+        destructive = classify_destructive_shell_command(command)
         if destructive is not None:
-            delete_result = await _request_destructive_confirmation(
+            delete_result = await request_destructive_confirmation(
                 tool_name="StartShell",
                 operation=destructive["operation"],
                 detail=destructive["detail"],
@@ -72,18 +72,18 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
             )
             if delete_result is not None:
                 return delete_result
-        elif _command_is_file_deletion(command):
-            delete_result = await _request_delete_confirmation(tool_name="StartShell", command=command)
+        elif command_is_file_deletion(command):
+            delete_result = await request_delete_confirmation(tool_name="StartShell", command=command)
             if delete_result is not None:
                 return delete_result
     wake_on_exit = bool(args.get("wake_on_exit", False))
     wake_note = str(args.get("wake_note", "") or "")
-    session_id = str(_current_session_id.get() or "").strip()
+    session_id = str(get_current_session_id() or "").strip()
     snap = await _start_shell_session(
         command=command,
         cwd=cwd,
         title=str(args.get("title", "") or ""),
-        round_id=_current_round_id.get(),
+        round_id=get_current_round_id(),
         wake_on_exit=wake_on_exit,
         wake_chat_id=session_id if wake_on_exit else "",
         wake_note=wake_note,
@@ -107,7 +107,7 @@ async def _tool_start_shell(args: dict[str, Any], _bot: Any, _chat_id: int, _db_
             "Shell is running in the background. Do not wait or poll. "
             "Quit this turn; you will be woken with the terminal output when it exits."
         )
-    return _json_result(result)
+    return json_result(result)
 
 
 handler = _tool_start_shell

@@ -4,8 +4,8 @@ import pytest
 
 
 def test_chat_plan_persists_markdown_and_tracks_step_progress(monkeypatch, tmp_path):
-    from cyrene.io_utils import atomic_write_json
-    from cyrene import workbench_chat_service as chat_routes
+    from cyrene.runtime.io import atomic_write_json
+    from cyrene.workbench import chat as chat_routes
 
     store_path = tmp_path / "workbench_chats.json"
     atomic_write_json(store_path, {
@@ -114,7 +114,7 @@ async def test_generate_plan_includes_pre_plan_tool_history(monkeypatch):
 @pytest.mark.asyncio
 async def test_plan_confirmation_can_resume_with_auto_mode(monkeypatch):
     from cyrene.agent import coordinator, guidance, state
-    from cyrene import workbench_chat_service as routes_workbench_chat
+    from cyrene.workbench import chat as routes_workbench_chat
 
     seen = {}
 

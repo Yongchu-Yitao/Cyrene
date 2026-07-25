@@ -9,7 +9,7 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_list_entities(args, bot, chat_id, db_path, notify_state):
-    from cyrene.entities import list_entities
+    from cyrene.tool_impl.entity.store import list_entities
     entities = await list_entities(
         db_path,
         type=args.get("type"),

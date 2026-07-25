@@ -22,17 +22,17 @@ sys.modules["PIL"] = pil_mock
 pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
-from cyrene import db
+from cyrene.runtime import database as db
 from route.registry import register_routes
 
 
 @pytest.fixture
 def targets_env(monkeypatch, tmp_path):
-    from cyrene import io_utils
-    from cyrene import workbench_chat_service as chat_service
-    from cyrene import workbench_runtime as routes_mod
+    from cyrene.runtime import io as io_utils
+    from cyrene.workbench import chat as chat_service
+    from cyrene.workbench import runtime as routes_mod
     from route.workbench import chat as chat_mod
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     data_dir = tmp_path / "data"
     store_dir = tmp_path / "store"
@@ -188,7 +188,7 @@ def test_quick_chat_surface_renders_even_in_legacy_ui_mode(targets_env):
 
 
 def test_running_status_reflects_run_registry(client, targets_env):
-    from webui.workbench_chat_runs import ChatRun
+    from cyrene.workbench.chat_runs import ChatRun
 
     manager = targets_env["chat_mod"]._CHAT_RUN_MANAGER
     manager.runs["chat_beta"] = ChatRun("chat_beta", {"type": "ack", "chatId": "chat_beta"})

@@ -23,7 +23,7 @@ sys.modules["PIL"] = pil_mock
 pil_mock.Image = MagicMock()
 
 from cyrene import config as cyrene_config
-from cyrene import db
+from cyrene.runtime import database as db
 from route.registry import register_routes
 
 

@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 from route import schemas as api_models
 from route.errors import error_response
 
@@ -1276,7 +1276,7 @@ def register_task_session_routes(router: APIRouter, bot: Any, db_path: str) -> N
             and bool(pending_plan_step.get("goalLoop"))
             and not permission_denied
         ):
-            from webui.workbench_goal_loop import begin_async_answer
+            from cyrene.workbench.goal_loop import begin_async_answer
             if await begin_async_answer(_db_path, session_id, question_id, answer_text):
                 payload = _read_workbench_store()
                 project, session = _workbench_find_session(payload, session_id)
@@ -1446,7 +1446,7 @@ def register_task_session_routes(router: APIRouter, bot: Any, db_path: str) -> N
         payload["activeSessionId"] = session_id
         _write_workbench_store(payload)
         if pending_plan_step and bool(pending_plan_step.get("goalLoop")) and not awaiting_user:
-            from webui.workbench_goal_loop import resume_after_answer
+            from cyrene.workbench.goal_loop import resume_after_answer
             await resume_after_answer(
                 _db_path,
                 session_id,

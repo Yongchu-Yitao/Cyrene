@@ -31,7 +31,7 @@ async def _tool_browser_screenshot(args: dict[str, Any], _bot: Any, _chat_id: in
             f"Path: {path or '—'}",
             f"Title: {result.get('title', '—')}",
         ]
-        from cyrene.attachments import analyze_image_with_primary_model, primary_model_supports_vision
+        from cyrene.runtime.attachments import analyze_image_with_primary_model, primary_model_supports_vision
 
         if path and primary_model_supports_vision():
             try:

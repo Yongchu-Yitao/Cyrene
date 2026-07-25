@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 
 
 def register_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
@@ -97,7 +97,7 @@ def register_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         # (notably the proactive scheduler) can reply in the same language.
         if lang in {"en", "zh"}:
             try:
-                from cyrene.settings_store import get as _get_setting, set_ as _set_setting
+                from cyrene.runtime.settings_store import get as _get_setting, set_ as _set_setting
                 if str(_get_setting("app_language", "") or "") != lang:
                     _set_setting("app_language", lang)
             except Exception:
@@ -159,7 +159,7 @@ def register_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
         reset_lottery()
         if mentions and message:
-            from cyrene.inbox import send_message
+            from cyrene.runtime.inbox import send_message
             from cyrene.subagent import _registry, reactivate, get_raw_messages, _spawn_subagent_task, _run_subagent
 
             valid_mentions = []

@@ -16,12 +16,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from cyrene.app_paths import TEMP_DIR
-from cyrene.tooling.runtime_support import (
-    _json_result,
-    _request_external_upload_confirmation,
-    _request_read_elevation,
-    _resolve_tool_path,
+from cyrene.runtime.paths import TEMP_DIR
+from cyrene.agent.context import (
+    consume_external_upload_grant,
+    publish_runtime_event,
+)
+from cyrene.tooling.runtime_api import (
+    json_result,
+    request_external_upload_confirmation as _request_external_upload_confirmation,
+    request_read_elevation,
+    resolve_tool_path,
 )
 
 TOOL_NAME = "browser_upload_files"
@@ -180,16 +184,16 @@ async def _resolve_files(path_args: list[str]) -> tuple[list[dict[str, Any]] | N
         if not path_arg:
             return None, "File paths must not be empty."
         try:
-            resolved = _resolve_tool_path(path_arg)
+            resolved = resolve_tool_path(path_arg)
         except ValueError:
-            elevation = await _request_read_elevation(
+            elevation = await request_read_elevation(
                 tool_name=TOOL_NAME,
                 path_hint=path_arg,
                 reason="Agent needs to read this file in order to disclose it to an external website.",
             )
             if elevation is not None:
                 return None, elevation
-            resolved = _resolve_tool_path(path_arg)
+            resolved = resolve_tool_path(path_arg)
         key = str(resolved)
         if key in seen:
             continue
@@ -237,14 +241,7 @@ def _upload_fingerprint(target: dict[str, Any], files: list[dict[str, Any]]) -> 
 
 
 def _consume_upload_grant(fingerprint: str) -> bool:
-    from cyrene.agent import state
-
-    existing = set(state._external_upload_confirmation_fingerprints.get())
-    if fingerprint not in existing:
-        return False
-    existing.remove(fingerprint)
-    state._external_upload_confirmation_fingerprints.set(frozenset(existing))
-    return True
+    return consume_external_upload_grant(fingerprint)
 
 
 def _public_files(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -267,7 +264,6 @@ async def _tool_browser_upload_files(
     _notify_state: dict[str, bool] | None,
 ) -> str:
     from cyrene import browser
-    from cyrene.agent import state
 
     chooser_id = str(args.get("chooser_id") or "").strip()
     ref = str(args.get("ref") or "").strip()
@@ -312,7 +308,7 @@ async def _tool_browser_upload_files(
     prepared_now = await browser.prepare_file_upload(chooser_id=chooser_id, ref=ref)
     files_now, validation_error = await _resolve_files([str(item or "") for item in raw_paths])
     if prepared_now.get("ok") is not True or validation_error is not None or files_now is None:
-        await state._publish_runtime_event({
+        await publish_runtime_event({
             "type": "external_browser_upload",
             "status": "cancelled_before_execution",
             "fingerprint": fingerprint,
@@ -321,14 +317,14 @@ async def _tool_browser_upload_files(
         return f"Browser upload cancelled during revalidation: {validation_error or prepared_now.get('error') or 'unknown error'}"
     target_now = prepared_now.get("target") if isinstance(prepared_now.get("target"), dict) else {}
     if _upload_fingerprint(target_now, files_now) != fingerprint:
-        await state._publish_runtime_event({
+        await publish_runtime_event({
             "type": "external_browser_upload",
             "status": "cancelled_binding_changed",
             "fingerprint": fingerprint,
         })
         return "Browser upload cancelled: the destination or file content changed after approval."
 
-    await state._publish_runtime_event({
+    await publish_runtime_event({
         "type": "external_browser_upload",
         "status": "executing",
         "effect": "file_input_population",
@@ -358,7 +354,7 @@ async def _tool_browser_upload_files(
     elif staging_root is not None:
         _remove_upload_snapshot(staging_root)
     status = "completed" if result.get("ok") is True else "failed"
-    await state._publish_runtime_event({
+    await publish_runtime_event({
         "type": "external_browser_upload",
         "status": status,
         "effect": "file_input_populated" if status == "completed" else "file_input_population_failed",
@@ -373,7 +369,7 @@ async def _tool_browser_upload_files(
     })
     if result.get("ok") is not True:
         return f"Browser upload failed after approval: {result.get('error', 'unknown error')}"
-    return _json_result({
+    return json_result({
         "status": "files_attached",
         "origin": str(target_now.get("origin") or ""),
         "url": str(result.get("url") or target_now.get("topUrl") or ""),

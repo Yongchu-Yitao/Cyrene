@@ -14,7 +14,7 @@ from typing import Any, Awaitable, Callable
 
 from contextvars import ContextVar
 
-from cyrene import debug
+from cyrene.observability import debug
 from cyrene.config import (
     ASSISTANT_NAME as ASSISTANT_NAME,
     DATA_DIR as _DATA_DIR,
@@ -179,7 +179,7 @@ _MAX_TOOL_ROUNDS = 15  # kept for backward-compat; prefer _get_max_tool_rounds()
 
 
 def _get_max_tool_rounds() -> int:
-    from cyrene.settings_store import get as _get_setting
+    from cyrene.runtime.settings_store import get as _get_setting
     return max(5, min(200, int(_get_setting("max_tool_rounds", 15) or 15)))
 
 _pending_compressors: set[asyncio.Task] = set()
@@ -262,6 +262,9 @@ def _init_session_epoch() -> None:
                 _ensure_session("").session_epoch = epoch
     except Exception:
         pass
+
+
+_init_session_epoch()
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +366,7 @@ async def _call_llm_stream(
 
 
 # ---------------------------------------------------------------------------
-# Quit tool handler (registered in __init__.py to avoid circular imports)
+# Quit tool handler
 # ---------------------------------------------------------------------------
 
 async def _tool_quit(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:

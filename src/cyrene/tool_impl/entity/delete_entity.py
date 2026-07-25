@@ -9,7 +9,7 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_delete_entity(args, bot, chat_id, db_path, notify_state):
-    from cyrene.entities import (
+    from cyrene.tool_impl.entity.store import (
         delete_entity,
         find_entities_by_id_prefix,
         find_entities_by_title,

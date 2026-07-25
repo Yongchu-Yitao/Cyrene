@@ -6,6 +6,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
@@ -18,7 +20,7 @@ def _patch(obj, attr, replacement):
 
 def test_config_persistence_empty():
     """Default config should return an empty server list."""
-    from cyrene import mcp_manager as mm
+    from cyrene.tooling.backends import mcp_manager as mm
 
     with tempfile.TemporaryDirectory() as tmp:
         mm._MCP_SERVERS_FILE = Path(tmp) / "mcp_servers.json"
@@ -28,7 +30,7 @@ def test_config_persistence_empty():
 
 def test_config_persistence_save_and_load():
     """Save then load should return the same data."""
-    from cyrene import mcp_manager as mm
+    from cyrene.tooling.backends import mcp_manager as mm
 
     with tempfile.TemporaryDirectory() as tmp:
         mm._MCP_SERVERS_FILE = Path(tmp) / "mcp_servers.json"
@@ -54,7 +56,7 @@ def test_config_persistence_save_and_load():
 
 def test_config_persistence_corrupted_file():
     """A corrupted JSON file should fall back to the default empty list."""
-    from cyrene import mcp_manager as mm
+    from cyrene.tooling.backends import mcp_manager as mm
 
     with tempfile.TemporaryDirectory() as tmp:
         mcp_file = Path(tmp) / "mcp_servers.json"
@@ -66,7 +68,7 @@ def test_config_persistence_corrupted_file():
 
 def test_singleton_get_manager():
     """get_manager() should always return the same instance."""
-    from cyrene.mcp_manager import get_manager
+    from cyrene.tooling.backends.mcp_manager import get_manager
 
     m1 = get_manager()
     m2 = get_manager()
@@ -75,7 +77,7 @@ def test_singleton_get_manager():
 
 def test_get_tool_defs_with_no_servers():
     """With no connected servers, get_tool_defs() should return empty list."""
-    from cyrene.mcp_manager import get_manager
+    from cyrene.tooling.backends.mcp_manager import get_manager
 
     manager = get_manager()
     defs = manager.get_tool_defs()
@@ -84,7 +86,7 @@ def test_get_tool_defs_with_no_servers():
 
 def test_get_server_status_with_no_config():
     """With no config file, get_server_status() should return empty list."""
-    from cyrene.mcp_manager import get_manager
+    from cyrene.tooling.backends.mcp_manager import get_manager
 
     manager = get_manager()
     status = manager.get_server_status()
@@ -130,7 +132,7 @@ def test_mcp_tool_def_conversion():
 def test_get_active_tool_defs_includes_mcp():
     """get_active_tool_defs() should include MCP tools when manager has them."""
     from cyrene.tooling import catalog as tools
-    from cyrene import mcp_manager as mm
+    from cyrene.tooling.backends import mcp_manager as mm
 
     with tempfile.TemporaryDirectory() as tmp:
         # Simulate a manager with tools
@@ -163,11 +165,11 @@ def test_execute_tool_unknown_fallback_to_mcp():
 
 def test_start_stop_with_no_servers():
     """start_mcp() and stop_mcp() should work with empty config."""
-    from cyrene.mcp_manager import get_manager, start_mcp, stop_mcp
+    from cyrene.tooling.backends.mcp_manager import get_manager, start_mcp, stop_mcp
     import asyncio
 
     with tempfile.TemporaryDirectory() as tmp:
-        from cyrene import mcp_manager as mm
+        from cyrene.tooling.backends import mcp_manager as mm
         mm._MCP_SERVERS_FILE = Path(tmp) / "mcp_servers.json"
         mm.save_mcp_servers([])
 
@@ -175,3 +177,21 @@ def test_start_stop_with_no_servers():
         manager = get_manager()
         assert len(manager._servers) == 0, "No servers should be connected with empty config"
         stop_mcp()
+
+
+@pytest.mark.asyncio
+async def test_async_stop_uses_the_running_application_loop(monkeypatch):
+    from cyrene.tooling.backends import mcp_manager as mm
+
+    events = []
+
+    class FakeManager:
+        async def stop(self):
+            events.append("stopped")
+
+    monkeypatch.setattr(mm, "_manager", FakeManager())
+
+    await mm.stop_mcp_async()
+
+    assert events == ["stopped"]
+    assert mm._manager is None

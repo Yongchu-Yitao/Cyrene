@@ -6,7 +6,7 @@ import hashlib
 import json
 from types import MappingProxyType
 
-from cyrene.settings_store import is_tool_pack_enabled
+from cyrene.runtime.settings_store import is_tool_pack_enabled
 from cyrene.tooling.catalog import TOOL_DEFS, TOOL_HANDLERS, all_capabilities
 from cyrene.tooling.packs import WIRE_NAME_BY_PACK_ID
 from cyrene.tooling.types import ToolCatalogSnapshot, ToolSpec

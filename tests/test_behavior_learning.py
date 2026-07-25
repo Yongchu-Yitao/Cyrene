@@ -35,7 +35,7 @@ async def _fake_llm_json(prompt: str, *, caller: str = "behavior_learning"):
 
 
 async def _init_behavior(tmp_path, monkeypatch):
-    from cyrene import behavior_learning as bl
+    from cyrene.learning import engine as bl
 
     await bl.init(tmp_path, tmp_path)
     monkeypatch.setattr(bl, "_call_llm_json", _fake_llm_json)
@@ -915,7 +915,7 @@ def test_parameterized_runner_detects_unsafe_legacy_wrapper():
 
 async def test_skill_risk_level_inferred_on_creation(tmp_path, monkeypatch):
     """Skills containing high-risk tools must get risk_level='high' at creation time."""
-    from cyrene import behavior_learning as bl
+    from cyrene.learning import engine as bl
 
     # Directly test the helper — no DB needed
     assert bl._infer_skill_risk_level([]) == "none"

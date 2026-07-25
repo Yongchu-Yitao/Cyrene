@@ -500,7 +500,9 @@ def test_workbench_memory_skill_learning_selects_tool_chains():
     styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
     i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
     routes = (root / "src" / "route" / "learning.py").read_text(encoding="utf-8")
-    pattern = (root / "src" / "cyrene" / "pattern.py").read_text(encoding="utf-8")
+    pattern = (
+        root / "src" / "cyrene" / "learning" / "facade.py"
+    ).read_text(encoding="utf-8")
     prompts = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
 
     assert "selectedLearningChainId" in source
@@ -2842,7 +2844,7 @@ def test_warning_toast_has_no_colored_left_accent():
 
 def test_workbench_subagent_payload_recovers_chat_scoped_snapshot(monkeypatch):
     from cyrene import subagent
-    from cyrene import workbench_chat_service as routes_workbench_chat
+    from cyrene.workbench import chat as routes_workbench_chat
 
     messages = [
         {"role": "user", "round_id": "round_1", "content": "Compare two approaches"},

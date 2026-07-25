@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
-    _build_skills,
+from cyrene.tooling.runtime_api import (
+    build_skills,
     json,
 )
 
@@ -23,7 +23,7 @@ async def _tool_list_skills(_args: dict[str, Any], _bot: Any, _chat_id: int, _db
             "enabled": s.get("enabled", True),
             "files": len(s.get("files", [])),
         }
-        for s in _build_skills()
+        for s in build_skills()
     ]
     return json.dumps({"ok": True, "skills": skills}, ensure_ascii=False)
 

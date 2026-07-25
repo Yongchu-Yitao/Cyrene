@@ -9,7 +9,8 @@ from route.registry import register_routes
 
 
 def _patch_paths(monkeypatch, tmp_path, soul_content, default_content):
-    from cyrene import onboarding, setup, conversations
+    from cyrene.runtime import onboarding, setup
+    from cyrene.runtime.memory import conversations
 
     soul_path = tmp_path / "workspace" / "SOUL.md"
     soul_path.parent.mkdir(parents=True, exist_ok=True)
@@ -17,6 +18,11 @@ def _patch_paths(monkeypatch, tmp_path, soul_content, default_content):
 
     monkeypatch.setattr(onboarding, "DATA_DIR", tmp_path)
     monkeypatch.setattr(onboarding, "STORE_DIR", tmp_path / "store")
+    monkeypatch.setattr(
+        onboarding,
+        "DB_PATH",
+        tmp_path / "store" / "cyrene.runtime.database",
+    )
     monkeypatch.setattr(onboarding, "STATE_FILE", tmp_path / "state.json")
     monkeypatch.setattr(onboarding, "get_soul_path", lambda: soul_path)
     monkeypatch.setattr(onboarding, "read_soul", lambda: soul_path.read_text(encoding="utf-8"))
@@ -28,7 +34,7 @@ def _patch_paths(monkeypatch, tmp_path, soul_content, default_content):
 
 
 def test_get_onboarding_status_detects_absolute_fresh_start(monkeypatch, tmp_path):
-    from cyrene import onboarding
+    from cyrene.runtime import onboarding
 
     default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"
     _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
@@ -42,7 +48,7 @@ def test_get_onboarding_status_detects_absolute_fresh_start(monkeypatch, tmp_pat
 
 
 def test_get_onboarding_status_infers_existing_setup(monkeypatch, tmp_path):
-    from cyrene import onboarding
+    from cyrene.runtime import onboarding
 
     default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"
     custom_soul = "# Sherlock's Soul\n\n## CORE IDENTITY\n- sharp and theatrical\n"
@@ -60,7 +66,7 @@ def test_get_onboarding_status_infers_existing_setup(monkeypatch, tmp_path):
 
 
 async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path):
-    from cyrene import onboarding, config_store
+    from cyrene.runtime import onboarding, config_store
 
     default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"
     _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
@@ -91,7 +97,7 @@ async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path
     assert payload["onboarding"]["llm"]["configured"] is True
     assert payload["onboarding"]["activeStep"] == "personality"
 
-    from cyrene.settings_store import get_models
+    from cyrene.runtime.settings_store import get_models
     models = get_models()
     assert len(models) == 1
     assert models[0]["id"] == "qwen3"
@@ -103,7 +109,7 @@ async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path
 
 
 async def test_vision_capability_probe_sends_an_image(monkeypatch):
-    from cyrene import onboarding
+    from cyrene.runtime import onboarding
 
     calls = []
 
@@ -140,7 +146,8 @@ def test_settings_model_save_persists_vision_probe_result(monkeypatch, tmp_path)
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from cyrene import config, onboarding, settings_store
+    from cyrene import config
+    from cyrene.runtime import onboarding, settings_store
 
     saved = {}
 
@@ -177,7 +184,7 @@ def test_settings_model_save_persists_vision_probe_result(monkeypatch, tmp_path)
 
 
 async def test_save_personality_setup_marks_setup_done(monkeypatch, tmp_path):
-    from cyrene import onboarding
+    from cyrene.runtime import onboarding
 
     default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"
     soul_path = _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)

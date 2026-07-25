@@ -117,7 +117,7 @@ Open `http://localhost:4242`. You should see the onboarding wizard on first laun
 To test the agent without the web server:
 
 ```bash
-python -m cyrene.local_cli
+python -m cyrene.runtime.host
 ```
 
 ## Optional Extras

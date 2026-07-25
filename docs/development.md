@@ -7,7 +7,7 @@
 Logs every LLM call (full prompt, tools, response, duration) and context trace to `data/debug_*.jsonl`:
 
 ```bash
-python -m cyrene.local_cli --verbose
+python -m cyrene.runtime.host --verbose
 # or
 python -m cyrene --workbench --verbose
 ```

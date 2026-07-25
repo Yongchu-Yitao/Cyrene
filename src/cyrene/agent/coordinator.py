@@ -68,19 +68,19 @@ from cyrene.agent.state import (
     _ui_round_hide_initial_detail,
     active_workspace_dir,
 )
-from cyrene.context_trace import context_block
+from cyrene.observability.context_trace import context_block
 from cyrene.config import PATTERN_DETECTION_INTERVAL
-from cyrene.llm import _assistant_text, _truncate
+from cyrene.model_runtime.messages import assistant_text, truncate
 from cyrene.memory import get_memory_context
-from cyrene.short_term import get_context
-from cyrene.skills_registry import build_skill_prompt_block
-from cyrene.settings_store import (
+from cyrene.runtime.memory.short_term import get_context
+from cyrene.learning.skills import build_skill_prompt_block
+from cyrene.runtime.settings_store import (
     get as _get_setting,
     get_spawn_policy,
     is_tool_pack_enabled,
 )
 from cyrene.tooling import execute_wire_tool, get_main_wire_tool_defs
-from cyrene.task_lifecycle import cancel_and_wait, track_task
+from cyrene.runtime.task_lifecycle import cancel_and_wait, track_task
 
 logger = logging.getLogger(__name__)
 _BACKGROUND_BEHAVIOR_TASKS: set[asyncio.Task[Any]] = set()
@@ -107,12 +107,12 @@ async def shutdown_background_tasks() -> None:
 async def _kick_behavior_learning_processing() -> None:
     """Coalesce completed turns instead of starting one LLM job per turn."""
     global _DEFERRED_BEHAVIOR_TASK
-    from cyrene import behavior_learning as _behavior_learning
+    from cyrene.learning import engine as _behavior_learning
 
     # Normal desktop/server runtimes already own the configured 10-minute
     # behavior-learning job. Do not add a second offset timer after every turn.
     try:
-        from cyrene import scheduler as _scheduler_module
+        from cyrene.runtime import scheduler as _scheduler_module
 
         runtime_scheduler = getattr(_scheduler_module, "_scheduler", None)
         if runtime_scheduler is not None and runtime_scheduler.running:
@@ -218,10 +218,10 @@ async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path
 
         tool_calls = response.get("tool_calls") or []
         if any(tc.get("function", {}).get("name") == "quit" for tc in tool_calls):
-            final_text = _assistant_text(response) or "Done."
+            final_text = assistant_text(response) or "Done."
             break
         if not tool_calls:
-            return _assistant_text(response) or "Done."
+            return assistant_text(response) or "Done."
 
         for tc in tool_calls:
             call_id = tc["id"]
@@ -240,7 +240,7 @@ async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path
                 )
             except Exception as e:
                 result = f"Tool {name} failed: {e}"
-            messages.append({"role": "tool", "tool_call_id": call_id, "content": _truncate(result)})
+            messages.append({"role": "tool", "tool_call_id": call_id, "content": truncate(result)})
 
     return final_text
 
@@ -462,7 +462,7 @@ async def _run_chat_agent(
 
         if command != DEEP_REFLECT_COMMAND_ID:
             try:
-                from cyrene import behavior_learning as _behavior_learning
+                from cyrene.learning import engine as _behavior_learning
                 labels = get_session_labels(round_id)
                 behavior_turn_context = await _behavior_learning.begin_turn(
                     session_id=labels.get("archive_session_id", ""),
@@ -571,7 +571,7 @@ async def _run_chat_agent(
             main_system_context.append(context_block(
                 "skills.installed",
                 "skills",
-                source="cyrene.skills_registry.build_skill_prompt_block",
+                source="cyrene.learning.skills.build_skill_prompt_block",
                 reason="enabled external skills are visible to the agent",
                 transforms=["preview", "concat_into_system"],
                 content=skill_prompt_block,
@@ -587,7 +587,7 @@ async def _run_chat_agent(
                 main_system_context.append(context_block(
                     "skills.learned",
                     "skills",
-                    source="cyrene.behavior_learning.build_learned_skill_block",
+                    source="cyrene.learning.engine.build_learned_skill_block",
                     reason="learned reusable workflows visible to the agent",
                     transforms=["concat_into_system"],
                     content=learned_skill_block,
@@ -598,7 +598,7 @@ async def _run_chat_agent(
         # prefix: the date rolls over daily, which would invalidate the entire
         # system+history prefix every midnight. It is run-fixed context instead.
         try:
-            from cyrene.shell_runtime import resolve_shell
+            from cyrene.tooling.backends.shell_runtime import resolve_shell
             _shell_kind = resolve_shell()[0]
         except Exception:
             _shell_kind = "bash"
@@ -678,7 +678,7 @@ async def _run_chat_agent(
                 })
                 if behavior_turn_context is not None:
                     try:
-                        from cyrene import behavior_learning as _behavior_learning
+                        from cyrene.learning import engine as _behavior_learning
                         latest_labels = get_session_labels(round_id)
                         await _behavior_learning.complete_turn(
                             turn_id=behavior_turn_context["turn_id"],
@@ -976,7 +976,7 @@ async def _run_chat_agent(
         })
         if behavior_turn_context is not None:
             try:
-                from cyrene import behavior_learning as _behavior_learning
+                from cyrene.learning import engine as _behavior_learning
                 latest_labels = get_session_labels(round_id)
                 await _behavior_learning.complete_turn(
                     turn_id=behavior_turn_context["turn_id"],
@@ -991,7 +991,7 @@ async def _run_chat_agent(
     finally:
         if behavior_turn_context is not None:
             try:
-                from cyrene import behavior_learning as _behavior_learning
+                from cyrene.learning import engine as _behavior_learning
                 _behavior_learning.clear_turn_context(behavior_turn_context)
             except Exception:
                 logger.debug("Failed to clear behavior-learning context", exc_info=True)
@@ -1108,7 +1108,7 @@ async def run_steward_agent(conversation_text: str, soulmd_content: str, bot: An
     # Query existing entity titles for LLM-level deduplication
     _existing_entity_hint = ""
     try:
-        from cyrene.entities import list_entities
+        from cyrene.tool_impl.entity.store import list_entities
         _existing = await list_entities(db_path, limit=200)
         if _existing:
             _lines = [f"- [{e['type']}] {e['title']}" for e in _existing]

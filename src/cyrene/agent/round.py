@@ -50,7 +50,7 @@ def _session_round_entries() -> dict[str, dict[str, Any]]:
 
 
 def _main_inbox_pending_by_round() -> dict[str, int]:
-    from cyrene.inbox import get_unread_messages
+    from cyrene.runtime.inbox import get_unread_messages
     counts: dict[str, int] = {}
     for message in get_unread_messages(_MAIN_INBOX_AGENT_ID):
         if str(message.get("type", "")).strip() != "guidance":
@@ -80,9 +80,9 @@ def _pending_question_live_entry() -> dict[str, Any]:
 def get_live_rounds() -> list[dict[str, Any]]:
     entries = _session_round_entries()
 
-    from cyrene.subagent import _registry
+    from cyrene.subagent import registry_snapshot
 
-    for info in _registry.values():
+    for info in registry_snapshot().values():
         round_id = str(info.get("round_id", "")).strip()
         if not round_id:
             continue

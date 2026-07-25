@@ -19,7 +19,7 @@ async def _wait_for_query(db_path, query, expected, *, timeout=1.0):
 
 
 async def test_tool_result_returns_through_session_inbox_while_guidance_is_retained(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     db_path = tmp_path / "workbench.db"
     inbox = WorkbenchAgentInbox("chat_1", str(db_path))
@@ -58,7 +58,7 @@ async def test_tool_result_returns_through_session_inbox_while_guidance_is_retai
 
 
 async def test_tool_result_is_delivered_when_persistence_fails(tmp_path, monkeypatch):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_persist_failure", str(tmp_path / "workbench.db"))
     original_persist = inbox._persist
@@ -82,7 +82,7 @@ async def test_tool_result_is_delivered_when_persistence_fails(tmp_path, monkeyp
 
 
 async def test_live_snapshot_exposes_current_tool_state_and_result_content():
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_live_snapshot")
     started = asyncio.Event()
@@ -122,7 +122,7 @@ async def test_live_snapshot_exposes_current_tool_state_and_result_content():
 
 
 async def test_live_snapshot_keeps_tool_arguments_across_state_changes():
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_live_arguments")
     started = asyncio.Event()
@@ -157,7 +157,7 @@ async def test_live_snapshot_keeps_tool_arguments_across_state_changes():
 async def test_tool_result_wakes_agent_before_blocked_persistence_finishes(
     tmp_path, monkeypatch
 ):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_blocked_persist", str(tmp_path / "workbench.db"))
     original_persist = inbox._persist
@@ -191,7 +191,7 @@ async def test_tool_result_wakes_agent_before_blocked_persistence_finishes(
 async def test_guidance_is_not_delivered_before_blocked_persistence_finishes(
     tmp_path, monkeypatch
 ):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_guidance_persist", str(tmp_path / "workbench.db"))
     original_persist = inbox._persist
@@ -228,7 +228,7 @@ async def test_guidance_is_not_delivered_before_blocked_persistence_finishes(
 
 
 async def test_duplicate_durable_tool_result_is_still_delivered_in_memory(tmp_path, monkeypatch):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_duplicate_result", str(tmp_path / "workbench.db"))
     monkeypatch.setattr(inbox, "_persist", lambda _event: False)
@@ -245,8 +245,8 @@ async def test_duplicate_durable_tool_result_is_still_delivered_in_memory(tmp_pa
 
 
 async def test_workbench_chat_run_installs_its_own_inbox_context(tmp_path):
-    from cyrene.workbench_inbox import current_workbench_inbox
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench.inbox import current_workbench_inbox
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     manager = ChatRunManager(retention_seconds=0)
     manager.configure(str(tmp_path / "workbench.db"))
@@ -263,7 +263,7 @@ async def test_workbench_chat_run_installs_its_own_inbox_context(tmp_path):
 
 
 async def test_guidance_dedupe_returns_original_event_without_second_delivery(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_dedupe", str(tmp_path / "workbench.db"))
     first = await inbox.put_guidance("first", client_request_id="same-request")
@@ -277,7 +277,7 @@ async def test_guidance_dedupe_returns_original_event_without_second_delivery(tm
 
 
 async def test_completed_guidance_dedupe_survives_process_restart(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     db_path = tmp_path / "workbench.db"
     first = WorkbenchAgentInbox("chat_restart_dedupe", str(db_path), run_id="run_1")
@@ -295,7 +295,7 @@ async def test_completed_guidance_dedupe_survives_process_restart(tmp_path):
 
 
 async def test_guidance_persistence_failure_rejects_without_delivery(tmp_path, monkeypatch):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_guidance_failure", str(tmp_path / "workbench.db"))
     monkeypatch.setattr(inbox, "_persist", lambda _event: None)
@@ -311,7 +311,7 @@ async def test_guidance_persistence_failure_rejects_without_delivery(tmp_path, m
 
 
 async def test_claimed_guidance_is_recovered_after_run_restart(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     db_path = tmp_path / "workbench.db"
     first = WorkbenchAgentInbox("chat_recover", str(db_path))
@@ -328,7 +328,7 @@ async def test_claimed_guidance_is_recovered_after_run_restart(tmp_path):
 
 
 async def test_graceful_close_cancels_unconsumed_events_with_run_reason(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     db_path = tmp_path / "workbench.db"
     inbox = WorkbenchAgentInbox("chat_close", str(db_path), run_id="run_close")
@@ -358,7 +358,7 @@ async def test_graceful_close_cancels_unconsumed_events_with_run_reason(tmp_path
 
 
 async def test_tool_lifecycle_telemetry_records_batch_queue_and_durations(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     db_path = tmp_path / "workbench.db"
     inbox = WorkbenchAgentInbox("chat_trace", str(db_path), run_id="run_trace")
@@ -408,7 +408,7 @@ async def test_tool_lifecycle_telemetry_records_batch_queue_and_durations(tmp_pa
 
 
 def test_inbox_schema_migrates_existing_database_without_dropping_events(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     db_path = tmp_path / "workbench.db"
     with sqlite3.connect(db_path) as conn:
@@ -450,7 +450,7 @@ def test_inbox_schema_migrates_existing_database_without_dropping_events(tmp_pat
 
 
 async def test_guidance_skips_not_yet_started_tools_in_submitted_batch(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_batch", str(tmp_path / "workbench.db"))
     first_started = asyncio.Event()
@@ -485,7 +485,7 @@ async def test_guidance_skips_not_yet_started_tools_in_submitted_batch(tmp_path)
 
 
 async def test_read_only_calls_on_same_resource_run_in_parallel(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_parallel_reads", str(tmp_path / "workbench.db"))
     first_started = asyncio.Event()
@@ -557,7 +557,7 @@ def test_tool_registry_resolves_parallel_safety_metadata_from_arguments(tmp_path
 
 
 async def test_writes_to_same_resource_are_serial_but_distinct_resources_parallel(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_resource_conflict", str(tmp_path / "workbench.db"))
     first_started = asyncio.Event()
@@ -603,7 +603,7 @@ async def test_writes_to_same_resource_are_serial_but_distinct_resources_paralle
 
 
 async def test_requires_order_call_is_a_batch_barrier(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_order_barrier", str(tmp_path / "workbench.db"))
     first_started = asyncio.Event()
@@ -648,7 +648,7 @@ async def test_requires_order_call_is_a_batch_barrier(tmp_path):
 
 
 async def test_parallel_results_can_arrive_out_of_order_and_are_consumed_in_model_order(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_out_of_order", str(tmp_path / "workbench.db"))
     slow_started = asyncio.Event()
@@ -680,7 +680,7 @@ async def test_parallel_results_can_arrive_out_of_order_and_are_consumed_in_mode
 
 
 async def test_live_inbox_prioritizes_guidance_over_already_queued_tool_result(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_priority", str(tmp_path / "workbench.db"))
     await inbox.put(
@@ -698,7 +698,7 @@ async def test_live_inbox_prioritizes_guidance_over_already_queued_tool_result(t
 
 
 async def test_acknowledging_one_guidance_does_not_clear_newer_guidance_signal(tmp_path):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
 
     inbox = WorkbenchAgentInbox("chat_guidance_race", str(tmp_path / "workbench.db"))
     await inbox.put_guidance("first", client_request_id="race-1")
@@ -726,9 +726,9 @@ async def test_acknowledging_one_guidance_does_not_clear_newer_guidance_signal(t
 async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tmp_path):
     import httpx
     from fastapi import FastAPI
-    from cyrene import workbench_chat_service as chat_service
+    from cyrene.workbench import chat as chat_service
     from route.workbench import chat as chat_mod
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     db_path = tmp_path / "workbench.db"
     chats_path = tmp_path / "workbench_chats.json"
@@ -819,8 +819,8 @@ async def test_workbench_guidance_endpoint_queues_into_live_chat(monkeypatch, tm
 async def test_startup_reconciles_durable_guidance_missing_from_transcript(
     monkeypatch, tmp_path
 ):
-    from cyrene.workbench_inbox import WorkbenchAgentInbox
-    from cyrene import workbench_chat_service as chat_mod
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
+    from cyrene.workbench import chat as chat_mod
 
     db_path = tmp_path / "workbench.db"
     chats_path = tmp_path / "workbench_chats.json"
@@ -868,7 +868,7 @@ async def test_startup_reconciles_durable_guidance_missing_from_transcript(
 async def test_main_agent_resumes_from_tool_result_and_applies_runtime_guidance(monkeypatch, tmp_path):
     from cyrene.agent import agent as agent_mod
     from cyrene.agent import state as state_mod
-    from cyrene.workbench_inbox import WorkbenchAgentInbox, _workbench_agent_inbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox, _workbench_agent_inbox
 
     inbox = WorkbenchAgentInbox("chat_agent", str(tmp_path / "workbench.db"))
     tool_started = asyncio.Event()
@@ -953,7 +953,7 @@ async def test_main_agent_resumes_from_tool_result_and_applies_runtime_guidance(
 async def test_main_agent_runs_independent_read_calls_in_parallel(monkeypatch, tmp_path):
     from cyrene.agent import agent as agent_mod
     from cyrene.agent import state as state_mod
-    from cyrene.workbench_inbox import WorkbenchAgentInbox, _workbench_agent_inbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox, _workbench_agent_inbox
 
     inbox = WorkbenchAgentInbox("chat_agent_parallel", str(tmp_path / "workbench.db"))
     started = {"a": asyncio.Event(), "b": asyncio.Event()}
@@ -1032,7 +1032,7 @@ async def test_main_agent_runs_independent_read_calls_in_parallel(monkeypatch, t
 async def test_main_agent_applies_guidance_sent_while_model_call_is_in_flight(monkeypatch, tmp_path):
     from cyrene.agent import agent as agent_mod
     from cyrene.agent import state as state_mod
-    from cyrene.workbench_inbox import WorkbenchAgentInbox, _workbench_agent_inbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox, _workbench_agent_inbox
 
     inbox = WorkbenchAgentInbox("chat_model_guidance", str(tmp_path / "workbench.db"))
     model_started = asyncio.Event()
@@ -1092,7 +1092,7 @@ async def test_main_agent_applies_guidance_sent_while_model_call_is_in_flight(mo
 async def test_main_agent_keeps_wrap_reply_and_continues_with_late_guidance(monkeypatch, tmp_path):
     from cyrene.agent import agent as agent_mod
     from cyrene.agent import state as state_mod
-    from cyrene.workbench_inbox import WorkbenchAgentInbox, _workbench_agent_inbox
+    from cyrene.workbench.inbox import WorkbenchAgentInbox, _workbench_agent_inbox
 
     inbox = WorkbenchAgentInbox("chat_wrap_guidance", str(tmp_path / "workbench.db"))
     wrap_started = asyncio.Event()
@@ -1205,7 +1205,7 @@ async def test_main_agent_keeps_wrap_reply_and_continues_with_late_guidance(monk
 
 
 async def test_chat_run_interrupt_cleans_pending_inbox_with_run_id(tmp_path):
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     db_path = tmp_path / "workbench.db"
     manager = ChatRunManager(retention_seconds=0)

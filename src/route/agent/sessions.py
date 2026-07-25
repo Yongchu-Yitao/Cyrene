@@ -2,7 +2,7 @@
 
 # ruff: noqa: F403,F405
 
-from cyrene.workbench_runtime import *
+from cyrene.workbench.runtime import *
 
 
 def register_session_routes(router: APIRouter, bot: Any, db_path: str) -> None:
@@ -14,7 +14,7 @@ def register_session_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/sessions")
     async def api_sessions():
-        from cyrene import db as cy_db
+        from cyrene.runtime import database as cy_db
         try:
             now_local = datetime.now(timezone.utc).astimezone()
             day_from = (now_local - timedelta(days=27)).strftime("%Y-%m-%d")

@@ -11,8 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from cyrene import workbench_knowledge_service as _service
-from cyrene.attachments import (
+from cyrene.workbench import knowledge as _service
+from cyrene.runtime.attachments import (
     UPLOADS_DIR as _UPLOADS_DIR,
     attachment_kind_from_meta,
     is_exported_attachment_path,
@@ -22,7 +22,7 @@ from fastapi import APIRouter, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from route import schemas as api_models
 from route.errors import error_response
-from webui.workbench_notifications import append_notification
+from cyrene.workbench.notifications import append_notification
 
 globals().update({
     name: value

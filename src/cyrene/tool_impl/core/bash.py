@@ -5,18 +5,18 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.tooling.runtime_support import (
-    _classify_destructive_shell_command,
-    _command_is_file_deletion,
-    _guard_nonbash_shell_command,
-    _guard_shell_command_workspace_write,
-    _is_dangerous_subshell,
-    _json_result,
-    _request_delete_confirmation,
-    _request_destructive_confirmation,
-    _request_scope_elevation,
-    _request_write_elevation,
-    _truncate,
+from cyrene.tooling.runtime_api import (
+    classify_destructive_shell_command,
+    command_is_file_deletion,
+    guard_nonbash_shell_command,
+    guard_shell_command_workspace_write,
+    is_dangerous_subshell,
+    json_result,
+    request_delete_confirmation,
+    request_destructive_confirmation,
+    request_scope_elevation,
+    request_write_elevation,
+    truncate,
     asyncio,
 )
 
@@ -25,12 +25,12 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 
 async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
-    from cyrene.agent.state import _temporary_full_access
+    from cyrene.agent.context import has_temporary_full_access
     command = str(args["command"])
-    _full_access = _temporary_full_access.get()
+    _full_access = has_temporary_full_access()
     # 命令替换无法提前验证路径，先拦截（默认模式问用户 / 自动模式交审核 agent）
-    if not _full_access and _is_dangerous_subshell(command):
-        elev = await _request_scope_elevation(
+    if not _full_access and is_dangerous_subshell(command):
+        elev = await request_scope_elevation(
             tool_name="Bash",
             path_hint="",
             operation="包含命令替换的 Shell 操作",
@@ -41,21 +41,21 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
         )
         if elev is not None:
             return elev
-    from cyrene.shell_runtime import command_argv, resolve_shell
+    from cyrene.tooling.backends.shell_runtime import command_argv, resolve_shell
     try:
         shell_kind = resolve_shell()[0]
     except Exception:
         shell_kind = "bash"
     if shell_kind == "bash":
         try:
-            _guard_shell_command_workspace_write(command)
+            guard_shell_command_workspace_write(command)
         except ValueError:
-            elev = await _request_write_elevation(tool_name="Bash", path_hint="", reason=command[:240])
+            elev = await request_write_elevation(tool_name="Bash", path_hint="", reason=command[:240])
             if elev is not None:
                 return elev
-        destructive = _classify_destructive_shell_command(command)
+        destructive = classify_destructive_shell_command(command)
         if destructive is not None:
-            delete_result = await _request_destructive_confirmation(
+            delete_result = await request_destructive_confirmation(
                 tool_name="Bash",
                 operation=destructive["operation"],
                 detail=destructive["detail"],
@@ -64,18 +64,18 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
             if delete_result is not None:
                 return delete_result
         # Backward-compatible fallback for deletion forms not classified above.
-        elif _command_is_file_deletion(command):
-            delete_result = await _request_delete_confirmation(tool_name="Bash", command=command)
+        elif command_is_file_deletion(command):
+            delete_result = await request_delete_confirmation(tool_name="Bash", command=command)
             if delete_result is not None:
                 return delete_result
     else:
         # 非 POSIX shell：POSIX 护栏无法验证路径，对写/删一律 fail-closed 拒绝
-        refusal = _guard_nonbash_shell_command(command, shell_kind)
+        refusal = guard_nonbash_shell_command(command, shell_kind)
         if refusal is not None:
             return refusal
     timeout_ms = int(args.get("timeout_ms", 120000))
     timeout_sec = timeout_ms / 1000
-    from cyrene.agent.state import active_workspace_dir
+    from cyrene.agent.context import active_workspace_dir
     proc = await asyncio.create_subprocess_exec(
         *command_argv(command),
         cwd=str(active_workspace_dir()),
@@ -83,7 +83,8 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
         stderr=asyncio.subprocess.PIPE,
     )
 
-    from cyrene.agent.state import _interrupt_event
+    from cyrene.agent.context import get_current_session_id, session_interrupt_event
+    interrupt_event = session_interrupt_event(get_current_session_id())
 
     stdout_chunks: list[bytes] = []
     stderr_chunks: list[bytes] = []
@@ -114,7 +115,7 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
                 except (asyncio.CancelledError, Exception):
                     pass
                 raise ValueError(f"Command timed out after {timeout_ms} ms")
-            if _interrupt_event.is_set():
+            if interrupt_event.is_set():
                 proc.kill()
                 reads.cancel()
                 try:
@@ -123,10 +124,10 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
                     pass
                 payload = {
                     "exit_code": -1,
-                    "stdout": _truncate(b"".join(stdout_chunks).decode("utf-8", errors="replace")),
+                    "stdout": truncate(b"".join(stdout_chunks).decode("utf-8", errors="replace")),
                     "stderr": "Command interrupted by new user message.",
                 }
-                return _json_result(payload)
+                return json_result(payload)
             try:
                 await asyncio.wait_for(asyncio.shield(reads), timeout=min(1, remaining))
             except asyncio.TimeoutError:
@@ -158,10 +159,10 @@ async def _tool_bash(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: s
 
     payload = {
         "exit_code": proc.returncode,
-        "stdout": _truncate(b"".join(stdout_chunks).decode("utf-8", errors="replace")),
-        "stderr": _truncate(b"".join(stderr_chunks).decode("utf-8", errors="replace")),
+        "stdout": truncate(b"".join(stdout_chunks).decode("utf-8", errors="replace")),
+        "stderr": truncate(b"".join(stderr_chunks).decode("utf-8", errors="replace")),
     }
-    return _json_result(payload)
+    return json_result(payload)
 
 
 handler = _tool_bash

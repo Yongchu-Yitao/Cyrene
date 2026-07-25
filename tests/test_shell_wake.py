@@ -9,7 +9,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_shell_wake_service():
-    from cyrene.shell_wake import get_shell_wake_service
+    from cyrene.runtime.shell_wake import get_shell_wake_service
 
     service = get_shell_wake_service()
     service.reset_for_tests()
@@ -18,7 +18,7 @@ def _reset_shell_wake_service():
 
 
 def test_build_shell_wake_prompt_includes_exit_and_tail():
-    from cyrene.shell_wake import build_shell_wake_prompt
+    from cyrene.runtime.shell_wake import build_shell_wake_prompt
 
     prompt = build_shell_wake_prompt(
         shell_id="shell_1",
@@ -45,7 +45,7 @@ def test_build_shell_wake_prompt_includes_exit_and_tail():
 
 @pytest.mark.asyncio
 async def test_shell_wake_dispatches_when_chat_idle():
-    from cyrene.shell_wake import ShellWakeService
+    from cyrene.runtime.shell_wake import ShellWakeService
 
     service = ShellWakeService()
     calls: list[dict] = []
@@ -82,7 +82,7 @@ async def test_shell_wake_dispatches_when_chat_idle():
 
 @pytest.mark.asyncio
 async def test_shell_wake_defers_when_chat_busy_then_dispatches():
-    from cyrene.shell_wake import ShellWakeService
+    from cyrene.runtime.shell_wake import ShellWakeService
 
     service = ShellWakeService()
     busy = {"chat_b": True}
@@ -115,8 +115,8 @@ async def test_shell_wake_defers_when_chat_busy_then_dispatches():
 
 @pytest.mark.asyncio
 async def test_watch_shell_triggers_wake_service(monkeypatch, tmp_path):
-    from cyrene import shells
-    from cyrene.shell_wake import get_shell_wake_service
+    from cyrene.tooling.backends import shells
+    from cyrene.runtime.shell_wake import get_shell_wake_service
 
     service = get_shell_wake_service()
     calls: list[dict] = []
@@ -159,8 +159,8 @@ async def test_watch_shell_triggers_wake_service(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_chat_run_finalize_dispatches_pending_shell_wake(monkeypatch):
-    from cyrene.shell_wake import get_shell_wake_service
-    from webui.workbench_chat_runs import ChatRunManager
+    from cyrene.runtime.shell_wake import get_shell_wake_service
+    from cyrene.workbench.chat_runs import ChatRunManager
 
     service = get_shell_wake_service()
     dispatched = asyncio.Event()

@@ -130,7 +130,7 @@ def _preferred_pdf_language(requested: object = None) -> tuple[str, str]:
     language = str(requested or "").strip().lower()
     if language not in {"en", "zh"}:
         try:
-            from cyrene.settings_store import get as _get_setting
+            from cyrene.runtime.settings_store import get as _get_setting
 
             language = str(_get_setting("app_language", "") or "").strip().lower()
         except Exception:

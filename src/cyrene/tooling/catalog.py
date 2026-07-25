@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from cyrene.tool_impl import NATIVE_TOOL_MODULES
-from cyrene.settings_store import is_tool_pack_enabled
+from cyrene.runtime.settings_store import is_tool_pack_enabled
 from cyrene.tooling.packs import (
     CAPABILITY_BINDINGS,
     MODULE_TOOL_NAMES,
@@ -158,7 +158,7 @@ def _normalize_resource_key(key: str) -> str:
     try:
         path = Path(raw_path).expanduser()
         if not path.is_absolute():
-            from cyrene.agent.state import active_workspace_dir
+            from cyrene.agent.context import active_workspace_dir
 
             path = active_workspace_dir() / path
         return f"fs:{path.resolve()}"
@@ -244,15 +244,17 @@ def _load_native_tools() -> None:
 
 
 def _register_map_tools() -> None:
-    from cyrene.tool_impl.map.tools import register_to
-
-    register_to(TOOL_DEFS, TOOL_HANDLERS)
+    importlib.import_module("cyrene.tool_impl.map.tools").register_to(
+        TOOL_DEFS,
+        TOOL_HANDLERS,
+    )
 
 
 def _register_code_tools() -> None:
-    from cyrene.tool_impl.code import register_all
-
-    register_all(TOOL_DEFS, TOOL_HANDLERS)
+    importlib.import_module("cyrene.tool_impl.code").register_all(
+        TOOL_DEFS,
+        TOOL_HANDLERS,
+    )
 
 
 def _initialize_registry() -> None:
@@ -299,7 +301,7 @@ def get_active_tool_defs_for_actor(actor: str = "main") -> list[dict[str, Any]]:
     ]
 
     try:
-        from cyrene.mcp_manager import get_manager as _get_mcp_mgr
+        from cyrene.tooling.backends.mcp_manager import get_manager as _get_mcp_mgr
 
         manager = _get_mcp_mgr()
         if is_tool_pack_enabled("integration_tools"):
@@ -352,7 +354,7 @@ def _function_definitions() -> dict[str, dict[str, Any]]:
 
 def _mcp_definitions() -> dict[str, dict[str, Any]]:
     try:
-        from cyrene.mcp_manager import get_manager
+        from cyrene.tooling.backends.mcp_manager import get_manager
 
         return {
             str((tool_def.get("function") or {}).get("name") or ""): tool_def

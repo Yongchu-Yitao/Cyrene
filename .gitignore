@@ -49,6 +49,7 @@ AGENTS.md
 .codex-run
 .pytest_cache
 /.playwright-cli/
+.codex-audit/
 
 # Tests
 tests*

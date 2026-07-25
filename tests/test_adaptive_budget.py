@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from cyrene.adaptive_budget import (
+from cyrene.agent.adaptive_budget import (
     DEFAULT_ACTIVITY_DENSITY,
     AdaptiveBudgetController,
     BudgetState,

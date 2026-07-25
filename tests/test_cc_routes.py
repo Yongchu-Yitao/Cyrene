@@ -10,7 +10,7 @@ from route.registry import register_routes
 
 
 def test_cc_status_route_exposes_expected_session(monkeypatch):
-    from cyrene import workbench_runtime as routes
+    from cyrene.workbench import runtime as routes
 
     monkeypatch.setattr(
         routes,

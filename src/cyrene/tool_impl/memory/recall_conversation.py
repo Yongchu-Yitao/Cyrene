@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
-from cyrene.conversations import recall_conversations, recall_workspace_conversations
-from cyrene.tooling.runtime_support import _json_result
+from cyrene.runtime.memory.conversations import recall_conversations, recall_workspace_conversations
+from cyrene.tooling.runtime_api import json_result
 
 TOOL_NAME = "RecallConversation"
 TOOL_DEF = get_native_tool_def(TOOL_NAME)
@@ -25,9 +25,9 @@ async def _tool_recall_conversation(
     date = str(args.get("date", "") or "").strip()
     limit = max(1, min(int(args.get("limit", 5) or 5), 10))
 
-    from cyrene.agent.state import _active_workspace_dir
+    from cyrene.agent.context import workspace_override
 
-    workspace_dir = str(_active_workspace_dir.get() or "").strip()
+    workspace_dir = str(workspace_override() or "").strip()
     if workspace_dir:
         matches = recall_workspace_conversations(
             workspace_dir=workspace_dir,
@@ -69,7 +69,7 @@ async def _tool_recall_conversation(
     }
     if not payload["matches"]:
         payload["note"] = "No archived conversation matches found for the given filters."
-    return _json_result(payload)
+    return json_result(payload)
 
 
 handler = _tool_recall_conversation

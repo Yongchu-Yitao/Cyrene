@@ -549,8 +549,8 @@ def run_electron_builder(arch: str = "x64") -> None:
 
 
 def write_buildinfo(ui_mode: str) -> None:
-    """Write _buildinfo.py with the target UI mode before PyInstaller bundles it."""
-    buildinfo = PROJECT_ROOT / "src" / "cyrene" / "_buildinfo.py"
+    """Write runtime/buildinfo.py before PyInstaller bundles it."""
+    buildinfo = PROJECT_ROOT / "src" / "cyrene" / "runtime" / "buildinfo.py"
     buildinfo.write_text(
         f"# Generated at build time by build/build.py — do not edit manually.\n"
         f'DEFAULT_UI_MODE: str = "{ui_mode}"\n',
@@ -560,8 +560,8 @@ def write_buildinfo(ui_mode: str) -> None:
 
 
 def restore_buildinfo() -> None:
-    """Restore _buildinfo.py to the default 'workbench' after building."""
-    buildinfo = PROJECT_ROOT / "src" / "cyrene" / "_buildinfo.py"
+    """Restore runtime/buildinfo.py to the default after building."""
+    buildinfo = PROJECT_ROOT / "src" / "cyrene" / "runtime" / "buildinfo.py"
     buildinfo.write_text(
         "# Generated at build time by build/build.py — do not edit manually.\n"
         "# Committed default is \"workbench\"; overwritten per-build via --ui-mode flag.\n"

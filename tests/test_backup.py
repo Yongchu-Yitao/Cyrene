@@ -23,7 +23,7 @@ def _read_db(path: Path) -> str:
 
 @pytest.fixture
 def backup_sandbox(monkeypatch, tmp_path):
-    from cyrene import backup
+    from cyrene.runtime import backup
 
     base = tmp_path / "runtime"
     data = base / "data"
@@ -91,7 +91,7 @@ async def test_backup_round_trip_is_exact_and_restores_sqlite_and_config(backup_
     conversations.mkdir()
     (conversations / "old.md").write_text("archived", encoding="utf-8")
     (data / "state.json").write_text('{"state":"old"}', encoding="utf-8")
-    _create_db(store / "cyrene.db", "old-db")
+    _create_db(store / "cyrene.runtime.database", "old-db")
 
     exported = await backup.export_backup()
     assert exported["ok"] is True
@@ -104,13 +104,13 @@ async def test_backup_round_trip_is_exact_and_restores_sqlite_and_config(backup_
 
     (data / "state.json").write_text('{"state":"new"}', encoding="utf-8")
     (conversations / "newer.md").write_text("must disappear", encoding="utf-8")
-    _create_db(store / "cyrene.db", "new-db")
+    _create_db(store / "cyrene.runtime.database", "new-db")
 
     restored = await backup.restore_backup(str(archive))
     assert restored["ok"] is True
     assert restored["restart_required"] is True
     assert (data / "state.json").read_text(encoding="utf-8") == '{"state":"old"}'
-    assert _read_db(store / "cyrene.db") == "old-db"
+    assert _read_db(store / "cyrene.runtime.database") == "old-db"
     assert sorted(path.name for path in conversations.iterdir()) == ["old.md"]
     assert (data / "config.enc").read_bytes() == b"encrypted-on-destination"
     assert env["activated"] == [env["snapshot"]]

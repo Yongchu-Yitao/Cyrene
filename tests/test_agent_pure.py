@@ -59,19 +59,19 @@ def test_browser_prompts_prefer_visible_clicks_over_direct_url_navigation():
 # ===========================================================================
 
 def test_report_export_filename_basic():
-    from cyrene.modules.deep_research import report_export_filename
+    from cyrene.agent.research import report_export_filename
     assert report_export_filename("round_12345") == "round_12345.pdf"
 
 
 def test_report_export_filename_sanitized():
-    from cyrene.modules.deep_research import report_export_filename
+    from cyrene.agent.research import report_export_filename
     result = report_export_filename("round_abc/def:ghi")
     assert "/" not in result
     assert result.endswith(".pdf")
 
 
 def test_report_export_filename_fallback():
-    from cyrene.modules.deep_research import report_export_filename
+    from cyrene.agent.research import report_export_filename
     result = report_export_filename("", "my-report")
     assert result == "my-report.pdf"
 
@@ -81,20 +81,20 @@ def test_report_export_filename_fallback():
 # ===========================================================================
 
 def test_report_title_from_heading():
-    from cyrene.modules.deep_research import report_title_from_text
+    from cyrene.agent.research import report_title_from_text
     text = "# My Research Report\n\nSome content."
     assert report_title_from_text(text) == "My Research Report"
 
 
 def test_report_title_from_first_line():
-    from cyrene.modules.deep_research import report_title_from_text
+    from cyrene.agent.research import report_title_from_text
     text = "Just a plain line\nSecond line"
     title = report_title_from_text(text)
     assert title == "Just a plain line"
 
 
 def test_report_title_fallback():
-    from cyrene.modules.deep_research import report_title_from_text
+    from cyrene.agent.research import report_title_from_text
     assert report_title_from_text("") == "Deep Research Report"
     assert report_title_from_text(None) == "Deep Research Report"
 
@@ -360,7 +360,7 @@ def test_suffix_fallback_prefix_len():
 # ===========================================================================
 
 def test_extract_new_references_with_heading():
-    from cyrene.modules.deep_research import extract_new_references
+    from cyrene.agent.research import extract_new_references
     text = "Some body text.\n\n## New References\n[1] https://example.com/a\n[2] https://example.com/b"
     body, refs = extract_new_references(text)
     assert "Some body" in body
@@ -370,7 +370,7 @@ def test_extract_new_references_with_heading():
 
 
 def test_extract_new_references_chinese_heading():
-    from cyrene.modules.deep_research import extract_new_references
+    from cyrene.agent.research import extract_new_references
     text = "正文内容。\n\n## 参考文献\n[1] https://example.com/c"
     body, refs = extract_new_references(text)
     assert "正文" in body
@@ -378,7 +378,7 @@ def test_extract_new_references_chinese_heading():
 
 
 def test_extract_new_references_orphan_fallback():
-    from cyrene.modules.deep_research import extract_new_references
+    from cyrene.agent.research import extract_new_references
     text = "Some body text.\n[1] https://example.com/x\n[2] https://example.com/y"
     body, refs = extract_new_references(text)
     assert len(refs) >= 1
@@ -386,7 +386,7 @@ def test_extract_new_references_orphan_fallback():
 
 
 def test_extract_new_references_no_refs():
-    from cyrene.modules.deep_research import extract_new_references
+    from cyrene.agent.research import extract_new_references
     text = "Just body text, no references."
     body, refs = extract_new_references(text)
     assert body == "Just body text, no references."
@@ -398,7 +398,7 @@ def test_extract_new_references_no_refs():
 # ===========================================================================
 
 def test_strip_stray_references_removes_ref_block():
-    from cyrene.modules.deep_research import strip_stray_references
+    from cyrene.agent.research import strip_stray_references
     text = "Some content.\n## References\n[1] example.com\nMore content."
     result = strip_stray_references(text)
     assert "Some content." in result
@@ -408,7 +408,7 @@ def test_strip_stray_references_removes_ref_block():
 
 
 def test_strip_stray_references_no_ref_block():
-    from cyrene.modules.deep_research import strip_stray_references
+    from cyrene.agent.research import strip_stray_references
     text = "Clean content without references."
     result = strip_stray_references(text)
     assert result == "Clean content without references."
@@ -419,7 +419,7 @@ def test_strip_stray_references_no_ref_block():
 # ===========================================================================
 
 def test_deduplicate_references_by_url():
-    from cyrene.modules.deep_research import deduplicate_references
+    from cyrene.agent.research import deduplicate_references
     entries = [
         "[1] https://example.com/a",
         "[2] https://example.com/b",
@@ -431,7 +431,7 @@ def test_deduplicate_references_by_url():
 
 
 def test_deduplicate_references_no_duplicates():
-    from cyrene.modules.deep_research import deduplicate_references
+    from cyrene.agent.research import deduplicate_references
     entries = [
         "[1] https://example.com/a",
         "[2] https://example.com/b",
@@ -446,7 +446,7 @@ def test_deduplicate_references_no_duplicates():
 # ===========================================================================
 
 def test_fill_missing_references_adds_placeholder():
-    from cyrene.modules.deep_research import fill_missing_references
+    from cyrene.agent.research import fill_missing_references
     body = "See [1] and [3] for details."
     refs = ["[1] Source A"]
     result = fill_missing_references(body, refs)
@@ -454,7 +454,7 @@ def test_fill_missing_references_adds_placeholder():
 
 
 def test_fill_missing_references_all_present():
-    from cyrene.modules.deep_research import fill_missing_references
+    from cyrene.agent.research import fill_missing_references
     body = "See [1] for details."
     refs = ["[1] Source A"]
     result = fill_missing_references(body, refs)
@@ -467,7 +467,7 @@ def test_fill_missing_references_all_present():
 # ===========================================================================
 
 def test_renumber_citations():
-    from cyrene.modules.deep_research import renumber_citations
+    from cyrene.agent.research import renumber_citations
     text = "See [1] and [3] for details."
     mapping = {1: 1, 3: 2}
     result = renumber_citations(text, mapping)
@@ -481,7 +481,7 @@ def test_renumber_citations():
 # ===========================================================================
 
 def test_assemble_report_basic():
-    from cyrene.modules.deep_research import assemble_report
+    from cyrene.agent.research import assemble_report
     sections = ["## Intro\nContent here.", "## Analysis\nMore content."]
     refs = ["[1] https://example.com"]
     outline = {"title": "Test Report"}
@@ -493,7 +493,7 @@ def test_assemble_report_basic():
 
 
 def test_assemble_report_with_dedup_mapping():
-    from cyrene.modules.deep_research import assemble_report
+    from cyrene.agent.research import assemble_report
     sections = ["## Intro\nSee [2] for details."]
     refs = ["[1] Source A"]
     outline = {"title": "Report"}
@@ -508,25 +508,25 @@ def test_assemble_report_with_dedup_mapping():
 # ===========================================================================
 
 def test_parse_length_short():
-    from cyrene.modules.deep_research import parse_length_preference
+    from cyrene.agent.research import parse_length_preference
     msgs = [{"role": "user", "content": "给我一个短报告，10页左右"}]
     assert parse_length_preference(msgs) == "short"
 
 
 def test_parse_length_long():
-    from cyrene.modules.deep_research import parse_length_preference
+    from cyrene.agent.research import parse_length_preference
     msgs = [{"role": "user", "content": "写一个长报告，30页"}]
     assert parse_length_preference(msgs) == "long"
 
 
 def test_parse_length_medium_default():
-    from cyrene.modules.deep_research import parse_length_preference
+    from cyrene.agent.research import parse_length_preference
     msgs = [{"role": "user", "content": "Just a normal question"}]
     assert parse_length_preference(msgs) == "medium"
 
 
 def test_parse_length_prefers_latest():
-    from cyrene.modules.deep_research import parse_length_preference
+    from cyrene.agent.research import parse_length_preference
     msgs = [
         {"role": "user", "content": "一个短报告"},
         {"role": "assistant", "content": "OK"},

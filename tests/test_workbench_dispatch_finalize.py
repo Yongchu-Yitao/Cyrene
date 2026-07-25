@@ -11,7 +11,7 @@ from route.registry import register_routes
 
 
 def test_classify_intent_maps_done_to_finalize(monkeypatch):
-    from cyrene import workbench_runtime as routes
+    from cyrene.workbench import runtime as routes
 
     async def fake_call_llm(*_args, **_kwargs):
         return {"content": '{"kind":"done"}'}
@@ -71,7 +71,7 @@ def _seed_store(store_path, workspace):
 def test_dispatch_finalize_summarizes_without_replanning(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from cyrene import workbench_runtime as routes
+    from cyrene.workbench import runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -128,7 +128,7 @@ def test_dispatch_finalize_summarizes_without_replanning(monkeypatch, tmp_path):
 def test_dispatch_answer_uses_task_reply_mode_and_reply_card(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from cyrene import workbench_runtime as routes
+    from cyrene.workbench import runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -182,7 +182,7 @@ def test_dispatch_acceptance_repair_does_not_return_500(monkeypatch, tmp_path):
     """A failed verification can be repaired through the normal dispatch path."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from cyrene import workbench_runtime as routes
+    from cyrene.workbench import runtime as routes
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()

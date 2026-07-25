@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 def workspace_scope_block(workspace_dir: Any = WORKSPACE_DIR, shell_kind: str = "bash") -> str:
     """Build workspace instructions for the current agent run.
 
-    ``shell_kind`` is the kind reported by :func:`cyrene.shell_runtime.resolve_shell`.
+    ``shell_kind`` is the kind reported by :func:`cyrene.tooling.backends.shell_runtime.resolve_shell`.
     When it is not ``bash`` (e.g. PowerShell/cmd on a Windows host without Git Bash),
     a dialect warning is appended so the agent stops emitting POSIX commands.
     """
@@ -155,7 +155,7 @@ def prompt_for_enabled_tool_packs(
     gateway/capability are omitted instead of advertising an unavailable entry.
     """
     if enabled_wire_names is None:
-        from cyrene.settings_store import is_tool_pack_enabled
+        from cyrene.runtime.settings_store import is_tool_pack_enabled
 
         enabled_wire_names = {
             wire_name
@@ -868,7 +868,7 @@ async def optimize_claude_code_prompt(task: str) -> str:
         f"Original request:\n{raw_task}"
     )
     try:
-        from cyrene.agent.state import _call_llm  # avoid circular deps
+        from cyrene.agent.model_service import call_agent_model as _call_llm
 
         response = await _call_llm(
             [
@@ -878,9 +878,9 @@ async def optimize_claude_code_prompt(task: str) -> str:
             tools=None,
             max_tokens=3600,
         )
-        from cyrene.llm import _assistant_text
+        from cyrene.model_runtime.messages import assistant_text
 
-        optimized = _assistant_text(response).strip()
+        optimized = assistant_text(response).strip()
         if optimized:
             return optimized
     except Exception:
@@ -942,3 +942,10 @@ def build_claude_code_question_payload(task: str, optimized_prompt: str, tmux_se
         "allow_custom": True,
         "meta": meta,
     }
+
+
+# Stable prompt fragments consumed by the Subagent runtime.
+DEEP_RESEARCH_SUBAGENT_PROMPT = _DEEP_RESEARCH_SUBAGENT_PROMPT
+DECISION_SUBAGENT_PROMPT = _DECISION_SUBAGENT_PROMPT
+LEARNING_SUBAGENT_PROMPT = _LEARNING_SUBAGENT_PROMPT
+COMPARE_SUBAGENT_PROMPT = _COMPARE_SUBAGENT_PROMPT

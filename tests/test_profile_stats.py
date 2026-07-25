@@ -8,8 +8,8 @@ import pytest
 
 import aiosqlite
 
-from cyrene import db as cy_db
-from cyrene import workbench_runtime as routes
+from cyrene.runtime import database as cy_db
+from cyrene.workbench import runtime as routes
 
 
 @pytest.mark.asyncio
@@ -108,7 +108,7 @@ def test_build_user_prefers_stored_profile(monkeypatch):
         "profile_avatar_color": "#1D9E75",
         "profile_bio": "first programmer",
     }
-    monkeypatch.setattr("cyrene.settings_store.get", lambda key, default="": stored.get(key, default))
+    monkeypatch.setattr("cyrene.runtime.settings_store.get", lambda key, default="": stored.get(key, default))
 
     user = routes._build_user()
     assert user["name"] == "Ada Lovelace"
@@ -120,7 +120,7 @@ def test_build_user_prefers_stored_profile(monkeypatch):
 
 
 def test_build_user_falls_back_to_local_name(monkeypatch):
-    monkeypatch.setattr("cyrene.settings_store.get", lambda key, default="": default)
+    monkeypatch.setattr("cyrene.runtime.settings_store.get", lambda key, default="": default)
     monkeypatch.setattr(routes, "_resolve_local_username", lambda: "Sam")
 
     user = routes._build_user()
