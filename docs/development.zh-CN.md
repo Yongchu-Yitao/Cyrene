@@ -57,7 +57,7 @@ Path。普通测试不得依赖真实 LLM Credential。
 
 ```bash
 # 安装开发依赖
-uv pip install -e ".[dev]"
+uv sync --all-extras
 
 # 完整测试，并把未处理线程异常视为错误
 uv run pytest -q \
@@ -76,6 +76,21 @@ git diff --check
 ```
 
 真实 LLM、Telegram、WeChat、远程 MCP 等属于带凭据的手工集成测试。
+
+最新稳定 Worktree 使用 Locked Environment 中的 Python `3.12.11`、
+FastAPI `0.136.1`、Pydantic `2.13.4`，完整 1,402 项测试全部通过。
+
+文档复核期间 OpenAPI Test 最初失败，是因为其 Hash 由 Ambient Python
+3.13.12、FastAPI 0.115.8、Pydantic 2.12.5 采集，而不是使用 `uv.lock` 中
+早已存在的版本。直接对比发现 10 个 Generator-level Difference：4 个
+Upload Schema 用 `contentMediaType: application/octet-stream` 替代
+`format: binary`，标准 `ValidationError` 增加 `input` 和 `ctx`；Route 和
+Application Request Model 都没有变化。
+
+因此，259 个 Operation 的严格 Hash 已在 Locked Environment 中重新采集，
+Contract 还会显式检查 FastAPI/Pydantic Generator Version。没有过滤或忽略
+任何 Schema Field；未来 Dependency Update 必须同时审查并更新 Version
+Baseline 与 Hash。
 
 ## 项目约定
 
@@ -137,15 +152,17 @@ Electron 直接执行 `src/cyrene/local_cli.py`，后者 Bootstrap Checkout 并�
 
 ## CI / Release
 
-`.github/workflows/release.yml` 在 Version Tag 或手工 Dispatch 时构建
-PyInstaller + Electron：
+Repository 有两个 GitHub Actions Workflow：
 
-- macOS；
-- Windows x64/ARM64；
-- Linux；
-- 手工触发仍可传入兼容 `ui_mode` 值 `workbench` 或历史 `agent`，但构建会把
-  两者都规范化为唯一的 Workbench UI，不再生成第二套 Agent UI；
-- 执行冻结产物 `--smoke-test`。
+- `.github/workflows/ci.yml` 在 Pull Request、推送到 `main` 或手工 Dispatch
+  时执行。Linux Job 会同步 Lockfile 中全部 Extra、编译 `src`、执行完整
+  pytest（把未处理 Thread Warning 提升为 Error）、构建 WebUI、确认
+  `src/webui/static/app` 已同步提交，并执行 Electron App Use Test。
+- `.github/workflows/release.yml` 在 Version Tag (`v*`) 或手工 Dispatch 时
+  执行。手工触发仍可传入兼容 `ui_mode` 值 `workbench` 或历史 `agent`，但构建
+  会把两者规范化为唯一 Workbench UI；随后为 macOS、Windows x64/ARM64 和
+  Linux 构建 PyInstaller + Electron，并执行冻结产物 `--smoke-test`。
 
-冻结 Smoke 会导入关键编译依赖和全部历史模块 Alias。目前没有常规 PR Test
-Workflow，因此 Tag 前必须本地执行完整验证。
+PR Workflow 不能替代真实平台打包 Smoke、视觉、带 Credential 外部服务、
+原地升级或 Installer 检查；Tag 前仍须完成这些 Release Gate。冻结 Smoke
+会导入关键编译依赖和全部历史模块 Alias。

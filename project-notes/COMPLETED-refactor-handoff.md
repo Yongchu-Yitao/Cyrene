@@ -1,6 +1,12 @@
 > **COMPLETED — 2026-07-26:** The package-boundary refactor and WebUI /
 > Workbench consolidation described here are finished. This file is the
 > canonical post-refactor architecture and compatibility handoff.
+>
+> **Current verification note:** the OpenAPI baseline mismatch found during a
+> later documentation audit was traced to a hash captured with ambient rather
+> than locked dependency versions. After reviewing the generated delta, the
+> strict locked-environment contract was corrected and the current suite passes
+> 1,402 tests. Current validation details live in `CONTEXT_DEV_PROGRESS.md`.
 
 # Cyrene Architecture Handoff
 
@@ -271,7 +277,7 @@ The 2026-07-26 baseline is:
 
 | Validation | Result |
 |---|---|
-| Current pytest | 1,390 passed |
+| Recorded post-settings-audit pytest | 1,390 passed |
 | Previous-commit functional pytest | 1,286 passed |
 | Previous source-shape test | 1 intentionally excluded |
 | Electron App Use | 44 passed |
@@ -299,7 +305,8 @@ The following are valid future improvements, not incomplete migration steps:
 - split `browser.py` into session, transport, policy, and capture boundaries;
 - divide behavior learning into storage, candidates, versions, and execution;
 - reduce import-time configuration/global mutation;
-- add pull-request CI for pytest, Ruff, Node tests, and packaged smoke.
+- extend the current pull-request CI (full pytest, WebUI build, and Electron
+  App Use) with Ruff and packaged smoke where platform cost permits.
 
 ### P2
 

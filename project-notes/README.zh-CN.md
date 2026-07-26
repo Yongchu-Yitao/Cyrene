@@ -13,5 +13,6 @@
 - [设计 QA](design-qa.zh-CN.md)
 - [浏览器浮窗动态避让可行性研究](browser-dynamic-layout-feasibility.md)
 
-`docs/research-workbench-report/` 保存设计过程中的本地截图与来源记录。该目录已
-被 Git 忽略，不属于 GitHub 仓库内容。
+大型/本地设计截图不属于 GitHub Repository。过时的本机
+`docs/research-workbench-report/` Artifact Directory 已于 2026-07-26 删除；
+历史结论保留在 Design QA。

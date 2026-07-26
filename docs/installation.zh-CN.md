@@ -38,99 +38,37 @@ pip install -e .
 
 ## Windows
 
-推荐使用预构建 Windows Installer。源码安装已经声明 `winloop`，但部分
-SimpleXNG Release 仍包含 Unix-specific SearXNG 代码；只有遇到对应错误时才
-需要以下兼容处理。
+预构建 Windows Installer 是当前面向最终用户的受支持路径。
 
-### 1. Environment
+Windows 源码 Environment 仍有一个上游 Packaging 限制：SimpleXNG 没有用
+Windows Environment Marker 排除 Unix-only `uvloop`。因此通用
+`pip install -e .` 或 Lockfile Sync 可能在 Cyrene Runtime Compatibility
+Launcher 生效前就因安装 `uvloop` 失败。
 
-```bash
-conda create -n cyrene python=3.12 -y
-conda activate cyrene
-```
-
-### 2. Dependencies
-
-优先尝试：
+Windows 开发请以仓库中的
+[Release Workflow](../.github/workflows/release.yml) Dependency-install Step
+为 Canonical Recipe：它会安装 `winloop`，用 `--no-deps` 安装 SimpleXNG，
+显式安装其 Transitive Dependency，再避免重新解析上述依赖来安装 Cyrene。
+Environment 准备好后：
 
 ```bash
-pip install -e .
-```
+cd src/webui
+npm install
+npm run build
+cd ../..
 
-如果 SimpleXNG Dependency Resolution 失败，可单独安装：
-
-```bash
-pip install aiosqlite apscheduler croniter fastapi httpx jinja2 \
-  python-dotenv python-telegram-bot requests sniffio uvicorn "mcp>=1.27.0"
-pip install winloop
-pip install simplexng --no-deps
-pip install babel brotli clideps flask flask-babel httpx-socks isodate \
-  lxml markdown-it-py msgspec platformdirs pyyaml rich setproctitle \
-  typer-slim valkey whitenoise
-pip install -e . --no-build-isolation
-```
-
-中国大陆可配置镜像：
-
-```bash
-pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-### 3. SimpleXNG Compatibility（仅需要时）
-
-在 `Lib/site-packages/simplexng/_vendor/searx/network/client.py` 中用
-`winloop` 替代 `uvloop`：
-
-```python
-import sys
-if sys.platform == "win32":
-    import winloop as uvloop
-else:
-    import uvloop
-uvloop.install()
-```
-
-在 Vendored Calculator 中把 `fork` Context 改为：
-
-```python
-import sys
-mp_fork = multiprocessing.get_context(
-    "fork" if sys.platform != "win32" else "spawn"
-)
-```
-
-如果依赖要求 `pwd`，创建最小 Windows Stub：
-
-```python
-"""pwd stub for Windows."""
-import os
-
-def getpwuid(uid):
-    name = os.environ.get("USERNAME", "unknown")
-    return type("pw", (), {"pw_name": name, "pw_uid": uid})()
-```
-
-确保 SimpleXNG Settings Template 允许 JSON：
-
-```yaml
-search:
-  formats:
-    - html
-    - json
-```
-
-### 4. 启动
-
-```bash
 python -m cyrene --workbench
-
-# 或后台 daemon
-cyrene start
-cyrene status
 ```
 
-如果不使用内置 Search，可在加密配置中设置外部 `SEARXNG_URL`，并设置
-`SEARXNG_AUTO_START=0`。
+不要预先手工修改 `site-packages`。Cyrene 通过
+`cyrene.tooling.backends.simplexng_child` 启动 SimpleXNG，在 Runtime 提供
+Windows `uvloop`、Multiprocessing Compatibility，并确保启用 JSON Search
+Output。这个 Launcher 解决的是安装完成后的 Runtime Compatibility，无法修复
+发生在更早阶段的 Package-resolution Failure。
+
+如果特定 SimpleXNG Release 仍无法启动，可在加密配置中把 `SEARXNG_URL`
+指向外部 SearXNG，并设置 `SEARXNG_AUTO_START=0`。调整 Dependency 前先保存
+Child Process Error；手工改 Vendored Package 不属于当前支持的安装流程。
 
 ## 验证安装
 
@@ -153,7 +91,7 @@ python -m cyrene.runtime.host
 
 - 非 Electron Browser：
   `pip install -e ".[browser]" && playwright install chromium`
-- 开发测试：`pip install -e ".[dev]"`
+- Locked 完整开发测试 Environment：`uv sync --all-extras`
 - Electron：
   `cd electron && npm install && npm run dev`
 

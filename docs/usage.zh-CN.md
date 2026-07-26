@@ -44,14 +44,14 @@ Workbench 以项目为中心：
 
 | 页面 | 功能 |
 |---|---|
-| Welcome / Projects | 创建和切换项目 |
-| Dashboard | Active Task、Recent Session、System Overview |
-| Chat | 项目范围实时 Agent Chat |
-| Schedule | Task、Deadline、Schedule |
-| Knowledge / Library | 上传、文献管理、全文/结构化检索 |
-| Memory | 检查 Project/Agent Memory |
-| Model | Model 与 Endpoint |
-| Help | Onboarding 与文档 |
+| Welcome / Projects | 创建、编辑、切换和删除 Project；选择 Workspace Directory |
+| Task | 创建、规划、批准、执行、暂停、验收、修复和复核 Task Session |
+| Chat | Project 范围实时 Chat 和 Session History |
+| Knowledge / Library | 导入 Document/书目文件、管理 Literature 和 Retrieval |
+| Schedule | 查看和管理 Scheduled Task |
+| Memory | 检查、搜索、创建和 Retire Project Memory |
+| Settings Overlay | 配置 Model、Integration、Capability、Channel、Agent、Data 和 Budget |
+| Help/Profile/Search | Secondary Overlay/Navigation，不是旧 UI 页面 |
 
 Workbench 是唯一 Web UI。实时 Markdown 对话、运行 Guidance、Subagent 与
 Browser 状态、Session History、Memory、Knowledge/Search、Schedule、Map、
@@ -146,15 +146,24 @@ Phase 1/2 Schema、专属 Prompt 和 Runtime Permission 中移除。Direct Tool
 
 ## Knowledge 与 Library
 
-支持 Text、PDF、Image 等文档。Pipeline：
+通过 Workbench 导入或在 Chat 中添加 Attachment。仅把任意文件放到 Project
+Workspace 不会自动加入 Knowledge Database。支持保存 Text/Code、PDF、
+DOCX/PPTX/XLSX、Image、Audio、Video 和其他 Binary Attachment。Pipeline：
 
-1. 提取 Text；
-2. 跳过 Binary 和超过限制的文件；
-3. Chunk 并写入 `store/kb_<workspace>.db`；
-4. 配置 Embedding 时生成 Vector。
+1. 保存 Attachment、Metadata 和 Content Hash；
+2. 从 PDF、Office XML、可读 Text 提取内容；配置 Vision Model 时可描述 Image；
+3. 未知 Binary 只 Archive，不生成乱码 Chunk；普通 Text Extract 超过 10 MiB
+   时跳过；
+4. Chunk 写入 `store/kb_<project-data-key>.db`；
+5. 只有配置 Embedding Provider 后才生成 Vector。
 
-Agent 通过 `knowledge_tools` 调用 `knowledge.search`。Workbench Library
-还提供 Collection、Tag、Citation Metadata、Zotero 和结构化 Search。
+同一个 Project Database 中的 Literature Library 提供 Collection、Tag、
+Status、Metadata、Note、Annotation、Attachment、Relation、Citation、
+CSL JSON/RIS/BibTeX Import、JSON Export 和只读 Zotero Desktop Local API
+Import。DOI/Title Lookup、Zotero Web API 双向同步和 Manuscript Editor 尚未
+实现。
+
+Agent 通过 `knowledge_tools` 使用 Project Search 和 Library Operation。
 
 ## Browser Live View
 
@@ -194,7 +203,9 @@ Telegram 使用相同的两阶段 Agent Loop、Subagent 和 Tool。
 
 ## WeChat
 
-配置 `WECHAT_BOT_TOKEN` 和 `WECHAT_OWNER_ID`，然后启动 Web UI。状态可在
-Settings 查看。
+打开 **Settings → Channels → WeChat**，获取 QR Code、使用微信扫码确认并
+启动 Channel。iLink Bot Token 会保存到加密配置，无需重启。
+`WECHAT_BOT_TOKEN` 和 `WECHAT_OWNER_ID` 仍作为历史配置输入保留，但当前 UI
+流程不要求用户手工获取或填写。
 
-WeChat 仍是 Alpha，可能需要可用代理。
+WeChat 仍是 Alpha，并依赖 WeChat iLink Bot Service 的可用性与行为。

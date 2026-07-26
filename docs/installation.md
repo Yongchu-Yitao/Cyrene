@@ -39,26 +39,26 @@ On first run, the onboarding wizard will ask for your API key and guide you thro
 
 ## Windows
 
-The pre-built Windows installer is recommended. Source installs include
-`winloop`, but some SimpleXNG releases still vendor Unix-specific SearXNG code;
-use the following compatibility steps only when a source launch reports the
-corresponding import/process error.
+Use the pre-built Windows installer for the supported end-user path.
 
-### 1. Environment
+There is a current upstream packaging limitation for source environments:
+SimpleXNG declares Unix-only `uvloop` without a Windows environment marker.
+Consequently, a generic `pip install -e .` or lockfile sync can try to install
+`uvloop` and fail before Cyrene's runtime compatibility launcher is available.
+
+For Windows development, use the dependency-install sequence in the checked-in
+[release workflow](../.github/workflows/release.yml) as the canonical recipe.
+It installs `winloop`, installs SimpleXNG with `--no-deps`, explicitly installs
+its transitive dependencies, and installs Cyrene without re-resolving those
+dependencies. After that environment is prepared:
 
 ```bash
-conda create -n cyrene python=3.12 -y
-conda activate cyrene
-```
+cd src/webui
+npm install
+npm run build
+cd ../..
 
-### 2. Dependencies
-
-```bash
-pip install aiosqlite apscheduler croniter fastapi httpx jinja2 python-dotenv python-telegram-bot requests sniffio uvicorn "mcp>=1.27.0"
-pip install winloop  # uvloop replacement for Windows
-pip install simplexng --no-deps
-pip install babel brotli clideps flask flask-babel httpx-socks isodate lxml markdown-it-py msgspec platformdirs pyyaml rich setproctitle typer-slim valkey whitenoise
-pip install -e . --no-build-isolation
+python -m cyrene --workbench
 ```
 
 > **Tip for China users:** Use Tsinghua mirror for faster downloads:
@@ -66,69 +66,18 @@ pip install -e . --no-build-isolation
 > pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 > ```
 
-### 3. Windows Compatibility Patches
-
-These patches fix SimpleXNG's vendored code for Windows:
-
-**Replace uvloop with winloop**
-Edit `Lib/site-packages/simplexng/_vendor/searx/network/client.py`:
-```python
-# Replace:
-import uvloop
-uvloop.install()
-# With:
-import sys
-if sys.platform == 'win32':
-    import winloop as uvloop
-else:
-    import uvloop
-uvloop.install()
-```
-
-**Replace fork with spawn**
-Edit `Lib/site-packages/simplexng/_vendor/searx/plugins/calculator.py`:
-```python
-# Replace:
-mp_fork = multiprocessing.get_context("fork")
-# With:
-import sys
-mp_fork = multiprocessing.get_context("fork" if sys.platform != "win32" else "spawn")
-```
-
-**Create pwd stub**
-Create `Lib/site-packages/pwd.py`:
-```python
-"""pwd stub for Windows — SearXNG compatibility."""
-import os
-def getpwuid(uid):
-    name = os.environ.get("USERNAME", "unknown")
-    return type("pw", (), {"pw_name": name, "pw_uid": uid})()
-```
-
-**Enable JSON API in SimpleXNG**
-Edit `Lib/site-packages/simplexng/settings/settings_template.yml`:
-```yaml
-search:
-  formats:
-    - html
-    - json    # ← add this line
-```
-
-### 4. Launch
-
-```bash
-python -m cyrene --workbench
-
-# Or use the installed background daemon client:
-cyrene start
-cyrene status
-```
-
-The onboarding wizard will run on first launch.
+Do not patch `site-packages` pre-emptively. Cyrene launches SimpleXNG through
+`cyrene.tooling.backends.simplexng_child`, which supplies the Windows `uvloop`
+and multiprocessing compatibility behavior at runtime and ensures JSON search
+output is enabled. This launcher solves runtime incompatibilities after
+installation; it cannot repair an earlier package-resolution failure.
 
 ### Alternative: External SearXNG
 
-If you prefer not to patch, set `SEARXNG_URL` in the encrypted config (or `.env`) to point to an external SearXNG instance and set `SEARXNG_AUTO_START=0`.
+If a particular SimpleXNG release still cannot start, point `SEARXNG_URL` at an
+external SearXNG instance and set `SEARXNG_AUTO_START=0` in the encrypted
+configuration. Capture the child-process error before changing dependencies;
+manual edits to vendored packages are not part of the current supported setup.
 
 ## Verify Installation
 
@@ -154,7 +103,7 @@ python -m cyrene.runtime.host
 ## Optional Extras
 
 - **Browser live view & login takeover outside Electron**: `pip install -e ".[browser]"` then `playwright install chromium` (desktop releases use embedded Chromium)
-- **Development/test dependencies**: `pip install -e ".[dev]"`
+- **Locked full development/test environment**: `uv sync --all-extras`
 - **Electron development app**: `cd electron && npm install && npm run dev`
 
 ## Next Steps

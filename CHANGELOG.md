@@ -4,6 +4,22 @@
 
 ## [Unreleased] - 2026-07-26
 
+- **全部 Repository 文档已按 `c1dbc62` 重新核对** — 当前指南现在明确区分
+  唯一正式 Workbench UI 与多个 Project Workspace，并如实记录 Managed Child
+  Process、已实现的 Literature Library 边界、WeChat iLink QR 配置、本地估算
+  Budget、Fernet Key/Keyring 与 Portable Backup 边界、当前/历史 Scheduler
+  Setting 差异，以及 Windows SimpleXNG Packaging/Runtime 限制。
+- **OpenAPI Characterization Baseline 已改用锁定环境** — 原 Hash 误用了
+  Ambient FastAPI 0.115.8 / Pydantic 2.12.5，而不是长期存在于 `uv.lock` 的
+ 版本。逐项审查全部 10 个 Generator-level Schema Delta 后，259 个 Operation
+  的严格 Hash 已在 FastAPI 0.136.1 / Pydantic 2.13.4 下重新采集，并把这两个
+  Generator Version 纳入 Contract。没有忽略任何字段，完整 Suite 现为
+  1,402 passed。
+- **新增常规 GitHub Actions CI** — Pull Request、推送到 `main` 和手工触发
+  现在会在锁定的全 Extra 环境执行 Python Compile 与完整 pytest，构建并核对
+  WebUI 已提交产物，同时执行 Electron App Use Test；Release Packaging 继续
+  由独立 Workflow 负责。
+
 - **核心源码按领域完成重组** — `src/cyrene/` 现在以 `agent/`、
   `workbench/`、`model_runtime/`、`learning/`、`runtime/`、
   `observability/`、`knowledge/`、`channels/`、`tooling/` 和
@@ -22,13 +38,15 @@
   daemon 共享 RuntimeContext、初始化顺序和关闭路径。`cyrene start`、
   `status`、API 连接与 `stop` 已通过真实隔离运行验证；Electron 开发模式继续
   从 `src/cyrene/local_cli.py` 启动当前源码。
-- **兼容性与构建验证扩大** — 当前测试套件 1,381 项通过；上一 commit 的
+- **兼容性与构建验证在该重构检查点扩大** — 当时测试套件 1,381 项通过；上一
+  commit 的
   1,286 项功能性测试通过，仅排除读取已删除 `pattern.py` 源码文本的形状测试。
   Electron App Use 44 项通过。最终 PyInstaller 产物验证 60 个旧模块别名、
   259 个 OpenAPI 操作、Web 启动、数据库迁移和干净退出。
 - **文档与源码边界同步** — README、架构、安装、使用、配置、开发、
   重构 handoff、Research Workbench 路线图和设计 QA 统一到当前包结构、
-  数据库文件名和启动命令；开发过程截图与来源记录保留在本机，不上传 GitHub。
+  数据库文件名和启动命令；过时且被 Git 忽略的本机 Research Workbench
+  Report Artifact 已删除，其历史结论保留在 Design QA。
 
 ### 技术细节
 

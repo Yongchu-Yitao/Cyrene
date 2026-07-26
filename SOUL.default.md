@@ -19,4 +19,4 @@
 ## PATTERN:USER
 
 ## TEMPORARY
-<!-- Items with 24h expiry — timestamps are used for cleanup. -->
+<!-- Items expire from injected memory context after 24h; source lines are retained. -->

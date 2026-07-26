@@ -52,14 +52,14 @@ The default Workbench UI is organized around projects:
 
 | Page | What you can do |
 |---|---|
-| **Welcome / Projects** | Create and switch projects; each project has its own data scope |
-| **Dashboard** | Overview of active tasks, recent sessions, and system status |
-| **Chat** | Project-scoped real-time chat with the agent |
-| **Schedule** | View and manage scheduled tasks and deadlines |
-| **Knowledge** | Upload documents, browse the knowledge base, and run semantic search |
-| **Memory** | Inspect and manage project/agent memory |
-| **Model** | Select LLM models and API endpoints |
-| **Help** | Onboarding tips and documentation links |
+| **Welcome / Projects** | Create, edit, switch, and delete projects; choose each workspace directory |
+| **Task** | Create, plan, approve, execute, pause, verify, repair, and review task sessions |
+| **Chat** | Project-scoped real-time chat and session history |
+| **Knowledge / Library** | Import documents and bibliography files; manage literature and retrieval |
+| **Schedule** | View and manage scheduled tasks |
+| **Memory** | Inspect, search, create, and retire project memories |
+| **Settings overlay** | Configure models, integrations, capabilities, channels, agents, data, and budgets |
+| **Help/Profile/Search** | Secondary overlays and navigation, not separate legacy pages |
 
 ---
 
@@ -142,7 +142,7 @@ This starts the agent directly without a web server. Available in-conversation c
 
 ## Slash Commands in Chat
 
-Both web UIs and the interactive CLI support slash commands:
+Workbench and the interactive CLI support slash commands:
 
 | Command | Description |
 |---|---|
@@ -196,22 +196,33 @@ tools such as `AnalyzeAttachment` remain available.
 
 ## Knowledge Base
 
-Upload documents through the Web UI or place them in the workspace. Supported types include:
+Import documents through Workbench or attach them in chat. Merely placing an
+arbitrary file in a project workspace does not automatically add it to the
+knowledge database. Preserved/importable content includes:
 
-- Text files (`.md`, `.txt`, `.py`, etc.)
-- PDFs
-- Images (description via vision model)
-- Maps and other text-based files
+- UTF-8 text and code files
+- PDF, DOCX, PPTX, and XLSX
+- Images (description requires a configured vision-capable model)
+- Audio, video, archives, and unknown binary files as preserved attachments
 
 The ingestion pipeline:
 
-1. Extracts text (PDF → `pypdf`, images → vision model, text → UTF-8)
-2. Skips binary files and files larger than 10 MB
-3. Chunks content and stores it in `store/kb_<workspace>.db`
-4. Generates embeddings if an embedding endpoint is configured
+1. Preserves the attachment and records metadata/content hash
+2. Extracts text from PDF, Office XML, images (when vision is configured), and
+   readable text; unknown binaries remain archived without text chunks
+3. Skips generic text extraction for files larger than 10 MiB (PDF/Office have
+   their own extractors)
+4. Chunks extractable content into `store/kb_<project-data-key>.db`
+5. Generates embeddings only when an embedding provider is configured
 
-In chat, the agent discovers and invokes `knowledge.search` through
-`knowledge_tools`; the Knowledge page queries the same corpus directly.
+The Literature Library in that same project database adds collections, tags,
+status, metadata, notes, annotations, attachments, relations, citations,
+CSL JSON/RIS/BibTeX import, JSON export, and read-only Zotero Desktop Local API
+import. It does not yet provide DOI/title lookup, Zotero Web API bidirectional
+sync, or a manuscript editor.
+
+In chat, the agent discovers project search and Library operations through
+`knowledge_tools`; the Knowledge/Library page queries the same project corpus.
 
 ---
 
@@ -258,6 +269,11 @@ The Telegram bot supports the same two-phase loop, subagents, and tools as the W
 
 ## WeChat Bot
 
-Set `WECHAT_BOT_TOKEN` and `WECHAT_OWNER_ID` in the encrypted config. Start Cyrene with the web UI; the WeChat integration runs alongside it. Status is shown on the Settings page.
+Open **Settings → Channels → WeChat**, request a QR code, scan it in WeChat,
+confirm the login, and start the channel. The returned iLink bot token is stored
+in the encrypted configuration and no restart is required. Environment/config
+keys `WECHAT_BOT_TOKEN` and `WECHAT_OWNER_ID` remain compatibility inputs, but
+the current UI flow does not require users to obtain or enter them manually.
 
-> WeChat support is **Alpha** and may require a working proxy setup.
+> WeChat support is **Alpha** and depends on the availability and behavior of
+> the WeChat iLink Bot service.

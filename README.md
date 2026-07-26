@@ -14,213 +14,118 @@
 <p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
 <p align="center">
-  An open-source AI agent framework with a living personality, parallel subagents,<br>
-  a workbench-style desktop UI, and zero infrastructure. No Docker, no Redis, just Python.
+  An open-source, local-first AI agent with durable memory, parallel subagents,
+  project workspaces, and a Workbench desktop UI.
 </p>
 
----
+## What Cyrene can do
 
-## What is Cyrene?
+- **Remember across sessions** — maintain a durable personality and memory while
+  keeping project work separate.
+- **Complete multi-step work** — plan, use tools, delegate to parallel
+  subagents, verify results, and resume interrupted tasks.
+- **Research and reflect** — conduct cited deep research, generate PDF reports,
+  and use deep reflection when a task is stuck.
+- **Organize projects** — manage project workspaces, chats, tasks, memories,
+  knowledge, entities, schedules, and literature collections.
+- **Understand files** — ingest and search text, PDFs, Office documents,
+  Markdown, images, audio, video, and other attachments.
+- **Work with literature** — manage collections, tags, notes, annotations,
+  citations, attachments, relations, CSL JSON, RIS, BibTeX, and read-only Zotero
+  Desktop imports.
+- **Use the web and local tools** — search and browse the web, edit files, run
+  shell and Git operations, connect MCP servers, and use installed skills.
+- **Automate recurring work** — run cron, interval, and one-shot tasks and send
+  optional desktop, Telegram, or WeChat notifications.
+- **Run in Workbench or Electron** — use the same Workbench experience in a
+  browser or desktop app, with Quick Chat, rich Markdown, code, diff, map, PDF,
+  file-preview, and browser views.
 
-Cyrene is an AI agent that **runs continuously** — it has a self-rewriting personality (`SOUL.md`), remembers conversations across sessions, spawns sub-agents for parallel work, and can act proactively via scheduled tasks.
+Cyrene has one official Web UI: **Workbench**.
 
-It runs as a local daemon with one Workbench web front-end (and optional Telegram/WeChat bots), connecting to any OpenAI-compatible LLM API. Everything — memory, knowledge, scheduler, browser automation, search — lives in a single Python process backed by SQLite and flat files. There is no external infrastructure to stand up: no Docker, no Redis, no vector database service.
+## Current limitations
 
-A quick map of the moving parts:
+- Cyrene is designed for one local operator. Projects are organizational
+  boundaries, not separate users or security tenants.
+- The Web server is local-only and is not intended for public internet
+  exposure.
+- Tool permissions reduce accidental actions but do not provide an operating
+  system, VM, or container sandbox.
+- Prompts and selected context are sent to configured model services.
+  Integrations may also exchange data with their configured services.
+- Chat models currently require an OpenAI-compatible endpoint.
+- Usage budgets are local estimates, not provider billing controls.
+- Data has no automatic retention period; it remains until explicitly removed
+  or reset.
+- Electron browser cookies and logins are shared across projects.
+- The HTTP API is not yet versioned as a stable public API.
+- Literature DOI/title lookup, Zotero Web API two-way sync, Experiments, and
+  Manuscripts are not implemented.
+- Windows source installation has an upstream SimpleXNG limitation; use a
+  pre-built app or follow the checked-in release workflow.
+- Pull-request CI covers the full Python suite, WebUI build, and Electron App
+  Use tests on Linux. Packaged, visual, upgrade, and credentialed integration
+  checks remain release/manual gates.
 
-- **One process** hosts the agent loop, the FastAPI web server, the scheduler, and the bundled search engine.
-- **One Workbench UI** provides the project-centric desktop and browser experience.
-- **Any OpenAI-compatible API** works (DeepSeek by default; Claude, GPT, Qwen, and local models all fit).
-- **Domain packages** separate agent, Workbench, model runtime, learning,
-  lifecycle, observability, knowledge, channels, and tooling without breaking
-  historical Python imports.
+See [Development](docs/development.md) for the exact validation baseline and
+[Current Development Progress](project-notes/CONTEXT_DEV_PROGRESS.md) for
+known engineering risks.
 
----
+## Quick start
 
-## Features
+### Desktop app
 
-Cyrene packs a lot into that single process. Here is the full picture, grouped by what you would reach for.
+Download an artifact from
+[GitHub Releases](https://github.com/Yongchu-Yitao/Cyrene/releases).
 
-### 🧠 Agent core
+### From source
 
-The reasoning loop and the pieces that make Cyrene feel less like a stateless chatbot.
-
-- **Two-phase agent loop** — every turn first decides whether it can answer directly (one LLM call, no tools) or whether it needs to act; only then does it enter the tool-using phase. Simple chat stays cheap and fast, while real work still gets the full toolset. *Stable*
-- **`SOUL.md` personality** — Cyrene keeps a personality document it rewrites itself. As it learns your preferences, voice, and the people and projects in your life, it edits its own `SOUL.md`, so the personality evolves across sessions instead of resetting every time. *Stable*
-- **Deep Research** — a multi-round research pipeline that plans sub-questions, searches and reads sources across several rounds, and exports a structured PDF report at the end. *Stable*
-- **Deep Reflection** — for complex or ambiguous requests, Cyrene reframes the problem over several internal rounds before answering, trading a little latency for a better-aimed response. *Beta*
-- **Behavior learning** — distills reusable action patterns from past conversations, so recurring workflows get faster and more consistent over time. *Beta*
-
-### 🗂️ Memory & knowledge
-
-How Cyrene remembers across sessions and works with your documents.
-
-- **Three-tier memory** — context window → short-term cross-session summaries → long-term `SOUL.md`. Conversations are compressed into short-term entries; a "steward" promotes the durable ones to long-term. Stale or superseded short-term memories can be **retired** so they stop being injected and recalled, without being destructively deleted. *Stable*
-- **Knowledge base** — upload documents, PDFs, and images; Cyrene embeds and indexes them (including vision indexing for images) so the agent can search and cite them mid-task. *Stable*
-- **Entities** — track structured project entities (people, systems, items) that the agent can query and update as facts change. *Stable*
-
-### 🛠️ Tools & automation
-
-What Cyrene can actually *do* beyond talking.
-
-- **Parallel sub-agents** — spawn independent agents with full tool access to work in parallel, coordinated through an inbox so their results flow back into the main run. *Stable*
-- **Built-in web search** — bundled SimpleXNG (SearXNG engine) means web search works out of the box, with no Docker and no external search API key. *Stable*
-- **MCP protocol** — connect any stdio or SSE [Model Context Protocol](https://modelcontextprotocol.io) server to extend the toolset with third-party capabilities. *Stable*
-- **Task scheduler** — cron, interval, and one-shot scheduled tasks, plus a proactive "lottery" system that lets Cyrene act on its own initiative rather than only when prompted. *Stable*
-- **Browser live view** — the Electron app drives its embedded, persistent browser directly (logins survive across runs), with native tabs and in-panel control. Source/CLI web runs can opt into Playwright for the same automation tools, live screencast, and login takeover flow. *Beta*
-- **Code tools** — codebase indexing, symbol search, and git helpers for working inside repositories. *Beta*
-- **Claude Code bridge** — detect, launch, and chat with Claude Code tmux sessions directly from within Cyrene. *Beta*
-- **Skills installer** — install `.md` / `.zip` prompt skills at runtime to teach Cyrene new procedures without a redeploy. *Stable*
-
-### 🖥️ Interfaces & channels
-
-Where you actually talk to Cyrene.
-
-- **Workbench UI** — a project-centric desktop experience: per-project dashboard, schedule, knowledge, memory, chat, session history, browser view, settings, and honest step-by-step task execution you can follow and steer. *Stable*
-- **Context tracing** — inspect exactly what context (system prompt, memory,
-  conversation history, tool set) was sent to each LLM call through verbose
-  JSONL logs, the context-debug API, or `cyrene flow`. *Stable*
-- **Electron desktop app** — packaged builds for macOS, Windows (x64 + ARM64), and Linux via CI, with credentials stored in the OS keyring. Its embedded Chromium powers browser tools, so releases do not ship a second Playwright/Chromium runtime. *Beta*
-- **Telegram bot** — full agent access from Telegram. *Stable*
-- **WeChat bot** — basic WeChat integration. *Alpha*
-- **Map engine** — interactive AMap / Leaflet map with pins for location-based tasks. *Beta*
-
----
-
-## Limitations (current as of v0.7.0b1)
-
-- **Single-user** — one workspace, one `SOUL.md`, no user isolation
-- **Local-only Web UI** — binds to `127.0.0.1`; the desktop app uses OS keyring auth, but the raw web server has no auth layer
-- **No data retention policy** — session history grows indefinitely
-- **Limited error recovery** — agent crashes are caught silently; the user is not always notified
-- **No API versioning** — all endpoints live under a bare `/api/`
-- **No rate/cost limiting** — there is no LLM call quota or spend protection
-- **Windows from source** — requires manual patching of vendored dependencies; the pre-built installer is recommended
-- **CI coverage** — the repository has a comprehensive local pytest suite and
-  Electron/package smoke tests, but GitHub Actions currently runs release
-  packaging rather than the complete pytest matrix
-
----
-
-## Quick Start
-
-### Option A: Pre-built (macOS / Windows / Linux)
-
-Download the latest release for your platform from the [Releases page](https://github.com/Yongchu-Yitao/Cyrene/releases).
-
-> Windows ARM64 and x64 installers are provided separately.
-
-### Option B: From source
-
-Requires Python 3.12+ and [Node.js 20+](https://nodejs.org/) (for the WebUI JSX precompilation step).
+Requires Python 3.12+, `uv`, and Node.js 20+.
 
 ```bash
-# 1. Install dependencies (uv recommended — uv.lock is committed for reproducible builds)
-uv sync           # or: pip install -e .
+uv sync
 
-# 2. Precompile the WebUI JSX → JS (required from source; releases bundle this already)
-cd src/webui && npm install && node build-jsx.mjs && cd ../..
+cd src/webui
+npm install
+npm run build
+cd ../..
 
-# 3. Run
-python -m cyrene --workbench     # Workbench UI
-
-# Or launch the Workbench daemon through the installed CLI
-cyrene start
+uv run python -m cyrene --workbench
 ```
 
-Open `http://localhost:4242`. First launch runs an onboarding wizard that guides you through API key configuration and personality setup.
+Open `http://localhost:4242`. First run guides you through model and personality
+setup.
 
-> No `.env` file is required. All configuration is stored in an encrypted store (`data/config.enc` by default) and managed through the Web UI settings or onboarding wizard. A legacy `.env.example` is kept for backward compatibility.
-
-Runtime state uses `store/cyrene.runtime.database`. When an older
-`store/cyrene.db` is present and the new database has not been populated,
-startup creates a verified SQLite snapshot in the new location, records a
-migration marker, and retains the old file as the rollback copy.
-
-### Electron app from source (development)
-
-The Electron package lives in `electron/`, not at the repository root. Before
-launching it, install the project dependencies into the repository's `.venv`
-(`uv sync`, `pip install -e .`, or the equivalent). Then use:
+To launch the Electron app:
 
 ```bash
 cd electron
+npm install
 npm run dev
 ```
 
-`local_cli.py` detects direct source-file execution, adds the checkout's `src/`
-directory to Python's import path, and re-executes through `.venv` when it is
-available. You can verify the environment before launching:
+Background service commands:
 
 ```bash
-PYTHONPATH="$(cd ../src && pwd)" python3 -c \
-  'import cyrene, cryptography, fastapi, uvicorn; print("Python environment OK")'
+uv run cyrene start
+uv run cyrene status
+uv run cyrene stop
 ```
 
-Common launch pitfalls:
-
-- Running `npm run dev` from the repository root fails because the root has no
-  `package.json`; run it from `electron/`.
-- `ModuleNotFoundError: No module named 'cryptography'` (or another runtime
-  dependency) means the checkout's `.venv` is missing or incomplete. Install
-  the project dependencies there, then run `npm run dev` again.
-- A raw request to `http://127.0.0.1:4242/` may return `401 Unauthorized` while
-  the Electron backend is healthy: the desktop window supplies its generated
-  authentication token. Confirm startup using the `UIMODE=workbench`,
-  `PORT=4242`, and HTTP `200` entries in the Electron terminal log.
-- Chromium DevTools messages about `Autofill.enable` / `Autofill.setAddresses`,
-  and `401` responses for optional JavaScript source maps, are development-log
-  noise and do not indicate that Workbench failed to load.
-
-Optional extras:
-
-- **Browser live view & login takeover outside Electron** — `uv pip install -e ".[browser]"` then `playwright install chromium` (desktop releases need no extra install)
-- **Development & tests** — `uv pip install -e ".[dev]"` then `uv run pytest -q`
-
-> **Windows?** Pre-built binary recommended. For source (requires patching vendored SimpleXNG deps), see [docs/installation.md](docs/installation.md#windows).
-
----
+For platform setup, optional browser support, channels, and development tests,
+see [Installation](docs/installation.md) and
+[Development](docs/development.md).
 
 ## Documentation
 
-- [Installation](docs/installation.md) — Linux, macOS, Windows
-- [Architecture](docs/architecture.md) — Two-phase loop, features, project structure
-- [Usage](docs/usage.md) — Workbench UI, CLI commands, in-conversation commands
-- [Configuration](docs/configuration.md) — Environment variables reference
-- [Development](docs/development.md) — Debugging, verbose logging, testing
-- [Browser Live View](docs/browser-live-view.md) — Browser screencasting and login takeover
-- [Changelog](CHANGELOG.en.md) — Release history
-- [Completed Architecture Handoff](project-notes/COMPLETED-refactor-handoff.md) —
-  canonical post-refactor module ownership, compatibility rules, validation
-  baseline, and independent future work
-- [Current Development Progress](project-notes/CONTEXT_DEV_PROGRESS.md) — Audited
-  implementation status and unresolved work
-- [Research Workbench Roadmap](project-notes/research-workbench-roadmap.md) — Current
-  Library status and proposed Experiments/Manuscripts phases
-- [Completed WebUI / Workbench Consolidation Plan](project-notes/COMPLETED-webui-workbench-consolidation-refactor-plan.en.md) —
-  completed historical implementation plan and Definition of Done
-- [Completed WebUI / Workbench Consolidation Log](project-notes/COMPLETED-webui-consolidation-implementation-log.md) —
-  implementation, packaging, upgrade, and Electron verification evidence
-- [Design QA](project-notes/design-qa.md) — Historical visual acceptance evidence
-- [Browser PiP Feasibility Study](project-notes/browser-dynamic-layout-feasibility.en.md) —
-  Historical design research
-
----
-
-## Tech Stack
-
-- **Runtime** — Python 3.12+, FastAPI, Uvicorn, SQLite
-- **Package manager** — uv (lock file committed); pip also supported
-- **Linting** — Ruff (line length 180)
-- **LLM** — OpenAI-compatible API (default: DeepSeek, works with Claude/GPT/Qwen)
-- **Search** — SimpleXNG (bundled, no Docker)
-- **Browser** — Electron embedded Chromium on desktop; optional Playwright + WebSocket screencasting outside Electron
-- **Desktop** — Electron + electron-builder, persistent native browser partition, OS keyring (keyring)
-- **Channels** — python-telegram-bot, WeChat (itchat)
-- **Encryption** — Fernet (cryptography) for config store
-
----
+- [Installation](docs/installation.md)
+- [Usage](docs/usage.md)
+- [Configuration](docs/configuration.md)
+- [Architecture](docs/architecture.md)
+- [Development](docs/development.md)
+- [Current development progress](project-notes/CONTEXT_DEV_PROGRESS.md)
+- [Changelog](CHANGELOG.en.md)
 
 ## License
 
-Apache 2.0
+[Apache License 2.0](LICENSE)

@@ -1,6 +1,11 @@
 > **COMPLETED / 已完成 — 2026-07-26：** 本文记录的包边界重构与
 > WebUI / Workbench 合并已经完成。本文是重构后架构、兼容边界和验收结果的
 > 正式交接文档。
+>
+> **当前验证提示：** 后续文档审计发现的 OpenAPI Baseline Mismatch 已定位为
+> 使用 Ambient 而非 Locked Dependency Version 采集 Hash。逐项审查生成差异
+> 后，严格 Locked-environment Contract 已修正，当前完整 Suite 为 1,402
+> Passed。验证细节以 `CONTEXT_DEV_PROGRESS.zh-CN.md` 为准。
 
 # Cyrene 架构重构 Handoff
 
@@ -247,7 +252,7 @@ Workbench 业务逻辑位于 `cyrene.workbench`。`workbench.runtime` 是正式�
 
 | 验证 | 结果 |
 |---|---|
-| 当前 pytest | 1,390 passed |
+| Settings Audit 后记录的 pytest | 1,390 passed |
 | 上一 commit 功能 pytest | 1,286 passed |
 | 上一源码形状测试 | 1 个按要求排除 |
 | Electron App Use | 44 passed |
@@ -275,7 +280,8 @@ Workbench 业务逻辑位于 `cyrene.workbench`。`workbench.runtime` 是正式�
 - 把 `browser.py` 拆为 Session、Transport、Policy、Capture；
 - 拆分行为学习的 Storage、Candidate、Version、Execution；
 - 减少导入时配置/全局变更；
-- 增加 pytest、Ruff、Node、打包 smoke 的 PR CI。
+- 在现有完整 pytest、WebUI Build 和 Electron App Use PR CI 上，按平台成本
+  补充 Ruff 与打包 Smoke。
 
 ### P2
 

@@ -50,9 +50,11 @@ Wire Bundle。Capabilities 页面按完整 Package 开关能力；关闭 Package
 
 ### 人格系统（SOUL.md）
 
-`workspace/SOUL.md` 保存身份、信念、关系、Memory 和 Pattern。Steward Agent
-按配置间隔审阅对话，通过 `APPEND`、`ERASE`、`MERGE` 更新 SOUL。临时记录会
-过期，最终回复会根据人格进行表达。
+`workspace/SOUL.md` 是唯一的全局 Personality 与持久 Memory Document。
+Steward Agent 审阅新 Conversation，并可通过 `APPEND`、`ERASE`、`MERGE`
+更新它。默认间隔为一小时，且最短会被限制为一小时。带日期的 `TEMPORARY`
+Entry 超过 24 小时后会在组装 Memory Context 时被过滤，但不会仅因过期而
+静默改写 Source Document。
 
 ### Multi-Agent 编排
 
@@ -64,21 +66,25 @@ Main Agent 通过 `subagent_tools` 调用 `subagent.spawn`。每个 Subagent 获
 running → waiting → resumed → done / timeout
 ```
 
-### 三层 Memory
+### Memory 分层
 
 | 层 | 存储 | 容量/维护 |
 |---|---|---|
-| Context Window | `data/state.json` | 默认约 40 条，自动 Trim/Compact |
-| Short-term | `data/short_term.json` | 压缩摘要，后台维护 |
-| Long-term | `workspace/SOUL.md` | Steward Agent |
+| Conversation Context | 默认历史 Session 使用 `data/state.json`；Named Session 使用 `data/sessions/<session>/state.json` | Agent Session Runtime |
+| Project Memory | 以 Project Memory Key 保存的 Workbench Document | Workbench Memory Service |
+| 历史 Short-term | `data/short_term.json` | 默认 Session 兼容，由 Compressor/Steward 维护 |
+| Long-term Identity | `workspace/SOUL.md` | 全局唯一，由 Steward Agent 维护 |
 
 Short-term Entry 保存情绪、提及次数和 Fact/Pattern/Preference/Emotion 类型。
 
 ### Knowledge 与 Library
 
-文档会被 Hash、分块、Embedding 并存入项目 SQLite。`knowledge_tools` 提供项目
-文档和文献库能力，例如 `knowledge.search`、`knowledge.library.search`。
-`AnalyzeAttachment`、`WebSearch`、`WebFetch` 是 Direct Tool。
+通过 Workbench 导入的文件、Chat Attachment、Generated Export 和 Zotero
+Attachment 会被 Hash 并存入项目 SQLite。可提取内容会被分块；只有配置
+Embedding Provider 后才生成 Embedding，否则仍提供 Lexical/FTS Retrieval。
+把任意文件放进 Project Workspace 不会自动 Ingest。`knowledge_tools` 提供
+项目 Document 和 Literature Library 能力；`AnalyzeAttachment`、
+`WebSearch`、`WebFetch` 是 Direct Tool。
 
 ### Entity
 
@@ -119,13 +125,16 @@ SQLite 保存执行历史。
 
 ### Web UI
 
-Cyrene 只提供 Workbench 前端，包含项目 Dashboard、Chat 与实时执行状态、
-Schedule、Knowledge/Library、Memory、Search、Browser/PDF/Diff、Settings、
-Onboarding 和 Quick Chat。唯一源码根是 `src/webui/frontend`，唯一生成输出根
-是 `src/webui/static/app`。
+Cyrene 只提供 Workbench 前端。主要区域是 Task、Chat、Knowledge/Library、
+Schedule 和 Memory；Search、Browser/PDF/Diff、Settings、Onboarding、Help、
+Profile 和 Quick Chat 是 Overlay、Panel 或 Secondary Surface，不是旧 UI
+页面。唯一源码根是 `src/webui/frontend`，唯一生成输出根是
+`src/webui/static/app`。
 
-Web UI 绑定 `127.0.0.1`，由 FastAPI Backend 提供。Electron 使用 OS Keyring
-和 Local Auth Middleware。
+Web UI 绑定 `127.0.0.1`，由 FastAPI Backend 提供。Electron 每次启动生成
+Shared Token、传给 Python Child，并把它作为 `X-Cyrene-Token` 注入 Desktop
+Request。OS Keyring 保存的是保护 `data/config.enc` 的 Fernet Key，不是该
+Per-launch HTTP Token。
 
 Electron Browser Tool 通过 Token-authenticated loopback RPC 直接使用内嵌
 Chromium，并与可见 `WebContentsView` 共享持久 Profile。打包桌面版不包含
@@ -153,8 +162,16 @@ History、Tool Result 等来源。`--verbose` 写入 `data/debug_*.jsonl`，API 
 
 ## 安全与本地认证
 
-Raw Web Server 只绑定 `127.0.0.1`，不适合作为远程服务暴露。Electron
-生成随机 Local Token，保存在 OS Keyring，并要求所有 Desktop 请求携带。
+Raw Web Server 只绑定 `127.0.0.1`，校验本地 Host/Origin，没有 User Login，
+不适合作为远程服务暴露。Electron 要求 Desktop 请求携带 Per-launch Token。
+Credential 保存在 `data/config.enc`；其 Fernet Key 优先进入 OS Keyring，
+Keyring 不可用时回退到权限为 0600 的本地 Key File 并记录 Warning。
+
+这些属于应用层 Control，不是 OS Sandbox 或 Multi-tenant Boundary。Project
+Store 和 Permission Mode 不能隔离互不信任的用户。只有 Config Blob 由应用
+加密；Workspace File、Database、Log/Trace、Export 和 Backup 仍依赖操作系统
+Storage Protection。Portable Backup ZIP 为跨 Installation Restore 包含
+Logical Config Snapshot，其中可能存在 Credential。
 
 ## 项目结构
 
@@ -185,10 +202,10 @@ src/
 ├── webui/                   App Lifecycle、Auth、唯一 Workbench 前端与 SPA Hosting
 │   ├── frontend/            唯一 React/JSX 源码根
 │   └── static/app/          唯一生成/打包输出根
-├── tests/
-├── data/
-├── workspace/
-└── store/
+tests/
+data/
+workspace/
+store/
 ```
 
 `cyrene.db`、`cyrene.scheduler`、`cyrene.workbench_runtime` 等历史 Import 由

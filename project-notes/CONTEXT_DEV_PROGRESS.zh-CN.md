@@ -11,6 +11,8 @@
 
 UI 合并工作区基线：`17914e697af41c13a3c5da0092f69aa9906644af`
 
+当前复核 HEAD：`c1dbc62f24460d123b5bac03dc42ce9411319fb1`
+
 本文记录当前开发检查点。旧版 Windows/Context Debugger 命令记录引用了已经
 迁移的模块路径，因此已由当前源码与验证结果替代。
 
@@ -123,13 +125,19 @@ PORT=4242
 DevTools 的 Autofill 方法不支持警告和可选 source map 的 401 属于开发日志
 噪声，不表示 Workbench 启动失败。
 
-## 验证基线
+## 当前验证与历史基线
 
-在 macOS ARM64、Python 3.13.12 下验证：
+已完成重构的 Acceptance 曾在 macOS ARM64、Python 3.13.12 下验证。本次对
+当前 Checkout 的文档复核使用 Python 3.12.11、FastAPI 0.136.1、Pydantic
+2.13.4：
 
 | 检查 | 结果 |
 |---|---|
-| 当前 pytest | 1,390 passed |
+| 最新稳定 Worktree pytest | **1,402 passed** |
+| OpenAPI Contract | 259 个 Operation；FastAPI 0.136.1 / Pydantic 2.13.4 下严格 Hash 通过 |
+| 历史审计诊断 | 1,389/1 与 1,401/1 暴露了使用错误 Ambient Dependency Version 采集的 Baseline |
+| 已审查 Generator Delta | 4 个 Upload File Item 用 `contentMediaType` 替代 `format: binary`；标准 `ValidationError` 增加 `input` 和 `ctx` |
+| Settings Audit 后的历史 pytest | Python 3.13.12 下 1,390 passed |
 | 上一 commit 功能测试 | 1,286 passed |
 | 排除的上一 commit 测试 | 1 个静态 `pattern.py` 源码文本断言 |
 | Electron App Use Node 测试 | 44 passed |
@@ -139,6 +147,13 @@ DevTools 的 Autofill 方法不支持警告和可选 source map 的 401 属于�
 | `cyrene start/status/API/stop` | 隔离 Runtime 中通过 |
 | 旧数据库迁移 | 数据保留、Marker 存在、`quick_check=ok` |
 | PyInstaller smoke/Runtime | Web 启动和干净关闭通过 |
+
+此前失败先完成隔离和跨 Environment 对比，再修改 Baseline。`uv.lock` 早已
+选择 FastAPI 0.136.1 / Pydantic 2.13.4；原 Characterization Hash 却误用
+Ambient FastAPI 0.115.8 / Pydantic 2.12.5 采集。逐项审查生成差异并确认
+Application Route 与 Request Model 都未变化后，严格 Hash 才在 Locked
+Environment 中重新采集。Test 现在同时检查 Generator Version 和完整 Schema
+Hash，没有过滤任何 Field。
 
 排除的旧测试只是读取已删除的 `src/cyrene/pattern.py` 文本；功能性导入
 `import cyrene.pattern` 仍解析到 `cyrene.learning.facade`。
@@ -169,7 +184,10 @@ DevTools 的 Autofill 方法不支持警告和可选 source map 的 401 属于�
 - 把 Browser 和 Subagent 大模块拆成更小的状态机/Transport；
 - 拆分行为学习的存储、候选生成、版本和执行服务；
 - 减少导入时配置变更；
-- 增加常规 PR CI，执行 pytest、Ruff、Node 和打包 smoke；
+- 在现有完整 pytest、WebUI Build 和 Electron App Use PR CI 基础上，按平台
+  成本补充 Ruff 与打包 Smoke；
+- 在下次 Release 前解决 Locked FastAPI/Pydantic Environment 下的 OpenAPI
+  Normalized Snapshot Mismatch；
 - 实现 `research-workbench-roadmap.md` 中的 Experiments 和 Manuscripts。
 
 它们不是当前 Runtime 或兼容性基线的阻塞项。

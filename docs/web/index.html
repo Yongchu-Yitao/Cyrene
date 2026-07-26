@@ -1815,14 +1815,14 @@ uv run pytest -v --tb=long</code></pre></div>
           <table>
             <thead><tr><th>项目</th><th>详情</th></tr></thead>
             <tbody>
-              <tr><td>CI 工作流</td><td><code>.github/workflows/release.yml</code></td></tr>
-              <tr><td>触发方式</td><td>推送 <code>v*</code> 标签，或手动触发；兼容参数 <code>ui_mode=agent</code> 会与 <code>workbench</code> 一样规范化为唯一的 Workbench UI</td></tr>
+              <tr><td>PR CI</td><td><code>.github/workflows/ci.yml</code>：完整 pytest、WebUI Build 与 Electron App Use Test</td></tr>
+              <tr><td>Release</td><td><code>.github/workflows/release.yml</code>：<code>v*</code> 标签或手工触发</td></tr>
               <tr><td>构建产物</td><td>PyInstaller + Electron，打包 macOS、Windows（x64/ARM64）、Linux</td></tr>
-              <tr><td>冒烟测试</td><td>打包应用运行 <code>--smoke-test</code></td></tr>
+              <tr><td>冒烟测试</td><td>Release 打包应用运行 <code>--smoke-test</code></td></tr>
             </tbody>
           </table>
         </div>
-        <p class="step-hint">目前没有 CI 持续集成测试任务。标记发布前请在本地运行 <code>uv run pytest -q</code>。</p>
+        <p class="step-hint">PR CI 不替代真实平台打包、视觉、升级和带 Credential 的集成检查。</p>
       </section>
 </div>
 <div lang="en">
@@ -1887,14 +1887,14 @@ python -m pytest tests/test_context_trace.py -v</code></pre></div>
           <table>
             <thead><tr><th>Item</th><th>Details</th></tr></thead>
             <tbody>
-              <tr><td>Workflow</td><td><code>.github/workflows/release.yml</code></td></tr>
-              <tr><td>Trigger</td><td><code>v*</code> tag or manual dispatch</td></tr>
+              <tr><td>PR CI</td><td><code>.github/workflows/ci.yml</code>: full pytest, WebUI build, and Electron App Use tests</td></tr>
+              <tr><td>Release</td><td><code>.github/workflows/release.yml</code>: <code>v*</code> tag or manual dispatch</td></tr>
               <tr><td>Build output</td><td>PyInstaller + Electron for macOS, Windows (x64/ARM64), Linux</td></tr>
-              <tr><td>Smoke test</td><td>Packaged app runs <code>--smoke-test</code></td></tr>
+              <tr><td>Smoke test</td><td>Release package runs <code>--smoke-test</code></td></tr>
             </tbody>
           </table>
         </div>
-        <p class="step-hint">No CI test runner currently. Run <code>uv run pytest -q</code> locally before tagging a release.</p>
+        <p class="step-hint">PR CI does not replace real-platform packaging, visual, upgrade, or credentialed integration checks.</p>
       </section>
 </div>
 </article>

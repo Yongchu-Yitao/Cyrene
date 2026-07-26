@@ -8,6 +8,7 @@ OpenAPI, tool wire, event, and dependency assertions must remain equivalent.
 from __future__ import annotations
 
 import hashlib
+from importlib.metadata import version
 import json
 from pathlib import Path
 import re
@@ -20,7 +21,9 @@ WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
 OPENAPI_OPERATION_COUNT = 259
-OPENAPI_SHA256 = "1d87052e49c842e2cca8827d25931372454fc183c1e418aabfcc928b8a1312d9"
+OPENAPI_BASELINE_FASTAPI = "0.136.1"
+OPENAPI_BASELINE_PYDANTIC = "2.13.4"
+OPENAPI_SHA256 = "4b37a6384fb2666c0208fbbc1bf293bf3c57bbb97759859bb7853394c81f6a0b"
 TOOL_REGISTRY_SHA256 = "0860b150897c7272b9942c6c251c9b25f0fd99a86a526c4fafb33a999e75f863"
 MAIN_WIRE_SHA256 = "29194c2d58bcb62679e65d2e7abb20e94235582d7c01dcd76f7f649f5f29f8f2"
 SUBAGENT_WIRE_SHA256 = "3b73d89cf5ad5cc83e32cc587891fdc562e035228c7c24d7f29471586c35a247"
@@ -72,8 +75,14 @@ def _sha256_json(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def test_openapi_contract_is_unchanged_before_ui_source_moves():
+def test_openapi_contract_matches_locked_generator_baseline():
     from webui.server import create_app
+
+    # The OpenAPI renderer is dependency-sensitive.  Keep the exact generator
+    # versions beside the strict hash so a dependency update requires an
+    # intentional schema review instead of producing an unexplained mismatch.
+    assert version("fastapi") == OPENAPI_BASELINE_FASTAPI
+    assert version("pydantic") == OPENAPI_BASELINE_PYDANTIC
 
     schema = create_app(None, ":memory:").openapi()
     operation_count = sum(

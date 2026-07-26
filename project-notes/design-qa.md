@@ -62,9 +62,9 @@ final result: passed
 
 ## Comparison target
 
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-4132a1b2-107c-43e7-89e8-58874927ff19.png` (1536 × 1024 px).
-- Implementation screenshot: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-existing-documents-selected-1536x1024.png` (1536 × 1024 px).
-- Full-view comparison evidence: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-existing-documents-selected-comparison.png` (3072 × 1024 px, source and implementation side by side).
+- The source, implementation, and side-by-side captures were local-only
+  acceptance artifacts. They were removed on 2026-07-26 after the findings
+  below were retained in this historical record.
 - Viewport: 1536 × 1024 CSS px, device scale factor 1, dark theme.
 - State: real current project, 26 existing `kb_documents`, first existing document selected with its indexed summary and original attachment visible.
 
@@ -239,36 +239,10 @@ final result: passed
 
 ## Comparison target
 
-- Source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-4132a1b2-107c-43e7-89e8-58874927ff19.png` (1536 × 1024 px).
-- Normalized source: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-ui-reference-1313x768.png`.
-- Final dark implementation: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-ui-dark-final-1313x768.png`.
-- Full-view comparison: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-ui-dark-comparison-final.png`.
-- Final light implementation: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-ui-light-final-1313x768.png`.
-- Final General settings: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-settings-final-1313x768.png`.
-- Citation alignment source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-f4d589e5-ac49-4dc9-aeaa-f7ef715c2d67.png`.
-- Final citation alignment capture: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-citation-aligned-1152x768.jpg`.
-- Focused citation comparison: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-citation-alignment-comparison.png`.
-- Citation-border source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-f69e743e-ac04-41d6-b716-d6d024249b28.png`.
-- Final citation-border capture: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-citation-accent-final-1152x768.png`.
-- Citation-border comparison: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-citation-accent-comparison.png`.
-- Independent-detail source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-c2ef03ab-4433-4727-ba00-b658a98d0024.png`.
-- Final independent-detail capture: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-info-split-final-1152x768.png`.
-- Independent-detail comparison: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-info-split-comparison.png`.
-- Sidebar-width source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-213ee9e1-de8a-459a-bcb7-e02c925b6c2b.png`.
-- Final sidebar capture: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-sidebar-final-1152x768.png`.
-- Sidebar-width comparison: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-sidebar-width-comparison.png`.
-- Selected-state source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-af9be6f3-aea4-4070-9227-a5c67df992f2.png`.
-- Final selected-state capture: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-selection-final-1152x768.png`.
-- Selected-state comparison: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-selection-comparison.png`.
-- List-scroll source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-3e13a162-92b0-47d5-ab8f-c09a01d187ee.png`.
-- Final list-scroll capture: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-list-scroll-final-1152x768.png`.
-- List-scroll comparison: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-list-scroll-comparison.png`.
-- Media-content source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-aa810695-9afb-47fc-a6a7-8c326b091f9e.png`.
-- Final image-content capture: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-content-image-final-1152x768.png`.
-- Image-content comparison: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-content-image-comparison.png`.
-- Markdown-content source: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-d0313a01-e21f-4db4-8c4f-6b72e987ffd8.png`.
-- Final Markdown-content capture: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-content-markdown-final-1152x768.png`.
-- Markdown-content comparison: `/Users/syw/Documents/playground/Cyrene/docs/research-workbench-report/library-content-markdown-comparison.png`.
+- The normalized references, dark/light captures, settings capture, and
+  focused comparisons for citation, detail panes, sidebar, selection, scroll,
+  image content, and Markdown content were local-only acceptance artifacts.
+  They were removed on 2026-07-26 after this result was recorded.
 - Viewport: Cyrene Electron at 1313 × 768 px. The dark selected-item state is used for source comparison; the light state verifies theme correctness.
 - Data state: the current project's 26 real knowledge documents. Reference sample records were intentionally not copied.
 
@@ -341,14 +315,13 @@ final result: passed
 - [x] Theme-correct light and dark states with final same-viewport comparison evidence.
 - [x] Refined list state: ordinary rows are continuous and divider-free; only the selected row has a rounded outline.
 - [x] Sidebar categories use a restrained 520 weight with 500-weight counts, while tag-cloud labels and counts remain regular 400 weight.
-- [x] Final sidebar-weight evidence: `docs/research-workbench-report/library-sidebar-weight-final-1152x768.png`.
-- [x] Final tag-cloud weight comparison: `docs/research-workbench-report/library-sidebar-weight-comparison.png`.
+- [x] Sidebar weight and tag-cloud weight were visually compared during the
+  historical acceptance.
 - [x] Fixed table header with an independently scrollable list body that reaches the final item while the detail workspace is open.
-- [x] Final list-scroll evidence: `docs/research-workbench-report/library-list-scroll-final-1152x768.png`.
-- [x] Final list-scroll comparison: `docs/research-workbench-report/library-list-scroll-comparison.png`.
+- [x] List scrolling was visually compared during the historical acceptance.
 - [x] Attachment-aware content rendering for images, playable video/audio, inline PDFs, and unsupported-file fallback.
 - [x] Sanitized Markdown rendering with semantic typography and automatic inspector scroll reset.
-- [x] Final image-content comparison: `docs/research-workbench-report/library-content-image-comparison.png`.
-- [x] Final Markdown-content comparison: `docs/research-workbench-report/library-content-markdown-comparison.png`.
+- [x] Image and Markdown content were visually compared during the historical
+  acceptance.
 
 final result: passed

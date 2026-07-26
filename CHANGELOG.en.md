@@ -7,6 +7,25 @@ The Chinese edition remains the most detailed record for older releases.
 
 ## [Unreleased] - 2026-07-26
 
+- **Repository documentation was re-audited against `c1dbc62`.** Current guides
+  now distinguish the single official Workbench UI from its multiple project
+  workspaces, document managed child processes, the implemented Literature
+  Library boundary, QR-based WeChat iLink setup, local estimated budgets,
+  Fernet-key/keyring and portable-backup boundaries, active versus historical
+  scheduler settings, and the Windows SimpleXNG packaging/runtime caveat.
+- **The OpenAPI characterization baseline now uses the locked environment.**
+  The previous hash had accidentally been captured with ambient FastAPI
+  0.115.8 / Pydantic 2.12.5 rather than the long-standing `uv.lock` versions.
+  After reviewing all ten generated-schema deltas, the strict 259-operation
+  hash was recaptured with FastAPI 0.136.1 / Pydantic 2.13.4 and those generator
+  versions were added to the contract. No field is ignored and the full suite
+  now passes 1,402 tests.
+- **A regular GitHub Actions CI workflow was added.** Pull requests, pushes to
+  `main`, and manual runs now compile Python and run the full pytest suite in
+  the locked all-extras environment, build and verify the checked-in WebUI
+  output, and run Electron App Use tests. Release packaging remains a separate
+  workflow.
+
 - **Source ownership was reorganized by domain.** Canonical implementations now
   live under `agent/`, `workbench/`, `model_runtime/`, `learning/`, `runtime/`,
   `observability/`, `knowledge/`, `channels/`, `tooling/`, and `tool_impl/`.
@@ -26,7 +45,8 @@ The Chinese edition remains the most detailed record for older releases.
   and shutdown behavior. Real isolated `cyrene start`, `status`, API, and
   `stop` checks passed; Electron development still launches current source
   through `src/cyrene/local_cli.py`.
-- **Compatibility and build validation expanded.** The current suite passed
+- **Compatibility and build validation expanded at that refactor checkpoint.**
+  The suite then passed
   1,381 tests. The previous commit passed 1,286 functional tests, excluding one
   shape test that read the deleted physical `pattern.py` source. Electron App
   Use passed 44 tests. The frozen build verified 60 legacy aliases, 259 OpenAPI
@@ -34,8 +54,9 @@ The Chinese edition remains the most detailed record for older releases.
 - **Documentation now matches the source boundaries.** README, architecture,
   installation, usage, configuration, development, the refactor handoff,
   Research Workbench roadmap, and design QA now describe the current packages,
-  database filename, and startup commands. Development screenshots and source
-  notes remain local and are not uploaded to GitHub.
+  database filename, and startup commands. The obsolete ignored local Research
+  Workbench report artifacts were removed after their historical findings were
+  retained in Design QA.
 
 ### Technical notes
 

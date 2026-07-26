@@ -11,6 +11,8 @@ Package-boundary baseline: `5e9a0044`
 
 UI-consolidation worktree baseline: `17914e697af41c13a3c5da0092f69aa9906644af`
 
+Current audited HEAD: `c1dbc62f24460d123b5bac03dc42ce9411319fb1`
+
 This file records the current development checkpoint. Older Windows/context
 debugger command transcripts have been removed because they referenced modules
 that now live under the canonical domain packages.
@@ -132,13 +134,19 @@ PORT=4242
 Chromium DevTools warnings for unsupported Autofill methods and unauthorized
 optional source maps are development noise, not backend startup failures.
 
-## Validation Baseline
+## Current validation and historical baseline
 
-Validated on macOS ARM64 with Python 3.13.12:
+The completed-refactor acceptance was validated on macOS ARM64 with Python
+3.13.12. A fresh documentation audit on the current checkout used Python
+3.12.11, FastAPI 0.136.1, and Pydantic 2.13.4:
 
 | Check | Result |
 |---|---|
-| Current pytest suite | 1,390 passed |
+| Latest stable working-tree pytest | **1,402 passed** |
+| OpenAPI contract | 259 operations; strict hash passes with FastAPI 0.136.1 / Pydantic 2.13.4 |
+| Historical audit diagnosis | 1,389/1 and 1,401/1 exposed a baseline captured with the wrong ambient dependency versions |
+| Reviewed generator delta | Four upload-file items use `contentMediaType` instead of `format: binary`; standard `ValidationError` adds `input` and `ctx` |
+| Historical post-settings-audit pytest | 1,390 passed on Python 3.13.12 |
 | Previous-commit functional tests | 1,286 passed |
 | Excluded previous test | one static `pattern.py` source-text assertion |
 | Electron App Use Node tests | 44 passed |
@@ -148,6 +156,14 @@ Validated on macOS ARM64 with Python 3.13.12:
 | `cyrene start/status/API/stop` | passed in an isolated runtime |
 | Legacy database migration | data retained, marker present, `quick_check=ok` |
 | PyInstaller smoke/runtime | passed, including Web startup and clean shutdown |
+
+The earlier failure was isolated and compared across environments before any
+baseline changed. `uv.lock` had already selected FastAPI 0.136.1 and Pydantic
+2.13.4; the original characterization hash had accidentally been captured with
+ambient FastAPI 0.115.8 and Pydantic 2.12.5. After reviewing every generated
+delta and confirming no application route or request-model change, the strict
+hash was recaptured in the locked environment. The test now asserts both
+generator versions as well as the full schema hash, and no field is filtered.
 
 The previous-commit exclusion is not a runtime behavior: the test directly read
 the deleted physical file `src/cyrene/pattern.py`. The supported
@@ -187,8 +203,9 @@ improvements:
 - split behavior learning storage, candidate generation, versioning, and
   execution services;
 - reduce import-time configuration mutation;
-- add a normal pull-request CI workflow for pytest, Ruff, Node tests, and
-  packaging smoke checks;
+- extend the pull-request CI beyond its current full pytest, WebUI-build, and
+  Electron App Use coverage with Ruff and packaged smoke checks where their
+  platform cost is justified;
 - implement the Research Workbench Experiments and Manuscripts phases described
   in `research-workbench-roadmap.md`.
 

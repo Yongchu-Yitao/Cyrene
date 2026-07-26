@@ -489,3 +489,49 @@ refactor. Those documents and the static documentation site were updated to
 match the actual single-Workbench source/build layout, compatibility-only
 `ui_mode=agent` normalization, Python 3.13.12 verification environment, and
 the current 1,390-test acceptance result.
+
+### Later repository-wide documentation re-audit — 2026-07-26
+
+A later pass at HEAD `c1dbc62` audited all 34 tracked Markdown files. Product
+guides were corrected to describe the multi-project Workbench, managed child
+processes, project Library scope, QR-based WeChat iLink flow, local estimated
+budgets, Fernet-key/keyring boundary, current model-pricing catalog, and
+the Windows SimpleXNG packaging/runtime boundary. Historical plans, changelog
+entries, design evidence, templates, and ignored local research notes were
+reviewed as historical or purpose-specific records rather than rewritten as
+current product promises. The obsolete ignored local Research Workbench report
+artifact directory was then removed at the user's direction after its findings
+were retained in Design QA.
+
+Current verification used Python 3.12.11, FastAPI 0.136.1, and Pydantic 2.13.4:
+1,389 pytest tests passed and the OpenAPI snapshot test failed with generated
+SHA `4b37a638…` versus frozen `1d87052e…`, while the operation count remained
+259. The failure was reproduced in isolation and was not hidden by changing
+the expected hash. WebUI build (32 JSX sources), Python compile, Electron App
+Use (44 tests), local Markdown links, and `git diff --check` passed.
+
+Those results apply to HEAD `c1dbc62` with only the documentation-audit delta
+present at execution time. Source changes made afterward require their own
+validation and are not covered by this record.
+
+After the later source changes stabilized, a separate full working-tree run
+completed with 1,401 passes and the same sole OpenAPI normalized-hash failure.
+Python compilation, the 32-source WebUI build, and all 44 Electron App Use
+tests also passed on that working tree. A cross-environment schema comparison
+isolated the hash change to upload-file generator metadata (`contentMediaType`
+versus `format: binary`) and the standard `ValidationError` `input`/`ctx`
+fields; the historical Python 3.13.12 / FastAPI 0.115.8 / Pydantic 2.12.5
+combination still passes the frozen hash.
+
+Resolution on 2026-07-27: `uv.lock` had already selected FastAPI 0.136.1 /
+Pydantic 2.13.4, so the original hash was confirmed to be an incorrectly
+captured ambient-environment baseline rather than the repository's locked
+baseline. After the ten generator-level deltas were reviewed, the strict hash
+was recaptured under the locked versions and those versions were added as
+explicit assertions. No schema field was filtered or ignored. The complete
+working-tree suite then passed **1,402 tests**.
+
+This resolution preserves the recorded UI-consolidation completion and
+supersedes both the earlier “current 1,390-test acceptance result” and the
+temporary failure records above. Living status is maintained in
+`CONTEXT_DEV_PROGRESS.md`.

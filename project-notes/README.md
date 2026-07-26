@@ -14,6 +14,7 @@ developer guides remain under [`docs/`](../docs/).
 - [Design QA](design-qa.md)
 - [Browser PiP Dynamic Avoidance Feasibility](browser-dynamic-layout-feasibility.en.md)
 
-`docs/research-workbench-report/` contains local screenshots and source notes
-used during design work. It is intentionally ignored by Git and is not part of
-the GitHub repository.
+Large/local screenshots used during design work are not part of the GitHub
+repository. The obsolete local `docs/research-workbench-report/` artifact
+directory was removed on 2026-07-26 after its historical findings were
+retained in Design QA.

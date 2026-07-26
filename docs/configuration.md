@@ -8,6 +8,16 @@ Cyrene stores most configuration in a Fernet-encrypted JSON config blob (`data/c
 
 A legacy `.env.example` is still shipped for backward compatibility, but new installs should use the onboarding wizard or Settings UI.
 
+The encrypted values live in `data/config.enc`. Its Fernet key is stored in the
+OS keyring when available. Headless/portable environments without a working
+keyring fall back to `data/.config_key` with mode `0600` and emit a warning;
+that fallback protects the key only through filesystem permissions.
+
+Portable backup ZIPs are not encrypted by Cyrene. They contain a logical
+configuration snapshot—including configured credentials—so that restore can
+re-encrypt it with the destination installation's key. Treat every exported
+backup as a secret.
+
 ## Runtime Paths and Persistence
 
 Source runs default to the checkout root. Packaged runs use the operating
@@ -60,7 +70,7 @@ The following variables are read at startup. Most can also be edited at runtime 
 | Variable | Description | Default |
 |---|---|---|
 | `WECHAT_BOT_TOKEN` | WeChat bot token | — |
-| `WECHAT_OWNER_ID` | WeChat owner ID | — |
+| `WECHAT_OWNER_ID` | Historical owner-ID compatibility field; the current QR flow discovers senders | — |
 
 ### Embedding / Knowledge Base (optional)
 
@@ -76,11 +86,11 @@ The following variables are read at startup. Most can also be edited at runtime 
 
 | Variable | Description | Default |
 |---|---|---|
-| `SCHEDULER_INTERVAL` | Legacy heartbeat interval in seconds | `60` |
-| `HEARTBEAT_INTERVAL` | Modern heartbeat interval in seconds | `300` |
-| `HEARTBEAT_LOTTERY_INTERVAL` | Proactive-message lottery interval in seconds | `1800` |
-| `DAYTIME_START` | Hour considered the start of daytime | `6` |
-| `DAYTIME_END` | Hour considered the end of daytime | `22` |
+| `SCHEDULER_INTERVAL` | Scheduled-task polling interval in seconds | `60` |
+| `HEARTBEAT_INTERVAL` | Historical compatibility value; not the active proactive cadence | `300` |
+| `HEARTBEAT_LOTTERY_INTERVAL` | Historical compatibility value; not read by the current scheduler | `1800` |
+| `DAYTIME_START` | Historical compatibility value; current proactive window is fixed at 06:00 | `6` |
+| `DAYTIME_END` | Historical compatibility value; current proactive window ends at 22:00 | `22` |
 
 ### Steward & Pattern Learning
 
@@ -88,8 +98,14 @@ The following variables are read at startup. Most can also be edited at runtime 
 |---|---|---|
 | `STEWARD_INTERVAL` | Seconds between SOUL.md steward runs (minimum one hour) | `3600` |
 | `PATTERN_DETECTION_INTERVAL` | Seconds between behavior-pattern scans | `600` |
-| `LOTTERY_DELTA` | Base lottery probability increment | `0.15` |
-| `LOTTERY_MAX` | Lottery probability cap | `0.85` |
+| `LOTTERY_DELTA` | Historical compatibility value; current lottery increment is fixed at `0.15` | `0.15` |
+| `LOTTERY_MAX` | Historical compatibility value; current lottery cap is fixed at `0.85` | `0.85` |
+
+The active proactive cadence is the encrypted runtime setting
+`heartbeat_interval`, exposed in Settings and defaulting to `1800` seconds.
+The scheduler reads it at startup. The historical environment keys above are
+still parsed for compatibility, but changing them does not currently change
+the proactive cadence, daytime window, or lottery parameters.
 
 ### Search
 
@@ -128,6 +144,8 @@ Most settings can be edited at runtime through the Web UI **Settings** page with
 - **Search** — Built-in SimpleXNG only
 - **MCP Servers** — Add, remove, and restart MCP server connections
 - **SOUL.md** — Edit the personality document directly
+- **Budget** — Configure estimated-cost tracking, CNY/USD display, billing
+  start day, adaptive mode, and warn/block behavior
 
 ## Browser Configuration
 
@@ -137,13 +155,23 @@ Electron injects `CYRENE_AUTH_TOKEN`, `CYRENE_ELECTRON_RPC_PORT`, and
 `CYRENE_ELECTRON_RPC_TOKEN` into its child runtime. These are internal
 per-launch security values and should not be persisted manually.
 
-## Model Pricing
+## Model pricing and budgets
 
-Cyrene tracks token usage and estimates cost for the model that served each response. An explicit saved price wins; otherwise Cyrene uses the built-in price for known models, and records zero only when the model has no configured or built-in price.
+Cyrene records token usage and estimates cost for the model that actually
+served each response. An explicit saved price wins, followed by the built-in
+catalog in `cyrene.model_runtime.pricing`; an unknown unpriced model records
+zero. User prices accept `input/output` or `input/cache-hit/output` per one
+million tokens. Prefix a value with `$` for USD or `¥` for CNY; unmarked values
+default to CNY.
 
-| Model | Input (per 1M tokens) | Output (per 1M tokens) |
-|---|---|---|
-| DeepSeek Chat | $0.14 | $0.28 |
-| Claude Haiku 4.5 | $0.25 | $1.25 |
-| Claude Sonnet 4.6 | $3.00 | $15.00 |
-| Claude Opus 4.7 | $15.00 | $75.00 |
+The catalog is code data, not a live quote. Its current source is marked as
+verified on 2026-06-25 and uses a fixed `7.25 CNY = 1 USD` conversion for
+USD-priced providers. It contains aliases for GPT 5.5, Claude Fable/Mythos 5,
+Gemini 3.5 Flash/3.1 Pro Preview, DeepSeek V4 Flash/Pro, GLM 5.2, MiniMax M3,
+MiMo V2.5, and Kimi K2.7 Code. Check the source and provider invoice before
+relying on an estimate.
+
+Budget Settings can divide a configured monthly amount into adaptive monthly,
+weekly, and five-hour windows and can warn or block new Workbench runs. These
+are local gates over Cyrene's estimates, not provider-side quotas or billing
+guarantees.

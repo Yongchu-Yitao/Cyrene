@@ -62,7 +62,12 @@ instead of overwriting data.
 
 ### Personality System (SOUL.md)
 
-Inject any personality via `workspace/SOUL.md` — a structured document with identity, beliefs, relationship dynamics, memory, and patterns. A **Steward Agent** runs on a configurable interval (default 30 minutes) to review conversations and update SOUL.md via `APPEND`/`ERASE`/`MERGE` commands. Temporary entries auto-expire after 24 hours. The chat filter translates all assistant output into the character's voice.
+`workspace/SOUL.md` is the single global personality and durable-memory
+document. A **Steward Agent** reviews new conversation material and can update
+it through `APPEND`/`ERASE`/`MERGE` commands. The configured interval defaults
+to one hour and is clamped to a one-hour minimum. Dated `TEMPORARY` entries
+older than 24 hours are filtered out when memory context is assembled; the
+source document is not silently rewritten merely because an entry expires.
 
 ### Multi-Agent Orchestration
 
@@ -73,23 +78,27 @@ Subagents communicate through the file-based inbox with
 `subagent.send_message` or `subagent.broadcast`. Lifecycle states are
 `running → waiting → resumed → done / timeout`.
 
-### Three-Layer Memory
+### Memory Layers
 
 | Layer | Storage | Capacity | Maintained by |
 |---|---|---|---|
-| **Context Window** | `data/state.json` | ~`MAX_HISTORY_MESSAGES` (default 40) | Auto-trimmed |
-| **Short-Term** | `data/short_term.json` | Compressed summaries | Background compressor |
-| **Long-Term** | `workspace/SOUL.md` | Structured document | Steward Agent |
+| **Conversation context** | `data/state.json` for the historical default session; `data/sessions/<session>/state.json` for named sessions | Bounded/compacted for model input | Agent session runtime |
+| **Project memory** | Workbench document store, keyed by project memory key | Project-scoped captured facts and summaries | Workbench memory service |
+| **Historical short-term memory** | `data/short_term.json` | Default-session compatibility summaries | Compressor / Steward |
+| **Long-term identity** | `workspace/SOUL.md` | One global structured document | Steward Agent |
 
 The short-term memory tracks emotional valence, mention count, and entry type (fact / pattern / preference / emotion). High-frequency entries (≥3 mentions) and extreme valence entries are preserved automatically.
 
 ### Knowledge Base
 
-Documents dropped into the workspace are hashed, chunked, embedded, and stored
-in a workspace-specific SQLite database. The `knowledge_tools` module exposes
-project-document and literature-library capabilities such as
-`knowledge.search` and `knowledge.library.search`. `AnalyzeAttachment`,
-`WebSearch`, and `WebFetch` remain direct tools and are not part of this module.
+Documents imported through Workbench, chat attachments, generated exports, and
+Zotero attachment import are hashed and stored in a project-specific SQLite
+database. Extractable content is chunked; embeddings are added only when an
+embedding provider is configured, otherwise lexical/FTS retrieval remains
+available. Merely placing an arbitrary file in a project workspace does not
+automatically ingest it. The `knowledge_tools` module exposes project-document
+and literature-library capabilities. `AnalyzeAttachment`, `WebSearch`, and
+`WebFetch` remain direct tools.
 
 ### Entities
 
@@ -132,14 +141,17 @@ Create cron, interval, or one-shot tasks with `task.schedule` through
 
 ### Web UI
 
-Cyrene ships one Workbench front-end. It provides the project-centric
-dashboard, Chat and live execution state, Schedule, Knowledge/Library, Memory,
-Search, Browser/PDF/Diff views, settings, onboarding, and Quick Chat. The source
-lives under `src/webui/frontend`; the only generated web output root is
+Cyrene ships one Workbench front-end. Its primary areas are Task, Chat,
+Knowledge/Library, Schedule, and Memory. Search, Browser/PDF/Diff views,
+settings, onboarding, help, profile, and Quick Chat are overlays, panels, or
+secondary surfaces rather than separate legacy pages. The source lives under
+`src/webui/frontend`; the only generated web output root is
 `src/webui/static/app`.
 
-The Web UI binds to `127.0.0.1` and is served by the FastAPI backend. The
-desktop/Electron build adds local-auth middleware backed by the OS keyring.
+The Web UI binds to `127.0.0.1` and is served by the FastAPI backend. Electron
+generates a shared token for each launch, passes it to the Python child, and
+injects it as `X-Cyrene-Token` on desktop requests. The OS keyring is used for
+the Fernet key protecting `data/config.enc`, not for the per-launch HTTP token.
 
 Desktop browser tools use Electron's embedded Chromium through a token-authenticated
 loopback RPC bridge, and the visible `WebContentsView` shares the same persistent
@@ -170,7 +182,19 @@ Two CLI surfaces exist:
 
 ## Security & Local Auth
 
-The raw web server binds only to `127.0.0.1` and has no authentication layer. The Electron/desktop build adds `LocalAuthMiddleware`, which stores a random token in the OS keyring and requires it on every request.
+The raw web server binds only to `127.0.0.1`, validates local Host/Origin
+headers, and has no user-login layer. The Electron build adds
+`LocalAuthMiddleware`, which requires its generated per-launch token on every
+desktop request. Configuration secrets live in `data/config.enc`; its Fernet
+key is stored in the OS keyring when available and falls back to a mode-0600
+local key file with a warning when it is not.
+
+These are application controls, not an OS sandbox or multi-tenant boundary.
+Project stores and permission modes do not isolate mutually untrusted users.
+Only the configuration blob is application-encrypted; workspace files,
+databases, logs/traces, exports, and backups rely on operating-system storage
+protection. Portable backup ZIPs include a logical configuration snapshot for
+cross-install restore and can contain credentials.
 
 ## Project Structure
 
@@ -213,10 +237,10 @@ src/
 │   │   ├── platform/                # Bootstrap, API, SSE, data, readiness
 │   │   └── shared/                  # Shared UI capabilities
 │   └── static/app/                  # Sole generated/bundled output root
-├── tests/                           # Test suite
-├── data/                            # Runtime state, debug logs, uploads
-├── workspace/                       # SOUL.md, patterns, conversations
-└── store/                           # SQLite databases
+tests/                               # Test suite
+data/                                # Source-run state, debug logs, uploads
+workspace/                           # Source-run SOUL.md and user workspace
+store/                               # Source-run SQLite databases
 ```
 
 Historical imports such as `cyrene.db`, `cyrene.scheduler`, and
