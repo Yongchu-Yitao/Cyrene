@@ -95,6 +95,23 @@ def test_module_help_has_no_runtime_side_effects(tmp_path):
     assert not runtime_dir.exists()
 
 
+def test_module_defaults_to_workbench(monkeypatch):
+    import cyrene.__main__ as module_entry
+    from cyrene.runtime import host
+
+    calls = []
+    monkeypatch.setattr(sys, "argv", ["cyrene"])
+    monkeypatch.setattr(
+        host,
+        "run_web_mode",
+        lambda *, ui_mode: calls.append(ui_mode),
+    )
+
+    module_entry.main()
+
+    assert calls == ["workbench"]
+
+
 @pytest.mark.asyncio
 async def test_interactive_cli_drains_background_work_before_loop_closes(monkeypatch):
     from cyrene.runtime import host as local_cli

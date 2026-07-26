@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.7.0b1-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.7.0b2-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-beta-orange" alt="Status">
 </p>
@@ -85,7 +85,7 @@ npm install
 npm run build
 cd ../..
 
-uv run python -m cyrene --workbench
+uv run python -m cyrene
 ```
 
 打开 `http://localhost:4242`。首次启动会引导完成 Model 与 Personality 配置。

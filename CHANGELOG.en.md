@@ -5,71 +5,136 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
-## [Unreleased] - 2026-07-26
+## [0.7.0b2] - 2026-07-27
 
-- **Repository documentation was re-audited against `c1dbc62`.** Current guides
-  now distinguish the single official Workbench UI from its multiple project
-  workspaces, document managed child processes, the implemented Literature
-  Library boundary, QR-based WeChat iLink setup, local estimated budgets,
-  Fernet-key/keyring and portable-backup boundaries, active versus historical
-  scheduler settings, and the Windows SimpleXNG packaging/runtime caveat.
-- **The OpenAPI characterization baseline now uses the locked environment.**
-  The previous hash had accidentally been captured with ambient FastAPI
-  0.115.8 / Pydantic 2.12.5 rather than the long-standing `uv.lock` versions.
-  After reviewing all ten generated-schema deltas, the strict 259-operation
-  hash was recaptured with FastAPI 0.136.1 / Pydantic 2.13.4 and those generator
-  versions were added to the contract. No field is ignored and the full suite
-  now passes 1,402 tests.
-- **A regular GitHub Actions CI workflow was added.** Pull requests, pushes to
-  `main`, and manual runs now compile Python and run the full pytest suite in
-  the locked all-extras environment, build and verify the checked-in WebUI
-  output, and run Electron App Use tests. Release packaging remains a separate
-  workflow.
+The second 0.7.0 beta includes every change since `v0.7.0-beta.1`: terminal
+wake-ups, completion-driven subagents, exact-scope permission review, runtime,
+route, and Workbench consolidation, safe database migration, CI hardening, and
+the simplified source startup command.
 
-- **Source ownership was reorganized by domain.** Canonical implementations now
-  live under `agent/`, `workbench/`, `model_runtime/`, `learning/`, `runtime/`,
-  `observability/`, `knowledge/`, `channels/`, `tooling/`, and `tool_impl/`.
-  The `cyrene/` root retains stable public entry points and the physical
-  `local_cli.py` launcher still required by Electron development.
-- **Historical Python imports resolve to the canonical module object.**
-  `runtime/module_compat.py` installs lazy aliases while preserving monkeypatch
-  behavior, module metadata, and executable `python -m` aliases.
-- **The old database filename migrates safely at first startup.** If
-  `store/cyrene.db` exists and `store/cyrene.runtime.database` is not populated,
-  startup takes a consistent SQLite backup including WAL data, runs
-  `quick_check`, writes an idempotency marker, and atomically enables the new
-  file. The source remains available for rollback and populated targets are
-  never overwritten.
-- **Startup and lifecycle ownership are unified.** Web, interactive CLI,
-  Electron, PyInstaller, and the daemon share runtime context, initialization,
-  and shutdown behavior. Real isolated `cyrene start`, `status`, API, and
-  `stop` checks passed; Electron development still launches current source
-  through `src/cyrene/local_cli.py`.
-- **Compatibility and build validation expanded at that refactor checkpoint.**
-  The suite then passed
-  1,381 tests. The previous commit passed 1,286 functional tests, excluding one
-  shape test that read the deleted physical `pattern.py` source. Electron App
-  Use passed 44 tests. The frozen build verified 60 legacy aliases, 259 OpenAPI
-  operations, Web startup, database migration, and clean shutdown.
-- **Documentation now matches the source boundaries.** README, architecture,
-  installation, usage, configuration, development, the refactor handoff,
-  Research Workbench roadmap, and design QA now describe the current packages,
-  database filename, and startup commands. The obsolete ignored local Research
-  Workbench report artifacts were removed after their historical findings were
-  retained in Design QA.
+### Agents, subagents, and long-running work
 
-### Technical notes
+- `StartShell(wake_on_exit=true)` can now outlive the current Agent turn. Cyrene
+  persists the shell/chat/project/run relationship and starts a fresh Workbench
+  turn with the exit code and bounded terminal tail. Busy chats queue the wake
+  until their current run finalizes.
+- Subagents now have explicit execution and discussion modes. Execution workers
+  are governed by success criteria and evidence instead of the main Agent's
+  normal round limit; discussion agents use separate round, per-agent message,
+  total message, message-length, tool, wall-time, and information-gain budgets.
+- Execution workers gained renewable leases, evidence checkpoints, repeated
+  no-progress detection, and wide tool-call, wall-time, cost, and context safety
+  fuses. Incomplete work retains partial results with an explicit outcome.
+- Duplicate active Agent IDs are rejected, discussion budgets are isolated by
+  discussion ID, cancellation/timeout/incomplete states are distinct, lifetime
+  metrics survive reactivation, and the parent monitor has a bounded deadline.
+- `send_message` is now a stable direct tool independent of the Delivery
+  package. Tool lifecycle events always pair started calls with completed,
+  failed, or cancelled terminal events, including progressive gateway calls.
+- Added `memory.list` for a complete, countable cross-session and project memory
+  inventory while preserving recall/search/save/retire boundaries.
 
-- Database migration runs before any database initialization.
-- `cyrene.call_llm`, `browser`, `subagent`, `memory`, and `tools` remain stable
-  public facades.
-- `local_cli.py` retains source-checkout `.venv` selection and now has a
-  direct-path regression test, preventing Electron development from using a
-  system Python that lacks project dependencies.
-- FastAPI adapters live in `src/route/`, Workbench services in
-  `src/cyrene/workbench/`, and Web lifecycle/static hosting in `src/webui/`.
-- Frozen-build smoke tests import all historical aliases and verify identity
-  with their canonical targets.
+### Permissions, safety, and auditability
+
+- Automatic approval no longer grants full access to the rest of a run. Each
+  approval creates a one-shot fingerprint bound to the exact tool, operation,
+  permission kind, canonical path, command or external arguments, and reason.
+- Shell and external MCP execution now elevate according to actual scope.
+  Default mode keeps simple workspace-local commands smooth, while external
+  working directories/paths, command substitution, opaque interpreters,
+  network executables, auto-mode process execution, and MCP calls require exact
+  review. Unknown MCP tools fail closed.
+- A new `permission_decisions` table records session, round, source, tool,
+  operation, path, result, rationale, and fingerprint. Workbench renders the
+  scoped approval or denial; string values such as `"false"` cannot be treated
+  as approval.
+- Permission mode is normalized and persisted across retry, fork, replay, and
+  recovery. Invalid modes fail closed. Forks retain attachments and state
+  boundaries, and failed retries preserve the old public reply until a
+  replacement succeeds.
+
+### Performance, scheduling, and Workbench workflows
+
+- Scheduled-task polling, proactive heartbeat, behavior learning, SOUL
+  stewardship, and short-term cleanup now have independent coalesced cadences.
+  Heavy maintenance is no longer coupled to every due-task poll, and the
+  steward default/minimum interval is one hour.
+- Behavior learning coalesces completed turns into one quiet-period job when no
+  scheduler exists and avoids a second per-turn job in normal server runtimes.
+  Single-tool, low-information turns skip the learning LLM.
+- Usage and latency writes share database batches. Workspace finalization
+  reuses unchanged snapshots based on mtime/ctime/size and marks change sets as
+  exclusive or overlapping with the relevant run IDs.
+- Electron gained a dedicated trusted browser-input module with React-compatible
+  native setters, keyboard/input events, per-session tabs, shared login state,
+  stale closed-tab protection, user-event learning telemetry, and background
+  renderer throttling.
+- Workbench now completes tool activities in place, shows finalization before
+  workspace persistence, reconnects without resubmitting messages, truncates
+  retries only after durable terminal events, and keeps LLM, plan, inbox,
+  browser, and tool traces independent and localized.
+- Additional Workbench hardening covers last-message retry, manual context
+  compaction, project/user workspace selection, long paths, customizable
+  shortcuts, clipboard/pasted files, drag-and-drop, narrow rails, native Linux
+  framing and directory selection, durable settings forms, and actionable
+  Knowledge, Memory, and learned-skill views.
+- Literature Library regressions now cover project isolation, CRUD/statistics,
+  trash and permanent batch deletion, file-type filtering, existing Knowledge
+  bridging, source abstracts, idempotent Zotero sync, inline media, unique read
+  events, and selection cleanup after filtering.
+
+### Architecture, compatibility, and data
+
+- All FastAPI adapters are centralized under `src/route/`, with registry-based
+  assembly for Agent, Workbench, Settings, Tasks, Knowledge, Memory, Learning,
+  Maps, Channels, System, and Code. Domain services no longer depend on WebUI.
+- Canonical source ownership is organized under `agent/`, `workbench/`,
+  `model_runtime/`, `learning/`, `runtime/`, `observability/`, `knowledge/`,
+  `channels/`, `tooling/`, and `tool_impl/`. Stable public facades remain for
+  `call_llm`, browser, subagent, memory, and tools.
+- Historical imports resolve lazily to the same canonical module objects,
+  preserving monkeypatch behavior, metadata, and executable aliases. Frozen
+  smoke tests verify every legacy alias.
+- The legacy `store/cyrene.db` migrates only when the new
+  `store/cyrene.runtime.database` is empty. Migration uses SQLite backup
+  semantics including WAL state, runs `quick_check`, writes an idempotent
+  marker, switches atomically, and retains the source for rollback.
+- Web, CLI, Electron, PyInstaller, and daemon modes now share runtime context,
+  bootstrap, service, scheduler, update, and shielded shutdown ownership.
+  Electron still launches the physical `local_cli.py`, which selects the
+  checkout virtual environment.
+- The canonical source command is now `uv run python -m cyrene`. The no-argument
+  module entry starts the sole Workbench UI, `--workbench` remains compatible,
+  Telegram requires `--telegram`, and `cyrene start` uses the same default.
+
+### Single Workbench, build, and documentation
+
+- WebUI now has one source tree under `src/webui/frontend`, organized into
+  entry, platform, shared, and Workbench features, with one committed build
+  output under `src/webui/static/app`. The classic UI, duplicate
+  `workbench-webui`, legacy selector, redundant assets, and dead preload API
+  were removed.
+- Bootstrap readiness, navigation, SSE events, API/data storage, theme, i18n,
+  Markdown/math/highlighting, diff, PDF, search, feedback, and browser view are
+  shared infrastructure. Electron always loads this Workbench from the dynamic
+  Python backend port.
+- Regular CI now compiles Python and runs the complete locked all-extras pytest
+  suite, rebuilds and checks committed WebUI output, and runs Electron App Use
+  tests. Platform packaging and frozen smoke tests remain release gates.
+- The strict 259-operation OpenAPI baseline was recaptured after reviewing ten
+  generator-level schema deltas and now pins FastAPI 0.136.1 and Pydantic
+  2.13.4; no schema fields are ignored.
+- English and Chinese README, installation, usage, configuration, architecture,
+  development, browser, project-note, handoff, roadmap, and design-QA material
+  now match the single Workbench, package ownership, database name, managed
+  processes, Literature/Zotero scope, WeChat QR setup, budget/backup/keyring
+  boundaries, and Windows SimpleXNG limitation. Obsolete local QA screenshots
+  were removed.
+- The local beta2 release baseline passed all 1,403 pytest tests in the locked
+  Python 3.12 environment, 49 Electron App Use/browser-input Node tests, the
+  complete 32-entry WebUI rebuild, Python compilation, version consistency, and
+  `git diff --check`. Platform packages and frozen smoke tests remain owned by
+  the tag-triggered release workflow.
 
 ---
 

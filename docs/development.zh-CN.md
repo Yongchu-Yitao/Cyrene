@@ -11,7 +11,7 @@
 ```bash
 python -m cyrene.runtime.host --verbose
 # 或
-python -m cyrene --workbench --verbose
+uv run python -m cyrene --verbose
 ```
 
 日志写入 `data/debug_*.jsonl`，每行是一个 JSON Event，例如：

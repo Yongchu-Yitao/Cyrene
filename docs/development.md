@@ -11,7 +11,7 @@ Logs every LLM call (full prompt, tools, response, duration) and context trace t
 ```bash
 python -m cyrene.runtime.host --verbose
 # or
-python -m cyrene --workbench --verbose
+uv run python -m cyrene --verbose
 ```
 
 ### Debug Logs

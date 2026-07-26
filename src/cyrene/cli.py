@@ -95,7 +95,7 @@ def cmd_start(args: argparse.Namespace) -> None:
     if getattr(sys, "frozen", False):
         cmd = [sys.executable, "--launch-web"]
     else:
-        cmd = [sys.executable, "-m", "cyrene", "--workbench"]
+        cmd = [sys.executable, "-m", "cyrene"]
 
     proc = subprocess.Popen(
         cmd,

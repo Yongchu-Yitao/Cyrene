@@ -22,7 +22,7 @@ npm install
 node build-jsx.mjs
 cd ../..
 
-python -m cyrene --workbench
+uv run python -m cyrene
 ```
 
 也可以使用 Conda/pip：
@@ -57,7 +57,7 @@ npm install
 npm run build
 cd ../..
 
-python -m cyrene --workbench
+uv run python -m cyrene
 ```
 
 不要预先手工修改 `site-packages`。Cyrene 通过
@@ -73,7 +73,7 @@ Child Process Error；手工改 Vendored Package 不属于当前支持的安装�
 ## 验证安装
 
 ```bash
-python -m cyrene --workbench
+uv run python -m cyrene
 ```
 
 打开 `http://localhost:4242`。首次启动应显示 Onboarding。

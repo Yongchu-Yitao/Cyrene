@@ -2,64 +2,149 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
-## [Unreleased] - 2026-07-26
+## [0.7.0b2] - 2026-07-27
 
-- **全部 Repository 文档已按 `c1dbc62` 重新核对** — 当前指南现在明确区分
-  唯一正式 Workbench UI 与多个 Project Workspace，并如实记录 Managed Child
-  Process、已实现的 Literature Library 边界、WeChat iLink QR 配置、本地估算
-  Budget、Fernet Key/Keyring 与 Portable Backup 边界、当前/历史 Scheduler
-  Setting 差异，以及 Windows SimpleXNG Packaging/Runtime 限制。
-- **OpenAPI Characterization Baseline 已改用锁定环境** — 原 Hash 误用了
-  Ambient FastAPI 0.115.8 / Pydantic 2.12.5，而不是长期存在于 `uv.lock` 的
- 版本。逐项审查全部 10 个 Generator-level Schema Delta 后，259 个 Operation
-  的严格 Hash 已在 FastAPI 0.136.1 / Pydantic 2.13.4 下重新采集，并把这两个
-  Generator Version 纳入 Contract。没有忽略任何字段，完整 Suite 现为
-  1,402 passed。
-- **新增常规 GitHub Actions CI** — Pull Request、推送到 `main` 和手工触发
-  现在会在锁定的全 Extra 环境执行 Python Compile 与完整 pytest，构建并核对
-  WebUI 已提交产物，同时执行 Electron App Use Test；Release Packaging 继续
-  由独立 Workflow 负责。
+这是 `0.7.0` 的第二个测试版，完整包含 `v0.7.0-beta.1` 之后的终端唤醒、
+Subagent 执行模型、安全权限收口、运行时/路由/Workbench 重构、数据库迁移、
+CI 与文档校准，以及新的默认源码启动入口。
 
+### Agent、Subagent 与长任务
+
+- **长时间 Shell 任务可以在退出当前 Agent 回合后自动续跑** —
+  `StartShell(wake_on_exit=true)` 会持久化受监控进程、Chat、Project 和 Run
+  关联；进程退出后把 Exit Code 与截断后的 Terminal Tail 组成新的 Workbench
+  Chat Turn。若原 Chat 正忙，唤醒会先进入 Pending Queue，等当前 Run 完成后
+  再派发，避免并发覆盖现有回复。
+- **Subagent 明确区分 Execution 与 Discussion 两种模式** — Execution Worker
+  以成功条件、证据和完成状态驱动，不再错误继承主 Agent 的普通 Tool Round
+  上限；Discussion Agent 使用独立的 Round、每 Agent Message、总 Message、
+  Message Length、Tool Call、Wall Time 和信息增益预算，防止讨论无限循环。
+- **Execution Worker 增加 Lease、Checkpoint 和多层 Safety Fuse** —
+  Checkpoint 会重新核验成功条件；连续无进展会以 `incomplete` 保留部分结果；
+  Tool Call、Wall Time、Cost 和 Context 上限触发可解释的资源耗尽收尾。
+  Agent Reactivation 会续租当前执行，但保留整个生命周期累计指标。
+- **Subagent 状态和通信更可靠** — 重复 Active Agent ID 会被拒绝而不是覆盖；
+  `done`、`timeout`、`incomplete` 和取消结果具有显式语义；Discussion State
+  按 Discussion ID 隔离，跨 Agent 共享管理预算；Parent Monitor 到达安全
+  Deadline 会终止仍在运行的 Worker，而不会无限等待。
+- **直接进度消息成为稳定 Direct Tool** — `send_message` 不再依赖 Delivery
+  Tool Package 是否开启，主 Agent 在非平凡工具任务开始和重要里程碑后都能
+  发送简洁进度。Tool Lifecycle 补齐 Started/Finished/Failed/Cancelled 配对，
+  Progressive Gateway 的 `discover`、`describe` 和实际执行都不会留下悬空
+  Activity Card。
+- **完整记忆清单成为 Agent 能力** — 新增 `memory.list`，可以返回跨 Session
+  和当前 Project 的完整 Memory Inventory 与准确数量，同时保留 Recall、
+  Search、Save 和 Retire 的职责边界。
+
+### 权限、安全与可审计性
+
+- **自动审批不再扩大成整轮全权限** — 自动审查通过后只生成绑定 Tool、
+  Operation、Permission Kind、Canonical Path、Command/External Arguments
+  和 Reason 的一次性 Fingerprint；Grant 只能消费一次，不能被另一条路径、
+  命令、MCP 调用或并发 Tool Task 复用。
+- **Shell 与外部 MCP 调用按真实风险提权** — Auto Mode 会审查 Process
+  Execution；Default Mode 允许保持在 Workspace 内的简单命令，但包含外部
+  Working Directory、绝对外部路径、Command Substitution、Opaque Shell/
+  Interpreter 或 Network Executable 的命令必须显式批准。未知 MCP Tool
+  Fail Closed，已批准调用也只放行精确参数。
+- **Permission Decision 全量持久化并显示在 Workbench** — 新增
+  `permission_decisions` 表，记录 Session、Round、来源、Tool、Operation、
+  Path、批准结果、Rationale 和 Fingerprint；前端 Activity Timeline 显示批准
+  或拒绝及其 Scope，字符串 `"false"` 不再被误判为批准。
+- **Chat Permission Mode 在 Retry、Fork 和恢复中保持一致** — Mode 经过
+  Allowlist 规范化，非法值 Fail Closed；Retry/Fork Replay 使用已持久化 Mode，
+  不会悄悄退回更宽松权限。Fork 继续保留 Message Prefix、Attachment 和
+  State Boundary，失败 Retry 在新回复成功前不会删除旧的 Public Reply。
+
+### 性能、调度与 Workbench 工作流
+
+- **Scheduler 拆分高频 Due-task Poll 与低频维护** — Scheduled Task、
+  Proactive Heartbeat、Behavior Learning、SOUL Steward 和 Short-term Cleanup
+  使用独立 Cadence 与 Single-instance/Coalescing 约束；重型维护不再挂在每次
+  Due-task Poll 上。Steward 默认和最小间隔提高到一小时。
+- **Behavior Learning 合并空闲期工作** — 正常 Server Scheduler 存在时不再
+  每个 Agent Turn 额外创建 LLM Job；无 Scheduler 的运行只保留一个延迟任务，
+  多次完成会合并。仅含单个 Tool 的无信息 Turn 会跳过 Learning LLM。
+- **Token Usage 与 Latency 写入合并，Workspace Diff 避免重复读盘** —
+  Usage/Latency 可以共享一次 Database Batch；Run Finalization 复用
+  mtime/ctime/size 未变化的 Snapshot。并发 Run 的 Change Set 标记
+  `exclusive` 或 `overlapping` 并记录重叠 Run ID，避免把共享改动错误归因给
+  单个 Agent。
+- **Electron Browser 输入改用可信原生事件路径** — 新增独立
+  `browser-input.js`，兼容 React Controlled Input 的 Native Setter，并覆盖
+  Type/Keyboard Event、Session Tab 隔离、共享 Login State、Closed-tab
+  恢复防护和 User-event Learning Telemetry；后台 Renderer 明确节流。
+- **Workbench Chat 的恢复与状态呈现更完整** — Tool Activity 原位完成，
+  Finalizing 在 Workspace Save 前显示；SSE 断开后通过显式 Reconnect 恢复而
+  不会重发用户消息；Retry 只在 Durable Terminal Event 后截断；LLM Activity、
+  Plan Step、Inbox、Browser Trace 与 Tool 参数预览保持独立且支持中英文。
+- **Workbench 交互细节补齐** — 包括上次 User Message Retry、手动 Context
+  Compaction、项目/用户覆盖 Workspace Chip、长路径 Picker、全局和可自定义
+  Shortcut、Clipboard/Paste File、Drag-and-drop、窄窗口 Rail、原生 Linux
+  Frame/Directory Picker、Settings 表单错误保留，以及 Knowledge Tag、
+  Markdown Chunk、Memory Citation/History/Related 和 Skill Learning 状态。
+- **文献库修复筛选、批量删除和媒体行为** — Project Isolation、CRUD/Stats、
+  Trash/Permanent Delete、General Knowledge File-type Filter、Existing
+  Knowledge Bridge、Source Abstract 修复、Zotero 幂等同步、Raw Media Inline
+  与 Unique Read Event 均有专门回归覆盖；Library Frontend 会在 Filter 改变
+  时清理无效 Selection。
+
+### 架构、兼容性与数据
+
+- **所有 HTTP API 适配器集中到 `src/route/`** — Agent、Workbench、Settings、
+  Task、Knowledge、Memory、Learning、Map、Channel、System 和 Code Route
+  通过 Registry 统一装配；领域 Service 不再反向依赖 FastAPI/WebUI。
 - **核心源码按领域完成重组** — `src/cyrene/` 现在以 `agent/`、
   `workbench/`、`model_runtime/`、`learning/`、`runtime/`、
   `observability/`、`knowledge/`、`channels/`、`tooling/` 和
-  `tool_impl/` 为正式所有权边界。根目录只保留稳定公共入口和
-  Electron 仍需按物理路径执行的 `local_cli.py` 启动垫片。
-- **旧 Python 导入继续解析到同一个模块对象** —
-  `runtime/module_compat.py` 通过惰性 import finder 维护历史模块名，
-  保留 monkeypatch、模块元数据和 `python -m` 可执行别名语义，不再为每个
-  旧路径保留重复实现文件。
-- **旧数据库在首次启动时安全迁移** — 当
-  `store/cyrene.db` 存在且 `store/cyrene.runtime.database` 尚未承载数据时，
-  Runtime 会使用 SQLite backup API 复制包含 WAL 的一致快照，执行
-  `quick_check`、写入幂等迁移标记并原子启用新库；旧库始终保留作为回滚副本，
-  已有新库数据不会被覆盖。
-- **启动与生命周期统一** — Web、交互 CLI、Electron、PyInstaller 和后台
-  daemon 共享 RuntimeContext、初始化顺序和关闭路径。`cyrene start`、
-  `status`、API 连接与 `stop` 已通过真实隔离运行验证；Electron 开发模式继续
-  从 `src/cyrene/local_cli.py` 启动当前源码。
-- **兼容性与构建验证在该重构检查点扩大** — 当时测试套件 1,381 项通过；上一
-  commit 的
-  1,286 项功能性测试通过，仅排除读取已删除 `pattern.py` 源码文本的形状测试。
-  Electron App Use 44 项通过。最终 PyInstaller 产物验证 60 个旧模块别名、
-  259 个 OpenAPI 操作、Web 启动、数据库迁移和干净退出。
-- **文档与源码边界同步** — README、架构、安装、使用、配置、开发、
-  重构 handoff、Research Workbench 路线图和设计 QA 统一到当前包结构、
-  数据库文件名和启动命令；过时且被 Git 忽略的本机 Research Workbench
-  Report Artifact 已删除，其历史结论保留在 Design QA。
+  `tool_impl/` 为正式所有权边界。`call_llm`、`browser`、`subagent`、
+  `memory` 和 `tools` 保持稳定公共入口。
+- **旧 Python Import 仍解析到同一个 Canonical Module Object** —
+  `runtime/module_compat.py` 使用 Lazy Import Finder 保留 Monkeypatch、
+  Module Metadata 和 `python -m` Alias 语义；PyInstaller Smoke Test 会导入
+  全部历史 Alias 并验证对象 Identity。
+- **旧数据库在首次启动时安全迁移** — 仅当新
+  `store/cyrene.runtime.database` 未承载数据时，使用 SQLite Backup API
+  复制旧 `store/cyrene.db`（含 WAL 一致快照），执行 `quick_check`、写入幂等
+  Migration Marker 并原子启用；旧库保留作回滚，已有新库绝不覆盖。
+- **Web、CLI、Electron、PyInstaller 与 Daemon 共用生命周期** —
+  `RuntimeContext`、Application Bootstrap、External Service、Scheduler、
+  Update Check 和 Shielded Shutdown 统一管理。Electron 仍通过物理
+  `src/cyrene/local_cli.py` 启动，并会自动切换到 Checkout 的 `.venv`。
+- **源码默认启动命令简化为 `uv run python -m cyrene`** — 无参数模块入口现在
+  默认启动唯一正式 Workbench；`--workbench` 保留兼容，Telegram 改为显式
+  `--telegram`。`cyrene start` 的后台子进程同步采用新入口。
 
-### 技术细节
+### 单一 Workbench、构建与文档
 
-- `cyrene.runtime.application`、`bootstrap`、`context`、`lifecycle` 和
-  `paths` 组成共享生命周期；数据库迁移发生在任何数据库初始化之前。
-- `cyrene.call_llm`、`browser`、`subagent`、`memory` 和 `tools` 保持稳定
-  公共入口；实现分别下沉到 `model_runtime/`、领域服务和 tooling 控制面。
-- `local_cli.py` 保留源码直跑时切换到仓库 `.venv` 的行为，并新增真实路径
-  启动回归测试，避免 Electron 开发模式误用缺少依赖的系统 Python。
-- FastAPI 适配器统一位于 `src/route/`，Workbench 业务逻辑位于
-  `src/cyrene/workbench/`，Web 生命周期和静态资源托管位于 `src/webui/`。
-- 冻结产物 smoke test 会导入全部历史模块别名，并确认别名与正式模块是同一
-  对象，从而捕获只在 PyInstaller 环境中出现的动态导入遗漏。
+- **WebUI 收敛为单一 Workbench Source Tree** — 正式源码全部位于
+  `src/webui/frontend/`，按 Entry、Platform、Shared 与 Workbench Feature
+  分层；构建输出统一写入 `src/webui/static/app`。旧 Classic UI、重复
+  `workbench-webui`、Legacy Selector、重复 Vendor Asset 和无效 Preload API
+  已删除。
+- **共享前端基础设施统一** — Bootstrap Readiness、Navigation、SSE Event、
+  API/Data Store、Theme、i18n、Markdown/Math/Highlight、Diff、PDF、Search、
+  Feedback 和 Browser View 不再由多个 UI Surface 各自维护；Electron 永远
+  加载同一个 Workbench，并根据 Python 输出的动态端口连接。
+- **常规 CI 与 Release Gate 分离** — Pull Request、`main` Push 和手工 CI
+  使用锁定的 All-extras Environment 执行 Python Compile、完整 pytest、
+  WebUI Build/Committed-output Diff 和 Electron App Use Test；Release
+  Workflow 继续负责 macOS、Windows x64/ARM64、Linux 与 Frozen Smoke。
+- **OpenAPI Contract 改用锁定 Generator** — 审查 10 个 Generator-level
+  Schema Delta 后，259 个 Operation 的严格 Hash 在 FastAPI 0.136.1 /
+  Pydantic 2.13.4 下重新采集，并将 Generator Version 纳入 Contract；没有
+  忽略任何 Schema Field。
+- **双语文档按最终实现重新核对** — README、安装、使用、配置、架构、开发、
+  Browser Live View、Project Notes、Refactor Handoff、Research Workbench
+  Roadmap 与 Design QA 统一到唯一 Workbench、当前包结构、数据库名称、
+  Managed Child Process、Literature/Zotero 边界、WeChat QR、Budget/Backup/
+  Keyring 边界和 Windows SimpleXNG 限制；过时的本地 QA Screenshot Artifact
+  已清理。
+- **beta2 本地发布基线通过** — 锁定的 Python 3.12 Environment 完整运行
+  1,403 项 pytest；Electron App Use 与 Browser Input 共 49 项 Node Test
+  通过；WebUI 32 个 JSX Entry 全部重建；Python `compileall`、Version
+  Consistency 与 `git diff --check` 通过。平台安装包和 Frozen Smoke 继续由
+  `v0.7.0-beta.2` Tag 触发的 Release Workflow 执行。
 
 ---
 

@@ -150,9 +150,9 @@ def test_frozen_smoke_test_rejects_stray_playwright_package():
 def test_macos_dmg_uses_electron_semver_and_tracks_python_alias():
     build_module = _load_build_module()
 
-    assert build_module.get_version() == "0.7.0b1"
-    assert build_module.get_electron_version() == "0.7.0-beta.1"
+    assert build_module.get_version() == "0.7.0b2"
+    assert build_module.get_electron_version() == "0.7.0-beta.2"
     assert build_module._mac_dmg_version_aliases() == (
-        "0.7.0b1",
-        "0.7.0-beta.1",
+        "0.7.0b2",
+        "0.7.0-beta.2",
     )

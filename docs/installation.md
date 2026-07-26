@@ -22,7 +22,7 @@ npm install
 node build-jsx.mjs
 cd ../..
 
-python -m cyrene --workbench
+uv run python -m cyrene
 ```
 
 Conda/pip remains supported:
@@ -58,7 +58,7 @@ npm install
 npm run build
 cd ../..
 
-python -m cyrene --workbench
+uv run python -m cyrene
 ```
 
 > **Tip for China users:** Use Tsinghua mirror for faster downloads:
@@ -84,7 +84,7 @@ manual edits to vendored packages are not part of the current supported setup.
 ```bash
 conda activate cyrene
 cd /path/to/Cyrene
-python -m cyrene --workbench
+uv run python -m cyrene
 ```
 
 Open `http://localhost:4242`. You should see the onboarding wizard on first launch.

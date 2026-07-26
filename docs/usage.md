@@ -7,7 +7,7 @@
 ### Workbench UI
 
 ```bash
-python -m cyrene --workbench
+uv run python -m cyrene
 ```
 
 ### Interactive local CLI (no web server)
@@ -260,7 +260,7 @@ OWNER_ID=your_telegram_user_id
 Then run:
 
 ```bash
-python -m cyrene
+uv run python -m cyrene --telegram
 ```
 
 The Telegram bot supports the same two-phase loop, subagents, and tools as the Web UI.

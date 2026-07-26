@@ -7,7 +7,7 @@
 ### Workbench
 
 ```bash
-python -m cyrene --workbench
+uv run python -m cyrene
 ```
 
 ### 无 Web 的交互 CLI
@@ -196,7 +196,7 @@ OWNER_ID=your_telegram_user_id
 然后运行：
 
 ```bash
-python -m cyrene
+uv run python -m cyrene --telegram
 ```
 
 Telegram 使用相同的两阶段 Agent Loop、Subagent 和 Tool。

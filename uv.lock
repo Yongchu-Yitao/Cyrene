@@ -399,7 +399,7 @@ wheels = [
 
 [[package]]
 name = "cyrene"
-version = "0.7.0b1"
+version = "0.7.0b2"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },

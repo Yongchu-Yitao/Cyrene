@@ -16,9 +16,10 @@ def _print_help() -> None:
 Cyrene runtime entry point.
 
 modes:
-  --workbench       Start the Workbench web UI
+  (default)         Start the Workbench web UI
+  --workbench       Start the Workbench web UI (compatibility alias)
   --gui              Start the native GUI wrapper
-  --telegram         Start the Telegram bot (also the legacy no-argument mode)
+  --telegram         Start the Telegram bot
 
 options:
   --port PORT        Workbench web server port
@@ -71,19 +72,19 @@ def main() -> None:
     if "--help" in sys.argv or "-h" in sys.argv:
         _print_help()
         return
-    if "--workbench" in sys.argv:
-        _runtime_started = True
-        from cyrene.runtime.host import run_web_mode
-        run_web_mode(ui_mode="workbench")
-        return
     if "--gui" in sys.argv or "--electron-mode" in sys.argv:
         _runtime_started = True
         from cyrene.runtime.host import main as _local_main
         _local_main()
         return
+    if "--telegram" in sys.argv:
+        _runtime_started = True
+        asyncio.run(_prepare_runtime())
+        _run_bot()
+        return
     _runtime_started = True
-    asyncio.run(_prepare_runtime())
-    _run_bot()
+    from cyrene.runtime.host import run_web_mode
+    run_web_mode(ui_mode="workbench")
 
 
 if __name__ == "__main__":
