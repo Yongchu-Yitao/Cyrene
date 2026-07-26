@@ -151,6 +151,60 @@ def test_create_chat_skips_full_project_repair(client, fork_env, monkeypatch):
     assert response.status_code == 200
     assert response.json()["chat"]["projectId"] == "project_1"
     assert response.json()["chat"]["title"] == "Fast chat"
+    assert response.json()["chat"]["permissionMode"] == "auto"
+
+
+def test_retry_reuses_persisted_permission_mode(client, fork_env, monkeypatch):
+    from cyrene import agent
+
+    _write_chat(
+        fork_env,
+        "chat_mode",
+        [
+            {"id": "u1", "role": "user", "content": "question"},
+            {"id": "a1", "role": "assistant", "content": "answer"},
+        ],
+        permissionMode="default",
+    )
+    _write_state(fork_env, "chat_mode", [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "answer"},
+    ])
+    seen = {}
+
+    async def fake_run_agent(**kwargs):
+        seen.update(kwargs)
+        return "retried"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    response = client.post(
+        "/api/workbench/chats/chat_mode/messages",
+        json={"retry": True},
+    )
+
+    assert response.status_code == 200
+    assert seen["permission_mode"] == "default"
+    assert client.get("/api/workbench/chats/chat_mode").json()["chat"]["permissionMode"] == "default"
+
+
+def test_invalid_permission_mode_fails_closed(client, fork_env, monkeypatch):
+    from cyrene import agent
+
+    _write_chat(fork_env, "chat_invalid_mode", [], permissionMode="auto")
+    seen = {}
+
+    async def fake_run_agent(**kwargs):
+        seen.update(kwargs)
+        return "done"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    response = client.post(
+        "/api/workbench/chats/chat_invalid_mode/messages",
+        json={"message": "hello", "mode": "unexpected"},
+    )
+
+    assert response.status_code == 200
+    assert seen["permission_mode"] == "default"
 
 
 def _write_chats(fork_env, chats):

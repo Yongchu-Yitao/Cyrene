@@ -7,7 +7,12 @@ import json
 from types import MappingProxyType
 
 from cyrene.runtime.settings_store import is_tool_pack_enabled
-from cyrene.tooling.catalog import TOOL_DEFS, TOOL_HANDLERS, all_capabilities
+from cyrene.tooling.catalog import (
+    TOOL_DEFS,
+    TOOL_HANDLERS,
+    TOOL_METADATA,
+    all_capabilities,
+)
 from cyrene.tooling.packs import WIRE_NAME_BY_PACK_ID
 from cyrene.tooling.types import ToolCatalogSnapshot, ToolSpec
 
@@ -50,6 +55,8 @@ def build_catalog_snapshot(actor: str = "main") -> ToolCatalogSnapshot:
         input_schema = dict(
             function.get("parameters") or {"type": "object"}
         )
+        metadata = TOOL_METADATA.get(concrete_name) or {}
+        read_only = bool(metadata.get("read_only"))
         capabilities[concrete_name] = ToolSpec(
             capability_id=concrete_name,
             concrete_name=concrete_name,
@@ -58,9 +65,9 @@ def build_catalog_snapshot(actor: str = "main") -> ToolCatalogSnapshot:
             input_schema=input_schema,
             handler=handler,
             actors=frozenset({actor}),
-            risk_class="native",
-            side_effect_class="unknown",
-            resource_templates=(),
+            risk_class="read_only" if read_only else "native",
+            side_effect_class="none" if read_only else "unknown",
+            resource_templates=tuple(metadata.get("resource_keys") or ()),
         )
         schema_hashes[concrete_name] = _schema_hash(input_schema)
     for capability in all_capabilities(
@@ -70,6 +77,8 @@ def build_catalog_snapshot(actor: str = "main") -> ToolCatalogSnapshot:
         handler = TOOL_HANDLERS.get(capability.concrete_name)
         if handler is None and not capability.external:
             continue
+        metadata = TOOL_METADATA.get(capability.concrete_name) or {}
+        read_only = bool(metadata.get("read_only"))
         spec = ToolSpec(
             capability_id=capability.capability_id,
             concrete_name=capability.concrete_name,
@@ -78,9 +87,17 @@ def build_catalog_snapshot(actor: str = "main") -> ToolCatalogSnapshot:
             input_schema=capability.input_schema,
             handler=handler,
             actors=frozenset({actor}),
-            risk_class="external" if capability.external else "native",
-            side_effect_class="unknown",
-            resource_templates=(),
+            risk_class=(
+                "external"
+                if capability.external
+                else ("read_only" if read_only else "native")
+            ),
+            side_effect_class=(
+                "unknown_external"
+                if capability.external
+                else ("none" if read_only else "unknown")
+            ),
+            resource_templates=tuple(metadata.get("resource_keys") or ()),
             external=capability.external,
         )
         capabilities[capability.capability_id] = spec

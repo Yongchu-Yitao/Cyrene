@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 
 VERBOSE = False
 _log_file: Path | None = None
+_PERMISSION_EVENT_TYPES = frozenset({
+    "auto_review",
+    "permission_decision",
+    "destructive_confirmation",
+    "external_upload_confirmation",
+})
 
 
 def init_debug_log() -> None:
@@ -138,7 +144,7 @@ def enable_event_bus() -> None:
 async def publish_event(event: dict, session_id: str = "") -> None:
     """发布一条事件（由 agent.py 调用）。自动初始化事件总线。
 
-    为 llm_call 和 tool_call 事件生成唯一 event_id，并存储完整数据到 _full_events。
+    为模型、工具和权限事件生成唯一 event_id，并存储完整数据到 _full_events。
 
     When *session_id* is non-empty, it is tagged on the event for per-session
     filtering downstream (see :func:`subscribe`).
@@ -150,8 +156,8 @@ async def publish_event(event: dict, session_id: str = "") -> None:
     if session_id:
         event = {**event, "session_id": session_id}
 
-    # 为 llm_call 和 tool_call 生成 event_id 并保留完整数据
-    if event.get("type") in ("llm_call", "tool_call"):
+    # Operationally significant events retain a full, addressable record.
+    if event.get("type") in {"llm_call", "tool_call"} | _PERMISSION_EVENT_TYPES:
         event_id = f"evt_{_uuid.uuid4().hex[:12]}"
         event["event_id"] = event_id
         _full_events[event_id] = dict(event)
@@ -171,6 +177,8 @@ async def publish_event(event: dict, session_id: str = "") -> None:
                 await cy_db.record_model_usage(str(DB_PATH), str(event.get("timestamp") or ""), model, event.get("usage") or {})
         elif event.get("type") == "tool_call":
             await cy_db.record_tool_call(str(DB_PATH), str(event.get("timestamp") or ""), str(event.get("tool") or ""))
+        elif event.get("type") in _PERMISSION_EVENT_TYPES:
+            await cy_db.record_permission_decision(str(DB_PATH), event)
     except Exception:
         logger.exception("Failed to persist runtime stats")
 

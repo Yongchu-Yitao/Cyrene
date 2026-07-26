@@ -9,6 +9,8 @@ with the existing agent loop.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
@@ -186,6 +188,88 @@ def grant_temporary_full_access() -> None:
     _state._temporary_full_access.set(True)
 
 
+def _add_one_shot_grant(variable: Any, value: str) -> None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return
+    existing = variable.get()
+    if existing is None:
+        existing = set()
+        variable.set(existing)
+    existing.add(normalized)
+
+
+def _consume_one_shot_grant(variable: Any, value: str) -> bool:
+    normalized = str(value or "").strip()
+    existing = variable.get()
+    if existing is None:
+        return False
+    if not normalized or normalized not in existing:
+        return False
+    existing.remove(normalized)
+    return True
+
+
+def grant_permission_elevation(fingerprint: str) -> None:
+    """Grant one exact permission request for the current run."""
+    _add_one_shot_grant(_state._permission_elevation_grants, fingerprint)
+
+
+def permission_elevation_fingerprint(
+    *,
+    tool_name: str,
+    permission_kind: str,
+    path_hint: str,
+    operation: str,
+    reason: str = "",
+) -> str:
+    """Return the stable identity of one exact permission request."""
+    payload = json.dumps(
+        {
+            "tool": str(tool_name or "").strip(),
+            "kind": str(permission_kind or "").strip(),
+            "path": str(path_hint or "").strip(),
+            "operation": str(operation or "").strip(),
+            "reason": str(reason or "").strip(),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def consume_permission_elevation(fingerprint: str) -> bool:
+    """Consume a previously approved exact permission request."""
+    return _consume_one_shot_grant(
+        _state._permission_elevation_grants,
+        fingerprint,
+    )
+
+
+def _scoped_path_key(access_kind: str, path: str | Path) -> str:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = active_workspace_dir() / candidate
+    return f"{str(access_kind or '').strip().lower()}:{candidate.resolve()}"
+
+
+def grant_scoped_path_access(access_kind: str, path: str | Path) -> None:
+    """Grant one exact canonical path lookup for the current tool execution."""
+    _add_one_shot_grant(
+        _state._scoped_path_access_grants,
+        _scoped_path_key(access_kind, path),
+    )
+
+
+def consume_scoped_path_access(access_kind: str, path: str | Path) -> bool:
+    """Consume an exact canonical path grant."""
+    return _consume_one_shot_grant(
+        _state._scoped_path_access_grants,
+        _scoped_path_key(access_kind, path),
+    )
+
+
 def allow_all_destructive_operations_for_run() -> None:
     _state._destructive_confirmation_allow_all.set(True)
 
@@ -338,6 +422,8 @@ __all__ = [
     "emit_reply_stream_event",
     "grant_destructive_operation",
     "grant_external_upload",
+    "grant_permission_elevation",
+    "grant_scoped_path_access",
     "grant_temporary_full_access",
     "get_current_agent_id",
     "get_current_caller",
@@ -349,7 +435,10 @@ __all__ = [
     "has_external_upload_grant",
     "has_destructive_confirmation",
     "has_temporary_full_access",
+    "consume_permission_elevation",
+    "consume_scoped_path_access",
     "is_permission_mode",
+    "permission_elevation_fingerprint",
     "consume_external_upload_grant",
     "publish_runtime_event",
     "session_interrupt_event",

@@ -166,6 +166,26 @@ CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON token_usage(created_at)
 CREATE INDEX IF NOT EXISTS idx_token_usage_model ON token_usage(model);
 CREATE INDEX IF NOT EXISTS idx_token_usage_round_id ON token_usage(round_id);
 
+CREATE TABLE IF NOT EXISTS permission_decisions (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    round_id TEXT NOT NULL DEFAULT '',
+    event_type TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    tool_name TEXT NOT NULL DEFAULT '',
+    operation TEXT NOT NULL DEFAULT '',
+    permission_kind TEXT NOT NULL DEFAULT '',
+    path_hint TEXT NOT NULL DEFAULT '',
+    approved INTEGER NOT NULL,
+    rationale TEXT NOT NULL DEFAULT '',
+    fingerprint TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_permission_decisions_session
+ON permission_decisions(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_permission_decisions_round
+ON permission_decisions(round_id, created_at);
+
 CREATE TABLE IF NOT EXISTS llm_latency_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     call_id TEXT NOT NULL,
@@ -842,6 +862,63 @@ async def record_tool_call(db_path: str, timestamp: str, tool_name: str = "") ->
                 """,
                 (day, tool),
             )
+        await db.commit()
+
+
+async def record_permission_decision(db_path: str, event: dict) -> None:
+    """Persist one auditable permission decision with its exact scope."""
+    event_type = str(event.get("type") or "permission_decision")
+    raw_decision = str(event.get("decision") or "").strip().lower()
+    approved = (
+        event.get("approved") is True
+        or raw_decision == "approved"
+    )
+    async with aiosqlite.connect(db_path) as db:
+        # Keep this writer safe during a rolling upgrade where the process may
+        # publish a decision before the next full ``init_db`` pass.
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS permission_decisions (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                session_id TEXT NOT NULL DEFAULT '',
+                round_id TEXT NOT NULL DEFAULT '',
+                event_type TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                tool_name TEXT NOT NULL DEFAULT '',
+                operation TEXT NOT NULL DEFAULT '',
+                permission_kind TEXT NOT NULL DEFAULT '',
+                path_hint TEXT NOT NULL DEFAULT '',
+                approved INTEGER NOT NULL,
+                rationale TEXT NOT NULL DEFAULT '',
+                fingerprint TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO permission_decisions (
+                id, created_at, session_id, round_id, event_type, source,
+                tool_name, operation, permission_kind, path_hint, approved,
+                rationale, fingerprint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(event.get("event_id") or uuid.uuid4().hex),
+                str(event.get("timestamp") or datetime.now(timezone.utc).isoformat()),
+                str(event.get("session_id") or ""),
+                str(event.get("round_id") or ""),
+                event_type,
+                str(event.get("source") or ("auto_reviewer" if event_type == "auto_review" else "user")),
+                str(event.get("tool_name") or event.get("tool") or ""),
+                str(event.get("operation") or ""),
+                str(event.get("permission_kind") or ""),
+                str(event.get("path_hint") or ""),
+                1 if approved else 0,
+                str(event.get("rationale") or ""),
+                str(event.get("fingerprint") or ""),
+            ),
+        )
         await db.commit()
 
 

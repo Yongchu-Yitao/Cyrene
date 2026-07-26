@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
+import shlex
 import time
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any
 
 from cyrene.agent.context import current_assistant_meta, current_run_context
@@ -25,6 +29,64 @@ _skip_action_recording: ContextVar[bool] = ContextVar("_skip_action_recording", 
 _active_tool_call_id: ContextVar[str] = ContextVar("_active_tool_call_id", default="")
 
 logger = logging.getLogger(__name__)
+
+_PROCESS_EXECUTION_TOOLS = frozenset({"Bash", "StartShell", "SendShell"})
+_OPAQUE_SHELL_EXECUTABLES = frozenset({
+    "bash", "sh", "zsh", "fish", "dash",
+    "python", "python3", "node", "ruby", "perl",
+    "eval", "env", "xargs",
+})
+_NETWORK_SHELL_EXECUTABLES = frozenset({
+    "curl", "wget", "ssh", "scp", "sftp", "ftp",
+    "nc", "ncat", "socat", "telnet",
+})
+
+
+def _shell_command_needs_explicit_review(arguments: dict[str, Any]) -> bool:
+    """Flag shell calls whose scope cannot be kept inside the workspace."""
+    command = str(arguments.get("command") or "").strip()
+    cwd = str(arguments.get("cwd") or "").strip()
+    from cyrene.agent.context import active_workspace_dir
+
+    workspace = active_workspace_dir().resolve()
+    if cwd:
+        candidate = Path(cwd).expanduser()
+        if not candidate.is_absolute():
+            candidate = workspace / candidate
+        resolved_cwd = candidate.resolve()
+        if resolved_cwd != workspace and workspace not in resolved_cwd.parents:
+            return True
+    if not command:
+        return False
+    if "$(" in command or "`" in command:
+        return True
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return True
+    expect_executable = True
+    separators = {"|", "||", "&&", ";", "&"}
+    for token in tokens:
+        if token in separators:
+            expect_executable = True
+            continue
+        if expect_executable:
+            executable = Path(token).name.lower()
+            if executable in _OPAQUE_SHELL_EXECUTABLES | _NETWORK_SHELL_EXECUTABLES:
+                return True
+            expect_executable = False
+            continue
+        if token.startswith("-") or token in {">", ">>", "<", "2>", "2>>"}:
+            continue
+        expanded = Path(
+            re.sub(r"^\$HOME(?=/|$)", str(Path.home()), token)
+        ).expanduser()
+        if not expanded.is_absolute():
+            continue
+        resolved = expanded.resolve()
+        if resolved != workspace and workspace not in resolved.parents:
+            return True
+    return False
 
 _pending_action_record_tasks: set[asyncio.Task[Any]] = set()
 _pending_timed_out_tool_tasks: set[asyncio.Task[Any]] = set()
@@ -251,14 +313,57 @@ async def _execute_tool(name: str, arguments: dict[str, Any], bot: Any, chat_id:
         if not is_tool_pack_enabled("browser_tools"):
             return "Browser automation tools are disabled in settings. Re-enable browser tools before using this action."
     handler = TOOL_HANDLERS.get(name)
+    run_context = current_run_context()
+    if (
+        name in _PROCESS_EXECUTION_TOOLS
+        and run_context.permission_mode != "full_access"
+        and (
+            run_context.permission_mode == "auto"
+            or _shell_command_needs_explicit_review(arguments)
+        )
+    ):
+        from cyrene.tooling.runtime_api import request_scope_elevation
+
+        command_preview = str(arguments.get("command") or "").strip()[:500]
+        permission_result = await request_scope_elevation(
+            tool_name=name,
+            path_hint=str(arguments.get("cwd") or ""),
+            operation="执行本地进程或 Shell 命令",
+            reason=f"命令：{command_preview or '[启动交互式 shell]'}",
+            permission_kind="process_execution",
+            options=["允许执行这一次", "拒绝"],
+            scope_hint="进程执行的 ",
+        )
+        if permission_result is not None:
+            return permission_result
     if handler is None:
         from cyrene.observability import debug as _debug
         from cyrene.tooling.backends.mcp_manager import get_manager as _get_mcp_mgr
 
+        from cyrene.tooling.runtime_api import request_scope_elevation
+
+        manager = _get_mcp_mgr()
+        has_tool = getattr(manager, "has_tool", None)
+        if callable(has_tool) and not has_tool(name):
+            raise ValueError(f"Unknown tool: {name}")
+        safe_arguments = redact_value(arguments)
+        permission_result = await request_scope_elevation(
+            tool_name=name,
+            path_hint="",
+            operation="调用外部 MCP/集成工具",
+            reason=(
+                "外部工具参数："
+                + json.dumps(safe_arguments, ensure_ascii=False, sort_keys=True)[:800]
+            ),
+            permission_kind="external_tool_execution",
+            options=["允许调用这一次", "拒绝"],
+            scope_hint="外部工具调用的 ",
+        )
+        if permission_result is not None:
+            return permission_result
+
         _t0 = time.monotonic()
         try:
-            run_context = current_run_context()
-            manager = _get_mcp_mgr()
             result = await _run_with_tool_timeout(
                 name, arguments, manager.execute_tool(name, arguments)
             )

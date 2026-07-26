@@ -435,7 +435,7 @@ async def _run_chat_agent(
     assistant_meta_token = _ui_round_assistant_meta.set(dict(assistant_message_meta) if assistant_message_meta else None)
     _mode = permission_mode if permission_mode in _state.PERMISSION_MODES else "default"
     mode_token = _state._permission_mode.set(_mode)
-    # 完全访问模式：复用现有 _temporary_full_access 短路，所有工具零额外改动即放行。
+    # Explicit full-access mode is inherited by every Workbench tool task.
     if _mode == "full_access":
         _state._temporary_full_access.set(True)
     behavior_turn_context: dict[str, Any] | None = None
@@ -1022,6 +1022,14 @@ async def _run_chat_agent(
         _state._active_main_round_public_prompt = ""
         _state._active_main_round_started_at = 0.0
         _state._temporary_full_access.set(False)
+        permission_grants = _state._permission_elevation_grants.get()
+        if permission_grants is not None:
+            permission_grants.clear()
+        path_grants = _state._scoped_path_access_grants.get()
+        if path_grants is not None:
+            path_grants.clear()
+        _state._permission_elevation_grants.set(None)
+        _state._scoped_path_access_grants.set(None)
         _state._permission_mode.reset(mode_token)
         _current_round_id.reset(round_token)
 

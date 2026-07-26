@@ -23,7 +23,8 @@ from cyrene.agent.context import (
     default_session_state_lock,
     grant_destructive_operation,
     grant_external_upload,
-    grant_temporary_full_access,
+    grant_permission_elevation,
+    permission_elevation_fingerprint,
     publish_runtime_event as _publish_runtime_event,
     session_interrupt_event,
 )
@@ -55,6 +56,17 @@ from cyrene.agent.session import (
 from cyrene.model_runtime.messages import assistant_text
 
 logger = logging.getLogger(__name__)
+
+
+def _original_round_user_prompt(context: dict[str, Any]) -> str:
+    """Return the original public user request for a resumed round."""
+    for message in context.get("round_history") or []:
+        if str(message.get("role") or "") != "user":
+            continue
+        content = str(message.get("public_content") or message.get("content") or "").strip()
+        if content:
+            return content
+    return ""
 
 # Historical private helpers remained importable from this module before the
 # reply synthesizer was extracted.  Keep the exact function objects so direct
@@ -919,6 +931,7 @@ async def answer_pending_question(
                 answer_text=content,
                 client_request_id=client_request_id,
                 context=context,
+                permission_mode=permission_mode,
             )
         except Exception:
             await _restore_pending_question(pending)
@@ -969,6 +982,7 @@ async def answer_pending_question(
             persist_user_message=True,
             command=str(context.get("command", "") or "").strip(),
             permission_mode=permission_mode,
+            public_prompt=_original_round_user_prompt(context),
         )
     except Exception:
         await _restore_pending_question(pending)
@@ -1079,7 +1093,8 @@ def _permission_answer_granted(text: str) -> bool:
         "仅这次允许", "allow once", "仅此次", "这次", "once",
         "始终允许", "always allow", "always", "永久允许", "allow",
         "本次会话内总是允许", "本轮总是允许", "always allow this session",
-        "允许这次", "允许这次读取", "允许这次上传", "允许执行", "允许删除", "仅此任务允许 full_access",
+        "允许这次", "允许这次读取", "允许这次上传", "允许执行", "允许执行这一次",
+        "允许调用这一次", "允许删除", "仅此任务允许 full_access",
         "同意", "确认", "好", "好的", "可以", "行", "yes", "y", "ok", "okay",
         "allow_once",
     }
@@ -1092,6 +1107,7 @@ async def _handle_permission_elevation_answer(
     answer_text: str,
     client_request_id: str,
     context: dict[str, Any],
+    permission_mode: str = "default",
 ) -> str:
     from cyrene.agent.coordinator import _run_chat_agent
     from cyrene.runtime.settings_store import set_write_permission_mode
@@ -1103,14 +1119,23 @@ async def _handle_permission_elevation_answer(
     operation = str(meta.get("operation", "") or "").strip()
     path_hint = str(meta.get("path_hint", "") or "").strip()
     reason = str(meta.get("reason", "") or "").strip()
+    permission_fingerprint = str(meta.get("fingerprint", "") or "").strip()
+    if not permission_fingerprint:
+        permission_fingerprint = permission_elevation_fingerprint(
+            tool_name=tool_name,
+            permission_kind=permission_kind,
+            path_hint=path_hint,
+            operation=operation,
+            reason=reason,
+        )
 
     granted = _permission_answer_granted(answer_text)
     if permission_kind == "write_permission_request":
         # "仅这次允许" —— 只在此 round 内有效，round 结束时自动清理
         if normalized in {"仅这次允许", "allow once", "仅此次", "这次", "once"}:
-            grant_temporary_full_access()
+            grant_permission_elevation(permission_fingerprint)
             system = (
-                "The user granted elevated write/delete permission for this round only. "
+                "The user granted this exact write/delete permission request once. "
                 "Retry the blocked action if it is still required."
             )
         # "始终允许" —— 全局永久生效
@@ -1128,9 +1153,9 @@ async def _handle_permission_elevation_answer(
             )
     elif permission_kind == "read_elevation":
         if granted:
-            grant_temporary_full_access()
+            grant_permission_elevation(permission_fingerprint)
             system = (
-                "The user granted temporary read access to paths outside the workspace for this round. "
+                "The user granted this exact outside-workspace read once. "
                 "Retry the blocked read action if it is still required."
             )
         else:
@@ -1188,9 +1213,9 @@ async def _handle_permission_elevation_answer(
                 "file or destination unless the user explicitly asks."
             )
     elif granted:
-        grant_temporary_full_access()
+        grant_permission_elevation(permission_fingerprint)
         system = (
-            "The user granted the internal permission/confirmation request for this round. "
+            "The user granted this exact internal permission request once. "
             "Retry the blocked action if it is still required."
         )
     else:
@@ -1212,6 +1237,19 @@ async def _handle_permission_elevation_answer(
     if details:
         system += "\n" + "\n".join(details)
 
+    await _publish_runtime_event({
+        "type": "permission_decision",
+        "source": "user",
+        "approved": granted,
+        "tool_name": tool_name,
+        "operation": operation,
+        "permission_kind": permission_kind,
+        "path_hint": path_hint,
+        "fingerprint": permission_fingerprint,
+        "rationale": "User approved the displayed request." if granted else "User denied the displayed request.",
+        "round_id": round_id,
+    })
+
     return await _run_chat_agent(
         "[Internal permission decision received. Continue the same round using the system instruction above.]",
         None,
@@ -1225,6 +1263,8 @@ async def _handle_permission_elevation_answer(
         client_request_id=client_request_id,
         persist_user_message=False,
         command=str(context.get("command", "") or "").strip(),
+        permission_mode=permission_mode,
+        public_prompt=_original_round_user_prompt(context),
     )
 
 

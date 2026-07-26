@@ -445,6 +445,10 @@ class MCPManager:
             defs.extend(conn.get_tool_defs())
         return defs
 
+    def has_tool(self, name: str) -> bool:
+        """Return whether a connected MCP server currently exposes ``name``."""
+        return any(conn.has_tool(name) for conn in self._servers.values())
+
     async def execute_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """Find the server that owns *name* and call it.
 

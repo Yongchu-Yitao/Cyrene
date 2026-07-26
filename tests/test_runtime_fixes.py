@@ -2572,6 +2572,7 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
         assistant_message_meta=None,
         lang="",
         command="",
+        permission_mode="default",
     ):
         seen["user_message"] = user_message
         seen["ephemeral_system"] = ephemeral_system
@@ -2581,6 +2582,8 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
         seen["persist_insert_at"] = persist_insert_at
         seen["client_request_id"] = client_request_id
         seen["persist_user_message"] = persist_user_message
+        seen["public_prompt"] = public_prompt
+        seen["permission_mode"] = permission_mode
         return "继续完成后的最终答案"
 
     monkeypatch.setattr(_agent_coordinator, "_run_chat_agent", fake_run_chat_agent)
@@ -2593,6 +2596,7 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
             0,
             "db.sqlite3",
             client_request_id="req_answer_perm_1",
+            permission_mode="auto",
         )
     finally:
         _temporary_full_access.set(False)
@@ -2603,7 +2607,7 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
     assert "pending_question" not in state
     assert seen["user_message"] == "[Internal permission decision received. Continue the same round using the system instruction above.]"
     assert "仅这次允许" not in seen["user_message"]
-    assert "granted elevated write/delete permission" in seen["ephemeral_system"]
+    assert "granted this exact write/delete permission request once" in seen["ephemeral_system"]
     assert "Permission kind: write_permission_request" in seen["ephemeral_system"]
     assert "Tool: Write" in seen["ephemeral_system"]
     assert seen["forced_round_id"] == "round_1"
@@ -2612,6 +2616,8 @@ async def test_answer_permission_question_is_hidden_from_context(monkeypatch, tm
     assert seen["persist_insert_at"] == 2
     assert seen["client_request_id"] == "req_answer_perm_1"
     assert seen["persist_user_message"] is False
+    assert seen["public_prompt"] == "写到外部路径"
+    assert seen["permission_mode"] == "auto"
 
 
 async def test_bash_destructive_command_requires_confirmation_in_full_access(monkeypatch, tmp_path):
@@ -2851,7 +2857,7 @@ async def test_send_wechat_file_uses_auto_review_without_prompt(monkeypatch, tmp
     assert result == "File sent via WeChat: rfi.pdf"
     assert seen["tool_name"] == "send_wechat_file"
     assert seen["operation"] == "外发 WeChat 文件"
-    assert full_access_after_review is True
+    assert full_access_after_review is False
     assert "pending_question" not in saved
 
 
@@ -2909,7 +2915,7 @@ async def test_analyze_attachment_retries_external_path_after_auto_approval(monk
     assert seen["review"]["tool_name"] == "AnalyzeAttachment"
     assert seen["path"] == str(outside)
     assert seen["prompt"] == "summarize"
-    assert full_access_after_review is True
+    assert full_access_after_review is False
 
 
 async def test_destructive_confirmation_answer_remembers_single_operation(monkeypatch, tmp_path):

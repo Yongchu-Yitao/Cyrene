@@ -192,9 +192,24 @@ _active_main_round_id = ""
 _active_main_round_prompt = ""
 _active_main_round_public_prompt = ""
 _active_main_round_started_at = 0.0
-# 临时 full_access 标记 —— "仅这次允许" 时由 guidance 设置，round 结束时清理
-# 使用 ContextVar 确保 asyncio 任务间隔离
+# Explicit run-wide full_access marker.  Exact one-shot approvals use the
+# fingerprint/path grant stores below and must never set this broad flag.
 _temporary_full_access: ContextVar[bool] = ContextVar("_temporary_full_access", default=False)
+
+# Exact, one-shot grants used when a human approves a single permission
+# request.  Unlike ``_temporary_full_access`` these are bound to the request
+# fingerprint and cannot authorize an unrelated tool/path.
+_permission_elevation_grants: ContextVar[set[str] | None] = ContextVar(
+    "_permission_elevation_grants",
+    default=None,
+)
+
+# Exact path grants bridge a successful read/write elevation check to the
+# resolver retry performed by the same tool call.  Entries are consumed on use.
+_scoped_path_access_grants: ContextVar[set[str] | None] = ContextVar(
+    "_scoped_path_access_grants",
+    default=None,
+)
 
 # 破坏性/不可逆操作的二次确认与 full_access 解耦。单次确认使用
 # fingerprint 避免同一工具重试时反复弹窗；"本次会话内总是允许" 使用

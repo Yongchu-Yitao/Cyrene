@@ -193,7 +193,7 @@ var WorkbenchChatModel = (function () {
       body: JSON.stringify({
         message: input.message || "",
         attachments: input.attachments || [],
-        mode: input.mode || "auto",
+        mode: input.mode || "default",
         command: input.command || "",
         retry: !!input.retry,
         forkReplay: !!input.forkReplay,
@@ -764,6 +764,17 @@ var WBC_MODES = [
   { id: "plan", labelKey: "workbenchChat.mode.plan.label", descKey: "workbenchChat.mode.plan.desc" },
   { id: "full_access", labelKey: "workbenchChat.mode.full_access.label", descKey: "workbenchChat.mode.full_access.desc" },
 ];
+
+function wbcNormalizePermissionMode(value, fallback) {
+  var normalized = String(value || "").trim().toLowerCase();
+  if (WBC_MODES.some(function (item) { return item.id === normalized; })) {
+    return normalized;
+  }
+  var safeFallback = String(fallback || "default").trim().toLowerCase();
+  return WBC_MODES.some(function (item) { return item.id === safeFallback; })
+    ? safeFallback
+    : "default";
+}
 
 function wbcModeMeta(id) {
   var meta = WBC_MODES[1];
@@ -1557,6 +1568,20 @@ var WorkbenchChatRuntimes = (function () {
         text: String(event.agent_id || wbcT("workbenchChat.subagents", "Subagents")),
         preview: wbcSubagentStatusText(event.status),
       };
+    } else if (event.type === "auto_review" || event.type === "permission_decision") {
+      var permissionApproved = event.approved === true;
+      entry = {
+        kind: "permission",
+        text: permissionApproved
+          ? wbcT("workbenchChat.permissionApproved", "Permission review approved")
+          : wbcT("workbenchChat.permissionDenied", "Permission review denied"),
+        preview: [
+          String(event.operation || ""),
+          String(event.path_hint || ""),
+          String(event.rationale || ""),
+        ].filter(Boolean).join(" · ").slice(0, 240),
+        failed: !permissionApproved,
+      };
     } else if (
       (event.type === "guidance_acknowledged" || event.type === "chat_message")
       && event.message
@@ -2278,10 +2303,21 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   function handleSend(input) {
     setError("");
     setErrorKind("load");
+    var preparedInput = Object.assign({}, input || {});
+    preparedInput.mode = wbcNormalizePermissionMode(
+      preparedInput.mode,
+      activeChat && activeChat.permissionMode
+        ? activeChat.permissionMode
+        : "auto"
+    );
     return ensureChat().then(function (chatId) {
+      setActiveChat(function (prev) {
+        if (!prev || prev.id !== chatId) return prev;
+        return { ...prev, permissionMode: preparedInput.mode };
+      });
       // The engine owns the stream (so it outlives this page) and enforces a
       // single in-flight run per conversation.
-      return runtimeEngine.start(chatId, input || {}, model);
+      return runtimeEngine.start(chatId, preparedInput, model);
     }).catch(function (err) {
       setError(wbcErrorText(err));
     });
@@ -2369,7 +2405,13 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     // Without it the resume ran invisibly — an empty thread while the side panel
     // showed a frozen "Replying" — and the composer offered no way to stop it.
     runtimeEngine.update(chatId, { chatId: chatId, text: "", progress: [], activities: [], activitySeq: 0, segments: [], startedAt: Date.now(), lastEventAt: Date.now(), replying: true });
-    model.answerChat(chatId, questionId, optionText, { mode: resumeMode || undefined }).then(function (res) {
+    var answerMode = wbcNormalizePermissionMode(
+      resumeMode,
+      activeChat && activeChat.permissionMode
+        ? activeChat.permissionMode
+        : "default"
+    );
+    model.answerChat(chatId, questionId, optionText, { mode: answerMode }).then(function (res) {
       runtimeEngine.update(chatId, null);
       // Pull the durable transcript: it now contains the question, this answer,
       // every pre-question tool/intermediate block, and the continued reply.
@@ -2399,7 +2441,12 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     if (!activeChat || activeChat.legacy || runtimeEngine.isRunning(activeChat.id)) return;
     if (!messageId || !newContent) return;
     setError("");
+    var replayMode = wbcNormalizePermissionMode(
+      activeChat && activeChat.permissionMode,
+      "auto"
+    );
     model.forkChat(activeChat.id, messageId, newContent).then(function (newChat) {
+      newChat = { ...newChat, permissionMode: replayMode };
       setChats(function (prev) { return [newChat].concat(prev); });
       skipNextHydrationChatIdRef.current = newChat.id;
       setActiveChatId(newChat.id);
@@ -2407,7 +2454,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       // Replay the edited user message (already the last entry in the forked
       // transcript) through the agent. forkReplay tells the server the state
       // was already truncated by the fork — no re-truncation needed.
-      return runtimeEngine.start(newChat.id, { retry: true, forkReplay: true }, model);
+      return runtimeEngine.start(newChat.id, { retry: true, forkReplay: true, mode: replayMode }, model);
     }).catch(function (err) { setError(wbcErrorText(err)); });
   }
 
@@ -2851,7 +2898,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     try {
       request = wasRunning && onGuidance
         ? onGuidance(text)
-        : (onSend ? onSend({ message: text, attachments: [], mode: "auto", command: "" }) : null);
+        : (onSend ? onSend({ message: text, attachments: [], command: "" }) : null);
     } catch (error) {
       if (!hasNativeChatOverlay) setFullscreenDraft(text);
       setFullscreenStatusRequested(false);
@@ -4630,7 +4677,9 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var workspaceContextKey = wbcWorkspaceContextKey(chatId, projectId);
   var [draft, setDraft] = useWbcState(function () { return wbcLoadDraft(chatId, draftNs); });
   var [attachments, setAttachments] = useWbcState(function () { return wbcLoadAttachments(chatId, draftNs); });
-  var [mode, setMode] = useWbcState("auto");
+  var [mode, setMode] = useWbcState(function () {
+    return wbcNormalizePermissionMode(chat && chat.permissionMode, "auto");
+  });
   var [command, setCommand] = useWbcState("");
   var [uploading, setUploading] = useWbcState(false);
   var [failedImagePreviews, setFailedImagePreviews] = useWbcState({});
@@ -4688,6 +4737,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       wbcSaveAttachments(prev, attachRef.current, draftNs);
       setDraft(wbcLoadDraft(chatId, draftNs));
       setAttachments(wbcLoadAttachments(chatId, draftNs));
+      setMode(wbcNormalizePermissionMode(chat && chat.permissionMode, "auto"));
       setFailedImagePreviews({});
       prevChatIdRef.current = chatId;
     }

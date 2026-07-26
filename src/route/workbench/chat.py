@@ -653,9 +653,7 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         wants_stream = bool(body.get("stream"))
         retry = bool(body.get("retry"))
         fork_replay = bool(body.get("forkReplay"))
-        mode = str(body.get("mode") or "auto").strip().lower()
-        if mode not in PERMISSION_MODES:
-            mode = "auto"
+        requested_mode = str(body.get("mode") or "").strip().lower()
         lang = str(body.get("lang") or "").strip().lower()
         # Persist the UI language so server-side flows (the proactive scheduler)
         # can reply in the same language even with no HTTP request to read.
@@ -683,6 +681,12 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        stored_mode = str(chat.get("permissionMode") or "").strip().lower()
+        if requested_mode:
+            mode = requested_mode if requested_mode in PERMISSION_MODES else "default"
+        else:
+            mode = stored_mode if stored_mode in PERMISSION_MODES else "default"
+        chat["permissionMode"] = mode
         project_id = str(chat.get("projectId") or "")
         project_store = await asyncio.to_thread(R._read_workbench_store)
         project = R._workbench_find_project(project_store, project_id)
@@ -1396,15 +1400,19 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
         question_id = str(body.get("question_id") or "").strip()
         answer_text = str(body.get("answer") or body.get("selected_option") or "").strip()
         from cyrene.agent.state import PERMISSION_MODES
-        mode = str(body.get("mode") or "default").strip().lower()
-        if mode not in PERMISSION_MODES:
-            mode = "default"
+        requested_mode = str(body.get("mode") or "").strip().lower()
         if not question_id or not answer_text:
             return JSONResponse({"error": "question_id and answer are required"}, status_code=400)
         payload = await asyncio.to_thread(_read_chats_store)
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        stored_mode = str(chat.get("permissionMode") or "").strip().lower()
+        if requested_mode:
+            mode = requested_mode if requested_mode in PERMISSION_MODES else "default"
+        else:
+            mode = stored_mode if stored_mode in PERMISSION_MODES else "default"
+        chat["permissionMode"] = mode
         pending = chat.get("pendingQuestion") if isinstance(chat.get("pendingQuestion"), dict) else None
         if not pending or str(pending.get("id") or "") != question_id:
             return JSONResponse({"error": "no matching pending question"}, status_code=409)

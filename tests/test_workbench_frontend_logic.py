@@ -608,7 +608,7 @@ def test_workbench_chat_supports_parallel_conversation_runtimes():
     assert "Runtimes: WorkbenchChatRuntimes" in source
     assert "var runtimeEngine = WorkbenchChatRuntimes;" in source
     assert "runtimeEngine.subscribe(function (snap) { setRuntimes(snap); })" in source
-    assert "runtimeEngine.start(chatId, input || {}, model)" in source
+    assert "runtimeEngine.start(chatId, preparedInput, model)" in source
     assert "var activeRuntime = runtimes[activeChatId] || null;" in source
     assert "if (!chatId || runtimes[chatId]) return null;" in source
     assert "otherRunning" not in source
@@ -1842,6 +1842,37 @@ def test_workbench_chat_plan_confirmation_can_continue_in_auto_mode():
     )[0]
     assert "options.map" not in plan_branch
     assert "workbenchChat.approveAuto" in i18n
+
+
+def test_workbench_permission_mode_is_preserved_across_secondary_entry_points():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'mode: input.mode || "default"' in source
+    assert "preparedInput.mode = wbcNormalizePermissionMode(" in source
+    assert "activeChat.permissionMode" in source
+    assert "var answerMode = wbcNormalizePermissionMode(" in source
+    assert "{ mode: answerMode }" in source
+    assert "var replayMode = wbcNormalizePermissionMode(" in source
+    assert "{ retry: true, forkReplay: true, mode: replayMode }" in source
+    assert 'mode: "auto", command: ""' not in source
+
+
+def test_workbench_surfaces_permission_reviews_and_describes_auto_accurately():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'event.type === "auto_review" || event.type === "permission_decision"' in source
+    assert 'kind: "permission"' in source
+    assert '"workbenchChat.mode.auto.desc": "Review permission requests automatically"' in i18n
+    assert '"workbenchChat.mode.auto.desc": "自动审核权限请求"' in i18n
 
 
 def test_workbench_attachment_preview_falls_back_without_overflowing():

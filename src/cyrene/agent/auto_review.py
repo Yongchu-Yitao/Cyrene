@@ -18,6 +18,7 @@ _REVIEW_TOOL_DEFS = [{
     "function": {
         "name": "decide",
         "description": "对该提权请求做出裁决。必须调用且只调用此工具。",
+        "strict": True,
         "parameters": {
             "type": "object",
             "properties": {
@@ -25,6 +26,7 @@ _REVIEW_TOOL_DEFS = [{
                 "rationale": {"type": "string", "description": "一句话理由（中文）。如拒绝，简述风险与更安全的替代做法。"},
             },
             "required": ["approve", "rationale"],
+            "additionalProperties": False,
         },
     },
 }]
@@ -85,8 +87,16 @@ async def review_elevation(
             args = json.loads(tc.get("function", {}).get("arguments") or "{}")
         except Exception:
             args = {}
-        approved = bool(args.get("approve"))
-        rationale = str(args.get("rationale") or "").strip()
+        if (
+            not isinstance(args, dict)
+            or set(args) != {"approve", "rationale"}
+            or type(args.get("approve")) is not bool
+            or not isinstance(args.get("rationale"), str)
+        ):
+            logger.warning("auto-review returned malformed decide() arguments; denying")
+            return (False, "审核 agent 返回了无效裁决格式，出于安全默认拒绝。")
+        approved = args["approve"]
+        rationale = args["rationale"].strip()
         return (approved, rationale or ("已批准。" if approved else "出于安全拒绝。"))
 
     logger.warning("auto-review returned no decide() call; denying by default")

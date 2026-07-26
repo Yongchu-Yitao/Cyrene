@@ -157,6 +157,21 @@ def _workspace_permission_error() -> str:
     return "Write and delete permissions are limited to the current workspace."
 
 
+def _grant_resolver_retry_for_permission(
+    permission_kind: str,
+    path_hint: str,
+) -> None:
+    """Allow only the exact resolver retry required by this approval."""
+    if not str(path_hint or "").strip():
+        return
+    from cyrene.agent.context import grant_scoped_path_access
+
+    if permission_kind == "read_elevation":
+        grant_scoped_path_access("read", path_hint)
+    elif permission_kind == "write_permission_request":
+        grant_scoped_path_access("write", path_hint)
+
+
 def _has_full_path_access() -> bool:
     from cyrene.agent.context import current_run_context
     from cyrene.runtime.settings_store import get_write_permission_mode
@@ -175,6 +190,12 @@ def _resolve_workspace_write_target(path_str: str) -> Path:
         candidate = Path(path_str)
         path = candidate if candidate.is_absolute() else active_workspace_dir() / candidate
         return path.resolve()
+    candidate = Path(path_str)
+    path = candidate if candidate.is_absolute() else active_workspace_dir() / candidate
+    resolved = path.resolve()
+    from cyrene.agent.context import consume_scoped_path_access
+    if consume_scoped_path_access("write", resolved):
+        return resolved
     try:
         return _resolve_workspace_path(path_str)
     except Exception as exc:
@@ -199,9 +220,9 @@ async def _request_scope_elevation(
 
     - ``default`` mode → creates a pending question and returns the
       ``awaiting_user`` JSON; the agent loop pauses until the user answers.
-    - ``auto`` mode → a review agent decides autonomously. Approve → sets
-      temporary full access and returns ``None``; deny → returns a denial
-      message string for the agent to see.
+    - ``auto`` mode → a review agent decides autonomously. Approve → grants
+      only the exact resolver retry (when needed) and returns ``None``; deny →
+      returns a denial message string for the agent to see.
     - ``full_access`` mode → returns ``None`` (normally short-circuited earlier).
 
     Args:
@@ -213,8 +234,9 @@ async def _request_scope_elevation(
         options: Custom options for the question UI.
     """
     from cyrene.agent.context import (
+        consume_permission_elevation,
         current_run_context,
-        grant_temporary_full_access,
+        permission_elevation_fingerprint,
         publish_runtime_event,
     )
     from cyrene.agent.session import (
@@ -235,13 +257,27 @@ async def _request_scope_elevation(
         )
 
     mode = run_context.permission_mode
+    permission_fingerprint = permission_elevation_fingerprint(
+        tool_name=tool_name,
+        permission_kind=permission_kind,
+        path_hint=path_hint,
+        operation=operation,
+        reason=reason,
+    )
+    if consume_permission_elevation(permission_fingerprint):
+        _grant_resolver_retry_for_permission(permission_kind, path_hint)
+        return None
+
     # 破坏性/不可逆操作必须由真人确认，不能被 full_access 或 auto mode 短路。
     requires_human_confirmation = permission_kind in {
         "destructive_confirmation",
         "external_upload_confirmation",
     }
-    # 完全访问模式：工具层通常已用 _temporary_full_access 短路，这里保险直接放行。
-    if mode == "full_access" and not requires_human_confirmation:
+    # Explicit full-access modes may pass ordinary permission boundaries, but
+    # never destructive or external-upload confirmation.
+    if (
+        mode == "full_access" or run_context.temporary_full_access
+    ) and not requires_human_confirmation:
         return None
     # 自动模式：审核 agent 自主裁决，从不打扰用户。
     if mode == "auto" and not requires_human_confirmation:
@@ -257,12 +293,15 @@ async def _request_scope_elevation(
             "approved": approved,
             "operation": operation,
             "tool_name": tool_name,
+            "permission_kind": permission_kind,
             "path_hint": path_hint,
+            "fingerprint": permission_fingerprint,
+            "source": "auto_reviewer",
             "rationale": rationale,
             "round_id": round_id,
         })
         if approved:
-            grant_temporary_full_access()
+            _grant_resolver_retry_for_permission(permission_kind, path_hint)
             return None
         return (
             f"⛔ 审核 agent 拒绝了此操作（{operation}）。\n"
@@ -277,6 +316,7 @@ async def _request_scope_elevation(
     effective_options = options or ["允许这次", "拒绝"]
     meta = {
         "kind": permission_kind,
+        "fingerprint": permission_fingerprint,
         "tool_name": tool_name,
         "path_hint": path_hint,
         "reason": reason,
@@ -848,6 +888,12 @@ def _resolve_tool_path(path_str: str) -> Path:
         candidate = Path(path_str)
         path = candidate if candidate.is_absolute() else active_workspace_dir() / candidate
         return path.resolve()
+    candidate = Path(path_str)
+    path = candidate if candidate.is_absolute() else active_workspace_dir() / candidate
+    resolved = path.resolve()
+    from cyrene.agent.context import consume_scoped_path_access
+    if consume_scoped_path_access("read", resolved):
+        return resolved
     return _resolve_workspace_path(path_str)
 
 
