@@ -68,7 +68,6 @@
 
         <li class="nav-section-label" data-i18n="nav.usage">使用</li>
         <li class="nav-item" data-page="usage-workbench"><a href="#" onclick="navigateTo('usage-workbench')" data-i18n="nav.usage-workbench">Workbench UI</a></li>
-        <li class="nav-item" data-page="usage-legacy"><a href="#" onclick="navigateTo('usage-legacy')" data-i18n="nav.usage-legacy">Legacy UI</a></li>
         <li class="nav-item" data-page="usage-cli"><a href="#" onclick="navigateTo('usage-cli')" data-i18n="nav.usage-cli">CLI</a></li>
 
         <li class="nav-section-label" data-i18n="nav.core-concepts">核心概念</li>
@@ -114,7 +113,7 @@
         <p>一切都在单一的 Python 进程中运行：</p>
         <ul>
           <li><strong>一个进程</strong>托管代理循环、FastAPI Web 服务器、调度器和内置搜索引擎</li>
-          <li><strong>两个 UI</strong>：以项目为中心的 <strong>Workbench</strong>（默认）和经典 <strong>Legacy Agent UI</strong></li>
+          <li><strong>一个 Workbench UI</strong>：项目中心的桌面与浏览器体验</li>
           <li><strong>任意 OpenAI 兼容 API</strong>（默认 DeepSeek；Claude、GPT、Qwen、本地模型都可以）</li>
           <li><strong>零外部依赖</strong>：没有 Docker、没有 Redis、没有向量数据库服务</li>
         </ul>
@@ -160,9 +159,8 @@
 
         <h3>界面与渠道</h3>
         <ul>
-          <li><strong>Workbench UI</strong>（默认）——项目中心化桌面体验：项目隔离、意图分流、逐步执行。每个项目独立的工作区、知识库、记忆和聊天。</li>
-          <li><strong>Legacy Agent UI</strong>——经典界面：实时聊天、Agent Flow SVG 时间线、记忆面板、设置页、实体管理、地图视图。</li>
-          <li><strong>Context Debugger</strong>——每次 LLM 调用标记 <code>_ctx</code> 来源元数据，精确追溯上下文每个块的来源。</li>
+          <li><strong>Workbench UI</strong>——项目中心化桌面体验：项目隔离、实时聊天与执行状态、Session、Browser、Knowledge、Memory、Schedule、Map 和 Settings。</li>
+          <li><strong>Context Trace</strong>——每次 LLM 调用标记 <code>_ctx</code> 来源元数据，并可通过 JSONL、API 或 CLI 精确追溯上下文来源。</li>
           <li><strong>Electron 桌面应用</strong>——CI 自动构建 macOS、Windows（x64 + ARM64）和 Linux 包。凭据存在 OS 钥匙串，浏览器工具复用 Electron 内嵌 Chromium，不携带第二套 Playwright 浏览器。</li>
           <li><strong>引导向导</strong>——首次启动自动运行，引导配置 API 密钥、模型和人格，无需手动编辑文件。</li>
           <li><strong>地图引擎</strong>——AMap / Leaflet 交互式地图，支持标注点和路线。</li>
@@ -223,7 +221,7 @@
         <p>Everything runs in a single Python process:</p>
         <ul>
           <li><strong>One process</strong> hosts the agent loop, FastAPI web server, scheduler, and bundled search engine</li>
-          <li><strong>Two UIs</strong>: project-centric <strong>Workbench</strong> (default) and classic <strong>Legacy Agent UI</strong></li>
+          <li><strong>One Workbench UI</strong>: the project-centric desktop and browser experience</li>
           <li><strong>Any OpenAI-compatible API</strong> (DeepSeek by default; Claude, GPT, Qwen, local models all work)</li>
           <li><strong>Zero external dependencies</strong>: no Docker, no Redis, no vector database</li>
         </ul>
@@ -260,9 +258,8 @@
         </ul>
         <h3>Interfaces & Channels</h3>
         <ul>
-          <li><strong>Workbench UI</strong> (default) — project-centric experience: project isolation, intent dispatch, step-by-step execution, independent workspace/knowledge/memory per project.</li>
-          <li><strong>Legacy Agent UI</strong> — classic interface with real-time chat, Agent Flow SVG timeline, memory panel, settings, entity management, and map view.</li>
-          <li><strong>Context Debugger</strong> — every LLM call is tagged with <code>_ctx</code> provenance metadata for precise context tracing.</li>
+          <li><strong>Workbench UI</strong> — project-centric experience with isolation, real-time chat and execution state, sessions, browser, knowledge, memory, schedule, maps, and settings.</li>
+          <li><strong>Context tracing</strong> — every LLM call is tagged with <code>_ctx</code> provenance metadata and can be inspected through JSONL, API, or CLI.</li>
           <li><strong>Electron desktop app</strong> — CI-built packages for macOS, Windows (x64+ARM64), Linux. OS keyring credential storage and browser tools powered by embedded Chromium without a second Playwright browser.</li>
           <li><strong>Onboarding wizard</strong> — runs on first launch, guides API key, model, and personality setup — no manual file editing.</li>
           <li><strong>Map engine</strong> — AMap / Leaflet interactive map with pins and routes.</li>
@@ -784,7 +781,6 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
       <section>
         <h2>相关文档</h2>
         <ul>
-          <li><a href="#" onclick="navigateTo('usage-legacy')">Legacy Agent UI——经典聊天界面</a></li>
           <li><a href="#" onclick="navigateTo('usage-cli')">CLI 使用——命令行和交互式终端</a></li>
         </ul>
       </section>
@@ -816,96 +812,6 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
       <section>
         <h2>Project Isolation</h2>
         <p>Each project has its own workspace path, knowledge base, memory space, and chat history — completely isolated.</p>
-      </section>
-</div>
-</article>
-
-    <!-- ============== Usage: Legacy ============== -->
-    <article class="page" id="page-usage-legacy">
-<div lang="zh">
-<div class="page-header">
-        <h1>Legacy Agent UI</h1>
-        <p class="page-subtitle">经典单代理 Web 界面，提供完整的功能面板和调试工具。</p>
-      </div>
-
-      <section>
-        <h2>启动</h2>
-
-        <h3>Release 桌面应用</h3>
-        <p>从 <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">Releases 页面</a> 下载安装包后，直接打开应用。如果你偏好经典界面，需要在应用内设置中切换，或在启动时使用 <code>--agent</code> 模式启动。</p>
-
-        <h3>源码运行</h3>
-        <div class="code-block"><pre><code>python -m cyrene --agent</code></pre></div>
-        <p>打开 <a href="http://localhost:4242">http://localhost:4242</a>。</p>
-      </section>
-
-      <section>
-        <h2>页面功能详解</h2>
-
-        <h3>聊天</h3>
-        <ul>
-          <li><strong>主面板</strong>——Markdown 渲染的消息区域，发送消息，实时查看流式响应</li>
-          <li><strong>引导（Guidance）</strong>——当代理正在执行多轮操作时，你可以向它发送引导指令，影响当前轮次的行为</li>
-          <li><strong>浏览器面板</strong>——当代理使用浏览器时自动显示实时画面</li>
-        </ul>
-
-        <h3>Agent Flow</h3>
-        <p>SVG 画布可视化代理执行的每一个步骤：LLM 调用、工具执行、子代理通信、消息路由。每个节点可点击查看详情。</p>
-
-        <h3>会话管理</h3>
-        <ul>
-          <li><strong>列表</strong>——浏览、搜索历史会话，查看消息数和 token 用量</li>
-          <li><strong>详情</strong>——查看完整消息记录、每个子代理的运行轨迹</li>
-        </ul>
-
-        <h3>记忆面板</h3>
-        <ul>
-          <li><strong>SOUL.md</strong>——浏览和在线编辑人格文档</li>
-          <li><strong>短期记忆</strong>——查看压缩后的短期记忆条目，每条带情感权重标签（正面/负面/中性）</li>
-          <li><strong>上下文</strong>——监控上下文窗口使用量</li>
-        </ul>
-
-        <h3>状态与调试</h3>
-        <ul>
-          <li><strong>指标</strong>——子代理数、会话数、记忆条目数、任务数</li>
-          <li><strong>工作者</strong>——主代理和每个子代理的运行状态</li>
-          <li><strong>服务健康</strong>——LLM 端点可用性、SOUL.md 状态、MCP 服务器连接状态</li>
-          <li><strong>Context Debugger</strong>——检查最近 LLM 调用的完整上下文溯源元数据（<code>_ctx</code>）</li>
-        </ul>
-      </section>
-
-      <section>
-        <h2>与传统聊天的区别</h2>
-        <p>相比 Workbench UI，Legacy UI 更适合：</p>
-        <ul>
-          <li>需要全面监控代理内部运行状态的场景</li>
-          <li>深入调试工具调用和 LLM 行为</li>
-          <li>不需要项目隔离的简单使用场景</li>
-        </ul>
-      </section>
-</div>
-<div lang="en">
-<div class="page-header">
-        <h1>Legacy Agent UI</h1>
-        <p class="page-subtitle">Classic single-agent web interface with comprehensive panels and debugging tools.</p>
-      </div>
-      <section>
-        <h2>Launching</h2>
-        <h3>Release Desktop App</h3>
-        <p>Download from <a href="https://github.com/Yongchu-Yitao/Cyrene/releases">GitHub Releases</a>. To use Legacy UI, launch with <code>--agent</code> mode or switch in-app settings.</p>
-        <h3>From Source</h3>
-        <div class="code-block"><pre><code>python -m cyrene --agent</code></pre></div>
-        <p>Open <a href="http://localhost:4242">http://localhost:4242</a>.</p>
-      </section>
-      <section>
-        <h2>Interface</h2>
-        <ul>
-          <li><strong>Chat</strong> — Markdown-rendered messages, live streaming, browser panel</li>
-          <li><strong>Agent Flow</strong> — SVG canvas visualizing every step of execution</li>
-          <li><strong>Sessions</strong> — browse, search, and inspect session history</li>
-          <li><strong>Memory</strong> — SOUL.md, short-term memory with valence, context usage</li>
-          <li><strong>Context Debugger</strong> — inspect provenance metadata for LLM calls</li>
-        </ul>
       </section>
 </div>
 </article>
@@ -981,7 +887,7 @@ cyrene stop</code></pre></div>
 
       <section>
         <h2>聊天的斜杠命令</h2>
-        <p>Workbench UI、Legacy UI 和交互式 CLI 都支持的斜杠命令：</p>
+        <p>Workbench UI 和交互式 CLI 支持的斜杠命令：</p>
         <div class="table-wrapper">
           <table>
             <thead><tr><th>命令</th><th>说明</th></tr></thead>
@@ -1109,58 +1015,26 @@ cyrene stop</code></pre></div>
       <section>
         <h2>项目结构</h2>
         <div class="code-block"><pre><code>src/
-├── cyrene/                           # 核心引擎
-│   ├── agent/                        # 双阶段循环、会话、轮次
-│   │   ├── agent.py                  # 主代理编排
-│   │   ├── coordinator.py            # 阶段路由、上下文组装
-│   │   ├── session.py                # 会话持久化
-│   │   ├── round.py                  # 工具轮次生命周期
-│   │   ├── prompts.py                # 系统提示和阶段提示
-│   │   └── deep_reflection.py        # 深度反思
-│   ├── tooling/                      # 稳定工具控制平面
-│   │   ├── types.py                  # ToolSpec、快照、执行上下文
-│   │   ├── catalog.py                # 原生 + MCP capability catalog
-│   │   ├── snapshot.py               # 单次运行固定快照
-│   │   ├── wire.py                   # 确定性 main/subagent bundles
-│   │   ├── packs.py                  # 12 个渐进工具模块
-│   │   ├── gateway.py                # discover / describe / invoke
-│   │   ├── executor.py               # 具体 handler 执行
-│   │   ├── validation.py             # 参数验证
-│   │   ├── policy/                   # actor、路径、Shell、审批策略
-│   │   └── adapters/                 # MCP、learned-skill adapters
-│   ├── tool_impl/                    # 按领域组织原生实现
-│   │   ├── control/ core/ code/ browser/ desktop/
-│   │   ├── memory/ knowledge/ task/ entity/ map/
-│   │   └── subagent/ delivery/ skills/
-│   ├── knowledge/                    # 文档摄取、嵌入、检索
-│   ├── channels/                     # Telegram、WeChat Bot
-│   ├── modules/                      # 深度研究等管道
-│   ├── tools.py                      # 薄公共门面
-│   ├── mcp_manager.py                # MCP 服务器生命周期
-│   ├── search.py                     # 搜索管道
-│   ├── searxng_manager.py            # SimpleXNG 进程管理
-│   ├── scheduler.py                  # 心跳、cron、抽奖、管家
-│   ├── soul.py                       # SOUL.md 读写
-│   ├── short_term.py                 # 短期记忆压缩
-│   ├── memory.py                     # 记忆上下文组装
-│   ├── shells.py                     # 持久 Shell 会话
-│   ├── browser.py                    # 持久浏览器
-│   ├── cc_bridge.py / cc_terminal.py # Claude Code 集成
-│   ├── behavior_learning.py          # 行为模式学习
-│   ├── skills_registry.py            # 技能存储
-│   ├── context_trace.py              # 上下文溯源标记
-│   └── context_debug.py              # 调试日志查看器
-├── webui/                            # FastAPI 后端 + SPA
-│   ├── server.py                     # FastAPI 应用工厂
-│   ├── routes.py                     # REST API + SSE
-│   ├── routes_knowledge.py           # 知识库 API
-│   ├── routes_workbench.py           # Workbench API
-│   └── static/app/                   # JSX 前端组件
-├── workbench-webui/                  # Workbench 前端资源
-├── tests/                            # 测试套件
-├── data/                             # 运行时数据、调试日志
-├── workspace/                        # SOUL.md、模式、会话
-└── store/                            # SQLite 数据库</code></pre></div>
+├── cyrene/                           # 核心领域与 Runtime
+│   ├── agent/ workbench/ model_runtime/ learning/
+│   ├── runtime/ observability/ knowledge/ channels/
+│   ├── tooling/                      # Tool 控制平面、Wire 与 Policy
+│   └── tool_impl/                    # 按领域组织的原生 Tool 实现
+├── route/                            # 全部 FastAPI HTTP/WebSocket Adapter
+│   ├── registry.py                   # 唯一路由组合根
+│   ├── agent/ workbench/ system/
+│   ├── settings/ code/ maps/
+│   └── channels/
+├── webui/                            # App Lifecycle、Auth 与唯一 Workbench SPA
+│   ├── server.py                     # FastAPI 应用工厂，安装 route.registry
+│   ├── frontend/                     # 唯一 React/JSX 源码根
+│   │   ├── platform/                 # Bootstrap、API、SSE、Data、Readiness
+│   │   └── shared/                   # Theme、Feedback、Markdown、Browser、PDF
+│   └── static/app/                   # 唯一生成和打包输出根
+├── tests/
+├── data/
+├── workspace/
+└── store/</code></pre></div>
       </section>
 
       <section>
@@ -1180,6 +1054,10 @@ cyrene stop</code></pre></div>
       <section>
         <h2>Two-Phase Decision Loop</h2>
         <p>Both ordinary phases receive the same deterministic wire bundle for the current package settings. Runtime policy restricts Phase 1 to <code>use_tools</code>, <code>ask_user</code>, and <code>quit</code>; Phase 2 keeps the same schemas and progressively discovers concrete capabilities through enabled gateways. Disabling a package omits its schema and package-specific prompt instructions, intentionally starting a new cache prefix. Deep Research keeps its specialized flow.</p>
+      </section>
+      <section>
+        <h2>Project Structure</h2>
+        <p>Domain code lives under <code>src/cyrene</code>; every FastAPI HTTP/WebSocket adapter is composed from <code>src/route/registry.py</code>. Cyrene ships one Workbench front-end: <code>src/webui/frontend</code> is the sole React/JSX source root and <code>src/webui/static/app</code> is the sole generated and packaged web output root. Shared theme, feedback, Markdown, browser, diff, search, PDF, data, SSE, and readiness capabilities are owned by the explicit <code>platform/</code> and <code>shared/</code> layers.</p>
       </section>
       <section>
         <h2>Security</h2>
@@ -1868,7 +1746,7 @@ python -m cyrene --workbench --verbose</code></pre></div>
 {"type": "tool_call", "caller": "subagent_poet", "tool": "send_agent_message",
  "args": {...}, "result": "Message sent.", "duration_ms": 150.2}</code></pre></div>
 
-        <h3>Context Debugger</h3>
+        <h3>Context Trace</h3>
         <p>每条 LLM 调用都带有 <code>_ctx</code> 元数据，标记每个上下文块的来源（系统提示、SOUL.md、短期记忆、历史消息、工具结果等）。调试方式：</p>
         <div class="code-block"><pre><code># 通过 API
 curl http://localhost:4242/api/context-debug/events?limit=10
@@ -1877,11 +1755,8 @@ curl http://localhost:4242/api/context-debug/events/evt_3b22f9a5c0cb
 # 通过 CLI
 cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb</code></pre></div>
 
-        <h3>Web UI 调试</h3>
-        <ul>
-          <li><strong>状态页面</strong>——显示实时调试日志、系统指标、工作线程状态、服务健康</li>
-          <li><strong>Agent Flow 页面</strong>——SVG 流程图可视化每一次 LLM 调用和工具执行</li>
-        </ul>
+        <h3>Runtime 与 Workbench 检查</h3>
+        <p><code>cyrene status</code> 显示 Daemon Health 与 Metric。Workbench Chat/Task Detail 显示实时 Agent、Tool、Subagent、Permission 和 Browser 状态；持久 Round Trace 使用 <code>cyrene flow</code> 或 Event API。</p>
       </section>
 
       <section>
@@ -1941,7 +1816,7 @@ uv run pytest -v --tb=long</code></pre></div>
             <thead><tr><th>项目</th><th>详情</th></tr></thead>
             <tbody>
               <tr><td>CI 工作流</td><td><code>.github/workflows/release.yml</code></td></tr>
-              <tr><td>触发方式</td><td>推送 <code>v*</code> 标签，或手动触发（选择默认 UI：workbench/agent）</td></tr>
+              <tr><td>触发方式</td><td>推送 <code>v*</code> 标签，或手动触发；兼容参数 <code>ui_mode=agent</code> 会与 <code>workbench</code> 一样规范化为唯一的 Workbench UI</td></tr>
               <tr><td>构建产物</td><td>PyInstaller + Electron，打包 macOS、Windows（x64/ARM64）、Linux</td></tr>
               <tr><td>冒烟测试</td><td>打包应用运行 <code>--smoke-test</code></td></tr>
             </tbody>
@@ -1971,12 +1846,13 @@ python -m cyrene --workbench --verbose</code></pre></div>
 {"type": "tool_call", "caller": "subagent_poet", "tool": "send_agent_message",
  "args": {...}, "result": "Message sent.", "duration_ms": 150.2}</code></pre></div>
 
-        <h3>Context Debugger</h3>
-        <p>Every LLM call is tagged with <code>_ctx</code> provenance metadata showing where each context block came from (system prompt, SOUL.md, short-term memory, history, tool results). View via the Web UI Context Debugger page or API:</p>
+        <h3>Context tracing</h3>
+        <p>Every LLM call is tagged with <code>_ctx</code> provenance metadata showing where each context block came from (system prompt, SOUL.md, short-term memory, history, tool results). Context tracing intentionally has no Workbench page; use the API, CLI, or canonical context-debug module:</p>
         <div class="code-block"><pre><code>curl http://localhost:4242/api/context-debug/events?limit=10
 curl http://localhost:4242/api/context-debug/events/evt_3b22f9a5c0cb</code></pre></div>
         <p>Via CLI:</p>
-        <div class="code-block"><pre><code>cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb</code></pre></div>
+        <div class="code-block"><pre><code>cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb
+python -m cyrene.observability.context_debug data/debug_*.jsonl --call 1</code></pre></div>
       </section>
       <section>
         <h2>Testing</h2>

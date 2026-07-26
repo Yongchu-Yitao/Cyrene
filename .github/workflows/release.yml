@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       ui_mode:
-        description: "Default UI to bundle (workbench = new UI, agent = classic UI)"
+        description: "Compatibility build mode (agent is normalized to the sole Workbench UI)"
         required: false
         default: "workbench"
         type: choice

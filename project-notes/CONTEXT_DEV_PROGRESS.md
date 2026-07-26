@@ -7,11 +7,20 @@ Updated: 2026-07-26
 
 Branch: `feature/project-literature-library`
 
-Baseline commit: `5e9a0044`
+Package-boundary baseline: `5e9a0044`
+
+UI-consolidation worktree baseline: `17914e697af41c13a3c5da0092f69aa9906644af`
 
 This file records the current development checkpoint. Older Windows/context
 debugger command transcripts have been removed because they referenced modules
 that now live under the canonical domain packages.
+
+The completed refactor records are
+[the architecture handoff](COMPLETED-refactor-handoff.md),
+[the WebUI consolidation plan](COMPLETED-webui-workbench-consolidation-refactor-plan.en.md),
+and [the implementation log](COMPLETED-webui-consolidation-implementation-log.md).
+This progress file remains unprefixed because it is a living status index, not
+a closed refactor record.
 
 ## Current Outcome
 
@@ -23,6 +32,9 @@ level:
   `tooling/`, and `tool_impl/`;
 - FastAPI adapters live under `src/route/`;
 - Web application lifecycle and static hosting live under `src/webui/`;
+- `src/webui/frontend` is the sole Workbench source root and
+  `src/webui/static/app` is the sole generated output root;
+- the classic shell, dual static mount, and `--agent` UI selector are removed;
 - historical Python imports resolve lazily to canonical modules;
 - the Electron development flow retains `src/cyrene/local_cli.py` as its only
   physical compatibility launcher;
@@ -40,9 +52,9 @@ targeted tests instead of being assumed complete.
 | Tag LLM context sources with `_ctx` provenance | Implemented, with an ongoing coverage invariant | `cyrene.observability.context_trace`; agent, coordinator, reflection, task-context, and model runtime call sites |
 | Strip internal metadata before provider calls and persistence | Implemented | `model_runtime.client`, `observability.debug`, and `agent.session` |
 | Persist a per-call context trace | Implemented | verbose JSONL events and `context_trace` summaries |
-| Context Debugger UI | Implemented | `src/webui/static/app/context-debugger.jsx` and compiled asset |
+| Context Debugger UI | Intentionally not part of Workbench | Confirmed during the final consolidation handoff review; trace/API/CLI support remains |
 | `GET /api/context-debug/events` and event detail | Implemented | `src/route/system/events.py` |
-| Read in-memory and persisted debug events | Implemented | route/event log readers and debugger UI |
+| Read in-memory and persisted debug events | Implemented | route/event log readers, `cyrene flow`, and `cyrene.observability.context_debug` |
 | Use built-in SimpleXNG instead of scraper fallbacks | Implemented | `cyrene.tooling.backends.search` only calls the SimpleXNG backend |
 | Prevent loopback search traffic from using environment proxies | Implemented | `trust_env=False` plus merged `NO_PROXY/no_proxy` |
 | Generate and pass SimpleXNG settings | Implemented | `searxng_manager` writes the settings path and child environment |
@@ -122,11 +134,11 @@ optional source maps are development noise, not backend startup failures.
 
 ## Validation Baseline
 
-Validated on macOS ARM64 with Python 3.12:
+Validated on macOS ARM64 with Python 3.13.12:
 
 | Check | Result |
 |---|---|
-| Current pytest suite | 1,381 passed |
+| Current pytest suite | 1,390 passed |
 | Previous-commit functional tests | 1,286 passed |
 | Excluded previous test | one static `pattern.py` source-text assertion |
 | Electron App Use Node tests | 44 passed |

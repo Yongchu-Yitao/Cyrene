@@ -30,7 +30,7 @@ Scheduler、SimpleXNG 搜索、Memory 和 Knowledge 都运行在同一个 Python
 进程中，以 SQLite 和本地文件持久化。
 
 - 一个进程承载 Agent、Web Server、Scheduler 和内置搜索。
-- 默认提供项目中心的 Workbench，同时保留 Classic Agent UI。
+- 只提供项目中心的 Workbench Web UI。
 - 默认 DeepSeek，也可使用 GPT、Claude、Qwen 或本地兼容模型。
 - 正式领域包分离 Agent、Workbench、Model Runtime、Learning、Lifecycle、
   Observability、Knowledge、Channels 和 Tooling，并兼容历史 Python Import。
@@ -66,10 +66,10 @@ Scheduler、SimpleXNG 搜索、Memory 和 Knowledge 都运行在同一个 Python
 ### 界面与 Channel
 
 - **Workbench**：项目 Dashboard、Schedule、Knowledge、Memory、Library、
-  Chat 和可跟踪 Task Execution。
-- **Classic Agent UI**：Chat、Agent Flow、Session、Memory、Status、Setting。
-- **Context Debugger**：检查每次 LLM 调用实际收到的 Prompt、Memory、History
-  和 Tool。
+  Chat、Session、Browser、Settings 和可跟踪 Task Execution。
+- **Context Trace**：通过 verbose JSONL、Context Debug API 或
+  `cyrene flow` 检查每次 LLM 调用实际收到的 Prompt、Memory、History 和
+  Tool。
 - **Electron**：macOS、Windows、Linux 桌面构建，凭据保存在 OS Keyring。
 - **Telegram / WeChat**：Telegram 稳定，WeChat 为 Alpha。
 - **Map**：AMap/Leaflet 地图和地点 Tool。
@@ -109,7 +109,6 @@ cd ../..
 
 # 前台运行
 python -m cyrene --workbench
-python -m cyrene --agent
 
 # 或后台 daemon
 cyrene start
@@ -169,9 +168,10 @@ Windows 源码安装见
 - [开发](docs/development.zh-CN.md)
 - [Browser Live View](docs/browser-live-view.zh-CN.md)
 - [变更记录](CHANGELOG.md)
-- [当前架构 Handoff](project-notes/refactor-handoff.zh-CN.md)
+- [已完成的架构 Handoff](project-notes/COMPLETED-refactor-handoff.zh-CN.md)
 - [Research Workbench 路线图](project-notes/research-workbench-roadmap.md)
-- [WebUI / Workbench UI 合并重构计划](project-notes/webui-workbench-consolidation-refactor-plan.md)（待实施）
+- [已完成的 WebUI / Workbench UI 合并重构计划](project-notes/COMPLETED-webui-workbench-consolidation-refactor-plan.md)
+- [已完成的 WebUI / Workbench UI 合并实施记录](project-notes/COMPLETED-webui-consolidation-implementation-log.md)
 - [当前开发进度](project-notes/CONTEXT_DEV_PROGRESS.zh-CN.md)
 - [设计 QA](project-notes/design-qa.zh-CN.md)
 - [浏览器浮窗动态避让可行性研究](project-notes/browser-dynamic-layout-feasibility.md)

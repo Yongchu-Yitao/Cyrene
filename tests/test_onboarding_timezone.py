@@ -6,10 +6,10 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_onboarding_timezone_row_uses_wrapping_long_value_layout():
-    source = (ROOT / "src" / "workbench-webui" / "workbench-welcome.jsx").read_text(
+    source = (ROOT / "src" / "webui" / "frontend" / "workbench-welcome.jsx").read_text(
         encoding="utf-8"
     )
-    styles = (ROOT / "src" / "workbench-webui" / "workbench.css").read_text(
+    styles = (ROOT / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
 
@@ -33,7 +33,7 @@ def test_ui_timezone_resolver_accepts_browser_iana_timezone():
 
 
 def test_ui_bootstrap_passes_browser_timezone_to_backend():
-    source = (ROOT / "src" / "webui" / "static" / "app" / "data.jsx").read_text(
+    source = (ROOT / "src" / "webui" / "frontend" / "platform" / "data-store.jsx").read_text(
         encoding="utf-8"
     )
 

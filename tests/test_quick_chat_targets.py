@@ -170,18 +170,17 @@ def test_targets_limit_caps_results(client):
     assert [t["chatId"] for t in payload["targets"]] == ["chat_alpha"]
 
 
-def test_quick_chat_surface_renders_even_in_legacy_ui_mode(targets_env):
-    # The global shortcut is registered regardless of UI mode, so the quick-chat
-    # surface must render in legacy/agent mode too — the spa root must not strip
-    # ?surface= by redirecting it to the legacy shell.
+def test_historical_ui_mode_is_normalized_to_workbench(targets_env):
+    # Historical callers may still pass a legacy ui_mode value to create_app,
+    # but the sole shell and Quick Chat surface must both render Workbench.
     app = FastAPI()
     app.state.ui_mode = "legacy"
     register_routes(app, bot=None, db_path=targets_env["db_path"])
     client = TestClient(app)
 
     plain = client.get("/", follow_redirects=False)
-    assert plain.status_code in (307, 308)
-    assert "shell=legacy" in plain.headers.get("location", "")
+    assert plain.status_code == 200
+    assert "shell=legacy" not in plain.headers.get("location", "")
 
     surfaced = client.get("/?surface=quick-chat", follow_redirects=False)
     assert surfaced.status_code == 200

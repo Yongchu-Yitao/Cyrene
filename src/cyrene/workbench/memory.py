@@ -1,14 +1,13 @@
-"""Workspace-scoped memory API for the new Workbench UI.
+"""Workspace-scoped memory API for the Workbench UI.
 
-This module is intentionally INDEPENDENT from the legacy memory page
-(``/api/memory`` in ``route/memory.py`` + ``compiled/memory.js``), which the old
-``--agent`` UI uses. It exposes a parallel set of endpoints under
-``/api/workbench/memory/*`` so the two UIs never share request code.
+This module is intentionally independent from the historical global memory
+API, which remains available for API and stored-data compatibility. It exposes
+project-scoped endpoints under ``/api/workbench/memory/*``.
 
 Per-project isolation: every request carries a ``workspace`` query param
 (the Workbench project id). It resolves to its own SQLite document, so each
 project owns a separate memory store. A missing/blank workspace falls back to
-an isolated ``default`` document; it never aliases legacy ``short_term.json``.
+an isolated ``default`` document; it never aliases historical ``short_term.json``.
 Cross-workspace memory is intentionally NOT implemented yet.
 
 Each memory item is a structured entry adapted into the rich model the

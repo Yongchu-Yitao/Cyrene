@@ -132,12 +132,14 @@ Create cron, interval, or one-shot tasks with `task.schedule` through
 
 ### Web UI
 
-Cyrene ships with two web front-ends:
+Cyrene ships one Workbench front-end. It provides the project-centric
+dashboard, Chat and live execution state, Schedule, Knowledge/Library, Memory,
+Search, Browser/PDF/Diff views, settings, onboarding, and Quick Chat. The source
+lives under `src/webui/frontend`; the only generated web output root is
+`src/webui/static/app`.
 
-- **Workbench UI** (default) — project-centric dashboard with Projects, Schedule, Knowledge, Memory, Chat, Model settings, and Help.
-- **Legacy Agent UI** — real-time chat with Markdown rendering, SSE event stream, Agent Flow SVG timeline, Sessions, Memory pipeline, Status, Settings, Evolution, Tasks, Knowledge, Entities, Map, Browser live view, and Claude Code terminal panel.
-
-Both UIs bind to `127.0.0.1` and are served by the same FastAPI backend. The desktop/Electron build adds local-auth middleware backed by the OS keyring.
+The Web UI binds to `127.0.0.1` and is served by the FastAPI backend. The
+desktop/Electron build adds local-auth middleware backed by the OS keyring.
 
 Desktop browser tools use Electron's embedded Chromium through a token-authenticated
 loopback RPC bridge, and the visible `WebContentsView` shares the same persistent
@@ -149,9 +151,15 @@ an optional extra, with text-only `httpx` navigation as the final fallback.
 
 Built-in search uses [SimpleXNG](https://github.com/jlevy/simplexng) — no Docker required. The manager auto-generates `data/simplexng_settings.yml`, auto-starts on port 8888, and handles proxy discovery. The deep research pipeline uses query generation → parallel search → filtering → synthesis.
 
-### Context Debugger
+### Context tracing
 
-Every LLM call is tagged with provenance metadata (`_ctx`) describing where each context block came from (system prompt, SOUL.md, short-term memory, history, tool results, etc.). With `--verbose`, these traces are written to `data/debug_*.jsonl` and exposed via `GET /api/context-debug/events`. The Context Debugger page lets you inspect exactly what context was sent to any call.
+Every LLM call is tagged with provenance metadata (`_ctx`) describing where
+each context block came from (system prompt, SOUL.md, short-term memory,
+history, tool results, and so on). With `--verbose`, these traces are written
+to `data/debug_*.jsonl` and exposed through
+`GET /api/context-debug/events`, `cyrene flow`, and the canonical
+`cyrene.observability.context_debug` module. Context tracing intentionally has
+no Workbench page.
 
 ### CLI
 
@@ -201,8 +209,10 @@ src/
 │   ├── server.py                    # FastAPI app factory; installs route.registry
 │   ├── workbench_*.py               # Background managers and UI support services
 │   ├── auth.py                      # Local auth middleware
-│   └── static/app/                  # JSX front-end components
-├── workbench-webui/                 # Workbench UI front-end assets
+│   ├── frontend/                    # Sole React/JSX source root
+│   │   ├── platform/                # Bootstrap, API, SSE, data, readiness
+│   │   └── shared/                  # Shared UI capabilities
+│   └── static/app/                  # Sole generated/bundled output root
 ├── tests/                           # Test suite
 ├── data/                            # Runtime state, debug logs, uploads
 ├── workspace/                       # SOUL.md, patterns, conversations

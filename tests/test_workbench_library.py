@@ -520,18 +520,21 @@ def test_bibliography_parsers_and_upload_contract(monkeypatch, library_db):
 
 def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-library.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(
         encoding="utf-8"
     )
-    shell = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(
+    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
         encoding="utf-8"
     )
-    shell_styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+    shell_styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
-    styles = (root / "src" / "workbench-webui" / "workbench-library.css").read_text(
+    styles = (root / "src" / "webui" / "frontend" / "workbench-library.css").read_text(
         encoding="utf-8"
     )
+    markdown_renderer = (
+        root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx"
+    ).read_text(encoding="utf-8")
 
     assert 'var workspace = props.project && props.project.id' in source
     assert 'query.set("workspace", workspace)' in source
@@ -624,8 +627,8 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert 'h("video", { src: props.rawUrl, controls: true' in source
     assert 'h("audio", { src: props.rawUrl, controls: true' in source
     assert "function LibraryPdfPreview" in source
-    assert "window.pdfjsSetupViewer(container)" in source
-    assert "window.pdfjsLoadPdf(props.url, viewer, abortLoader.signal)" in source
+    assert "pdf.setupViewer(container)" in source
+    assert "pdf.loadPdf(props.url, viewer, abortLoader.signal)" in source
     assert ".wb-lib-pdf-preview" in styles
     assert 'rightTab === "content" && selectedId' in source
     assert "markSelectedRead(selectedId)" in source
@@ -634,7 +637,9 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert "暂无可显示内容。" in source
     assert ".wb-lib-media-preview" in styles
     assert "max-height: calc(100vh - 210px)" in styles
-    assert "window.DOMPurify.sanitize(window.marked.parse" in source
+    assert 'window.CyreneUI.require("markdown").render' in source
+    assert "root.marked.parse(source)" in markdown_renderer
+    assert "root.DOMPurify.sanitize" in markdown_renderer
     assert 'className: "wb-lib-markdown"' in source
     assert ".wb-lib-markdown h1" in styles
     assert "renderSafeHtmlDocument" in source

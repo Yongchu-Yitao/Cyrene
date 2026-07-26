@@ -1,3 +1,3 @@
 # Generated at build time by build/build.py — do not edit manually.
-# Committed default is "workbench"; overwritten per-build via --ui-mode flag.
+# Historical build UI modes are normalized to Workbench.
 DEFAULT_UI_MODE: str = "workbench"

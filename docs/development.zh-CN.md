@@ -21,10 +21,9 @@ python -m cyrene --workbench --verbose
  "messages": [], "response": {}, "duration_ms": 423.0}
 ```
 
-### Context Debugger
+### Context Trace
 
-`_ctx` Metadata 描述每个 Context Block 的来源。可从 Web UI Context
-Debugger 或 API 查看：
+`_ctx` Metadata 描述每个 Context Block 的来源，可从 API 查看：
 
 ```bash
 curl http://localhost:4242/api/context-debug/events?limit=10
@@ -37,6 +36,9 @@ CLI：
 cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb
 ```
 
+classic UI 合并完成后，Context Trace 不再提供 Workbench 页面；请使用 API、
+CLI 或 `python -m cyrene.observability.context_debug`。
+
 历史 Event API 仍可用：
 
 ```bash
@@ -44,8 +46,9 @@ curl http://localhost:4242/api/events/list
 curl http://localhost:4242/api/events/evt_3b22f9a5c0cb
 ```
 
-Status 页面显示 Debug Log、System Metric、Worker 和 Service Health；
-Agent Flow 页面展示 LLM/Tool/Subagent 执行时间线。
+`cyrene status` 显示 Daemon Health 与 Metric。Workbench Chat/Task Detail
+展示实时 Agent、Tool、Subagent、Permission 和 Browser 状态；持久 Round
+Trace 通过 `cyrene flow` 与 Event API 检查。
 
 ## 测试
 
@@ -140,7 +143,8 @@ PyInstaller + Electron：
 - macOS；
 - Windows x64/ARM64；
 - Linux；
-- 可选择默认 Workbench 或 Agent UI；
+- 手工触发仍可传入兼容 `ui_mode` 值 `workbench` 或历史 `agent`，但构建会把
+  两者都规范化为唯一的 Workbench UI，不再生成第二套 Agent UI；
 - 执行冻结产物 `--smoke-test`。
 
 冻结 Smoke 会导入关键编译依赖和全部历史模块 Alias。目前没有常规 PR Test

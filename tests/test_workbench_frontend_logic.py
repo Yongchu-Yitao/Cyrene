@@ -5,7 +5,7 @@ from pathlib import Path
 
 def test_global_search_times_out_and_ignores_stale_requests():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "static" / "app" / "search.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "shared" / "search" / "overlay.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -19,10 +19,10 @@ def test_global_search_times_out_and_ignores_stale_requests():
 
 def test_new_workbench_chat_reuses_create_response_without_refetching():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    shell = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(
+    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -36,7 +36,7 @@ def test_new_workbench_chat_reuses_create_response_without_refetching():
 
 def test_workbench_chat_restores_project_cache_before_background_refresh():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -49,10 +49,10 @@ def test_workbench_chat_restores_project_cache_before_background_refresh():
 
 def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
 
@@ -70,7 +70,7 @@ def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():
     assert "var contentPreview = wbcNavigationPreview(msg.content || \"\");" in source
     assert "var attachmentPreview = attachmentTypes.slice(0, 2).join(\" · \");" in source
     assert "contentPreview ? prefix + \": \" + preview : preview" in source
-    assert '"workbenchChat.attachmentType.image": "图片"' in (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    assert '"workbenchChat.attachmentType.image": "图片"' in (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
     assert ".wbc-conversation-nav" in styles
     assert ".wbc-conversation-nav:hover .wbc-conversation-nav-panel" in styles
     assert ".wbc-conversation-nav-list" in styles
@@ -79,10 +79,10 @@ def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():
 
 def test_maximized_browser_has_compact_agent_chat_with_transient_status():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
 
@@ -138,11 +138,14 @@ def test_electron_browser_chat_overlay_floats_above_native_page():
 
 def _run_workbench_model_js(expression: str):
     root = Path(__file__).resolve().parent.parent
-    model_path = root / "src" / "workbench-webui" / "workbench-model.jsx"
+    runtime_path = root / "src" / "webui" / "frontend" / "platform" / "runtime.jsx"
+    model_path = root / "src" / "webui" / "frontend" / "workbench-model.jsx"
     script = f"""
 const fs = require("fs");
 global.window = {{}};
+eval(fs.readFileSync({json.dumps(str(runtime_path))}, "utf8"));
 eval(fs.readFileSync({json.dumps(str(model_path))}, "utf8"));
+window.WorkbenchModel = window.CyreneUI.require("model");
 const result = ({expression});
 process.stdout.write(JSON.stringify(result));
 """
@@ -152,7 +155,8 @@ process.stdout.write(JSON.stringify(result));
 
 def _run_workbench_i18n_js(expression: str):
     root = Path(__file__).resolve().parent.parent
-    i18n_path = root / "src" / "workbench-webui" / "workbench-i18n.jsx"
+    runtime_path = root / "src" / "webui" / "frontend" / "platform" / "runtime.jsx"
+    i18n_path = root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
     script = f"""
 const fs = require("fs");
 global.window = {{}};
@@ -160,7 +164,9 @@ global.localStorage = {{ getItem: () => "", setItem: () => {{}} }};
 global.navigator = {{ language: "zh-CN" }};
 global.document = {{ documentElement: {{ dataset: {{}} }} }};
 global.React = {{ useState: () => [0, () => {{}}], useEffect: () => {{}} }};
+eval(fs.readFileSync({json.dumps(str(runtime_path))}, "utf8"));
 eval(fs.readFileSync({json.dumps(str(i18n_path))}, "utf8"));
+window.WorkbenchI18n = window.CyreneUI.require("i18n");
 window.WorkbenchI18n.setLang("zh");
 const result = ({expression});
 process.stdout.write(JSON.stringify(result));
@@ -171,8 +177,9 @@ process.stdout.write(JSON.stringify(result));
 
 def _run_workbench_trace_i18n_js(expression: str):
     root = Path(__file__).resolve().parent.parent
-    i18n_path = root / "src" / "workbench-webui" / "workbench-i18n.jsx"
-    chat_source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    runtime_path = root / "src" / "webui" / "frontend" / "platform" / "runtime.jsx"
+    i18n_path = root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
+    chat_source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
     helper_source = "function wbcT(" + chat_source.split(
@@ -185,8 +192,10 @@ global.localStorage = {{ getItem: () => "", setItem: () => {{}} }};
 global.navigator = {{ language: "zh-CN" }};
 global.document = {{ documentElement: {{ dataset: {{}} }} }};
 global.React = {{ useState: () => [0, () => {{}}], useEffect: () => {{}} }};
+eval(fs.readFileSync({json.dumps(str(runtime_path))}, "utf8"));
 eval(fs.readFileSync({json.dumps(str(i18n_path))}, "utf8"));
 eval({json.dumps(helper_source)});
+window.WorkbenchI18n = window.CyreneUI.require("i18n");
 window.WorkbenchI18n.setLang("zh");
 const result = ({expression});
 process.stdout.write(JSON.stringify(result));
@@ -197,21 +206,24 @@ process.stdout.write(JSON.stringify(result));
 
 def _run_workbench_runtime_js(expression: str):
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
     args_preview_source = "function wbcToolArgsPreview(" + source.split(
         "function wbcToolArgsPreview(", 1
     )[1].split("function wbcThinkingPhrases", 1)[0]
     runtime_source = source.split(
-        "var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {", 1
+        "var WorkbenchChatRuntimes = (function () {", 1
     )[1].split("// Page", 1)[0]
-    runtime_source = (
-        "var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {"
-        + runtime_source
-    )
+    runtime_source = "var WorkbenchChatRuntimes = (function () {" + runtime_source
     script = f"""
-global.window = {{ __sseHandlers: {{ add: (handler) => {{ global.__wbcSseHandler = handler; }} }} }};
+global.window = {{
+  CyreneUI: {{
+    require: () => ({{
+      subscribe: (handler) => {{ global.__wbcSseHandler = handler; return () => {{}}; }}
+    }})
+  }}
+}};
 function wbcT(_key, fallback) {{ return fallback; }}
 function wbcSubagentStatusText(status) {{ return String(status || ""); }}
 eval({json.dumps(args_preview_source)});
@@ -225,7 +237,7 @@ process.stdout.write(JSON.stringify(result));
 
 def _run_workbench_timeline_js(expression: str):
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
     timeline_source = "function wbcConfirmOptimisticMessage(" + source.split(
@@ -420,8 +432,8 @@ def test_workbench_dependency_helpers_preserve_visible_order_and_block_unmet_ste
 
 def test_workbench_plan_ui_uses_step_ids_and_operation_endpoint():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
-    model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
 
     assert "function markStepById" in model
     assert '"/plan"' in model
@@ -434,7 +446,7 @@ def test_workbench_plan_ui_uses_step_ids_and_operation_endpoint():
 
 def test_workbench_keeps_live_subagent_logs_across_silent_refreshes():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
 
     assert 'data.type === "subagent_update"' in source
     assert 'session_id = str(entry.get("session_id") or "")' in (
@@ -446,8 +458,8 @@ def test_workbench_keeps_live_subagent_logs_across_silent_refreshes():
 
 def test_workbench_uses_light_project_payload_and_lazy_session_detail():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
-    model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
 
     assert 'apiJson("/api/projects?detail=summary")' in model
     assert "function fetchSession(sessionId)" in model
@@ -460,9 +472,9 @@ def test_workbench_uses_light_project_payload_and_lazy_session_detail():
 
 def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
     root = Path(__file__).resolve().parent.parent
-    shell = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
-    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    knowledge = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    knowledge = (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
 
     assert "mountedPages" in shell
     assert "var WorkbenchStableSurface = React.memo(" in shell
@@ -482,7 +494,7 @@ def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
 
 def test_workbench_task_controller_uses_current_session_from_returned_store():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
     controller = source.split("function useTaskController", 1)[1].split("function TaskPlanList", 1)[0]
 
     assert "function sessionFromStore" in controller
@@ -496,9 +508,9 @@ def test_workbench_task_controller_uses_current_session_from_returned_store():
 
 def test_workbench_memory_skill_learning_selects_tool_chains():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
-    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
     routes = (root / "src" / "route" / "learning.py").read_text(encoding="utf-8")
     pattern = (
         root / "src" / "cyrene" / "learning" / "facade.py"
@@ -586,14 +598,15 @@ def test_workbench_chat_overview_i18n_has_zh_labels():
 
 def test_workbench_chat_supports_parallel_conversation_runtimes():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
-    assert "var WorkbenchChatRuntimes = window.WorkbenchChatRuntimes || (function () {" in source
+    assert "var WorkbenchChatRuntimes = (function () {" in source
     assert "var runtimes = {};" in source
     assert "var aborts = {};" in source
-    assert "window.WorkbenchChatRuntimes = WorkbenchChatRuntimes;" in source
-    assert "var runtimeEngine = window.WorkbenchChatRuntimes;" in source
+    assert 'window.CyreneUI.chat = window.CyreneUI.register("chat", {' in source
+    assert "Runtimes: WorkbenchChatRuntimes" in source
+    assert "var runtimeEngine = WorkbenchChatRuntimes;" in source
     assert "runtimeEngine.subscribe(function (snap) { setRuntimes(snap); })" in source
     assert "runtimeEngine.start(chatId, input || {}, model)" in source
     assert "var activeRuntime = runtimes[activeChatId] || null;" in source
@@ -605,11 +618,11 @@ def test_workbench_chat_supports_parallel_conversation_runtimes():
 
 def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
     quick_source = (
-        root / "src" / "workbench-webui" / "workbench-quick-chat.jsx"
+        root / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx"
     ).read_text(encoding="utf-8")
 
     start_block = source.split("function start(chatId, input, model)", 1)[1].split(
@@ -681,8 +694,8 @@ def test_workbench_chat_renders_new_user_turn_before_live_thinking_card():
 
 def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
     assert "browserActiveByChat" in source
     assert 'event.type === "browser_frame" || event.type === "browser_takeover_request"' in source
@@ -735,8 +748,8 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
 def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
     set_bounds_block = main.split("  setBounds(info = {}) {", 1)[1].split("\n  setObscured(", 1)[0]
     assert "this.syncAttachedView();" in set_bounds_block
@@ -759,7 +772,7 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "if (interaction.pointerReleased) finalizeInteraction(interaction);" in stop_block
     assert "}, 250);" in move_block
 
-    browser_view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
+    browser_view = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
     assert "lastBoundsRef" in browser_view
     assert "if (lastBoundsRef.current === signature) return Promise.resolve(true);" in browser_view
     assert "workbench:browser-window-interaction" in browser_view
@@ -863,7 +876,7 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
 
 def test_workbench_reload_restores_native_browser_after_beforeunload_guard():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
     reset_block = source.split(
         "// A reload hides the native view from beforeunload", 1
     )[1].split("// Any renderer overlay", 1)[0]
@@ -876,7 +889,7 @@ def test_workbench_reload_restores_native_browser_after_beforeunload_guard():
 
 def _run_browser_avoidance_plan(*args):
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
     function_source = "function wbcBrowserAvoidancePlan" + source.split(
@@ -914,10 +927,10 @@ def test_browser_avoidance_plan_declines_centered_or_too_narrow_layouts():
 
 def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
 
@@ -960,7 +973,7 @@ def test_workbench_chat_reflows_only_entries_intersecting_the_browser_pip():
 
 def test_active_browser_tab_uses_standard_text_color():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
     active_tab_styles = styles.split(".browser-tab.active {", 1)[1].split("}", 1)[0]
     assert "color: var(--wb-text, var(--text));" in active_tab_styles
@@ -970,8 +983,8 @@ def test_active_browser_tab_uses_standard_text_color():
 def test_electron_browser_video_fullscreen_is_platform_aware_and_shared_with_ui():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
-    browser_view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    browser_view = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
     create_view = main.split("  createView() {", 1)[1].split("\n  setContext(", 1)[0]
     assert "disableHtmlFullscreenWindowResize: true" in create_view
@@ -1030,7 +1043,7 @@ def test_electron_browser_tab_attaches_before_navigation_and_survives_media_load
 
 def test_workbench_browser_window_frame_stays_inside_chat_region():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
     helper_source = "function wbcClampBrowserWindowFrame(" + source.split(
         "function wbcClampBrowserWindowFrame(", 1
     )[1].split("function wbcNotifyBrowserLayoutChanged", 1)[0]
@@ -1388,7 +1401,7 @@ def test_workbench_chat_merges_tool_only_calls_without_visible_boundary():
 
 def test_workbench_chat_model_labels_and_run_summary_use_live_data():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
     composer = source.split("function WbcComposer(", 1)[1].split(
@@ -1406,7 +1419,7 @@ def test_workbench_chat_model_labels_and_run_summary_use_live_data():
 
 def test_workbench_chat_delete_detaches_local_fork_markers():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
     handler = source.split("function handleDeleteChat(chatId)", 1)[1].split("function handleToTask", 1)[0]
 
     assert "function detachDeletedForkSource(item)" in handler
@@ -1419,7 +1432,7 @@ def test_workbench_chat_delete_detaches_local_fork_markers():
 
 def test_workbench_chat_card_menu_can_rename_the_target_chat():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
     rail = source.split("function WbcRail(", 1)[1].split(
@@ -1435,10 +1448,10 @@ def test_workbench_chat_card_menu_can_rename_the_target_chat():
 
 def test_workbench_branch_tree_uses_compact_git_history_layout():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
     branch = source.split("function WbcBranchTab", 1)[1].split(
@@ -1461,10 +1474,10 @@ def test_workbench_branch_tree_uses_compact_git_history_layout():
 
 def test_workbench_chat_switches_stop_to_guidance_while_running():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(
+    index = (root / "src" / "webui" / "frontend" / "index.html").read_text(
         encoding="utf-8"
     )
     composer = source.split("function WbcComposer(", 1)[1].split(
@@ -1482,7 +1495,7 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in composer
     assert "if (running) { onInterrupt(); return; }" not in composer
     assert "输入内容以引导正在运行的 Agent" in (
-        root / "src" / "workbench-webui" / "workbench-i18n.jsx"
+        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
     assert "workbench-chat.js?v=0.7.0b1" in index
     assert "workbench-i18n.js?v=0.7.0b1" in index
@@ -1490,7 +1503,7 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
     guidance_model = source.split("function sendGuidance", 1)[1].split(
@@ -1514,12 +1527,12 @@ def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
 
 def test_workbench_tool_start_is_rendered_then_completed_in_place():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
 
     runtime = source.split("function onSseEvent(event)", 1)[1].split(
-        "if (window.__sseHandlers", 1
+        'window.CyreneUI.require("events").subscribe(onSseEvent)', 1
     )[0]
     activity_card = source.split("function WbcLiveActivityCard", 1)[1].split(
         "function WbcLiveMessage", 1
@@ -1560,10 +1573,10 @@ def test_workbench_marks_run_finalizing_before_workspace_save():
 
 def test_workbench_context_tab_has_live_session_inbox_card():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    css = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
     context_tab = source.split("function WbcContextTab", 1)[1].split(
@@ -1624,20 +1637,18 @@ def test_workbench_context_tab_has_live_session_inbox_card():
 def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
     root = Path(__file__).resolve().parents[1]
     overlay = (
-        root / "src" / "workbench-webui" / "settings-overlay.jsx"
+        root / "src" / "webui" / "frontend" / "settings-overlay.jsx"
     ).read_text(encoding="utf-8")
     chat = (
-        root / "src" / "workbench-webui" / "workbench-chat.jsx"
+        root / "src" / "webui" / "frontend" / "workbench-chat.jsx"
     ).read_text(encoding="utf-8")
     i18n = (
-        root / "src" / "workbench-webui" / "workbench-i18n.jsx"
+        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
     css = (
-        root / "src" / "workbench-webui" / "workbench.css"
+        root / "src" / "webui" / "frontend" / "workbench.css"
     ).read_text(encoding="utf-8")
-    legacy_settings = (
-        root / "src" / "webui" / "static" / "app" / "settings.jsx"
-    ).read_text(encoding="utf-8")
+    classic_settings = root / "src" / "webui" / "static" / "app" / "settings.jsx"
 
     capabilities = overlay.split("function CapabilitiesPanel", 1)[1].split(
         "function DataPanel", 1
@@ -1690,9 +1701,7 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
         assert i18n.count(f'"toolPackageDesc.{package_id}"') == 2
         assert i18n.count(f'"toolName.{package_id}"') == 2
 
-    assert "toolList.map" not in legacy_settings
-    assert "saveToolPackage(group.id" in legacy_settings
-    assert 't("toolPackageDesc." + group.id)' in legacy_settings
+    assert not classic_settings.exists()
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert '"workbenchChat.inbox.title": "Session inbox"' in i18n
     assert '"workbenchChat.inbox.title": "Agent 收件箱"' in i18n
@@ -1703,7 +1712,7 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
 
 def test_workbench_inbox_cleanup_aborts_and_ignores_a_late_response():
     root = Path(__file__).resolve().parents[1]
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
     hook_source = source.split("var WBC_INBOX_CACHE_LIMIT", 1)[1].split(
@@ -1723,13 +1732,21 @@ function useWbcState(initial) {{
 function useWbcEffect(effect) {{ cleanup = effect(); }}
 function wbcErrorText(error) {{ return String(error); }}
 global.window = {{
-  WorkbenchChatModel: {{
-    getInbox: function (_chatId, options) {{
-      capturedSignal = options.signal;
-      return new Promise(function (resolve) {{ resolveInbox = resolve; }});
+  CyreneUI: {{
+    require: function (name) {{
+      if (name !== "chat") throw new Error("unexpected service " + name);
+      return {{
+        Model: {{
+          getInbox: function (_chatId, options) {{
+            capturedSignal = options.signal;
+            return new Promise(function (resolve) {{ resolveInbox = resolve; }});
+          }}
+        }}
+      }};
     }}
   }}
 }};
+var WorkbenchChatModel = window.CyreneUI.require("chat").Model;
 eval({json.dumps(hook_source)});
 useWbcLiveInbox({{ id: "chat_race" }}, false);
 cleanup();
@@ -1750,7 +1767,7 @@ setTimeout(function () {{
 
 def test_workbench_chat_does_not_render_previous_transcript_during_switch():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
     load_effect = source.split("// Load the full transcript when the selection changes.", 1)[1].split(
@@ -1773,10 +1790,10 @@ def test_workbench_chat_does_not_render_previous_transcript_during_switch():
 
 def test_workbench_chat_loading_keeps_lightweight_overview_visible():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -1791,10 +1808,10 @@ def test_workbench_chat_loading_keeps_lightweight_overview_visible():
 
 def test_workbench_chat_loading_is_centered_in_the_rail():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
 
@@ -1808,10 +1825,10 @@ def test_workbench_chat_loading_is_centered_in_the_rail():
 
 def test_workbench_chat_plan_confirmation_can_continue_in_auto_mode():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -1829,10 +1846,10 @@ def test_workbench_chat_plan_confirmation_can_continue_in_auto_mode():
 
 def test_workbench_attachment_preview_falls_back_without_overflowing():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
 
@@ -1845,7 +1862,7 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     )[1].split("function WbcUserMessage(", 1)[0]
     assert "onError={function () { setImageFailed(true); }}" in message_attachment
     assert source.count("<WbcMessageAttachment key=") == 2
-    assert "window.WorkbenchFileVisual" in source
+    assert 'window.CyreneUI.require("knowledge").FileVisual' in source
     assert 'className="wbc-attach-file"' in message_attachment
     assert 'wbcT("workbenchChat.openPreview", "Open preview")' in message_attachment
     assert 'className={"wbc-msg-attachments" + (msg.content ? " after-copy" : "")}' in source
@@ -1858,7 +1875,7 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
 
 def test_workbench_chat_splits_live_tools_around_intermediate_messages():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
     append_block = source.split("function appendIntermediate(chatId, message)", 1)[1].split(
         "function streamHandlers(chatId)", 1
     )[0]
@@ -1879,7 +1896,7 @@ def test_workbench_chat_splits_live_tools_around_intermediate_messages():
 
 def test_workbench_chat_retry_truncates_only_after_durable_terminal_event():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -1901,7 +1918,7 @@ def test_workbench_chat_retry_truncates_only_after_durable_terminal_event():
 
 def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -1921,9 +1938,9 @@ def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading(
 def test_workbench_knowledge_related_tab_loads_and_navigates_conversations():
     root = Path(__file__).resolve().parent.parent
     knowledge = (
-        root / "src" / "workbench-webui" / "workbench-knowledge.jsx"
+        root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx"
     ).read_text(encoding="utf-8")
-    shell = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(
+    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -1936,7 +1953,7 @@ def test_workbench_knowledge_related_tab_loads_and_navigates_conversations():
 
 def test_workbench_chat_plan_tab_uses_durable_plan_and_live_step_events():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -1949,10 +1966,10 @@ def test_workbench_chat_plan_tab_uses_durable_plan_and_live_step_events():
 
 def test_workbench_chat_tool_trace_preserves_i18n_metadata():
     root = Path(__file__).resolve().parent.parent
-    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -1982,13 +1999,13 @@ def test_workbench_chat_tool_trace_preserves_i18n_metadata():
 
 def test_workbench_live_trace_keeps_each_llm_activity_independent():
     root = Path(__file__).resolve().parent.parent
-    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    css = (root / "src" / "workbench-webui" / "workbench.css").read_text(
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
-    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -2042,10 +2059,10 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
 
 def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
     root = Path(__file__).resolve().parent.parent
-    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -2066,7 +2083,7 @@ def test_progressive_capability_ids_resolve_to_existing_tool_name_i18n():
     from cyrene.tooling.packs import CAPABILITY_BINDINGS
 
     root = Path(__file__).resolve().parent.parent
-    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -2088,7 +2105,7 @@ def test_progressive_capability_ids_resolve_to_existing_tool_name_i18n():
     assert '"toolName.browser_navigate": "浏览器导航"' in i18n
 
 
-def test_tool_i18n_fallbacks_and_legacy_surfaces_do_not_leak_internal_keys():
+def test_tool_i18n_fallbacks_do_not_leak_internal_keys_after_classic_removal():
     result = _run_workbench_trace_i18n_js(
         """
 ({
@@ -2116,22 +2133,10 @@ def test_tool_i18n_fallbacks_and_legacy_surfaces_do_not_leak_internal_keys():
     }
 
     root = Path(__file__).resolve().parent.parent
-    classic_chat = (root / "src" / "webui" / "static" / "app" / "chat.jsx").read_text(
-        encoding="utf-8"
-    )
-    chat_surface = (
-        root / "src" / "webui" / "static" / "app" / "chat-surface.jsx"
-    ).read_text(encoding="utf-8")
-    evolution = (
-        root / "src" / "webui" / "static" / "app" / "evolution.jsx"
-    ).read_text(encoding="utf-8")
-
-    assert "window.WorkbenchI18n.tForLang(" in classic_chat
-    assert "window.WorkbenchI18n.toolName(event.tool" in classic_chat
-    assert "window.WorkbenchI18n.toolName(raw, lang)" in chat_surface
-    assert "function evolutionToolLabel(name)" in evolution
-    assert "<span>{evolutionToolLabel(name)}</span>" in evolution
-    assert '<span className="evolution-step-tool">{toolLabel}</span>' in evolution
+    classic_root = root / "src" / "webui" / "static" / "app"
+    assert not (classic_root / "chat.jsx").exists()
+    assert not (classic_root / "chat-surface.jsx").exists()
+    assert not (classic_root / "evolution.jsx").exists()
 
 
 def test_workbench_tool_trace_preview_localizes_protocol_values_only():
@@ -2182,7 +2187,7 @@ def test_workbench_phase_events_publish_translation_keys():
     planning = (root / "src" / "cyrene" / "agent" / "planning.py").read_text(encoding="utf-8")
     guidance = (root / "src" / "cyrene" / "agent" / "guidance.py").read_text(encoding="utf-8")
     reflection = (root / "src" / "cyrene" / "agent" / "deep_reflection.py").read_text(encoding="utf-8")
-    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
     assert '"detail_key": "phase.planning"' in planning
     assert '"detail_key": "phase.applyingGuidanceToSubagents"' in guidance
@@ -2196,10 +2201,10 @@ def test_workbench_phase_events_publish_translation_keys():
 
 def test_workbench_chat_last_user_message_has_retry_action():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
-    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -2222,7 +2227,7 @@ def test_workbench_chat_last_user_message_has_retry_action():
 
 def test_workbench_chat_uses_explicit_run_reconnect_without_resubmitting_message():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -2236,7 +2241,7 @@ def test_workbench_chat_uses_explicit_run_reconnect_without_resubmitting_message
 def test_workbench_copy_uses_electron_clipboard_bridge():
     root = Path(__file__).resolve().parent.parent
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
-    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
 
     assert "clipboard, contextBridge, ipcRenderer" in preload
     assert "writeClipboardText: (text) =>" in preload
@@ -2249,9 +2254,21 @@ def test_workbench_copy_uses_electron_clipboard_bridge():
 
 def test_code_blocks_use_declared_language_and_resilient_clipboard_actions():
     root = Path(__file__).resolve().parent.parent
-    highlight = (root / "src" / "webui" / "static" / "app" / "code" / "highlight.jsx").read_text(encoding="utf-8")
-    actions = (root / "src" / "webui" / "static" / "app" / "code" / "actions.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "webui" / "static" / "app" / "code" / "highlight.css").read_text(encoding="utf-8")
+    highlight = (
+        root
+        / "src"
+        / "webui"
+        / "frontend"
+        / "shared"
+        / "markdown"
+        / "highlight.jsx"
+    ).read_text(encoding="utf-8")
+    actions = (
+        root / "src" / "webui" / "frontend" / "shared" / "markdown" / "actions.jsx"
+    ).read_text(encoding="utf-8")
+    styles = (
+        root / "src" / "webui" / "frontend" / "shared" / "markdown" / "highlight.css"
+    ).read_text(encoding="utf-8")
 
     assert 'language = "text";' in highlight
     assert "hljs.highlightAuto(code)" not in highlight
@@ -2265,8 +2282,8 @@ def test_code_blocks_use_declared_language_and_resilient_clipboard_actions():
 
 def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
 
     assert 'split(";", 1)[0].trim().toLowerCase()' in source
@@ -2277,8 +2294,8 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
     assert '<base href="' in source
     assert 'sandbox="allow-scripts"' in source
     assert 'srcDoc={htmlPreview}' in source
-    assert 'window.pdfjsInstallCopyFix(container, viewer)' in source
-    assert 'window.pdfjsInstallSelectionSanitizer(container, viewer, eventBus)' in source
+    assert 'pdf.installCopyFix(container, viewer)' in source
+    assert 'pdf.installSelectionSanitizer(container, viewer, eventBus)' in source
     assert 'selectionSanitizer.abort();' in source
     assert '"/api/workbench/library/read?workspace="' in source
     assert '<WbcViewerTab file={viewerFile} onViewed={onViewerViewed} />' in source
@@ -2292,18 +2309,18 @@ def test_workbench_side_viewer_keeps_html_sandboxed_and_uses_pdfjs_text_layer():
 
 def test_workbench_acceptance_button_calls_agent_endpoint():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
-    model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
 
-    assert "window.WorkbenchModel.generateAcceptance(session.id)" in source
+    assert 'window.CyreneUI.require("model").generateAcceptance(session.id)' in source
     assert '"/acceptance/generate"' in model
 
 
 def test_workbench_artifact_rows_download_registered_files():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
-    model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
     routes = (root / "src" / "route" / "workbench" / "task_sessions.py").read_text(encoding="utf-8")
 
     assert "WorkbenchModel.ensureArtifacts(session)" in source
@@ -2319,8 +2336,8 @@ def test_workbench_artifact_rows_download_registered_files():
 
 def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
-    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     tabs_rule = styles.split(".workbench-right-tabs {", 1)[1].split("}", 1)[0]
     body_rule = styles.split(".workbench-right-body {", 1)[1].split("}", 1)[0]
@@ -2338,8 +2355,8 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
-    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     nav_rule = styles.split("\n.workbench-nav-button {", 1)[1].split("}", 1)[0]
     nav_label_rule = styles.split(".workbench-nav-button > span:last-child {", 1)[1].split("}", 1)[0]
@@ -2360,7 +2377,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
     collapsed_prefix = (
         ".workbench-grid.rail-collapsed "
@@ -2384,7 +2401,7 @@ def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
 
 def test_workbench_narrow_window_forces_project_rail_into_stable_icon_strip():
     root = Path(__file__).resolve().parent.parent
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
     title_rule = styles.split("\n.wb-rail-title {", 1)[1].split("}", 1)[0]
     actions_rule = styles.split("\n.workbench-rail-head-actions {", 1)[1].split("}", 1)[0]
@@ -2413,10 +2430,10 @@ def test_workbench_narrow_window_forces_project_rail_into_stable_icon_strip():
 
 def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     root = Path(__file__).resolve().parent.parent
-    settings = (root / "src" / "workbench-webui" / "settings-overlay.jsx").read_text(encoding="utf-8")
-    translations = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
-    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+    settings = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     assert "function WeChatConnectionPanel" in settings
     assert 'fetch("/api/wechat/status")' in settings
@@ -2435,11 +2452,11 @@ def test_linux_desktop_uses_native_frame_and_directory_picker():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
-    create = (root / "src" / "workbench-webui" / "workbench-create.jsx").read_text(encoding="utf-8")
-    chat = (root / "src" / "webui" / "static" / "app" / "chat.jsx").read_text(encoding="utf-8")
+    create = (root / "src" / "webui" / "frontend" / "workbench-create.jsx").read_text(encoding="utf-8")
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
 
     assert "const isLinux = process.platform === 'linux';" in main
-    assert "const useInsetTitleBar = !isLegacyShell && isMac;" in main
+    assert "const useInsetTitleBar = isMac;" in main
     assert "ipcMain.handle('dialog:pick-directory'" in main
     assert "properties: ['openDirectory', 'createDirectory']" in main
     assert "if (process.platform !== 'linux') return Promise.resolve(null);" in preload
@@ -2447,14 +2464,14 @@ def test_linux_desktop_uses_native_frame_and_directory_picker():
     assert 'window.cyrene.platform === "linux"' in create
     assert "await window.cyrene.pickDirectory()" in create
     assert 'window.cyrene.platform === "linux"' in chat
-    assert "await window.cyrene.pickDirectory()" in chat
+    assert "window.cyrene.pickDirectory().then(function (data)" in chat
 
 
 def test_electron_browser_panel_uses_native_browser_bridge():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
-    view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
+    view = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
 
     assert "WebContentsView" in main
     assert "class BrowserTabManager" in main
@@ -2504,8 +2521,8 @@ def test_electron_browser_tabs_are_per_session_while_login_state_is_shared():
     preload = (root / "electron" / "preload.js").read_text(encoding="utf-8")
     browser = (root / "src" / "cyrene" / "browser.py").read_text(encoding="utf-8")
     chat_routes = (root / "src" / "route" / "workbench" / "chat.py").read_text(encoding="utf-8")
-    view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
-    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    view = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
 
     assert "const browserTabManagers = new Map();" in main
     assert "new BrowserTabManager(normalized)" in main
@@ -2529,7 +2546,7 @@ def test_electron_browser_user_events_are_recorded_for_learning():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")
     routes = (root / "src" / "route" / "agent" / "browser.py").read_text(encoding="utf-8")
-    view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
+    view = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
 
     assert "BROWSER_USER_EVENT_CONSOLE_PREFIX" in main
     assert "installUserEventCapture" in main
@@ -2547,7 +2564,7 @@ def test_electron_browser_user_events_are_recorded_for_learning():
 
 def test_electron_browser_panel_does_not_restore_closed_tabs_from_stale_state():
     root = Path(__file__).resolve().parent.parent
-    view = (root / "src" / "webui" / "static" / "app" / "browser-view.jsx").read_text(encoding="utf-8")
+    view = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
     panel = view.split("function ElectronBrowserViewportPanel", 1)[1].split("function ScreencastBrowserViewportPanel", 1)[0]
 
     assert 'const nextUrl = (active && active.url) || "";' in panel
@@ -2558,8 +2575,8 @@ def test_electron_browser_panel_does_not_restore_closed_tabs_from_stale_state():
 
 def test_workbench_chat_directory_picker_falls_back_on_macos_and_lists_default_workspace():
     root = Path(__file__).resolve().parent.parent
-    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    i18n = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
     assert 'window.cyrene.platform === "linux"' in chat
     assert 'fetch("/api/context/pick-directory", { method: "POST" })' in chat
@@ -2572,7 +2589,7 @@ def test_workbench_chat_directory_picker_falls_back_on_macos_and_lists_default_w
 
 def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it():
     root = Path(__file__).resolve().parent.parent
-    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -2602,9 +2619,9 @@ def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it()
 
 def test_workbench_context_picker_contains_long_workspace_paths():
     root = Path(__file__).resolve().parent.parent
-    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
-    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     picker_rule = styles.rsplit(".wbc-ctx-picker {", 1)[1].split("}", 1)[0]
     text_rule = styles.rsplit(
@@ -2623,10 +2640,10 @@ def test_workbench_context_picker_contains_long_workspace_paths():
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
-    model = (root / "src" / "workbench-webui" / "workbench-model.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
     routes = (root / "src" / "route" / "workbench" / "projects.py").read_text(encoding="utf-8")
-    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     assert 'window.prompt("后续任务标题"' not in source
     assert "model.createFollowUp(sid, options)" in source
@@ -2640,7 +2657,7 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
     regenerate_block = source.split("regeneratePlan: function ()", 1)[1].split("approvePlan: function ()", 1)[0]
 
     assert "plan: Array.isArray(session.plan) ? session.plan : []" in regenerate_block
@@ -2650,8 +2667,8 @@ def test_workbench_regenerate_plan_failure_preserves_current_plan():
 
 def test_workbench_plan_conflict_does_not_apply_client_fallback():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
-    api = (root / "src" / "workbench-webui" / "workbench-api.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    api = (root / "src" / "webui" / "frontend" / "platform" / "api.jsx").read_text(encoding="utf-8")
 
     assert 'err.code === "stale_plan_revision"' in source
     assert "rethrowPlanConflict(err);" in source
@@ -2660,7 +2677,7 @@ def test_workbench_plan_conflict_does_not_apply_client_fallback():
 
 def test_workbench_api_timeout_covers_response_body_consumption():
     root = Path(__file__).resolve().parent.parent
-    api = (root / "src" / "workbench-webui" / "workbench-api.jsx").read_text(encoding="utf-8")
+    api = (root / "src" / "webui" / "frontend" / "platform" / "api.jsx").read_text(encoding="utf-8")
 
     assert "Keep the deadline active until" in api
     assert "resp.__workbenchRequestDone = done" in api
@@ -2670,10 +2687,20 @@ def test_workbench_api_timeout_covers_response_body_consumption():
 
 def test_workbench_api_json_times_out_when_body_stalls_after_headers():
     root = Path(__file__).resolve().parent.parent
-    api_path = root / "src" / "workbench-webui" / "workbench-api.jsx"
+    api_path = root / "src" / "webui" / "frontend" / "platform" / "api.jsx"
     script = f"""
 const fs = require("fs");
-global.window = {{}};
+global.window = {{
+  CyreneUI: {{
+    register: function (_name, service) {{ return service; }},
+    require: function (name) {{
+      if (name === "i18n") {{
+        return {{ t: function (_key, _params, fallback) {{ return fallback; }} }};
+      }}
+      throw new Error("unexpected service " + name);
+    }}
+  }}
+}};
 global.fetch = function (_url, init) {{
   return Promise.resolve({{
     ok: true,
@@ -2691,7 +2718,7 @@ global.fetch = function (_url, init) {{
   }});
 }};
 eval(fs.readFileSync({json.dumps(str(api_path))}, "utf8"));
-window.WorkbenchAPI.json("/slow-body", {{ timeout: 10, toast: false }}).then(
+window.CyreneUI.api.json("/slow-body", {{ timeout: 10, toast: false }}).then(
   function () {{ process.stdout.write("unexpected success"); process.exit(1); }},
   function (err) {{ process.stdout.write(JSON.stringify({{ name: err.name, isTimeout: err.isTimeout }})); }}
 );
@@ -2705,7 +2732,7 @@ window.WorkbenchAPI.json("/slow-body", {{ timeout: 10, toast: false }}).then(
 
 def test_workbench_init_plan_failure_shows_details_and_restart():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-create.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-create.jsx").read_text(encoding="utf-8")
 
     assert "function InitPlanError" in source
     assert 'className="wb-init-plan-error"' in source
@@ -2732,7 +2759,7 @@ def test_workbench_init_plan_failure_shows_details_and_restart():
 
 def test_workbench_init_answer_updates_do_not_set_parent_state_inside_local_updater():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-create.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-create.jsx").read_text(encoding="utf-8")
     answer_block = source.split("function setAnswer(qid, value)", 1)[1].split("function regenerate()", 1)[0]
 
     assert "answersRef.current = nextAnswers;" in answer_block
@@ -2743,8 +2770,8 @@ def test_workbench_init_answer_updates_do_not_set_parent_state_inside_local_upda
 
 def test_workbench_model_settings_preserve_form_on_failed_response():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "settings-overlay.jsx").read_text(encoding="utf-8")
-    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
     save_block = source.split("function saveModels()", 1)[1].split("function saveTools()", 1)[0]
 
     assert "async function readSettingsResponse(response)" in source
@@ -2758,9 +2785,9 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
-    legacy = (root / "src" / "webui" / "static" / "app" / "chat.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    classic_chat = root / "src" / "webui" / "static" / "app" / "chat.jsx"
 
     assert 'id: "subagents"' in source
     assert "function WbcSubagentsTab" in source
@@ -2768,7 +2795,7 @@ def test_workbench_chat_subagent_page_is_independent_and_localized():
     assert "AgentGroupChat" not in source
     assert ".wbc-subagent-page" in styles
     assert ".agent-chat-" not in styles.split("/* Workbench-only subagent page.", 1)[1].split("/* 计划 tab", 1)[0]
-    assert "function AgentGroupChat" in legacy
+    assert not classic_chat.exists()
 
     result = _run_workbench_i18n_js(
         """
@@ -2785,7 +2812,7 @@ def test_workbench_chat_subagent_page_is_independent_and_localized():
 
 def test_workbench_chat_quick_actions_include_manual_context_compaction():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
 
     assert 'function compactChat(chatId)' in source
     assert '"/compact"' in source
@@ -2821,7 +2848,7 @@ def test_workbench_chat_quick_actions_include_manual_context_compaction():
 
 def test_workbench_chat_exposes_browser_live_view_and_takeover():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
 
     assert 'event.type === "browser_frame" || event.type === "browser_takeover_request"' in source
     browser_switch_block = source.split('event.type === "browser_frame" || event.type === "browser_takeover_request"', 1)[1].split('// Live tool/phase/subagent progress', 1)[0]
@@ -2829,14 +2856,14 @@ def test_workbench_chat_exposes_browser_live_view_and_takeover():
     assert "setBrowserWindowModeByChat" in browser_switch_block
     assert "runtimeEngine.isRunning" not in browser_switch_block
     assert 'id: "browser", label: wbcT("chat.side.browser", "Browser")' in source
-    assert "window.BrowserViewportPanel" in source
+    assert 'window.CyreneUI.require("browser").ViewportPanel' in source
     assert "onTakeoverComplete: onBrowserTakeoverComplete" in source
     assert "handleAnswer(pending.id" in source
 
 
 def test_warning_toast_has_no_colored_left_accent():
     root = Path(__file__).resolve().parent.parent
-    css = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
     assert ".workbench-toast.is-warning { border-left: 1px solid var(--wb-line); }" in css
     assert ".workbench-toast.is-warning { border-left-color: var(--wb-amber); }" not in css
@@ -2891,7 +2918,8 @@ def test_workbench_subagent_payload_recovers_chat_scoped_snapshot(monkeypatch):
 
 def _run_workbench_shortcuts_js(expression: str):
     root = Path(__file__).resolve().parent.parent
-    shortcuts_path = root / "src" / "workbench-webui" / "workbench-shortcuts.jsx"
+    runtime_path = root / "src" / "webui" / "frontend" / "platform" / "runtime.jsx"
+    shortcuts_path = root / "src" / "webui" / "frontend" / "workbench-shortcuts.jsx"
     script = f"""
     const fs = require("fs");
     const store = {{}};
@@ -2905,6 +2933,7 @@ def _run_workbench_shortcuts_js(expression: str):
         setItem: (k, v) => {{ store[k] = String(v); }},
         removeItem: (k) => {{ delete store[k]; }},
     }};
+    eval(fs.readFileSync({json.dumps(str(runtime_path))}, "utf8"));
     eval(fs.readFileSync({json.dumps(str(shortcuts_path))}, "utf8"));
     const result = ({expression});
     process.stdout.write(JSON.stringify(result));
@@ -2915,9 +2944,9 @@ def _run_workbench_shortcuts_js(expression: str):
 
 def test_workbench_shortcuts_module_exposes_actions_and_platform_aware_mod():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-shortcuts.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-shortcuts.jsx").read_text(encoding="utf-8")
 
-    assert "window.WorkbenchShortcuts" in source
+    assert 'window.CyreneUI.shortcuts = window.CyreneUI.register("shortcuts"' in source
     assert "isMacPlatform" in source
     assert '"mod"' in source
     # Composer Enter-to-send is one of the default bindings so the setting panel
@@ -2926,7 +2955,7 @@ def test_workbench_shortcuts_module_exposes_actions_and_platform_aware_mod():
     assert '"Enter"' in source
 
     ids = _run_workbench_shortcuts_js(
-        "window.WorkbenchShortcuts.list().map(function (i) { return i.id; })"
+        'window.CyreneUI.require("shortcuts").list().map(function (i) { return i.id; })'
     )
     assert "search" in ids
     assert "new-chat" in ids
@@ -2942,12 +2971,12 @@ def test_workbench_shortcuts_matches_mod_k_on_windows_user_agent():
     # should not match.
     result = _run_workbench_shortcuts_js(
         "{"
-        ' ctrlK: window.WorkbenchShortcuts.matches({ key: "k", metaKey: false, ctrlKey: true, shiftKey: false, altKey: false }, "search"),'
-        ' cmdK: window.WorkbenchShortcuts.matches({ key: "k", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false }, "search"),'
-        ' plainK: window.WorkbenchShortcuts.matches({ key: "k", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }, "search"),'
-        ' enter: window.WorkbenchShortcuts.matches({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }, "composer-send"),'
-        ' shiftEnter: window.WorkbenchShortcuts.matches({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: true, altKey: false }, "composer-send"),'
-        ' shiftEnterNewline: window.WorkbenchShortcuts.matches({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: true, altKey: false }, "composer-newline")'
+        ' ctrlK: window.CyreneUI.require("shortcuts").matches({ key: "k", metaKey: false, ctrlKey: true, shiftKey: false, altKey: false }, "search"),'
+        ' cmdK: window.CyreneUI.require("shortcuts").matches({ key: "k", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false }, "search"),'
+        ' plainK: window.CyreneUI.require("shortcuts").matches({ key: "k", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }, "search"),'
+        ' enter: window.CyreneUI.require("shortcuts").matches({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }, "composer-send"),'
+        ' shiftEnter: window.CyreneUI.require("shortcuts").matches({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: true, altKey: false }, "composer-send"),'
+        ' shiftEnterNewline: window.CyreneUI.require("shortcuts").matches({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: true, altKey: false }, "composer-newline")'
         "}"
     )
     assert result == {
@@ -2963,7 +2992,7 @@ def test_workbench_shortcuts_matches_mod_k_on_windows_user_agent():
 def test_workbench_shortcuts_persist_and_reset_custom_binding():
     result = _run_workbench_shortcuts_js(
         "(function () {"
-        " var sc = window.WorkbenchShortcuts;"
+        ' var sc = window.CyreneUI.require("shortcuts");'
         " var before = sc.describe('search').join('+');"
         " sc.set('search', ['mod', 'P']);"
         " var after = sc.describe('search').join('+');"
@@ -2986,10 +3015,10 @@ def test_workbench_shortcuts_capture_event_converts_ctrl_to_mod_on_windows():
     # binding stays portable when the user later opens the app on a Mac.
     result = _run_workbench_shortcuts_js(
         "{"
-        ' ctrlK: window.WorkbenchShortcuts.captureEvent({ key: "k", metaKey: false, ctrlKey: true, shiftKey: false, altKey: false }),'
-        ' shiftEnter: window.WorkbenchShortcuts.captureEvent({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: true, altKey: false }),'
-        ' escape: window.WorkbenchShortcuts.captureEvent({ key: "Escape", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }),'
-        ' pureMod: window.WorkbenchShortcuts.captureEvent({ key: "Control", metaKey: false, ctrlKey: true, shiftKey: false, altKey: false })'
+        ' ctrlK: window.CyreneUI.require("shortcuts").captureEvent({ key: "k", metaKey: false, ctrlKey: true, shiftKey: false, altKey: false }),'
+        ' shiftEnter: window.CyreneUI.require("shortcuts").captureEvent({ key: "Enter", metaKey: false, ctrlKey: false, shiftKey: true, altKey: false }),'
+        ' escape: window.CyreneUI.require("shortcuts").captureEvent({ key: "Escape", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }),'
+        ' pureMod: window.CyreneUI.require("shortcuts").captureEvent({ key: "Control", metaKey: false, ctrlKey: true, shiftKey: false, altKey: false })'
         "}"
     )
     assert result["ctrlK"] == {"cancelled": False, "keys": ["mod", "K"]}
@@ -3000,7 +3029,7 @@ def test_workbench_shortcuts_capture_event_converts_ctrl_to_mod_on_windows():
 
 def test_workbench_task_composer_uses_enter_to_send_via_shortcut_module():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
 
     # The old Cmd/Ctrl+Enter to send behavior is replaced by the shortcut module
     # so Enter sends directly (matching the chat composer).
@@ -3011,10 +3040,10 @@ def test_workbench_task_composer_uses_enter_to_send_via_shortcut_module():
 
 def test_workbench_file_drop_routes_files_to_task_chat_and_knowledge():
     root = Path(__file__).resolve().parent.parent
-    workbench = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
-    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    knowledge = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    knowledge = (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
     # The shared document-level target prevents Chromium's default file
     # navigation and forwards the real DataTransfer FileList.
@@ -3045,7 +3074,7 @@ def test_workbench_file_drop_routes_files_to_task_chat_and_knowledge():
 
 def test_workbench_file_drop_hook_prevents_navigation_and_delivers_files():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
     hook_source = "function useWorkbenchFileDrop" + source.split(
         "function useWorkbenchFileDrop", 1
     )[1].split("function WorkbenchFileDropOverlay", 1)[0]
@@ -3097,15 +3126,15 @@ process.stdout.write(JSON.stringify({{
 
 def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "settings-overlay.jsx").read_text(encoding="utf-8")
-    translations = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
-    index = (root / "src" / "webui" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     assert '{ id: "shortcuts", labelKey: "settings.shortcuts" }' in source
     assert "function ShortcutsPanel" in source
     assert "React.createElement(ShortcutsPanel" in source
-    assert "window.WorkbenchShortcuts" in source
+    assert 'window.CyreneUI.require("shortcuts")' in source
     assert "captureEvent" in source
     # The panel groups bindings and offers a reset-all action.
     assert "settings.shortcutGroupGlobal" in source
@@ -3125,8 +3154,8 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
 
 def test_workbench_about_related_actions_only_click_right_button():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "settings-overlay.jsx").read_text(encoding="utf-8")
-    styles = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
     related_block = source.split('React.createElement("section", { className: "wb-about-related-card" }', 1)[1].split(
         "changelogOpen && React.createElement", 1
@@ -3155,14 +3184,42 @@ def test_workbench_about_related_actions_only_click_right_button():
     assert styles.count("height: var(--wb-settings-panel-height);") == 3
 
 
+def test_workbench_about_panel_reads_app_version_from_registered_data_store():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+
+    update_section = source.split("function UpdateSection({ t, config }) {", 1)[1].split(
+        "function SettingsVersionIcon", 1
+    )[0]
+
+    assert 'var dataState = window.CyreneUI.require("data").state;' in update_section
+    assert "dataState.appVersion" in update_section
+
+
+def test_workbench_settings_dynamic_lists_have_stable_react_keys():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+
+    shortcuts_panel = source.split("function ShortcutsPanel(p) {", 1)[1].split(
+        "function BudgetPanel", 1
+    )[0]
+    model_card = source.split("function ModelCard(children, key) {", 1)[1].split(
+        "function ModelField", 1
+    )[0]
+
+    assert "React.createElement(React.Fragment, { key: groupKey }" in shortcuts_panel
+    assert 'React.createElement("div", { className: "wb-shortcut-row", key: item.id }' in shortcuts_panel
+    assert 'React.createElement("div", { className: "wb-model-card", key: key }, ...children)' in model_card
+
+
 def test_workbench_help_center_lists_shortcuts_from_module_with_customize_link():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
 
-    # Help center reads the binding list from WorkbenchShortcuts instead of
+    # Help center reads the binding list from the registered shortcuts service instead of
     # hardcoding the keys array, so customizations surface there too.
     help_block = source.split("function WorkbenchHelpCenter", 1)[1].split("function WorkbenchEditProjectModal", 1)[0]
-    assert "WorkbenchShortcuts" in help_block
+    assert 'window.CyreneUI.require("shortcuts")' in help_block
     assert "shortcutList" in help_block
     assert "help.customizeShortcuts" in help_block
     # The old hardcoded list is gone.
@@ -3171,7 +3228,7 @@ def test_workbench_help_center_lists_shortcuts_from_module_with_customize_link()
 
 def test_workbench_global_shortcut_handler_wired_in_workbench_app():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
 
     app_block = source.split("function WorkbenchApp", 1)[1].split("function WorkbenchTopbar", 1)[0]
     # A keydown listener dispatches the global shortcuts.
@@ -3193,7 +3250,7 @@ def test_workbench_global_shortcut_handler_wired_in_workbench_app():
 
 def test_workbench_memory_cite_tab_renders_actual_citations_not_placeholder():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
 
     # The old placeholder text is gone.
     assert "引用记录会在 Agent 引用此记忆时自动记录" not in source
@@ -3205,7 +3262,7 @@ def test_workbench_memory_cite_tab_renders_actual_citations_not_placeholder():
 
 def test_workbench_memory_history_tab_renders_events_not_hardcoded():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
 
     # The old hardcoded two-row history is gone — isolate the historyBody block.
     history_block = source.split("var historyBody", 1)[1].split("return h(\"aside\"", 1)[0]
@@ -3219,8 +3276,8 @@ def test_workbench_memory_history_tab_renders_events_not_hardcoded():
 
 def test_workbench_skill_learning_uses_actionable_candidate_status_only():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    translations = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
     assert 'activeCandidate ? h("div", { className: "wb-learning-review-pill "' in source
     assert "candidateNextStepText(activeCandidate, t)" in source
@@ -3232,7 +3289,7 @@ def test_workbench_skill_learning_uses_actionable_candidate_status_only():
 
 def test_workbench_skill_learning_has_small_screen_progressive_disclosure():
     root = Path(__file__).resolve().parent.parent
-    css = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
     compact_three_column = css.split("@media (min-width: 761px) and (max-width: 980px)", 1)[1].split("@media", 1)[0]
     assert ".wb-mem-page.learning-active > .wb-mem-detail" in compact_three_column
@@ -3248,9 +3305,9 @@ def test_workbench_skill_learning_has_small_screen_progressive_disclosure():
 
 def test_workbench_skill_learning_remains_operable_in_short_windows():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
-    css = (root / "src" / "workbench-webui" / "workbench.css").read_text(encoding="utf-8")
-    translations = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
     sidebar_block = css.split(".wb-learning-session-list {", 1)[1].split("}", 1)[0]
     sessions_block = css.split(".wb-learning-side-section.sessions {", 1)[1].split("}", 1)[0]
@@ -3269,7 +3326,7 @@ def test_workbench_skill_learning_remains_operable_in_short_windows():
 
 def test_workbench_memory_related_uses_tag_and_content_matching_not_category_only():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-memory.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
 
     # The old simple category-only filter is gone — the filter line that used
     # category as the sole match criterion no longer exists.
@@ -3286,7 +3343,7 @@ def test_workbench_memory_related_uses_tag_and_content_matching_not_category_onl
 
 def test_workbench_knowledge_folders_group_by_kind_not_source():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
 
     # The old source-based grouping is gone from the folders tab.
     folders_block = source.split('if (activeTab === "folders")', 1)[1].split('if (activeTab === "tags")', 1)[0]
@@ -3300,7 +3357,7 @@ def test_workbench_knowledge_folders_group_by_kind_not_source():
 
 def test_workbench_knowledge_tags_are_editable_inline():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
 
     assert "function KbTagEditor" in source
     assert "wb-kb-tag-input" in source
@@ -3313,11 +3370,13 @@ def test_workbench_knowledge_tags_are_editable_inline():
 
 def test_workbench_knowledge_content_tab_renders_markdown_chunks():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    renderer = (root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx").read_text(encoding="utf-8")
 
     assert "renderChunkHtml" in source
-    assert "window.marked" in source
-    assert "DOMPurify" in source
+    assert 'window.CyreneUI.require("markdown").render' in source
+    assert "root.marked.parse(source)" in renderer
+    assert "root.DOMPurify.sanitize" in renderer
     assert "dangerouslySetInnerHTML" in source
     assert "wb-kb-chunk-md" in source
     assert "wb-kb-chunk-text" in source
@@ -3325,7 +3384,7 @@ def test_workbench_knowledge_content_tab_renders_markdown_chunks():
 
 def test_workbench_knowledge_list_does_not_silently_truncate():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
 
     # The old silent limit:500 is gone.
     assert "limit: 500" not in source
@@ -3346,8 +3405,8 @@ def test_packaged_electron_preserves_explicit_runtime_path_overrides():
 
 def test_workbench_composers_upload_files_pasted_from_clipboard():
     root = Path(__file__).resolve().parent.parent
-    chat = (root / "src" / "workbench-webui" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    task = (root / "src" / "workbench-webui" / "workbench.jsx").read_text(encoding="utf-8")
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    task = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
 
     for source in (chat, task):
         assert "onPaste={onPaste}" in source

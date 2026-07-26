@@ -7,9 +7,10 @@ handoff, roadmap, feasibility, and design-acceptance records. End-user and
 developer guides remain under [`docs/`](../docs/).
 
 - [Current Development Progress](CONTEXT_DEV_PROGRESS.md)
-- [Architecture Refactor Handoff](refactor-handoff.md)
+- [Completed Architecture Refactor Handoff](COMPLETED-refactor-handoff.md)
 - [Research Workbench Roadmap](research-workbench-roadmap.en.md)
-- [WebUI / Workbench Consolidation Refactor Plan](webui-workbench-consolidation-refactor-plan.en.md)
+- [Completed WebUI / Workbench Consolidation Refactor Plan](COMPLETED-webui-workbench-consolidation-refactor-plan.en.md)
+- [Completed WebUI / Workbench Consolidation Implementation Log](COMPLETED-webui-consolidation-implementation-log.md)
 - [Design QA](design-qa.md)
 - [Browser PiP Dynamic Avoidance Feasibility](browser-dynamic-layout-feasibility.en.md)
 

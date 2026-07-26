@@ -24,12 +24,12 @@
 
 Cyrene is an AI agent that **runs continuously** — it has a self-rewriting personality (`SOUL.md`), remembers conversations across sessions, spawns sub-agents for parallel work, and can act proactively via scheduled tasks.
 
-It runs as a local daemon with two web front-ends (and optional Telegram/WeChat bots), connecting to any OpenAI-compatible LLM API. Everything — memory, knowledge, scheduler, browser automation, search — lives in a single Python process backed by SQLite and flat files. There is no external infrastructure to stand up: no Docker, no Redis, no vector database service.
+It runs as a local daemon with one Workbench web front-end (and optional Telegram/WeChat bots), connecting to any OpenAI-compatible LLM API. Everything — memory, knowledge, scheduler, browser automation, search — lives in a single Python process backed by SQLite and flat files. There is no external infrastructure to stand up: no Docker, no Redis, no vector database service.
 
 A quick map of the moving parts:
 
 - **One process** hosts the agent loop, the FastAPI web server, the scheduler, and the bundled search engine.
-- **Two UIs** ship side by side — a project-centric **Workbench** (default) and the classic single-agent **Legacy** UI — sharing the same backend.
+- **One Workbench UI** provides the project-centric desktop and browser experience.
 - **Any OpenAI-compatible API** works (DeepSeek by default; Claude, GPT, Qwen, and local models all fit).
 - **Domain packages** separate agent, Workbench, model runtime, learning,
   lifecycle, observability, knowledge, channels, and tooling without breaking
@@ -76,9 +76,10 @@ What Cyrene can actually *do* beyond talking.
 
 Where you actually talk to Cyrene.
 
-- **Workbench UI** — a project-centric desktop experience: per-project dashboard, schedule, knowledge, memory, and chat, with honest step-by-step task execution you can follow and steer. *Stable*
-- **Legacy agent UI** — the classic single-agent web UI: real-time chat, an agent-flow timeline, session history, and settings. *Stable*
-- **Context debugger** — inspect exactly what context (system prompt, memory, conversation history, tool set) was sent to each individual LLM call. *Stable*
+- **Workbench UI** — a project-centric desktop experience: per-project dashboard, schedule, knowledge, memory, chat, session history, browser view, settings, and honest step-by-step task execution you can follow and steer. *Stable*
+- **Context tracing** — inspect exactly what context (system prompt, memory,
+  conversation history, tool set) was sent to each LLM call through verbose
+  JSONL logs, the context-debug API, or `cyrene flow`. *Stable*
 - **Electron desktop app** — packaged builds for macOS, Windows (x64 + ARM64), and Linux via CI, with credentials stored in the OS keyring. Its embedded Chromium powers browser tools, so releases do not ship a second Playwright/Chromium runtime. *Beta*
 - **Telegram bot** — full agent access from Telegram. *Stable*
 - **WeChat bot** — basic WeChat integration. *Alpha*
@@ -121,8 +122,7 @@ uv sync           # or: pip install -e .
 cd src/webui && npm install && node build-jsx.mjs && cd ../..
 
 # 3. Run
-python -m cyrene --workbench     # Workbench UI (default)
-python -m cyrene --agent         # Classic agent UI (legacy)
+python -m cyrene --workbench     # Workbench UI
 
 # Or launch the Workbench daemon through the installed CLI
 cyrene start
@@ -185,19 +185,22 @@ Optional extras:
 
 - [Installation](docs/installation.md) — Linux, macOS, Windows
 - [Architecture](docs/architecture.md) — Two-phase loop, features, project structure
-- [Usage](docs/usage.md) — Workbench UI, legacy UI, CLI commands, in-conversation commands
+- [Usage](docs/usage.md) — Workbench UI, CLI commands, in-conversation commands
 - [Configuration](docs/configuration.md) — Environment variables reference
 - [Development](docs/development.md) — Debugging, verbose logging, testing
 - [Browser Live View](docs/browser-live-view.md) — Browser screencasting and login takeover
 - [Changelog](CHANGELOG.en.md) — Release history
-- [Current Architecture Handoff](project-notes/refactor-handoff.md) — Canonical module
-  ownership, compatibility rules, validation baseline, and remaining work
+- [Completed Architecture Handoff](project-notes/COMPLETED-refactor-handoff.md) —
+  canonical post-refactor module ownership, compatibility rules, validation
+  baseline, and independent future work
 - [Current Development Progress](project-notes/CONTEXT_DEV_PROGRESS.md) — Audited
   implementation status and unresolved work
 - [Research Workbench Roadmap](project-notes/research-workbench-roadmap.md) — Current
   Library status and proposed Experiments/Manuscripts phases
-- [WebUI / Workbench Consolidation Plan](project-notes/webui-workbench-consolidation-refactor-plan.en.md) —
-  Planned, not implemented
+- [Completed WebUI / Workbench Consolidation Plan](project-notes/COMPLETED-webui-workbench-consolidation-refactor-plan.en.md) —
+  completed historical implementation plan and Definition of Done
+- [Completed WebUI / Workbench Consolidation Log](project-notes/COMPLETED-webui-consolidation-implementation-log.md) —
+  implementation, packaging, upgrade, and Electron verification evidence
 - [Design QA](project-notes/design-qa.md) — Historical visual acceptance evidence
 - [Browser PiP Feasibility Study](project-notes/browser-dynamic-layout-feasibility.en.md) —
   Historical design research

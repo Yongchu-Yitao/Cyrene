@@ -7,10 +7,18 @@
 
 分支：`feature/project-literature-library`
 
-基线提交：`5e9a0044`
+包边界基线：`5e9a0044`
+
+UI 合并工作区基线：`17914e697af41c13a3c5da0092f69aa9906644af`
 
 本文记录当前开发检查点。旧版 Windows/Context Debugger 命令记录引用了已经
 迁移的模块路径，因此已由当前源码与验证结果替代。
+
+已完成的重构记录见
+[架构 Handoff](COMPLETED-refactor-handoff.zh-CN.md)、
+[WebUI 合并计划](COMPLETED-webui-workbench-consolidation-refactor-plan.md)和
+[实施记录](COMPLETED-webui-consolidation-implementation-log.md)。本文件没有
+增加 `COMPLETED-` 前缀，因为它是持续更新的状态索引，不是封存的重构记录。
 
 ## 当前结论
 
@@ -21,6 +29,9 @@ Cyrene 的包边界重构已经完成：
   `channels/`、`tooling/` 和 `tool_impl/`；
 - FastAPI 适配器位于 `src/route/`；
 - Web 应用生命周期和静态资源托管位于 `src/webui/`；
+- `src/webui/frontend` 是唯一 Workbench Source Root，
+  `src/webui/static/app` 是唯一生成输出根；
+- classic shell、双静态挂载和 `--agent` UI Selector 已删除；
 - 历史 Python 导入会惰性解析到正式模块；
 - Electron 开发模式只保留 `src/cyrene/local_cli.py` 这个物理启动垫片；
 - 启动时会先把 `store/cyrene.db` 迁移到
@@ -36,9 +47,9 @@ Cyrene 的包边界重构已经完成：
 | 用 `_ctx` 标记 LLM 上下文来源 | 已实现，但属于持续覆盖约束 | `cyrene.observability.context_trace`，以及 agent、coordinator、reflection、task-context、model runtime 调用点 |
 | 发送给 Provider 和持久化前移除内部元数据 | 已实现 | `model_runtime.client`、`observability.debug`、`agent.session` |
 | 为每次调用保存 context trace | 已实现 | verbose JSONL 事件和 `context_trace` 摘要 |
-| Context Debugger UI | 已实现 | `src/webui/static/app/context-debugger.jsx` 及编译产物 |
+| Context Debugger UI | 明确不进入 Workbench | 最终合并 Handoff 复核时确认；Trace/API/CLI 保留 |
 | Context Debugger 列表与详情 API | 已实现 | `src/route/system/events.py` |
-| 同时读取内存事件与持久化调试日志 | 已实现 | Route 日志读取和 Debugger UI |
+| 同时读取内存事件与持久化调试日志 | 已实现 | Route 日志读取、`cyrene flow` 和 `cyrene.observability.context_debug` |
 | 只使用内置 SimpleXNG，不再走爬虫 fallback | 已实现 | `cyrene.tooling.backends.search` 只调用 SimpleXNG 后端 |
 | 本地搜索流量不读取环境代理 | 已实现 | `trust_env=False` 和合并后的 `NO_PROXY/no_proxy` |
 | 生成并传递 SimpleXNG 设置 | 已实现 | `searxng_manager` 写入设置路径和子进程环境 |
@@ -114,11 +125,11 @@ DevTools 的 Autofill 方法不支持警告和可选 source map 的 401 属于�
 
 ## 验证基线
 
-在 macOS ARM64、Python 3.12 下验证：
+在 macOS ARM64、Python 3.13.12 下验证：
 
 | 检查 | 结果 |
 |---|---|
-| 当前 pytest | 1,381 passed |
+| 当前 pytest | 1,390 passed |
 | 上一 commit 功能测试 | 1,286 passed |
 | 排除的上一 commit 测试 | 1 个静态 `pattern.py` 源码文本断言 |
 | Electron App Use Node 测试 | 44 passed |

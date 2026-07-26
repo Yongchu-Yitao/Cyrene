@@ -4,7 +4,7 @@
 
 > This is a historical design-evidence log. Implementation status and
 > architecture ownership are documented in
-> [the current handoff](refactor-handoff.md).
+> [the completed architecture handoff](COMPLETED-refactor-handoff.md).
 
 ## Comparison target
 

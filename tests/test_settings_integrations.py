@@ -207,8 +207,8 @@ def test_integration_settings_routes_hide_secrets_and_probe_drafts(monkeypatch, 
 
 def test_general_settings_ui_exposes_zotero_and_embedding_controls():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "workbench-webui" / "settings-overlay.jsx").read_text(encoding="utf-8")
-    translations = (root / "src" / "workbench-webui" / "workbench-i18n.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    translations = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(encoding="utf-8")
 
     assert 'fetch("/api/settings/integrations")' in source
     assert 'fetch("/api/settings/integrations/test"' in source

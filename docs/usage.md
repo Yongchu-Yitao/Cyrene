@@ -4,16 +4,10 @@
 
 ## Starting Cyrene
 
-### Workbench UI (default)
+### Workbench UI
 
 ```bash
 python -m cyrene --workbench
-```
-
-### Legacy agent UI
-
-```bash
-python -m cyrene --agent
 ```
 
 ### Interactive local CLI (no web server)
@@ -69,39 +63,15 @@ The default Workbench UI is organized around projects:
 
 ---
 
-## Legacy Agent UI
+Workbench is the only Web UI. Real-time Markdown chat, guidance, subagent and
+browser status, session history, memory, knowledge/search, scheduling, maps,
+model/tool/MCP/API-key settings, theme controls, and the other established
+Workbench capabilities remain available through its pages, panels, and settings
+overlay.
 
-The classic UI is still available with `--agent`:
-
-| Page | Section | What you can do |
-|---|---|---|
-| **Chat** | Main | Send messages, view Markdown-rendered replies, see live progress |
-| | Guidance | Send guidance to running agent rounds |
-| | Subagents | Monitor active sub-agents and shells |
-| | Browser | Live browser screencast and takeover card |
-| **Agent Flow** | Canvas | SVG timeline of LLM calls, tool executions, subagent communication |
-| **Sessions** | List | Browse, search, and delete sessions |
-| | Detail | View messages, tokens, subagents per session |
-| **Memory** | SOUL.md | Browse and edit the personality document |
-| | Short-Term | View compressed memory with emotional valence |
-| | Context | Monitor context window usage |
-| **Knowledge** | Documents | Upload and manage documents |
-| | Search | Run semantic/keyword search over the knowledge base |
-| **Entities** | List | View and edit tracked project entities |
-| **Evolution** | Patterns | Review and approve learned behavior patterns |
-| **Tasks** | List | View scheduled tasks and their history |
-| **Map** | View | AMap/Leaflet map with pins and routes |
-| **Status** | Metrics | Subagents, sessions, memory, tasks |
-| | Workers | Main agent and sub-agent status |
-| | Services | LLM endpoint, SOUL.md, MCP servers health |
-| | Context Debugger | Inspect context traces for recent LLM calls |
-| **Settings** | General | Edit SOUL.md directly, toggle stream reasoning |
-| | Models | Add/remove/select LLM models |
-| | Tool packages | Enable/disable complete progressive tool packages |
-| | MCP Servers | Add/remove/restart MCP server connections |
-| | Search | SimpleXNG built-in mode only |
-| | API Keys | Edit API keys and endpoints at runtime |
-| | Appearance | Theme, text size, density |
+Verbose context traces are intentionally inspected outside the Web UI through
+`cyrene flow`, `/api/context-debug/events`, or
+`python -m cyrene.observability.context_debug`.
 
 ---
 

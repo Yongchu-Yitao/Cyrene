@@ -6,7 +6,7 @@
 > Status checked on 2026-07-26. This document intentionally combines shipped
 > capabilities with future plans. Implemented claims were checked against
 > `src/cyrene/knowledge/`, `src/route/workbench/library.py`,
-> `src/workbench-webui/workbench-library.*`,
+> `src/webui/frontend/workbench-library.*`,
 > `tests/test_workbench_library.py`, and `tests/test_library_tools.py`.
 
 ## Current implementation status
@@ -121,7 +121,7 @@ src/route/workbench/
   experiments.py                      # future
   manuscripts.py                      # future
 
-src/workbench-webui/
+src/webui/frontend/
   workbench-library.jsx               # existing
   workbench-experiments.jsx           # future
   workbench-manuscripts.jsx           # future

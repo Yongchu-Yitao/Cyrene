@@ -3,7 +3,7 @@
 [English](design-qa.md) · [简体中文](design-qa.zh-CN.md)
 
 > 这是历史设计证据记录，不代表当前开发状态总表。当前实现状态和架构归属以
-> [重构交接文档](refactor-handoff.zh-CN.md)为准。文中
+> [已完成的重构交接文档](COMPLETED-refactor-handoff.zh-CN.md)为准。文中
 > `docs/research-workbench-report/` 下的截图只保留在本机，该目录已被 Git
 > 忽略，不会上传到 GitHub。
 

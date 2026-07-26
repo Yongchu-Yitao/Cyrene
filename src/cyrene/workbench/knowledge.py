@@ -1,9 +1,9 @@
-"""Workspace-scoped knowledge base API for the new Workbench UI.
+"""Workspace-scoped knowledge base API for the Workbench UI.
 
-This module is intentionally independent from the legacy
-``route/knowledge.py``
-(which the old ``--agent`` UI uses). It exposes a parallel set of endpoints
-under ``/api/workbench/knowledge/*`` so the two UIs never share request code.
+This module is intentionally independent from the historical global knowledge
+API. It exposes project-scoped endpoints under
+``/api/workbench/knowledge/*`` while the global endpoints remain available for
+API and stored-data compatibility.
 
 The only thing shared is the pure data layer (``cyrene.knowledge.store`` /
 ``ingest`` / ``retrieve``) — that *is* the backend interface we reuse.
@@ -48,7 +48,7 @@ def _resolve_workspace_id(workspace_id: str | None) -> str:
     The knowledge page sends a project's ``dataKey`` (or id) as the workspace,
     but knowledge is stored under the project **id** key — the same key project
     memory uses (see ``resolve_project_knowledge_key_for_session``). For the
-    legacy default project these differ (dataKey == "default", id ==
+    historical default project these differ (dataKey == "default", id ==
     "project_…"): returning "default" would alias the global ``kb_default.db``
     catalog and leak every project's uploaded/generated files into the default
     project's view. Match by id first, then by dataKey, and always return the

@@ -17,12 +17,11 @@ Cyrene runtime entry point.
 
 modes:
   --workbench       Start the Workbench web UI
-  --agent           Start the legacy agent web UI
   --gui              Start the native GUI wrapper
   --telegram         Start the Telegram bot (also the legacy no-argument mode)
 
 options:
-  --port PORT        Web server port (Workbench/agent modes)
+  --port PORT        Workbench web server port
   --verbose, -v      Enable verbose diagnostics
   -h, --help         Show this help without initializing the runtime
 
@@ -76,11 +75,6 @@ def main() -> None:
         _runtime_started = True
         from cyrene.runtime.host import run_web_mode
         run_web_mode(ui_mode="workbench")
-        return
-    if "--agent" in sys.argv:
-        _runtime_started = True
-        from cyrene.runtime.host import run_web_mode
-        run_web_mode(ui_mode="legacy")
         return
     if "--gui" in sys.argv or "--electron-mode" in sys.argv:
         _runtime_started = True

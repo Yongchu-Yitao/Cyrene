@@ -5,13 +5,13 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_workbench_project_modules_restore_project_scoped_cache_before_refresh():
-    memory = (ROOT / "src/workbench-webui/workbench-memory.jsx").read_text(
+    memory = (ROOT / "src/webui/frontend/workbench-memory.jsx").read_text(
         encoding="utf-8"
     )
-    schedule = (ROOT / "src/workbench-webui/workbench-schedule.jsx").read_text(
+    schedule = (ROOT / "src/webui/frontend/workbench-schedule.jsx").read_text(
         encoding="utf-8"
     )
-    knowledge = (ROOT / "src/workbench-webui/workbench-knowledge.jsx").read_text(
+    knowledge = (ROOT / "src/webui/frontend/workbench-knowledge.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -30,7 +30,7 @@ def test_workbench_project_modules_restore_project_scoped_cache_before_refresh()
     for source in (memory, schedule, knowledge):
         assert "CACHE_TTL_MS" not in source
         assert 'window.addEventListener("focus", refreshSoon)' in source
-        assert "window.__sseHandlers.add(onRuntimeEvent)" in source
+        assert 'window.CyreneUI.require("events").subscribe(onRuntimeEvent)' in source
 
 
 def test_workbench_module_routes_use_lightweight_canonical_project_lookup(monkeypatch):

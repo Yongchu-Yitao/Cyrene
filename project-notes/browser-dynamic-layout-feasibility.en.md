@@ -26,17 +26,17 @@ and unnecessarily increases scroll height.
 
 ## Existing implementation anchors
 
-- `src/workbench-webui/workbench-chat.jsx`
+- `src/webui/frontend/workbench-chat.jsx`
   - `wbcClampBrowserWindowFrame` defined the floating-window geometry.
   - `commitFrame` synchronized the DOM shell during drag/resize and emitted
     `workbench:browser-layout`.
   - `WbcMain` owned both the scroll container and the PiP host.
-- `src/workbench-webui/workbench.css`
+- `src/webui/frontend/workbench.css`
   - `.wbc-thread-stage` provided the positioning context.
   - `.wbc-thread` and `.wbc-browser-movement-region` shared content insets.
   - User messages were right-aligned and Agent messages left-aligned, so logical
     inline padding on a row wrapper could preserve alignment.
-- `src/webui/static/app/browser-view.jsx`
+- `src/webui/frontend/shared/browser/viewport.jsx`
   - `getBoundingClientRect()` already synchronized the browser host to Electron.
   - Drag events covered position-only updates that `ResizeObserver` cannot see.
 - `electron/main.js`

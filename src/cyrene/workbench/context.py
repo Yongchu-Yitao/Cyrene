@@ -187,13 +187,13 @@ def resolve_project_knowledge_key_for_session(session_id: str | None) -> str:
     """Resolve a Workbench session to its knowledge-base storage key.
 
     Knowledge is keyed on the project **id** (like project memory), NOT the
-    project ``dataKey``. The legacy default project deliberately uses
-    ``dataKey == "default"`` to share the ``--agent`` UI's global knowledge base;
+    project ``dataKey``. The historical default project deliberately uses
+    ``dataKey == "default"`` for the global knowledge catalog;
     keying knowledge on that would make the Workbench default project alias the
     global ``kb_default.db`` catalog and surface files from every other project.
     Keying on the id decouples it, exactly as
     :func:`resolve_workbench_project_id_for_session` does for memory. Sessions not
-    attached to any project (the legacy ``--agent`` UI) fall back to ``default``.
+    attached to any project fall back to ``default`` for storage compatibility.
     """
     project_id = resolve_workbench_project_id_for_session(session_id)
     if project_id:

@@ -1257,7 +1257,7 @@ async def test_chat_run_interrupt_cleans_pending_inbox_with_run_id(tmp_path):
 def test_workbench_composer_switches_stop_button_to_guidance_when_typed():
     from pathlib import Path
 
-    source = Path("src/workbench-webui/workbench-chat.jsx").read_text(encoding="utf-8")
+    source = Path("src/webui/frontend/workbench-chat.jsx").read_text(encoding="utf-8")
     assert "var hasRuntimeGuidance = running && !!draft.trim();" in source
     assert "running && !hasRuntimeGuidance ? onInterrupt : submit" in source
     assert 'wbcT("workbenchChat.guidance", "Guide")' in source
@@ -1315,6 +1315,6 @@ def test_subagent_monitoring_has_no_fixed_two_second_completion_sleep():
 def test_workbench_has_localized_model_fallback_progress_message():
     from pathlib import Path
 
-    source = Path("src/workbench-webui/workbench-i18n.jsx").read_text(encoding="utf-8")
+    source = Path("src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
     assert '"phase.modelFallback": "Primary model unavailable' in source
     assert '"phase.modelFallback": "主模型不可用，正在切换备用模型' in source

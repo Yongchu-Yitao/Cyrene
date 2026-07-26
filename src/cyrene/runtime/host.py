@@ -100,11 +100,16 @@ async def _shielded_application_shutdown(
         raise
 
 
+def _normalize_ui_mode(ui_mode: str | None) -> str:
+    """Normalize historical UI mode values to the sole Workbench surface."""
+    return "workbench"
+
+
 def _get_default_ui_mode() -> str:
-    """Return the UI mode baked in at build time, defaulting to 'workbench'."""
+    """Return the normalized UI mode baked in at build time."""
     try:
         from cyrene.runtime.buildinfo import DEFAULT_UI_MODE
-        return DEFAULT_UI_MODE
+        return _normalize_ui_mode(DEFAULT_UI_MODE)
     except Exception:
         return "workbench"
 
@@ -475,12 +480,7 @@ def _run_electron_mode() -> None:
     so Electron can discover the server.
     """
     import sys as _sys
-    if "--agent" in _sys.argv:
-        ui_mode = "legacy"
-    elif "--workbench" in _sys.argv:
-        ui_mode = "workbench"
-    else:
-        ui_mode = _get_default_ui_mode()
+    ui_mode = _get_default_ui_mode()
     if "--verbose" in _sys.argv:
         import cyrene.observability.debug as _debug
         _debug.VERBOSE = True
@@ -678,12 +678,7 @@ def _run_web_gui() -> None:
     Server init runs in a background thread; pywebview window on the main thread.
     """
     import sys as _sys
-    if "--agent" in _sys.argv:
-        ui_mode = "legacy"
-    elif "--workbench" in _sys.argv:
-        ui_mode = "workbench"
-    else:
-        ui_mode = _get_default_ui_mode()
+    ui_mode = _get_default_ui_mode()
     if "--verbose" in _sys.argv:
         import cyrene.observability.debug as _debug
         _debug.VERBOSE = True
@@ -891,7 +886,7 @@ async def _run_one_shot_mcp(args: list[str]) -> None:
 
 def run_web_mode(ui_mode: str = "workbench") -> None:
     """Public host entry point used by ``python -m cyrene``."""
-    _run_web_mode(ui_mode=ui_mode)
+    _run_web_mode(ui_mode=_normalize_ui_mode(ui_mode))
 
 
 def main() -> None:
@@ -904,9 +899,6 @@ def main() -> None:
         return
     if "--workbench" in sys.argv:
         _run_web_mode(ui_mode="workbench")
-        return
-    if "--agent" in sys.argv:
-        _run_web_mode(ui_mode="legacy")
         return
     if "--web" in sys.argv:
         _run_web_mode(ui_mode="workbench")

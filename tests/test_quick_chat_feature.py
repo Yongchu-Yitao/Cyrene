@@ -47,7 +47,7 @@ def test_quick_chat_preload_exposes_narrow_bridge():
 def test_quick_chat_shortcut_is_persisted_by_the_main_process():
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
     settings = (
-        ROOT / "src" / "workbench-webui" / "settings-overlay.jsx"
+        ROOT / "src" / "webui" / "frontend" / "settings-overlay.jsx"
     ).read_text(encoding="utf-8")
 
     assert "quickChatShortcut: 'CommandOrControl+Shift+Space'" in main
@@ -60,18 +60,19 @@ def test_quick_chat_shortcut_is_persisted_by_the_main_process():
 
 def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
     quick_chat = (
-        ROOT / "src" / "workbench-webui" / "workbench-quick-chat.jsx"
+        ROOT / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx"
     ).read_text(encoding="utf-8")
-    app = (ROOT / "src" / "webui" / "static" / "app" / "app.jsx").read_text(
+    app = (ROOT / "src" / "webui" / "frontend" / "entry" / "bootstrap.jsx").read_text(
         encoding="utf-8"
     )
-    index = (ROOT / "src" / "webui" / "static" / "app" / "index.html").read_text(
+    index = (ROOT / "src" / "webui" / "frontend" / "index.html").read_text(
         encoding="utf-8"
     )
 
-    assert 'params.get("surface")' in app
-    assert 'readUiSurfaceMode() === "quick-chat"' in app
-    assert "<window.QuickChatApp />" in app
+    assert 'get("surface")' in app
+    assert 'readWorkbenchSurface() === "quick-chat"' in app
+    assert 'var QuickChatApp = window.CyreneUI.require("quickChat").App;' in app
+    assert "<QuickChatApp />" in app
     assert "compiled/workbench-quick-chat.js?v=0.7.0b1" in index
     # The picker pulls writable targets from the dedicated endpoint.
     assert "/api/workbench/quick-chat/targets" in quick_chat
@@ -81,24 +82,25 @@ def test_quick_chat_surface_is_loaded_without_uploading_the_screenshot():
     # composer via the existing attachment event.
     assert "/api/chat/upload" not in quick_chat
     assert "cyrene:add-chat-attachments" in quick_chat
-    assert "window.QuickChatApp = QuickChatApp;" in quick_chat
+    assert 'window.CyreneUI.register("quickChat"' in quick_chat
+    assert "App: QuickChatApp" in quick_chat
 
 
 def test_quick_chat_reuses_the_shared_composer_not_a_fork():
     quick_chat = (
-        ROOT / "src" / "workbench-webui" / "workbench-quick-chat.jsx"
+        ROOT / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx"
     ).read_text(encoding="utf-8")
     chat = (
-        ROOT / "src" / "workbench-webui" / "workbench-chat.jsx"
+        ROOT / "src" / "webui" / "frontend" / "workbench-chat.jsx"
     ).read_text(encoding="utf-8")
 
     # The composer is shared, not duplicated.
-    assert "window.WbcComposer = WbcComposer;" in chat
-    assert "window.WbcComposer" in quick_chat
+    assert "Composer: WbcComposer" in chat
+    assert "chatService.Composer" in quick_chat
     # Quick chat isolates its draft via a namespace. The window now stays open
     # after a send (continuous conversation), so the composer clears its input on
     # send using the default behavior rather than passing clearOnSend={false}.
-    assert 'draftNamespace="quick-chat:"' in quick_chat
+    assert 'draftNamespace: "quick-chat:"' in quick_chat
     assert "clearOnSend={false}" not in quick_chat
     # The composer honors the new optional props (defaults preserve main chat).
     assert "draftNamespace" in chat
@@ -108,13 +110,13 @@ def test_quick_chat_reuses_the_shared_composer_not_a_fork():
 
 def test_quick_chat_send_close_and_sync_contract():
     quick_chat = (
-        ROOT / "src" / "workbench-webui" / "workbench-quick-chat.jsx"
+        ROOT / "src" / "webui" / "frontend" / "workbench-quick-chat.jsx"
     ).read_text(encoding="utf-8")
     chat = (
-        ROOT / "src" / "workbench-webui" / "workbench-chat.jsx"
+        ROOT / "src" / "webui" / "frontend" / "workbench-chat.jsx"
     ).read_text(encoding="utf-8")
     workbench = (
-        ROOT / "src" / "workbench-webui" / "workbench.jsx"
+        ROOT / "src" / "webui" / "frontend" / "workbench.jsx"
     ).read_text(encoding="utf-8")
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
     preload = (ROOT / "electron" / "preload.js").read_text(encoding="utf-8")
@@ -130,13 +132,13 @@ def test_quick_chat_send_close_and_sync_contract():
     assert "createdChatIdRef" in quick_chat
     # Reuses the shared run-manager + transcript hooks instead of a forked
     # streaming loop, so the run is durable server-side and survives the window.
-    assert "WorkbenchChatRuntimes" in quick_chat
+    assert "chatService.Runtimes" in quick_chat
     assert "runtimeEngine.start" in quick_chat
     assert "onUserMessage" in quick_chat
     assert "chat_run_in_progress" in quick_chat
     # Renders the shared message cards (not a simplified bubble) inside the
     # shared thread layout.
-    assert "window.WbcLiveMessage" in quick_chat
+    assert "chatService.LiveMessage" in quick_chat
     assert 'className="wbc-thread wbq-thread"' in quick_chat
     # closeWindow is wired to ESC only, never to a successful send/ack.
     assert "resetAfterSend" not in quick_chat
@@ -225,7 +227,7 @@ def test_tray_icon_is_a_small_transparent_colored_asset():
 def test_quick_chat_is_opt_in_behind_general_settings_toggles():
     main = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
     general = (
-        ROOT / "src" / "workbench-webui" / "settings-overlay.jsx"
+        ROOT / "src" / "webui" / "frontend" / "settings-overlay.jsx"
     ).read_text(encoding="utf-8")
 
     # Opt-in: the global shortcut is only claimed when quick chat is enabled,

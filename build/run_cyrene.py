@@ -160,11 +160,9 @@ if __name__ == "__main__":
             sys.argv.remove("--electron")
             sys.argv.append("--electron-mode")
         else:
-            try:
-                from cyrene.runtime.buildinfo import DEFAULT_UI_MODE as _ui_mode
-            except Exception:
-                _ui_mode = "workbench"
-            sys.argv.append("--workbench" if _ui_mode != "legacy" else "--agent")
+            # Historical buildinfo values such as "agent" or "legacy" are
+            # normalized to the sole supported Workbench surface.
+            sys.argv.append("--workbench")
         try:
             from cyrene.runtime.host import main
             main()

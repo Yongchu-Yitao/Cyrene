@@ -20,7 +20,6 @@ contextBridge.exposeInMainWorld('cyrene', {
     if (process.platform !== 'linux') return Promise.resolve(null);
     return ipcRenderer.invoke('dialog:pick-directory');
   },
-  switchUiShell: (mode) => ipcRenderer.invoke('window:switch-shell', mode),
   browser: {
     getState: (sessionId) => ipcRenderer.invoke('browser:get-state', { sessionId: String(sessionId || '') }),
     setBounds: (info) => ipcRenderer.invoke('browser:set-bounds', info || {}),

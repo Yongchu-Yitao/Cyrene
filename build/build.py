@@ -550,6 +550,8 @@ def run_electron_builder(arch: str = "x64") -> None:
 
 def write_buildinfo(ui_mode: str) -> None:
     """Write runtime/buildinfo.py before PyInstaller bundles it."""
+    # Historical callers may still pass "agent"; Workbench is now the sole UI.
+    ui_mode = "workbench"
     buildinfo = PROJECT_ROOT / "src" / "cyrene" / "runtime" / "buildinfo.py"
     buildinfo.write_text(
         f"# Generated at build time by build/build.py — do not edit manually.\n"
@@ -564,7 +566,7 @@ def restore_buildinfo() -> None:
     buildinfo = PROJECT_ROOT / "src" / "cyrene" / "runtime" / "buildinfo.py"
     buildinfo.write_text(
         "# Generated at build time by build/build.py — do not edit manually.\n"
-        "# Committed default is \"workbench\"; overwritten per-build via --ui-mode flag.\n"
+        "# Historical build UI modes are normalized to Workbench.\n"
         'DEFAULT_UI_MODE: str = "workbench"\n',
         encoding="utf-8",
     )
@@ -585,7 +587,7 @@ def main() -> None:
         "--ui-mode",
         choices=["workbench", "agent"],
         default="workbench",
-        help="默认启动的 UI（workbench 或 agent），打包进二进制",
+        help="兼容参数；agent 已弃用并会规范化为 workbench",
     )
     parser.add_argument(
         "--arch",
@@ -597,7 +599,9 @@ def main() -> None:
 
     print(f"Cyrene Builder — {sys.platform}")
     print(f"  project: {PROJECT_ROOT}")
-    print(f"  ui-mode: {args.ui_mode}")
+    if args.ui_mode == "agent":
+        print("  warning: --ui-mode agent is deprecated; using workbench")
+    print("  ui-mode: workbench")
     print(f"  arch: {args.arch}")
 
     if args.clean:
@@ -614,7 +618,7 @@ def main() -> None:
     configure_playwright_bundle(args.bundle_playwright)
 
     try:
-        write_buildinfo(args.ui_mode)
+        write_buildinfo("workbench")
         run_pyinstaller(arch=args.arch)
     finally:
         restore_buildinfo()

@@ -138,7 +138,6 @@ let quickChatShortcutError = '';
 let pythonProcess = null;
 let pendingPortResolve = null;
 let backendPort = null;
-let backendUiMode = null;
 let isShuttingDown = false;
 let isQuitting = false;
 let launchHidden = process.argv.includes('--hidden');
@@ -3155,12 +3154,9 @@ function getPythonBinaryPath() {
 
 function getPythonArgs() {
   if (isDev) {
-    // Dev mode: use system python. CYRENE_UI_MODE=agent launches the legacy UI
-    // (for testing the native title bar); anything else uses the workbench.
-    const uiFlag = process.env.CYRENE_UI_MODE === 'agent' ? '--agent' : '--workbench';
     return [
       path.join(__dirname, '..', 'src', 'cyrene', 'local_cli.py'),
-      uiFlag,
+      '--workbench',
       '--electron-mode',
     ];
   }
@@ -3207,12 +3203,6 @@ function spawnPython() {
 
   pythonProcess.stdout.on('data', (data) => {
     const text = data.toString();
-    // Capture the UI mode (printed just before PORT) so the window is created
-    // with the matching title bar style.
-    const modeMatch = text.match(/^UIMODE=(\w+)$/m);
-    if (modeMatch) {
-      backendUiMode = modeMatch[1];
-    }
     // Scan each line for PORT=<number>
     const match = text.match(/^PORT=(\d+)$/m);
     if (match) {
@@ -3604,7 +3594,7 @@ async function openQuickChat() {
   }
 }
 
-async function createMainWindow(shellOverride) {
+async function createMainWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -3631,16 +3621,11 @@ async function createMainWindow(shellOverride) {
     return;
   }
 
-  // The workbench draws its own top bar and reserves room for the traffic
-  // lights, so it uses the frameless inset title bar. The legacy/agent UI has a
-  // normal top bar that the inset controls would overlap — keep the native
-  // (default) title bar there. Unknown mode falls back to the workbench style.
-  const uiShell = shellOverride || backendUiMode || 'workbench';
-  const isLegacyShell = uiShell === 'legacy' || uiShell === 'agent';
-  // The inset title bar and traffic-light positioning are macOS-specific.
+  // Workbench draws its own top bar and reserves room for the traffic lights.
+  // The inset title bar and traffic-light positioning remain macOS-specific.
   // Windows and Linux keep their native frame so close/minimize/maximize
   // controls remain available.
-  const useInsetTitleBar = !isLegacyShell && isMac;
+  const useInsetTitleBar = isMac;
   const windowOptions = {
     width: 1200,
     height: 800,
@@ -3691,12 +3676,8 @@ async function createMainWindow(shellOverride) {
     mainWindow = null;
   });
 
-  // Navigate to the local Python server. The legacy/agent UI is selected via
-  // the ?shell=legacy param so it renders in this (natively-framed) window even
-  // when the backend was launched in workbench mode.
-  const url = isLegacyShell
-    ? `http://127.0.0.1:${port}/?shell=legacy`
-    : `http://127.0.0.1:${port}`;
+  // Navigate to the sole Workbench surface.
+  const url = `http://127.0.0.1:${port}`;
   // Force clear cache so the app always loads fresh assets
   mainWindow.webContents.session.clearCache();
   mainWindow.loadURL(url);
@@ -3786,38 +3767,6 @@ function syncTrayWithSettings(settings) {
     if (tray) tray.setContextMenu(buildTrayMenu());
   }
   else destroyTray();
-}
-
-// Swap the window to a different UI shell at runtime (e.g. the workbench's
-// "旧界面" button). titleBarStyle is fixed at creation, so we build a fresh
-// window with the right chrome and discard the old one. The new window is
-// created BEFORE the old is destroyed, so the window count never hits zero
-// (which would fire window-all-closed → killPython). Returning to the new UI
-// is a normal app restart.
-let isSwitchingShell = false;
-async function reopenWindowForShell(uiShell) {
-  if (isSwitchingShell) return;
-  isSwitchingShell = true;
-  try {
-    const old = mainWindow;
-    const bounds = old && !old.isDestroyed() ? old.getBounds() : null;
-    if (old && !old.isDestroyed()) {
-      // Drop lifecycle listeners so destroying the old window doesn't
-      // hide-to-background or kill the (still-needed) Python backend.
-      old.removeAllListeners('close');
-      old.removeAllListeners('closed');
-    }
-    mainWindow = null;
-    await createMainWindow(uiShell);
-    if (bounds && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setBounds(bounds);  // keep the same size/position across the swap
-    }
-    if (old && !old.isDestroyed()) {
-      old.destroy();
-    }
-  } finally {
-    isSwitchingShell = false;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3927,10 +3876,6 @@ if (!gotSingleInstanceLock) {
         return { path: '', cancelled: true };
       }
       return { path: result.filePaths[0] };
-    });
-    ipcMain.handle('window:switch-shell', (_event, mode) => {
-      const target = (mode === 'legacy' || mode === 'agent') ? 'legacy' : 'workbench';
-      return reopenWindowForShell(target);
     });
     ipcMain.handle('browser:get-state', (_event, info) => handleBrowserRpc('state', {}, info || {}));
     ipcMain.handle('browser:set-bounds', (_event, info) => handleBrowserRpc('setBounds', info || {}, info || {}));

@@ -9,7 +9,7 @@
   // --- Page data ---
   const PAGES = [
     'overview', 'installation', 'configuration',
-    'usage-workbench', 'usage-legacy', 'usage-cli',
+    'usage-workbench', 'usage-cli',
     'architecture', 'memory', 'knowledge',
     'browser', 'mcp', 'scheduler', 'subagents', 'search',
     'quick-chat',
@@ -31,7 +31,6 @@
     'nav.installation': { zh: '安装', en: 'Installation' },
     'nav.configuration': { zh: '配置', en: 'Configuration' },
     'nav.usage-workbench': { zh: 'Workbench UI', en: 'Workbench UI' },
-    'nav.usage-legacy': { zh: 'Legacy UI', en: 'Legacy UI' },
     'nav.usage-cli': { zh: 'CLI', en: 'CLI' },
     'nav.architecture': { zh: '双阶段循环', en: 'Two-Phase Loop' },
     'nav.memory': { zh: '记忆系统', en: 'Memory System' },
@@ -64,7 +63,6 @@
     'page.installation': { zh: '在 Linux/macOS/Windows 上安装 Cyrene', en: 'Install Cyrene on Linux, macOS, or Windows' },
     'page.configuration': { zh: '环境变量、加密配置仓库、运行时设置', en: 'Environment variables, encrypted config store, runtime settings' },
     'page.usage-workbench': { zh: 'Workbench UI 使用指南：项目隔离、意图分流、逐步执行', en: 'Workbench UI guide: project isolation, intent dispatch, step-by-step execution' },
-    'page.usage-legacy': { zh: 'Legacy Agent UI 功能详解', en: 'Legacy Agent UI feature reference' },
     'page.usage-cli': { zh: 'CLI 命令和交互式本地 CLI 使用', en: 'CLI commands and interactive local CLI usage' },
     'page.architecture': { zh: '双阶段代理循环、项目结构、安全模型', en: 'Two-phase agent loop, project structure, security model' },
     'page.memory': { zh: '三层记忆架构：上下文窗口、短期记忆、SOUL.md', en: 'Three-layer memory: context window, short-term, SOUL.md' },

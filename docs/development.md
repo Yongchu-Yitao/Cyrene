@@ -34,9 +34,11 @@ Each log line is a JSON object:
  "duration_ms": 150.2}
 ```
 
-### Context Debugger
+### Context tracing
 
-When `--verbose` is enabled, every LLM call is tagged with `_ctx` provenance metadata describing where each context block came from. These traces are written to the debug JSONL and exposed through the Web UI **Context Debugger** page and the API:
+When `--verbose` is enabled, every LLM call is tagged with `_ctx` provenance
+metadata describing where each context block came from. These traces are
+written to the debug JSONL and exposed through the API:
 
 ```bash
 # List recent events
@@ -52,7 +54,11 @@ Via the CLI:
 cyrene flow --session run_live --round round_xxx --id evt_3b22f9a5c0cb
 ```
 
-### Event Inspection (legacy)
+Context tracing intentionally has no Workbench page after the classic UI
+consolidation; use the API, CLI, or
+`python -m cyrene.observability.context_debug` instead.
+
+### Historical event inspection API
 
 When `--verbose` is enabled, every LLM call and tool call gets a unique `event_id` (e.g., `evt_3b22f9a5c0cb`) that persists to disk. Even after a daemon restart, you can inspect full event details:
 
@@ -64,9 +70,11 @@ curl http://localhost:4242/api/events/list
 curl http://localhost:4242/api/events/evt_3b22f9a5c0cb
 ```
 
-### Web UI Debug
+### Runtime and Workbench inspection
 
-The **Status** page shows live debug logs, system metrics, worker status, and service health. The **Agent Flow** page visualizes every step of the agent's execution as an interactive SVG flowchart.
+Use `cyrene status` for daemon health and metrics. Workbench chat/task details
+show live Agent, Tool, Subagent, permission, and browser execution state;
+`cyrene flow` and the event APIs provide the durable per-round trace.
 
 ## Testing
 
@@ -139,7 +147,9 @@ For MCP server support, add servers through the Settings UI or `cyrene mcp add`.
 The repository uses GitHub Actions for release builds:
 
 - Workflow: `.github/workflows/release.yml`
-- Triggers: version tags (`v*`) or manual dispatch with a choice of default UI (`workbench` or `agent`)
+- Triggers: version tags (`v*`) or manual dispatch. The compatibility
+  `ui_mode` input still accepts `workbench` or historical `agent`, but the
+  build normalizes both values to the sole Workbench UI.
 - Builds: PyInstaller + Electron for macOS, Windows (x64/ARM64), and Linux
 - Smoke test: packaged app `--smoke-test`
 

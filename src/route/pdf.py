@@ -466,7 +466,8 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
 
 <script src="/static/app/pdfjs/pdf.min.js?v=0.7.4"></script>
 <script src="/static/app/pdfjs/pdf_viewer.js?v=0.7.4"></script>
-<script src="/static/app/pdfjs/pdf-setup.js?v=0.7.4"></script>
+<script src="/static/app/compiled/platform/runtime.js?v=0.7.0b1"></script>
+<script src="/static/app/compiled/shared/pdf/bridge.js?v=0.7.4"></script>
 <script>
 (function() {{
   var pdfUrl = {js_url};
@@ -477,13 +478,15 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
   pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/app/pdfjs/pdf.worker.min.js?v=0.7.4';
 
   var container = document.getElementById('viewerContainer');
-  var result = pdfjsSetupViewer(container);
+  var pdfBridge = window.CyreneUI.require('pdf');
+  var result = pdfBridge.setupViewer(container);
   var viewer = result.viewer;
   var eventBus = result.eventBus;
 
   var currentDoc = null;
+  var abortLoader = new AbortController();
 
-  pdfjsLoadPdf(pdfUrl, viewer).then(function(doc) {{
+  pdfBridge.loadPdf(pdfUrl, viewer, abortLoader.signal).then(function(doc) {{
     currentDoc = doc;
     document.getElementById('pageCount').textContent = doc.numPages;
   }}).catch(function(err) {{
@@ -494,9 +497,10 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
     container.appendChild(failure);
   }});
 
-  eventBus.on('pagechanging', function(evt) {{
+  function onPageChanging(evt) {{
     document.getElementById('pageNum').textContent = evt.pageNumber;
-  }});
+  }}
+  eventBus.on('pagechanging', onPageChanging);
 
   document.getElementById('zoomIn').addEventListener('click', function() {{
     viewer.currentScale *= 1.15;
@@ -519,7 +523,7 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
   container.addEventListener('mouseup', function() {{
     if (selectionTimeout) clearTimeout(selectionTimeout);
     selectionTimeout = setTimeout(function() {{
-      var text = pdfjsGetSelectedText(container).trim();
+      var text = pdfBridge.getSelectedText(container).trim();
       analyzeBtn.style.display = text ? 'block' : 'none';
     }}, 200);
   }});
@@ -529,7 +533,7 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
   }});
 
   analyzeBtn.addEventListener('click', function() {{
-    var text = pdfjsGetSelectedText(container).trim();
+    var text = pdfBridge.getSelectedText(container).trim();
     if (!text || analyzeBtn.disabled) return;
 
     analyzeBtn.textContent = labels.analyzing;
@@ -539,14 +543,14 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
     resultPanel.style.display = 'block';
 
     var currentPage = Number(document.getElementById('pageNum').textContent) || 1;
-    if (!window.pdfjsBuildAnalysisInventory || !window.pdfjsExtractAnalysisContext) {{
+    if (!pdfBridge.buildAnalysisInventory || !pdfBridge.extractAnalysisContext) {{
       resultPanel.className = 'wbc-pdf-result';
       resultBody.textContent = labels.failed + labels.tools_unavailable;
       analyzeBtn.disabled = false;
       return;
     }}
 
-    window.pdfjsBuildAnalysisInventory(container, viewer, currentPage)
+    pdfBridge.buildAnalysisInventory(container, viewer, currentPage)
     .then(function(inventory) {{
       return fetch('/api/pdf/context-plan', {{
         method: 'POST',
@@ -555,7 +559,7 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
       }}).then(function(response) {{ return response.json(); }})
       .then(function(plan) {{
         if (plan.error) throw new Error(plan.error);
-        return window.pdfjsExtractAnalysisContext(viewer, plan.page_numbers, inventory, plan.reason);
+        return pdfBridge.extractAnalysisContext(viewer, plan.page_numbers, inventory, plan.reason);
       }});
     }})
     .then(function(context) {{
@@ -595,8 +599,21 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
   }});
 
   // Copy the original PDF text rather than browser-measured text-layer content.
-  pdfjsInstallSelectionSanitizer(container, viewer, eventBus);
-  pdfjsInstallCopyFix(container, viewer);
+  var selectionSanitizer = pdfBridge.installSelectionSanitizer(container, viewer, eventBus);
+  var copyFix = pdfBridge.installCopyFix(container, viewer);
+
+  window.addEventListener('beforeunload', function() {{
+    if (selectionTimeout) clearTimeout(selectionTimeout);
+    abortLoader.abort();
+    selectionSanitizer.abort();
+    copyFix.abort();
+    eventBus.off('pagechanging', onPageChanging);
+    try {{ viewer.setDocument(null); }} catch (error) {{}}
+    if (currentDoc) {{
+      try {{ currentDoc.destroy(); }} catch (error) {{}}
+      currentDoc = null;
+    }}
+  }}, {{ once: true }});
 }})();
 </script>
 </body>

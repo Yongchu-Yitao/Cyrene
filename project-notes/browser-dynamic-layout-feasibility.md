@@ -18,15 +18,15 @@
 
 ## 当前结构中的实现支点
 
-- `src/workbench-webui/workbench-chat.jsx`
+- `src/webui/frontend/workbench-chat.jsx`
   - `wbcClampBrowserWindowFrame` 已定义浮窗的几何模型。
   - `commitFrame` 已在拖动/缩放时同步 DOM 外壳，并派发 `workbench:browser-layout`。
   - `WbcMain` 同时拥有滚动容器和浮窗宿主，是计算避让的合适边界。
-- `src/workbench-webui/workbench.css`
+- `src/webui/frontend/workbench.css`
   - `.wbc-thread-stage` 是定位上下文。
   - `.wbc-thread` 与 `.wbc-browser-movement-region` 使用相同的内容 inset，坐标可直接换算。
   - 用户消息右对齐、Agent 消息左对齐，适合通过消息行 wrapper 的 `padding-inline-start/end` 保留原有对齐语义。
-- `src/webui/static/app/browser-view.jsx`
+- `src/webui/frontend/shared/browser/viewport.jsx`
   - 已通过 `getBoundingClientRect()` 将浏览器宿主矩形同步到 Electron。
   - 拖动事件已经额外覆盖了仅发生位移、`ResizeObserver` 看不到的场景。
 - `electron/main.js`

@@ -62,6 +62,10 @@ webpage/
 # Node.js build artifacts (webui JSX precompilation)
 node_modules/
 src/webui/static/app/compiled/
+src/webui/static/app/index.html
+src/webui/static/app/workbench.css
+src/webui/static/app/workbench-library.css
+src/webui/static/app/shared/
 
 # Transient agent/test output written to the repo root
 /animations/

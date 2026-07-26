@@ -1,9 +1,9 @@
-"""Schedule / calendar API for the new Workbench UI.
+"""Schedule / calendar API for the Workbench UI.
 
-This module is intentionally INDEPENDENT from the legacy scheduled-tasks
-endpoints (``/api/tasks`` in ``route/tasks.py``) that the old ``--agent`` UI uses.
-It exposes a parallel set of endpoints under ``/api/workbench/schedule/*`` so the
-two UIs never share request code.
+This module is intentionally independent from the historical scheduled-task
+endpoints (``/api/tasks`` in ``route/tasks.py``), which remain available for API
+compatibility. It exposes project calendar endpoints under
+``/api/workbench/schedule/*``.
 
 The only thing shared is the pure data layer — that *is* the backend interface
 we reuse:

@@ -112,7 +112,7 @@ def test_session_knowledge_key_falls_back_to_default_when_unattached(monkeypatch
     from cyrene.workbench import context as wc
 
     _point_stores(monkeypatch, tmp_path, projects=[])
-    # Legacy --agent / unattached sessions keep using the global kb_default.db.
+    # Unattached historical sessions keep using the global kb_default.db.
     assert wc.resolve_project_knowledge_key_for_session("ghost-session") == "default"
 
 
@@ -199,7 +199,7 @@ async def test_migration_lifts_only_attributable_docs(tmp_path, monkeypatch):
     assert str(catalog_generated.resolve()) not in moved
     assert str(catalog_upload.resolve()) not in moved
 
-    # The shared legacy db is left intact (non-destructive) for the --agent UI.
+    # The shared historical DB remains intact for data/API compatibility.
     assert len(await store.list_documents(source_db, limit=0)) == 4
 
 

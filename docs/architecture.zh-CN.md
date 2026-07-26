@@ -119,14 +119,12 @@ SQLite 保存执行历史。
 
 ### Web UI
 
-Cyrene 同时提供：
+Cyrene 只提供 Workbench 前端，包含项目 Dashboard、Chat 与实时执行状态、
+Schedule、Knowledge/Library、Memory、Search、Browser/PDF/Diff、Settings、
+Onboarding 和 Quick Chat。唯一源码根是 `src/webui/frontend`，唯一生成输出根
+是 `src/webui/static/app`。
 
-- **Workbench**：项目 Dashboard、Schedule、Knowledge、Library、Memory、
-  Chat、Model 和 Help；
-- **Classic Agent UI**：Chat、SSE、Agent Flow、Session、Memory、Status、
-  Setting、Evolution、Task、Knowledge、Entity、Map、Browser、Claude Code。
-
-两者绑定 `127.0.0.1`，共用同一个 FastAPI Backend。Electron 使用 OS Keyring
+Web UI 绑定 `127.0.0.1`，由 FastAPI Backend 提供。Electron 使用 OS Keyring
 和 Local Auth Middleware。
 
 Electron Browser Tool 通过 Token-authenticated loopback RPC 直接使用内嵌
@@ -139,11 +137,13 @@ Playwright/第二份 Chromium。非 Electron 模式可选 Playwright，最终可
 内置 [SimpleXNG](https://github.com/jlevy/simplexng)，无需 Docker。Manager
 生成 `data/simplexng_settings.yml`、默认使用 8888、处理代理并管理子进程。
 
-### Context Debugger
+### Context Trace
 
 每次 LLM 调用都带 `_ctx` Provenance，标明 System Prompt、SOUL、Short-term、
 History、Tool Result 等来源。`--verbose` 写入 `data/debug_*.jsonl`，API 为
-`GET /api/context-debug/events`。内部 `_ctx` 在 Provider 调用和持久化前移除。
+`GET /api/context-debug/events`，也可使用 `cyrene flow` 或正式模块
+`cyrene.observability.context_debug`。Context Trace 不提供 Workbench 页面；
+内部 `_ctx` 在 Provider 调用和持久化前移除。
 
 ### CLI
 
@@ -182,8 +182,9 @@ src/
 │   ├── __main__.py
 │   └── local_cli.py         Electron 物理启动垫片
 ├── route/                   FastAPI Adapter 与 Registry
-├── webui/                   App Lifecycle、Auth、SPA Hosting
-├── workbench-webui/         Workbench 前端
+├── webui/                   App Lifecycle、Auth、唯一 Workbench 前端与 SPA Hosting
+│   ├── frontend/            唯一 React/JSX 源码根
+│   └── static/app/          唯一生成/打包输出根
 ├── tests/
 ├── data/
 ├── workspace/

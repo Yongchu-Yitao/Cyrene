@@ -346,7 +346,7 @@ def test_workbench_frontend_handles_proactive_sse():
     source = (
         Path(__file__).resolve().parent.parent
         / "src"
-        / "workbench-webui"
+        / "webui" / "frontend"
         / "workbench-chat.jsx"
     ).read_text(encoding="utf-8")
 

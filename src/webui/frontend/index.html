@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<base href="/static/app/" />
+<title>Cyrene</title>
+	<style>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }</style>
+<style>
+  #cyrene-launch-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483647;
+    display: grid;
+    place-items: center;
+    background: #f5f6f8;
+    color: #171c22;
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 140ms ease, visibility 0s linear 140ms;
+  }
+  html[data-theme="dark"] #cyrene-launch-screen {
+    background: #1a2230;
+    color: #edf2f8;
+  }
+  #cyrene-launch-screen[data-ready="1"] {
+    opacity: 0;
+    visibility: hidden;
+  }
+  .cyrene-launch-brand {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    font-family: Manrope, Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .cyrene-launch-brand img {
+    display: block;
+    width: 72px;
+    height: 72px;
+  }
+  .cyrene-launch-brand strong {
+    font-size: 34px;
+    font-weight: 720;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #cyrene-launch-screen { transition: none; }
+  }
+</style>
+<link rel="icon" type="image/png" href="logo-mark.png" />
+<script>
+(() => {
+  try {
+    const mode = localStorage.getItem("cyrene-theme-mode") || "system";
+    const theme = mode === "system"
+      ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+      : mode;
+    document.documentElement.dataset.theme = theme;
+    const readTweak = (key, fallback) => {
+      const raw = localStorage.getItem("cyrene-tweak-" + key);
+      return raw == null ? fallback : JSON.parse(raw);
+    };
+    document.documentElement.dataset.density = readTweak("density", "cozy");
+    document.documentElement.dataset.textSize = readTweak("textSize", "default") || "default";
+    document.documentElement.dataset.booting = "1";
+  } catch (e) {}
+
+  let launchReadyRequested = false;
+  let launchFinished = false;
+  let launchRequestsInFlight = 0;
+  let launchIdleTimer = 0;
+  let launchDeadlineTimer = 0;
+  const nativeFetch = window.fetch.bind(window);
+
+  function finishLaunch() {
+    if (launchFinished) return;
+    launchFinished = true;
+    window.clearTimeout(launchIdleTimer);
+    window.clearTimeout(launchDeadlineTimer);
+    window.fetch = nativeFetch;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      delete document.documentElement.dataset.booting;
+      const launchScreen = document.getElementById("cyrene-launch-screen");
+      if (!launchScreen) return;
+      launchScreen.dataset.ready = "1";
+      window.setTimeout(() => launchScreen.remove(), 180);
+    }));
+  }
+
+  function scheduleLaunchFinish() {
+    window.clearTimeout(launchIdleTimer);
+    if (!launchReadyRequested || launchFinished || launchRequestsInFlight > 0) return;
+    // React surfaces start a few dependent requests after their parent payload
+    // renders. Require a short quiet window so those requests join the gate.
+    launchIdleTimer = window.setTimeout(finishLaunch, 300);
+  }
+
+  window.fetch = (...args) => {
+    if (launchFinished) return nativeFetch(...args);
+    launchRequestsInFlight += 1;
+    window.clearTimeout(launchIdleTimer);
+    return nativeFetch(...args).finally(() => {
+      launchRequestsInFlight = Math.max(0, launchRequestsInFlight - 1);
+      scheduleLaunchFinish();
+    });
+  };
+
+  function requestLaunchReady() {
+    if (launchReadyRequested || launchFinished) return;
+    launchReadyRequested = true;
+    // A failed or unusually long request must not leave the app inaccessible.
+    launchDeadlineTimer = window.setTimeout(finishLaunch, 20000);
+    scheduleLaunchFinish();
+  }
+  window.addEventListener("cyrene:ready", requestLaunchReady, { once: true });
+})();
+</script>
+<link rel="stylesheet" href="highlight.min.css" />
+<link rel="stylesheet" href="katex/katex.min.css" />
+<link rel="stylesheet" href="leaflet.css" />
+<link rel="stylesheet" href="shared/theme/base.css?v=0.7.0b1" />
+<link rel="stylesheet" href="workbench.css?v=0.7.0b1" />
+<link rel="stylesheet" href="workbench-library.css?v=0.7.0b1" />
+<link rel="stylesheet" href="shared/markdown/highlight.css?v=0.7.0b1" />
+<link rel="stylesheet" href="pdfjs/pdf_viewer.css?v=0.7.4" />
+</head>
+<body>
+<div id="cyrene-launch-screen" role="status" aria-label="Cyrene">
+  <div class="cyrene-launch-brand">
+    <img src="logo-mark.png" alt="" draggable="false" />
+    <strong>Cyrene</strong>
+  </div>
+</div>
+<div id="root"></div>
+
+<script src="react.development.js"></script>
+<script src="react-dom.development.js"></script>
+<script src="marked.min.js"></script>
+<script src="katex/katex.min.js"></script>
+<script src="purify.min.js"></script>
+<script src="highlight.min.js"></script>
+<script src="compiled/platform/runtime.js?v=0.7.0b1"></script>
+<script src="compiled/shared/markdown/math.js?v=0.7.0b1"></script>
+<script src="compiled/shared/markdown/highlight.js?v=0.7.0b1"></script>
+<script src="leaflet.js"></script>
+
+<script src="pdfjs/pdf.min.js?v=0.7.4"></script>
+<script src="pdfjs/pdf_viewer.js?v=0.7.4"></script>
+<script>
+window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/app/pdfjs/pdf.worker.min.js?v=0.7.4';
+</script>
+<script src="compiled/platform/readiness.js?v=0.7.0b1"></script>
+<script src="compiled/platform/events.js?v=0.7.0b1"></script>
+<script src="compiled/platform/navigation.js?v=0.7.0b1"></script>
+<script src="compiled/workbench-i18n.js?v=0.7.0b1"></script>
+<script src="compiled/shared/i18n/format.js?v=0.7.0b1"></script>
+<script src="compiled/shared/i18n/translations.js?v=0.7.0b1"></script>
+<script src="compiled/shared/pdf/bridge.js?v=0.7.4"></script>
+<script src="compiled/shared/feedback/service.js?v=0.7.0b1"></script>
+<script src="compiled/shared/markdown/renderer.js?v=0.7.0b1"></script>
+<script src="compiled/platform/data-store.js?v=0.7.0b1"></script>
+<script src="compiled/shared/browser/viewport.js?v=0.7.0b1"></script>
+<script src="compiled/shared/search/overlay.js?v=0.7.0b1"></script>
+<script src="compiled/shared/markdown/actions.js?v=0.7.0b1"></script>
+<script src="compiled/shared/diff/viewer.js?v=0.7.0b1"></script>
+<script src="compiled/platform/api.js?v=0.7.0b1"></script>
+<script src="compiled/workbench-library.js?v=0.7.0b1"></script>
+<script src="compiled/workbench-shortcuts.js?v=0.7.0b1"></script>
+<script src="compiled/workbench-model.js?v=0.7.0b1"></script>
+<script src="compiled/workbench-knowledge.js?v=0.7.0b1"></script>
+<script src="compiled/workbench-schedule.js?v=0.7.0b1"></script>
+<script src="compiled/workbench-memory.js?v=0.7.0b1"></script>
+<script src="compiled/workbench-create.js?v=0.7.0b1"></script>
+<script src="compiled/workbench-welcome.js?v=0.7.0b1"></script>
+<script src="compiled/workbench-profile.js?v=0.7.0b1"></script>
+<script src="compiled/workbench-chat.js?v=0.7.0b1"></script>
+<script src="compiled/workbench-quick-chat.js?v=0.7.0b1"></script>
+<script src="compiled/workbench.js?v=0.7.0b1"></script>
+<script src="compiled/settings-overlay.js?v=0.7.0b1"></script>
+<script src="compiled/entry/bootstrap.js?v=0.7.0b1"></script>
+</body>
+</html>

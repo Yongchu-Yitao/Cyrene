@@ -1,9 +1,9 @@
-"""Workspace-scoped conversation (对话) API for the new Workbench UI.
+"""Workspace-scoped conversation (对话) API for the Workbench UI.
 
-This service is intentionally independent from the legacy single-session chat
-(``/api/chat`` in ``route/agent/chat.py``), which the old ``--agent`` UI uses. It exposes
-a parallel set of endpoints under ``/api/workbench/chats*`` so the two UIs
-never share request code, while reusing the same per-session agent runtime
+This service is intentionally independent from the historical global chat API
+(``/api/chat`` in ``route/agent/chat.py``), which remains available for API
+compatibility. It exposes project-scoped endpoints under
+``/api/workbench/chats*`` while reusing the same per-session agent runtime
 (``run_agent(session_id=...)``).
 
 Data model: every Workbench project (workspace) owns two kinds of sessions —

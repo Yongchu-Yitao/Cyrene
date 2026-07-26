@@ -17,7 +17,6 @@ from cyrene.runtime.task_lifecycle import cancel_and_wait
 logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
-_WORKBENCH_UI_DIR = Path(__file__).parent.parent / "workbench-webui"
 
 
 class WebBot:
@@ -64,8 +63,9 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     app = FastAPI(title="Cyrene", lifespan=_lifespan)
     app.add_middleware(LocalAuthMiddleware)
     app.state.instance_id = instance_id
-    app.state.ui_mode = ui_mode
-    app.mount("/static/workbench-ui", StaticFiles(directory=str(_WORKBENCH_UI_DIR)), name="workbench-ui")
+    # ``ui_mode`` remains in the Python call signature for historical callers,
+    # but Workbench is now the only served UI.
+    app.state.ui_mode = "workbench"
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     register_routes(app, bot, db_path)

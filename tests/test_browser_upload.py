@@ -322,7 +322,7 @@ async def test_browser_upload_is_managed_by_browser_package_and_prompt():
     from pathlib import Path
 
     root = Path(__file__).resolve().parent.parent
-    settings = (root / "src" / "workbench-webui" / "settings-overlay.jsx").read_text(encoding="utf-8")
+    settings = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(encoding="utf-8")
     prompt = (root / "src" / "cyrene" / "agent" / "prompts.py").read_text(encoding="utf-8")
 
     assert '"browser_upload_files"' not in settings

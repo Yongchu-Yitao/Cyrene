@@ -4,16 +4,10 @@
 
 ## 启动 Cyrene
 
-### Workbench（默认）
+### Workbench
 
 ```bash
 python -m cyrene --workbench
-```
-
-### Classic Agent UI
-
-```bash
-python -m cyrene --agent
 ```
 
 ### 无 Web 的交互 CLI
@@ -59,21 +53,14 @@ Workbench 以项目为中心：
 | Model | Model 与 Endpoint |
 | Help | Onboarding 与文档 |
 
-## Classic Agent UI
+Workbench 是唯一 Web UI。实时 Markdown 对话、运行 Guidance、Subagent 与
+Browser 状态、Session History、Memory、Knowledge/Search、Schedule、Map、
+Model/Tool/MCP/API Key 设置和主题能力都通过 Workbench 的页面、面板或
+Settings Overlay 提供。
 
-| 页面 | 功能 |
-|---|---|
-| Chat | Message、运行 Guidance、Subagent、Browser |
-| Agent Flow | LLM、Tool、Subagent 时间线 |
-| Sessions | 搜索、查看、删除 Session |
-| Memory | SOUL、Short-term、Context |
-| Knowledge | 文档上传与 Search |
-| Entities | 结构化 Entity |
-| Evolution | Learned Pattern |
-| Tasks | Schedule 与 History |
-| Map | AMap/Leaflet |
-| Status | Metric、Worker、Service、Context Debugger |
-| Settings | Model、Tool Package、MCP、Search、API Key、Appearance |
+Verbose Context Trace 不属于 WebUI；通过 `cyrene flow`、
+`/api/context-debug/events` 或
+`python -m cyrene.observability.context_debug` 检查。
 
 ## CLI
 

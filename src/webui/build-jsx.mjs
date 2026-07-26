@@ -1,12 +1,13 @@
 import * as esbuild from 'esbuild'
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync, rmSync } from 'fs'
 import { join, relative, dirname, extname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const APP_DIR = resolve(__dirname, 'static/app')
 const OUT_DIR = resolve(APP_DIR, 'compiled')
-const WORKBENCH_DIR = resolve(__dirname, '../workbench-webui')
+const WORKBENCH_DIR = resolve(__dirname, 'frontend')
+const INDEX_SOURCE = resolve(WORKBENCH_DIR, 'index.html')
 
 function collect(dir) {
   const files = []
@@ -21,9 +22,23 @@ function collect(dir) {
   return files
 }
 
+function collectCss(dir) {
+  const files = []
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry)
+    if (statSync(full).isDirectory()) {
+      files.push(...collectCss(full))
+    } else if (entry.endsWith('.css')) {
+      files.push(full)
+    }
+  }
+  return files
+}
+
 async function build() {
   const workbenchFiles = existsSync(WORKBENCH_DIR) ? collect(WORKBENCH_DIR) : []
-  const files = [...collect(APP_DIR), ...workbenchFiles]
+  const files = workbenchFiles
+  rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
 
   for (const file of files) {
@@ -61,6 +76,19 @@ async function build() {
 
   const total = files.length
   console.log(`\nDone. ${total} JSX file${total > 1 ? 's' : ''} compiled to ${OUT_DIR}`)
+
+  copyFileSync(INDEX_SOURCE, join(APP_DIR, 'index.html'))
+  console.log('✓ index.html')
+
+  // CSS is maintained beside its owning source and copied to the one static
+  // output namespace with the same relative path.
+  for (const srcPath of collectCss(WORKBENCH_DIR)) {
+    const rel = relative(WORKBENCH_DIR, srcPath)
+    const outPath = join(APP_DIR, rel)
+    mkdirSync(dirname(outPath), { recursive: true })
+    copyFileSync(srcPath, outPath)
+    console.log(`✓ ${rel}`)
+  }
 
   // ---- Copy pdfjs-dist assets ------------------------------------------------
   const PDFJS_SRC = resolve(__dirname, 'node_modules/pdfjs-dist')

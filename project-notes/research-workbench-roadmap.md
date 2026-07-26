@@ -5,7 +5,7 @@
 
 > 状态核对：2026-07-26。本文件同时包含已落地能力和后续规划。
 > “当前已实现”均已对照 `src/cyrene/knowledge/`、
-> `src/route/workbench/library.py`、`src/workbench-webui/workbench-library.*`
+> `src/route/workbench/library.py`、`src/webui/frontend/workbench-library.*`
 > 与 `tests/test_workbench_library.py`、`tests/test_library_tools.py`；
 > 其余内容仍是路线图，不代表已经交付。
 
@@ -270,7 +270,7 @@ src/route/workbench/
   experiments.py                      # 后续
   manuscripts.py                      # 后续
 
-src/workbench-webui/
+src/webui/frontend/
   workbench-library.jsx               # 已有
   workbench-experiments.jsx           # 后续
   workbench-manuscripts.jsx           # 后续
