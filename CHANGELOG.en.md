@@ -120,6 +120,29 @@ localization, and visual hierarchy have been comprehensively refined.
   clipboard use, accessible labels, toasts, Event/Outcome localization, local
   time formatting, outcome centering, and removal of the legacy notice.
 
+### Workbench chat renaming
+
+- **Renaming no longer invokes the browser's native prompt** — The Conversation
+  Rail menu opens a Workbench-native modal that follows the existing theme,
+  radii, buttons, focus rings, and light/dark behavior, avoiding an
+  uncontrollable system dialog that can also be blocked by Electron.
+- **Validation and saving state are complete** — The dialog starts with the
+  current title selected and enforces the 60-character limit. Empty,
+  whitespace-only, unchanged, and currently-saving submissions are disabled;
+  the value is trimmed before persistence.
+- **Keyboard and accessibility behavior are explicit** — The modal supplies
+  `role="dialog"`, `aria-modal="true"`, a labelled title and input, Escape and
+  scrim-click dismissal, save-time close protection, and an accessible name
+  for the close button.
+- **Errors and success follow Workbench feedback conventions** — API errors
+  remain inline with alert semantics and clear when editing resumes. Success
+  uses the shared toast and closes the modal instead of losing failures behind
+  a `window.prompt` call chain.
+- **Backend persistence has a regression test** —
+  `PATCH /api/workbench/chats/{chat_id}` stores the trimmed title, advances
+  `updatedAt`, and writes the Workbench chat store. The frontend contract also
+  locks out any return of `window.prompt`.
+
 ### Compatibility and verification
 
 - **Control API and command scope are unchanged** — beta3 does not add arbitrary
@@ -134,7 +157,7 @@ localization, and visual hierarchy have been comprehensively refined.
   allowlist boundaries, the exact `100.100.8.4` case, adjacent-address
   rejection, trusted-device persistence across store reopen, and the complete
   Connection-settings interaction contract. The local beta3 release gate
-  passed all `1,455` pytest cases, `44` Electron Node tests, rebuilding all 32
+  passed all `1,456` pytest cases, `44` Electron Node tests, rebuilding all 32
   WebUI JSX entries, Python `compileall`, version consistency, and
   `git diff --check`. Platform installers and frozen smoke tests remain the
   responsibility of the beta3-tagged GitHub Release workflow.

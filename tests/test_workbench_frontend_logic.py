@@ -1440,15 +1440,17 @@ def test_workbench_chat_card_menu_can_rename_the_target_chat():
     rail = source.split("function WbcRail(", 1)[1].split(
         "// Conversation main (column 3)", 1
     )[0]
+    rename_dialog = source.split("function WbcRenameDialog", 1)[1].split(
+        "function WbcRail(", 1
+    )[0]
 
     assert "onRename={handleRenameChat}" in source
     assert 'wbcT("workbenchChat.rename", "Rename chat")' in rail
-    assert "function WbcRenameDialog" in rail
-    assert 'role="dialog"' in rail
-    assert "maxLength={60}" in rail
+    assert 'role="dialog"' in rename_dialog
+    assert "maxLength={60}" in rename_dialog
     assert "setRenameChat(chat)" in rail
     assert "window.prompt(" not in rail
-    assert "onRename(chat.id, next)" in rail
+    assert "onRename(chat.id, nextTitle)" in rename_dialog
     assert "prev && prev.id === chat.id" in source
 
 

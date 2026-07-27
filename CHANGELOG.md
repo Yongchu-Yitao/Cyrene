@@ -94,6 +94,24 @@
   Electron Clipboard、Accessible Label、Toast、Event/Outcome i18n、本地时间、
   状态居中和旧通知移除均纳入 Source-level Regression Contract。
 
+### Workbench 对话重命名
+
+- **对话重命名不再调用浏览器原生 Prompt** — Conversation Rail 的菜单动作改为
+  Workbench 原生 Modal，与现有主题、圆角、Button、Focus Ring 和明暗模式保持
+  一致，不再出现样式突兀、无法控制或被 Electron 阻断的系统输入框。
+- **输入校验与保存状态完整** — Dialog 自动带入当前标题并全选，标题限制为
+  60 个字符；空标题、只包含空格、未发生变化或正在保存时禁用提交。提交前统一
+  Trim，避免持久化不可见空格。
+- **键盘和无障碍行为补齐** — Modal 提供 `role="dialog"`、
+  `aria-modal="true"`、关联标题和 Label；支持 Escape 与点击 Scrim 关闭，
+  保存期间禁止误关闭，关闭按钮有独立 Accessible Name。
+- **错误与成功反馈遵循 Workbench 规范** — API 错误保留在 Dialog 内并使用
+  Alert 语义，用户继续输入时自动清除；成功后使用 Shared Toast 提示并关闭
+  Modal，不再让错误从 `window.prompt` 调用链静默丢失。
+- **重命名持久化增加后端回归测试** — `PATCH /api/workbench/chats/{chat_id}`
+  会保存 Trim 后标题、更新 `updatedAt` 并写回 Workbench Chat Store；Frontend
+  Contract 同时锁定不再出现 `window.prompt`。
+
 ### 兼容性与验证
 
 - **不改变 Control API 和远程领域命令** — beta3 没有扩大任意 HTTP、Shell、
@@ -105,7 +123,7 @@
   仍通过既有 Private IPv6 规则。
 - **专项回归覆盖** — 新增 Tailscale Allowlist 边界、精确
   `100.100.8.4`、邻接地址拒绝、可信设备跨重启持久化以及完整设置页交互契约
-  测试；beta3 本地发布门禁通过完整 `1,455` 项 pytest、`44` 项 Electron
+  测试；beta3 本地发布门禁通过完整 `1,456` 项 pytest、`44` 项 Electron
   Node Test、32 个 WebUI JSX Entry 重建、Python `compileall`、版本一致性与
   `git diff --check`。各平台安装包与 Frozen Smoke 继续由 beta3 Tag 触发的
   GitHub Release Workflow 验证。

@@ -1884,6 +1884,123 @@ body.wb-col-resizing {
   z-index: 199;
 }
 
+/* ---- Rename chat dialog ---- */
+
+.wbc-rename-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 10100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.38);
+  animation: wb-confirm-fade 0.14s ease-out;
+}
+
+.wbc-rename-dialog {
+  width: min(420px, calc(100vw - 40px));
+  overflow: hidden;
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  background: var(--wb-card-bg);
+  color: var(--wb-text);
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.32);
+  animation: wb-confirm-pop 0.16s ease-out;
+}
+
+.wbc-rename-head,
+.wbc-rename-foot {
+  display: flex;
+  align-items: center;
+  padding: 14px 18px;
+}
+
+.wbc-rename-head {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--wb-line);
+}
+
+.wbc-rename-head strong {
+  font-size: calc(16px * var(--wb-ui-font-scale, 1));
+  font-weight: 720;
+}
+
+.wbc-rename-close {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.wbc-rename-close:hover:not(:disabled) {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-rename-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px;
+}
+
+.wbc-rename-body label {
+  color: var(--wb-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbc-rename-body input {
+  width: 100%;
+  height: 40px;
+  box-sizing: border-box;
+  border: 1px solid var(--wb-line);
+  border-radius: 9px;
+  outline: none;
+  padding: 0 11px;
+  background: var(--wb-input-bg, var(--wb-card-bg));
+  color: var(--wb-text);
+  font: inherit;
+}
+
+.wbc-rename-body input:focus {
+  border-color: var(--wb-active-border);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-active-border) 18%, transparent);
+}
+
+.wbc-rename-meta {
+  min-height: 18px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--wb-faint);
+  font-size: calc(11.5px * var(--wb-ui-font-scale, 1));
+}
+
+.wbc-rename-meta > span:first-child {
+  flex: 1 1 auto;
+}
+
+.wbc-rename-meta .is-error {
+  color: var(--wb-red);
+}
+
+.wbc-rename-foot {
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--wb-line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-rename-scrim,
+  .wbc-rename-dialog { animation: none; }
+}
+
 /* ---- /Card action menu ---- */
 
 .workbench-status-dot {

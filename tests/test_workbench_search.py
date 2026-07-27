@@ -175,6 +175,21 @@ def client(search_env):
     return TestClient(app)
 
 
+def test_rename_workbench_chat_persists_trimmed_title(client, search_env):
+    response = client.patch(
+        "/api/workbench/chats/chat_1",
+        json={"title": "  Renamed conversation  "},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["chat"]["title"] == "Renamed conversation"
+    stored = json.loads(
+        (search_env["data_dir"] / "workbench_chats.json").read_text(encoding="utf-8")
+    )
+    assert stored["chats"][0]["title"] == "Renamed conversation"
+    assert stored["chats"][0]["updatedAt"] != "2026-01-02T00:00:00+00:00"
+
+
 def test_delete_workbench_legacy_chat_uses_session_delete(client, search_env, monkeypatch):
     routes_mod = search_env["routes_mod"]
     deleted = []

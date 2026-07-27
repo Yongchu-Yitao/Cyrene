@@ -2763,9 +2763,110 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
 // Conversation rail (column 2)
 // ---------------------------------------------------------------------------
 
+function WbcRenameDialog({ chat, onClose, onRename }) {
+  var [draft, setDraft] = useWbcState(chat ? chat.title || "" : "");
+  var [saving, setSaving] = useWbcState(false);
+  var [error, setError] = useWbcState("");
+  var inputRef = useWbcRef(null);
+  var originalTitle = String((chat && chat.title) || "");
+  var nextTitle = String(draft || "").trim();
+  var canSave = !!nextTitle && nextTitle !== originalTitle && !saving;
+
+  useWbcEffect(function () {
+    setDraft(originalTitle);
+    setError("");
+    setSaving(false);
+    requestAnimationFrame(function () {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.select();
+      }
+    });
+  }, [chat && chat.id]);
+
+  function close() {
+    if (!saving && onClose) onClose();
+  }
+
+  function submit(e) {
+    if (e) e.preventDefault();
+    if (!canSave || !chat || !onRename) return;
+    setSaving(true);
+    setError("");
+    onRename(chat.id, nextTitle).then(function () {
+      window.CyreneUI.require("feedback").showToast(
+        wbcT("workbenchChat.renameSuccess", "Chat renamed"),
+        "success"
+      );
+      if (onClose) onClose();
+    }).catch(function (err) {
+      setError(wbcErrorText(err));
+      setSaving(false);
+    });
+  }
+
+  if (!chat) return null;
+  return (
+    <div
+      className="wbc-rename-scrim"
+      onMouseDown={function (e) { if (e.target === e.currentTarget) close(); }}
+      onKeyDown={function (e) { if (e.key === "Escape") close(); }}
+    >
+      <form
+        className="wbc-rename-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="wbc-rename-title"
+        onSubmit={submit}
+      >
+        <div className="wbc-rename-head">
+          <strong id="wbc-rename-title">{wbcT("workbenchChat.rename", "Rename chat")}</strong>
+          <button
+            type="button"
+            className="wbc-rename-close"
+            aria-label={wbcT("common.close", "Close")}
+            disabled={saving}
+            onClick={close}
+          >{WBC_ICONS.x}</button>
+        </div>
+        <div className="wbc-rename-body">
+          <label htmlFor="wbc-rename-input">{wbcT("workbenchChat.titleLabel", "Chat title")}</label>
+          <input
+            id="wbc-rename-input"
+            ref={inputRef}
+            value={draft}
+            maxLength={60}
+            disabled={saving}
+            onChange={function (e) {
+              setDraft(e.target.value);
+              if (error) setError("");
+            }}
+            placeholder={wbcT("workbenchChat.renamePlaceholder", "Enter a chat title")}
+          />
+          <div className="wbc-rename-meta">
+            <span className={error ? "is-error" : ""} role={error ? "alert" : undefined}>
+              {error || (!nextTitle ? wbcT("workbenchChat.renameRequired", "The title cannot be empty") : "")}
+            </span>
+            <span>{String(draft || "").length}/60</span>
+          </div>
+        </div>
+        <div className="wbc-rename-foot">
+          <button type="button" className="wb-btn" disabled={saving} onClick={close}>
+            {wbcT("common.cancel", "Cancel")}
+          </button>
+          <button type="submit" className="wb-btn primary" disabled={!canSave}>
+            {saving ? wbcT("common.saving", "Saving...") : wbcT("common.save", "Save")}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCreate, onRename, onDelete }) {
   var [query, setQuery] = useWbcState("");
   var [menuId, setMenuId] = useWbcState("");
+  var [renameChat, setRenameChat] = useWbcState(null);
   var filtered = useWbcMemo(function () {
     var q = query.trim().toLowerCase();
     if (!q) return chats;
@@ -2846,16 +2947,7 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
                           <button type="button" onClick={function (e) {
                             e.stopPropagation();
                             setMenuId("");
-                            var next = window.prompt(
-                              wbcT("workbenchChat.titleLabel", "Chat title"),
-                              chat.title || ""
-                            );
-                            if (next == null) return;
-                            next = String(next).trim();
-                            if (!next || next === chat.title || !onRename) return;
-                            onRename(chat.id, next).catch(function (err) {
-                              window.CyreneUI.require("feedback").showToast(err.message || String(err), "error");
-                            });
+                            setRenameChat(chat);
                           }}>{wbcT("workbenchChat.rename", "Rename chat")}</button>
                         )}
                         <button type="button" className="danger" onClick={function (e) {
@@ -2876,6 +2968,11 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
           );
         })}
       </div>
+      <WbcRenameDialog
+        chat={renameChat}
+        onClose={function () { setRenameChat(null); }}
+        onRename={onRename}
+      />
     </aside>
   );
 }
