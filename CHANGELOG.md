@@ -12,9 +12,8 @@
 ### Tailscale 直连与地址安全边界
 
 - **Tailscale IPv4 地址可以直接配对** — 直接地址校验明确允许
-  `100.64.0.0/10` 共享地址空间，因此 `100.100.8.4`、
-  `100.100.8.4:37841` 等 Tailnet 地址不再被误判为公网地址。未填写端口时仍
-  自动使用 Cyrene LAN Listener 默认端口 `37841`。
+  `100.64.0.0/10` 共享地址空间，因此该网段内的 Tailnet 地址不再被误判为
+  公网地址。未填写端口时仍自动使用 Cyrene LAN Listener 默认端口 `37841`。
 - **放行范围保持最小化** — 本次只把 Tailscale 使用的
   `100.64.0.0/10` 加入既有 Loopback、Private 和 Link-local Allowlist；
   `100.63.255.255`、`100.128.0.1`、普通公网地址、URL 形式、非法端口和超出
@@ -121,9 +120,9 @@
 - **局域网地址继续兼容** — `127.0.0.1`、RFC 1918 IPv4、Link-local 和既有
   IPv6 Local Address 行为不变。Tailscale IPv6 使用的 Unique-local Address
   仍通过既有 Private IPv6 规则。
-- **专项回归覆盖** — 新增 Tailscale Allowlist 边界、精确
-  `100.100.8.4`、邻接地址拒绝、可信设备跨重启持久化以及完整设置页交互契约
-  测试；beta3 本地发布门禁通过完整 `1,456` 项 pytest、`44` 项 Electron
+- **专项回归覆盖** — 新增 Tailscale Allowlist 边界、网段内地址、
+  邻接地址拒绝、可信设备跨重启持久化以及完整设置页交互契约测试；beta3
+  本地发布门禁通过完整 `1,456` 项 pytest、`44` 项 Electron
   Node Test、32 个 WebUI JSX Entry 重建、Python `compileall`、版本一致性与
   `git diff --check`。各平台安装包与 Frozen Smoke 继续由 beta3 Tag 触发的
   GitHub Release Workflow 验证。

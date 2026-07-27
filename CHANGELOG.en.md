@@ -17,9 +17,9 @@ localization, and visual hierarchy have been comprehensively refined.
 
 - **Tailscale IPv4 addresses can pair directly** — Direct-address validation
   now explicitly accepts the `100.64.0.0/10` shared-address range, so Tailnet
-  addresses such as `100.100.8.4` and `100.100.8.4:37841` are no longer
-  mistaken for public Internet addresses. Omitting the port still selects the
-  Cyrene LAN listener default, `37841`.
+  addresses in that range are no longer mistaken for public Internet
+  addresses. Omitting the port still selects the Cyrene LAN listener default,
+  `37841`.
 - **The allowlist remains deliberately narrow** — Only Tailscale's
   `100.64.0.0/10` range was added to the existing loopback, private, and
   link-local rules. `100.63.255.255`, `100.128.0.1`, ordinary public
@@ -154,9 +154,9 @@ localization, and visual hierarchy have been comprehensively refined.
   unique-local addresses continue to pass through the existing private-IPv6
   rule.
 - **Focused regression coverage was expanded** — Tests now cover Tailscale
-  allowlist boundaries, the exact `100.100.8.4` case, adjacent-address
-  rejection, trusted-device persistence across store reopen, and the complete
-  Connection-settings interaction contract. The local beta3 release gate
+  allowlist boundaries, in-range addresses, adjacent-address rejection,
+  trusted-device persistence across store reopen, and the complete Connection
+  settings interaction contract. The local beta3 release gate
   passed all `1,456` pytest cases, `44` Electron Node tests, rebuilding all 32
   WebUI JSX entries, Python `compileall`, version consistency, and
   `git diff --check`. Platform installers and frozen smoke tests remain the
