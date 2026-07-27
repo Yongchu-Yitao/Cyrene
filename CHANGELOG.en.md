@@ -8,9 +8,84 @@ The Chinese edition remains the most detailed record for older releases.
 ## [0.7.0b2] - 2026-07-27
 
 The second 0.7.0 beta includes every change since `v0.7.0-beta.1`: terminal
-wake-ups, completion-driven subagents, exact-scope permission review, runtime,
-route, and Workbench consolidation, safe database migration, CI hardening, and
-the simplified source startup command.
+wake-ups, completion-driven subagents, exact-scope permission review, end-to-end
+remote device control, runtime, route, and Workbench consolidation, safe data
+migration, release-pipeline improvements, arbitrary theme colors, and the
+simplified source startup command.
+
+### Remote Cyrene, device pairing, and control APIs
+
+- Added an end-to-end remote-control protocol with per-device identities,
+  Ed25519 signatures, X25519 key exchange, and ChaCha20-Poly1305 encryption.
+  Envelopes bind sender, recipient, message ID, timestamp, and nonce; receivers
+  enforce clock-skew limits, replay protection, signature verification, and
+  authenticated headers. Relays route ciphertext without seeing command data.
+- Added expiring short-code LAN pairing and WSS relay pairing. Invitations bind
+  capabilities and project scopes, while identities, peers, grants,
+  revocations, nonces, and audit events are persisted. Private material prefers
+  the OS keyring and uses a protected local fallback when the keyring is not
+  available.
+- Remote authorization now checks direction, capability, project scope, and
+  command type. Project-scoped commands fail closed without a project ID, grant
+  changes synchronize continuously, revocations propagate immediately, and
+  side-effecting requests require idempotency keys.
+- Added commands for project discovery; chat listing, creation, reading, and
+  sending; run state, cursor-addressable events, guidance, and interruption;
+  task listing, creation, reading, dispatch, plan approval, step execution,
+  pause, resume, and cancellation; approval responses; and bounded artifact
+  listing and reads.
+- Added a versioned `/api/control` surface with strict request/response schemas,
+  run-event cursors, project ownership checks, task-transition validation,
+  artifact path/size boundaries, and stable error responses. Remote commands
+  reuse these Workbench domain boundaries instead of bypassing them.
+- Added progressive remote Agent tools for listing explicitly paired devices,
+  reading connection status, and invoking an action on a user-selected device.
+  Catalog, package disclosure, runtime support, and metadata are integrated
+  without exposing remote tools to every run by default.
+- Added the standalone `cyrene-relay` console command. The WebSocket relay
+  verifies registrations, routes online peers, returns delivery receipts,
+  applies message-size limits, reconnects with backoff, and works across source
+  installs on macOS, Windows, and Linux.
+- Added a Connections settings panel for device identity, fingerprint, local
+  addresses, relay state, paired peers, bidirectional grants, project scopes,
+  last-seen status, and audit history. Chat composers can select one or more
+  remote devices, and the selection persists per chat across reloads, forks,
+  and deletes.
+
+### Durable runs, remote recovery, and portable data
+
+- Workbench run metadata and sequence-numbered events are now retained in
+  SQLite for seven days. Reconnects can recover by run or chat ID and resume
+  from a cursor; completed runs remain replayable. Startup marks unfinished
+  runs as `process_restarted` and appends a durable terminal error event.
+- The composer remains editable while an Agent runs. Empty input still
+  interrupts; non-empty input guides the current run. The Control API and
+  remote command layer use the same inbox and run-ID semantics.
+- Managed attachment, Knowledge, Library, and learned-script paths can be
+  relocated after backup restore or an app-data-root change. Resolution remains
+  inside managed roots, so deletion and deduplication cannot escape into
+  arbitrary filesystem locations.
+- Backup and configuration recovery now cover unavailable keyrings, encryption
+  fallback keys, old configuration migration, database and attachment restore,
+  learned-script references, and cross-platform path formats while retaining
+  diagnosable errors for corrupt state.
+- Chat deletion now uses optimistic UI with full rollback of active selection,
+  list position, fork-source metadata, and active-chat state when the request
+  fails.
+
+### Appearance, search, and settings experience
+
+- Theme colors now support arbitrary values in addition to eight compact
+  presets. The custom picker includes a saturation/value plane, vertical hue
+  strip, HEX field, native color input, current/new previews, reset, cancel,
+  and apply actions.
+- Selection feedback now uses a white check, one accent ring, and a restrained
+  halo. Swatch size and spacing prevent overlap; the transparent custom entry
+  matches preset dimensions and is vertically centered. The popover, HEX field,
+  and preview were compacted, and native dark focus/range outlines were removed.
+- Added a contracted shared Search Overlay stylesheet and completed bilingual
+  Settings copy, focus behavior, narrow-layout handling, and failed-form-state
+  retention for Remote, Appearance, shortcuts, and long configuration forms.
 
 ### Agents, subagents, and long-running work
 
@@ -121,6 +196,15 @@ the simplified source startup command.
 - Regular CI now compiles Python and runs the complete locked all-extras pytest
   suite, rebuilds and checks committed WebUI output, and runs Electron App Use
   tests. Platform packaging and frozen smoke tests remain release gates.
+- The release workflow now caches Python and npm dependencies from lockfiles,
+  uses `npm ci --prefer-offline` for Electron and WebUI, and disables redundant
+  artifact compression. macOS, Windows x64, and Linux publish the prerelease
+  immediately; experimental Windows ARM64 runs outside the critical path and
+  attaches its installer later with a clobber-safe release upload.
+- Windows ARM64 now persists static OpenSSL packages through vcpkg's files
+  binary provider and retains pip's locally built cryptography wheel. Cache
+  keys include platform, architecture, lockfiles, and workflow inputs while
+  preserving the frozen application's static-OpenSSL requirement.
 - The strict 259-operation OpenAPI baseline was recaptured after reviewing ten
   generator-level schema deltas and now pins FastAPI 0.136.1 and Pydantic
   2.13.4; no schema fields are ignored.
@@ -130,7 +214,7 @@ the simplified source startup command.
   processes, Literature/Zotero scope, WeChat QR setup, budget/backup/keyring
   boundaries, and Windows SimpleXNG limitation. Obsolete local QA screenshots
   were removed.
-- The local beta2 release baseline passed all 1,403 pytest tests in the locked
+- The local beta2 release baseline passed all 1,449 pytest tests in the locked
   Python 3.12 environment, 49 Electron App Use/browser-input Node tests, the
   complete 32-entry WebUI rebuild, Python compilation, version consistency, and
   `git diff --check`. Platform packages and frozen smoke tests remain owned by

@@ -5,8 +5,79 @@
 ## [0.7.0b2] - 2026-07-27
 
 这是 `0.7.0` 的第二个测试版，完整包含 `v0.7.0-beta.1` 之后的终端唤醒、
-Subagent 执行模型、安全权限收口、运行时/路由/Workbench 重构、数据库迁移、
-CI 与文档校准，以及新的默认源码启动入口。
+Subagent 执行模型、安全权限收口、端到端远程设备控制、运行时/路由/Workbench
+重构、数据库迁移、CI 与发布链路优化、主题色自定义，以及新的默认源码启动入口。
+
+### 远程 Cyrene、设备配对与控制 API
+
+- **新增端到端远程 Cyrene 控制协议** — 每台设备生成独立 Device Identity，
+  使用 Ed25519 签名、X25519 密钥交换和 ChaCha20-Poly1305 加密；Envelope
+  绑定 Sender、Recipient、Message ID、Timestamp 与 Nonce，校验时限制时间窗、
+  拒绝重放、验证签名并对 Header 做认证加密。Relay 只负责转发密文，不能读取
+  Command Payload。
+- **支持局域网短码配对与 WSS Relay 配对** — 设置页可以生成限时短码、选择授权
+  Capability 与 Project Scope，并通过直接地址或 Relay 完成双向 Trust 建立。
+  Pairing Payload、Identity、Peer、Grant、Revocation、Nonce 和 Audit Event
+  均持久化；密钥优先写入 OS Keyring，不可用时使用受保护的本地存储。
+- **授权模型同时限制 Capability、Project 与方向** — 读取 Capability、项目、
+  Chat、Run、Task、Approval 和 Artifact 的每条远程 Command 都映射到明确权限；
+  Project-scoped Command 缺少 Project ID 时 Fail Closed。授权更新定期同步，
+  Revocation 即时传播，Side-effect Command 必须携带 Idempotency Key。
+- **新增完整远程 Command Surface** — 支持列出项目，列出/创建/读取 Chat，
+  发送消息，读取 Run 与游标化 Event，Guide/Interrupt 运行，列出/创建/读取/
+  Dispatch Task，批准 Plan、执行 Step、Pause/Resume/Cancel Task，响应
+  Approval，以及列出和读取 Artifact。所有跨设备操作复用本机 Workbench
+  领域服务和权限边界，不另造旁路执行器。
+- **新增外部 Control API** — `/api/control` 暴露版本化、结构化的 Project、
+  Chat、Run、Task、Approval 和 Artifact 接口，包含严格 Request/Response
+  Schema、Run Event Cursor、Project Ownership 校验、Task State Transition
+  校验、Artifact Path/Size 限制和稳定错误响应，可供受信任客户端与远程命令层
+  共同调用。
+- **新增 Remote Agent Tools 与 Progressive Package** — Agent 可以显式查看
+  已配对设备、查询连接状态，并对用户选择的设备执行 Remote Action；Tool
+  Catalog、Package Disclosure、Runtime Support 与 Metadata 都纳入现有渐进式
+  工具体系，避免默认把远程能力暴露给所有运行。
+- **新增可独立运行的 `cyrene-relay`** — WebSocket Relay 提供签名注册、在线
+  路由、Delivery Receipt、连接恢复、Size Limit 和 Backoff；Windows/macOS/
+  Linux Source Install 均可通过同一 Console Script 启动测试 Relay。
+- **Workbench 设置页新增“连接”管理面板** — 可查看本机 Device ID、Fingerprint、
+  Local Address、Relay 状态、已配对设备、双向 Grant、Project Scope、最近在线
+  时间和 Audit Log，并可更新授权或撤销设备。Chat Composer 支持选择一个或多个
+  Remote Device，选择结果按 Chat 持久化并在 Fork/Delete/Reload 中保持一致。
+
+### 持久运行记录、远程恢复与可移植数据
+
+- **Workbench Run Event 改为 SQLite 持久化** — Run Metadata 和带 Sequence 的
+  Event History 保留七天；重连可以按 Run ID 或 Chat ID 恢复并从 Cursor 续读，
+  已完成运行仍可回放。进程重启会把未终止 Run 标记为
+  `process_restarted`，补写 Durable Error Event，而不是让前端永远等待。
+- **运行中的 Chat 可以接受 Guidance** — Composer 在 Agent 运行时保持可编辑；
+  空输入仍显示 Interrupt，非空输入改为 Guide 当前 Run。Control API 与远程
+  Command 使用同一 Inbox/Run ID 语义，避免重发原始用户消息。
+- **Attachment、Knowledge 和 Learned Skill 路径支持安装位置迁移** —
+  Backup/Restore 或 App Data Root 改变后，会在新的 Managed Upload、Export、
+  Library 和 Learned Script Root 下安全重定位旧绝对路径；解析必须保持在受管
+  根目录内，删除与去重不会越界处理任意文件。
+- **Backup/Config Store 恢复更稳健** — 补齐 Keyring 不可用、Encryption Key
+  Fallback、旧配置迁移、数据库与附件恢复、学习脚本引用和跨平台路径格式测试，
+  同时保留损坏配置的可诊断错误与安全回退。
+- **Chat 删除采用 Optimistic UI 并可完整回滚** — 删除中的 Active Chat、
+  Fork Source 和 Selection 会立即更新；请求失败时恢复原顺序、Fork Metadata
+  与 Active State，避免出现幽灵分支或丢失当前对话。
+
+### 外观、搜索与设置体验
+
+- **主题色支持任意颜色** — 保留八个紧凑预设，并新增单一透明自定义入口；
+  自定义取色器支持 Saturation/Value 面板、纵向 Hue Color Strip、HEX 输入、
+  系统 Color Input、Current/New Preview、恢复默认、取消和应用。
+- **主题色选中态重新设计** — 使用白色勾选、单层 Accent Ring 与克制 Halo；
+  色块尺寸和间距避免相邻覆盖，自定义入口与预设圆点同尺寸且垂直居中，Popover、
+  HEX 与 Color Preview 均压缩为紧凑布局，并移除浏览器原生黑色 Focus/Range
+  Border。
+- **Settings 与 Search Overlay 完成独立样式收口** — 新增共享 Search Overlay
+  Asset Contract，设置页补齐 Remote、Theme、快捷键和长表单的中英文文案、
+  Focus State、窄窗口布局与错误保留；Committed WebUI Output 与 Source Build
+  继续由测试锁定。
 
 ### Agent、Subagent 与长任务
 
@@ -130,6 +201,15 @@ CI 与文档校准，以及新的默认源码启动入口。
   使用锁定的 All-extras Environment 执行 Python Compile、完整 pytest、
   WebUI Build/Committed-output Diff 和 Electron App Use Test；Release
   Workflow 继续负责 macOS、Windows x64/ARM64、Linux 与 Frozen Smoke。
+- **Release Workflow 缩短主发布关键路径** — Python Pip 与 Node npm 依赖按
+  Lockfile 缓存，Electron/WebUI 统一使用 `npm ci --prefer-offline`；上传
+  Installer/AppImage/DMG 时关闭二次压缩，避免浪费 CPU。macOS、Windows x64
+  与 Linux 完成后立即创建 Prerelease，实验性的 Windows ARM64 改为独立
+  Non-blocking Job，构建成功后再以 `gh release upload --clobber` 附加。
+- **Windows ARM64 构建缓存原生依赖** — vcpkg 改用 Files Binary Provider
+  持久化静态 OpenSSL Package，Cryptography Source Build 保留 Pip Wheel
+  Cache；Cache Key 绑定 OS、Architecture、Lockfile 与 Workflow，减少重复
+  编译并保留安装包的静态 OpenSSL 运行时约束。
 - **OpenAPI Contract 改用锁定 Generator** — 审查 10 个 Generator-level
   Schema Delta 后，259 个 Operation 的严格 Hash 在 FastAPI 0.136.1 /
   Pydantic 2.13.4 下重新采集，并将 Generator Version 纳入 Contract；没有
@@ -141,7 +221,7 @@ CI 与文档校准，以及新的默认源码启动入口。
   Keyring 边界和 Windows SimpleXNG 限制；过时的本地 QA Screenshot Artifact
   已清理。
 - **beta2 本地发布基线通过** — 锁定的 Python 3.12 Environment 完整运行
-  1,403 项 pytest；Electron App Use 与 Browser Input 共 49 项 Node Test
+  1,449 项 pytest；Electron App Use 与 Browser Input 共 49 项 Node Test
   通过；WebUI 32 个 JSX Entry 全部重建；Python `compileall`、Version
   Consistency 与 `git diff --check` 通过。平台安装包和 Frozen Smoke 继续由
   `v0.7.0-beta.2` Tag 触发的 Release Workflow 执行。
