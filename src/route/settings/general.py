@@ -65,27 +65,33 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.get("/api/context/state")
     async def api_context_state():
         from cyrene.runtime.settings_store import is_workspace_active, is_soul_active, get_workspace_history
-        # When inside a Workbench project, reflect the project's actual workspace
-        # path instead of the global fallback so the UI chip and context-picker
-        # defaults match the project the user is working in.
-        workspace_dir = str(WORKSPACE_DIR)
-        try:
-            store = _read_workbench_store()
-            active_id = str(store.get("activeProjectId") or "").strip()
-            if active_id:
-                project = _workbench_find_project(store, active_id)
-                if project:
-                    project_ws = str(project.get("workspacePath") or "").strip()
-                    if project_ws:
-                        workspace_dir = project_ws
-        except Exception:
-            pass
-        return {
-            "soul_active": is_soul_active(),
-            "workspace_active": is_workspace_active(),
-            "workspace_dir": workspace_dir,
-            "workspace_history": get_workspace_history(),
-        }
+
+        def _load_context_state():
+            # Context chips need persisted project metadata only. The full store
+            # reader also performs artifact repair and walks every project
+            # workspace once per task session, which can block all API requests
+            # for seconds. Keep both SQLite/config I/O and metadata decoding off
+            # the event loop.
+            workspace_dir = str(WORKSPACE_DIR)
+            try:
+                store = _read_workbench_store_lightweight()
+                active_id = str(store.get("activeProjectId") or "").strip()
+                if active_id:
+                    project = _workbench_find_project(store, active_id)
+                    if project:
+                        project_ws = str(project.get("workspacePath") or "").strip()
+                        if project_ws:
+                            workspace_dir = project_ws
+            except Exception:
+                pass
+            return {
+                "soul_active": is_soul_active(),
+                "workspace_active": is_workspace_active(),
+                "workspace_dir": workspace_dir,
+                "workspace_history": get_workspace_history(),
+            }
+
+        return await asyncio.to_thread(_load_context_state)
 
     @router.post("/api/context/remove-soul")
     async def api_remove_soul():
@@ -102,17 +108,15 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.post("/api/context/remove-workspace")
     async def api_remove_workspace():
         from cyrene.runtime.settings_store import set_workspace_active
-        set_workspace_active(False)
+        await asyncio.to_thread(set_workspace_active, False)
         return {"ok": True}
 
     @router.post("/api/context/add-workspace")
     async def api_add_workspace(request: Request):
-        from cyrene.runtime.settings_store import set_workspace_active, add_workspace_to_history
+        from cyrene.runtime.settings_store import activate_workspace
         body = await request.json()
         path = str(body.get("path", "")).strip()
-        set_workspace_active(True)
-        if path:
-            add_workspace_to_history(path)
+        await asyncio.to_thread(activate_workspace, path)
         return {"ok": True}
 
     @router.post("/api/context/pick-directory")

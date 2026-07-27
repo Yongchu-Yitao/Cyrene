@@ -7,7 +7,11 @@ from route import schemas as api_models
 from route.errors import error_response
 
 
-def register_task_session_routes(router: APIRouter, bot: Any, db_path: str) -> None:
+def register_task_session_routes(
+    router: APIRouter,
+    bot: Any,
+    db_path: str,
+) -> dict[str, Any]:
     global _bot, _db_path
     _bot = bot
     _db_path = db_path
@@ -1667,3 +1671,13 @@ def register_task_session_routes(router: APIRouter, bot: Any, db_path: str) -> N
         filename = Path(str(artifact.get("name") or target.name)).name or target.name
         media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         return FileResponse(target, filename=filename, media_type=media_type)
+
+    return {
+        "get_task": api_workbench_get_session,
+        "update_task": api_workbench_update_session,
+        "dispatch_task": api_workbench_dispatch,
+        "create_run": api_workbench_create_run,
+        "answer_task": api_workbench_answer,
+        "task_events": api_workbench_session_events,
+        "task_artifacts": api_workbench_session_artifacts,
+    }

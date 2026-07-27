@@ -5,7 +5,6 @@ Mirrors the style of cyrene.tool_impl.entity.store with aiosqlite, JSON serializ
 """
 
 import hashlib
-import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -371,7 +370,11 @@ async def delete_document(db_path: str, doc_id: str, *, remove_file: bool = True
     # Delete the on-disk file
     if remove_file and doc["path"]:
         try:
-            file_path = Path(doc["path"])
+            from cyrene.runtime.attachments import resolve_managed_attachment_path
+
+            file_path = resolve_managed_attachment_path(str(doc["path"]))
+            if file_path is None:
+                file_path = Path(doc["path"])
             if file_path.exists():
                 file_path.unlink()
         except Exception:
@@ -388,7 +391,11 @@ async def deduplicate_documents(db_path: str) -> dict:
     KB records/chunks/relations, and only deletes duplicate files that live in
     Cyrene-managed upload/export directories.
     """
-    from cyrene.runtime.attachments import is_uploaded_attachment_path, is_exported_attachment_path
+    from cyrene.runtime.attachments import (
+        is_exported_attachment_path,
+        is_uploaded_attachment_path,
+        resolve_managed_attachment_path,
+    )
 
     updated_hashes = 0
     removed_duplicates = 0
@@ -405,7 +412,14 @@ async def deduplicate_documents(db_path: str) -> dict:
         for row in rows:
             digest = str(row["content_hash"] or "").strip()
             if not digest:
-                digest = content_hash_file(row["path"])
+                from cyrene.runtime.attachments import (
+                    resolve_managed_attachment_path,
+                )
+
+                relocated = resolve_managed_attachment_path(
+                    str(row["path"] or "")
+                )
+                digest = content_hash_file(relocated or row["path"])
             if not digest:
                 continue
 
@@ -434,8 +448,8 @@ async def deduplicate_documents(db_path: str) -> dict:
         if not path or not (is_uploaded_attachment_path(path) or is_exported_attachment_path(path)):
             continue
         try:
-            file_path = Path(path)
-            if file_path.exists():
+            file_path = resolve_managed_attachment_path(path)
+            if file_path is not None and file_path.exists():
                 file_path.unlink()
                 removed_files += 1
         except Exception:

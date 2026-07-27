@@ -35,6 +35,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
+import threading
+from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable
 from uuid import uuid4
 
@@ -60,6 +63,7 @@ _RETENTION_SECONDS = 45.0
 # On graceful shutdown, wait up to this long for in-flight runs to finalize
 # before cancelling them (so a planned restart still persists replies).
 _SHUTDOWN_GRACE_SECONDS = 20.0
+_DURABLE_RETENTION_DAYS = 7
 
 # Event types that suppress the synthesized reply (the agent already streamed a
 # real reply). Mirrors the legacy generator's ``startswith("reply_")`` check.
@@ -74,6 +78,238 @@ def _ndjson_line(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False) + "\n"
 
 
+class ChatRunEventStore:
+    """SQLite-backed run metadata and cursor-addressable event history."""
+
+    def __init__(self, db_path: str) -> None:
+        self.db_path = str(db_path or "")
+        self._lock = threading.RLock()
+        if self.db_path:
+            self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=5)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
+
+    def _initialize(self) -> None:
+        with self._lock, self._connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS workbench_chat_runs (
+                    run_id TEXT PRIMARY KEY,
+                    chat_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT NOT NULL DEFAULT '',
+                    termination_reason TEXT NOT NULL DEFAULT '',
+                    outcome_kind TEXT NOT NULL DEFAULT '',
+                    last_seq INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_workbench_chat_runs_chat
+                    ON workbench_chat_runs(chat_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS workbench_chat_run_events (
+                    run_id TEXT NOT NULL,
+                    seq INTEGER NOT NULL,
+                    event_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(run_id, seq),
+                    FOREIGN KEY(run_id) REFERENCES workbench_chat_runs(run_id)
+                        ON DELETE CASCADE
+                );
+                """
+            )
+            cutoff = (
+                datetime.now(timezone.utc)
+                - timedelta(days=_DURABLE_RETENTION_DAYS)
+            ).isoformat()
+            expired = [
+                str(row["run_id"])
+                for row in conn.execute(
+                    """
+                    SELECT run_id FROM workbench_chat_runs
+                    WHERE completed_at != '' AND completed_at < ?
+                    """,
+                    (cutoff,),
+                ).fetchall()
+            ]
+            if expired:
+                conn.executemany(
+                    "DELETE FROM workbench_chat_run_events WHERE run_id = ?",
+                    [(run_id,) for run_id in expired],
+                )
+                conn.executemany(
+                    "DELETE FROM workbench_chat_runs WHERE run_id = ?",
+                    [(run_id,) for run_id in expired],
+                )
+
+    def create(self, run: "ChatRun") -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO workbench_chat_runs(
+                    run_id, chat_id, status, created_at, last_seq
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    run.run_id,
+                    run.chat_id,
+                    run.status,
+                    run.created_at,
+                    run.seq,
+                ),
+            )
+            for event in run.events:
+                self._append_locked(conn, run.run_id, event)
+
+    def append(self, run_id: str, event: dict[str, Any]) -> None:
+        with self._lock, self._connect() as conn:
+            self._append_locked(conn, run_id, event)
+
+    @staticmethod
+    def _append_locked(
+        conn: sqlite3.Connection,
+        run_id: str,
+        event: dict[str, Any],
+    ) -> None:
+        seq = int(event.get("_seq") or 0)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO workbench_chat_run_events(
+                run_id, seq, event_json, created_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (
+                str(run_id),
+                seq,
+                json.dumps(
+                    event,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE workbench_chat_runs
+            SET last_seq = CASE WHEN last_seq < ? THEN ? ELSE last_seq END
+            WHERE run_id = ?
+            """,
+            (seq, seq, str(run_id)),
+        )
+
+    def finalize(self, run: "ChatRun") -> None:
+        outcome = run.outcome if isinstance(run.outcome, dict) else {}
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE workbench_chat_runs
+                SET status = ?, completed_at = ?, termination_reason = ?,
+                    outcome_kind = ?, last_seq = ?
+                WHERE run_id = ?
+                """,
+                (
+                    run.status,
+                    datetime.now(timezone.utc).isoformat(),
+                    run.termination_reason,
+                    str(outcome.get("kind") or ""),
+                    run.seq,
+                    run.run_id,
+                ),
+            )
+
+    def recover_interrupted(self) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT run_id, last_seq FROM workbench_chat_runs
+                WHERE completed_at = ''
+                """
+            ).fetchall()
+            for row in rows:
+                event = {
+                    "_seq": int(row["last_seq"]) + 1,
+                    "runId": str(row["run_id"]),
+                    "type": "error",
+                    "code": "process_restarted",
+                    "message": "The Cyrene process restarted before this run completed.",
+                }
+                self._append_locked(conn, str(row["run_id"]), event)
+                conn.execute(
+                    """
+                    UPDATE workbench_chat_runs
+                    SET status = 'error', completed_at = ?,
+                        termination_reason = 'process_restarted',
+                        outcome_kind = 'error'
+                    WHERE run_id = ?
+                    """,
+                    (now, str(row["run_id"])),
+                )
+            return len(rows)
+
+    def load_by_run_id(self, run_id: str) -> "ChatRun | None":
+        return self._load("run_id = ?", (str(run_id),))
+
+    def load_latest_for_chat(self, chat_id: str) -> "ChatRun | None":
+        return self._load(
+            "chat_id = ?",
+            (str(chat_id),),
+            order_by="created_at DESC",
+        )
+
+    def _load(
+        self,
+        where: str,
+        args: tuple[Any, ...],
+        *,
+        order_by: str = "created_at DESC",
+    ) -> "ChatRun | None":
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT run_id, chat_id, status, created_at, completed_at,
+                       termination_reason, outcome_kind, last_seq
+                FROM workbench_chat_runs
+                WHERE {where}
+                ORDER BY {order_by}
+                LIMIT 1
+                """,
+                args,
+            ).fetchone()
+            if row is None:
+                return None
+            event_rows = conn.execute(
+                """
+                SELECT event_json FROM workbench_chat_run_events
+                WHERE run_id = ? ORDER BY seq
+                """,
+                (str(row["run_id"]),),
+            ).fetchall()
+        events = []
+        for event_row in event_rows:
+            try:
+                event = json.loads(str(event_row["event_json"]))
+            except Exception:
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+        return ChatRun.restore(
+            run_id=str(row["run_id"]),
+            chat_id=str(row["chat_id"]),
+            status=str(row["status"]),
+            created_at=str(row["created_at"]),
+            termination_reason=str(row["termination_reason"]),
+            outcome_kind=str(row["outcome_kind"]),
+            last_seq=int(row["last_seq"]),
+            events=events,
+            completed=bool(row["completed_at"]),
+        )
+
+
 class ChatRun:
     """One in-flight conversation exchange and its replayable event buffer."""
 
@@ -82,6 +318,8 @@ class ChatRun:
 
         self.chat_id = str(chat_id)
         self.run_id = f"run_{uuid4().hex}"
+        self.created_at = datetime.now(timezone.utc).isoformat()
+        self._event_store: ChatRunEventStore | None = None
         self.inbox = WorkbenchAgentInbox(
             self.chat_id, db_path=db_path, run_id=self.run_id
         )
@@ -105,6 +343,50 @@ class ChatRun:
         #   {"kind": "error", "exc": Exception}    — run failed
         self.outcome: dict[str, Any] | None = None
 
+    @classmethod
+    def restore(
+        cls,
+        *,
+        run_id: str,
+        chat_id: str,
+        status: str,
+        created_at: str,
+        termination_reason: str,
+        outcome_kind: str,
+        last_seq: int,
+        events: list[dict[str, Any]],
+        completed: bool,
+    ) -> "ChatRun":
+        """Rehydrate a completed/crash-recovered run without creating an inbox."""
+        run = cls.__new__(cls)
+        run.chat_id = str(chat_id)
+        run.run_id = str(run_id)
+        run.created_at = str(created_at)
+        run._event_store = None
+        run.inbox = None
+        run.max_buffer = max(_MAX_BUFFER_EVENTS, len(events))
+        run.seq = int(last_seq)
+        run.events = list(events)
+        run.subscribers = set()
+        run.done = asyncio.Event()
+        run.ready = asyncio.Event()
+        run.ready.set()
+        if completed:
+            run.done.set()
+        run.task = None
+        run.saw_reply_events = any(
+            str(event.get("type") or "").startswith(_REPLY_EVENT_PREFIX)
+            for event in events
+        )
+        run.status = str(status)
+        run.termination_reason = str(termination_reason)
+        run.outcome = {"kind": str(outcome_kind)} if outcome_kind else None
+        return run
+
+    async def configure_event_store(self, store: ChatRunEventStore) -> None:
+        self._event_store = store
+        await asyncio.to_thread(store.create, self)
+
     async def publish(self, event: dict[str, Any]) -> None:
         """Append an event to the buffer and fan it out to attached clients.
 
@@ -124,6 +406,12 @@ class ChatRun:
         self.seq += 1
         stored = {"_seq": self.seq, "runId": self.run_id, **dict(event)}
         self.events.append(stored)
+        if self._event_store is not None:
+            await asyncio.to_thread(
+                self._event_store.append,
+                self.run_id,
+                stored,
+            )
         if len(self.events) > self.max_buffer:
             # Keep the ack (events[0]); drop the oldest events after it.
             overflow = len(self.events) - self.max_buffer
@@ -154,10 +442,14 @@ class ChatRunManager:
         self._shutdown_grace_seconds = float(shutdown_grace_seconds)
         self._cleanup_tasks: set[asyncio.Task[Any]] = set()
         self._db_path = ""
+        self._event_store: ChatRunEventStore | None = None
 
     def configure(self, db_path: str) -> None:
-        """Configure durable inbox storage before chat routes start runs."""
+        """Configure durable inbox and run-event storage before runs start."""
         self._db_path = str(db_path or "")
+        self._event_store = (
+            ChatRunEventStore(self._db_path) if self._db_path else None
+        )
 
     def get(self, chat_id: str) -> ChatRun | None:
         """Return only an actively running exchange."""
@@ -173,7 +465,30 @@ class ChatRunManager:
         a reconnect can replay terminal events.  Keeping this separate from
         :meth:`get` prevents a completed exchange from blocking a new send.
         """
-        return self.runs.get(str(chat_id))
+        run = self.runs.get(str(chat_id))
+        if run is not None:
+            return run
+        if self._event_store is not None:
+            return self._event_store.load_latest_for_chat(str(chat_id))
+        return None
+
+    def get_by_run_id(self, run_id: str) -> ChatRun | None:
+        """Return an active run by its public run identifier."""
+        target = str(run_id or "")
+        for run in self.runs.values():
+            if run.run_id == target and not run.done.is_set():
+                return run
+        return None
+
+    def get_replayable_by_run_id(self, run_id: str) -> ChatRun | None:
+        """Return a retained run, including one that has just finished."""
+        target = str(run_id or "")
+        for run in self.runs.values():
+            if run.run_id == target:
+                return run
+        if self._event_store is not None:
+            return self._event_store.load_by_run_id(target)
+        return None
 
     def interrupt(self, chat_id: str) -> bool:
         """Cancel a live run and wake attached streams immediately."""
@@ -256,6 +571,8 @@ class ChatRunManager:
 
     async def _drive(self, run: ChatRun, runner: Runner) -> None:
         try:
+            if self._event_store is not None:
+                await run.configure_event_store(self._event_store)
             if self._db_path:
                 await asyncio.to_thread(run.inbox.configure_storage, self._db_path)
             run.ready.set()
@@ -307,6 +624,14 @@ class ChatRunManager:
                 # non-streaming callers.
                 logger.exception("Failed to close chat inbox for %s", run.chat_id)
             run.status = "done" if run.status in {"running", "finishing"} else run.status
+            if self._event_store is not None:
+                try:
+                    await asyncio.to_thread(self._event_store.finalize, run)
+                except Exception:
+                    logger.exception(
+                        "Failed to finalize durable event log for run %s",
+                        run.run_id,
+                    )
             run.done.set()
             # Nudge attached streams so they re-check ``done`` immediately rather
             # than waiting out the poll timeout.
@@ -410,6 +735,11 @@ class ChatRunManager:
                 chat_mod._reconcile_inbox_guidance_messages(self._db_path)
         except Exception:
             logger.exception("Chat guidance transcript reconciliation failed")
+        try:
+            if self._event_store is not None:
+                self._event_store.recover_interrupted()
+        except Exception:
+            logger.exception("Chat durable run recovery failed")
 
     async def shutdown(self) -> None:
         """On graceful shutdown, give in-flight runs a chance to finalize (so a

@@ -15,6 +15,7 @@ from route.agent.sessions import register_session_routes
 from route.backup import register_backup_routes
 from route.channels.wechat import register_wechat_routes
 from route.code import router as code_router
+from route.control import register_control_routes
 from route.entities import register_entity_routes
 from route.errors import install_api_exception_handlers
 from route.knowledge import register_knowledge_routes
@@ -24,6 +25,7 @@ from route.maps.map import register_map_routes
 from route.memory import register_memory_routes
 from route.notifications import register_notification_routes
 from route.pdf import register_pdf_routes
+from route.remote import register_remote_routes
 from route.search import register_search_routes
 from route.settings.general import register_settings_routes
 from route.skills import register_skill_routes
@@ -48,7 +50,7 @@ def _register_shared_adapter(
     router: APIRouter,
     bot: Any,
     db_path: str,
-) -> None:
+) -> Any:
     """Bind the shared service facade before installing a split adapter.
 
     The former monolithic adapter kept its route handlers and helper functions
@@ -66,7 +68,7 @@ def _register_shared_adapter(
             if not name.startswith("__")
         }
     )
-    factory(router, bot, db_path)
+    return factory(router, bot, db_path)
 
 
 def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
@@ -97,7 +99,37 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
     register_workbench_library_routes(router)
     register_workbench_memory_routes(router, db_path)
     register_workbench_schedule_routes(router, db_path)
-    register_workbench_chat_routes(router, bot, db_path)
+    chat_control_adapter = register_workbench_chat_routes(router, bot, db_path)
+    project_control_adapter = _register_shared_adapter(
+        register_project_routes,
+        router,
+        bot,
+        db_path,
+    )
+    task_control_adapter = _register_shared_adapter(
+        register_task_session_routes,
+        router,
+        bot,
+        db_path,
+    )
+    goal_loop_manager = register_goal_loop_routes(router, app, db_path)
+    goal_loop_control_adapter = goal_loop_manager.control_adapter
+    register_control_routes(
+        router,
+        chat_control_adapter,
+        project_control_adapter,
+        task_control_adapter,
+        goal_loop_control_adapter,
+    )
+    register_remote_routes(
+        router,
+        app,
+        db_path,
+        chat_adapter=chat_control_adapter,
+        project_adapter=project_control_adapter,
+        task_adapter=task_control_adapter,
+        goal_loop_adapter=goal_loop_control_adapter,
+    )
     register_pdf_routes(router)
     router.include_router(code_router)
 
@@ -118,14 +150,11 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
         register_notification_routes,
         register_memory_routes,
         register_settings_routes,
-        register_project_routes,
-        register_task_session_routes,
         register_task_routes,
         register_update_routes,
     ):
         _register_shared_adapter(factory, router, bot, db_path)
 
-    register_goal_loop_routes(router, app, db_path)
     app.include_router(router)
 
 

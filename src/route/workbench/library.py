@@ -15,7 +15,12 @@ import aiosqlite
 from fastapi import APIRouter, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from cyrene.runtime.attachments import EXPORTS_DIR, UPLOADS_DIR, safe_attachment_filename
+from cyrene.runtime.attachments import (
+    EXPORTS_DIR,
+    UPLOADS_DIR,
+    resolve_managed_attachment_path,
+    safe_attachment_filename,
+)
 from cyrene.knowledge import bibliography, ingest, library, retrieve, store, zotero
 from route.errors import error_response
 from cyrene.workbench.knowledge import _ensure_kb_db, _resolve_workspace_id
@@ -528,8 +533,11 @@ def register_workbench_library_routes(router: APIRouter) -> None:
                 return JSONResponse({"error": "no attachment"}, status_code=404)
             # Raw access is only allowed through a project knowledge-document
             # link.  Never serve a path supplied as untrusted import metadata.
-            path = Path(str(attachment.get("document_path") or ""))
+            stored_path = str(attachment.get("document_path") or "")
+            path = Path(stored_path)
             if not path.is_file():
+                path = resolve_managed_attachment_path(stored_path)
+            if path is None or not path.is_file():
                 return JSONResponse({"error": "attachment unavailable"}, status_code=404)
             return FileResponse(
                 str(path), media_type=str(

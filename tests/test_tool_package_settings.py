@@ -67,10 +67,11 @@ def test_settings_api_exposes_stable_package_groups(monkeypatch):
         "subagent_tools",
         "delivery_tools",
         "skill_tools",
+        "remote_tools",
         "integration_tools",
     ]
     groups = payload["tool_groups"]
-    assert len(groups) == 12
+    assert len(groups) == 13
     assert all(item["kind"] == "package" for item in groups)
     browser = next(
         item for item in payload["packages"]

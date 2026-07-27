@@ -388,6 +388,12 @@ def register_goal_loop_routes(router: APIRouter, app: Any, db_path: str) -> Goal
         payload, project, session = _read_session(session_id)
         return {"ok": True, "project": project, "session": session, "goalLoop": _public_run(updated), **payload}
 
+    manager.control_adapter = {
+        "get": get_goal_loop,
+        "pause": pause_goal_loop,
+        "resume": resume_goal_loop,
+        "cancel": cancel_goal_loop,
+    }
     return manager
 
 

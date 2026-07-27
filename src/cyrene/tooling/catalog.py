@@ -59,6 +59,7 @@ _MAIN_ONLY_TOOLS = {
     "browser_scroll",
     "browser_user_events",
     "browser_request_takeover",
+    "RemoteCyreneAction",
 }
 
 AGENT_TOOL_GROUPS: dict[str, set[str]] = {
@@ -79,6 +80,7 @@ _READ_ONLY_TOOLS = {
     "GitDiff", "GitLog", "SearchSymbol", "FindReferences", "GetFileSymbols",
     "LintCode", "CodeReview", "browser_snapshot", "browser_network_log",
     "browser_tab_list",
+    "ListRemoteDevices", "RemoteCyreneStatus",
 }
 
 _REQUIRES_ORDER_TOOLS = {
@@ -125,6 +127,9 @@ _RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
     "ListShells": ("shell:registry",),
     "SendShell": ("shell:{shell_id}",),
     "CloseShell": ("shell:{shell_id}",),
+    "ListRemoteDevices": ("remote:chat-context",),
+    "RemoteCyreneStatus": ("remote:{device_id}",),
+    "RemoteCyreneAction": ("remote:{device_id}",),
 }
 for _browser_tool_name in _REQUIRES_ORDER_TOOLS:
     if _browser_tool_name.startswith("browser_"):

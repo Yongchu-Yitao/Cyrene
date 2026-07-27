@@ -1,9 +1,13 @@
 import sys
+import hashlib
 import json
 import re
 import sqlite3
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+
+from fastapi import APIRouter, FastAPI
+from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -12,6 +16,72 @@ def _prompt_json(prompt: str, marker: str) -> dict:
     payload = prompt.split(marker, 1)[1].lstrip()
     value, _ = json.JSONDecoder().raw_decode(payload)
     return value
+
+
+def test_behavior_media_route_rebases_restored_path_with_spaces(
+    monkeypatch, tmp_path
+):
+    from cyrene import learning
+    from route import learning as learning_routes
+
+    data_dir = tmp_path / "Application Support" / "Cyrene" / "data"
+    target = data_dir / "behavior-media" / "turn_1" / "capture.png"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"\x89PNG\r\n\x1a\n")
+    old_path = (
+        "/Users/old/Library/Application Support/Cyrene/"
+        "data/behavior-media/turn_1/capture.png"
+    )
+
+    async def list_tool_chains(_project="", _limit=500):
+        return [{
+            "chain": [{
+                "tool": "desktop.use",
+                "output_summary": f'{{"path":"{old_path}"}}',
+            }],
+        }]
+
+    monkeypatch.setattr(learning_routes, "DATA_DIR", data_dir)
+    monkeypatch.setattr(learning, "list_tool_chains", list_tool_chains)
+    app = FastAPI()
+    router = APIRouter()
+    learning_routes.register_learning_routes(router, None, "")
+    app.include_router(router)
+
+    response = TestClient(app).get(
+        "/api/tool-chain-media", params={"path": old_path}
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"\x89PNG\r\n\x1a\n"
+
+
+def test_installed_skill_path_rebases_after_portable_restore(
+    monkeypatch, tmp_path
+):
+    from cyrene.learning import skills
+
+    installed_root = tmp_path / "current" / "data" / "installed_skills"
+    skill_dir = installed_root / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: Demo Skill\ndescription: Restored skill\n---\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(skills, "_SKILLS_DIR", installed_root)
+
+    payload = skills.skill_payload_from_record({
+        "id": "demo-skill",
+        "enabled": True,
+        "stored_path": (
+            "/Users/old/Library/Application Support/Cyrene/"
+            "data/installed_skills/demo-skill"
+        ),
+    })
+
+    assert payload is not None
+    assert payload["name"] == "Demo Skill"
+    assert Path(payload["stored_path"]) == skill_dir
 
 
 async def _fake_llm_json(prompt: str, *, caller: str = "behavior_learning"):
@@ -323,6 +393,38 @@ async def test_learning_agent_shell_script_is_validated_persisted_and_hash_check
     _, ok, reason = await bl._execute_script_step(steps[0]["implementation_reference"], {})
     assert ok is False
     assert reason == "script_integrity_error"
+
+
+async def test_learned_script_path_rebases_after_portable_restore(
+    tmp_path, monkeypatch
+):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    script = (
+        tmp_path
+        / "learned_skill_scripts"
+        / "restored-skill"
+        / "run.sh"
+    )
+    script.parent.mkdir(parents=True)
+    source = "#!/bin/sh\nprintf restored\n"
+    script.write_text(source, encoding="utf-8")
+
+    output, ok, reason = await bl._execute_script_step(
+        {
+            "script_path": (
+                "/Users/old/Library/Application Support/Cyrene/"
+                "data/learned_skill_scripts/restored-skill/run.sh"
+            ),
+            "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "language": "shell",
+        },
+        {},
+    )
+
+    assert ok is True
+    assert reason == ""
+    assert output == "restored"
+
 
 async def test_behavior_learning_sanitizes_legacy_scheduler_prompts(tmp_path, monkeypatch):
     bl = await _init_behavior(tmp_path, monkeypatch)

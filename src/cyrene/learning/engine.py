@@ -2108,8 +2108,28 @@ def _persist_learning_agent_script(
     return [wrapper], persisted_implementation
 
 
+def _resolve_generated_script_path(path_value: Any) -> Path:
+    """Resolve a learned script restored under a different app-data prefix."""
+    raw = str(path_value or "").strip()
+    direct = Path(raw).expanduser()
+    if direct.exists():
+        return direct.resolve()
+    normalized = raw.replace("\\", "/")
+    marker = "/data/learned_skill_scripts/"
+    marker_index = normalized.lower().rfind(marker)
+    if marker_index >= 0 and (
+        normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized)
+    ):
+        relative = normalized[marker_index + len(marker):]
+        root = (Path(_DATA_DIR or DATA_DIR) / "learned_skill_scripts").resolve()
+        candidate = (root / Path(relative)).resolve()
+        if candidate == root or root in candidate.parents:
+            return candidate
+    return direct
+
+
 async def _execute_script_step(reference: dict[str, Any], params: dict[str, Any]) -> tuple[str, bool, str]:
-    script_path = Path(str(reference.get("script_path") or ""))
+    script_path = _resolve_generated_script_path(reference.get("script_path"))
     if not script_path.exists():
         return f"Script failed: missing script {script_path}", False, "missing_script"
     try:

@@ -28,7 +28,9 @@ globals().update({
 })
 
 
-def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
+def register_workbench_chat_routes(
+    router: APIRouter, bot: Any, db_path: str
+) -> dict[str, Any]:
     configure_store(db_path)
     _CHAT_RUN_MANAGER.configure(db_path)
 
@@ -639,14 +641,15 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             logger.exception("Failed to close Electron browser for chat %s", chat_id)
         return {"ok": True}
 
-    @router.post("/api/workbench/chats/{chat_id}/messages")
-    async def api_workbench_chat_send(
-        chat_id: str, body_model: api_models.ChatMessageBody
+    async def _workbench_chat_send_impl(
+        chat_id: str,
+        body: dict[str, Any],
+        *,
+        detached: bool = False,
     ):
         from cyrene.agent import run_agent
         from cyrene.agent.state import PERMISSION_MODES, _attachment_paths_by_name
 
-        body = api_models.body_dict(body_model)
         message = str(body.get("message") or "").strip()
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         command = str(body.get("command") or "").strip()
@@ -1181,16 +1184,44 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
                         logger.debug("Workbench chat live segment publisher failed for %s", chat_id, exc_info=True)
                 await asyncio.to_thread(_settle_status)
 
-        run, _is_new = _CHAT_RUN_MANAGER.start_or_get(
+        run, is_new = _CHAT_RUN_MANAGER.start_or_get(
             chat_id,
             ack,
             run_streaming,
             stream=True,
         )
+        if detached:
+            if not is_new:
+                return JSONResponse(
+                    {
+                        "error": "chat already has a running reply",
+                        "code": "chat_run_in_progress",
+                    },
+                    status_code=409,
+                )
+            return JSONResponse(
+                {
+                    "run_id": run.run_id,
+                    "chat_id": chat_id,
+                    "status": run.status,
+                    "created_at": run.created_at,
+                    "event_cursor": 0,
+                },
+                status_code=202,
+            )
         return StreamingResponse(
             _CHAT_RUN_MANAGER.stream(run),
             media_type="application/x-ndjson",
             headers={"Cache-Control": "no-cache"},
+        )
+
+    @router.post("/api/workbench/chats/{chat_id}/messages")
+    async def api_workbench_chat_send(
+        chat_id: str, body_model: api_models.ChatMessageBody
+    ):
+        return await _workbench_chat_send_impl(
+            chat_id,
+            api_models.body_dict(body_model),
         )
 
     @router.post("/api/workbench/chats/{chat_id}/fork")
@@ -1579,6 +1610,16 @@ def register_workbench_chat_routes(router: APIRouter, bot: Any, db_path: str) ->
             "assistantMessage": _public_message(assistant_entry),
             "assistantMessages": [_public_message(item) for item in saved_messages],
         }
+
+    return {
+        "list_chats": api_workbench_list_chats,
+        "create_chat": api_workbench_create_chat,
+        "get_chat": api_workbench_get_chat,
+        "send_chat_detached": _workbench_chat_send_impl,
+        "guide_chat": api_workbench_chat_guidance,
+        "answer_chat": api_workbench_chat_answer,
+        "run_manager": _CHAT_RUN_MANAGER,
+    }
 
 
 __all__ = ["register_workbench_chat_routes"]

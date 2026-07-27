@@ -20,13 +20,13 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 259
+OPENAPI_OPERATION_COUNT = 294
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "4b37a6384fb2666c0208fbbc1bf293bf3c57bbb97759859bb7853394c81f6a0b"
-TOOL_REGISTRY_SHA256 = "0860b150897c7272b9942c6c251c9b25f0fd99a86a526c4fafb33a999e75f863"
-MAIN_WIRE_SHA256 = "29194c2d58bcb62679e65d2e7abb20e94235582d7c01dcd76f7f649f5f29f8f2"
-SUBAGENT_WIRE_SHA256 = "3b73d89cf5ad5cc83e32cc587891fdc562e035228c7c24d7f29471586c35a247"
+OPENAPI_SHA256 = "04469768dc61f47468ed3ce2d93d9049b1ba08558e1e0335ab53839cd35d2b19"
+TOOL_REGISTRY_SHA256 = "0526a805a0c4153e8b163f7bf8ce628dacc2c038aac4d90f0e29b11c1d6206ac"
+MAIN_WIRE_SHA256 = "56f247691752283c226eb34ea1a8a902df14c8cd5c83ab94f92dbdd89f0e76f3"
+SUBAGENT_WIRE_SHA256 = "2d29000a405e62b49ae6374bbbf43b1edb34fbf0fdee32e5816f73b026981c75"
 
 # CyreneUI is the sole application-owned browser global. Every cross-script
 # capability is registered under its explicit service name.
@@ -100,14 +100,14 @@ def test_openapi_contract_matches_locked_generator_baseline():
 def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged():
     from cyrene.tooling import catalog, wire
 
-    assert len(catalog.TOOL_DEFS) == 94
-    assert len(catalog.TOOL_HANDLERS) == 94
-    assert len(catalog._MAIN_ONLY_TOOLS) == 35
+    assert len(catalog.TOOL_DEFS) == 97
+    assert len(catalog.TOOL_HANDLERS) == 97
+    assert len(catalog._MAIN_ONLY_TOOLS) == 36
     assert _sha256_json(catalog.TOOL_DEFS) == TOOL_REGISTRY_SHA256
 
-    assert len(wire.get_main_wire_tool_defs()) == 28
+    assert len(wire.get_main_wire_tool_defs()) == 29
     assert wire.get_wire_bundle_hash("main") == MAIN_WIRE_SHA256
-    assert len(wire.get_subagent_wire_tool_defs()) == 22
+    assert len(wire.get_subagent_wire_tool_defs()) == 23
     assert wire.get_wire_bundle_hash("subagent") == SUBAGENT_WIRE_SHA256
 
 

@@ -2436,7 +2436,13 @@ def _workbench_find_project_lightweight(project_id: str) -> dict[str, Any] | Non
         return None
     raw = _read_workbench_store_lightweight()
     project = _workbench_find_project(raw, target_id)
-    return dict(project) if isinstance(project, dict) else None
+    if not isinstance(project, dict):
+        return None
+    result = dict(project)
+    relocated_root = _workbench_workspace_root(result)
+    if relocated_root is not None:
+        result["workspacePath"] = str(relocated_root)
+    return result
 
 
 def _write_workbench_store(
@@ -2510,6 +2516,13 @@ def _workbench_ensure_invariants(payload: dict[str, Any]) -> bool:
         _workbench_task_ensure_shared_context(project)
         project.setdefault("createdAt", now)
         project.setdefault("updatedAt", now)
+        relocated_root = _workbench_workspace_root(project)
+        if (
+            relocated_root is not None
+            and str(project.get("workspacePath") or "") != str(relocated_root)
+        ):
+            project["workspacePath"] = str(relocated_root)
+            changed = True
         if not project.get("dataKey"):
             is_legacy_default = (
                 str(project.get("name") or "").strip().lower() == "workspace"
@@ -3911,6 +3924,21 @@ def _tool_args_preview(args: Any) -> str:
 
 
 def _workbench_workspace_root(project: dict[str, Any] | None) -> Path | None:
+    project_id = str((project or {}).get("id") or "").strip()
+    workspace_source = str(
+        (project or {}).get("workspacePathSource") or ""
+    ).strip().lower()
+    if workspace_source == "generated" and project_id:
+        return (WORKSPACE_DIR / "projects" / project_id).resolve()
+    if (
+        _workbench_project_data_key(project or {}) == _WORKBENCH_LEGACY_DATA_KEY
+        and not workspace_source
+    ):
+        raw_legacy = str((project or {}).get("workspacePath") or "").replace(
+            "\\", "/"
+        ).rstrip("/")
+        if raw_legacy.lower().endswith("/workspace"):
+            return WORKSPACE_DIR.resolve()
     workspace_path = str((project or {}).get("workspacePath") or "").strip()
     if not workspace_path:
         return None

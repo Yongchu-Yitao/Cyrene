@@ -736,6 +736,7 @@ var WBC_ICONS = {
   compact: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m8 3 4 4 4-4M12 7V1M8 21l4-4 4 4M12 17v6"/><path d="M4 10h16v4H4z"/></svg>,
   spark: <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M12 2.5 13.7 9 20 10.7 13.7 12.4 12 19l-1.7-6.6L4 10.7 10.3 9Z"/></svg>,
   folder: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>,
+  device: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="14" height="11" rx="2"/><path d="M7 20h8M11 15v5M19 9h2M20 8v2"/></svg>,
   fork: <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M6 8.2v7.6M8.2 6h7.6M8.2 18H15a3 3 0 0 0 3-3V8.2"/></svg>,
   chevronsRight: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m13 7 5 5-5 5M6 7l5 5-5 5"/></svg>,
   download: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>,
@@ -2522,19 +2523,54 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       danger: true,
     }).then(function (ok) {
       if (!ok) return;
+      var deletedIndex = chats.findIndex(function (item) { return item.id === chatId; });
+      var deletedItem = deletedIndex >= 0 ? chats[deletedIndex] : null;
+      var deletedActiveChat = deletingActiveChat ? activeChat : null;
+      var detachedForks = chats.filter(function (item) {
+        return String(item.forkedFromChatId || "") === String(chatId);
+      });
+      var previousActiveChat = activeChat;
+      setChats(function (prev) {
+        var next = prev
+          .filter(function (item) { return item.id !== chatId; })
+          .map(detachDeletedForkSource);
+        if (deletingActiveChat) setActiveChatId(next[0] ? next[0].id : "");
+        return next;
+      });
+      if (deletingActiveChat) setActiveChat(null);
+      else setActiveChat(function (prev) { return detachDeletedForkSource(prev); });
       model.deleteChat(chatId).then(function () {
         runtimeEngine.abort(chatId);
         runtimeEngine.clear(chatId);
-        setChats(function (prev) {
-          var next = prev
-            .filter(function (item) { return item.id !== chatId; })
-            .map(detachDeletedForkSource);
-          if (deletingActiveChat) setActiveChatId(next[0] ? next[0].id : "");
-          return next;
-        });
-        if (deletingActiveChat) setActiveChat(null);
-        else setActiveChat(function (prev) { return detachDeletedForkSource(prev); });
-      }).catch(function (err) { setError(wbcErrorText(err)); });
+      }).catch(function (err) {
+        if (deletedItem) {
+          setChats(function (prev) {
+            var next = prev.map(function (item) {
+              var original = detachedForks.find(function (fork) { return fork.id === item.id; });
+              return original ? {
+                ...item,
+                forkedFromChatId: original.forkedFromChatId,
+                forkedAtMessageId: original.forkedAtMessageId,
+                forkMessage: original.forkMessage,
+              } : item;
+            });
+            if (!next.some(function (item) { return item.id === chatId; })) {
+              next.splice(Math.min(Math.max(deletedIndex, 0), next.length), 0, deletedItem);
+            }
+            return next;
+          });
+        }
+        if (deletingActiveChat) {
+          setActiveChatId(chatId);
+          setActiveChat(deletedActiveChat);
+        } else if (
+          previousActiveChat
+          && String(previousActiveChat.forkedFromChatId || "") === String(chatId)
+        ) {
+          setActiveChat(previousActiveChat);
+        }
+        setError(wbcErrorText(err));
+      });
     });
   }
 
@@ -4689,6 +4725,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var [workspaceOverride, setWorkspaceOverride] = useWbcState(function () {
     return wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
   });
+  var [remoteDevices, setRemoteDevices] = useWbcState([]);
+  var [remoteDeviceIds, setRemoteDeviceIds] = useWbcState([]);
   var [ctxPickerOpen, setCtxPickerOpen] = useWbcState(false);
   var taRef = useWbcRef(null);
   var fileRef = useWbcRef(null);
@@ -4697,6 +4735,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var attachRef = useWbcRef(attachments);
   var prevChatIdRef = useWbcRef(chatId);
   var workspaceOverrideRef = useWbcRef(workspaceOverride);
+  var remoteDeviceIdsRef = useWbcRef(remoteDeviceIds);
+  var pendingRemoteContextRef = useWbcRef({});
   var prevWorkspaceContextKeyRef = useWbcRef(workspaceContextKey);
   // Last payload snapshot for optimistic clear with restore on error
   var lastSentRef = useWbcRef(null);
@@ -4705,6 +4745,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   useWbcEffect(function () { draftRef.current = draft; });
   useWbcEffect(function () { attachRef.current = attachments; });
   useWbcEffect(function () { workspaceOverrideRef.current = workspaceOverride; });
+  useWbcEffect(function () { remoteDeviceIdsRef.current = remoteDeviceIds; });
 
   useWbcEffect(function () {
     if (prevChatIdRef.current === chatId) wbcSaveDraft(chatId, draft, draftNs);
@@ -4782,24 +4823,66 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       if (String(detail.projectId || "") !== String(projectId || "") || !detail.chatId) return;
       var nextKey = wbcWorkspaceContextKey(detail.chatId, projectId);
       wbcSaveWorkspaceOverride(nextKey, workspaceOverrideRef.current, draftNs);
+      if (remoteDeviceIdsRef.current.length) {
+        var selectedIds = remoteDeviceIdsRef.current.slice();
+        pendingRemoteContextRef.current[detail.chatId] = selectedIds;
+        wbcSaveRemoteContext(detail.chatId, selectedIds).finally(function () {
+          delete pendingRemoteContextRef.current[detail.chatId];
+        });
+      }
     }
     window.addEventListener("cyrene:wbc-chat-created", onChatCreated);
     return function () { window.removeEventListener("cyrene:wbc-chat-created", onChatCreated); };
   }, [projectId]);
 
   function wbcRefreshCtxState() {
-    fetch("/api/context/state").then(function (r) { return r.json(); }).then(function (s) {
+    window.CyreneUI.require("api").json("/api/context/state", { toast: false }).then(function (s) {
       setContextState(s);
     }).catch(function () {});
   }
 
   useWbcEffect(function () {
     var cancelled = false;
-    fetch("/api/context/state").then(function (r) { return r.json(); }).then(function (s) {
+    window.CyreneUI.require("api").json("/api/context/state", { toast: false }).then(function (s) {
       if (!cancelled) setContextState(s);
     }).catch(function () {});
     return function () { cancelled = true; };
   }, [projectId, projectWorkspacePath]);
+
+  useWbcEffect(function () {
+    var cancelled = false;
+    fetch("/api/remote/settings").then(function (r) { return r.json(); }).then(function (payload) {
+      if (cancelled) return;
+      var eligible = (payload.peers || []).filter(function (peer) {
+        return peer
+          && Array.isArray(peer.received_capabilities)
+          && peer.received_capabilities.length > 0
+          && Array.isArray(peer.received_project_scopes)
+          && peer.received_project_scopes.length > 0
+          && !peer.revoked_at;
+      });
+      setRemoteDevices(eligible);
+    }).catch(function () {
+      if (!cancelled) setRemoteDevices([]);
+    });
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) {
+      setRemoteDeviceIds([]);
+      return function () { cancelled = true; };
+    }
+    var pendingIds = pendingRemoteContextRef.current[chatId];
+    if (Array.isArray(pendingIds)) {
+      setRemoteDeviceIds(pendingIds);
+      return function () { cancelled = true; };
+    }
+    fetch("/api/workbench/chats/" + encodeURIComponent(chatId) + "/remote-context")
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)); })
+      .then(function (payload) {
+        if (!cancelled) setRemoteDeviceIds(payload.device_ids || []);
+      }).catch(function () {
+        if (!cancelled) setRemoteDeviceIds([]);
+      });
+    return function () { cancelled = true; };
+  }, [chatId]);
 
   function syncHeight() {
     var ta = taRef.current;
@@ -4922,22 +5005,36 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
 
   function wbcAddWorkspace(path) {
     var selectedPath = String(path || "").trim();
-    window.CyreneUI.require("api").fetch("/api/context/add-workspace", {
+    var previousOverride = workspaceOverride;
+    setWorkspaceOverride(selectedPath && selectedPath !== projectWorkspacePath ? selectedPath : "");
+    setContextState(function (prev) {
+      if (!prev) return prev;
+      var history = Array.isArray(prev.workspace_history) ? prev.workspace_history : [];
+      if (selectedPath) {
+        history = [selectedPath].concat(history.filter(function (item) { return item !== selectedPath; })).slice(0, 10);
+      }
+      return { ...prev, workspace_active: true, workspace_dir: selectedPath || prev.workspace_dir, workspace_history: history };
+    });
+    window.CyreneUI.require("api").json("/api/context/add-workspace", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: selectedPath }),
+      toast: false,
     }).then(function () {
-      setWorkspaceOverride(selectedPath && selectedPath !== projectWorkspacePath ? selectedPath : "");
       wbcRefreshCtxState();
     }, function (err) {
+      setWorkspaceOverride(previousOverride);
+      wbcRefreshCtxState();
       window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.workspaceAddFailed", "Failed to add workspace: "));
     }).catch(function () {});
     setCtxPickerOpen(false);
   }
 
   function wbcRemoveWorkspace() {
-    window.CyreneUI.require("api").fetch("/api/context/remove-workspace", { method: "POST" })
+    setContextState(function (prev) { return prev ? { ...prev, workspace_active: false } : prev; });
+    window.CyreneUI.require("api").json("/api/context/remove-workspace", { method: "POST", toast: false })
       .then(wbcRefreshCtxState, function (err) {
+        wbcRefreshCtxState();
         window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.workspaceRemoveFailed", "Failed to remove workspace: "));
       }).catch(function () {});
   }
@@ -4960,6 +5057,45 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       .catch(function (err) {
         window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.pickDirFailed", "Failed to open directory picker: "));
       });
+  }
+
+  function wbcSaveRemoteContext(targetChatId, nextDeviceIds) {
+    var normalized = Array.from(new Set(nextDeviceIds || []));
+    setRemoteDeviceIds(normalized);
+    if (!targetChatId || String(targetChatId).indexOf("legacy:") === 0) {
+      return Promise.resolve();
+    }
+    return window.CyreneUI.require("api").fetch(
+      "/api/workbench/chats/" + encodeURIComponent(targetChatId) + "/remote-context",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_ids: normalized }),
+      }
+    ).then(function () {}, function (err) {
+      window.CyreneUI.require("api").toastError(err, wbcT("workbenchChat.remoteContextFailed", "Failed to update remote context: "));
+      throw err;
+    });
+  }
+
+  function wbcToggleRemoteDevice(deviceId) {
+    var previousIds = remoteDeviceIds.slice();
+    var selected = remoteDeviceIds.indexOf(deviceId) >= 0;
+    var nextIds = selected
+      ? remoteDeviceIds.filter(function (item) { return item !== deviceId; })
+      : remoteDeviceIds.concat([deviceId]);
+    wbcSaveRemoteContext(chatId, nextIds).catch(function () {
+      setRemoteDeviceIds(previousIds);
+    });
+    setCtxPickerOpen(false);
+  }
+
+  function wbcRemoveRemoteDevice(deviceId) {
+    var previousIds = remoteDeviceIds.slice();
+    var nextIds = remoteDeviceIds.filter(function (item) { return item !== deviceId; });
+    wbcSaveRemoteContext(chatId, nextIds).catch(function () {
+      setRemoteDeviceIds(previousIds);
+    });
   }
   var hasRuntimeGuidance = running && !!draft.trim();
   var sendDisabled = running ? false : (!draft.trim() && attachments.length === 0);
@@ -5040,7 +5176,18 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
               <button type="button" className="wbc-ctx-x" title={wbcT("workbenchChat.removeContext", "Remove")} onClick={wbcRemoveWorkspace}>{WBC_ICONS.x}</button>
             </span>
           )}
-          {(!personaOn || !workspaceOn) && (
+          {remoteDeviceIds.map(function (deviceId) {
+            var device = remoteDevices.find(function (item) { return item.device_id === deviceId; });
+            if (!device) return null;
+            return (
+              <span className="wbc-ctx-chip on remote" key={deviceId}>
+                {WBC_ICONS.device}
+                <span title={device.device_id}>{wbcT("workbenchChat.remoteDeviceChip", "Remote: {name}", { name: device.display_name || device.device_id })}</span>
+                <button type="button" className="wbc-ctx-x" title={wbcT("workbenchChat.removeContext", "Remove")} onClick={function () { wbcRemoveRemoteDevice(deviceId); }}>{WBC_ICONS.x}</button>
+              </span>
+            );
+          })}
+          {(!personaOn || !workspaceOn || remoteDevices.length > 0) && (
             <span className="wbc-pop-anchor">
               <button type="button" className={"wbc-ctx-add-btn" + (ctxPickerOpen ? " active" : "")} onClick={function () { setCtxPickerOpen(!ctxPickerOpen); setSlashOpen(false); setModeOpen(false); }}>
                 {WBC_ICONS.plus}<span>{wbcT("workbenchChat.addContext", "Add context")}</span>
@@ -5054,6 +5201,9 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                   onTogglePersona={wbcTogglePersona}
                   onAddWorkspace={wbcAddWorkspace}
                   onPickWorkspace={wbcPickWorkspace}
+                  remoteDevices={remoteDevices}
+                  selectedRemoteDeviceIds={remoteDeviceIds}
+                  onToggleRemoteDevice={wbcToggleRemoteDevice}
                 />
               )}
             </span>
@@ -5151,8 +5301,8 @@ function wbcClearComposerDraft(chatId, ns) {
 
 // Context picker popup — shown inside the composer when the user clicks "+ Add context".
 // Fully independent from the legacy ModernContextPicker in chat-surface.jsx.
-function WbcCtxPicker({ personaOn, workspaceOn, defaultWorkspacePath, wsHistory, onTogglePersona, onAddWorkspace, onPickWorkspace }) {
-  var hasAny = !personaOn || !workspaceOn;
+function WbcCtxPicker({ personaOn, workspaceOn, defaultWorkspacePath, wsHistory, onTogglePersona, onAddWorkspace, onPickWorkspace, remoteDevices, selectedRemoteDeviceIds, onToggleRemoteDevice }) {
+  var hasAny = !personaOn || !workspaceOn || (remoteDevices && remoteDevices.length > 0);
   var workspaceOptions = [];
   if (defaultWorkspacePath) workspaceOptions.push({ path: defaultWorkspacePath, isDefault: true });
   wsHistory.forEach(function (path) {
@@ -5186,6 +5336,22 @@ function WbcCtxPicker({ personaOn, workspaceOn, defaultWorkspacePath, wsHistory,
           <button type="button" onClick={onPickWorkspace}>
             <span className="wbc-popmenu-label">{wbcT("workbenchChat.chooseDirectory", "Choose directory…")}</span>
           </button>
+        </React.Fragment>
+      )}
+      {remoteDevices && remoteDevices.length > 0 && (
+        <React.Fragment>
+          <div className="wbc-popmenu-head">{wbcT("workbenchChat.remoteDevicesSection", "Remote devices")}</div>
+          {remoteDevices.map(function (device) {
+            var selected = selectedRemoteDeviceIds.indexOf(device.device_id) >= 0;
+            var capabilityCount = (device.received_capabilities || []).length;
+            return (
+              <button key={device.device_id} type="button" className={selected ? "active" : ""} onClick={function () { onToggleRemoteDevice(device.device_id); }}>
+                <span className="wbc-popmenu-label">{WBC_ICONS.device} {device.display_name || device.device_id}</span>
+                <span className="wbc-popmenu-desc">{wbcT("workbenchChat.remoteDeviceHint", "{count} granted capabilities · {fingerprint}", { count: capabilityCount, fingerprint: device.fingerprint || device.device_id })}</span>
+                {selected ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
+              </button>
+            );
+          })}
         </React.Fragment>
       )}
     </div>
@@ -7202,6 +7368,7 @@ var WBC_PROGRESSIVE_TOOL_PACKAGES = new Set([
   "subagent_tools",
   "delivery_tools",
   "skill_tools",
+  "remote_tools",
   "integration_tools",
 ]);
 

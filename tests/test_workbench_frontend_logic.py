@@ -1428,6 +1428,8 @@ def test_workbench_chat_delete_detaches_local_fork_markers():
     assert "delete cleaned.forkMessage" in handler
     assert ".map(detachDeletedForkSource)" in handler
     assert "setActiveChat(function (prev) { return detachDeletedForkSource(prev); })" in handler
+    assert handler.index("setChats(function (prev)") < handler.index("model.deleteChat(chatId)")
+    assert "next.splice(Math.min(Math.max(deletedIndex, 0), next.length), 0, deletedItem)" in handler
 
 
 def test_workbench_chat_card_menu_can_rename_the_target_chat():
@@ -1696,6 +1698,7 @@ def test_tool_package_settings_are_scoped_and_context_shows_agent_disclosure():
         "subagent_tools",
         "delivery_tools",
         "skill_tools",
+        "remote_tools",
         "integration_tools",
     ):
         assert i18n.count(f'"toolPackageDesc.{package_id}"') == 2
@@ -3213,6 +3216,83 @@ def test_workbench_about_related_actions_only_click_right_button():
 
     assert "--wb-settings-panel-height: min(540px, calc(100vh - 48px))" in styles
     assert styles.count("height: var(--wb-settings-panel-height);") == 3
+
+
+def test_remote_settings_reuses_standard_toggle_and_localizes_capabilities():
+    root = Path(__file__).resolve().parent.parent
+    source = (
+        root / "src" / "webui" / "frontend" / "settings-overlay.jsx"
+    ).read_text(encoding="utf-8")
+    i18n = (
+        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
+    ).read_text(encoding="utf-8")
+    styles = (
+        root / "src" / "webui" / "frontend" / "workbench.css"
+    ).read_text(encoding="utf-8")
+
+    remote_panel = source.split("function RemotePanel(p) {", 1)[1].split(
+        "function RemotePeerCard", 1
+    )[0]
+    assert "FieldRow(" in remote_panel
+    assert "Toggle(!!remote.enabled" in remote_panel
+    assert "remote-status-card" not in remote_panel
+    assert ".remote-status-card" not in styles
+    assert "remoteCapabilityLabel(t, capability)" in source
+    assert "remoteTransportDetail(t, transport)" in remote_panel
+    assert 'var [pairingMode, setPairingMode] = useStateSt("share")' in remote_panel
+    assert 'className: "wb-seg remote-pairing-tabs"' in remote_panel
+    assert 'className: "remote-pairing-columns"' not in remote_panel
+    assert 'className: "remote-pairing-card"' not in remote_panel
+    assert ".remote-pairing-columns" not in styles
+    assert ".remote-pairing-card" not in styles
+    assert i18n.count('"settings.remotePairModeShare"') == 2
+    assert i18n.count('"settings.remotePairModeControl"') == 2
+    assert i18n.count('"settings.remotePairCapabilities"') == 2
+    assert 'fetch("/api/remote/pairing/short-key"' in remote_panel
+    assert 'fetch("/api/remote/pairing/connect"' in remote_panel
+    assert 'placeholder: "192.168.1.20:37841"' in remote_panel
+    assert 'placeholder: "ABCDE-23456"' in remote_panel
+    assert 'className: "remote-direct-offer"' in remote_panel
+    assert "incomingInvitation" not in remote_panel
+    assert "incomingResponse" not in remote_panel
+    assert 't("settings.remoteRelayUrl")' not in remote_panel
+    assert 'placeholder: "wss://relay.example/v1"' not in remote_panel
+    assert "peer.lan_address" in source
+    assert ".wb-textarea {" in styles
+    assert "height: 68px;" in styles
+    assert i18n.count('"settings.remotePairingKey"') == 2
+    assert i18n.count('"settings.remoteDeviceAddress"') == 2
+
+    capabilities = (
+        "approval:clarification",
+        "approval:respond",
+        "artifact:read",
+        "chat:create",
+        "chat:guide",
+        "chat:interrupt",
+        "chat:read",
+        "chat:send",
+        "projects:list_shared",
+        "task:control",
+        "task:create",
+        "task:dispatch",
+        "task:read",
+    )
+    for capability in capabilities:
+        assert i18n.count(
+            f'"settings.remoteCapability.{capability}"'
+        ) == 2
+
+    for status in (
+        "Configured",
+        "Connected",
+        "Connecting",
+        "Disabled",
+        "Error",
+        "ErrorDetail",
+        "Unknown",
+    ):
+        assert i18n.count(f'"settings.remoteTransport{status}"') == 2
 
 
 def test_workbench_about_panel_reads_app_version_from_registered_data_store():

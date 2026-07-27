@@ -3,6 +3,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -95,20 +96,64 @@ def _cache_file(key: str) -> Path:
     return ANALYSIS_CACHE_DIR / f"{key}.json"
 
 
+def _path_within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _resolve_attachment_under(path_str: str, root: Path) -> Path | None:
+    """Resolve current or relocated paths inside one managed attachment root.
+
+    Knowledge rows persist absolute paths. A portable backup can be restored
+    under a different home/application-data directory, so an otherwise valid
+    path may still carry the old prefix. Only the stable
+    ``data/<managed-dir>/...`` suffix is rebased; arbitrary external paths are
+    never redirected.
+    """
+    raw = str(path_str or "").strip()
+    if not raw:
+        return None
+    resolved_root = root.resolve()
+    try:
+        direct = Path(raw).expanduser().resolve()
+        if _path_within(direct, resolved_root):
+            return direct
+    except Exception:
+        pass
+
+    normalized = raw.replace("\\", "/")
+    if not (normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized)):
+        return None
+    marker = f"/data/{root.name}/"
+    marker_index = normalized.lower().rfind(marker.lower())
+    if marker_index < 0:
+        return None
+    relative = normalized[marker_index + len(marker):]
+    try:
+        candidate = (resolved_root / Path(relative)).resolve()
+    except Exception:
+        return None
+    return candidate if _path_within(candidate, resolved_root) else None
+
+
+def resolve_managed_attachment_path(path_str: str) -> Path | None:
+    """Return the safe current location for a managed upload/export path."""
+    for root in (UPLOADS_DIR, EXPORTS_DIR):
+        resolved = _resolve_attachment_under(path_str, root)
+        if resolved is not None:
+            return resolved
+    return None
+
+
 def is_uploaded_attachment_path(path_str: str) -> bool:
     try:
-        resolved = Path(path_str).resolve()
-        root = UPLOADS_DIR.resolve()
-        return resolved == root or root in resolved.parents
+        return _resolve_attachment_under(path_str, UPLOADS_DIR) is not None
     except Exception:
         return False
 
 
 def is_exported_attachment_path(path_str: str) -> bool:
     try:
-        resolved = Path(path_str).resolve()
-        root = EXPORTS_DIR.resolve()
-        return resolved == root or root in resolved.parents
+        return _resolve_attachment_under(path_str, EXPORTS_DIR) is not None
     except Exception:
         return False
 

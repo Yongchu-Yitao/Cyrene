@@ -12,8 +12,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from cyrene.runtime.attachments import (
     UPLOADS_DIR as _UPLOADS_DIR,
     attachment_kind_from_meta,
-    is_uploaded_attachment_path,
-    is_exported_attachment_path,
+    resolve_managed_attachment_path,
     safe_attachment_filename,
 )
 from cyrene.tooling.runtime_support import _resolve_workspace_path
@@ -212,10 +211,9 @@ def register_knowledge_routes(router: APIRouter, workspace_id: str = "default") 
             if not path_str:
                 return JSONResponse({"error": "no file path"}, status_code=404)
 
-            if not (is_uploaded_attachment_path(path_str) or is_exported_attachment_path(path_str)):
+            file_path = resolve_managed_attachment_path(path_str)
+            if file_path is None:
                 return JSONResponse({"error": "file not in allowed paths"}, status_code=403)
-
-            file_path = Path(path_str)
             if not file_path.exists():
                 return JSONResponse({"error": "file not found on disk"}, status_code=404)
 

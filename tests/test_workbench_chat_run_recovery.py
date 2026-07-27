@@ -83,6 +83,62 @@ async def test_finished_run_remains_replayable_during_retention_window():
     await manager.shutdown()
 
 
+async def test_finished_run_events_reload_from_sqlite_after_memory_cleanup(
+    tmp_path,
+):
+    from cyrene.workbench.chat_runs import ChatRunManager
+
+    db_path = str(tmp_path / "durable-runs.sqlite3")
+    manager = ChatRunManager(retention_seconds=0)
+    manager.configure(db_path)
+
+    async def runner(run):
+        await run.publish({"type": "reply_done", "response": "durable reply"})
+        run.outcome = {"kind": "reply"}
+
+    run, _ = manager.start_or_get(
+        "chat_durable",
+        {"type": "ack", "chatId": "chat_durable"},
+        runner,
+        stream=False,
+    )
+    await asyncio.wait_for(run.done.wait(), timeout=2)
+
+    restarted = ChatRunManager(retention_seconds=0)
+    restarted.configure(db_path)
+    restored = restarted.get_replayable_by_run_id(run.run_id)
+
+    assert restored is not None
+    assert restored.done.is_set()
+    assert restored.status == "done"
+    assert restored.outcome == {"kind": "reply"}
+    assert [event["type"] for event in restored.events] == [
+        "ack",
+        "reply_done",
+    ]
+    assert restored.events[-1]["response"] == "durable reply"
+
+
+def test_startup_marks_unfinished_durable_run_as_process_restarted(tmp_path):
+    from cyrene.workbench.chat_runs import ChatRun, ChatRunEventStore, ChatRunManager
+
+    db_path = str(tmp_path / "crashed-run.sqlite3")
+    store = ChatRunEventStore(db_path)
+    run = ChatRun("chat_crashed", {"type": "ack", "chatId": "chat_crashed"})
+    store.create(run)
+
+    manager = ChatRunManager(retention_seconds=0)
+    manager.configure(db_path)
+    manager.startup()
+    restored = manager.get_replayable_by_run_id(run.run_id)
+
+    assert restored is not None
+    assert restored.status == "error"
+    assert restored.termination_reason == "process_restarted"
+    assert restored.events[-1]["code"] == "process_restarted"
+    assert restored.events[-1]["_seq"] == 2
+
+
 async def test_chat_run_storage_setup_runs_off_the_event_loop(monkeypatch, tmp_path):
     from cyrene.workbench.inbox import WorkbenchAgentInbox
     from cyrene.workbench.chat_runs import ChatRunManager

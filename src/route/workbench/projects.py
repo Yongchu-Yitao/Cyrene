@@ -8,7 +8,11 @@ from route.errors import error_response
 from route.workspace import WorkspacePathError, validate_workspace_path
 
 
-def register_project_routes(router: APIRouter, bot: Any, db_path: str) -> None:
+def register_project_routes(
+    router: APIRouter,
+    bot: Any,
+    db_path: str,
+) -> dict[str, Any]:
     global _bot, _db_path
     _bot = bot
     _db_path = db_path
@@ -349,3 +353,8 @@ def register_project_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         payload["activeSessionId"] = session.get("id")
         _write_workbench_store(payload)
         return {"ok": True, "project": project, "session": session, **payload}
+
+    return {
+        "list_tasks": api_workbench_project_sessions,
+        "create_task": api_workbench_create_session,
+    }

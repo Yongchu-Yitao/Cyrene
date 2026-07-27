@@ -87,6 +87,30 @@ def test_migration_fixes_incomplete_model_entries(isolated_config_store):
     assert vision[0]["api_key"] == "sk-env"
 
 
+def test_activate_workspace_updates_active_state_and_history_in_one_write(
+    isolated_config_store, monkeypatch,
+):
+    isolated_config_store._cache = {
+        "env": {},
+        "settings": {
+            "workspace_active": False,
+            "workspace_history": ["/old", "/selected"],
+        },
+    }
+    persisted = []
+    monkeypatch.setattr(
+        isolated_config_store,
+        "_persist",
+        lambda config: persisted.append(config),
+    )
+
+    isolated_config_store.activate_workspace("/selected")
+
+    assert isolated_config_store.is_workspace_active() is True
+    assert isolated_config_store.get_workspace_history() == ["/selected", "/old"]
+    assert len(persisted) == 1
+
+
 def test_portable_snapshot_is_detached_reencrypted_and_activated(
     isolated_config_store,
     monkeypatch,

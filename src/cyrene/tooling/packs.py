@@ -16,7 +16,8 @@ PACKS = (
     PackSpec("subagent", "subagent_tools", "Spawn, inspect, and communicate with subagents.", ("subagent.",), 900),
     PackSpec("delivery", "delivery_tools", "Progress updates, notifications, messages, and file delivery.", ("delivery.",), 1000),
     PackSpec("skill", "skill_tools", "Discover, install, remove, inspect, and run Agent Skills.", ("skill.",), 1100),
-    PackSpec("integration", "integration_tools", "Dynamically connected MCP and external integration capabilities.", ("integration.",), 1200),
+    PackSpec("remote", "remote_tools", "Operate paired Cyrene devices explicitly selected in the current chat.", ("remote.",), 1200),
+    PackSpec("integration", "integration_tools", "Dynamically connected MCP and external integration capabilities.", ("integration.",), 1300),
 )
 
 CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -118,6 +119,11 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
         ("skill.list", "ListSkills"),
         ("skill.get_learned", "GetLearnedSkill"),
         ("skill.run_learned", "RunLearnedSkill"),
+    ),
+    "remote_tools": (
+        ("remote.devices.list", "ListRemoteDevices"),
+        ("remote.status", "RemoteCyreneStatus"),
+        ("remote.action", "RemoteCyreneAction"),
     ),
     "integration_tools": (),
 }

@@ -82,6 +82,7 @@ var TABS = [
   { id: "general", labelKey: "settings.general" },
   { id: "models", labelKey: "settings.models" },
   { id: "channels", labelKey: "settings.channels" },
+  { id: "remote", labelKey: "settings.remoteTab" },
   { id: "agents", labelKey: "settings.agents" },
   { id: "appearance", labelKey: "settings.appearance" },
   { id: "capabilities", labelKey: "settings.capabilities" },
@@ -95,7 +96,7 @@ var TABS = [
 var SETTINGS_TAB_GROUPS = [
   ["general", "appearance", "shortcuts"],
   ["models", "capabilities", "skills"],
-  ["channels", "agents"],
+  ["channels", "remote", "agents"],
   ["data", "budget"],
   ["about"],
 ];
@@ -114,6 +115,7 @@ function SettingsTabIcon(id) {
     ],
     models: [React.createElement("path", { key: "p", d: "M12 3 4 7v10l8 4 8-4V7l-8-4Z" }), React.createElement("path", { key: "p2", d: "M4 7l8 4 8-4M12 11v10" })],
     channels: [React.createElement("path", { key: "p", d: "M21 8a6 6 0 0 1-8.7 5.3L8 16l1.1-4.8A6 6 0 1 1 21 8Z" }), React.createElement("path", { key: "p2", d: "M7.5 12.5A5 5 0 0 0 3 17.5L2 22l4.5-1A5 5 0 0 0 14 17" })],
+    remote: [React.createElement("rect", { key: "r1", x: "3", y: "4", width: "13", height: "10", rx: "2" }), React.createElement("path", { key: "p1", d: "M7 20h8M11 14v6M18 9h3m-1.5-1.5V12" })],
     agents: [React.createElement("path", { key: "p", d: "M12 3v4M6 8h12a2 2 0 0 1 2 2v7a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-7a2 2 0 0 1 2-2Z" }), React.createElement("path", { key: "p2", d: "M9 14h.01M15 14h.01M8 20v2M16 20v2" })],
     appearance: [React.createElement("path", { key: "p", d: "M12 3a9 9 0 1 0 9 9 4 4 0 0 1-4 4h-1.2a2 2 0 0 1-1.5-3.3l.7-.8A5 5 0 0 0 12 3Z" }), React.createElement("circle", { key: "c1", cx: "7.5", cy: "10.5", r: ".8" }), React.createElement("circle", { key: "c2", cx: "10", cy: "7.5", r: ".8" }), React.createElement("circle", { key: "c3", cx: "14", cy: "7.5", r: ".8" })],
     capabilities: [React.createElement("path", { key: "p", d: "M7 7h10M7 17h10M9 7a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM19 17a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z" })],
@@ -501,8 +503,9 @@ function SettingsOverlay({
           tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
           tab === "models" && ModelsPanel({ t, models, setModels, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, saveModels, config }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
+          tab === "remote" && React.createElement(RemotePanel, { t }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
-          tab === "appearance" && AppearancePanel({ t, tweaks, setTweak, actualTheme, theme: initialTheme }),
+          tab === "appearance" && React.createElement(AppearancePanel, { t, tweaks, setTweak, actualTheme, theme: initialTheme }),
           tab === "capabilities" && CapabilitiesPanel({ t, mcpConfigs, setMcpConfigs, mcpServers, toolGroups, toolsSaved, saveToolGroup, newMcpServer, setNewMcpServer, mcpSaved, saveMcp }),
           tab === "skills" && React.createElement(SkillsPanel, { t }),
           tab === "shortcuts" && React.createElement(ShortcutsPanel, { t }),
@@ -511,6 +514,395 @@ function SettingsOverlay({
           tab === "about" && AboutPanel({ t, config }),
         ),
       ),
+    ),
+  );
+}
+
+// ── Remote Control Panel ──
+function remoteCapabilityLabel(t, capability) {
+  return t("settings.remoteCapability." + capability, null, capability);
+}
+
+function remoteTransportDetail(t, transport) {
+  var status = String((transport && transport.status) || "disabled");
+  var key = {
+    disabled: "settings.remoteTransportDisabled",
+    configured: "settings.remoteTransportConfigured",
+    connecting: "settings.remoteTransportConnecting",
+    connected: "settings.remoteTransportConnected",
+  }[status];
+  if (key) return t(key);
+  if (status === "error") {
+    var detail = String((transport && transport.detail) || "").trim();
+    return detail
+      ? t("settings.remoteTransportErrorDetail", { detail: detail })
+      : t("settings.remoteTransportError");
+  }
+  return t("settings.remoteTransportUnknown");
+}
+
+function RemotePanel(p) {
+  var { t } = p;
+  var [remote, setRemote] = useStateSt(null);
+  var [loading, setLoading] = useStateSt(true);
+  var [busy, setBusy] = useStateSt("");
+  var [notice, setNotice] = useStateSt("");
+  var [pairingMode, setPairingMode] = useStateSt("share");
+  var [inviteCapabilities, setInviteCapabilities] = useStateSt([]);
+  var [inviteProjects, setInviteProjects] = useStateSt([]);
+  var [pairingKey, setPairingKey] = useStateSt("");
+  var [remoteAddress, setRemoteAddress] = useStateSt("");
+  var [incomingPairingKey, setIncomingPairingKey] = useStateSt("");
+  var [auditEvents, setAuditEvents] = useStateSt([]);
+
+  function loadRemote() {
+    setLoading(true);
+    return fetch("/api/remote/settings").then(readSettingsResponse).then(function (payload) {
+      setRemote(payload);
+      setInviteCapabilities(function (current) {
+        return current.length ? current : (payload.default_capabilities || []);
+      });
+      setLoading(false);
+      return payload;
+    }).catch(function (error) {
+      setNotice(t("settings.remoteLoadFailed") + ": " + error.message);
+      setLoading(false);
+    });
+  }
+
+  function loadAudit() {
+    return fetch("/api/remote/audit?limit=30").then(readSettingsResponse).then(function (payload) {
+      setAuditEvents(payload.events || []);
+    }).catch(function () {});
+  }
+
+  useEffectSt(function () {
+    loadRemote();
+    loadAudit();
+  }, []);
+
+  function saveSettings() {
+    if (!remote) return;
+    setBusy("settings");
+    setNotice("");
+    fetch("/api/remote/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: !!remote.enabled,
+        relay_url: "",
+        device_name: remote.device_name || "",
+      }),
+    }).then(readSettingsResponse).then(function (payload) {
+      setRemote(payload);
+      setNotice(t("settings.remoteSettingsSaved"));
+      loadAudit();
+    }).catch(function (error) {
+      setNotice(t("settings.error") + ": " + error.message);
+    }).finally(function () {
+      setBusy("");
+    });
+  }
+
+  function toggleList(value, list, setter) {
+    setter(list.indexOf(value) >= 0
+      ? list.filter(function (item) { return item !== value; })
+      : list.concat([value]));
+  }
+
+  function createInvitation() {
+    setBusy("invite");
+    setNotice("");
+    fetch("/api/remote/pairing/short-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        capabilities: inviteCapabilities,
+        project_scopes: inviteProjects,
+        ttl_seconds: 120,
+      }),
+    }).then(readSettingsResponse).then(function (payload) {
+      setPairingKey(payload.pairing_key || "");
+      setNotice(t("settings.remoteInvitationCreated"));
+      loadAudit();
+    }).catch(function (error) {
+      setNotice(t("settings.error") + ": " + error.message);
+    }).finally(function () {
+      setBusy("");
+    });
+  }
+
+  function connectRemoteDevice() {
+    if (!remoteAddress.trim() || !incomingPairingKey.trim()) return;
+    setBusy("accept");
+    setNotice("");
+    fetch("/api/remote/pairing/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        address: remoteAddress.trim(),
+        pairing_key: incomingPairingKey.trim(),
+      }),
+    }).then(readSettingsResponse).then(function (payload) {
+      setIncomingPairingKey("");
+      setNotice(t("settings.remotePairingComplete"));
+      loadRemote();
+      loadAudit();
+    }).catch(function (error) {
+      setNotice(t("settings.error") + ": " + error.message);
+    }).finally(function () {
+      setBusy("");
+    });
+  }
+
+  function copyText(value) {
+    if (!value) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(function () {
+        setNotice(t("settings.remoteCopied"));
+      }).catch(function () {});
+    }
+  }
+
+  if (loading && !remote) {
+    return React.createElement("div", { className: "settings-panel" },
+      SectionTitle(t("settings.remote"), t("settings.remoteSubtitle")),
+      React.createElement("p", { className: "wb-hint" }, t("settings.loading")),
+    );
+  }
+
+  if (!remote) {
+    return React.createElement("div", { className: "settings-panel" },
+      SectionTitle(t("settings.remote"), t("settings.remoteSubtitle")),
+      React.createElement("p", { className: "wb-hint" }, notice || t("settings.remoteLoadFailed")),
+    );
+  }
+
+  var identity = remote.identity || {};
+  var transport = remote.transport || {};
+  var directPairing = remote.direct_pairing || {};
+  var localAddresses = directPairing.addresses || [];
+  return React.createElement("div", { className: "settings-panel remote-settings-panel" },
+    SectionTitle(t("settings.remote"), t("settings.remoteSubtitle")),
+
+    FieldRow(
+      remote.enabled ? t("settings.remoteEnabled") : t("settings.remoteDisabled"),
+      remoteTransportDetail(t, transport),
+      Toggle(!!remote.enabled, function () {
+        setRemote({ ...remote, enabled: !remote.enabled });
+      }, busy === "settings", t("settings.remoteEnable")),
+    ),
+
+    SectionBlock(t("settings.remoteThisDevice"), null,
+      React.createElement("div", { className: "remote-identity-grid" },
+        React.createElement("label", null,
+          React.createElement("span", null, t("settings.remoteDeviceName")),
+          React.createElement("input", { className: "wb-input", value: remote.device_name || "", maxLength: 120, onChange: function (e) { setRemote({ ...remote, device_name: e.target.value }); } }),
+        ),
+      ),
+      React.createElement("div", { className: "remote-identity-facts" },
+        React.createElement("div", null, React.createElement("span", null, t("settings.remoteLocalAddress")), React.createElement("code", null, localAddresses[0] || t("settings.remoteAddressUnavailable"))),
+        React.createElement("div", null, React.createElement("span", null, t("settings.remoteDeviceId")), React.createElement("code", null, identity.device_id || "—")),
+        React.createElement("div", null, React.createElement("span", null, t("settings.remoteFingerprint")), React.createElement("code", null, identity.fingerprint || "—")),
+      ),
+      React.createElement("div", { className: "wb-save-actions" },
+        React.createElement("button", { className: "wb-btn primary", onClick: saveSettings, disabled: busy === "settings" }, busy === "settings" ? t("settings.saving") : t("settings.saveApply")),
+      ),
+    ),
+
+    SectionBlock(t("settings.remotePairDevice"), null,
+      React.createElement("div", { className: "remote-pairing-layout" },
+        React.createElement("div", { className: "remote-pairing-toolbar" },
+          React.createElement("p", null, t("settings.remotePairDeviceHint")),
+          React.createElement("div", { className: "wb-seg remote-pairing-tabs", role: "tablist", "aria-label": t("settings.remotePairDevice") },
+            React.createElement("button", {
+              type: "button",
+              role: "tab",
+              "aria-selected": pairingMode === "share",
+              className: "wb-seg-btn" + (pairingMode === "share" ? " active" : ""),
+              onClick: function () { setPairingMode("share"); },
+            }, t("settings.remotePairModeShare")),
+            React.createElement("button", {
+              type: "button",
+              role: "tab",
+              "aria-selected": pairingMode === "control",
+              className: "wb-seg-btn" + (pairingMode === "control" ? " active" : ""),
+              onClick: function () { setPairingMode("control"); },
+            }, t("settings.remotePairModeControl")),
+          ),
+        ),
+        pairingMode === "share"
+          ? React.createElement("div", { className: "remote-pairing-pane", role: "tabpanel" },
+              React.createElement("div", { className: "remote-pairing-copy" },
+                React.createElement("b", null, t("settings.remoteAllowController")),
+                React.createElement("small", null, t("settings.remoteAllowControllerHint")),
+              ),
+              React.createElement("div", { className: "remote-pairing-share-grid" },
+                React.createElement("div", { className: "remote-pairing-group" },
+                  React.createElement("span", { className: "remote-pairing-group-title" }, t("settings.remotePairCapabilities")),
+                  React.createElement("div", { className: "remote-option-list" },
+                    (remote.supported_capabilities || []).map(function (capability) {
+                      return React.createElement("label", { key: capability, className: "remote-option" },
+                        React.createElement("input", { type: "checkbox", checked: inviteCapabilities.indexOf(capability) >= 0, onChange: function () { toggleList(capability, inviteCapabilities, setInviteCapabilities); } }),
+                        React.createElement("span", null, remoteCapabilityLabel(t, capability)),
+                      );
+                    }),
+                  ),
+                ),
+                React.createElement("div", { className: "remote-pairing-group" },
+                  React.createElement("span", { className: "remote-pairing-group-title" }, t("settings.remoteSharedProjects")),
+                  React.createElement("div", { className: "remote-project-choices" },
+                    (remote.projects || []).map(function (project) {
+                      return React.createElement("label", { key: project.id, className: "remote-option" },
+                        React.createElement("input", { type: "checkbox", checked: inviteProjects.indexOf(project.id) >= 0, onChange: function () { toggleList(project.id, inviteProjects, setInviteProjects); } }),
+                        React.createElement("span", null, project.name || project.id),
+                      );
+                    }),
+                  ),
+                ),
+              ),
+              React.createElement("div", { className: "remote-pairing-actions" },
+                React.createElement("button", { className: "wb-btn primary", onClick: createInvitation, disabled: !remote.enabled || !inviteCapabilities.length || !inviteProjects.length || busy === "invite" }, busy === "invite" ? t("settings.loading") : t("settings.remoteCreateInvitation")),
+              ),
+              pairingKey && React.createElement("div", { className: "remote-direct-offer" },
+                React.createElement("div", null,
+                  React.createElement("small", null, t("settings.remoteLocalAddress")),
+                  React.createElement("code", null, localAddresses[0] || t("settings.remoteAddressUnavailable")),
+                ),
+                React.createElement("div", null,
+                  React.createElement("small", null, t("settings.remotePairingKey")),
+                  React.createElement("button", { type: "button", className: "remote-pairing-key", onClick: function () { copyText(pairingKey); }, title: t("settings.remoteCopyPairingKey") }, pairingKey),
+                ),
+                React.createElement("p", null, t("settings.remoteShortKeyExpires")),
+              ),
+            )
+          : React.createElement("div", { className: "remote-pairing-pane", role: "tabpanel" },
+              React.createElement("div", { className: "remote-pairing-copy" },
+                React.createElement("b", null, t("settings.remoteControlAnother")),
+                React.createElement("small", null, t("settings.remoteControlAnotherHint")),
+              ),
+              React.createElement("div", { className: "remote-pairing-control" },
+                React.createElement("label", { className: "remote-response-field" },
+                  React.createElement("span", null, t("settings.remoteDeviceAddress")),
+                  React.createElement("input", { className: "wb-input mono", value: remoteAddress, spellCheck: false, autoCapitalize: "off", autoCorrect: "off", placeholder: "192.168.1.20:37841", onChange: function (e) { setRemoteAddress(e.target.value); } }),
+                ),
+                React.createElement("label", { className: "remote-response-field" },
+                  React.createElement("span", null, t("settings.remotePairingKey")),
+                  React.createElement("input", { className: "wb-input mono remote-key-input", value: incomingPairingKey, maxLength: 11, spellCheck: false, autoCapitalize: "characters", autoCorrect: "off", placeholder: "ABCDE-23456", onChange: function (e) { setIncomingPairingKey(e.target.value.toUpperCase()); } }),
+                ),
+                React.createElement("div", { className: "remote-pairing-actions" },
+                  React.createElement("button", { className: "wb-btn primary", onClick: connectRemoteDevice, disabled: !remoteAddress.trim() || !incomingPairingKey.trim() || busy === "accept" }, busy === "accept" ? t("settings.remoteConnectingDevice") : t("settings.remoteConnectDevice")),
+                ),
+              ),
+            ),
+      ),
+    ),
+
+    SectionBlock(t("settings.remoteTrustedDevices"), null,
+      !(remote.peers || []).length && React.createElement("p", { className: "wb-hint" }, t("settings.remoteNoDevices")),
+      (remote.peers || []).map(function (peer) {
+        return React.createElement(RemotePeerCard, {
+          key: peer.device_id,
+          t: t,
+          peer: peer,
+          projects: remote.projects || [],
+          capabilities: remote.supported_capabilities || [],
+          onChanged: function () { loadRemote(); loadAudit(); },
+          onNotice: setNotice,
+        });
+      }),
+    ),
+
+    SectionBlock(t("settings.remoteAudit"), null,
+      React.createElement("div", { className: "remote-audit-list" },
+        !auditEvents.length && React.createElement("p", { className: "wb-hint" }, t("settings.remoteNoAudit")),
+        auditEvents.map(function (event) {
+          return React.createElement("div", { key: event.event_id, className: "remote-audit-row" },
+            React.createElement("span", { className: "remote-audit-outcome " + (event.outcome === "error" ? "error" : "") }, event.outcome || "•"),
+            React.createElement("div", null,
+              React.createElement("b", null, event.event_type),
+              React.createElement("small", null, [event.command, event.peer_device_id, event.created_at].filter(Boolean).join(" · ")),
+            ),
+          );
+        }),
+      ),
+    ),
+    notice && React.createElement("div", { className: "remote-notice", role: "status" }, notice),
+  );
+}
+
+function RemotePeerCard(p) {
+  var { t, peer, projects, capabilities, onChanged, onNotice } = p;
+  var [editing, setEditing] = useStateSt(false);
+  var [busy, setBusy] = useStateSt(false);
+  var [grantedCapabilities, setGrantedCapabilities] = useStateSt(peer.granted_capabilities || []);
+  var [grantedProjects, setGrantedProjects] = useStateSt(peer.granted_project_scopes || []);
+
+  function toggle(value, list, setter) {
+    setter(list.indexOf(value) >= 0 ? list.filter(function (item) { return item !== value; }) : list.concat([value]));
+  }
+
+  function saveGrant() {
+    setBusy(true);
+    fetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ capabilities: grantedCapabilities, project_scopes: grantedProjects }),
+    }).then(readSettingsResponse).then(function () {
+      setEditing(false);
+      onNotice(t("settings.remoteGrantSaved"));
+      onChanged();
+    }).catch(function (error) {
+      onNotice(t("settings.error") + ": " + error.message);
+    }).finally(function () { setBusy(false); });
+  }
+
+  function revoke() {
+    setBusy(true);
+    fetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), { method: "DELETE" })
+      .then(readSettingsResponse).then(function () {
+        onNotice(t("settings.remoteDeviceRevoked"));
+        onChanged();
+      }).catch(function (error) {
+        onNotice(t("settings.error") + ": " + error.message);
+      }).finally(function () { setBusy(false); });
+  }
+
+  return React.createElement("div", { className: "remote-peer-card" },
+    React.createElement("div", { className: "remote-peer-header" },
+      React.createElement("div", null,
+        React.createElement("b", null, peer.display_name || peer.device_id),
+        React.createElement("code", null, peer.device_id),
+      ),
+      React.createElement("div", { className: "remote-peer-actions" },
+        React.createElement("button", { className: "wb-btn muted", onClick: function () { setEditing(!editing); }, disabled: busy }, editing ? t("settings.close") : t("settings.remoteEditGrant")),
+        React.createElement("button", { className: "wb-btn danger", onClick: revoke, disabled: busy }, t("settings.remoteRevoke")),
+      ),
+    ),
+    React.createElement("div", { className: "remote-peer-summary" },
+      React.createElement("span", null, t("settings.remoteDeviceAddress") + ": " + (peer.lan_address || "—")),
+      React.createElement("span", null, t("settings.remoteGrantedToPeer") + ": " + (peer.granted_capabilities || []).length),
+      React.createElement("span", null, t("settings.remoteReceivedFromPeer") + ": " + (peer.received_capabilities || []).length),
+      React.createElement("span", null, peer.fingerprint || ""),
+    ),
+    editing && React.createElement("div", { className: "remote-grant-editor" },
+      React.createElement("div", { className: "remote-option-list" },
+        capabilities.map(function (capability) {
+          return React.createElement("label", { key: capability, className: "remote-option" },
+            React.createElement("input", { type: "checkbox", checked: grantedCapabilities.indexOf(capability) >= 0, onChange: function () { toggle(capability, grantedCapabilities, setGrantedCapabilities); } }),
+            React.createElement("span", null, remoteCapabilityLabel(t, capability)),
+          );
+        }),
+      ),
+      React.createElement("div", { className: "remote-project-list" },
+        projects.map(function (project) {
+          return React.createElement("label", { key: project.id, className: "remote-option" },
+            React.createElement("input", { type: "checkbox", checked: grantedProjects.indexOf(project.id) >= 0, onChange: function () { toggle(project.id, grantedProjects, setGrantedProjects); } }),
+            React.createElement("span", null, project.name || project.id),
+          );
+        }),
+      ),
+      React.createElement("button", { className: "wb-btn primary", onClick: saveGrant, disabled: busy }, t("settings.remoteSaveGrant")),
     ),
   );
 }
@@ -1307,9 +1699,136 @@ function AgentsPanel(p) {
 }
 
 // ── Appearance Panel ──
+function normalizeAccentHex(value) {
+  var next = String(value || "").trim();
+  if (!next) return "";
+  if (next[0] !== "#") next = "#" + next;
+  if (/^#[0-9a-f]{3}$/i.test(next)) {
+    next = "#" + next.slice(1).split("").map(function (char) { return char + char; }).join("");
+  }
+  return /^#[0-9a-f]{6}$/i.test(next) ? next.toUpperCase() : "";
+}
+
+function hexToAccentHsv(value) {
+  var hex = normalizeAccentHex(value) || "#E5488B";
+  var red = parseInt(hex.slice(1, 3), 16) / 255;
+  var green = parseInt(hex.slice(3, 5), 16) / 255;
+  var blue = parseInt(hex.slice(5, 7), 16) / 255;
+  var max = Math.max(red, green, blue);
+  var min = Math.min(red, green, blue);
+  var delta = max - min;
+  var hue = 0;
+  if (delta) {
+    if (max === red) hue = 60 * (((green - blue) / delta) % 6);
+    else if (max === green) hue = 60 * (((blue - red) / delta) + 2);
+    else hue = 60 * (((red - green) / delta) + 4);
+  }
+  if (hue < 0) hue += 360;
+  return {
+    h: Math.round(hue),
+    s: max ? Math.round((delta / max) * 100) : 0,
+    v: Math.round(max * 100),
+  };
+}
+
+function accentHsvToHex(hue, saturation, value) {
+  var h = ((Number(hue) % 360) + 360) % 360;
+  var s = Math.max(0, Math.min(100, Number(saturation))) / 100;
+  var v = Math.max(0, Math.min(100, Number(value))) / 100;
+  var chroma = v * s;
+  var x = chroma * (1 - Math.abs((h / 60) % 2 - 1));
+  var m = v - chroma;
+  var red = 0, green = 0, blue = 0;
+  if (h < 60) { red = chroma; green = x; }
+  else if (h < 120) { red = x; green = chroma; }
+  else if (h < 180) { green = chroma; blue = x; }
+  else if (h < 240) { green = x; blue = chroma; }
+  else if (h < 300) { red = x; blue = chroma; }
+  else { red = chroma; blue = x; }
+  return "#" + [red, green, blue].map(function (channel) {
+    return Math.round((channel + m) * 255).toString(16).padStart(2, "0");
+  }).join("").toUpperCase();
+}
+
 function AppearancePanel(p) {
   var { t, tweaks, setTweak, actualTheme, theme } = p;
   var accentPresets = ["#4378ff", "#8b5cf6", "#e8796b", "#34b8a0", "#f4a93e", "#e5488b", "#6b8cff", "#a78bfa"];
+  var defaultAccent = actualTheme === "dark" ? "#63B38F" : "#4D9A78";
+  var appliedAccent = normalizeAccentHex(tweaks.accent) || defaultAccent;
+  var normalizedAccent = normalizeAccentHex(tweaks.accent);
+  var customAccentSelected = !!normalizedAccent && !accentPresets.some(function (color) {
+    return normalizeAccentHex(color) === normalizedAccent;
+  });
+  var [accentPickerOpen, setAccentPickerOpen] = useStateSt(false);
+  var [accentDraft, setAccentDraft] = useStateSt(appliedAccent);
+  var [accentHsv, setAccentHsv] = useStateSt(function () { return hexToAccentHsv(appliedAccent); });
+  var accentPickerRef = useRefSt(null);
+
+  useEffectSt(function () {
+    if (accentPickerOpen) return;
+    var next = normalizeAccentHex(tweaks.accent) || defaultAccent;
+    setAccentDraft(next);
+    setAccentHsv(hexToAccentHsv(next));
+  }, [tweaks.accent, actualTheme, accentPickerOpen]);
+
+  useEffectSt(function () {
+    if (!accentPickerOpen) return undefined;
+    function closeAccentPicker(event) {
+      if (accentPickerRef.current && !accentPickerRef.current.contains(event.target)) {
+        setAccentPickerOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", closeAccentPicker);
+    return function () { document.removeEventListener("pointerdown", closeAccentPicker); };
+  }, [accentPickerOpen]);
+
+  function updateAccentDraft(next) {
+    var normalized = normalizeAccentHex(next);
+    setAccentDraft(next);
+    if (normalized) {
+      setAccentDraft(normalized);
+      setAccentHsv(hexToAccentHsv(normalized));
+    }
+  }
+
+  function updateAccentFromHsv(next) {
+    setAccentHsv(next);
+    setAccentDraft(accentHsvToHex(next.h, next.s, next.v));
+  }
+
+  function updateAccentPlane(event) {
+    var rect = event.currentTarget.getBoundingClientRect();
+    var saturation = Math.round(Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) * 100);
+    var value = Math.round((1 - Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))) * 100);
+    updateAccentFromHsv({ h: accentHsv.h, s: saturation, v: value });
+  }
+
+  function updateAccentHue(event) {
+    var rect = event.currentTarget.getBoundingClientRect();
+    var ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+    updateAccentFromHsv({ h: Math.round(ratio * 359), s: accentHsv.s, v: accentHsv.v });
+  }
+
+  function openAccentPicker() {
+    var next = normalizeAccentHex(tweaks.accent) || defaultAccent;
+    setAccentDraft(next);
+    setAccentHsv(hexToAccentHsv(next));
+    setAccentPickerOpen(true);
+  }
+
+  function applyAccentDraft() {
+    var next = normalizeAccentHex(accentDraft);
+    if (!next) return;
+    setTweak("accent", next);
+    setAccentPickerOpen(false);
+  }
+
+  function resetAccentDraft() {
+    setTweak("accent", null);
+    setAccentDraft(defaultAccent);
+    setAccentHsv(hexToAccentHsv(defaultAccent));
+    setAccentPickerOpen(false);
+  }
 
   return React.createElement("div", { className: "settings-panel" },
     SectionTitle(t("settings.appearance"), t("settings.appearanceSubtitle")),
@@ -1321,16 +1840,147 @@ function AppearancePanel(p) {
       ),
     ),
     FieldRow(t("settings.themeColor"), t("settings.themeColorHint", { theme: actualTheme || t("settings.system") }),
-      React.createElement("div", { className: "wb-color-swatches" },
-        accentPresets.map(function (color, idx) {
-          return React.createElement("button", {
-            key: color,
-            className: "wb-color-swatch" + (tweaks.accent === color ? " active" : ""),
-            style: { "--swatch": color },
-            onClick: function () { setTweak("accent", color); },
-            title: t("settings.accentN", { n: idx + 1 }),
-          });
-        }),
+      React.createElement("div", { className: "wb-accent-picker", ref: accentPickerRef },
+        React.createElement("div", { className: "wb-color-swatches" },
+          accentPresets.map(function (color, idx) {
+            var normalized = normalizeAccentHex(color);
+            var selected = normalizeAccentHex(tweaks.accent) === normalized;
+            return React.createElement("button", {
+              key: color,
+              type: "button",
+              className: "wb-color-swatch" + (selected ? " active" : ""),
+              style: { "--swatch": color },
+              onClick: function () {
+                setTweak("accent", normalized);
+                setAccentPickerOpen(false);
+              },
+              title: t("settings.accentN", { n: idx + 1 }),
+              "aria-label": t("settings.accentN", { n: idx + 1 }),
+              "aria-pressed": selected ? "true" : "false",
+            });
+          }),
+          React.createElement("button", {
+            type: "button",
+            className: "wb-color-swatch wb-color-swatch-custom" + (customAccentSelected ? " active" : ""),
+            style: { "--swatch": appliedAccent },
+            onClick: function () { accentPickerOpen ? setAccentPickerOpen(false) : openAccentPicker(); },
+            title: t("settings.currentThemeColor", { color: appliedAccent }),
+            "aria-label": t("settings.currentThemeColor", { color: appliedAccent }),
+            "aria-pressed": customAccentSelected ? "true" : "false",
+            "aria-expanded": accentPickerOpen ? "true" : "false",
+            "aria-haspopup": "dialog",
+          }),
+        ),
+        accentPickerOpen && React.createElement("div", {
+          className: "wb-accent-popover",
+          role: "dialog",
+          "aria-label": t("settings.customColor"),
+          onKeyDown: function (event) {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              setAccentPickerOpen(false);
+            }
+          },
+        },
+          React.createElement("div", { className: "wb-accent-popover-body" },
+            React.createElement("div", { className: "wb-accent-picker-visuals" },
+              React.createElement("div", {
+                className: "wb-accent-sv",
+                style: { "--picker-hue": "hsl(" + accentHsv.h + " 100% 50%)" },
+                onPointerDown: function (event) {
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  updateAccentPlane(event);
+                },
+                onPointerMove: function (event) {
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) updateAccentPlane(event);
+                },
+                role: "slider",
+                tabIndex: 0,
+                "aria-label": t("settings.colorSaturationBrightness"),
+                "aria-valuetext": accentDraft,
+              },
+                React.createElement("span", {
+                  className: "wb-accent-sv-thumb",
+                  style: { left: accentHsv.s + "%", top: (100 - accentHsv.v) + "%" },
+                }),
+              ),
+              React.createElement("div", {
+                className: "wb-accent-hue",
+                role: "slider",
+                tabIndex: 0,
+                "aria-label": t("settings.colorHue"),
+                "aria-valuemin": "0",
+                "aria-valuemax": "359",
+                "aria-valuenow": String(accentHsv.h),
+                onPointerDown: function (event) {
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  updateAccentHue(event);
+                },
+                onPointerMove: function (event) {
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) updateAccentHue(event);
+                },
+                onKeyDown: function (event) {
+                  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+                  event.preventDefault();
+                  var delta = event.key === "ArrowUp" ? -1 : 1;
+                  updateAccentFromHsv({
+                    h: Math.max(0, Math.min(359, accentHsv.h + delta)),
+                    s: accentHsv.s,
+                    v: accentHsv.v,
+                  });
+                },
+              },
+                React.createElement("span", {
+                  className: "wb-accent-hue-thumb",
+                  style: { top: (accentHsv.h / 359 * 100) + "%" },
+                }),
+              ),
+            ),
+            React.createElement("div", { className: "wb-accent-picker-fields" },
+              React.createElement("div", { className: "wb-accent-preview-row" },
+                React.createElement("span", null, t("settings.currentColor")),
+                React.createElement("span", { className: "wb-accent-preview-dot", style: { "--swatch": appliedAccent } }),
+                React.createElement("code", null, appliedAccent),
+              ),
+              React.createElement("div", { className: "wb-accent-preview-row" },
+                React.createElement("span", null, t("settings.newColor")),
+                React.createElement("span", { className: "wb-accent-preview-dot", style: { "--swatch": normalizeAccentHex(accentDraft) || appliedAccent } }),
+                React.createElement("code", null, normalizeAccentHex(accentDraft) || "—"),
+              ),
+              React.createElement("label", { className: "wb-accent-hex-field" },
+                React.createElement("span", null, "HEX"),
+                React.createElement("input", {
+                  value: accentDraft,
+                  maxLength: 7,
+                  spellCheck: false,
+                  onChange: function (event) { updateAccentDraft(event.target.value); },
+                  onKeyDown: function (event) { if (event.key === "Enter") applyAccentDraft(); },
+                  "aria-invalid": normalizeAccentHex(accentDraft) ? "false" : "true",
+                }),
+              ),
+              React.createElement("input", {
+                className: "wb-accent-native-input",
+                type: "color",
+                value: normalizeAccentHex(accentDraft) || appliedAccent,
+                onChange: function (event) { updateAccentDraft(event.target.value); },
+                "aria-label": t("settings.openSystemColorPicker"),
+              }),
+            ),
+          ),
+          React.createElement("div", { className: "wb-accent-popover-actions" },
+            React.createElement("button", { type: "button", className: "wb-btn muted", onClick: resetAccentDraft }, t("settings.restoreDefault")),
+            React.createElement("div", { className: "wb-accent-popover-actions-end" },
+              React.createElement("button", { type: "button", className: "wb-btn muted", onClick: function () { setAccentPickerOpen(false); } }, t("settings.cancel")),
+              React.createElement("button", {
+                type: "button",
+                className: "wb-btn primary",
+                disabled: !normalizeAccentHex(accentDraft),
+                onClick: applyAccentDraft,
+              }, t("settings.apply")),
+            ),
+          ),
+        ),
       ),
     ),
     FieldRow(t("settings.textSize"), t("settings.textSizeHint"),

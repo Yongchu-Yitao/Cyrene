@@ -111,6 +111,7 @@ _TOOL_PACK_PROMPT_TERMS: dict[str, tuple[str, ...]] = {
         "learned skill",
         "agent skills",
     ),
+    "remote_tools": ("remote_tools", "remote."),
     "integration_tools": ("integration_tools", "mcp"),
 }
 

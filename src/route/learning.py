@@ -47,9 +47,28 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     _LEARNING_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
     _LEARNING_FILE_PATH_RE = re.compile(
-        r"(?P<path>(?:/[^\s\"'<>]+|[A-Za-z]:\\[^\s\"'<>]+)\.(?:png|jpg|jpeg|webp|gif|pdf|md|txt|json|csv|tsv|xlsx|docx|pptx|py|js|jsx|ts|tsx|css|html))",
+        r"(?P<path>(?:/|[A-Za-z]:\\)[^\"'<>\r\n]+?\.(?:png|jpg|jpeg|webp|gif|pdf|md|txt|json|csv|tsv|xlsx|docx|pptx|py|js|jsx|ts|tsx|css|html))",
         re.IGNORECASE,
     )
+
+    def _learning_resolve_media_path(raw_path: str) -> Path:
+        """Resolve current or relocated behavior-media screenshot paths."""
+        raw = str(raw_path or "").strip()
+        direct = Path(raw).expanduser()
+        if direct.exists():
+            return direct.resolve()
+        normalized = raw.replace("\\", "/")
+        marker = "/data/behavior-media/"
+        marker_index = normalized.lower().rfind(marker)
+        if marker_index >= 0 and (
+            normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized)
+        ):
+            relative = normalized[marker_index + len(marker):]
+            root = (DATA_DIR / "behavior-media").resolve()
+            candidate = (root / Path(relative)).resolve()
+            if candidate == root or root in candidate.parents:
+                return candidate
+        return direct.resolve()
 
     def _learning_extract_paths(value: Any) -> list[str]:
         paths: list[str] = []
@@ -91,7 +110,7 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                     if raw_path in seen_paths:
                         continue
                     seen_paths.add(raw_path)
-                    target = Path(raw_path).expanduser()
+                    target = _learning_resolve_media_path(raw_path)
                     suffix = target.suffix.lower()
                     item = {
                         "path": raw_path,
@@ -128,7 +147,7 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 candidates.extend(_learning_extract_paths(step.get("output_summary") or ""))
                 for raw_path in candidates:
                     try:
-                        if Path(raw_path).expanduser().resolve() == target:
+                        if _learning_resolve_media_path(raw_path) == target:
                             return True
                     except Exception:
                         continue
@@ -136,7 +155,7 @@ def register_learning_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/tool-chain-media")
     async def api_tool_chain_media(path: str = ""):
-        target = Path(str(path or "")).expanduser().resolve()
+        target = _learning_resolve_media_path(path)
         if target.suffix.lower() not in _LEARNING_IMAGE_EXTS:
             return JSONResponse({"error": "unsupported media type"}, status_code=400)
         if not target.exists() or not target.is_file():

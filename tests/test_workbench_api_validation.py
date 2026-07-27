@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -105,6 +106,99 @@ def test_activate_returns_small_selection_payload_without_heavy_store_read(monke
         "activeProjectId": "project_1",
         "activeSessionId": "",
     }
+
+
+def test_context_state_uses_lightweight_store_read_off_event_loop(
+    monkeypatch, tmp_path,
+):
+    client = _client(monkeypatch, tmp_path)
+
+    from cyrene.runtime import settings_store
+    from route.settings import general
+
+    route_threads = []
+    reader_threads = []
+    original_to_thread = general.asyncio.to_thread
+
+    async def recording_to_thread(function, *args, **kwargs):
+        route_threads.append(threading.get_ident())
+        return await original_to_thread(function, *args, **kwargs)
+
+    def lightweight_read():
+        reader_threads.append(threading.get_ident())
+        return {
+            "activeProjectId": "project_1",
+            "projects": [
+                {
+                    "id": "project_1",
+                    "workspacePath": "/fast/workspace",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        general,
+        "_read_workbench_store",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("context state must not run the repair reader")
+        ),
+    )
+    monkeypatch.setattr(general.asyncio, "to_thread", recording_to_thread)
+    monkeypatch.setattr(general, "_read_workbench_store_lightweight", lightweight_read)
+    monkeypatch.setattr(settings_store, "is_soul_active", lambda: True)
+    monkeypatch.setattr(settings_store, "is_workspace_active", lambda: True)
+    monkeypatch.setattr(
+        settings_store,
+        "get_workspace_history",
+        lambda: ["/fast/workspace"],
+    )
+
+    response = client.get("/api/context/state")
+
+    assert response.status_code == 200
+    assert response.json()["workspace_dir"] == "/fast/workspace"
+    assert route_threads
+    assert reader_threads
+    assert reader_threads[0] != route_threads[0]
+
+
+def test_workspace_context_mutations_use_background_thread(
+    monkeypatch, tmp_path,
+):
+    client = _client(monkeypatch, tmp_path)
+
+    from cyrene.runtime import settings_store
+    from route.settings import general
+
+    route_threads = []
+    calls = []
+    original_to_thread = general.asyncio.to_thread
+
+    async def recording_to_thread(function, *args, **kwargs):
+        route_threads.append(threading.get_ident())
+        return await original_to_thread(function, *args, **kwargs)
+
+    monkeypatch.setattr(general.asyncio, "to_thread", recording_to_thread)
+    monkeypatch.setattr(
+        settings_store,
+        "activate_workspace",
+        lambda path: calls.append(("add", path, threading.get_ident())),
+    )
+    monkeypatch.setattr(
+        settings_store,
+        "set_workspace_active",
+        lambda active: calls.append(("active", active, threading.get_ident())),
+    )
+
+    added = client.post("/api/context/add-workspace", json={"path": "/selected"})
+    removed = client.post("/api/context/remove-workspace")
+
+    assert added.status_code == 200
+    assert removed.status_code == 200
+    assert calls[0][:2] == ("add", "/selected")
+    assert calls[1][:2] == ("active", False)
+    assert route_threads
+    assert all(call[2] not in route_threads for call in calls)
 
 
 def test_unstarted_session_cannot_be_paused(monkeypatch, tmp_path):

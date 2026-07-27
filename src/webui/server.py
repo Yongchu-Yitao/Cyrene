@@ -51,6 +51,7 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
         await _start_workbench_chat_runs()
+        await _start_remote_control()
         await _start_wechat()
         await _migrate_knowledge_db()
         await _sync_knowledge_catalog()
@@ -83,6 +84,15 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
             await _setup_wechat(app, db_path)
         except Exception:
             logger.warning("WeChat bot setup failed — check your config / proxy setup")
+
+    async def _start_remote_control() -> None:
+        runtime = getattr(app.state, "remote_control_runtime", None)
+        if runtime is None:
+            return
+        try:
+            await runtime.start()
+        except Exception:
+            logger.warning("Remote-control gateway startup failed", exc_info=True)
 
     async def _migrate_knowledge_db() -> None:
         try:
@@ -138,6 +148,16 @@ def create_app(bot: Any, db_path: str, instance_id: str = "", ui_mode: str = "wo
         app.state._decouple_task = asyncio.create_task(_run())
 
     async def _close_browser_session() -> None:
+        remote_runtime = getattr(app.state, "remote_control_runtime", None)
+        if remote_runtime is not None:
+            try:
+                await remote_runtime.stop()
+            except Exception:
+                logger.warning(
+                    "Remote-control gateway shutdown failed",
+                    exc_info=True,
+                )
+
         manager = getattr(app.state, "goal_loop_manager", None)
         if manager is not None:
             try:

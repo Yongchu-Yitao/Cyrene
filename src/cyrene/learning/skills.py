@@ -165,6 +165,26 @@ def _skill_entrypoint(stored_path: Path) -> Path | None:
     return None
 
 
+def _resolve_stored_skill_path(path_value: Any) -> Path:
+    """Resolve an installed skill copied under a previous app-data prefix."""
+    raw = str(path_value or "").strip()
+    direct = Path(raw).expanduser()
+    if direct.exists():
+        return direct.resolve()
+    normalized = raw.replace("\\", "/")
+    marker = "/data/installed_skills/"
+    marker_index = normalized.lower().rfind(marker)
+    if marker_index >= 0 and (
+        normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized)
+    ):
+        relative = normalized[marker_index + len(marker):]
+        root = _SKILLS_DIR.resolve()
+        candidate = (root / Path(relative)).resolve()
+        if candidate == root or root in candidate.parents:
+            return candidate
+    return direct
+
+
 def _parse_frontmatter_field(text: str, field: str) -> str | None:
     """Extract a simple `field: value` from YAML frontmatter (---...---) at the start of text."""
     stripped = text.lstrip("﻿")
@@ -216,7 +236,7 @@ def extract_skill_summary(path: Path) -> tuple[str, str, str]:
 
 
 def skill_payload_from_record(record: dict[str, Any]) -> dict[str, Any] | None:
-    stored_path = Path(str(record.get("stored_path") or "")).expanduser()
+    stored_path = _resolve_stored_skill_path(record.get("stored_path"))
     if not stored_path.exists():
         return None
     entrypoint = _skill_entrypoint(stored_path)
@@ -355,7 +375,8 @@ def register_existing_skills() -> dict[str, Any]:
     """
     records = skill_settings_records()
     existing_stored = {
-        str((record.get("stored_path") or "")).rstrip("/"): True for record in records
+        str(_resolve_stored_skill_path(record.get("stored_path"))).rstrip("/"): True
+        for record in records
     }
     added: list[dict[str, Any]] = []
     for entry in skills_storage_dir().iterdir():
@@ -405,7 +426,7 @@ def uninstall_skill(skill_id: str) -> bool:
     removed = False
     for record in skill_settings_records():
         if record.get("id") == skill_id:
-            stored_path = Path(str(record.get("stored_path") or "")).expanduser()
+            stored_path = _resolve_stored_skill_path(record.get("stored_path"))
             try:
                 if stored_path.exists():
                     if stored_path.is_dir():

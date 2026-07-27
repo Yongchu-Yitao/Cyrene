@@ -30,7 +30,7 @@ from typing import Any, Callable
 import httpx
 
 from cyrene.call_llm import NETWORK_RETRY_LIMIT
-from cyrene.config import DATA_DIR
+from cyrene.config import DATA_DIR, WORKSPACE_DIR
 from cyrene.runtime.memory.conversations import archive_session_exchange
 from cyrene.runtime.io import atomic_write_json, read_json_safe
 from cyrene.workbench.store import read_document, write_document
@@ -138,9 +138,38 @@ def _write_plan_markdown(plan: dict[str, Any]) -> None:
     raw_path = str(plan.get("markdownPath") or "").strip()
     if not raw_path:
         return
-    path = Path(raw_path)
+    path = _resolve_managed_plan_path(raw_path)
+    if path != Path(raw_path):
+        plan["markdownPath"] = str(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_plan_markdown(plan), encoding="utf-8")
+
+
+def _resolve_managed_plan_path(raw_path: str) -> Path:
+    """Rebase plan mirrors restored from another Cyrene data directory."""
+    raw = str(raw_path or "").strip()
+    direct = Path(raw).expanduser()
+    try:
+        resolved = direct.resolve()
+        workspace_root = WORKSPACE_DIR.resolve()
+        if resolved == workspace_root or workspace_root in resolved.parents:
+            return resolved
+    except Exception:
+        pass
+
+    normalized = raw.replace("\\", "/")
+    marker = "/workspace/"
+    marker_index = normalized.lower().rfind(marker)
+    if marker_index >= 0 and (
+        normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized)
+    ):
+        relative = normalized[marker_index + len(marker):]
+        if relative == "plan" or relative.startswith(("plan/", "projects/")):
+            candidate = (WORKSPACE_DIR / Path(relative)).resolve()
+            root = WORKSPACE_DIR.resolve()
+            if candidate == root or root in candidate.parents:
+                return candidate
+    return direct
 
 
 def _normalize_chat_plan(

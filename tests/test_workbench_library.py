@@ -446,6 +446,61 @@ async def test_library_raw_media_is_served_inline(
 
 
 @pytest.mark.asyncio
+async def test_library_raw_media_rebases_restored_managed_path(
+    monkeypatch, library_db, tmp_path
+):
+    from cyrene.runtime import attachments
+
+    current_exports = tmp_path / "current" / "data" / "webui_exports"
+    current_uploads = tmp_path / "current" / "data" / "webui_uploads"
+    current_exports.mkdir(parents=True)
+    current_uploads.mkdir()
+    media_path = current_exports / "restored.pdf"
+    media_path.write_bytes(b"%PDF-1.4\nrestored\n")
+    monkeypatch.setattr(attachments, "EXPORTS_DIR", current_exports)
+    monkeypatch.setattr(attachments, "UPLOADS_DIR", current_uploads)
+
+    old_path = (
+        "/Users/old/Library/Application Support/Cyrene/"
+        "data/webui_exports/restored.pdf"
+    )
+    document = await store.upsert_document_by_path(
+        library_db,
+        path=old_path,
+        name=media_path.name,
+        content_type="application/pdf",
+        kind="pdf",
+        size=media_path.stat().st_size,
+        source="test",
+    )
+    item = await library.create_item(library_db, {"title": "Restored PDF"})
+    await library.add_attachment(
+        library_db,
+        item["id"],
+        {
+            "kb_document_id": document["id"],
+            "filename": media_path.name,
+            "content_type": "application/pdf",
+        },
+    )
+
+    async def ensure(_workspace):
+        return library_db
+
+    monkeypatch.setattr(library_routes, "_ensure_kb_db", ensure)
+    app = FastAPI()
+    router = APIRouter()
+    library_routes.register_workbench_library_routes(router)
+    app.include_router(router)
+    response = TestClient(app).get(
+        f"/api/workbench/library/items/{item['id']}/raw?workspace=p1"
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"%PDF-1.4\nrestored\n"
+
+
+@pytest.mark.asyncio
 async def test_library_read_event_marks_unique_viewed_attachment(
     monkeypatch, library_db, tmp_path
 ):

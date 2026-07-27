@@ -25,6 +25,7 @@ get_enabled_tool_packs = _store.get_enabled_tool_packs
 save_enabled_tool_packs = _store.save_enabled_tool_packs
 get_workspace_history = _store.get_workspace_history
 add_workspace_to_history = _store.add_workspace_to_history
+activate_workspace = _store.activate_workspace
 is_workspace_active = _store.is_workspace_active
 set_workspace_active = _store.set_workspace_active
 get_write_permission_mode = _store.get_write_permission_mode

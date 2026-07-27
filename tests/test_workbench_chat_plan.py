@@ -60,6 +60,27 @@ def test_chat_plan_persists_markdown_and_tracks_step_progress(monkeypatch, tmp_p
     assert "activePlan" not in chat_routes._public_chat_full(stored)
 
 
+def test_plan_markdown_path_rebases_after_portable_restore(monkeypatch, tmp_path):
+    from cyrene.workbench import chat
+
+    current_workspace = tmp_path / "current" / "workspace"
+    monkeypatch.setattr(chat, "WORKSPACE_DIR", current_workspace)
+
+    old_path = (
+        "/Users/old/Library/Application Support/Cyrene/"
+        "workspace/projects/project_demo/plan/plan_demo.md"
+    )
+    resolved = chat._resolve_managed_plan_path(old_path)
+
+    assert resolved == (
+        current_workspace
+        / "projects"
+        / "project_demo"
+        / "plan"
+        / "plan_demo.md"
+    )
+
+
 def test_workbench_plan_progress_tool_is_main_only():
     from cyrene.tooling.catalog import AGENT_TOOL_GROUPS, get_tool_names
 

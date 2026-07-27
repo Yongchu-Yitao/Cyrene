@@ -34,23 +34,40 @@ _BACKUP_DIR = BASE_DIR / "backups"
 _MANAGED_DIRECTORIES: list[tuple[Path, str]] = [
     (WORKSPACE_DIR / "conversations", "workspace/conversations"),
     (WORKSPACE_DIR / "patterns", "workspace/patterns"),
+    # Plan records persist markdownPath values into chat state. Keep the
+    # generated markdown mirrors so those stored paths remain valid.
+    (WORKSPACE_DIR / "plan", "workspace/plan"),
+    # Files declared through send_file are durable user-facing state.  Chat
+    # messages and project knowledge store URLs/paths into this directory, so
+    # omitting it from a backup preserves the references while losing the
+    # actual PDF/HTML/media bytes after restore.
+    (WORKSPACE_DIR / "deliverables", "workspace/deliverables"),
+    # Projects created without a user-selected directory live here. Their task
+    # sessions persist relative artifact paths and download directly from these
+    # workspaces. User-selected external project folders remain user-owned and
+    # intentionally stay outside the Cyrene state backup.
+    (WORKSPACE_DIR / "projects", "workspace/projects"),
     (DATA_DIR / "sessions", "data/sessions"),
     (DATA_DIR / "inbox", "data/inbox"),
     (DATA_DIR / "installed_skills", "data/installed_skills"),
     (DATA_DIR / "learned_skill_scripts", "data/learned_skill_scripts"),
     (DATA_DIR / "behavior-media", "data/behavior-media"),
     (DATA_DIR / "webui_uploads", "data/webui_uploads"),
+    # register_generated_attachment copies every file exposed by
+    # /api/chat/export here.  These copies are also used as knowledge-library
+    # document paths and therefore are not a disposable download cache.
+    (DATA_DIR / "webui_exports", "data/webui_exports"),
 ]
 _RESTORABLE_REPLACE_ROOTS = {arcname for _, arcname in _MANAGED_DIRECTORIES}
 
-# Browser state, derived indexes, generated downloads, and diagnostics are
-# caches/artifacts rather than durable agent state. Everything else at the
-# root of data/ and store/ is included.
+# Browser state, derived indexes, and diagnostics are caches rather than
+# durable agent state. Everything else at the root of data/ and store/ is
+# included.
 _EXCLUDED_DATA_ROOT_NAMES = {
     "config.enc", ".config_key", "code_index.db",
 }
 _EXCLUDED_DATA_DIRECTORIES = {
-    "attachment_cache", "browser_profile", "generated_reports", "webui_exports",
+    "attachment_cache", "browser_profile", "generated_reports",
 }
 
 _ALLOWED_ROOTS: list[Path] = [STORE_DIR.resolve(), DATA_DIR.resolve(), WORKSPACE_DIR.resolve()]

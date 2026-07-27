@@ -7,6 +7,7 @@
 
 - [当前开发进度](CONTEXT_DEV_PROGRESS.zh-CN.md)
 - [已完成的架构重构 Handoff](COMPLETED-refactor-handoff.zh-CN.md)
+- [Cyrene-to-Cyrene 远程控制 Handoff](remote-cyrene-control-design.zh-CN.md)
 - [Research Workbench 路线图](research-workbench-roadmap.md)
 - [已完成的 WebUI / Workbench UI 合并重构计划](COMPLETED-webui-workbench-consolidation-refactor-plan.md)
 - [已完成的 WebUI / Workbench UI 合并实施记录](COMPLETED-webui-consolidation-implementation-log.md)

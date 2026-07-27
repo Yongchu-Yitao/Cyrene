@@ -36,6 +36,41 @@ def test_artifact_download_target_resolves_registered_workspace_file(tmp_path):
     assert resolved == target
 
 
+def test_artifact_download_rebases_generated_project_workspace(
+    monkeypatch, tmp_path
+):
+    from cyrene.workbench import runtime
+
+    app_workspace = tmp_path / "current" / "workspace"
+    target = (
+        app_workspace
+        / "projects"
+        / "project_demo"
+        / "deliverables"
+        / "report.md"
+    )
+    target.parent.mkdir(parents=True)
+    target.write_text("# restored report", encoding="utf-8")
+    monkeypatch.setattr(runtime, "WORKSPACE_DIR", app_workspace)
+
+    project = {
+        "id": "project_demo",
+        "dataKey": "project_demo",
+        "workspacePathSource": "generated",
+        "workspacePath": (
+            "/Users/old/Library/Application Support/Cyrene/"
+            "workspace/projects/project_demo"
+        ),
+    }
+    _, resolved = runtime._workbench_artifact_download_target(
+        project,
+        _session("deliverables/report.md"),
+        "artifact_demo",
+    )
+
+    assert resolved == target
+
+
 def test_artifact_download_target_rejects_paths_outside_workspace(tmp_path):
     outside = tmp_path.parent / "secret.txt"
     outside.write_text("secret", encoding="utf-8")

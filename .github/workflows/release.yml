@@ -34,11 +34,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            electron/package-lock.json
+            src/webui/package-lock.json
 
       - name: Install Python deps
         run: |
@@ -47,10 +55,10 @@ jobs:
           pip install --upgrade typing_extensions pydantic pydantic_core
 
       - name: Install Electron deps
-        run: cd electron && npm install
+        run: cd electron && npm ci --prefer-offline --no-audit --no-fund
 
       - name: Build WebUI JS
-        run: cd src/webui && npm install && node build-jsx.mjs
+        run: cd src/webui && npm ci --prefer-offline --no-audit --no-fund && node build-jsx.mjs
 
       - name: Verify critical imports
         run: python -c "from typing_extensions import Sentinel; from pydantic_core import core_schema; print('imports-ok')"
@@ -67,6 +75,7 @@ jobs:
           name: macos-dmg
           path: dist-electron/Cyrene-*-mac.dmg
           if-no-files-found: error
+          compression-level: 0
 
   # ==========================================================================
   # Windows Build
@@ -80,11 +89,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            electron/package-lock.json
+            src/webui/package-lock.json
 
       - name: Install Python deps
         run: |
@@ -102,7 +119,7 @@ jobs:
           pip install mcp httpx-sse pydantic pydantic-settings jsonschema referencing rpds-py attrs sse-starlette pyjwt
 
       - name: Install Electron deps
-        run: cd electron && npm install
+        run: cd electron && npm ci --prefer-offline --no-audit --no-fund
 
       - name: Test Windows App Use provider
         shell: powershell
@@ -115,7 +132,7 @@ jobs:
           if ($result.ok -ne $true) { throw "Windows App Use provider smoke test failed: $(@($raw) -join [Environment]::NewLine)" }
 
       - name: Build WebUI JS
-        run: cd src/webui && npm install && node build-jsx.mjs
+        run: cd src/webui && npm ci --prefer-offline --no-audit --no-fund && node build-jsx.mjs
 
       - name: Apply Windows compatibility patches
         shell: python
@@ -209,6 +226,7 @@ jobs:
           name: windows-installer
           path: dist-electron/Cyrene-*-win-x64.exe
           if-no-files-found: error
+          compression-level: 0
 
   # ==========================================================================
   # Windows on ARM Build
@@ -216,6 +234,11 @@ jobs:
   build-windows-arm:
     runs-on: windows-11-arm
     continue-on-error: true
+    env:
+      # vcpkg's files provider writes content-addressed OpenSSL packages into a
+      # directory persisted by actions/cache. The former x-gha provider was
+      # removed from current vcpkg releases.
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\vcpkg-binary-cache,readwrite'
     steps:
       - uses: actions/checkout@v4
 
@@ -223,11 +246,27 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            electron/package-lock.json
+            src/webui/package-lock.json
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-${{ runner.arch }}-openssl-arm64-static-md-${{ hashFiles('pyproject.toml', 'uv.lock', '.github/workflows/release.yml') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ runner.arch }}-openssl-arm64-static-md-
 
       - name: Install OpenSSL (ARM64)
         run: |
@@ -249,9 +288,10 @@ jobs:
           # --no-deps prevents pip from pulling simplexng's uvloop (Unix-only) on Windows.
           pip install . --no-deps
           # Rebuild cryptography with statically-linked OpenSSL so the frozen ARM64
-          # app does not depend on vcpkg DLLs at runtime.
+          # app does not depend on vcpkg DLLs at runtime. Keep pip's wheel cache:
+          # subsequent releases can reuse the wheel when inputs are unchanged.
           pip uninstall -y cryptography
-          pip install cryptography --no-binary cryptography --no-cache-dir
+          pip install cryptography --no-binary cryptography
           # Upgrade pydantic first, then install mcp and friends to avoid pip uninstalling mcp
           # when resolving pyproject.toml dependencies (mcp 1.28+ requires pydantic>=2.11.0).
           pip install --upgrade typing_extensions pydantic pydantic_core
@@ -259,7 +299,7 @@ jobs:
           pip install keyring uvicorn
 
       - name: Install Electron deps
-        run: cd electron && npm install
+        run: cd electron && npm ci --prefer-offline --no-audit --no-fund
 
       - name: Test Windows App Use provider
         shell: powershell
@@ -272,7 +312,7 @@ jobs:
           if ($result.ok -ne $true) { throw "Windows App Use provider smoke test failed: $(@($raw) -join [Environment]::NewLine)" }
 
       - name: Build WebUI JS
-        run: cd src/webui && npm install && node build-jsx.mjs
+        run: cd src/webui && npm ci --prefer-offline --no-audit --no-fund && node build-jsx.mjs
 
       - name: Apply Windows compatibility patches
         shell: python
@@ -366,6 +406,7 @@ jobs:
           name: windows-installer-arm
           path: dist-electron/Cyrene-*-win-arm64.exe
           if-no-files-found: error
+          compression-level: 0
 
   # ==========================================================================
   # Linux Build
@@ -379,11 +420,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            electron/package-lock.json
+            src/webui/package-lock.json
 
       # No system deps needed — Electron handles the window on all platforms.
       # No appimagetool needed — electron-builder produces AppImage.
@@ -395,10 +444,10 @@ jobs:
           pip install --upgrade typing_extensions pydantic pydantic_core
 
       - name: Install Electron deps
-        run: cd electron && npm install
+        run: cd electron && npm ci --prefer-offline --no-audit --no-fund
 
       - name: Build WebUI JS
-        run: cd src/webui && npm install && node build-jsx.mjs
+        run: cd src/webui && npm ci --prefer-offline --no-audit --no-fund && node build-jsx.mjs
 
       - name: Verify build environment imports
         run: |
@@ -416,21 +465,37 @@ jobs:
           name: linux-appimage
           path: dist-electron/Cyrene-*-x64.AppImage
           if-no-files-found: error
+          compression-level: 0
 
   # ==========================================================================
   # Create GitHub Release
   # ==========================================================================
   release:
-    needs: [build-macos, build-windows, build-windows-arm, build-linux]
+    # Publish the three primary platforms immediately. Windows ARM64 remains an
+    # experimental parallel build and is attached later instead of extending
+    # the release critical path by roughly ten minutes.
+    needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
+          name: macos-dmg
           path: artifacts
-          merge-multiple: true
+
+      - name: Download Windows x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: artifacts
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-appimage
+          path: artifacts
 
       - name: List artifacts
         run: ls -la artifacts/
@@ -476,3 +541,23 @@ jobs:
           body: ${{ steps.notes.outputs.body }}
           fail_on_unmatched_files: true
           prerelease: ${{ steps.pre.outputs.is_pre == 'true' }}
+
+  # ==========================================================================
+  # Attach the experimental Windows ARM64 installer without blocking release
+  # ==========================================================================
+  release-windows-arm:
+    needs: [release, build-windows-arm]
+    if: ${{ always() && needs.release.result == 'success' && github.ref_type == 'tag' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows ARM64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer-arm
+          path: artifacts-arm
+
+      - name: Attach Windows ARM64 installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" artifacts-arm/* --clobber

@@ -9,7 +9,7 @@ def _names(defs):
     return [item["function"]["name"] for item in defs]
 
 
-def test_main_wire_bundle_is_the_fixed_28_tool_contract():
+def test_main_wire_bundle_is_the_fixed_29_tool_contract():
     from cyrene.tooling import get_main_wire_tool_defs
 
     defs = get_main_wire_tool_defs()
@@ -20,7 +20,7 @@ def test_main_wire_bundle_is_the_fixed_28_tool_contract():
         "AnalyzeAttachment", "code_tools", "browser_tools",
         "desktop_tools", "memory_tools", "knowledge_tools", "task_tools",
         "entity_tools", "map_tools", "subagent_tools", "delivery_tools",
-        "skill_tools", "integration_tools",
+        "skill_tools", "remote_tools", "integration_tools",
     ]
     assert json.dumps(defs, sort_keys=True) == json.dumps(
         get_main_wire_tool_defs(),
@@ -385,6 +385,7 @@ def test_prompts_use_new_module_names_and_keep_deep_research_specialized():
         "subagent_tools",
         "delivery_tools",
         "skill_tools",
+        "remote_tools",
         "integration_tools",
     ):
         assert module_name in combined

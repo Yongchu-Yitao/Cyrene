@@ -5,10 +5,8 @@ Handles text extraction, chunking, embedding, and indexing.
 
 import asyncio
 import re
-import zipfile
 import aiosqlite
 from pathlib import Path
-from xml.etree import ElementTree
 
 from cyrene.runtime.attachments import (
     is_pdf_path,
@@ -191,6 +189,12 @@ async def _index_document_inner(db_path: str, doc_id: str) -> None:
 
         # Extract text
         path = Path(doc["path"])
+        if not path.is_file():
+            from cyrene.runtime.attachments import resolve_managed_attachment_path
+
+            relocated = resolve_managed_attachment_path(str(doc["path"]))
+            if relocated is not None:
+                path = relocated
         text = await extract_document_text(path, doc["kind"])
 
         # Chunk text

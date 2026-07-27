@@ -872,7 +872,11 @@ def _json_result(payload: Any) -> str:
 
 def _resolve_tool_path(path_str: str) -> Path:
     if is_uploaded_attachment_path(path_str) or is_exported_attachment_path(path_str):
-        return Path(path_str).resolve()
+        from cyrene.runtime.attachments import resolve_managed_attachment_path
+
+        resolved_attachment = resolve_managed_attachment_path(path_str)
+        if resolved_attachment is not None:
+            return resolved_attachment
     # Auto-resolve filename to the correct upload path when the agent guesses wrong paths.
     from cyrene.agent.context import (
         active_workspace_dir,

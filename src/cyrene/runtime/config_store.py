@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from copy import deepcopy
 from pathlib import Path
 
@@ -381,21 +382,26 @@ def _generate_key_if_missing() -> None:
 # Persistence
 # ---------------------------------------------------------------------------
 
+_PERSIST_LOCK = threading.RLock()
+
 
 def _persist(config: dict) -> None:
-    _ENCRYPTED_PATH.parent.mkdir(parents=True, exist_ok=True)
-    plain = json.dumps(config, ensure_ascii=False, indent=2).encode("utf-8")
-    encrypted = _cipher().encrypt(plain)
-    tmp = _ENCRYPTED_PATH.with_suffix(".enc.tmp")
-    try:
-        tmp.write_bytes(encrypted)
-        tmp.replace(_ENCRYPTED_PATH)
-    finally:
+    # Settings routes may persist from worker threads so the async API loop
+    # remains responsive. Serialize the shared temp-file/replace sequence.
+    with _PERSIST_LOCK:
+        _ENCRYPTED_PATH.parent.mkdir(parents=True, exist_ok=True)
+        plain = json.dumps(config, ensure_ascii=False, indent=2).encode("utf-8")
+        encrypted = _cipher().encrypt(plain)
+        tmp = _ENCRYPTED_PATH.with_suffix(".enc.tmp")
         try:
-            if tmp.exists():
-                tmp.unlink()
-        except OSError:
-            pass
+            tmp.write_bytes(encrypted)
+            tmp.replace(_ENCRYPTED_PATH)
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
 
 
 def _read_config() -> dict:
@@ -831,6 +837,28 @@ def add_workspace_to_history(path: str) -> None:
     if len(history) > 10:
         history = history[:10]
     set_setting("workspace_history", history)
+
+
+def activate_workspace(path: str = "") -> None:
+    """Enable workspace context and update its history in one durable write."""
+    config = _ensure_loaded()
+    settings = config.setdefault("settings", {})
+    settings["workspace_active"] = True
+    normalized = str(path or "").strip()
+    if normalized:
+        raw_history = settings.get(
+            "workspace_history",
+            _DEFAULT_SETTINGS["workspace_history"],
+        )
+        if not isinstance(raw_history, list):
+            raw_history = []
+        history = [
+            item
+            for item in raw_history
+            if item != normalized
+        ]
+        settings["workspace_history"] = [normalized, *history][:10]
+    _persist(config)
 
 
 def is_workspace_active() -> bool:
