@@ -5,6 +5,142 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0b3] - 2026-07-27
+
+This is the third `0.7.0` beta. It completes the direct Cyrene-device control
+work that followed `v0.7.0-beta.2`: Tailscale addresses are now first-class
+direct-pairing targets, successful trust survives restarts, Connection settings
+save automatically, and short-key copy, connection events, error feedback,
+localization, and visual hierarchy have been comprehensively refined.
+
+### Tailscale direct connections and address boundaries
+
+- **Tailscale IPv4 addresses can pair directly** — Direct-address validation
+  now explicitly accepts the `100.64.0.0/10` shared-address range, so Tailnet
+  addresses such as `100.100.8.4` and `100.100.8.4:37841` are no longer
+  mistaken for public Internet addresses. Omitting the port still selects the
+  Cyrene LAN listener default, `37841`.
+- **The allowlist remains deliberately narrow** — Only Tailscale's
+  `100.64.0.0/10` range was added to the existing loopback, private, and
+  link-local rules. `100.63.255.255`, `100.128.0.1`, ordinary public
+  addresses, URL-form inputs, invalid ports, and ports outside `1024..65535`
+  remain rejected, so the pairing endpoint cannot become a general network
+  request primitive.
+- **Tailscale retains the complete Cyrene security protocol** — Address
+  acceptance only permits the TCP/HTTP connection attempt. It does not bypass
+  the one-time short key, Ed25519 device identity, X25519 key exchange,
+  ChaCha20-Poly1305 E2EE, capabilities, project scopes, nonces, timestamps,
+  replay protection, revocation, or auditing.
+- **Old remote-version rejection is detected** — If the controller reaches
+  another Cyrene over Tailscale but the remote beta2 build rejects pairing
+  completion with its old local-network check, the controller returns the
+  stable `remote_pairing_peer_update_required` code. Workbench now asks the
+  user to update and restart the remote Cyrene and generate a new key instead
+  of presenting the remote `409` as a misleading local-address error.
+- **The two-sided upgrade requirement is explicit** — Pairing completion saves
+  the controller's Tailnet source address on the controlled device, so both
+  endpoints need beta3 or newer. If an older controlled device already claimed
+  a key before rejecting completion, that key must not be reused; generate a
+  fresh key after upgrading it.
+
+### Trusted-device persistence and direct reuse
+
+- **Successful pairing automatically adds a trusted device** — There is no
+  extra Save or confirmation step. Once the bidirectional public-key proof
+  completes, Device ID, display name, signing and exchange public keys,
+  fingerprint, LAN/Tailscale address, directional capabilities, and project
+  scopes are atomically stored in `remote_peers`.
+- **Later use does not require another short key** — The short key only
+  bootstraps first trust. When an Agent selects the device from Add Context,
+  Remote Gateway reads the persisted peer identity, grant, and address and
+  sends E2EE commands directly. A new key is only required after revocation,
+  identity replacement, or intentional re-pairing.
+- **Trust survives Cyrene restarts** — A new regression test reopens both the
+  controller and controlled `RemoteControlStore` databases and verifies that
+  the devices, saved addresses, `chat:read`/`chat:send` capabilities, and
+  project scopes remain available rather than living only in process memory.
+- **The real direct round trip remains covered** — The local two-instance test
+  uses isolated SQLite databases, two real listeners, and bidirectional Remote
+  Gateways to pair with a short key, send `chats.send`, execute on the
+  controlled side, and return an encrypted response. Persistence assertions
+  run after both listeners have been stopped.
+
+### Automatic Connection settings and pairing interaction
+
+- **The Save and Apply button is removed** — The remote-access switch saves
+  immediately. Device-name edits save after a `600ms` idle debounce and flush
+  pending drafts on blur, so users no longer have to infer whether a change
+  has taken effect.
+- **Automatic writes are serialized** — Rapid typing, immediately toggling the
+  switch, or a failed preceding request cannot reorder durable settings. A
+  version guard ignores stale responses so an older server response cannot
+  overwrite a newer local draft; only the newest operation owns busy and error
+  state.
+- **Successful saves stay quiet; failures remain visible** — Routine automatic
+  saves no longer create large success banners. Failures use the shared
+  Feedback Service for a non-blocking error toast while retaining the backend's
+  diagnostic text.
+- **The short-key tile copies directly** — The key itself is an accessible
+  button. Electron first uses the native clipboard exposed by Preload, normal
+  browsers use the asynchronous Clipboard API, and unsupported contexts fall
+  back to a hidden textarea plus `execCommand("copy")`. Both success and
+  failure produce explicit toast feedback.
+- **Pairing success explains future behavior** — The success message now states
+  that the device was added to Trusted devices and can be selected in future
+  conversations without entering another short key.
+
+### Connection events, localization, and visual polish
+
+- **Remote audit is renamed Connection events** — The settings page now
+  presents gateway start/stop, setting updates, short-key claims, invitation
+  acceptance, pairing completion, grant sync, revocation, command send/
+  completion, and envelope rejection as a user-readable event stream instead
+  of exposing internal snake-case names.
+- **Event names and outcomes are fully bilingual** — English and Simplified
+  Chinese labels cover the current 16 remote event types and 17 outcomes.
+  Unknown values are still safely humanized. An absent outcome is displayed as
+  Recorded rather than as a lone bullet.
+- **Timestamps follow the local locale** — ISO 8601 UTC values are converted to
+  the system's local date and time, with a diagnostic fallback for invalid or
+  missing values. Command names and peer device IDs remain available as
+  secondary metadata.
+- **The outcome column is actually centered** — Green and red outcomes use a
+  dedicated fixed column with horizontal and vertical Flex centering,
+  wrapping, and consistent line height, avoiding clipped or drifting text.
+- **Event typography is deliberately quieter** — Titles, timestamps, and
+  outcomes are reduced to `12px`, `10px`, and `9.5px`; weight, line height,
+  padding, gap, and column width are tightened so connection history reads as
+  secondary information rather than competing with trusted-device and pairing
+  actions.
+- **The large pink settings notice is removed** — Invitation, copy, pairing,
+  grant, revocation, and error feedback now share the standard Workbench toast.
+  The sticky `remote-notice` node and styling have been deleted.
+- **Frontend contracts cover the refined behavior** — Source-level regressions
+  now lock debounce and blur flush, the absence of a Save button, Electron
+  clipboard use, accessible labels, toasts, Event/Outcome localization, local
+  time formatting, outcome centering, and removal of the legacy notice.
+
+### Compatibility and verification
+
+- **Control API and command scope are unchanged** — beta3 does not add arbitrary
+  HTTP, shell, tool, or remote-desktop authority. The existing 23 Control API
+  operations, 22 fixed remote commands, explicit capability/project grants,
+  and Agent context selection remain the beta2 contract.
+- **Existing LAN inputs remain compatible** — `127.0.0.1`, RFC 1918 IPv4,
+  link-local, and existing local IPv6 behavior are unchanged. Tailscale IPv6
+  unique-local addresses continue to pass through the existing private-IPv6
+  rule.
+- **Focused regression coverage was expanded** — Tests now cover Tailscale
+  allowlist boundaries, the exact `100.100.8.4` case, adjacent-address
+  rejection, trusted-device persistence across store reopen, and the complete
+  Connection-settings interaction contract. The local beta3 release gate
+  passed all `1,455` pytest cases, `44` Electron Node tests, rebuilding all 32
+  WebUI JSX entries, Python `compileall`, version consistency, and
+  `git diff --check`. Platform installers and frozen smoke tests remain the
+  responsibility of the beta3-tagged GitHub Release workflow.
+
+---
+
 ## [0.7.0b2] - 2026-07-27
 
 The second 0.7.0 beta includes every change since `v0.7.0-beta.1`: terminal

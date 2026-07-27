@@ -2,6 +2,116 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.7.0b3] - 2026-07-27
+
+这是 `0.7.0` 的第三个测试版，集中完成 `v0.7.0-beta.2` 之后的 Cyrene
+设备直连收尾：Tailscale 地址正式进入直接配对范围，配对完成后的可信关系可以
+跨重启复用，“连接”设置页改为自动保存，并对短密钥复制、连接事件、错误提示、
+中英文文案和视觉层级进行了完整整理。
+
+### Tailscale 直连与地址安全边界
+
+- **Tailscale IPv4 地址可以直接配对** — 直接地址校验明确允许
+  `100.64.0.0/10` 共享地址空间，因此 `100.100.8.4`、
+  `100.100.8.4:37841` 等 Tailnet 地址不再被误判为公网地址。未填写端口时仍
+  自动使用 Cyrene LAN Listener 默认端口 `37841`。
+- **放行范围保持最小化** — 本次只把 Tailscale 使用的
+  `100.64.0.0/10` 加入既有 Loopback、Private 和 Link-local Allowlist；
+  `100.63.255.255`、`100.128.0.1`、普通公网地址、URL 形式、非法端口和超出
+  `1024..65535` 的端口仍被拒绝，避免把 Pairing API 扩展为任意网络请求入口。
+- **Tailscale 仍使用完整 Cyrene 安全协议** — 地址放行只决定是否允许发起
+  TCP/HTTP 直连，不会绕过一次性短密钥、Ed25519 Device Identity、X25519
+  密钥交换、ChaCha20-Poly1305 E2EE、Capability、Project Scope、Nonce、
+  Timestamp、Replay Protection、Revocation 或 Audit。
+- **识别远端旧版本拒绝** — 当本机已通过 Tailscale 到达另一台 Cyrene，但远端
+  仍以 beta2 的 Local-network 校验拒绝 Pairing Completion 时，控制端返回稳定
+  `remote_pairing_peer_update_required` 错误码。Workbench 会明确提示用户更新
+  并重启远端 Cyrene、重新生成短密钥，不再把远端 `409` 原样显示成误导性的
+  英文“本机地址不受支持”错误。
+- **双端升级要求更加明确** — Tailscale Pairing Completion 会让被控端保存
+  控制端的 Tailnet 来源地址，所以控制端和被控端都需要 beta3 或更新版本。
+  如果旧被控端已经领取过短密钥但在 Completion 阶段失败，该短密钥不得复用，
+  更新远端后需要重新生成。
+
+### 可信设备持久化与直接复用
+
+- **配对成功即自动加入可信设备** — 不再需要额外“保存”或二次确认。成功完成
+  双向公钥证明后，Device ID、Display Name、Signing/Exchange Public Key、
+  Fingerprint、LAN/Tailscale Address、双向 Capability 和 Project Scope 会
+  原子写入 `remote_peers`。
+- **下次使用无需再次输入短密钥** — 短密钥只承担第一次建立信任的职责；后续
+  Agent 从对话“添加上下文”选择该设备时，Remote Gateway 会直接读取持久化的
+  Peer Identity、Grant 和地址发送 E2EE Command。只有设备被撤销、身份改变或
+  重新配对时才需要新的短密钥。
+- **可信关系跨 Cyrene 重启保留** — 新增数据库重开回归测试，分别重新创建控制端
+  和被控端 `RemoteControlStore`，验证双方仍能读取对方设备、已保存地址、
+  `chat:read`/`chat:send` Capability 与 Project Scope，而不是只在当前进程
+  内存中可用。
+- **真实直连往返继续覆盖** — 本机双实例测试仍通过两个隔离 SQLite 数据库、
+  两个真实 Listener 和双向 Remote Gateway 完成短密钥配对，发送
+  `chats.send`，在被控端执行并从反向直连返回加密响应；持久化断言在网络往返
+  完成并关闭 Listener 后执行。
+
+### “连接”设置页自动保存与配对交互
+
+- **移除“保存并应用”按钮** — 远程访问开关改为立即保存，设备名称在输入停止
+  `600ms` 后自动保存，并在失焦时立即 Flush 尚未提交的草稿。用户不再需要猜测
+  修改是否已经生效。
+- **自动保存请求按顺序串行化** — 快速输入、立即切换开关或前一个请求失败时，
+  保存队列仍保持提交顺序；Version Guard 会忽略过期响应，防止旧 Response
+  覆盖较新的本地草稿。只有最新操作控制 Busy State 和错误反馈。
+- **成功保存保持安静，失败清晰可见** — 普通自动保存不会持续生成大面积成功
+  Banner；失败通过共享 Feedback Service 显示非阻塞 Error Toast，并保留后端
+  的稳定错误文本。
+- **短密钥整块点击即可复制** — 配对短密钥本身是具有 Accessible Label 的
+  Button。Electron 优先调用 Preload 暴露的原生 Clipboard，普通浏览器使用
+  Async Clipboard API，不支持时退回隐藏 Textarea 与 `execCommand("copy")`；
+  成功和失败都会显示明确 Toast，不再静默失败。
+- **配对成功提示说明后续行为** — 成功文案现在明确指出设备已自动进入“可信设备”，
+  下次无需再次输入短密钥，可以直接添加到对话上下文并使用授予的能力。
+
+### 连接事件、i18n 与视觉整理
+
+- **“远程审计”改名为“连接事件”** — 设置页以用户可理解的事件流呈现网关启动/
+  停止、设置更新、短密钥领取、邀请接受、配对完成、授权同步、设备撤销、
+  Command 发送/完成和 Envelope 拒绝，不再直接暴露内部 Snake Case Event
+  Name。
+- **事件名称和结果完整双语化** — 为当前 16 类 Remote Event 和 17 类 Outcome
+  增加英文与简体中文文案；未知值仍会安全转换为可读标题。空 Outcome 使用
+  “已记录/Recorded”，不再显示孤立圆点。
+- **时间使用本机 Locale** — ISO 8601 UTC 时间转换为系统本地日期时间；非法或
+  缺失时间保留可诊断的安全回退。Command 和 Peer Device ID 继续作为辅助信息
+  展示。
+- **状态列真正居中** — 左侧绿色/红色 Outcome 使用独立固定列、Flex 水平与垂直
+  居中、自动换行和统一 Line Height，长状态不会再贴边、截断或上下漂移。
+- **事件列表降低视觉噪声** — Event Title、Timestamp 和 Outcome 分别收紧到
+  `12px`、`10px` 和 `9.5px`，降低字重、行高、Padding、Gap 和列宽，使连接
+  记录回到辅助信息层级，不再压过“可信设备”和配对主流程。
+- **移除设置页底部的大块粉色通知** — Invitation、Copy、Pairing、Grant、
+  Revocation 和错误反馈统一复用 Workbench Shared Toast；旧 Sticky
+  `remote-notice` 样式与渲染节点已删除。
+- **前端契约测试同步加强** — 自动保存 Debounce/Blur Flush、无保存按钮、
+  Electron Clipboard、Accessible Label、Toast、Event/Outcome i18n、本地时间、
+  状态居中和旧通知移除均纳入 Source-level Regression Contract。
+
+### 兼容性与验证
+
+- **不改变 Control API 和远程领域命令** — beta3 没有扩大任意 HTTP、Shell、
+  Tool 或远程桌面权限；现有 23 个 Control API Operation、22 个固定 Remote
+  Command、显式 Capability/Project Grant 和 Agent Context Selection 继续
+  保持 beta2 契约。
+- **局域网地址继续兼容** — `127.0.0.1`、RFC 1918 IPv4、Link-local 和既有
+  IPv6 Local Address 行为不变。Tailscale IPv6 使用的 Unique-local Address
+  仍通过既有 Private IPv6 规则。
+- **专项回归覆盖** — 新增 Tailscale Allowlist 边界、精确
+  `100.100.8.4`、邻接地址拒绝、可信设备跨重启持久化以及完整设置页交互契约
+  测试；beta3 本地发布门禁通过完整 `1,455` 项 pytest、`44` 项 Electron
+  Node Test、32 个 WebUI JSX Entry 重建、Python `compileall`、版本一致性与
+  `git diff --check`。各平台安装包与 Frozen Smoke 继续由 beta3 Tag 触发的
+  GitHub Release Workflow 验证。
+
+---
+
 ## [0.7.0b2] - 2026-07-27
 
 这是 `0.7.0` 的第二个测试版，完整包含 `v0.7.0-beta.1` 之后的终端唤醒、
