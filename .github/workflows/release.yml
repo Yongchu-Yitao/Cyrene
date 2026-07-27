@@ -560,4 +560,5 @@ jobs:
       - name: Attach Windows ARM64 installer
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: gh release upload "${GITHUB_REF_NAME}" artifacts-arm/* --clobber

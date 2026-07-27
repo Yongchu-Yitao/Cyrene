@@ -161,6 +161,10 @@ localization, and visual hierarchy have been comprehensively refined.
   WebUI JSX entries, Python `compileall`, version consistency, and
   `git diff --check`. Platform installers and frozen smoke tests remain the
   responsibility of the beta3-tagged GitHub Release workflow.
+- **Windows ARM64 attachment is more reliable** — The post-release uploader
+  for the experimental ARM64 installer now identifies the GitHub repository
+  explicitly instead of depending on a checked-out working tree, so it can
+  reliably attach the artifact after the primary release is created.
 
 ---
 

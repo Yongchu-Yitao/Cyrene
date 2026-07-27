@@ -126,6 +126,9 @@
   Node Test、32 个 WebUI JSX Entry 重建、Python `compileall`、版本一致性与
   `git diff --check`。各平台安装包与 Frozen Smoke 继续由 beta3 Tag 触发的
   GitHub Release Workflow 验证。
+- **Windows ARM64 附件发布更加可靠** — 实验性 ARM64 安装包的后置上传任务
+  现在显式绑定当前 GitHub 仓库，不再依赖任务目录中存在 Git Checkout；
+  主平台 Release 创建完成后可以稳定附加 ARM64 产物。
 
 ---
 
