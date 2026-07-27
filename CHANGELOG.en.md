@@ -5,6 +5,198 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0b5] - 2026-07-27
+
+This is the fifth `0.7.0` beta and contains every change since
+`v0.7.0-beta.4`. It redesigns the primary Cyrene-to-Cyrene Agent control path:
+the controller Agent no longer needs to create a remote conversation, type a
+natural-language instruction, and start a second Agent for ordinary work.
+Instead, it discovers, describes, and invokes capabilities from tool packages
+that the controlled device explicitly grants. Every invocation is approved
+locally in the controller conversation against the exact device, project,
+capability, and arguments, while the controlled device independently enforces
+trust, project scope, package grants, schemas, idempotency, and audit.
+
+The release also fixes successful `202 Accepted` responses being reported as
+remote failures, high-frequency run polling, remotely created chats not
+appearing live on the controlled computer, compatibility runs becoming stuck
+at approvals, listener-port conflicts disabling all remote control, and
+Workbench context-picker interaction and fingerprint exposure.
+
+### Direct remote Harness: the new preferred control path
+
+- **New `RemoteHarness` Agent tool** — The controller can `discover`,
+  `describe`, and `invoke` against a paired device explicitly selected in the
+  current chat. It reuses Cyrene's progressive tool gateway and stable
+  capability IDs without creating a remote chat or starting a second Agent.
+- **The Agent prefers direct invocation by default** — Main-agent guidance now
+  routes ordinary remote work through `remote.harness`: inspect received
+  package grants, discover relevant capabilities, describe their exact schemas,
+  and invoke. `RemoteCyreneAction` and `RunRemoteCyrene` remain compatibility
+  fallbacks for explicit remote conversations or targets without direct Harness
+  support.
+- **Exact approval happens on the controller** — Before `invoke` crosses the
+  device boundary, the controller's current permission resolver receives the
+  device ID, project ID, package, capability ID, and complete argument object.
+  `default` can ask the user, `auto` can use the local reviewer, and discovery
+  and description remain read-only.
+- **The controlled device retains final enforcement** — Only the fixed
+  `harness.discover`, `harness.describe`, and `harness.invoke` commands are
+  accepted after paired identity, signature, E2EE envelope, directional grant,
+  and shared-project checks. Package membership, capability schema, local
+  enablement, and runtime availability are validated again before execution.
+- **Execution is bound to the shared project workspace** — The composition root
+  injects the Bot and runtime database into the remote executor. Each call gets
+  an isolated `remote_harness` context, stable session/call identity, target
+  project workspace, and catalog snapshot, and the binding is reset in
+  `finally` so permissions cannot leak into later conversations.
+- **No arbitrary execution backdoor** — The protocol exposes no arbitrary HTTP
+  method or URL, Python function, database statement, raw shell RPC, or hidden
+  concrete tool name. Only stable catalog capability IDs inside an explicitly
+  granted package can run. `remote_tools` cannot itself be granted remotely,
+  preventing recursive device-control chains.
+- **Structured results and errors survive the hop** — Harness results preserve
+  status, capability identity, and result text. Unsupported packages, denied
+  grants, missing projects, schema or capability errors, transport failures,
+  and timeouts remain distinguishable.
+
+### Per-device remote tool-package switches
+
+- **Compatibility capabilities and direct packages are separated** — Remote
+  settings retain Chat, Run, Task, Approval, and Artifact commands while adding
+  a dedicated “Directly callable tool packages” section.
+- **The UI reuses Settings → Capabilities controls** — Pairing invitations and
+  each trusted-device grant editor use the established field rows,
+  descriptions, and standard toggles with the same names as local tool-package
+  settings.
+- **Authorization is stored per trusted device** — Stable
+  `toolpack:<wire_name>` grants flow through signed pairing bundles,
+  directional peer grants, encrypted grant synchronization, and audit.
+  Changing one controller does not broaden another controller's authority.
+- **No silent privilege expansion** — Direct packages start disabled during
+  pairing and existing peers gain none during upgrade. The user must explicitly
+  enable each package.
+- **Twelve package classes are independently grantable** — Code, Browser,
+  Desktop, Memory, Knowledge, Task, Entity, Map, Subagent, Delivery, Skill, and
+  Integration are available. A package disabled in local
+  Settings → Capabilities still cannot execute even when its remote grant is on.
+- **Discovery and execution both filter grants** — An ungranted package cannot
+  expose capabilities through discovery, and a known ID cannot bypass the
+  package check during invoke. Both controller and controlled-device boundaries
+  validate the grant.
+- **Bilingual and accessible labels are complete** — Compatibility/direct
+  headings, grant guidance, toggle labels, and the localized
+  `remote.harness` tool-trace alias are available in Chinese and English.
+
+### Remote runs, approvals, and live-status reliability
+
+- **`202 Accepted` is correctly treated as success** — The remote adapter
+  previously forced every FastAPI `JSONResponse` to `ok:false`, including a
+  valid detached chat start with a `run_id`. It now treats HTTP 2xx as success
+  unless the payload explicitly says `ok:false`.
+- **New event-driven `runs.wait`** — A controller can wait for the next public
+  run event with a cursor and bounded timeout. The target checks backlog,
+  subscribes to `ChatRun.subscribers`, waits on its queue, and removes the
+  subscription on exit instead of busy-polling `runs.events`.
+- **Compatibility remote chats default to `auto`** — `RunRemoteCyrene` and
+  remote `chats.send` now accept `auto/default/plan` and default to `auto`,
+  preventing unattended compatibility runs from stalling in an approval mode
+  the controller cannot complete.
+- **Approval is no longer the main remote-control loop** — Ordinary work is
+  approved once around the exact controller-side Harness invocation. The
+  controller does not need to create a remote chat, inspect a pending question,
+  and then seek permission for a second `approvals.respond` action.
+- **Supervised Agent fallback remains available** — When the compatibility path
+  is required, the controller can still read runs, guide, interrupt, answer
+  questions, and download attachments or artifacts; Agent guidance prefers
+  `runs.wait` and reserves `runs.events` for immediate incremental reads.
+
+### Live chat-list synchronization on the controlled computer
+
+- **New `workbench_chat_changed` SSE event** — Chat creation, run start, and
+  post-settlement state publish project/chat-scoped events through the formal
+  frontend event allowlist.
+- **Remote chats appear immediately** — Workbench filters events to the active
+  project and refreshes the list with an 80 ms debounce, eliminating manual
+  page refresh after remote creation.
+- **Terminal states converge** — Run `finally` publishes after durable status
+  settlement, so Running/Idle state, timestamps, and previews match the backend
+  after success, waiting, interruption, or error.
+- **Background work never steals focus** — A new remote chat refreshes the list
+  without selecting itself over the conversation the user is reading or
+  editing.
+- **Subscriptions clean up fully** — Page unmount removes both the SSE listener
+  and any pending refresh timer.
+
+### Automatic recovery from LAN listener-port conflicts
+
+- **A busy default port no longer disables remote control** — When `37841`
+  cannot bind, the listener searches the bounded `37841..37940` range and only
+  falls back for address-in-use errors. Other socket failures remain visible.
+- **The actual port persists** — A migratable `listen_port` column is added to
+  `remote_settings`; runtime stores the successful port and reuses it after
+  restart while retaining the `1024..65535` validation boundary.
+- **Pairing displays the real address** — Settings and local pairing addresses
+  use the runtime listener port. A bilingual status message identifies the
+  selected fallback port instead of claiming the service is fixed at `37841`.
+- **Paired devices discover a moved listener** — Delivery tries the stored
+  address first and, when it belongs to the Cyrene fallback range, performs a
+  bounded scan with short connect timeouts. Only an endpoint returning `202`
+  with `accepted:true` is accepted as Cyrene.
+- **Successful discovery repairs stored state** — The matching address is
+  persisted so later requests go directly to the correct port.
+- **Grant updates and responses synchronize the listener port** — Encrypted
+  grant and response payloads carry the sender's live port; peers update their
+  saved address only after envelope verification.
+- **IPv4 and IPv6 rewriting stays safe** — Port replacement preserves ordinary
+  hosts and bracketed IPv6 hosts without broadening address validation.
+
+### Workbench remote-context interaction and privacy
+
+- **The Add Context picker closes on outside click** — The composer anchors the
+  picker with a ref and registers `pointerdown` only while open, removing it as
+  soon as the picker closes or unmounts.
+- **Inside selections remain usable** — `contains(event.target)` prevents the
+  global listener from closing the menu before device, persona, or workspace
+  toggles complete.
+- **Device fingerprints leave the everyday picker** — The menu now shows the
+  device name and granted-capability count only. Fingerprints remain available
+  in trusted-device management and security-verification surfaces.
+
+### Contracts, tests, documentation, and release
+
+- **The tool-registry contract advances intentionally** — `RemoteHarness` joins
+  native modules, the main-only set, resource metadata, progressive
+  `remote_tools` bindings, and i18n aliases; locked registry counts and SHA-256
+  contracts are updated.
+- **Remote security regressions expand** — Coverage includes package-grant
+  normalization, rejection of recursive `toolpack:remote_tools`, two-sided
+  denial for ungranted packages, target project/workspace context, one-call
+  permission binding and reset, approval only for invoke, read-only discovery,
+  202 success semantics, event waiting, listener migration/fallback/discovery/
+  synchronization, and real dual-gateway round trips.
+- **Workbench regressions expand** — Tests cover direct-package settings,
+  standard toggles and localization, fallback-port status, chat-event
+  allowlisting and refresh, outside-click behavior, and fingerprint removal.
+- **The architecture handoff documents direct Harness control** — Design notes
+  now record the preferred invocation chain, local approval boundary, package
+  grants, compatibility fallback, event waiting, and live-list semantics.
+- **The local beta5 release gate passes** — The locked
+  `uv sync --locked --all-extras` environment completes Python `compileall`
+  and all 1,473 pytest cases with unhandled thread warnings promoted to errors.
+  All 32 WebUI JSX entries rebuild with generated assets matching frontend
+  sources, all 44 Electron App Use Node tests pass, and Ruff plus
+  `git diff --check` are clean.
+- **All active version surfaces move to beta5** — Python package metadata,
+  Electron package and lock, README badges, documentation sidebar, WeChat
+  channel headers, Workbench and PDF cache keys, `uv.lock`, and version tests
+  now agree on `0.7.0b5` / `0.7.0-beta.5`.
+- **The prerelease remains tag-driven** — `v0.7.0-beta.5` triggers the existing
+  macOS DMG, Windows x64/ARM64 installer, and Linux AppImage workflow, frozen
+  smoke checks, and a GitHub prerelease whose notes come from this section.
+
+---
+
 ## [0.7.0b4] - 2026-07-27
 
 This is the fourth `0.7.0` beta and includes every change since

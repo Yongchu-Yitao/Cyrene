@@ -2,6 +2,172 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.7.0b5] - 2026-07-27
+
+这是 `0.7.0` 的第五个测试版，完整包含 `v0.7.0-beta.4` 之后的全部改动。
+本版重新设计 Cyrene-to-Cyrene 的 Agent 远程控制主路径：控制端 Agent 不再
+默认通过“创建远程对话 → 输入自然语言 → 启动第二个 Agent”间接操作目标设备，
+而是直接发现、描述并调用被控端明确授权的 Harness 工具包。每次实际调用都在
+控制端当前对话中按精确设备、Project、Capability 和参数完成本地审批；被控端
+仍执行独立的信任、Project Scope、工具包 Grant、Schema、幂等与审计校验。
+
+同时，本版修复远程 `202 Accepted` 被误判为失败、运行状态高频轮询、远程创建
+对话无法实时出现在被控电脑列表、默认兼容运行权限导致审批停滞、监听端口冲突
+导致整套远程功能不可用，以及 Workbench“添加上下文”菜单无法点击外部关闭和
+显示设备指纹等问题。
+
+### 直接远程 Harness：新的首选控制路径
+
+- **新增 `RemoteHarness` Agent Tool** — 控制端可以对当前对话明确选择的配对
+  设备执行 `discover`、`describe` 和 `invoke`。它复用 Cyrene 现有 Progressive
+  Tool Gateway 与稳定 Capability ID，不创建远程 Chat、不启动第二个 Agent，
+  也不需要把用户请求重新输入远端对话。
+- **Agent 默认优先直接调用** — Main Agent Prompt 明确要求普通远程工作先使用
+  `remote.harness`：读取设备收到的工具包 Grant，发现相关 Capability，描述
+  精确 Schema 后调用。`RemoteCyreneAction` 与 `RunRemoteCyrene` 只在用户明确
+  需要远程对话，或目标端不支持直接 Harness 时作为兼容回退。
+- **控制端执行精确本地审批** — `invoke` 在发送跨设备命令前调用当前控制端
+  对话的 Permission Resolver；审批元数据绑定 Device ID、Project ID、
+  Tool Package、Capability ID 和完整参数。`default` 模式可由用户批准，
+  `auto` 模式由本地 Reviewer 判断，发现和描述操作保持只读。
+- **被控端仍保留最终验证边界** — 目标端只接受固定的
+  `harness.discover`、`harness.describe`、`harness.invoke` Command；必须先通过
+  配对身份、签名与 E2EE Envelope、方向性 Grant 和共享 Project Scope。随后
+  目标端再次校验工具包、Capability 所属关系、输入 Schema、本机启用状态和
+  Runtime 可用性。
+- **调用绑定目标 Project Workspace** — Remote Command Executor 由 Composition
+  Root 注入 Bot 与 Runtime DB，并为每次调用建立独立 `remote_harness` Run
+  Context、稳定 Session/Call ID、目标 Project Workspace 和不可泄漏到后续
+  回合的 Catalog Snapshot。绑定在 `finally` 中复位，避免权限或 Workspace
+  Context 污染其他会话。
+- **没有任意执行后门** — 协议不接受任意 HTTP Method/URL、Python 函数、
+  数据库语句、原始 Shell RPC 或隐藏 Concrete Tool Name；只能调用目标端正式
+  Catalog 中属于已授权工具包的稳定 Capability ID。`remote_tools` 本身不可
+  远程授权，避免设备间递归控制链。
+- **结构化结果与错误保留** — 目标 Harness 的 JSON Result 会保留
+  `status`、`capability_id` 和结果正文；协议区分 Unsupported Pack、Grant
+  Denied、Project Missing、Schema/Capability Error、Transport Error 和
+  Timeout，控制端不再需要从远端自然语言回复猜测真实执行状态。
+
+### 按设备授权的远程工具包开关
+
+- **“允许的能力”拆分为兼容能力与直接工具包** — 远程控制设置继续保留
+  Chat、Run、Task、Approval 和 Artifact 等兼容 Capability，同时新增
+  “允许远程直接调用的工具包”区域，避免把领域命令和 Agent Harness 权限混在
+  同一扁平列表中。
+- **交互复用“设置 → 能力”工具包样式** — 配对邀请和每台可信设备的授权编辑器
+  都使用现有 Field Row、说明文案和标准 Toggle，显示与本机能力页一致的工具包
+  名称和描述。
+- **授权按可信设备独立保存** — 工具包 Grant 使用稳定
+  `toolpack:<wire_name>` 标识并进入既有签名 Pairing Bundle、方向性 Peer
+  Grant、加密 Grant Sync 和审计流程。修改某台设备不会扩大其他控制端权限。
+- **默认不静默扩权** — 新的直接工具包在配对界面默认关闭，用户必须显式开启；
+  升级已有 Peer 时也不会自动获得直接 Harness 权限。
+- **支持十二类可选工具包** — Code、Browser、Desktop、Memory、Knowledge、
+  Task、Entity、Map、Subagent、Delivery、Skill 和 Integration 可以分别授权。
+  即使远程 Grant 已开启，本机“设置 → 能力”关闭的包仍不会被 Harness 执行。
+- **发现与执行双层过滤** — 未授权工具包不能通过目标端 Discovery 暴露其
+  Capability，也不能通过已知 ID 直接 Invoke；控制端 Tool 在发送前和被控端
+  Executor 在执行前都会检查 Grant。
+- **中英文权限文案完整** — 新增兼容能力、直接工具包、授权说明和 Accessible
+  Toggle Label 的中英文翻译；Tool Trace 也能把 `remote.harness` 映射回
+  `RemoteHarness` 的本地化名称。
+
+### 远程运行、审批与实时状态可靠性
+
+- **修复 `202 Accepted` 成功响应误判** — Remote Adapter 过去把所有 FastAPI
+  `JSONResponse` 强制标记为 `ok:false`，导致已经返回有效 `run_id` 的远程
+  `chats.send` 被审计为失败。现在按 HTTP `2xx` 判定成功，同时尊重 Payload
+  中显式的 `ok:false`。
+- **新增事件驱动 `runs.wait`** — 控制端可以带 Cursor 和有界 Timeout 等待
+  Run 的下一个公开事件。被控端订阅 `ChatRun.subscribers`，先检查 Backlog，
+  再等待 Queue，并在退出时移除订阅，替代连续调用 `runs.events` 的忙轮询。
+- **兼容远程对话默认使用 `auto`** — `RunRemoteCyrene` 和远程
+  `chats.send` 兼容路径现在允许 `auto/default/plan` 并默认选择 `auto`，
+  避免安装版默认模式在远端产生无人能够完成的 Approval Loop。
+- **审批不再成为远程控制主循环** — 普通操作的批准发生在控制端
+  `RemoteHarness` 精确 Invoke 前；控制端无需创建远程 Chat、读取 Pending
+  Question，再通过另一次需要审批的 `approvals.respond` 去“审批一个审批”。
+- **远程 Agent 回退仍可监督** — 必须使用旧路径时仍可读取 Run、发送 Guidance、
+  Interrupt、回答问题和下载 Attachment/Artifact；Agent Prompt 明确要求优先
+  使用 `runs.wait`，只把 `runs.events` 留作即时增量读取。
+
+### 被控电脑对话列表实时同步
+
+- **新增 `workbench_chat_changed` SSE Event** — 创建 Chat、开始 Run 和 Run
+  Settle 时发布 Project/Chat-scoped Event；事件进入正式前端 Event Allowlist。
+- **远程创建对话立即可见** — 被控电脑 Workbench 订阅事件后按 Project 过滤，
+  使用 `80ms` Debounce 刷新列表。远程 Chat 不再必须手动刷新页面才能出现。
+- **完成、等待与错误状态会收敛** — Run 最终 `finally` 在持久状态 Settle 后
+  发布更新，使列表中的 Running/Idle、时间和 Preview 回到真实后端状态。
+- **不会抢走当前对话焦点** — 后台远程 Chat 只刷新列表，不自动 Select 新项；
+  用户正在查看或输入的对话不会被远程控制流程切走。
+- **订阅生命周期完整清理** — 页面卸载时同时取消 SSE Listener 和待执行的
+  Refresh Timer，防止页面切换后的幽灵刷新。
+
+### LAN 监听端口冲突自动恢复
+
+- **默认端口占用不再禁用远程控制** — `37841` 无法 Bind 时，Listener 会在
+  `37841..37940` 的有界区间内轮转选择可用端口，仅对
+  `EADDRINUSE` 类冲突回退；其他 Socket Error 仍立即暴露。
+- **实际端口持久保存** — `remote_settings` 新增可迁移的 `listen_port`，
+  Runtime 保存成功绑定端口并在后续启动优先复用；端口范围继续限制为
+  `1024..65535`。
+- **配对页展示真实地址** — Settings API 和 Local Pairing Address 使用
+  Runtime 实际监听端口；连接状态在发生回退时显示明确的中英文提示和端口号，
+  不再宣称固定监听 `37841`。
+- **已配对设备自动发现新端口** — LAN Delivery 对保存地址先正常投递；若保存
+  端口属于 Cyrene 回退区间且不可达，则以短 Connect Timeout 有界扫描其余端口，
+  只接受返回 `202` 且 `accepted:true` 的真实 Cyrene Envelope Endpoint。
+- **发现成功后修正持久地址** — 命中新端口会更新 Peer LAN Address，后续请求
+  直接使用正确端口，不会每次重复扫描。
+- **Grant 与 Response 同步监听端口** — 加密 Grant Update 和 Command Response
+  携带发送端当前 Listener Port；Peer 验证 Envelope 后更新保存地址，使正常
+  双向通信主动收敛，而不是只能依赖失败后的探测。
+- **IPv4/IPv6 地址重写安全** — 更新 Peer Port 时分别保留普通 Host 和方括号
+  IPv6 Host，不通过未校验字符串拼接改变目标地址边界。
+
+### Workbench 远程上下文交互与隐私
+
+- **“添加上下文”菜单支持点击外部关闭** — Composer 为 Popover Anchor 增加
+  Ref，并只在菜单打开期间注册 `pointerdown` Listener；点击菜单外部会关闭，
+  卸载或关闭时立即移除 Listener。
+- **菜单内部操作不被误关** — `contains(event.target)` 保证设备、Persona 和
+  Workspace 选项仍可正常点击，不会在 Toggle 生效前被全局 Listener 截断。
+- **远程设备列表不再显示指纹** — Context Picker 只显示设备名和已授予能力
+  数量；Fingerprint 继续保留在可信设备管理和安全验证界面，不再占用日常
+  Composer 菜单空间或无必要暴露。
+
+### 契约、测试、文档与发布
+
+- **Tool Registry 合同更新** — `RemoteHarness` 注册到 Native Module、
+  Main-only Tool Set、Resource Metadata、Progressive `remote_tools` Binding
+  和 i18n Alias；锁定的 Registry Count 与 SHA-256 Contract 同步更新。
+- **远程安全回归扩充** — 覆盖工具包 Grant 正规化、拒绝递归
+  `toolpack:remote_tools`、未授权包双端拒绝、目标 Project/Workspace Context、
+  Full-access 单次绑定与复位、控制端只对 Invoke 审批、Discovery 不申请审批、
+  `202` 成功语义、Event Wait、监听端口迁移/回退/发现/同步和真实双 Gateway
+  往返。
+- **Workbench 回归扩充** — 覆盖直接工具包设置、标准 Toggle/i18n、回退端口
+  状态文案、远程 Chat Event Allowlist/刷新、Context Picker 外部关闭和设备
+  指纹移除。
+- **设计文档更新到直接 Harness 架构** — 远程控制 Handoff 记录首选调用链、
+  本地审批边界、工具包授权、兼容回退、Event Wait 和实时列表语义。
+- **本地 beta5 发布门禁通过** — 使用 `uv sync --locked --all-extras` 的锁定
+  环境完成 Python `compileall`，并以未处理线程警告提升为 Error 的配置运行
+  `1,473` 项 pytest；同时重建全部 `32` 个 WebUI JSX Entry、验证生成资源与
+  Frontend Source 一致、通过 `44` 项 Electron App Use Node Test、Ruff 和
+  `git diff --check`。
+- **全部版本面升级到 beta5** — Python Package、Electron Package/Lock、
+  README Badge、Docs Sidebar、WeChat Channel Header、Workbench/PDF Cache
+  Key、`uv.lock` 和版本契约测试统一为 `0.7.0b5` /
+  `0.7.0-beta.5`。
+- **Tag 驱动预发布** — `v0.7.0-beta.5` 继续触发现有 Release Workflow：
+  构建 macOS DMG、Windows x64/ARM64 Installer 和 Linux AppImage，执行 Frozen
+  Smoke，并提取本节作为 GitHub Prerelease Notes。
+
+---
+
 ## [0.7.0b4] - 2026-07-27
 
 这是 `0.7.0` 的第四个测试版，完整包含 `v0.7.0-beta.3` 之后的全部改动。
