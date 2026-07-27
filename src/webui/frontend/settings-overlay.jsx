@@ -527,6 +527,11 @@ function remoteCapabilityLabel(t, capability) {
 
 function remoteTransportDetail(t, transport) {
   var status = String((transport && transport.status) || "disabled");
+  if (status === "connected" && transport && transport.port_fallback) {
+    return t("settings.remoteTransportAlternatePort", {
+      port: Number(transport.lan_port) || 37841,
+    });
+  }
   var key = {
     disabled: "settings.remoteTransportDisabled",
     configured: "settings.remoteTransportConfigured",
@@ -854,12 +859,27 @@ function RemotePanel(p) {
               ),
               React.createElement("div", { className: "remote-pairing-share-grid" },
                 React.createElement("div", { className: "remote-pairing-group" },
-                  React.createElement("span", { className: "remote-pairing-group-title" }, t("settings.remotePairCapabilities")),
+                  React.createElement("span", { className: "remote-pairing-group-title" }, t("settings.remoteCompatibilityCapabilities")),
                   React.createElement("div", { className: "remote-option-list" },
                     (remote.supported_capabilities || []).map(function (capability) {
                       return React.createElement("label", { key: capability, className: "remote-option" },
                         React.createElement("input", { type: "checkbox", checked: inviteCapabilities.indexOf(capability) >= 0, onChange: function () { toggleList(capability, inviteCapabilities, setInviteCapabilities); } }),
                         React.createElement("span", null, remoteCapabilityLabel(t, capability)),
+                      );
+                    }),
+                  ),
+                  React.createElement("span", { className: "remote-pairing-group-title" }, t("settings.remoteDirectToolPackages")),
+                  React.createElement("div", { className: "wb-tool-package-settings" },
+                    (remote.remote_tool_packages || []).map(function (item) {
+                      var enabled = inviteCapabilities.indexOf(item.grant) >= 0;
+                      var name = t("toolName." + item.wire_name);
+                      return FieldRow(
+                        name,
+                        t("toolPackageDesc." + item.wire_name),
+                        Toggle(enabled, function () {
+                          toggleList(item.grant, inviteCapabilities, setInviteCapabilities);
+                        }, false, t("settings.remotePackageToggleLabel", { name: name })),
+                        "remote-invite-" + item.wire_name,
                       );
                     }),
                   ),
@@ -928,6 +948,7 @@ function RemotePanel(p) {
           peer: peer,
           projects: remote.projects || [],
           capabilities: remote.supported_capabilities || [],
+          toolPackages: remote.remote_tool_packages || [],
           onChanged: function () { loadRemote(); loadAudit(); },
           onNotice: showRemoteNotice,
         });
@@ -952,7 +973,7 @@ function RemotePanel(p) {
 }
 
 function RemotePeerCard(p) {
-  var { t, peer, projects, capabilities, onChanged, onNotice } = p;
+  var { t, peer, projects, capabilities, toolPackages, onChanged, onNotice } = p;
   var [editing, setEditing] = useStateSt(false);
   var [busy, setBusy] = useStateSt(false);
   var [grantedCapabilities, setGrantedCapabilities] = useStateSt(peer.granted_capabilities || []);
@@ -1013,6 +1034,24 @@ function RemotePeerCard(p) {
             React.createElement("span", null, remoteCapabilityLabel(t, capability)),
           );
         }),
+      ),
+      React.createElement("div", { className: "remote-grant-tool-packages" },
+        React.createElement("b", null, t("settings.remoteDirectToolPackages")),
+        React.createElement("small", null, t("settings.remoteDirectToolPackagesHint")),
+        React.createElement("div", { className: "wb-tool-package-settings" },
+          (toolPackages || []).map(function (item) {
+            var enabled = grantedCapabilities.indexOf(item.grant) >= 0;
+            var name = t("toolName." + item.wire_name);
+            return FieldRow(
+              name,
+              t("toolPackageDesc." + item.wire_name),
+              Toggle(enabled, function () {
+                toggle(item.grant, grantedCapabilities, setGrantedCapabilities);
+              }, false, t("settings.remotePackageToggleLabel", { name: name })),
+              "remote-peer-" + peer.device_id + "-" + item.wire_name,
+            );
+          }),
+        ),
       ),
       React.createElement("div", { className: "remote-project-list" },
         projects.map(function (project) {

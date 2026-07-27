@@ -49,6 +49,7 @@
     "user_question",
     "user_question_answered",
     "workbench_proactive_message",
+    "workbench_chat_changed",
     "workspace_changes",
   ]);
 

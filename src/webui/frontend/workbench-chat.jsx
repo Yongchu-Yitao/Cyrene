@@ -1740,6 +1740,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var [subagentData, setSubagentData] = useWbcState({ rounds: [], activeRoundId: "", agents: [], messages: [] });
   var [subagentLoading, setSubagentLoading] = useWbcState(false);
   var subagentRefreshTimerRef = useWbcRef(null);
+  var remoteChatRefreshTimerRef = useWbcRef(null);
   var revealedSubagentRoundRef = useWbcRef("");
   // True while the backend reads the whole conversation and synthesizes a task.
   var [toTaskBusy, setToTaskBusy] = useWbcState(false);
@@ -2053,6 +2054,20 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   useWbcEffect(function () {
     function onEvent(event) {
       if (!event) return;
+      if (event.type === "workbench_chat_changed") {
+        if (
+          event.project_id
+          && String(event.project_id) !== String(projectIdRef.current || "")
+        ) return;
+        if (remoteChatRefreshTimerRef.current) {
+          clearTimeout(remoteChatRefreshTimerRef.current);
+        }
+        remoteChatRefreshTimerRef.current = setTimeout(function () {
+          remoteChatRefreshTimerRef.current = null;
+          refreshChats("");
+        }, 80);
+        return;
+      }
       if (event.type === "workspace_changes") {
         try { window.dispatchEvent(new CustomEvent("workbench:workspace-changes", { detail: event })); } catch (e) {}
       }
@@ -2146,7 +2161,14 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       // module-level engine (WorkbenchChatRuntimes) so it keeps accumulating even
       // when this page is unmounted; nothing to do here.
     }
-    return window.CyreneUI.require("events").subscribe(onEvent);
+    var unsubscribe = window.CyreneUI.require("events").subscribe(onEvent);
+    return function () {
+      unsubscribe();
+      if (remoteChatRefreshTimerRef.current) {
+        clearTimeout(remoteChatRefreshTimerRef.current);
+        remoteChatRefreshTimerRef.current = null;
+      }
+    };
   }, []);
 
   // 按对话查询 Electron 中对应的 BrowserTabManager。每个 manager 的 tabs
@@ -4865,6 +4887,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var [ctxPickerOpen, setCtxPickerOpen] = useWbcState(false);
   var taRef = useWbcRef(null);
   var fileRef = useWbcRef(null);
+  var ctxPickerRef = useWbcRef(null);
   var uploadCountRef = useWbcRef(0);
   var draftRef = useWbcRef(draft);
   var attachRef = useWbcRef(attachments);
@@ -4905,6 +4928,17 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       taRef.current.focus();
     }
   }, []);
+
+  useWbcEffect(function () {
+    if (!ctxPickerOpen) return undefined;
+    function closeContextPicker(event) {
+      if (ctxPickerRef.current && !ctxPickerRef.current.contains(event.target)) {
+        setCtxPickerOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", closeContextPicker);
+    return function () { document.removeEventListener("pointerdown", closeContextPicker); };
+  }, [ctxPickerOpen]);
 
   useWbcEffect(function () {
     var prev = prevChatIdRef.current;
@@ -5323,7 +5357,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
             );
           })}
           {(!personaOn || !workspaceOn || remoteDevices.length > 0) && (
-            <span className="wbc-pop-anchor">
+            <span className="wbc-pop-anchor" ref={ctxPickerRef}>
               <button type="button" className={"wbc-ctx-add-btn" + (ctxPickerOpen ? " active" : "")} onClick={function () { setCtxPickerOpen(!ctxPickerOpen); setSlashOpen(false); setModeOpen(false); }}>
                 {WBC_ICONS.plus}<span>{wbcT("workbenchChat.addContext", "Add context")}</span>
               </button>
@@ -5482,7 +5516,7 @@ function WbcCtxPicker({ personaOn, workspaceOn, defaultWorkspacePath, wsHistory,
             return (
               <button key={device.device_id} type="button" className={selected ? "active" : ""} onClick={function () { onToggleRemoteDevice(device.device_id); }}>
                 <span className="wbc-popmenu-label">{WBC_ICONS.device} {device.display_name || device.device_id}</span>
-                <span className="wbc-popmenu-desc">{wbcT("workbenchChat.remoteDeviceHint", "{count} granted capabilities · {fingerprint}", { count: capabilityCount, fingerprint: device.fingerprint || device.device_id })}</span>
+                <span className="wbc-popmenu-desc">{wbcT("workbenchChat.remoteDeviceHint", "{count} granted capabilities", { count: capabilityCount })}</span>
                 {selected ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
               </button>
             );

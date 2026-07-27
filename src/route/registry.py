@@ -125,6 +125,7 @@ def register_routes(app: FastAPI, bot: Any, db_path: str) -> None:
         router,
         app,
         db_path,
+        bot=bot,
         chat_adapter=chat_control_adapter,
         project_adapter=project_control_adapter,
         task_adapter=task_control_adapter,

@@ -60,6 +60,7 @@ _MAIN_ONLY_TOOLS = {
     "browser_user_events",
     "browser_request_takeover",
     "RemoteCyreneAction",
+    "RemoteHarness",
     "RunRemoteCyrene",
 }
 
@@ -130,6 +131,7 @@ _RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
     "CloseShell": ("shell:{shell_id}",),
     "ListRemoteDevices": ("remote:chat-context",),
     "RemoteCyreneStatus": ("remote:{device_id}",),
+    "RemoteHarness": ("remote:{device_id}",),
     "RemoteCyreneAction": ("remote:{device_id}",),
     "RunRemoteCyrene": ("remote:{device_id}",),
 }

@@ -5,6 +5,12 @@
 > 独立远程控制数据库、无限总大小的分块文件传输、实时传输进度、设置管理和
 > “添加上下文”入口均已实现。远程桌面属于独立的后续可选能力。
 >
+> **2026-07-27 直接 Harness 更新：** 控制端 Agent 现在优先使用目标端
+> 明确授权的工具包，按 `discover → describe → invoke` 直接调用目标 Harness；
+> 审批发生在控制端当前对话，不创建目标端对话或第二个 Agent。Chat/Task
+> 命令保留为兼容回退。目标端按设备 Grant、Project Scope、工具包开关和
+> Capability Schema 再次校验并审计。
+>
 > **当前安全边界：** 产品范围只包含同一局域网内的 Cyrene-to-Cyrene
 > 连接，不需要 Relay、NAT 穿透或公网入口。`/v1/control/*` 仍只服务桌面
 > 本机调用；LAN Listener 只接受配对和加密 Envelope，所有命令仍须通过
@@ -37,7 +43,8 @@ Cyrene。主要能力是远程使用和监督 Agent；远程桌面只是后续�
 - 可以按 `run_id` 查询状态、增量读取持久事件、发送 guidance 和
   interrupt；
 - 请求模型拒绝未知字段，响应不暴露 Workspace 路径或 Model Credential；
-- 远程发送消息只允许 `default` 和 `plan` Permission Mode；
+- 兼容的远程发送消息允许 `auto`、`default` 和 `plan` Permission Mode，
+  默认使用 `auto`；
 - 远程 Task 调度、Step 执行和 Approval 只允许 `default`，不能借用本机
   Control API 的 `auto/full_access` 模式；
 - 事件出口过滤现有 `reasoning_*` 内部事件；
@@ -68,6 +75,14 @@ Cyrene。主要能力是远程使用和监督 Agent；远程桌面只是后续�
 - `RunRemoteCyrene` 只把用户级任务交给被控端 Agent。被控端 Agent 可使用
   该设备上已经安装并授权的模型、工具、Skill、Browser、Computer Use、
   文件和集成；执行始终经过被控端自己的 Harness、Sandbox 和审批；
+- 新增首选 Agent Tool `RemoteHarness`：控制端先读取目标端已授权工具包，
+  再发现/描述/调用精确 capability；调用前由控制端当前 Permission Mode
+  审批，不创建远程 Chat；
+- “远程控制”设置按可信设备提供与“设置 → 能力”一致的工具包开关；只有
+  开启的工具包会被发现和执行，`remote_tools` 不可递归授权；
+- `runs.wait` 使用 Run 订阅队列做有界长轮询，替代高频 `runs.events`；
+- 远程创建/更新 Chat 会发布 `workbench_chat_changed`，目标电脑的对话列表
+  无需手动刷新；
 - Chat Attachment 与 Task Artifact 支持分块读取，不限制完整文件总大小；
   控制端自动组装到本地附件，工具卡显示实时百分比，不把 Base64 内容放入
   Agent 上下文；
@@ -112,6 +127,10 @@ Idempotency Key 安全重试；持久 Goal Loop 则由既有恢复器继续调�
 
 “远程控制 Cyrene”优先意味着：
 
+- 普通操作优先直接调用目标 Harness 中被用户授权的工具包；
+- 控制端对精确的设备、Project、Capability 和参数进行本地审批；
+- 只有用户明确要求远程对话，或直接 Harness 不可用时，才创建远程 Chat
+  并启动目标端 Agent；
 - 查看显式共享的 Project、Chat、Task 和运行状态；
 - 在远端创建工作并向远端 Agent 下达用户级指令；
 - 观察公开的回复、Plan、Artifact、进度和错误事件；Tool 参数、隐藏推理及
@@ -122,7 +141,8 @@ Idempotency Key 安全重试；持久 Goal Loop 则由既有恢复器继续调�
 - 结果和文件默认保存在被控电脑；
 - 控制端可显式读取对话引用的 Attachment 和 Task Artifact；传输使用分块
   协议、无完整文件大小上限，并显示进度；
-- 所有工具都由被控端 Harness 验证、授权和执行。
+- 所有工具都由被控端 Harness 验证、授权和执行；目标端不会接受任意
+  HTTP、Python、Shell RPC 或未注册的 concrete tool 名称。
 
 远程桌面只用于 Agent 无法结构化呈现的本机 UI、登录、验证码、拖拽或人工
 纠错。它必须单独请求、单独授权，不是 Control API 的基础传输方式。
@@ -131,7 +151,7 @@ Idempotency Key 安全重试；持久 Goal Loop 则由既有恢复器继续调�
 
 结构化远程控制不允许：
 
-- 控制端直接执行远端 Shell 或任意 Tool；
+- 控制端绕过工具包 Grant、Project Scope 或 Schema 执行远端 Tool；
 - 远端把任意 HTTP Method、URL、数据库语句映射成本地调用；
 - 直接协议命令安装 Skill、MCP 或 Integration（但远端 Agent 在其本机
   Harness 明确授权后，仍可像本地对话一样使用或管理这些能力）；
@@ -487,10 +507,18 @@ Response Bundle 仍是内部签名握手格式和兼容 API，不再要求用户
 
 主控制面使用局域网 TCP/HTTP 直连：
 
-- 每台启用远程访问的 Cyrene 默认监听 `0.0.0.0:37841`；
+- 每台启用远程访问的 Cyrene 优先监听 `0.0.0.0:37841`；若端口被占用，
+  自动在 `37841..37940` 中选择下一个可用端口并持久记住；
 - 只接受 `/v1/pairing/claim`、`/v1/pairing/complete` 和
   `/v1/control/envelope`；
 - 配对完成后双方持久化对端 private/link-local IP 与监听端口；
+- 设置页和短密钥邀请始终显示实际监听端口，而不是写死 `37841`；
+- Grant Sync 和 Command Response 在 E2EE Envelope 中携带当前监听端口，
+  已配对设备验证签名并解密后自动更新对端地址，因此备用端口不会要求重新
+  配对；未知设备不能借此修改地址；
+- 如果可信设备离线期间更换了端口，控制端会在同一已信任 IP 的
+  `37841..37940` 范围内尝试投递；仅当端点明确返回 Cyrene 的
+  `202 Accepted` 响应后才持久化新端口，不扫描其他主机或任意端口；
 - 控制端直接向对端投递 Signed + E2EE Envelope；
 - 接收端先校验来源地址、可信设备，再由 RemoteGateway 完成签名、解密、
   Grant、Project Scope、Replay 和 Idempotency 校验；

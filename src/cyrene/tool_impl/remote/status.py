@@ -41,6 +41,7 @@ TOOL_DEF = {
                         "chats.read",
                         "runs.read",
                         "runs.events",
+                        "runs.wait",
                         "tasks.list",
                         "tasks.read",
                         "artifacts.list",
@@ -56,7 +57,8 @@ TOOL_DEF = {
                     "type": "object",
                     "description": (
                         "Command payload: chats.read {chat_id}; runs.read {run_id}; "
-                        "runs.events {run_id,cursor?,limit?}; tasks.read {task_id}; "
+                        "runs.events {run_id,cursor?,limit?}; runs.wait "
+                        "{run_id,cursor?,limit?,timeout_seconds?}; tasks.read {task_id}; "
                         "artifacts.list {task_id}; artifacts.read {task_id,artifact_id}. "
                         "attachments.read {chat_id,attachment_id}. File reads are "
                         "downloaded in chunks with live progress and return a local "

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import APIRouter, FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from cyrene.runtime.remote_control import (
@@ -22,7 +23,11 @@ from cyrene.runtime.remote_control import (
     register_remote_gateway,
     unregister_remote_gateway,
 )
-from cyrene.runtime.remote_commands import RemoteCommandExecutor
+from cyrene.runtime.remote_commands import (
+    RemoteCommandExecutor,
+    RemoteControlRuntime,
+    _json_response_payload,
+)
 from cyrene.runtime.remote_relay import CyreneRelayServer
 from cyrene.runtime.remote_pairing import (
     DirectPairingServer,
@@ -30,6 +35,7 @@ from cyrene.runtime.remote_pairing import (
     normalize_pairing_address,
 )
 from cyrene.tool_impl.remote.list_devices import handler as list_remote_devices
+from cyrene.tool_impl.remote.harness import handler as remote_harness
 from cyrene.tool_impl.remote.run import handler as run_remote_cyrene
 from cyrene.tool_impl.remote.status import handler as remote_cyrene_status
 from route.remote import register_remote_routes
@@ -135,6 +141,41 @@ def test_default_pairing_grant_completes_remote_agent_approval_loop(
     assert peer is not None
     assert "approval:respond" in DEFAULT_REMOTE_CAPABILITIES
     assert "approval:respond" in peer["received_capabilities"]
+
+
+def test_json_response_payload_treats_accepted_as_success():
+    result = _json_response_payload(
+        JSONResponse({"run_id": "run_accepted"}, status_code=202)
+    )
+
+    assert result == {
+        "ok": True,
+        "status_code": 202,
+        "run_id": "run_accepted",
+    }
+
+
+def test_remote_tool_pack_grants_are_valid_but_remote_pack_is_not(monkeypatch, tmp_path):
+    monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
+    store = RemoteControlStore(str(tmp_path / "tool-pack-grants.sqlite3"))
+    controller = RemoteControlStore(str(tmp_path / "tool-pack-controller.sqlite3"))
+    store.update_settings(enabled=True, relay_url="", device_name="Target")
+
+    invitation = store.create_pairing_invitation(
+        capabilities=["toolpack:desktop_tools", "toolpack:integration_tools"],
+        project_scopes=["project_1"],
+    )
+
+    accepted = controller.accept_pairing_invitation(invitation["invitation"])
+    assert accepted["peer"]["received_capabilities"] == [
+        "toolpack:desktop_tools",
+        "toolpack:integration_tools",
+    ]
+    with pytest.raises(ValueError, match="unsupported remote capabilities"):
+        store.create_pairing_invitation(
+            capabilities=["toolpack:remote_tools"],
+            project_scopes=["project_1"],
+        )
 
 
 def test_remote_store_migrates_out_of_runtime_database(monkeypatch, tmp_path):
@@ -381,6 +422,203 @@ async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_pa
         f"127.0.0.1:{controller_port}"
     )
     assert persisted_target_peer["granted_project_scopes"] == ["project_1"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_falls_back_when_preferred_lan_port_is_occupied(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
+    blocker = None
+    preferred = 0
+
+    async def discard(
+        _reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ):
+        writer.close()
+        await writer.wait_closed()
+
+    for candidate in range(37841, 37940):
+        try:
+            blocker = await asyncio.start_server(
+                discard,
+                "127.0.0.1",
+                candidate,
+            )
+            preferred = candidate
+            break
+        except OSError:
+            continue
+    assert blocker is not None
+
+    store = RemoteControlStore(str(tmp_path / "runtime.sqlite3"))
+    store.update_settings(
+        enabled=True,
+        relay_url="",
+        device_name="Fallback target",
+    )
+    store.update_listen_port(preferred)
+
+    async def executor(*_args):
+        return {"ok": True}
+
+    runtime = RemoteControlRuntime(
+        db_path=store.db_path,
+        store=store,
+        executor=executor,
+        lan_host="127.0.0.1",
+    )
+    try:
+        await runtime.start()
+        assert runtime.gateway is not None
+        assert runtime.lan_port != preferred
+        assert runtime.status()["port_fallback"] is True
+        assert store.get_settings()["listen_port"] == runtime.lan_port
+    finally:
+        await runtime.stop()
+        blocker.close()
+        await blocker.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_direct_delivery_discovers_and_persists_fallback_port(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
+    target = RemoteControlStore(str(tmp_path / "target.sqlite3"))
+    controller = RemoteControlStore(str(tmp_path / "controller.sqlite3"))
+    target.update_settings(enabled=True, relay_url="", device_name="Target")
+    controller.update_settings(
+        enabled=True,
+        relay_url="",
+        device_name="Controller",
+    )
+
+    async def unrelated_http_server(
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ):
+        await reader.read(64 * 1024)
+        writer.write(
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"
+            b"Connection: close\r\n\r\n"
+        )
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    blocker = None
+    preferred = 0
+    for candidate in range(37841, 37940):
+        try:
+            blocker = await asyncio.start_server(
+                unrelated_http_server,
+                "127.0.0.1",
+                candidate,
+            )
+            preferred = candidate
+            break
+        except OSError:
+            continue
+    assert blocker is not None
+
+    offer = target.create_short_pairing_invitation(
+        capabilities=["chat:read"],
+        project_scopes=["project_1"],
+    )
+    target_server = DirectPairingServer(
+        target,
+        host="127.0.0.1",
+        port=preferred,
+    )
+    controller_server = DirectPairingServer(
+        controller,
+        host="127.0.0.1",
+        port=0,
+    )
+    await target_server.start()
+    await controller_server.start()
+    try:
+        await connect_by_address(
+            controller,
+            address=f"127.0.0.1:{target_server.port}",
+            pairing_key=offer["pairing_key"],
+            listener_port=controller_server.port,
+        )
+        controller.update_peer_lan_address(
+            target.identity.device_id,
+            f"127.0.0.1:{preferred}",
+        )
+
+        async def handler(*_args):
+            return {"ok": True}
+
+        target_gateway = RemoteGateway(target, target_server, handler)
+        controller_gateway = RemoteGateway(
+            controller,
+            controller_server,
+            handler,
+        )
+        await target_gateway.start()
+        await controller_gateway.start()
+        try:
+            result = await controller_gateway.request(
+                target.identity.device_id,
+                command="chats.read",
+                project_id="project_1",
+                payload={},
+                idempotency_key="fallback-discovery",
+                timeout=5,
+            )
+        finally:
+            await controller_gateway.stop()
+            await target_gateway.stop()
+
+        assert result == {"ok": True}
+        peer = controller.get_peer(target.identity.device_id)
+        assert peer is not None
+        assert peer["lan_address"] == f"127.0.0.1:{target_server.port}"
+        assert target_server.port != preferred
+    finally:
+        await controller_server.stop()
+        await target_server.stop()
+        blocker.close()
+        await blocker.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_encrypted_grant_sync_updates_peer_listener_port(paired_stores):
+    controller = paired_stores["controller"]
+    target = paired_stores["target"]
+    controller.update_peer_lan_address(
+        target.identity.device_id,
+        "100.100.8.4:37841",
+    )
+
+    async def handler(*_args):
+        return {"ok": True}
+
+    gateway = RemoteGateway(controller, InMemoryRemoteRelay(), handler)
+    target_peer = target.get_peer(controller.identity.device_id)
+    assert target_peer is not None
+    envelope = RemoteEnvelopeCodec.encode(
+        identity=target.identity,
+        peer=target_peer,
+        kind="grant_update",
+        payload={
+            "capabilities": target_peer["granted_capabilities"],
+            "project_scopes": target_peer["granted_project_scopes"],
+            "listener_port": 37857,
+        },
+    )
+    await gateway._receive(envelope)
+
+    refreshed = controller.get_peer(target.identity.device_id)
+    assert refreshed is not None
+    assert refreshed["lan_address"] == "100.100.8.4:37857"
 
 
 def test_pairing_invitation_signature_rejects_grant_tampering(
@@ -688,6 +926,159 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
                 "project_1",
             )
         assert calls == {"chat_send": 0, "task_dispatch": 0}
+
+    asyncio.run(scenario())
+
+
+def test_remote_harness_filters_by_granted_tool_pack_and_uses_bound_context(
+    paired_stores,
+    monkeypatch,
+    tmp_path,
+):
+    async def scenario():
+        target = paired_stores["target"]
+        controller = paired_stores["controller"]
+        target.update_peer_grant(
+            controller.identity.device_id,
+            capabilities=["toolpack:desktop_tools"],
+            project_scopes=["project_1"],
+        )
+        monkeypatch.setattr(
+            "cyrene.runtime.remote_commands.workbench_runtime._workbench_find_project_lightweight",
+            lambda project_id: {
+                "id": project_id,
+                "workspacePath": str(tmp_path),
+            },
+        )
+        monkeypatch.setattr(
+            "cyrene.runtime.remote_commands.workbench_runtime._workbench_resolve_workspace_dir",
+            lambda _project: str(tmp_path),
+        )
+        observed = {}
+
+        async def execute_remote_pack(wire_name, arguments, context):
+            from cyrene.agent.context import current_run_context
+
+            observed.update({
+                "wire_name": wire_name,
+                "arguments": arguments,
+                "context": context,
+                "run_context": current_run_context(),
+            })
+            return json.dumps({
+                "status": "success",
+                "capability_id": "desktop.use",
+                "result": "remote desktop inspected",
+            })
+
+        monkeypatch.setattr(
+            "cyrene.runtime.remote_commands.execute_wire_tool_in_context",
+            execute_remote_pack,
+        )
+        executor = RemoteCommandExecutor(
+            store=target,
+            db_path=target.db_path,
+            chat_adapter={},
+            project_adapter={},
+            task_adapter={},
+        )
+
+        denied = await executor(
+            controller.identity.device_id,
+            "harness.discover",
+            {"tool_pack": "code_tools"},
+            "project_1",
+        )
+        invoked = await executor(
+            controller.identity.device_id,
+            "harness.invoke",
+            {
+                "tool_pack": "desktop_tools",
+                "capability_id": "desktop.use",
+                "arguments": {"operation": "list_targets"},
+                "call_id": "remote-call-1",
+            },
+            "project_1",
+        )
+
+        assert denied["code"] == "remote_tool_pack_denied"
+        assert invoked["ok"] is True
+        assert observed["wire_name"] == "desktop_tools"
+        assert observed["arguments"]["capability_id"] == "desktop.use"
+        assert observed["context"].permission_mode == "full_access"
+        assert observed["run_context"].caller == "remote_harness"
+        assert observed["run_context"].permission_mode == "full_access"
+        assert observed["run_context"].temporary_full_access is True
+
+    asyncio.run(scenario())
+
+
+def test_remote_harness_approves_invoke_locally_but_not_discovery(monkeypatch):
+    async def scenario():
+        device = {
+            "device_id": "device_target",
+            "received_capabilities": ["toolpack:desktop_tools"],
+        }
+        approvals = []
+        commands = []
+        monkeypatch.setattr(
+            "cyrene.tool_impl.remote.harness.resolve_selected_remote_device",
+            lambda *_args, **_kwargs: ({}, device),
+        )
+
+        async def approve(**kwargs):
+            approvals.append(kwargs)
+            return None
+
+        async def send(args, *_rest, **_kwargs):
+            commands.append(args)
+            return {"ok": True, "result": {"status": "success"}}
+
+        monkeypatch.setattr(
+            "cyrene.tool_impl.remote.harness.request_scope_elevation",
+            approve,
+        )
+        monkeypatch.setattr(
+            "cyrene.tool_impl.remote.harness.request_remote_command",
+            send,
+        )
+
+        discovered = json.loads(await remote_harness(
+            {
+                "project_id": "project_1",
+                "tool_pack": "desktop_tools",
+                "operation": "discover",
+                "query": "desktop",
+            },
+            None,
+            "chat_local",
+            "runtime.sqlite3",
+            None,
+        ))
+        invoked = json.loads(await remote_harness(
+            {
+                "project_id": "project_1",
+                "tool_pack": "desktop_tools",
+                "operation": "invoke",
+                "capability_id": "desktop.use",
+                "arguments": {"operation": "list_targets"},
+                "reason": "Inspect the selected remote desktop",
+            },
+            None,
+            "chat_local",
+            "runtime.sqlite3",
+            None,
+        ))
+
+        assert discovered["ok"] is True
+        assert invoked["ok"] is True
+        assert len(approvals) == 1
+        assert approvals[0]["permission_kind"] == "remote_harness_invoke"
+        assert approvals[0]["meta_extra"]["capability_id"] == "desktop.use"
+        assert [item["command"] for item in commands] == [
+            "harness.discover",
+            "harness.invoke",
+        ]
 
     asyncio.run(scenario())
 

@@ -18,10 +18,9 @@ TOOL_DEF = {
         "name": TOOL_NAME,
         "description": (
             "Perform a typed action on a paired Cyrene device explicitly selected "
-            "in the current chat. The local user permission mode and the remote "
-            "device's grants both apply. To operate every capability of the remote "
-            "Cyrene, create a chat, send it an instruction, follow runs.events, and "
-            "answer any approval request. Never use for arbitrary HTTP, tools, or shell."
+            "in the current chat. This is a compatibility path for remote chat/task "
+            "lifecycle actions. Prefer RemoteHarness for ordinary remote control so "
+            "no remote chat or second Agent is created."
         ),
         "parameters": {
             "type": "object",
@@ -55,7 +54,7 @@ TOOL_DEF = {
                     "type": "object",
                     "description": (
                         "Command payload: chats.create {title?}; chats.send "
-                        "{chat_id,message,permission_mode?:default|plan,language?}; "
+                        "{chat_id,message,permission_mode?:auto|default|plan,language?}; "
                         "runs.guide {chat_id,message,request_id?}; runs.interrupt "
                         "{chat_id}; tasks.create {title?,goal,priority?}; tasks.dispatch "
                         "{task_id,message}; tasks.approve_plan {task_id}; tasks.run_step "

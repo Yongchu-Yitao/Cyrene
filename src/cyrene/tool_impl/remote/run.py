@@ -17,7 +17,8 @@ TOOL_DEF = {
     "function": {
         "name": TOOL_NAME,
         "description": (
-            "Start work on a paired Cyrene selected in the current chat. This "
+            "Compatibility fallback: start work on a paired Cyrene selected in "
+            "the current chat. Prefer RemoteHarness for ordinary remote control. This "
             "creates a remote chat, sends the instruction to the remote Agent, "
             "and returns chat_id/run_id for RemoteCyreneStatus. The remote "
             "Cyrene keeps its own tools, skills, permissions, approvals, and "
@@ -50,10 +51,10 @@ TOOL_DEF = {
                 },
                 "permission_mode": {
                     "type": "string",
-                    "enum": ["default", "plan"],
+                    "enum": ["auto", "default", "plan"],
                     "description": (
-                        "Remote run mode. Remote approvals remain enforced; "
-                        "auto/full_access cannot be requested across devices."
+                        "Remote run mode. Defaults to auto so its reviewer can "
+                        "resolve approvals when the compatibility path is required."
                     ),
                 },
                 "language": {
@@ -163,7 +164,7 @@ async def handler(
                     "chat_id": remote_chat_id,
                     "message": message,
                     "permission_mode": str(
-                        args.get("permission_mode") or "default"
+                        args.get("permission_mode") or "auto"
                     ),
                     "language": str(args.get("language") or ""),
                 },

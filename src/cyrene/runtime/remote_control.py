@@ -91,6 +91,26 @@ DEFAULT_REMOTE_CAPABILITIES = (
     "approval:respond",
     "artifact:read",
 )
+REMOTE_TOOL_PACK_PREFIX = "toolpack:"
+REMOTE_TOOL_PACK_WIRE_NAMES = (
+    "code_tools",
+    "browser_tools",
+    "desktop_tools",
+    "memory_tools",
+    "knowledge_tools",
+    "task_tools",
+    "entity_tools",
+    "map_tools",
+    "subagent_tools",
+    "delivery_tools",
+    "skill_tools",
+    "integration_tools",
+)
+REMOTE_TOOL_PACK_CAPABILITIES = frozenset(
+    REMOTE_TOOL_PACK_PREFIX + wire_name
+    for wire_name in REMOTE_TOOL_PACK_WIRE_NAMES
+)
+ALL_REMOTE_GRANTS = REMOTE_CAPABILITIES | REMOTE_TOOL_PACK_CAPABILITIES
 _LEGACY_DEFAULT_REMOTE_CAPABILITIES = frozenset(
     capability
     for capability in DEFAULT_REMOTE_CAPABILITIES
@@ -108,6 +128,7 @@ _COMMAND_CAPABILITIES = {
     "chats.send": "chat:send",
     "runs.read": "chat:read",
     "runs.events": "chat:read",
+    "runs.wait": "chat:read",
     "runs.guide": "chat:guide",
     "runs.interrupt": "chat:interrupt",
     "tasks.list": "task:read",
@@ -123,6 +144,9 @@ _COMMAND_CAPABILITIES = {
     "artifacts.list": "artifact:read",
     "artifacts.read": "artifact:read",
     "attachments.read": "artifact:read",
+    "harness.discover": "",
+    "harness.describe": "",
+    "harness.invoke": "",
 }
 _PROJECT_SCOPED_COMMANDS = frozenset(
     command
@@ -143,6 +167,7 @@ _SIDE_EFFECT_COMMANDS = frozenset(
         "tasks.resume",
         "tasks.cancel",
         "approvals.respond",
+        "harness.invoke",
     }
 )
 
@@ -438,6 +463,7 @@ class RemoteControlStore:
                     enabled INTEGER NOT NULL DEFAULT 0,
                     relay_url TEXT NOT NULL DEFAULT '',
                     device_name TEXT NOT NULL DEFAULT '',
+                    listen_port INTEGER NOT NULL DEFAULT 37841,
                     updated_at TEXT NOT NULL
                 );
 
@@ -519,6 +545,19 @@ class RemoteControlStore:
                     """
                     ALTER TABLE remote_peers
                     ADD COLUMN lan_address TEXT NOT NULL DEFAULT ''
+                    """
+                )
+            settings_columns = {
+                str(row["name"])
+                for row in conn.execute(
+                    "PRAGMA table_info(remote_settings)"
+                ).fetchall()
+            }
+            if "listen_port" not in settings_columns:
+                conn.execute(
+                    """
+                    ALTER TABLE remote_settings
+                    ADD COLUMN listen_port INTEGER NOT NULL DEFAULT 37841
                     """
                 )
             conn.execute(
@@ -665,7 +704,7 @@ class RemoteControlStore:
     def get_settings(self) -> dict[str, Any]:
         with self._lock, self._connect() as conn:
             row = conn.execute(
-                "SELECT enabled, relay_url, device_name, updated_at "
+                "SELECT enabled, relay_url, device_name, listen_port, updated_at "
                 "FROM remote_settings WHERE singleton = 1"
             ).fetchone()
         assert row is not None
@@ -673,8 +712,32 @@ class RemoteControlStore:
             "enabled": bool(row["enabled"]),
             "relay_url": str(row["relay_url"]),
             "device_name": str(row["device_name"]),
+            "listen_port": int(row["listen_port"] or DIRECT_PAIRING_PORT),
             "updated_at": str(row["updated_at"]),
         }
+
+    def update_listen_port(self, listen_port: int) -> dict[str, Any]:
+        port = int(listen_port)
+        if port < 1024 or port > 65535:
+            raise ValueError("listener port must be between 1024 and 65535")
+        current = self.get_settings()
+        if int(current["listen_port"]) == port:
+            return current
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE remote_settings
+                SET listen_port = ?, updated_at = ?
+                WHERE singleton = 1
+                """,
+                (port, _utc_iso()),
+            )
+        self.audit(
+            "remote_listener_port_selected",
+            outcome="fallback" if port != DIRECT_PAIRING_PORT else "default",
+            detail={"listen_port": port},
+        )
+        return self.get_settings()
 
     def update_settings(
         self,
@@ -711,7 +774,7 @@ class RemoteControlStore:
     @staticmethod
     def _normalize_capabilities(values: list[str] | tuple[str, ...]) -> list[str]:
         normalized = sorted({str(item) for item in values if str(item)})
-        invalid = [item for item in normalized if item not in REMOTE_CAPABILITIES]
+        invalid = [item for item in normalized if item not in ALL_REMOTE_GRANTS]
         if invalid:
             raise ValueError(f"unsupported remote capabilities: {', '.join(invalid)}")
         return normalized
@@ -1188,6 +1251,28 @@ class RemoteControlStore:
             )
             if cursor.rowcount != 1:
                 raise KeyError(device_id)
+
+    def update_peer_listener_port(
+        self,
+        device_id: str,
+        listener_port: int,
+    ) -> None:
+        port = int(listener_port)
+        if port < 1024 or port > 65535:
+            raise ValueError("peer listener port is invalid")
+        peer = self.get_peer(device_id)
+        if peer is None:
+            raise KeyError(device_id)
+        address = str(peer.get("lan_address") or "")
+        if not address:
+            return
+        if address.startswith("["):
+            host = address[1:].split("]", 1)[0]
+            updated = f"[{host}]:{port}"
+        else:
+            host = address.rsplit(":", 1)[0]
+            updated = f"{host}:{port}"
+        self.update_peer_lan_address(device_id, updated)
 
     @staticmethod
     def _peer_from_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -2007,6 +2092,9 @@ class RemoteGateway:
             payload={
                 "capabilities": peer["granted_capabilities"],
                 "project_scopes": peer["granted_project_scopes"],
+                "listener_port": int(
+                    getattr(self.relay, "port", DIRECT_PAIRING_PORT)
+                ),
             },
         )
 
@@ -2141,6 +2229,12 @@ class RemoteGateway:
                     capabilities=list(payload.get("capabilities") or []),
                     project_scopes=list(payload.get("project_scopes") or []),
                 )
+                listener_port = int(payload.get("listener_port") or 0)
+                if listener_port:
+                    self.store.update_peer_listener_port(
+                        sender,
+                        listener_port,
+                    )
             except (KeyError, ValueError):
                 self.store.audit(
                     "peer_grant_sync_rejected",
@@ -2164,6 +2258,12 @@ class RemoteGateway:
                             grant.get("project_scopes") or []
                         ),
                     )
+                    listener_port = int(grant.get("listener_port") or 0)
+                    if listener_port:
+                        self.store.update_peer_listener_port(
+                            sender,
+                            listener_port,
+                        )
                 except (KeyError, ValueError):
                     pass
             request_id = str(payload.get("request_id") or "")
@@ -2280,6 +2380,9 @@ class RemoteGateway:
                 "grant": {
                     "capabilities": peer["granted_capabilities"],
                     "project_scopes": peer["granted_project_scopes"],
+                    "listener_port": int(
+                        getattr(self.relay, "port", DIRECT_PAIRING_PORT)
+                    ),
                 },
             },
         )
@@ -2292,6 +2395,9 @@ __all__ = [
     "InMemoryRemoteRelay",
     "PAIRING_TTL_SECONDS",
     "REMOTE_CAPABILITIES",
+    "REMOTE_TOOL_PACK_CAPABILITIES",
+    "REMOTE_TOOL_PACK_PREFIX",
+    "REMOTE_TOOL_PACK_WIRE_NAMES",
     "REMOTE_PROTOCOL_VERSION",
     "RemoteControlStore",
     "RemoteEnvelopeCodec",

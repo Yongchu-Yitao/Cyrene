@@ -8,6 +8,7 @@ HTTP routes, native tools, Python calls, or shell execution.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import mimetypes
@@ -16,13 +17,20 @@ from typing import Any
 
 from fastapi.responses import JSONResponse
 
+from cyrene.agent.context import bind_run_context
 from cyrene.runtime.remote_control import (
+    DIRECT_PAIRING_PORT,
     REMOTE_CAPABILITIES,
+    REMOTE_TOOL_PACK_PREFIX,
+    REMOTE_TOOL_PACK_WIRE_NAMES,
     RemoteControlStore,
     RemoteGateway,
     register_remote_gateway,
     unregister_remote_gateway,
 )
+from cyrene.tooling.gateway import execute_wire_tool_in_context
+from cyrene.tooling.snapshot import build_catalog_snapshot
+from cyrene.tooling.types import ToolExecutionContext
 from cyrene.runtime.remote_pairing import DirectPairingServer
 from cyrene.workbench import runtime as workbench_runtime
 from route import schemas as api_models
@@ -119,11 +127,9 @@ def _json_response_payload(value: Any) -> dict[str, Any]:
         payload = {"error": "remote command failed"}
     if not isinstance(payload, dict):
         payload = {"error": str(payload)}
-    return {
-        "ok": False,
-        "status_code": int(value.status_code),
-        **payload,
-    }
+    status_code = int(value.status_code)
+    ok = 200 <= status_code < 300 and payload.get("ok") is not False
+    return {"ok": ok, "status_code": status_code, **payload}
 
 
 def _require_text(
@@ -388,8 +394,12 @@ class RemoteCommandExecutor:
         project_adapter: dict[str, Any],
         task_adapter: dict[str, Any],
         goal_loop_adapter: dict[str, Any] | None = None,
+        bot: Any = None,
+        db_path: str = "",
     ) -> None:
         self.store = store
+        self.bot = bot
+        self.db_path = str(db_path or "")
         self.chat = chat_adapter
         self.project = project_adapter
         self.task = task_adapter
@@ -410,6 +420,7 @@ class RemoteCommandExecutor:
                 "ok": True,
                 "protocol_version": 1,
                 "capabilities": sorted(REMOTE_CAPABILITIES),
+                "remote_tool_packages": list(REMOTE_TOOL_PACK_WIRE_NAMES),
             }
         if command == "projects.list":
             return await self._projects_list(peer_device_id)
@@ -425,6 +436,8 @@ class RemoteCommandExecutor:
             return await self._runs_read(project_id, payload)
         if command == "runs.events":
             return await self._runs_events(project_id, payload)
+        if command == "runs.wait":
+            return await self._runs_wait(project_id, payload)
         if command == "runs.guide":
             return await self._runs_guide(project_id, payload)
         if command == "runs.interrupt":
@@ -451,6 +464,10 @@ class RemoteCommandExecutor:
             return await self._artifacts_read(project_id, payload)
         if command == "attachments.read":
             return await self._attachments_read(project_id, payload)
+        if command.startswith("harness."):
+            return await self._harness_command(
+                peer_device_id, command, project_id, payload
+            )
         return {
             "ok": False,
             "code": "remote_command_unsupported",
@@ -551,7 +568,8 @@ class RemoteCommandExecutor:
                     "message": _require_text(payload, "message"),
                     "mode": _permission_mode(
                         payload,
-                        allowed=frozenset({"default", "plan"}),
+                        allowed=frozenset({"auto", "default", "plan"}),
+                        default="auto",
                     ),
                     "lang": str(payload.get("language") or ""),
                     "stream": True,
@@ -633,6 +651,134 @@ class RemoteCommandExecutor:
                 [cursor, *[int(event.get("_seq") or 0) for event in raw_events]]
             ),
             "completed": run.done.is_set(),
+        }
+
+    async def _runs_wait(
+        self,
+        project_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        run, error = await self._run_for_project(project_id, payload)
+        if error:
+            return error
+        cursor = max(0, int(payload.get("cursor") or 0))
+        timeout = max(0.1, min(float(payload.get("timeout_seconds") or 25), 55.0))
+        if not run.done.is_set() and not any(
+            int(event.get("_seq") or 0) > cursor for event in run.events
+        ):
+            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+            run.subscribers.add(queue)
+            try:
+                if not run.done.is_set() and not any(
+                    int(event.get("_seq") or 0) > cursor for event in run.events
+                ):
+                    try:
+                        await asyncio.wait_for(queue.get(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        pass
+            finally:
+                run.subscribers.discard(queue)
+        return await self._runs_events(project_id, payload)
+
+    async def _harness_command(
+        self,
+        peer_device_id: str,
+        command: str,
+        project_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        wire_name = _require_text(payload, "tool_pack", max_length=100)
+        if wire_name not in REMOTE_TOOL_PACK_WIRE_NAMES:
+            return {
+                "ok": False,
+                "code": "remote_tool_pack_unsupported",
+                "error": f"tool package is not remotely callable: {wire_name}",
+            }
+        peer = self.store.get_peer(peer_device_id)
+        grant = REMOTE_TOOL_PACK_PREFIX + wire_name
+        if peer is None or grant not in (peer.get("granted_capabilities") or []):
+            return {
+                "ok": False,
+                "code": "remote_tool_pack_denied",
+                "error": f"remote access to {wire_name} is not granted",
+            }
+        project = workbench_runtime._workbench_find_project_lightweight(project_id)
+        if project is None:
+            return {
+                "ok": False,
+                "code": "remote_project_not_found",
+                "error": "authorized project no longer exists",
+            }
+        workspace_dir = workbench_runtime._workbench_resolve_workspace_dir(project)
+        operation = command.removeprefix("harness.")
+        arguments: dict[str, Any] = {"operation": operation}
+        if operation == "discover":
+            arguments.update({
+                "query": str(payload.get("query") or ""),
+                "limit": max(1, min(int(payload.get("limit") or 20), 50)),
+            })
+        elif operation == "describe":
+            capability_ids = payload.get("capability_ids")
+            if not isinstance(capability_ids, list):
+                capability_ids = [str(payload.get("capability_id") or "")]
+            arguments["capability_ids"] = [
+                str(item) for item in capability_ids if str(item).strip()
+            ][:20]
+        elif operation == "invoke":
+            arguments.update({
+                "capability_id": _require_text(
+                    payload, "capability_id", max_length=200
+                ),
+                "arguments": dict(payload.get("arguments") or {}),
+            })
+        else:
+            raise ValueError("unsupported harness operation")
+
+        snapshot = build_catalog_snapshot("main")
+        context = ToolExecutionContext(
+            actor="main",
+            session_id=f"remote_harness:{peer_device_id}:{project_id}",
+            round_id=str(payload.get("call_id") or ""),
+            workspace=Path(workspace_dir) if workspace_dir else None,
+            bot=self.bot,
+            chat_id=0,
+            db_path=self.db_path,
+            permission_mode="full_access",
+            catalog_snapshot=snapshot,
+        )
+        binding = bind_run_context(
+            agent_id="main",
+            caller="remote_harness",
+            conversation_source="remote_harness",
+            round_id=context.round_id or f"remote-{peer_device_id}",
+            session_id=context.session_id,
+            workspace_dir=workspace_dir,
+            permission_mode="full_access",
+            temporary_full_access=True,
+        )
+        try:
+            timeout = max(
+                1.0, min(float(payload.get("timeout_seconds") or 120), 300.0)
+            )
+            raw = await asyncio.wait_for(
+                execute_wire_tool_in_context(wire_name, arguments, context),
+                timeout=timeout,
+            )
+        finally:
+            binding.reset()
+        try:
+            result: Any = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            result = raw
+        failed = (
+            isinstance(result, dict)
+            and str(result.get("status") or "").lower() == "error"
+        )
+        return {
+            "ok": not failed,
+            "tool_pack": wire_name,
+            "operation": operation,
+            "result": result,
         }
 
     async def _runs_guide(
@@ -1140,13 +1286,21 @@ class RemoteControlRuntime:
         store: RemoteControlStore,
         executor: RemoteCommandExecutor,
         lan_host: str = "0.0.0.0",
-        lan_port: int = 37841,
+        lan_port: int | None = None,
     ) -> None:
         self.db_path = str(db_path)
         self.store = store
         self.executor = executor
         self.lan_host = str(lan_host)
-        self.lan_port = int(lan_port)
+        self.requested_lan_port = (
+            int(lan_port) if lan_port is not None else None
+        )
+        self.lan_port = int(
+            lan_port
+            if lan_port is not None
+            else store.get_settings().get("listen_port") or 37841
+        )
+        self.used_fallback_port = False
         self.gateway: RemoteGateway | None = None
         self.pairing_server: DirectPairingServer | None = None
         self._running = False
@@ -1188,11 +1342,23 @@ class RemoteControlRuntime:
             self.last_error = ""
             return
         try:
+            requested_port = int(
+                self.requested_lan_port
+                if self.requested_lan_port is not None
+                else settings.get("listen_port") or 37841
+            )
             pairing_server = DirectPairingServer(
-                self.store, host=self.lan_host, port=self.lan_port
+                self.store, host=self.lan_host, port=requested_port
             )
             await pairing_server.start()
             self.pairing_server = pairing_server
+            self.lan_port = pairing_server.port
+            self.used_fallback_port = pairing_server.used_fallback_port
+            if self.requested_lan_port is None:
+                await asyncio.to_thread(
+                    self.store.update_listen_port,
+                    self.lan_port,
+                )
         except Exception as exc:
             self.last_error = f"LAN control listener failed: {exc}"
             self.store.audit(
@@ -1252,6 +1418,12 @@ class RemoteControlRuntime:
             "detail": detail,
             "direct_pairing": bool(self.pairing_server and self.pairing_server.running),
             "lan_port": self.lan_port,
+            "requested_lan_port": (
+                self.requested_lan_port
+                if self.requested_lan_port is not None
+                else int(settings.get("listen_port") or 37841)
+            ),
+            "port_fallback": self.lan_port != DIRECT_PAIRING_PORT,
         }
 
 

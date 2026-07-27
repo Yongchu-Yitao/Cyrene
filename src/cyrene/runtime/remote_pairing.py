@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import ipaddress
 import json
 import socket
@@ -15,7 +16,26 @@ from cyrene.runtime.remote_control import DIRECT_PAIRING_PORT, RemoteControlStor
 _MAX_REQUEST_BYTES = 64 * 1024
 _MAX_ENVELOPE_BYTES = 24 * 1024 * 1024
 _TAILSCALE_IPV4_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+_FALLBACK_PORT_FIRST = DIRECT_PAIRING_PORT
+_FALLBACK_PORT_LAST = DIRECT_PAIRING_PORT + 99
 RemoteReceiver = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+def _delivery_addresses(address: str) -> list[str]:
+    """Return the saved address followed by Cyrene's bounded fallback ports."""
+    normalized = normalize_pairing_address(address)
+    url = httpx.URL(f"http://{normalized}")
+    port = int(url.port or DIRECT_PAIRING_PORT)
+    if port < _FALLBACK_PORT_FIRST or port > _FALLBACK_PORT_LAST:
+        return [normalized]
+    host = str(url.host)
+    rendered_host = f"[{host}]" if ":" in host else host
+    ports = [port, *(
+        candidate
+        for candidate in range(_FALLBACK_PORT_FIRST, _FALLBACK_PORT_LAST + 1)
+        if candidate != port
+    )]
+    return [f"{rendered_host}:{candidate}" for candidate in ports]
 
 
 def local_pairing_addresses(port: int = DIRECT_PAIRING_PORT) -> list[str]:
@@ -90,6 +110,8 @@ class DirectPairingServer:
         self.store = store
         self.host = host
         self.port = int(port)
+        self.requested_port = int(port)
+        self.used_fallback_port = False
         self._server: asyncio.AbstractServer | None = None
         self._device_id = ""
         self._receiver: RemoteReceiver | None = None
@@ -104,10 +126,42 @@ class DirectPairingServer:
         return self.running and self._receiver is not None
 
     async def start(self) -> None:
-        if self._server is None:
-            self._server = await asyncio.start_server(
-                self._handle_connection, self.host, self.port
-            )
+        if self._server is not None:
+            return
+        requested = int(self.requested_port)
+        candidates = [requested]
+        if _FALLBACK_PORT_FIRST <= requested <= _FALLBACK_PORT_LAST:
+            candidates = list(
+                range(requested, _FALLBACK_PORT_LAST + 1)
+            ) + list(range(_FALLBACK_PORT_FIRST, requested))
+        last_error: OSError | None = None
+        for candidate in candidates:
+            try:
+                self._server = await asyncio.start_server(
+                    self._handle_connection,
+                    self.host,
+                    candidate,
+                )
+                socket_port = int(
+                    self._server.sockets[0].getsockname()[1]
+                )
+                self.port = socket_port
+                self.used_fallback_port = (
+                    requested not in {0, socket_port}
+                )
+                return
+            except OSError as exc:
+                last_error = exc
+                if exc.errno not in {
+                    errno.EADDRINUSE,
+                    48,
+                    98,
+                    10048,
+                }:
+                    raise
+        if last_error is not None:
+            raise last_error
+        raise OSError("no LAN control listener port is available")
 
     async def stop(self) -> None:
         server, self._server = self._server, None
@@ -142,20 +196,43 @@ class DirectPairingServer:
         address = str(peer.get("lan_address") or "")
         if not address:
             raise ConnectionError("remote device has no LAN address")
-        normalized = normalize_pairing_address(address)
-        try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(8), trust_env=False
-            ) as client:
-                response = await client.post(
-                    f"http://{normalized}/v1/control/envelope",
-                    json={"envelope": envelope},
-                )
-                response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise ConnectionError(
-                f"remote device is unreachable at {normalized}"
-            ) from exc
+        candidates = _delivery_addresses(address)
+        last_error: Exception | None = None
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(2, connect=0.25),
+            trust_env=False,
+        ) as client:
+            for normalized in candidates:
+                try:
+                    response = await client.post(
+                        f"http://{normalized}/v1/control/envelope",
+                        json={"envelope": envelope},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    if (
+                        response.status_code != 202
+                        or not isinstance(payload, dict)
+                        or payload.get("accepted") is not True
+                    ):
+                        raise httpx.HTTPStatusError(
+                            "endpoint did not accept the Cyrene envelope",
+                            request=response.request,
+                            response=response,
+                        )
+                except (httpx.HTTPError, ValueError) as exc:
+                    last_error = exc
+                    continue
+                if normalized != candidates[0]:
+                    await asyncio.to_thread(
+                        self.store.update_peer_lan_address,
+                        recipient,
+                        normalized,
+                    )
+                return
+        raise ConnectionError(
+            f"remote device is unreachable at {candidates[0]}"
+        ) from last_error
 
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter

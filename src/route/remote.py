@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from cyrene.runtime.remote_control import (
     DEFAULT_REMOTE_CAPABILITIES,
     REMOTE_CAPABILITIES,
+    REMOTE_TOOL_PACK_WIRE_NAMES,
     RemoteControlStore,
 )
 from cyrene.runtime.remote_commands import (
@@ -54,6 +55,14 @@ def _settings_payload(
         "identity": store.public_identity(),
         "supported_capabilities": sorted(REMOTE_CAPABILITIES),
         "default_capabilities": list(DEFAULT_REMOTE_CAPABILITIES),
+        "remote_tool_packages": [
+            {
+                "id": wire_name,
+                "wire_name": wire_name,
+                "grant": "toolpack:" + wire_name,
+            }
+            for wire_name in REMOTE_TOOL_PACK_WIRE_NAMES
+        ],
         "projects": _shared_projects(),
         "peers": store.list_peers(),
         "direct_pairing": {
@@ -90,6 +99,7 @@ def register_remote_routes(
     app: FastAPI,
     db_path: str,
     *,
+    bot: Any = None,
     chat_adapter: dict[str, Any] | None = None,
     project_adapter: dict[str, Any] | None = None,
     task_adapter: dict[str, Any] | None = None,
@@ -104,6 +114,8 @@ def register_remote_routes(
             store=store,
             executor=RemoteCommandExecutor(
                 store=store,
+                bot=bot,
+                db_path=db_path,
                 chat_adapter=chat_adapter,
                 project_adapter=project_adapter,
                 task_adapter=task_adapter,

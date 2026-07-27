@@ -24,7 +24,7 @@ OPENAPI_OPERATION_COUNT = 295
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
 OPENAPI_SHA256 = "f1762d75b0dc465fb980bb4f2d890b67115338b7e413845c0a4ad142babc5287"
-TOOL_REGISTRY_SHA256 = "3b44e3cd4554cf4f722c4dc03d18955307b5d21941ea8e5e8df0db9d61f3f8f8"
+TOOL_REGISTRY_SHA256 = "bbd293544746e946add31bbb15d2e92f67e83faf04f4102e9fe0caf139301690"
 MAIN_WIRE_SHA256 = "56f247691752283c226eb34ea1a8a902df14c8cd5c83ab94f92dbdd89f0e76f3"
 SUBAGENT_WIRE_SHA256 = "2d29000a405e62b49ae6374bbbf43b1edb34fbf0fdee32e5816f73b026981c75"
 
@@ -100,9 +100,9 @@ def test_openapi_contract_matches_locked_generator_baseline():
 def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged():
     from cyrene.tooling import catalog, wire
 
-    assert len(catalog.TOOL_DEFS) == 98
-    assert len(catalog.TOOL_HANDLERS) == 98
-    assert len(catalog._MAIN_ONLY_TOOLS) == 37
+    assert len(catalog.TOOL_DEFS) == 99
+    assert len(catalog.TOOL_HANDLERS) == 99
+    assert len(catalog._MAIN_ONLY_TOOLS) == 38
     assert _sha256_json(catalog.TOOL_DEFS) == TOOL_REGISTRY_SHA256
 
     assert len(wire.get_main_wire_tool_defs()) == 29

@@ -263,6 +263,12 @@ _MAIN_DESKTOP_PROMPT = _tool_pack_prompt_block(
 - When a macOS text input is visible but absent from the AX tree, prefer disclosed `visual_type`; it owns fresh capture localization, captured-to-window coordinate mapping, `CGEventPostToPid` delivery, and exact-text verification. Do not manually alter or reinterpret its coordinates. Use low-level `virtual_type_at` only when current tool evidence already supplies window coordinates. `event_delivered:true` proves routing and cursor/focus invariants; only `exact_text_present:true` proves that the text appeared. If the result is `unsupported_background_text_input` with `isolation_required:true`, stop: do not retry, invent a renderer-specific channel, or offer foreground takeover. State that the target requires a configured isolated desktop/VM worker.""",
 )
 
+_MAIN_REMOTE_PROMPT = _tool_pack_prompt_block(
+    "remote_tools",
+    """- For ordinary work on a selected paired Cyrene, prefer `remote.harness` through `remote_tools`: discover the target's granted tool package, describe the needed capability, then invoke it directly. The controller's current permission mode reviews the exact invocation locally. Do not create a remote chat or start a second remote Agent unless the user explicitly asks for a remote conversation or direct harness access is unavailable.
+- `remote.action` and `remote.run` are compatibility fallbacks. When following a fallback run, prefer the event-driven `runs.wait` status command over repeated `runs.events` polling.""",
+)
+
 _MAIN_DELIVERY_PROGRESS_PROMPT = """- Use the direct `send_message` tool for the proactive progress-reporting protocol above. For non-trivial tool work, the opening update is required and should be the first invocation in the batch when possible. Additional updates require real new information; do not use it for questions or as a substitute for the final answer."""
 
 _MAIN_MEMORY_PROMPT = _tool_pack_prompt_block(
@@ -354,6 +360,7 @@ _MAIN_AGENT_PROMPT_TEMPLATE = f"""You are {ASSISTANT_NAME}, a personal AI compan
 {_MAIN_CODE_PROMPT}
 {_MAIN_BROWSER_PROMPT}
 {_MAIN_DESKTOP_PROMPT}
+{_MAIN_REMOTE_PROMPT}
 {_MAIN_DELIVERY_PROGRESS_PROMPT}
 - Call `ask_user` proactively. Ask when: the request is ambiguous, a key detail is missing, multiple valid approaches exist and the choice matters, or you need confirmation before a high-stakes action. Guessing wrong costs more than asking. Use freeform text or add a short options list when structured choices help.
 - If you need to ask the user anything, you MUST use `ask_user`. Do not ask questions in a normal assistant text reply. Progress updates and final answers must be statements, not questions.

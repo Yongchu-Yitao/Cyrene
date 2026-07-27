@@ -3278,6 +3278,8 @@ def test_remote_settings_reuses_standard_toggle_and_localizes_capabilities():
     assert ".remote-status-card" not in styles
     assert "remoteCapabilityLabel(t, capability)" in source
     assert "remoteTransportDetail(t, transport)" in remote_panel
+    assert "transport.port_fallback" in source
+    assert i18n.count('"settings.remoteTransportAlternatePort"') == 2
     assert 'var [pairingMode, setPairingMode] = useStateSt("share")' in remote_panel
     assert 'className: "wb-seg remote-pairing-tabs"' in remote_panel
     assert 'className: "remote-pairing-columns"' not in remote_panel

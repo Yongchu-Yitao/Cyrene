@@ -170,6 +170,14 @@ def register_workbench_chat_routes(
             return chat
 
         chat = await asyncio.to_thread(create_and_persist)
+        from cyrene.observability import debug
+        await debug.publish_event({
+            "type": "workbench_chat_changed",
+            "change": "created",
+            "session_id": str(chat.get("id") or ""),
+            "chat_id": str(chat.get("id") or ""),
+            "project_id": project_id,
+        }, session_id=str(chat.get("id") or ""))
         elapsed_ms = (time.monotonic() - started) * 1000
         if elapsed_ms >= 250:
             logger.warning(
@@ -972,6 +980,14 @@ def register_workbench_chat_routes(
                 )
                 await asyncio.to_thread(_restore_retry_state)
                 await asyncio.to_thread(_settle_status)
+                from cyrene.observability import debug
+                await debug.publish_event({
+                    "type": "workbench_chat_changed",
+                    "change": "settled",
+                    "session_id": chat_id,
+                    "chat_id": chat_id,
+                    "project_id": project_id,
+                }, session_id=chat_id)
                 run.outcome = {"kind": "error", "exc": exc}
                 return
             run.status = "finishing"
@@ -1183,6 +1199,14 @@ def register_workbench_chat_routes(
                     except Exception:
                         logger.debug("Workbench chat live segment publisher failed for %s", chat_id, exc_info=True)
                 await asyncio.to_thread(_settle_status)
+                from cyrene.observability import debug
+                await debug.publish_event({
+                    "type": "workbench_chat_changed",
+                    "change": "settled",
+                    "session_id": chat_id,
+                    "chat_id": chat_id,
+                    "project_id": project_id,
+                }, session_id=chat_id)
 
         run, is_new = _CHAT_RUN_MANAGER.start_or_get(
             chat_id,
@@ -1190,6 +1214,15 @@ def register_workbench_chat_routes(
             run_streaming,
             stream=True,
         )
+        if is_new:
+            from cyrene.observability import debug
+            await debug.publish_event({
+                "type": "workbench_chat_changed",
+                "change": "running",
+                "session_id": chat_id,
+                "chat_id": chat_id,
+                "project_id": project_id,
+            }, session_id=chat_id)
         if detached:
             if not is_new:
                 return JSONResponse(
