@@ -20,7 +20,11 @@ from cyrene.runtime.remote_control import (
 )
 from cyrene.runtime.remote_commands import RemoteCommandExecutor
 from cyrene.runtime.remote_relay import CyreneRelayServer
-from cyrene.runtime.remote_pairing import DirectPairingServer, connect_by_address
+from cyrene.runtime.remote_pairing import (
+    DirectPairingServer,
+    connect_by_address,
+    normalize_pairing_address,
+)
 from cyrene.tool_impl.remote.list_devices import handler as list_remote_devices
 from cyrene.tool_impl.remote.status import handler as remote_cyrene_status
 from route.remote import register_remote_routes
@@ -56,6 +60,24 @@ def paired_stores(monkeypatch, tmp_path):
     }
 
 
+@pytest.mark.parametrize(
+    ("address", "expected"),
+    [
+        ("100.64.0.1", "100.64.0.1:37841"),
+        ("100.100.8.4:41234", "100.100.8.4:41234"),
+        ("100.127.255.254", "100.127.255.254:37841"),
+    ],
+)
+def test_pairing_address_allows_tailscale_network(address, expected):
+    assert normalize_pairing_address(address) == expected
+
+
+@pytest.mark.parametrize("address", ["100.63.255.255", "100.128.0.1", "8.8.8.8"])
+def test_pairing_address_does_not_expand_tailscale_allowlist(address):
+    with pytest.raises(ValueError, match="local-network"):
+        normalize_pairing_address(address)
+
+
 def test_pairing_creates_directional_grants_and_single_use_invitation(
     paired_stores,
 ):
@@ -89,8 +111,10 @@ def test_pairing_creates_directional_grants_and_single_use_invitation(
 @pytest.mark.asyncio
 async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_path):
     monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
-    target = RemoteControlStore(str(tmp_path / "direct-target.sqlite3"))
-    controller = RemoteControlStore(str(tmp_path / "direct-controller.sqlite3"))
+    target_db = str(tmp_path / "direct-target.sqlite3")
+    controller_db = str(tmp_path / "direct-controller.sqlite3")
+    target = RemoteControlStore(target_db)
+    controller = RemoteControlStore(controller_db)
     for store, name in ((target, "Target"), (controller, "Controller")):
         store.update_settings(
             enabled=True,
@@ -178,6 +202,28 @@ async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_pa
     finally:
         await controller_server.stop()
         await target_server.stop()
+
+    reopened_target = RemoteControlStore(target_db)
+    reopened_controller = RemoteControlStore(controller_db)
+    persisted_controller_peer = reopened_controller.get_peer(
+        target.identity.device_id
+    )
+    persisted_target_peer = reopened_target.get_peer(
+        controller.identity.device_id
+    )
+    assert persisted_controller_peer is not None
+    assert persisted_controller_peer["lan_address"] == (
+        f"127.0.0.1:{target_port}"
+    )
+    assert persisted_controller_peer["received_capabilities"] == [
+        "chat:read",
+        "chat:send",
+    ]
+    assert persisted_target_peer is not None
+    assert persisted_target_peer["lan_address"] == (
+        f"127.0.0.1:{controller_port}"
+    )
+    assert persisted_target_peer["granted_project_scopes"] == ["project_1"]
 
 
 def test_pairing_invitation_signature_rejects_grant_tampering(

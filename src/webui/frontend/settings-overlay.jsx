@@ -53,9 +53,11 @@ async function readSettingsResponse(response) {
     if (response.ok) throw new Error("Invalid JSON response");
   }
   if (!response.ok) {
-    throw new Error(
+    var responseError = new Error(
       String(payload.detail || payload.error || ("HTTP " + response.status))
     );
+    responseError.code = String(payload.code || "");
+    throw responseError;
   }
   return payload;
 }
@@ -541,6 +543,34 @@ function remoteTransportDetail(t, transport) {
   return t("settings.remoteTransportUnknown");
 }
 
+function remoteEventFallback(value) {
+  var text = String(value || "").replace(/_/g, " ").trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "—";
+}
+
+function remoteEventLabel(t, eventType) {
+  return t(
+    "settings.remoteEvent." + eventType,
+    null,
+    remoteEventFallback(eventType),
+  );
+}
+
+function remoteOutcomeLabel(t, outcome) {
+  var value = String(outcome || "recorded");
+  return t(
+    "settings.remoteOutcome." + value,
+    null,
+    remoteEventFallback(value),
+  );
+}
+
+function remoteEventTime(value) {
+  if (!value) return "—";
+  var date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
 function RemotePanel(p) {
   var { t } = p;
   var [remote, setRemote] = useStateSt(null);
@@ -554,6 +584,21 @@ function RemotePanel(p) {
   var [remoteAddress, setRemoteAddress] = useStateSt("");
   var [incomingPairingKey, setIncomingPairingKey] = useStateSt("");
   var [auditEvents, setAuditEvents] = useStateSt([]);
+  var remoteSaveTimerRef = useRefSt(null);
+  var remoteSaveQueueRef = useRefSt(Promise.resolve());
+  var remoteSaveVersionRef = useRefSt(0);
+  var remoteDraftRef = useRefSt(null);
+
+  function showRemoteNotice(message, type) {
+    var feedback = window.CyreneUI && window.CyreneUI.require
+      ? window.CyreneUI.require("feedback")
+      : null;
+    if (feedback && typeof feedback.showToast === "function") {
+      feedback.showToast(message, type || "success");
+      return;
+    }
+    setNotice(message);
+  }
 
   function loadRemote() {
     setLoading(true);
@@ -579,29 +624,67 @@ function RemotePanel(p) {
   useEffectSt(function () {
     loadRemote();
     loadAudit();
+    return function () {
+      if (remoteSaveTimerRef.current) {
+        clearTimeout(remoteSaveTimerRef.current);
+      }
+    };
   }, []);
 
-  function saveSettings() {
-    if (!remote) return;
+  function persistSettings(nextRemote, version) {
+    if (!nextRemote) return;
+    var snapshot = {
+      enabled: !!nextRemote.enabled,
+      relay_url: "",
+      device_name: String(nextRemote.device_name || "").trim(),
+    };
     setBusy("settings");
-    setNotice("");
-    fetch("/api/remote/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        enabled: !!remote.enabled,
-        relay_url: "",
-        device_name: remote.device_name || "",
-      }),
-    }).then(readSettingsResponse).then(function (payload) {
+    var request = remoteSaveQueueRef.current.catch(function () {}).then(function () {
+      return fetch("/api/remote/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(snapshot),
+      }).then(readSettingsResponse);
+    });
+    remoteSaveQueueRef.current = request;
+    request.then(function (payload) {
+      if (version !== remoteSaveVersionRef.current) return;
       setRemote(payload);
-      setNotice(t("settings.remoteSettingsSaved"));
       loadAudit();
     }).catch(function (error) {
-      setNotice(t("settings.error") + ": " + error.message);
+      if (version === remoteSaveVersionRef.current) {
+        showRemoteNotice(t("settings.error") + ": " + error.message, "error");
+      }
     }).finally(function () {
-      setBusy("");
+      if (version === remoteSaveVersionRef.current) {
+        setBusy("");
+      }
     });
+  }
+
+  function updateRemoteSettings(nextRemote, immediate) {
+    remoteDraftRef.current = nextRemote;
+    var version = ++remoteSaveVersionRef.current;
+    setRemote(nextRemote);
+    if (remoteSaveTimerRef.current) {
+      clearTimeout(remoteSaveTimerRef.current);
+      remoteSaveTimerRef.current = null;
+    }
+    if (immediate) {
+      persistSettings(nextRemote, version);
+      return;
+    }
+    remoteSaveTimerRef.current = setTimeout(function () {
+      remoteSaveTimerRef.current = null;
+      persistSettings(remoteDraftRef.current, version);
+    }, 600);
+  }
+
+  function flushRemoteSettings() {
+    if (!remoteSaveTimerRef.current) return;
+    clearTimeout(remoteSaveTimerRef.current);
+    remoteSaveTimerRef.current = null;
+    persistSettings(remoteDraftRef.current, remoteSaveVersionRef.current);
   }
 
   function toggleList(value, list, setter) {
@@ -612,7 +695,6 @@ function RemotePanel(p) {
 
   function createInvitation() {
     setBusy("invite");
-    setNotice("");
     fetch("/api/remote/pairing/short-key", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -623,10 +705,10 @@ function RemotePanel(p) {
       }),
     }).then(readSettingsResponse).then(function (payload) {
       setPairingKey(payload.pairing_key || "");
-      setNotice(t("settings.remoteInvitationCreated"));
+      showRemoteNotice(t("settings.remoteInvitationCreated"));
       loadAudit();
     }).catch(function (error) {
-      setNotice(t("settings.error") + ": " + error.message);
+      showRemoteNotice(t("settings.error") + ": " + error.message, "error");
     }).finally(function () {
       setBusy("");
     });
@@ -635,7 +717,6 @@ function RemotePanel(p) {
   function connectRemoteDevice() {
     if (!remoteAddress.trim() || !incomingPairingKey.trim()) return;
     setBusy("accept");
-    setNotice("");
     fetch("/api/remote/pairing/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -645,11 +726,13 @@ function RemotePanel(p) {
       }),
     }).then(readSettingsResponse).then(function (payload) {
       setIncomingPairingKey("");
-      setNotice(t("settings.remotePairingComplete"));
+      showRemoteNotice(t("settings.remotePairingComplete"));
       loadRemote();
       loadAudit();
     }).catch(function (error) {
-      setNotice(t("settings.error") + ": " + error.message);
+      showRemoteNotice(error.code === "remote_pairing_peer_update_required"
+        ? t("settings.remotePeerUpdateRequired")
+        : t("settings.error") + ": " + error.message, "error");
     }).finally(function () {
       setBusy("");
     });
@@ -657,11 +740,35 @@ function RemotePanel(p) {
 
   function copyText(value) {
     if (!value) return;
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(value).then(function () {
-        setNotice(t("settings.remoteCopied"));
-      }).catch(function () {});
+    var write;
+    if (window.cyrene && typeof window.cyrene.writeClipboardText === "function") {
+      write = Promise.resolve(window.cyrene.writeClipboardText(value));
+    } else if (navigator.clipboard && navigator.clipboard.writeText) {
+      write = navigator.clipboard.writeText(value);
+    } else {
+      write = new Promise(function (resolve, reject) {
+        var input = document.createElement("textarea");
+        input.value = value;
+        input.setAttribute("readonly", "");
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        document.body.appendChild(input);
+        input.select();
+        try {
+          if (!document.execCommand("copy")) throw new Error("copy failed");
+          resolve();
+        } catch (error) {
+          reject(error);
+        } finally {
+          input.remove();
+        }
+      });
     }
+    write.then(function () {
+      showRemoteNotice(t("settings.remoteCopied"));
+    }).catch(function (error) {
+      showRemoteNotice(t("settings.error") + ": " + error.message, "error");
+    });
   }
 
   if (loading && !remote) {
@@ -689,7 +796,7 @@ function RemotePanel(p) {
       remote.enabled ? t("settings.remoteEnabled") : t("settings.remoteDisabled"),
       remoteTransportDetail(t, transport),
       Toggle(!!remote.enabled, function () {
-        setRemote({ ...remote, enabled: !remote.enabled });
+        updateRemoteSettings({ ...remote, enabled: !remote.enabled }, true);
       }, busy === "settings", t("settings.remoteEnable")),
     ),
 
@@ -697,16 +804,24 @@ function RemotePanel(p) {
       React.createElement("div", { className: "remote-identity-grid" },
         React.createElement("label", null,
           React.createElement("span", null, t("settings.remoteDeviceName")),
-          React.createElement("input", { className: "wb-input", value: remote.device_name || "", maxLength: 120, onChange: function (e) { setRemote({ ...remote, device_name: e.target.value }); } }),
+          React.createElement("input", {
+            className: "wb-input",
+            value: remote.device_name || "",
+            maxLength: 120,
+            onChange: function (e) {
+              updateRemoteSettings(
+                { ...remote, device_name: e.target.value },
+                false,
+              );
+            },
+            onBlur: flushRemoteSettings,
+          }),
         ),
       ),
       React.createElement("div", { className: "remote-identity-facts" },
         React.createElement("div", null, React.createElement("span", null, t("settings.remoteLocalAddress")), React.createElement("code", null, localAddresses[0] || t("settings.remoteAddressUnavailable"))),
         React.createElement("div", null, React.createElement("span", null, t("settings.remoteDeviceId")), React.createElement("code", null, identity.device_id || "—")),
         React.createElement("div", null, React.createElement("span", null, t("settings.remoteFingerprint")), React.createElement("code", null, identity.fingerprint || "—")),
-      ),
-      React.createElement("div", { className: "wb-save-actions" },
-        React.createElement("button", { className: "wb-btn primary", onClick: saveSettings, disabled: busy === "settings" }, busy === "settings" ? t("settings.saving") : t("settings.saveApply")),
       ),
     ),
 
@@ -771,7 +886,13 @@ function RemotePanel(p) {
                 ),
                 React.createElement("div", null,
                   React.createElement("small", null, t("settings.remotePairingKey")),
-                  React.createElement("button", { type: "button", className: "remote-pairing-key", onClick: function () { copyText(pairingKey); }, title: t("settings.remoteCopyPairingKey") }, pairingKey),
+                  React.createElement("button", {
+                    type: "button",
+                    className: "remote-pairing-key",
+                    onClick: function () { copyText(pairingKey); },
+                    title: t("settings.remoteCopyPairingKey"),
+                    "aria-label": t("settings.remoteCopyPairingKey"),
+                  }, pairingKey),
                 ),
                 React.createElement("p", null, t("settings.remoteShortKeyExpires")),
               ),
@@ -808,7 +929,7 @@ function RemotePanel(p) {
           projects: remote.projects || [],
           capabilities: remote.supported_capabilities || [],
           onChanged: function () { loadRemote(); loadAudit(); },
-          onNotice: setNotice,
+          onNotice: showRemoteNotice,
         });
       }),
     ),
@@ -818,16 +939,15 @@ function RemotePanel(p) {
         !auditEvents.length && React.createElement("p", { className: "wb-hint" }, t("settings.remoteNoAudit")),
         auditEvents.map(function (event) {
           return React.createElement("div", { key: event.event_id, className: "remote-audit-row" },
-            React.createElement("span", { className: "remote-audit-outcome " + (event.outcome === "error" ? "error" : "") }, event.outcome || "•"),
+            React.createElement("span", { className: "remote-audit-outcome " + (event.outcome === "error" ? "error" : "") }, remoteOutcomeLabel(t, event.outcome)),
             React.createElement("div", null,
-              React.createElement("b", null, event.event_type),
-              React.createElement("small", null, [event.command, event.peer_device_id, event.created_at].filter(Boolean).join(" · ")),
+              React.createElement("b", null, remoteEventLabel(t, event.event_type)),
+              React.createElement("small", null, [event.command, event.peer_device_id, remoteEventTime(event.created_at)].filter(Boolean).join(" · ")),
             ),
           );
         }),
       ),
     ),
-    notice && React.createElement("div", { className: "remote-notice", role: "status" }, notice),
   );
 }
 
@@ -850,10 +970,10 @@ function RemotePeerCard(p) {
       body: JSON.stringify({ capabilities: grantedCapabilities, project_scopes: grantedProjects }),
     }).then(readSettingsResponse).then(function () {
       setEditing(false);
-      onNotice(t("settings.remoteGrantSaved"));
+      onNotice(t("settings.remoteGrantSaved"), "success");
       onChanged();
     }).catch(function (error) {
-      onNotice(t("settings.error") + ": " + error.message);
+      onNotice(t("settings.error") + ": " + error.message, "error");
     }).finally(function () { setBusy(false); });
   }
 
@@ -861,10 +981,10 @@ function RemotePeerCard(p) {
     setBusy(true);
     fetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), { method: "DELETE" })
       .then(readSettingsResponse).then(function () {
-        onNotice(t("settings.remoteDeviceRevoked"));
+        onNotice(t("settings.remoteDeviceRevoked"), "success");
         onChanged();
       }).catch(function (error) {
-        onNotice(t("settings.error") + ": " + error.message);
+        onNotice(t("settings.error") + ": " + error.message, "error");
       }).finally(function () { setBusy(false); });
   }
 

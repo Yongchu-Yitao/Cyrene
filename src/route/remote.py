@@ -212,13 +212,19 @@ def register_remote_routes(
             )
         except (httpx.HTTPError, OSError) as exc:
             detail = str(exc)
+            code = "remote_pairing_connection_failed"
             if isinstance(exc, httpx.HTTPStatusError):
                 try:
                     detail = str(exc.response.json().get("error") or detail)
                 except Exception:
                     pass
+                if (
+                    detail
+                    == "direct pairing is limited to local-network IP addresses"
+                ):
+                    code = "remote_pairing_peer_update_required"
             return JSONResponse(
-                {"error": detail, "code": "remote_pairing_connection_failed"},
+                {"error": detail, "code": code},
                 status_code=409,
             )
         await load_remote_grant_sync(result["peer"])

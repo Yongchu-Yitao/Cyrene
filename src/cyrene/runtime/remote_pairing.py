@@ -14,6 +14,7 @@ from cyrene.runtime.remote_control import DIRECT_PAIRING_PORT, RemoteControlStor
 
 _MAX_REQUEST_BYTES = 64 * 1024
 _MAX_ENVELOPE_BYTES = 24 * 1024 * 1024
+_TAILSCALE_IPV4_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 RemoteReceiver = Callable[[dict[str, Any]], Awaitable[None]]
 
 
@@ -56,7 +57,15 @@ def normalize_pairing_address(value: str) -> str:
         parsed = ipaddress.ip_address(host.strip("[]"))
     except ValueError as exc:
         raise ValueError("device address must be an IPv4 or IPv6 address") from exc
-    if not (parsed.is_private or parsed.is_link_local or parsed.is_loopback):
+    is_tailscale = (
+        parsed.version == 4 and parsed in _TAILSCALE_IPV4_NETWORK
+    )
+    if not (
+        parsed.is_private
+        or parsed.is_link_local
+        or parsed.is_loopback
+        or is_tailscale
+    ):
         raise ValueError("direct pairing is limited to local-network IP addresses")
     try:
         port = int(port_text)

@@ -3250,9 +3250,30 @@ def test_remote_settings_reuses_standard_toggle_and_localizes_capabilities():
     assert i18n.count('"settings.remotePairCapabilities"') == 2
     assert 'fetch("/api/remote/pairing/short-key"' in remote_panel
     assert 'fetch("/api/remote/pairing/connect"' in remote_panel
+    assert 'error.code === "remote_pairing_peer_update_required"' in remote_panel
+    assert i18n.count('"settings.remotePeerUpdateRequired"') == 2
+    assert "function persistSettings(nextRemote, version)" in remote_panel
+    assert "function updateRemoteSettings(nextRemote, immediate)" in remote_panel
+    assert "}, 600);" in remote_panel
+    assert "onBlur: flushRemoteSettings" in remote_panel
+    assert "onClick: saveSettings" not in remote_panel
+    assert 't("settings.saveApply")' not in remote_panel
     assert 'placeholder: "192.168.1.20:37841"' in remote_panel
     assert 'placeholder: "ABCDE-23456"' in remote_panel
     assert 'className: "remote-direct-offer"' in remote_panel
+    assert 'window.cyrene.writeClipboardText(value)' in remote_panel
+    assert '"aria-label": t("settings.remoteCopyPairingKey")' in remote_panel
+    assert "remoteEventLabel(t, event.event_type)" in remote_panel
+    assert "remoteOutcomeLabel(t, event.outcome)" in remote_panel
+    assert "remoteEventTime(event.created_at)" in remote_panel
+    assert 'window.CyreneUI.require("feedback")' in remote_panel
+    assert 'className: "remote-notice"' not in remote_panel
+    assert ".remote-notice {" not in styles
+    assert "justify-content: center;" in styles
+    assert i18n.count('"settings.remoteAudit": "Connection events"') == 1
+    assert i18n.count('"settings.remoteAudit": "连接事件"') == 1
+    assert i18n.count('"settings.remoteEvent.remote_gateway_started"') == 2
+    assert i18n.count('"settings.remoteOutcome.online"') == 2
     assert "incomingInvitation" not in remote_panel
     assert "incomingResponse" not in remote_panel
     assert 't("settings.remoteRelayUrl")' not in remote_panel

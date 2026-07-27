@@ -5397,10 +5397,10 @@ html[data-theme="light"] .wb-tool-list .mono {
 
 .remote-audit-row {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
-  align-items: start;
-  gap: 9px;
-  padding: 9px 10px;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
   border: 1px solid var(--wb-line);
   border-radius: 8px;
 }
@@ -5408,37 +5408,38 @@ html[data-theme="light"] .wb-tool-list .mono {
 .remote-audit-row > div {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
+}
+
+.remote-audit-row b {
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
 }
 
 .remote-audit-row small {
   overflow-wrap: anywhere;
   color: var(--wb-muted);
+  font-size: 10px;
+  line-height: 1.35;
 }
 
 .remote-audit-outcome {
-  overflow: hidden;
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  justify-content: center;
+  overflow-wrap: anywhere;
   color: var(--wb-green);
-  font-size: 10px;
-  text-overflow: ellipsis;
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-align: center;
 }
 
 .remote-audit-outcome.error {
   color: var(--wb-red);
-}
-
-.remote-notice {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  padding: 10px 12px;
-  margin-top: 12px;
-  border: 1px solid color-mix(in srgb, var(--wb-accent) 35%, var(--wb-line));
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-card-bg));
-  color: var(--wb-text);
-  box-shadow: 0 8px 24px color-mix(in srgb, #000 14%, transparent);
 }
 
 @media (max-width: 860px) {
