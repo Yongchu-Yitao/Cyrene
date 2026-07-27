@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from cyrene.tool_impl.remote.common import (
+    remote_tool_error,
     request_remote_command,
     resolve_selected_remote_device,
 )
@@ -18,7 +19,9 @@ TOOL_DEF = {
         "description": (
             "Perform a typed action on a paired Cyrene device explicitly selected "
             "in the current chat. The local user permission mode and the remote "
-            "device's grants both apply. Never use for arbitrary HTTP, tools, or shell."
+            "device's grants both apply. To operate every capability of the remote "
+            "Cyrene, create a chat, send it an instruction, follow runs.events, and "
+            "answer any approval request. Never use for arbitrary HTTP, tools, or shell."
         ),
         "parameters": {
             "type": "object",
@@ -50,7 +53,15 @@ TOOL_DEF = {
                 },
                 "payload": {
                     "type": "object",
-                    "description": "Typed action parameters defined by the selected command.",
+                    "description": (
+                        "Command payload: chats.create {title?}; chats.send "
+                        "{chat_id,message,permission_mode?:default|plan,language?}; "
+                        "runs.guide {chat_id,message,request_id?}; runs.interrupt "
+                        "{chat_id}; tasks.create {title?,goal,priority?}; tasks.dispatch "
+                        "{task_id,message}; tasks.approve_plan {task_id}; tasks.run_step "
+                        "{task_id,step_id,message}; tasks.pause/resume/cancel {task_id}; "
+                        "approvals.respond {chat_id|task_id,question_id,answer}."
+                    ),
                 },
                 "idempotency_key": {
                     "type": "string",
@@ -111,7 +122,7 @@ async def handler(
         )
         return json_result(result)
     except Exception as exc:
-        return json_result({"ok": False, "error": str(exc)})
+        return json_result(remote_tool_error(exc))
 
 
 __all__ = ["TOOL_NAME", "TOOL_DEF", "TOOL_METADATA", "handler"]

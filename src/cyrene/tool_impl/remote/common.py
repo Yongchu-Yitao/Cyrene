@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import sqlite3
 from typing import Any
 from uuid import uuid4
 
@@ -9,6 +11,52 @@ from cyrene.runtime.remote_control import (
     RemoteControlStore,
     get_remote_gateway,
 )
+
+
+def remote_tool_error(exc: Exception) -> dict[str, Any]:
+    """Return a stable controller-side error instead of an ambiguous string."""
+    message = str(exc).strip() or exc.__class__.__name__
+    if isinstance(exc, sqlite3.OperationalError) and (
+        "locked" in message.lower() or "busy" in message.lower()
+    ):
+        return {
+            "ok": False,
+            "code": "remote_controller_database_busy",
+            "error": message,
+            "error_origin": "controller",
+            "retryable": True,
+        }
+    if isinstance(exc, asyncio.TimeoutError):
+        return {
+            "ok": False,
+            "code": "remote_command_timeout",
+            "error": "remote command timed out",
+            "error_origin": "transport",
+            "retryable": True,
+        }
+    if isinstance(exc, PermissionError):
+        return {
+            "ok": False,
+            "code": "remote_controller_permission_denied",
+            "error": message,
+            "error_origin": "controller",
+            "retryable": False,
+        }
+    if isinstance(exc, (ConnectionError, OSError)):
+        return {
+            "ok": False,
+            "code": "remote_transport_unavailable",
+            "error": message,
+            "error_origin": "transport",
+            "retryable": True,
+        }
+    return {
+        "ok": False,
+        "code": "remote_controller_error",
+        "error": message,
+        "error_origin": "controller",
+        "retryable": False,
+    }
 
 
 def selected_remote_devices(
@@ -83,7 +131,7 @@ async def request_remote_command(
     if gateway is None:
         raise RuntimeError("远程连接尚未启动，请先在设置中启用远程控制")
     timeout = max(1.0, min(float(args.get("timeout_seconds") or 30), 120.0))
-    return await gateway.request(
+    result = await gateway.request(
         str(device["device_id"]),
         command=str(args.get("command") or ""),
         project_id=str(args.get("project_id") or ""),
@@ -91,9 +139,13 @@ async def request_remote_command(
         payload=dict(args.get("payload") or {}),
         timeout=timeout,
     )
+    if result.get("ok") is False and not result.get("error_origin"):
+        result = {**result, "error_origin": "remote"}
+    return result
 
 
 __all__ = [
+    "remote_tool_error",
     "request_remote_command",
     "resolve_selected_remote_device",
     "selected_remote_devices",

@@ -19,6 +19,7 @@ from route.registry import register_routes
 def control_env(monkeypatch, tmp_path):
     from cyrene import config as cyrene_config
     from cyrene.agent import state as agent_state
+    from cyrene.runtime import attachments as managed_attachments
     from cyrene.workbench import chat as chat_service
     from cyrene.workbench import runtime as workbench_runtime
     from route.workbench import chat as chat_routes
@@ -40,6 +41,16 @@ def control_env(monkeypatch, tmp_path):
     monkeypatch.setattr(chat_service, "DATA_DIR", data_dir)
     monkeypatch.setattr(agent_state, "_DATA_DIR", data_dir)
     monkeypatch.setattr(agent_state, "DATA_DIR", data_dir)
+    monkeypatch.setattr(
+        managed_attachments,
+        "UPLOADS_DIR",
+        data_dir / "webui_uploads",
+    )
+    monkeypatch.setattr(
+        managed_attachments,
+        "EXPORTS_DIR",
+        data_dir / "webui_exports",
+    )
     agent_state._sessions.clear()
 
     chat_service._CHATS_STORE = data_dir / "workbench_chats.json"
@@ -129,6 +140,7 @@ def test_control_capabilities_disclose_remote_gateway_and_remaining_limits(
     assert payload["remote_transport_available"] is True
     assert payload["durable_run_events"] is True
     assert "chats.send" in payload["operations"]
+    assert "attachments.read" in payload["operations"]
     features = {item["name"]: item["available"] for item in payload["features"]}
     assert features == {
         "chat_runs": True,
@@ -309,6 +321,43 @@ def test_control_chat_contract_lists_creates_and_reads(control_env):
     detail = client.get(f"/v1/control/chats/{chat_id}")
     assert detail.status_code == 200
     assert detail.json()["chat"]["messages"] == []
+
+
+def test_control_chat_attachment_contract_downloads_referenced_file(
+    control_env,
+):
+    from cyrene.runtime import attachments as managed_attachments
+    from cyrene.workbench import chat as chat_service
+
+    managed_attachments.EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    target = managed_attachments.EXPORTS_DIR / "remote-result.txt"
+    target.write_bytes(b"complete remote result")
+    payload = chat_service._read_chats_store()
+    chat = chat_service._find_chat(payload, "chat_1")
+    assert chat is not None
+    chat["messages"][0]["attachments"] = [
+        {
+            "id": target.name,
+            "name": "result.txt",
+            "path": str(target),
+            "content_type": "text/plain",
+            "kind": "code",
+            "size": target.stat().st_size,
+            "url": f"/api/chat/export/{target.name}",
+        }
+    ]
+    chat_service._write_chats_store(payload)
+
+    detail = control_env["client"].get("/v1/control/chats/chat_1")
+    assert detail.status_code == 200
+    attachment = detail.json()["chat"]["messages"][0]["attachments"][0]
+    assert attachment["download_url"] == (
+        "/v1/control/chats/chat_1/attachments/remote-result.txt"
+    )
+
+    downloaded = control_env["client"].get(attachment["download_url"])
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"complete remote result"
 
 
 def test_control_task_approval_requires_matching_pending_question(control_env):
@@ -500,6 +549,7 @@ def test_control_openapi_is_explicitly_versioned_and_typed(control_env):
         "/v1/control/chats",
         "/v1/control/chats/{chat_id}",
         "/v1/control/chats/{chat_id}/messages",
+        "/v1/control/chats/{chat_id}/attachments/{attachment_id}",
         "/v1/control/runs/{run_id}",
         "/v1/control/runs/{run_id}/events",
         "/v1/control/runs/{run_id}/guidance",

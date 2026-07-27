@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.7.0b3-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.7.0b4-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-beta-orange" alt="Status">
 </p>
@@ -41,35 +41,12 @@
   browser or desktop app, with Quick Chat, rich Markdown, code, diff, map, PDF,
   file-preview, and browser views.
 
-Cyrene has one official Web UI: **Workbench**.
 
 ## Current limitations
 
-- Cyrene is designed for one local operator. Projects are organizational
-  boundaries, not separate users or security tenants.
-- The Web server is local-only and is not intended for public internet
-  exposure.
-- Tool permissions reduce accidental actions but do not provide an operating
-  system, VM, or container sandbox.
-- Prompts and selected context are sent to configured model services.
-  Integrations may also exchange data with their configured services.
-- Chat models currently require an OpenAI-compatible endpoint.
-- Usage budgets are local estimates, not provider billing controls.
-- Data has no automatic retention period; it remains until explicitly removed
-  or reset.
-- Electron browser cookies and logins are shared across projects.
-- The HTTP API is not yet versioned as a stable public API.
-- Literature DOI/title lookup, Zotero Web API two-way sync, Experiments, and
-  Manuscripts are not implemented.
-- Windows source installation has an upstream SimpleXNG limitation; use a
-  pre-built app or follow the checked-in release workflow.
-- Pull-request CI covers the full Python suite, WebUI build, and Electron App
-  Use tests on Linux. Packaged, visual, upgrade, and credentialed integration
-  checks remain release/manual gates.
-
-See [Development](docs/development.md) for the exact validation baseline and
-[Current Development Progress](project-notes/CONTEXT_DEV_PROGRESS.md) for
-known engineering risks.
+See [Current limitations](docs/limitations.md) for the security boundaries,
+service requirements, data behavior, platform constraints, and release gates
+that apply to the current beta.
 
 ## Quick start
 

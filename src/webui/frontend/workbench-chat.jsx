@@ -112,7 +112,10 @@ var WorkbenchChatModel = (function () {
 
   function interrupt(chatId) {
     return fetch("/api/chat/interrupt?session_id=" + encodeURIComponent(chatId), { method: "POST" })
-      .catch(function () {});
+      .then(function (response) {
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        return response;
+      });
   }
 
   function uploadFiles(files) {
@@ -431,7 +434,11 @@ function wbcFinalizeRuntime(runtime) {
 }
 
 function wbcMergeToolLifecycleEntry(current, incoming, terminalOnly) {
-  if (!terminalOnly) return { ...current, ...incoming };
+  if (!terminalOnly) return {
+    ...current,
+    ...incoming,
+    text: incoming.text || current.text,
+  };
   // The concrete executor may already have replaced a progressive package name
   // with the resolved capability. A gateway terminal event owns lifecycle only;
   // it must not regress that richer identity back to the package name.
@@ -1068,9 +1075,20 @@ var WorkbenchChatRuntimes = (function () {
   }
 
   function interrupt(chatId, model) {
-    if (!chatId) return;
-    if (runtimes[chatId] && model && model.interrupt) model.interrupt(chatId);
-    abort(chatId);
+    if (!chatId) return Promise.resolve(null);
+    var request = runtimes[chatId] && model && model.interrupt
+      ? model.interrupt(chatId)
+      : Promise.resolve(null);
+    // Keep the live stream attached until the server has accepted the
+    // interruption and repaired the persisted chat status. If the interrupted
+    // event wins the race it clears the runtime directly; otherwise aborting
+    // here makes ownStream perform one authoritative re-pull.
+    return Promise.resolve(request).catch(function (err) {
+      fire("onError", chatId, err);
+      return null;
+    }).finally(function () {
+      abort(chatId);
+    });
   }
 
   function deferSend(chatId, input, model) {
@@ -1346,7 +1364,7 @@ var WorkbenchChatRuntimes = (function () {
       },
       onInterrupted: function () {
         update(chatId, null);
-        fire("onResync", chatId);
+        fire("onInterrupted", chatId);
       },
       onError: function (err) {
         // Keep the runtime until the stream closes so `finally` performs the
@@ -1542,12 +1560,13 @@ var WorkbenchChatRuntimes = (function () {
     }
     var entry = null;
     var terminalToolEvent = false;
-    if (event.type === "tool_call_started" || event.type === "tool_call" || event.type === "tool_call_finished") {
+    if (event.type === "tool_call_started" || event.type === "tool_call" || event.type === "tool_call_finished" || event.type === "tool_call_progress") {
       var toolName = String(event.tool || "");
       if (["use_tools", "quit", "send_message", "update_plan_progress"].indexOf(toolName) >= 0) return;
       var args = event.args || {};
       var preview = wbcToolArgsPreview(args);
       var toolStarted = event.type === "tool_call_started";
+      var toolProgress = event.type === "tool_call_progress";
       terminalToolEvent = event.type === "tool_call_finished";
       var toolResult = String(event.result || "");
       var toolFailed = !!event.failed
@@ -1556,10 +1575,13 @@ var WorkbenchChatRuntimes = (function () {
       entry = {
         kind: "tool",
         toolCallId: String(event.tool_call_id || ""),
-        text: toolName || wbcT("settings.tools", "Tools"),
-        preview: preview,
-        status: toolStarted ? "running" : "completed",
+        text: toolName || undefined,
+        preview: toolProgress ? String(event.label || "") : preview,
+        status: (toolStarted || toolProgress) ? "running" : "completed",
         failed: toolFailed,
+        progress: toolProgress ? Math.max(0, Math.min(1, Number(event.progress) || 0)) : undefined,
+        progressCurrent: toolProgress ? Math.max(0, Number(event.current) || 0) : undefined,
+        progressTotal: toolProgress ? Math.max(0, Number(event.total) || 0) : undefined,
       };
     } else if (event.type === "phase_transition" && (event.detail || event.detail_key)) {
       entry = { kind: "phase", text: event.detail ? String(event.detail).slice(0, 80) : "", detailKey: event.detail_key || "", detailParams: event.detail_params || {}, preview: "" };
@@ -2268,6 +2290,16 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           if (!prev || prev.id !== chatId) return prev;
           return { ...prev, status: "idle", pendingQuestion: pendingQuestion || null };
         });
+      },
+      onInterrupted: function (chatId) {
+        // The server emits this only after accepting the interruption. Clear
+        // the stale persisted-looking state immediately; the interrupt request
+        // also settles storage before its response completes.
+        setActiveChat(function (prev) {
+          if (!prev || prev.id !== chatId) return prev;
+          return { ...prev, status: "idle" };
+        });
+        refreshChats();
       },
       onError: function (chatId, err) {
         setErrorKind("message");
@@ -4546,6 +4578,12 @@ function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, o
                         return toolKey;
                       })()}
                       {(entry.preview) ? <small>（{wbcToolPreviewText(entry.preview)}）</small> : null}
+                      {isRunning && Number(entry.progressTotal) > 0 ? (
+                        <span className="wbc-transfer-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(Number(entry.progress || 0) * 100)}>
+                          <span style={{ width: Math.round(Number(entry.progress || 0) * 100) + "%" }} />
+                          <small>{Math.round(Number(entry.progress || 0) * 100)}%</small>
+                        </span>
+                      ) : null}
                     </span>
                   </li>
                 );
@@ -7007,7 +7045,7 @@ function WbcOverviewTab({ chat, loading, detailed, runtime, onRename, onDelete, 
       </section>
       <section className="workbench-side-section">
         <h3>{wbcT("workbenchChat.sessionInfo", "Session info")}</h3>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.statusLabel", "Status")}</span><b>{runtime || chat.status === "running" ? wbcT("workbenchChat.status.replying", "Replying") : wbcT("workbenchChat.status.idle", "Idle")}</b></div>
+        <div className="wb-kv"><span>{wbcT("workbenchChat.statusLabel", "Status")}</span><b>{runtime ? wbcT("workbenchChat.status.replying", "Replying") : wbcT("workbenchChat.status.idle", "Idle")}</b></div>
         <div className="wb-kv"><span>{wbcT("workbenchChat.messageCount", "Messages")}</span><b>{chat.messageCount != null ? chat.messageCount : (chat.messages || []).length}</b></div>
         <div className="wb-kv"><span>{wbcT("workbenchChat.model", "Model")}</span><b className="wbc-kv-mono">{currentModel || "—"}</b></div>
         <div className="wb-kv"><span>{wbcT("chat.runId", "Session ID")}</span><b className="wbc-kv-mono">{chat.id}</b></div>

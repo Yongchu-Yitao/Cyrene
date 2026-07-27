@@ -685,7 +685,7 @@ async def test_execution_cost_fuse_requests_finalization(monkeypatch):
 
     _patch_limits(
         monkeypatch,
-        subagent_execution_max_cost_usd=0.001,
+        subagent_execution_max_cost_usd=0.00725,
         subagent_execution_max_tool_calls=200,
         subagent_execution_max_wall_seconds=1800,
         subagent_execution_no_progress_turns=3,

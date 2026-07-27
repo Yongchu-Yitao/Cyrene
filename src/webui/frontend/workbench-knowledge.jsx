@@ -13,6 +13,10 @@
   var knowledgePageCache = { lists: {}, pending: {} };
   var KB_PAGE_SIZE = 80;
 
+  function KBT(key, fallback, params) {
+    return window.CyreneUI.require("i18n").t(key, params || null, fallback);
+  }
+
   // ── helpers ──────────────────────────────────────────────────────────
 
   function formatDate(iso) {
@@ -58,7 +62,7 @@
   }
 
   function docTitle(doc) {
-    return String((doc && (doc.title || doc.name)) || "未命名文档").trim();
+    return String((doc && (doc.title || doc.name)) || KBT("knowledge.noName", "Untitled document")).trim();
   }
 
   function fileExt(doc) {
@@ -178,27 +182,24 @@
     var summary = String((doc && doc.summary) || "").trim();
     if (summary) return summary;
     var status = String((doc && doc.status) || "");
-    if (status === "pending" || status === "indexing") return "正在索引内容…";
-    if (status === "error") return "索引失败，可重新索引重试。";
+    if (status === "pending" || status === "indexing") return KBT("knowledge.description.indexing", "Indexing content…");
+    if (status === "error") return KBT("knowledge.description.error", "Indexing failed. Reindex to try again.");
     var vk = visualKind(doc);
-    var typeLabel = { pdf: "PDF 文档", doc: "Word 文档", sheet: "电子表格", slide: "演示文稿", markdown: "Markdown", link: "链接", image: "图片", code: "代码文件", map: "地图数据", note: "文本", file: "文件" }[vk] || "文件";
+    var typeLabel = KBT("knowledge.type." + vk, KBT("knowledge.type.file", "File"));
     return typeLabel + " · " + formatBytes(doc && doc.size);
   }
 
-  var SOURCE_LABELS = {
-    kb_upload: "知识库上传", chat_upload: "对话上传", import: "导入", export: "导出文件", sync: "同步",
-    workbench_task: "任务摘要", workbench_artifact: "任务产物",
-  };
   function sourceLabel(source) {
-    return SOURCE_LABELS[String(source || "")] || (source ? String(source) : "其他");
+    var raw = String(source || "other");
+    return KBT("knowledge.source." + raw, source ? String(source) : KBT("knowledge.source.other", "Other"));
   }
 
   function statusMeta(status) {
     var raw = String(status || "");
-    if (raw === "indexed" || raw === "done" || raw === "completed") return { tone: "green", text: "已索引" };
-    if (raw === "pending" || raw === "indexing") return { tone: "amber", text: "索引中" };
-    if (raw === "error") return { tone: "red", text: "索引失败" };
-    return { tone: "slate", text: raw || "未知" };
+    if (raw === "indexed" || raw === "done" || raw === "completed") return { tone: "green", text: KBT("knowledge.status.indexed", "Indexed") };
+    if (raw === "pending" || raw === "indexing") return { tone: "amber", text: KBT("knowledge.status.pending", "Indexing") };
+    if (raw === "error") return { tone: "red", text: KBT("knowledge.status.error", "Indexing failed") };
+    return { tone: "slate", text: raw || KBT("knowledge.status.unknown", "Unknown") };
   }
 
   // ── API model (workspace-scoped) ─────────────────────────────────────
@@ -295,12 +296,12 @@
         ),
         React.createElement(
           "div", { className: "wb-kb-card-foot" },
-          React.createElement("span", null, "更新于 " + formatDateShort(doc.updated_at || doc.created_at)),
+          React.createElement("span", null, KBT("knowledge.updatedAt", "Updated {date}", { date: formatDateShort(doc.updated_at || doc.created_at) })),
           React.createElement(
             "button",
             {
               type: "button", className: "wb-kb-card-menu-btn",
-              title: "更多",
+              title: KBT("knowledge.more", "More"),
               onClick: function (e) { e.stopPropagation(); props.onMenu(doc, e); },
             },
             React.createElement("svg", { width: 16, height: 16, viewBox: "0 0 24 24", fill: "currentColor" },
@@ -320,7 +321,7 @@
     var detail = props.detail;  // full detail (chunks + relations), may be loading
     var tab = props.tab;
     var setTab = props.setTab;
-    var userName = (window.CyreneUI.require("data").state.user || {}).name || "我";
+    var userName = (window.CyreneUI.require("data").state.user || {}).name || KBT("common.me", "Me");
 
     var chunks = (detail && Array.isArray(detail.chunks)) ? detail.chunks : [];
     var relations = (detail && Array.isArray(detail.relations)) ? detail.relations : [];
@@ -330,9 +331,9 @@
     var relatedCount = Number((related.counts && related.counts.conversations) || 0);
 
     var tabs = [
-      { id: "detail", label: "详情" },
-      { id: "content", label: "内容" },
-      { id: "related", label: "关联对话" + (relatedCount ? " (" + relatedCount + ")" : "") },
+      { id: "detail", label: KBT("knowledge.details", "Details") },
+      { id: "content", label: KBT("knowledge.content", "Content") },
+      { id: "related", label: KBT("knowledge.relatedChats", "Related conversations") + (relatedCount ? " (" + relatedCount + ")" : "") },
     ];
 
     return React.createElement(
@@ -354,7 +355,7 @@
         React.createElement(
           "div", { className: "wb-kb-detail-head-actions" },
           React.createElement("a", {
-            className: "wb-kb-iconbtn", href: props.rawUrl, target: "_blank", rel: "noreferrer", title: "查看原文件",
+            className: "wb-kb-iconbtn", href: props.rawUrl, target: "_blank", rel: "noreferrer", title: KBT("knowledge.viewOriginal", "View original file"),
           }, React.createElement("svg", { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
             React.createElement("path", { d: "M1.5 12s4-7 10.5-7 10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12Z" }),
             React.createElement("circle", { cx: 12, cy: 12, r: 3 })))
@@ -425,9 +426,9 @@
         tags.map(function (tag) {
           return React.createElement("span", { className: "wb-kb-tag", key: tag }, "# " + tag);
         }),
-        tags.length === 0 && React.createElement("span", { className: "wb-kb-muted" }, "暂无标签"),
+        tags.length === 0 && React.createElement("span", { className: "wb-kb-muted" }, KBT("knowledge.noTags", "No tags")),
         React.createElement("button", {
-          type: "button", className: "wb-kb-tag-edit-btn", title: "编辑标签",
+          type: "button", className: "wb-kb-tag-edit-btn", title: KBT("knowledge.editTags", "Edit tags"),
           onClick: function () { setEditing(true); setTimeout(function () { if (inputRef.current) inputRef.current.focus(); }, 0); },
         }, React.createElement("svg", { width: 13, height: 13, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
           React.createElement("path", { d: "M12 20h9" }), React.createElement("path", { d: "M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" })))
@@ -438,19 +439,19 @@
       tags.map(function (tag) {
         return React.createElement("span", { className: "wb-kb-tag removable", key: tag },
           "# " + tag,
-          React.createElement("button", { type: "button", className: "wb-kb-tag-x", onClick: function () { removeTag(tag); }, title: "移除" },
+          React.createElement("button", { type: "button", className: "wb-kb-tag-x", onClick: function () { removeTag(tag); }, title: KBT("knowledge.remove", "Remove") },
             React.createElement("svg", { width: 10, height: 10, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.5, strokeLinecap: "round" },
               React.createElement("path", { d: "m6 6 12 12M18 6 6 18" })))
         );
       }),
       React.createElement("input", {
         ref: inputRef, type: "text", className: "wb-kb-tag-input", value: tagInput,
-        placeholder: "添加标签，回车确认…",
+        placeholder: KBT("knowledge.addTagPlaceholder", "Add tags, press Enter to confirm…"),
         onChange: function (e) { setTagInput(e.target.value); },
         onKeyDown: onKey,
         disabled: tagBusy,
       }),
-      React.createElement("button", { type: "button", className: "wb-kb-tag-done", onClick: function () { setEditing(false); }, disabled: tagBusy }, "完成")
+      React.createElement("button", { type: "button", className: "wb-kb-tag-done", onClick: function () { setEditing(false); }, disabled: tagBusy }, KBT("knowledge.done", "Done"))
     );
   }
 
@@ -462,18 +463,18 @@
       React.createElement(KbTagEditor, { tags: props.tags, onSave: props.onSaveTags }),
       React.createElement(
         "div", { className: "wb-kb-meta-card" },
-        React.createElement(MetaRow, { label: "创建时间", value: formatDate(doc.created_at) }),
-        React.createElement(MetaRow, { label: "更新时间", value: formatDate(doc.updated_at) }),
-        React.createElement(MetaRow, { label: "创建者", value: props.userName }),
-        React.createElement(MetaRow, { label: "来源", value: sourceLabel(doc.source) }),
-        React.createElement(MetaRow, { label: "状态", value: React.createElement("span", { className: "wb-kb-badge " + props.sm.tone }, props.sm.text) }),
-        React.createElement(MetaRow, { label: "字符数", value: formatNumber(doc.char_count) }),
-        React.createElement(MetaRow, { label: "分块数", value: formatNumber(doc.chunk_count) }),
-        React.createElement(MetaRow, { label: "关联", value: formatNumber(props.relations.length) })
+        React.createElement(MetaRow, { label: KBT("knowledge.createdAt", "Created"), value: formatDate(doc.created_at) }),
+        React.createElement(MetaRow, { label: KBT("knowledge.updated", "Updated"), value: formatDate(doc.updated_at) }),
+        React.createElement(MetaRow, { label: KBT("knowledge.creator", "Created by"), value: props.userName }),
+        React.createElement(MetaRow, { label: KBT("knowledge.source", "Source"), value: sourceLabel(doc.source) }),
+        React.createElement(MetaRow, { label: KBT("knowledge.status", "Status"), value: React.createElement("span", { className: "wb-kb-badge " + props.sm.tone }, props.sm.text) }),
+        React.createElement(MetaRow, { label: KBT("knowledge.characterCount", "Characters"), value: formatNumber(doc.char_count) }),
+        React.createElement(MetaRow, { label: KBT("knowledge.chunkCount", "Chunks"), value: formatNumber(doc.chunk_count) }),
+        React.createElement(MetaRow, { label: KBT("knowledge.related", "Related"), value: formatNumber(props.relations.length) })
       ),
       React.createElement(
         "div", { className: "wb-kb-filelist" },
-        React.createElement("div", { className: "wb-kb-section-head" }, React.createElement("span", null, "文件"), React.createElement("small", null, "1 个文件")),
+        React.createElement("div", { className: "wb-kb-section-head" }, React.createElement("span", null, KBT("knowledge.file", "File")), React.createElement("small", null, KBT("knowledge.fileCount", "1 file"))),
         React.createElement(
           "a", { className: "wb-kb-file-row", href: props.rawUrl, target: "_blank", rel: "noreferrer" },
           React.createElement(DocIcon, { doc: doc }),
@@ -499,12 +500,12 @@
     var doc = props.doc;
     var chunks = (detail && Array.isArray(detail.chunks)) ? detail.chunks : [];
     if (props.loading || (detail && detail._chunksLoaded === false)) {
-      return React.createElement("div", { className: "wb-kb-muted pad" }, "加载内容中…");
+      return React.createElement("div", { className: "wb-kb-muted pad" }, KBT("knowledge.loadingContent", "Loading content…"));
     }
     if (!chunks.length) {
       var st = statusMeta(doc.status);
       return React.createElement("div", { className: "wb-kb-muted pad" },
-        st.tone === "amber" ? "正在索引，稍后即可查看提取内容。" : "暂无已提取的文本内容。");
+        st.tone === "amber" ? KBT("knowledge.indexingContent", "Still indexing. Extracted content will appear shortly.") : KBT("knowledge.noExtractedContent", "No extracted text content yet."));
     }
     var vk = visualKind(doc);
     var renderAsMarkdown = vk === "markdown" || vk === "note";
@@ -546,23 +547,23 @@
     if (props.loading) {
       return React.createElement("div", { className: "wb-kb-related-state" },
         React.createElement("span", { className: "wb-kb-spin" }),
-        React.createElement("span", null, "正在查找关联对话…"));
+        React.createElement("span", null, KBT("knowledge.loadingRelated", "Finding related conversations…")));
     }
     if (props.error) {
       return React.createElement("div", { className: "wb-kb-related-state error" },
         React.createElement("span", null, props.error),
-        React.createElement("button", { type: "button", className: "wb-btn tonal", onClick: props.onRetry }, "重试"));
+        React.createElement("button", { type: "button", className: "wb-btn tonal", onClick: props.onRetry }, KBT("knowledge.retry", "Retry")));
     }
     if (!conversations.length && !documentRelations.length) {
-      return React.createElement("div", { className: "wb-kb-muted pad" }, "暂无关联文档或对话。");
+      return React.createElement("div", { className: "wb-kb-muted pad" }, KBT("knowledge.noRelated", "No related documents or conversations."));
     }
     return React.createElement(
       "div", { className: "wb-kb-related" },
       conversations.length > 0 && React.createElement(
         "section", { className: "wb-kb-related-section" },
         React.createElement("div", { className: "wb-kb-section-head" },
-          React.createElement("span", null, "关联对话"),
-          React.createElement("small", null, conversations.length + " 条")),
+          React.createElement("span", null, KBT("knowledge.relatedChats", "Related conversations")),
+          React.createElement("small", null, KBT("knowledge.count", "{count} items", { count: conversations.length }))),
         conversations.map(function (item) {
           var reasons = Array.isArray(item.reasons) ? item.reasons : [];
           var navPayload = item.type === "task"
@@ -578,11 +579,11 @@
             React.createElement("span", { className: "wb-kb-related-icon" }, relationIcon(item.type)),
             React.createElement(
               "span", { className: "wb-kb-related-copy" },
-              React.createElement("span", { className: "wb-kb-related-title" }, item.title || "未命名对话"),
+              React.createElement("span", { className: "wb-kb-related-title" }, item.title || KBT("knowledge.noNameConversation", "Untitled conversation")),
               item.preview && React.createElement("span", { className: "wb-kb-related-preview" }, item.preview),
               React.createElement(
                 "span", { className: "wb-kb-related-meta" },
-                React.createElement("span", null, item.type === "task" ? "任务" : "对话"),
+                React.createElement("span", null, item.type === "task" ? KBT("knowledge.task", "Task") : KBT("knowledge.conversation", "Conversation")),
                 item.updated_at && React.createElement("time", null, formatDateShort(item.updated_at)),
                 reasons.map(function (reason) {
                   return React.createElement("span", { className: "wb-kb-related-reason", key: reason }, reason);
@@ -597,11 +598,11 @@
       documentRelations.length > 0 && React.createElement(
         "section", { className: "wb-kb-related-section" },
         React.createElement("div", { className: "wb-kb-section-head" },
-          React.createElement("span", null, "关联文档"),
-          React.createElement("small", null, documentRelations.length + " 个")),
+          React.createElement("span", null, KBT("knowledge.relatedDocuments", "Related documents")),
+          React.createElement("small", null, KBT("knowledge.count", "{count} items", { count: documentRelations.length }))),
         documentRelations.map(function (rel, i) {
           var other = rel.document;
-          var label = other ? docTitle(other) : (rel.dst_id || rel.src_id || "未知文档");
+          var label = other ? docTitle(other) : (rel.dst_id || rel.src_id || KBT("knowledge.unknownDocument", "Unknown document"));
           return React.createElement(
             "button", {
               type: "button", className: "wb-kb-related-row", key: rel.id || i,
@@ -610,7 +611,7 @@
             },
             React.createElement("span", { className: "wb-kb-related-icon document" }, relationIcon("document")),
             React.createElement("span", { className: "wb-kb-related-name" }, label),
-            React.createElement("span", { className: "wb-kb-related-rel" }, rel.relation || "related")
+            React.createElement("span", { className: "wb-kb-related-rel" }, rel.relation || KBT("knowledge.relation", "related"))
           );
         })
       )
@@ -620,6 +621,7 @@
   // ── main page ────────────────────────────────────────────────────────
 
   function WorkbenchKnowledgePage(props) {
+    window.CyreneUI.require("i18n").use();
     var project = props && props.project;
     var active = !props || props.active !== false;
     // Knowledge is stored under the canonical project id. Sending that id also
@@ -891,7 +893,7 @@
 
     function handleDelete(doc) {
       setOpenMenu(null);
-      window.CyreneUI.require("feedback").confirmModal({ body: "确定删除「" + docTitle(doc) + "」？此操作不可撤销。", confirmLabel: "删除", danger: true }).then(function (ok) {
+      window.CyreneUI.require("feedback").confirmModal({ body: KBT("knowledge.deleteConfirm", "Delete “{name}”? This cannot be undone.", { name: docTitle(doc) }), confirmLabel: KBT("common.delete", "Delete"), danger: true }).then(function (ok) {
         if (!ok) return;
         client.remove(doc.id)
           .then(function () {
@@ -936,29 +938,25 @@
     }, [documents, query, kindFilter, sortKey]);
 
     var kindFilters = [
-      { id: "", label: "全部类型" },
+      { id: "", label: KBT("knowledge.allTypes", "All types") },
       { id: "pdf", label: "PDF" },
-      { id: "doc", label: "Word 文档" },
-      { id: "sheet", label: "Excel 表格" },
-      { id: "slide", label: "PPT 幻灯片" },
+      { id: "doc", label: KBT("knowledge.type.doc", "Word document") },
+      { id: "sheet", label: KBT("knowledge.type.sheet", "Excel spreadsheet") },
+      { id: "slide", label: KBT("knowledge.type.slide", "PPT presentation") },
       { id: "markdown", label: "Markdown" },
-      { id: "link", label: "链接" },
-      { id: "image", label: "图片" },
-      { id: "code", label: "代码" },
-      { id: "file", label: "其他" },
+      { id: "link", label: KBT("knowledge.type.link", "Link") },
+      { id: "image", label: KBT("knowledge.type.image", "Image") },
+      { id: "code", label: KBT("knowledge.type.code", "Code") },
+      { id: "file", label: KBT("knowledge.type.other", "Other") },
     ];
     var sortOptions = [
-      { id: "updated", label: "最近更新" },
-      { id: "name", label: "名称" },
-      { id: "size", label: "大小" },
+      { id: "updated", label: KBT("knowledge.sortUpdated", "Recently updated") },
+      { id: "name", label: KBT("knowledge.sortName", "Name") },
+      { id: "size", label: KBT("knowledge.sortSize", "Size") },
     ];
 
     // group docs for folders / tags tabs
-    var FOLDER_LABELS = {
-      pdf: "PDF 文档", doc: "Word 文档", sheet: "电子表格", slide: "演示文稿",
-      markdown: "Markdown", link: "链接", image: "图片", code: "代码文件",
-      map: "地图数据", note: "文本", file: "其他",
-    };
+    var FOLDER_LABELS = {};
     var FOLDER_ORDER = ["pdf", "doc", "sheet", "slide", "markdown", "link", "image", "code", "map", "note", "file"];
     var groups = useMemo(function () {
       if (activeTab === "folders") {
@@ -969,7 +967,7 @@
         });
         return FOLDER_ORDER
           .filter(function (k) { return byKind[k] && byKind[k].length; })
-          .map(function (k) { return { key: k, label: FOLDER_LABELS[k] || "其他", docs: byKind[k] }; });
+          .map(function (k) { return { key: k, label: KBT("knowledge.type." + k, KBT("knowledge.type.other", "Other")), docs: byKind[k] }; });
       }
       if (activeTab === "tags") {
         var byTag = {};
@@ -980,7 +978,7 @@
           tags.forEach(function (tg) { (byTag[tg] = byTag[tg] || []).push(d); });
         });
         var out = Object.keys(byTag).sort().map(function (k) { return { key: k, label: "# " + k, docs: byTag[k] }; });
-        if (untagged.length) out.push({ key: "__untagged", label: "未分类", docs: untagged });
+        if (untagged.length) out.push({ key: "__untagged", label: KBT("knowledge.untagged", "Untagged"), docs: untagged });
         return out;
       }
       return null;
@@ -988,7 +986,7 @@
 
     if (!project) {
       return React.createElement("section", { className: "wb-kb-page" },
-        React.createElement("div", { className: "wb-kb-empty" }, "请选择一个项目以查看其知识库。"));
+        React.createElement("div", { className: "wb-kb-empty" }, KBT("knowledge.selectProject", "Select a project to view its knowledge base.")));
     }
 
     var menuDoc = null;
@@ -1016,7 +1014,7 @@
           "button", { type: "button", className: "wb-kb-card add", onClick: triggerUpload, key: "__add" },
           React.createElement("svg", { width: 26, height: 26, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" },
             React.createElement("path", { d: "M12 5v14M5 12h14" })),
-          React.createElement("span", null, "新建知识")
+          React.createElement("span", null, KBT("knowledge.new", "New knowledge"))
         )
       );
     }
@@ -1045,25 +1043,25 @@
           React.createElement(
             "div", { className: "wb-kb-title-row" },
             props.onBack && React.createElement(
-              "button", { type: "button", className: "wb-kb-iconbtn wb-kb-back", onClick: props.onBack, title: "返回" },
+              "button", { type: "button", className: "wb-kb-iconbtn wb-kb-back", onClick: props.onBack, title: KBT("common.back", "Back") },
               React.createElement("svg", { width: 18, height: 18, viewBox: "2 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.9, strokeLinecap: "round", strokeLinejoin: "round" },
                 React.createElement("path", { d: "m15 18-6-6 6-6" }))
             ),
-            React.createElement("h1", null, "知识库")
+            React.createElement("h1", null, KBT("knowledge.title", "Knowledge base"))
           ),
-          React.createElement("p", null, "管理你的知识内容，让 Agent 基于你的知识更好地回答问题")
+          React.createElement("p", null, KBT("knowledge.subtitle", "Manage your knowledge so the Agent can answer with better context"))
         ),
         React.createElement(
           "button", { type: "button", className: "wb-btn tonal", onClick: triggerUpload, disabled: busy },
           busy ? React.createElement("span", { className: "wb-kb-spin" }) : React.createElement("svg", { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.2, strokeLinecap: "round" }, React.createElement("path", { d: "M12 5v14M5 12h14" })),
-          React.createElement("span", null, busy ? "上传中…" : "新建知识")
+          React.createElement("span", null, busy ? KBT("knowledge.uploading", "Uploading…") : KBT("knowledge.new", "New knowledge"))
         )
       ),
 
       // tabs
       React.createElement(
         "div", { className: "wb-kb-tabbar" },
-        [{ id: "all", label: "全部" }, { id: "folders", label: "文件夹" }, { id: "tags", label: "标签" }].map(function (t) {
+        [{ id: "all", label: KBT("knowledge.tabs.all", "All") }, { id: "folders", label: KBT("knowledge.tabs.folders", "Folders") }, { id: "tags", label: KBT("knowledge.tabs.tags", "Tags") }].map(function (t) {
           return React.createElement("button", {
             key: t.id, type: "button", className: "wb-kb-tab" + (activeTab === t.id ? " active" : ""),
             onClick: function () { setActiveTab(t.id); },
@@ -1079,7 +1077,7 @@
           React.createElement("svg", { width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.9, strokeLinecap: "round", strokeLinejoin: "round" },
             React.createElement("circle", { cx: 11, cy: 11, r: 7 }), React.createElement("path", { d: "m20 20-3.2-3.2" })),
           React.createElement("input", {
-            type: "text", placeholder: "搜索知识库…", value: query,
+            type: "text", placeholder: KBT("knowledge.searchPlaceholder", "Search knowledge base…"), value: query,
             onChange: function (e) { setQuery(e.target.value); },
           })
         ),
@@ -1093,7 +1091,7 @@
               onClick: function () { setOpenMenu(openMenu === "filter" ? null : "filter"); },
             },
               React.createElement("svg", { width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", { d: "M3 5h18l-7 8v6l-4-2v-4Z" })),
-              React.createElement("span", null, "筛选")),
+              React.createElement("span", null, KBT("knowledge.filter", "Filter"))),
             openMenu === "filter" && React.createElement(
               "div", { className: "wb-kb-menu" },
               kindFilters.map(function (k) {
@@ -1112,7 +1110,7 @@
               onClick: function () { setOpenMenu(openMenu === "sort" ? null : "sort"); },
             },
               React.createElement("svg", { width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", { d: "M3 6h12M3 12h8M3 18h5M17 8V6m0 0 3 3m-3-3-3 3M17 6v12" })),
-              React.createElement("span", null, "排序")),
+              React.createElement("span", null, KBT("knowledge.sort", "Sort"))),
             openMenu === "sort" && React.createElement(
               "div", { className: "wb-kb-menu" },
               sortOptions.map(function (o) {
@@ -1126,9 +1124,9 @@
           // view toggle
           React.createElement(
             "div", { className: "wb-kb-viewtoggle" },
-            React.createElement("button", { type: "button", className: viewMode === "grid" ? "on" : "", title: "网格", onClick: function () { setViewMode("grid"); } },
+            React.createElement("button", { type: "button", className: viewMode === "grid" ? "on" : "", title: KBT("knowledge.grid", "Grid"), onClick: function () { setViewMode("grid"); } },
               React.createElement("svg", { width: 15, height: 15, viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement("rect", { x: 3, y: 3, width: 8, height: 8, rx: 1.5 }), React.createElement("rect", { x: 13, y: 3, width: 8, height: 8, rx: 1.5 }), React.createElement("rect", { x: 3, y: 13, width: 8, height: 8, rx: 1.5 }), React.createElement("rect", { x: 13, y: 13, width: 8, height: 8, rx: 1.5 }))),
-            React.createElement("button", { type: "button", className: viewMode === "list" ? "on" : "", title: "列表", onClick: function () { setViewMode("list"); } },
+            React.createElement("button", { type: "button", className: viewMode === "list" ? "on" : "", title: KBT("knowledge.list", "List"), onClick: function () { setViewMode("list"); } },
               React.createElement("svg", { width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" }, React.createElement("path", { d: "M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01" })))
           )
         )
@@ -1136,21 +1134,21 @@
 
       error && React.createElement("div", { className: "wb-kb-error" }, error),
 
-      // list column (scrolls); the "共 N 个知识" count is pinned at the bottom
+      // list column (scrolls); the translated count keeps the original “显示前” truncation cue.
       React.createElement(
         "div", { className: "wb-kb-list-col" },
         React.createElement(
           "div", { className: "wb-kb-scroll" },
           loading
-            ? React.createElement("div", { className: "wb-kb-empty" }, "加载知识库中…")
+            ? React.createElement("div", { className: "wb-kb-empty" }, KBT("knowledge.loading", "Loading knowledge base…"))
             : (visibleDocs.length === 0
               ? React.createElement(
                 "div", { className: "wb-kb-empty" },
                 React.createElement("div", { className: "wb-kb-empty-icon" },
                   React.createElement("svg", { width: 40, height: 40, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round" },
                     React.createElement("path", { d: "M5 4.5A2.5 2.5 0 0 1 7.5 2H20v15H7.5A2.5 2.5 0 0 0 5 19.5Z" }), React.createElement("path", { d: "M5 19.5A2.5 2.5 0 0 0 7.5 22H20" }))),
-                React.createElement("p", null, query || kindFilter ? "没有匹配的知识。" : "还没有知识内容。"),
-                React.createElement("button", { type: "button", className: "wb-btn primary", onClick: triggerUpload }, "上传第一个文件")
+                React.createElement("p", null, query || kindFilter ? KBT("knowledge.noMatch", "No matching knowledge.") : KBT("knowledge.empty", "No knowledge yet.")),
+                React.createElement("button", { type: "button", className: "wb-btn primary", onClick: triggerUpload }, KBT("knowledge.uploadFirst", "Upload your first file"))
               )
               : (groups
                 ? React.createElement(
@@ -1178,15 +1176,15 @@
                 },
               },
               loadingMore ? React.createElement("span", { className: "wb-kb-spin" }) : null,
-              React.createElement("span", null, loadingMore ? "加载中…" : "加载更多")
+              React.createElement("span", null, loadingMore ? KBT("knowledge.loadingMore", "Loading…") : KBT("knowledge.loadMore", "Load more"))
             )
           )
         ),
         React.createElement(
           "div", { className: "wb-kb-count" },
           totalDocs > visibleDocs.length
-            ? "显示前 " + visibleDocs.length + " 个，共 " + totalDocs + " 个知识"
-            : "共 " + visibleDocs.length + " 个知识"
+            ? KBT("knowledge.countShown", "Showing {shown} of {total} items", { shown: visibleDocs.length, total: totalDocs })
+            : KBT("knowledge.count", "{count} items", { count: visibleDocs.length })
         )
       )
       ),
@@ -1210,7 +1208,7 @@
           React.createElement("div", { className: "wb-kb-detail-placeholder" },
             React.createElement("svg", { width: 34, height: 34, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round" },
               React.createElement("path", { d: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" }), React.createElement("path", { d: "M14 3v5h5" })),
-            React.createElement("p", null, "选择一个知识查看详情"))
+            React.createElement("p", null, KBT("knowledge.selectToView", "Select knowledge to view details")))
         ),
 
       // card / tool menu scrim + card menu popover
@@ -1220,10 +1218,10 @@
           className: "wb-kb-cardmenu", onClick: function (e) { e.stopPropagation(); },
           style: menuPos ? { top: menuPos.y + "px", left: menuPos.x + "px" } : undefined,
         },
-        React.createElement("button", { type: "button", onClick: function () { setOpenMenu(null); selectDoc(menuDoc.id); } }, "查看详情"),
-        React.createElement("button", { type: "button", onClick: function () { handleReindex(menuDoc); } }, "重新索引"),
-        React.createElement("a", { href: client.rawUrl(menuDoc.id), target: "_blank", rel: "noreferrer", onClick: function () { setOpenMenu(null); } }, "查看原文件"),
-        React.createElement("button", { type: "button", className: "danger", onClick: function () { handleDelete(menuDoc); } }, "删除")
+        React.createElement("button", { type: "button", onClick: function () { setOpenMenu(null); selectDoc(menuDoc.id); } }, KBT("knowledge.viewDetails", "View details")),
+        React.createElement("button", { type: "button", onClick: function () { handleReindex(menuDoc); } }, KBT("knowledge.reindex", "Reindex")),
+        React.createElement("a", { href: client.rawUrl(menuDoc.id), target: "_blank", rel: "noreferrer", onClick: function () { setOpenMenu(null); } }, KBT("knowledge.viewOriginal", "View original file")),
+        React.createElement("button", { type: "button", className: "danger", onClick: function () { handleDelete(menuDoc); } }, KBT("common.delete", "Delete"))
       )
     );
   }

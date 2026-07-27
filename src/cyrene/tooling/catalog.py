@@ -60,6 +60,7 @@ _MAIN_ONLY_TOOLS = {
     "browser_user_events",
     "browser_request_takeover",
     "RemoteCyreneAction",
+    "RunRemoteCyrene",
 }
 
 AGENT_TOOL_GROUPS: dict[str, set[str]] = {
@@ -130,6 +131,7 @@ _RESOURCE_KEY_TEMPLATES: dict[str, tuple[str, ...]] = {
     "ListRemoteDevices": ("remote:chat-context",),
     "RemoteCyreneStatus": ("remote:{device_id}",),
     "RemoteCyreneAction": ("remote:{device_id}",),
+    "RunRemoteCyrene": ("remote:{device_id}",),
 }
 for _browser_tool_name in _REQUIRES_ORDER_TOOLS:
     if _browser_tool_name.startswith("browser_"):

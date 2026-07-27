@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sqlite3
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +13,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from cyrene.runtime.remote_control import (
+    DEFAULT_REMOTE_CAPABILITIES,
     InMemoryRemoteRelay,
     RemoteControlStore,
     RemoteEnvelopeCodec,
@@ -26,6 +30,7 @@ from cyrene.runtime.remote_pairing import (
     normalize_pairing_address,
 )
 from cyrene.tool_impl.remote.list_devices import handler as list_remote_devices
+from cyrene.tool_impl.remote.run import handler as run_remote_cyrene
 from cyrene.tool_impl.remote.status import handler as remote_cyrene_status
 from route.remote import register_remote_routes
 
@@ -106,6 +111,158 @@ def test_pairing_creates_directional_grants_and_single_use_invitation(
         target.complete_pairing_response(
             paired_stores["pairing_response"]
         )
+
+
+def test_default_pairing_grant_completes_remote_agent_approval_loop(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
+    target = RemoteControlStore(str(tmp_path / "target-default.sqlite3"))
+    controller = RemoteControlStore(str(tmp_path / "controller-default.sqlite3"))
+    target.update_settings(
+        enabled=True,
+        relay_url="",
+        device_name="Target",
+    )
+    invitation = target.create_pairing_invitation(
+        project_scopes=["project_1"],
+    )
+    accepted = controller.accept_pairing_invitation(invitation["invitation"])
+    target.complete_pairing_response(accepted["response"])
+
+    peer = controller.get_peer(target.identity.device_id)
+    assert peer is not None
+    assert "approval:respond" in DEFAULT_REMOTE_CAPABILITIES
+    assert "approval:respond" in peer["received_capabilities"]
+
+
+def test_remote_store_migrates_out_of_runtime_database(monkeypatch, tmp_path):
+    monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
+    logical_path = tmp_path / "legacy-runtime.sqlite3"
+    original = RemoteControlStore(str(logical_path))
+    original.update_settings(
+        enabled=True,
+        relay_url="",
+        device_name="Migrated device",
+    )
+    with sqlite3.connect(original.remote_db_path) as source:
+        with sqlite3.connect(logical_path) as legacy:
+            source.backup(legacy)
+    for suffix in ("", "-wal", "-shm"):
+        path = tmp_path / f"legacy-runtime.sqlite3.remote-control{suffix}"
+        path.unlink(missing_ok=True)
+
+    migrated = RemoteControlStore(str(logical_path))
+
+    assert migrated.remote_db_path != migrated.db_path
+    assert migrated.get_settings()["device_name"] == "Migrated device"
+    with sqlite3.connect(migrated.remote_db_path) as conn:
+        marker = conn.execute(
+            """
+            SELECT migration_id FROM remote_store_migrations
+            WHERE migration_id = 'split_remote_control_store_v1'
+            """
+        ).fetchone()
+    assert marker == ("split_remote_control_store_v1",)
+
+
+def test_legacy_default_grants_gain_approval_response_only_when_untouched(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
+    target_path = str(tmp_path / "target-upgrade.sqlite3")
+    controller_path = str(tmp_path / "controller-upgrade.sqlite3")
+    target = RemoteControlStore(target_path)
+    controller = RemoteControlStore(controller_path)
+    target.update_settings(enabled=True, relay_url="", device_name="Target")
+    invitation = target.create_pairing_invitation(
+        project_scopes=["project_1"],
+    )
+    accepted = controller.accept_pairing_invitation(invitation["invitation"])
+    target.complete_pairing_response(accepted["response"])
+    legacy_caps = sorted(
+        capability
+        for capability in DEFAULT_REMOTE_CAPABILITIES
+        if capability != "approval:respond"
+    )
+    with sqlite3.connect(controller.remote_db_path) as conn:
+        conn.execute(
+            """
+            UPDATE remote_peers
+            SET received_capabilities_json = ?
+            WHERE device_id = ?
+            """,
+            (json.dumps(legacy_caps), target.identity.device_id),
+        )
+
+    reopened = RemoteControlStore(controller_path)
+    peer = reopened.get_peer(target.identity.device_id)
+
+    assert peer is not None
+    assert "approval:respond" in peer["received_capabilities"]
+
+
+def test_runtime_database_write_lock_does_not_block_remote_command(
+    paired_stores,
+):
+    async def scenario():
+        target = paired_stores["target"]
+        controller = paired_stores["controller"]
+        relay = InMemoryRemoteRelay()
+        received = []
+
+        async def target_handler(peer_id, command, payload, project_id):
+            received.append((peer_id, command, payload, project_id))
+            return {"ok": True, "chat": {"id": "chat_remote"}}
+
+        async def controller_handler(*_args):
+            return {"ok": True}
+
+        target_gateway = RemoteGateway(target, relay, target_handler)
+        controller_gateway = RemoteGateway(
+            controller,
+            relay,
+            controller_handler,
+        )
+        await target_gateway.start()
+        await controller_gateway.start()
+        runtime_lock = sqlite3.connect(controller.db_path)
+        runtime_lock.execute(
+            "CREATE TABLE IF NOT EXISTS active_chat_writer(value TEXT)"
+        )
+        runtime_lock.commit()
+        runtime_lock.execute("BEGIN IMMEDIATE")
+        runtime_lock.execute(
+            "INSERT INTO active_chat_writer(value) VALUES ('streaming')"
+        )
+        try:
+            result = await controller_gateway.request(
+                target.identity.device_id,
+                command="chats.send",
+                project_id="project_1",
+                payload={"message": "continue remotely"},
+                idempotency_key="runtime_lock_isolated_1",
+                timeout=3,
+            )
+        finally:
+            runtime_lock.rollback()
+            runtime_lock.close()
+            await controller_gateway.stop()
+            await target_gateway.stop()
+
+        assert result == {"ok": True, "chat": {"id": "chat_remote"}}
+        assert received == [
+            (
+                controller.identity.device_id,
+                "chats.send",
+                {"message": "continue remotely"},
+                "project_1",
+            )
+        ]
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.asyncio
@@ -535,6 +692,184 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
     asyncio.run(scenario())
 
 
+def test_remote_command_reads_only_attachment_referenced_by_shared_chat(
+    paired_stores,
+    monkeypatch,
+    tmp_path,
+):
+    async def scenario():
+        from cyrene.runtime import attachments as managed_attachments
+
+        exports = tmp_path / "exports"
+        uploads = tmp_path / "uploads"
+        exports.mkdir()
+        uploads.mkdir()
+        monkeypatch.setattr(managed_attachments, "EXPORTS_DIR", exports)
+        monkeypatch.setattr(managed_attachments, "UPLOADS_DIR", uploads)
+        screenshot = exports / "desktop.png"
+        screenshot.write_bytes(b"remote-screenshot")
+        external = tmp_path / "outside-managed-roots.bin"
+        external.write_bytes(b"x" * (10 * 1024 * 1024 + 17))
+
+        async def get_chat(_chat_id):
+            return {
+                "chat": {
+                    "id": "chat_1",
+                    "projectId": "project_1",
+                    "messages": [
+                        {
+                            "id": "message_1",
+                            "role": "assistant",
+                            "content": "Screenshot attached.",
+                            "attachments": [
+                                {
+                                    "id": "desktop.png",
+                                    "name": "Desktop screenshot",
+                                    "content_type": "image/png",
+                                    "kind": "image",
+                                    "size": len(b"remote-screenshot"),
+                                    "url": "/api/chat/export/desktop.png",
+                                },
+                                {
+                                    "id": "large-result",
+                                    "name": "Large result",
+                                    "content_type": "application/octet-stream",
+                                    "kind": "file",
+                                    "size": external.stat().st_size,
+                                    "path": str(external),
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+
+        executor = RemoteCommandExecutor(
+            store=paired_stores["target"],
+            chat_adapter={"get_chat": get_chat},
+            project_adapter={},
+            task_adapter={},
+        )
+        result = await executor(
+            paired_stores["controller"].identity.device_id,
+            "attachments.read",
+            {
+                "chat_id": "chat_1",
+                "attachment_id": "desktop.png",
+            },
+            "project_1",
+        )
+        missing = await executor(
+            paired_stores["controller"].identity.device_id,
+            "attachments.read",
+            {
+                "chat_id": "chat_1",
+                "attachment_id": "secret.txt",
+            },
+            "project_1",
+        )
+        large_first = await executor(
+            paired_stores["controller"].identity.device_id,
+            "attachments.read",
+            {
+                "chat_id": "chat_1",
+                "attachment_id": "large-result",
+                "offset": 0,
+                "limit": 1024 * 1024,
+            },
+            "project_1",
+        )
+        large_last = await executor(
+            paired_stores["controller"].identity.device_id,
+            "attachments.read",
+            {
+                "chat_id": "chat_1",
+                "attachment_id": "large-result",
+                "offset": 10 * 1024 * 1024,
+                "limit": 1024 * 1024,
+            },
+            "project_1",
+        )
+
+        assert result["ok"] is True
+        assert result["media_type"] == "image/png"
+        assert result["attachment"]["kind"] == "image"
+        assert result["content_base64"] == "cmVtb3RlLXNjcmVlbnNob3Q="
+        assert missing["code"] == "attachment_not_found"
+        assert large_first["chunk_size"] == 1024 * 1024
+        assert large_first["eof"] is False
+        assert large_last["chunk_size"] == 17
+        assert large_last["eof"] is True
+        assert large_last["size"] == 10 * 1024 * 1024 + 17
+
+    asyncio.run(scenario())
+
+
+def test_remote_status_assembles_chunks_into_local_attachment(
+    monkeypatch,
+    tmp_path,
+):
+    async def scenario():
+        from cyrene import config as cyrene_config
+        from cyrene.runtime import attachments as managed_attachments
+        from cyrene.tool_impl.remote import status as remote_status
+
+        data_dir = tmp_path / "data"
+        exports = data_dir / "exports"
+        source = b"a" * (1024 * 1024 + 31)
+        monkeypatch.setattr(cyrene_config, "DATA_DIR", data_dir)
+        monkeypatch.setattr(managed_attachments, "EXPORTS_DIR", exports)
+
+        async def fake_request(args, _db_path, *, fallback_chat_id):
+            del fallback_chat_id
+            payload = dict(args.get("payload") or {})
+            offset = int(payload.get("offset") or 0)
+            limit = int(payload.get("limit") or 1)
+            chunk = source[offset : offset + limit]
+            next_offset = offset + len(chunk)
+            return {
+                "ok": True,
+                "filename": "large-result.bin",
+                "media_type": "application/octet-stream",
+                "size": len(source),
+                "offset": offset,
+                "next_offset": next_offset,
+                "eof": next_offset >= len(source),
+                "content_base64": __import__("base64").b64encode(chunk).decode(
+                    "ascii"
+                ),
+            }
+
+        monkeypatch.setattr(
+            remote_status,
+            "request_remote_command",
+            fake_request,
+        )
+        raw = await remote_status.handler(
+            {
+                "command": "attachments.read",
+                "project_id": "project_1",
+                "payload": {
+                    "chat_id": "chat_1",
+                    "attachment_id": "large-result",
+                },
+            },
+            None,
+            1,
+            str(tmp_path / "runtime.sqlite3"),
+            None,
+        )
+        result = json.loads(raw)
+        assert result["ok"] is True
+        assert result["downloaded"] is True
+        assert result["size"] == len(source)
+        assert "content_base64" not in result
+        local_path = Path(result["attachment"]["path"])
+        assert local_path.read_bytes() == source
+
+    asyncio.run(scenario())
+
+
 def test_encrypted_gateway_executes_typed_command_and_dedupes(paired_stores):
     async def scenario():
         target = paired_stores["target"]
@@ -899,6 +1234,146 @@ def test_agent_status_tool_only_controls_device_selected_in_chat(
         assert target.identity.device_id in listed
         assert '"command": "projects.list"' in status
         assert "未添加到当前对话上下文" in denied
+
+    asyncio.run(scenario())
+
+
+def test_run_remote_cyrene_creates_chat_and_starts_remote_agent(
+    monkeypatch,
+    tmp_path,
+):
+    async def scenario():
+        monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
+        target = RemoteControlStore(str(tmp_path / "run-target.sqlite3"))
+        controller = RemoteControlStore(
+            str(tmp_path / "run-controller.sqlite3")
+        )
+        target.update_settings(enabled=True, relay_url="", device_name="Target")
+        controller.update_settings(
+            enabled=True,
+            relay_url="",
+            device_name="Controller",
+        )
+        invitation = target.create_pairing_invitation(
+            capabilities=["chat:create", "chat:send"],
+            project_scopes=["project_1"],
+        )
+        accepted = controller.accept_pairing_invitation(
+            invitation["invitation"]
+        )
+        target.complete_pairing_response(accepted["response"])
+        relay = InMemoryRemoteRelay()
+        received = []
+        remote_chat = {
+            "id": "chat_remote_1",
+            "projectId": "project_1",
+            "title": "Inspect remote desktop",
+            "messages": [],
+        }
+
+        async def create_chat(body):
+            received.append(("create", body.project, body.title))
+            return {"ok": True, "chat": dict(remote_chat)}
+
+        async def get_chat(chat_id):
+            assert chat_id == remote_chat["id"]
+            return {"ok": True, "chat": dict(remote_chat)}
+
+        async def send_chat_detached(chat_id, body, *, detached):
+            received.append(("send", chat_id, dict(body), detached))
+            return {
+                "run_id": "run_remote_1",
+                "chat_id": chat_id,
+                "status": "running",
+                "created_at": "2026-07-27T08:00:00+00:00",
+                "event_cursor": 0,
+            }
+
+        target_executor = RemoteCommandExecutor(
+            store=target,
+            chat_adapter={
+                "create_chat": create_chat,
+                "get_chat": get_chat,
+                "send_chat_detached": send_chat_detached,
+            },
+            project_adapter={},
+            task_adapter={},
+        )
+
+        async def controller_handler(*_args):
+            return {"ok": True}
+
+        chats = {
+            "chats": [
+                {
+                    "id": "chat_local",
+                    "projectId": "project_local",
+                    "remoteDeviceIds": [target.identity.device_id],
+                }
+            ]
+        }
+        from cyrene.workbench import chat as chat_service
+
+        monkeypatch.setattr(chat_service, "_read_chats_store", lambda: chats)
+
+        async def allow_remote_action(**_kwargs):
+            return None
+
+        monkeypatch.setattr(
+            "cyrene.tool_impl.remote.run.request_scope_elevation",
+            allow_remote_action,
+        )
+        target_gateway = RemoteGateway(target, relay, target_executor)
+        controller_gateway = RemoteGateway(
+            controller,
+            relay,
+            controller_handler,
+        )
+        await target_gateway.start()
+        await controller_gateway.start()
+        register_remote_gateway(controller.db_path, controller_gateway)
+        try:
+            raw = await run_remote_cyrene(
+                {
+                    "device_id": target.identity.device_id,
+                    "project_id": "project_1",
+                    "title": "Inspect remote desktop",
+                    "message": "Use your local tools to inspect the desktop.",
+                    "permission_mode": "default",
+                    "language": "en",
+                    "idempotency_key": "remote_run_test_1",
+                    "reason": "User requested remote work",
+                },
+                None,
+                "chat_local",
+                controller.db_path,
+                None,
+            )
+        finally:
+            unregister_remote_gateway(
+                controller.db_path,
+                controller_gateway,
+            )
+            await controller_gateway.stop()
+            await target_gateway.stop()
+
+        result = json.loads(raw)
+        assert result["ok"] is True
+        assert result["chat"]["id"] == "chat_remote_1"
+        assert result["run_id"] == "run_remote_1"
+        assert received[0] == (
+            "create",
+            "project_1",
+            "Inspect remote desktop",
+        )
+        assert received[1][0:2] == ("send", "chat_remote_1")
+        assert received[1][2] == {
+            "message": "Use your local tools to inspect the desktop.",
+            "mode": "default",
+            "lang": "en",
+            "stream": True,
+        }
+        assert received[1][3] is True
 
     asyncio.run(scenario())
 

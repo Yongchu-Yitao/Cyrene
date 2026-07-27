@@ -76,15 +76,15 @@
   }
   function pad2(n) { return (n < 10 ? "0" : "") + n; }
   // Relative label for list cards: 今天 / 昨天 / MM-DD / YYYY-MM-DD.
-  function formatRel(s) {
+  function formatRel(s, t) {
     var d = parseDate(s);
     if (!d) return "—";
     var now = new Date();
     var startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     var startThat = new Date(d.getFullYear(), d.getMonth(), d.getDate());
     var days = Math.round((startToday - startThat) / 86400000);
-    if (days === 0) return "今天";
-    if (days === 1) return "昨天";
+    if (days === 0) return t ? t("memory.today", "Today") : "今天";
+    if (days === 1) return t ? t("memory.yesterday", "Yesterday") : "昨天";
     if (d.getFullYear() === now.getFullYear()) return pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
     return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
   }
@@ -118,7 +118,22 @@
   var SOURCE_TONE = { conversation: "violet", knowledge: "amber", manual: "green", agent: "blue", other: "slate" };
   var CONF_TONE = { high: "green", medium: "amber", low: "slate" };
 
-  function catMeta(id) { return CATS[id] || { label: id, tone: "slate" }; }
+  function catLabel(id, t) {
+    var fallback = (CATS[id] && CATS[id].label) || id || "—";
+    return t ? t("memory.category." + id, fallback) : fallback;
+  }
+  function catMeta(id, t) {
+    var meta = CATS[id] || { tone: "slate" };
+    return { label: catLabel(id, t), tone: meta.tone };
+  }
+  function sourceLabel(id, t) {
+    var raw = String(id || "other");
+    return t ? t("memory.source." + raw, raw) : raw;
+  }
+  function confidenceLabel(id, t) {
+    var raw = String(id || "auto");
+    return raw === "auto" ? (t ? t("memory.auto", "Automatic") : "自动") : (t ? t("memory.confidence." + raw, raw) : raw);
+  }
   function catIcon(id, size) { return (ICON[id] || ICON.fact)(size || 18); }
 
   // ── API model (workspace-scoped) ─────────────────────────────────────
@@ -172,11 +187,13 @@
     return h("svg", { className: "wb-mem-donut", viewBox: "0 0 80 80", width: 78, height: 78 },
       arcs,
       h("text", { x: 40, y: 37, textAnchor: "middle", className: "wb-mem-donut-num" }, total),
-      h("text", { x: 40, y: 50, textAnchor: "middle", className: "wb-mem-donut-cap" }, "条"));
+      h("text", { x: 40, y: 50, textAnchor: "middle", className: "wb-mem-donut-cap" }, props.t ? props.t("memory.itemsUnit", "items") : "条"));
   }
 
   // ── create / edit modal ──────────────────────────────────────────────
   function MemoryModal(props) {
+    var hookT = useMemoryT();
+    var t = props.t || hookT;
     var init = props.draft || {};
     var contentState = useState(init.content || ""); var content = contentState[0]; var setContent = contentState[1];
     var catState = useState(init.category || "fact"); var category = catState[0]; var setCategory = catState[1];
@@ -207,28 +224,28 @@
     return h("div", { className: "wb-mem-modal-scrim", onMouseDown: function (e) { if (e.target === e.currentTarget) props.onClose(); } },
       h("div", { className: "wb-mem-modal", role: "dialog" },
         h("div", { className: "wb-mem-modal-head" },
-          h("b", null, props.mode === "edit" ? "编辑记忆" : "新建记忆"),
-          h("button", { type: "button", className: "wb-mem-iconbtn", onClick: props.onClose, title: "关闭" },
+          h("b", null, props.mode === "edit" ? t("memory.edit", "Edit memory") : t("memory.new", "New memory")),
+          h("button", { type: "button", className: "wb-mem-iconbtn", onClick: props.onClose, title: t("common.close", "Close") },
             svg({ width: 17, height: 17 }, h("path", { d: "m6 6 12 12M18 6 6 18" })))),
         h("div", { className: "wb-mem-modal-body" },
-          h("label", { className: "wb-mem-field-label" }, "记忆内容"),
-          h("textarea", { ref: ref, className: "wb-mem-textarea", value: content, placeholder: "描述这条记忆的内容…", onChange: function (e) { setContent(e.target.value); }, rows: 4 }),
-          h("label", { className: "wb-mem-field-label" }, "类型"),
-          sel(category, setCategory, CAT_ORDER.map(function (c) { return { id: c, label: CATS[c].label }; })),
-          h("label", { className: "wb-mem-field-label" }, "来源"),
+          h("label", { className: "wb-mem-field-label" }, t("memory.content", "Memory content")),
+          h("textarea", { ref: ref, className: "wb-mem-textarea", value: content, placeholder: t("memory.contentPlaceholder", "Describe this memory…"), onChange: function (e) { setContent(e.target.value); }, rows: 4 }),
+          h("label", { className: "wb-mem-field-label" }, t("memory.type", "Type")),
+          sel(category, setCategory, CAT_ORDER.map(function (c) { return { id: c, label: catLabel(c, t) }; })),
+          h("label", { className: "wb-mem-field-label" }, t("memory.source", "Source")),
           sel(source, setSource, [
-            { id: "manual", label: "手动添加" }, { id: "conversation", label: "对话" },
-            { id: "knowledge", label: "知识库" }, { id: "other", label: "其他" },
+            { id: "manual", label: sourceLabel("manual", t) }, { id: "conversation", label: sourceLabel("conversation", t) },
+            { id: "knowledge", label: sourceLabel("knowledge", t) }, { id: "other", label: sourceLabel("other", t) },
           ]),
-          h("label", { className: "wb-mem-field-label" }, "置信度"),
+          h("label", { className: "wb-mem-field-label" }, t("memory.confidence", "Confidence")),
           sel(confidence, setConfidence, [
-            { id: "", label: "自动" }, { id: "high", label: "高" }, { id: "medium", label: "中" }, { id: "low", label: "低" },
+            { id: "", label: confidenceLabel("auto", t) }, { id: "high", label: confidenceLabel("high", t) }, { id: "medium", label: confidenceLabel("medium", t) }, { id: "low", label: confidenceLabel("low", t) },
           ]),
-          h("label", { className: "wb-mem-field-label" }, "标签"),
-          h("input", { className: "wb-mem-input", value: tags, placeholder: "用逗号分隔，如：表达偏好, 沟通方式", onChange: function (e) { setTags(e.target.value); } })),
+          h("label", { className: "wb-mem-field-label" }, t("memory.tags", "Tags")),
+          h("input", { className: "wb-mem-input", value: tags, placeholder: t("memory.tagsPlaceholder", "Comma-separated, e.g. preferences, communication"), onChange: function (e) { setTags(e.target.value); } })),
         h("div", { className: "wb-mem-modal-foot" },
-          h("button", { type: "button", className: "wb-btn ghost", onClick: props.onClose }, "取消"),
-          h("button", { type: "button", className: "wb-btn primary", onClick: submit, disabled: props.busy }, props.busy ? "保存中…" : "保存"))));
+          h("button", { type: "button", className: "wb-btn ghost", onClick: props.onClose }, t("common.cancel", "Cancel")),
+          h("button", { type: "button", className: "wb-btn primary", onClick: submit, disabled: props.busy }, props.busy ? t("common.saving", "Saving…") : t("common.save", "Save")))));
   }
 
   // ── detail panel ─────────────────────────────────────────────────────
@@ -239,6 +256,8 @@
   }
 
   function DetailPanel(props) {
+    var hookT = useMemoryT();
+    var t = props.t || hookT;
     var m = props.memory;
     var tabState = useState("detail"); var tab = tabState[0]; var setTab = tabState[1];
     useEffect(function () { setTab("detail"); }, [m ? m.id : ""]);
@@ -246,15 +265,15 @@
       return h("aside", { className: "wb-mem-detail empty" },
         h("div", { className: "wb-mem-detail-ph" },
           svg({ width: 34, height: 34, strokeWidth: 1.4 }, h("path", { d: "M12 3.6 14 9.4 20 11l-6 1.6L12 18l-2-5.4L4 11l6-1.6Z" })),
-          h("p", null, "选择一条记忆查看详情")));
+          h("p", null, t("memory.selectToView", "Select a memory to view details"))));
     }
-    var meta = catMeta(m.category);
+    var meta = catMeta(m.category, t);
     var related = props.related || [];
     var tabs = [
-      { id: "detail", label: "详情" },
-      { id: "cite", label: "引用 (" + m.citation_count + ")" },
-      { id: "related", label: "相关记忆 (" + related.length + ")" },
-      { id: "history", label: "编辑历史" },
+      { id: "detail", label: t("memory.details", "Details") },
+      { id: "cite", label: t("memory.citationTab", "Citations ({count})", { count: m.citation_count }) },
+      { id: "related", label: t("memory.relatedTab", "Related ({count})", { count: related.length }) },
+      { id: "history", label: t("memory.history", "Edit history") },
     ];
 
     var detailBody = h("div", { className: "wb-mem-detail-scroll" },
@@ -262,35 +281,35 @@
         h("span", { className: "wb-mem-ico " + meta.tone }, catIcon(m.category, 18)),
         h("p", null, m.content),
         h("div", { className: "wb-mem-hero-actions" },
-          h("button", { type: "button", className: "wb-mem-iconbtn", title: "编辑", onClick: function () { props.onEdit(m); } },
+          h("button", { type: "button", className: "wb-mem-iconbtn", title: t("common.edit", "Edit"), onClick: function () { props.onEdit(m); } },
             svg({ width: 15, height: 15 }, h("path", { d: "M12 20h9" }), h("path", { d: "M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" }))),
-          h("button", { type: "button", className: "wb-mem-iconbtn", title: "删除", onClick: function () { props.onDelete(m); } },
+          h("button", { type: "button", className: "wb-mem-iconbtn", title: t("common.delete", "Delete"), onClick: function () { props.onDelete(m); } },
             svg({ width: 15, height: 15 }, h("path", { d: "M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" }))))),
       h("div", { className: "wb-mem-meta" },
-        MetaRow({ label: "类型", children: h(Chip, { tone: meta.tone }, m.category_label) }),
-        MetaRow({ label: "标签", children: h("div", { className: "wb-mem-tagwrap" },
+        MetaRow({ label: t("memory.type", "Type"), children: h(Chip, { tone: meta.tone }, catLabel(m.category, t)) }),
+        MetaRow({ label: t("memory.tags", "Tags"), children: h("div", { className: "wb-mem-tagwrap" },
           (m.tags.length ? m.tags : []).map(function (t, i) { return h(Chip, { key: i }, t); }),
-          h("button", { type: "button", className: "wb-mem-tag-add", title: "编辑标签", onClick: function () { props.onEdit(m); } }, "+")) }),
-        MetaRow({ label: "来源", children: m.source_label }),
-        m.stale && MetaRow({ label: "状态", children: h(Chip, { tone: "slate" }, "已过时 · 不注入") }),
-        MetaRow({ label: "创建时间", children: formatFull(m.created_at) }),
-        MetaRow({ label: "更新时间", children: formatFull(m.updated_at) }),
-        MetaRow({ label: "置信度", children: h(Chip, { tone: CONF_TONE[m.confidence] }, m.confidence_label) }),
-        MetaRow({ label: "引用次数", children: String(m.citation_count) })),
+          h("button", { type: "button", className: "wb-mem-tag-add", title: t("memory.editTags", "Edit tags"), onClick: function () { props.onEdit(m); } }, "+")) }),
+        MetaRow({ label: t("memory.source", "Source"), children: sourceLabel(m.source, t) }),
+        m.stale && MetaRow({ label: t("memory.status", "Status"), children: h(Chip, { tone: "slate" }, t("memory.stale", "Outdated · not injected")) }),
+        MetaRow({ label: t("memory.createdAt", "Created"), children: formatFull(m.created_at) }),
+        MetaRow({ label: t("memory.updatedAt", "Updated"), children: formatFull(m.updated_at) }),
+        MetaRow({ label: t("memory.confidence", "Confidence"), children: h(Chip, { tone: CONF_TONE[m.confidence] }, confidenceLabel(m.confidence, t)) }),
+        MetaRow({ label: t("memory.citationCount", "Citation count"), children: String(m.citation_count) })),
       h("div", { className: "wb-mem-section" },
-        h("div", { className: "wb-mem-section-head" }, "记忆内容"),
+        h("div", { className: "wb-mem-section-head" }, t("memory.content", "Memory content")),
         h("p", { className: "wb-mem-content-full" }, m.content)),
       related.length > 0 && h("div", { className: "wb-mem-section" },
-        h("div", { className: "wb-mem-section-head" }, "相关记忆", h("button", { type: "button", className: "wb-mem-link", onClick: function () { setTab("related"); } }, "查看全部 (" + related.length + ")")),
+        h("div", { className: "wb-mem-section-head" }, t("memory.related", "Related memories"), h("button", { type: "button", className: "wb-mem-link", onClick: function () { setTab("related"); } }, t("memory.relatedAll", "View all ({count})", { count: related.length }))),
         related.slice(0, 3).map(function (r) {
           return h("button", { key: r.id, type: "button", className: "wb-mem-related-row", onClick: function () { props.onSelect(r.id); } },
-            h("span", { className: "wb-mem-ico sm " + catMeta(r.category).tone }, catIcon(r.category, 13)),
+            h("span", { className: "wb-mem-ico sm " + catMeta(r.category, t).tone }, catIcon(r.category, 13)),
             h("span", { className: "wb-mem-related-text" }, r.content),
-            h("time", null, formatRel(r.updated_at)));
+            h("time", null, formatRel(r.updated_at, t)));
         })));
 
     var citeBody = h("div", { className: "wb-mem-detail-scroll" },
-      h("div", { className: "wb-mem-cite-summary" }, h("b", null, m.citation_count), h("span", null, "次被引用")),
+      h("div", { className: "wb-mem-cite-summary" }, h("b", null, m.citation_count), h("span", null, t("memory.timesCited", "times cited"))),
       (m.citations || []).length > 0
         ? h("div", { className: "wb-mem-cite-list" }, m.citations.map(function (c, i) {
             return h("div", { className: "wb-mem-cite-row", key: i },
@@ -301,16 +320,16 @@
           }))
         : h("div", { className: "wb-mem-empty-soft" },
             svg({ width: 26, height: 26, strokeWidth: 1.5 }, h("path", { d: "M8 10h8M8 14h5" }), h("path", { d: "M21 11.4a6.9 6.9 0 0 1-9.6 6.4L6 19l1.1-4.1A6.9 6.9 0 1 1 21 11.4Z" })),
-            h("p", null, "这条记忆还没有被引用过。Agent 在对话中引用此记忆时会自动记录。")));
+            h("p", null, t("memory.noCitations", "This memory has not been cited yet. Citations are recorded automatically when the Agent uses it in a conversation."))));
 
     var relatedBody = h("div", { className: "wb-mem-detail-scroll" },
       related.length === 0
-        ? h("div", { className: "wb-mem-empty-soft" }, h("p", null, "暂无相关记忆"))
+        ? h("div", { className: "wb-mem-empty-soft" }, h("p", null, t("memory.noRelated", "No related memories")))
         : related.map(function (r) {
           return h("button", { key: r.id, type: "button", className: "wb-mem-related-row", onClick: function () { props.onSelect(r.id); } },
-            h("span", { className: "wb-mem-ico sm " + catMeta(r.category).tone }, catIcon(r.category, 13)),
+            h("span", { className: "wb-mem-ico sm " + catMeta(r.category, t).tone }, catIcon(r.category, 13)),
             h("span", { className: "wb-mem-related-text" }, r.content),
-            h("time", null, formatRel(r.updated_at)));
+            h("time", null, formatRel(r.updated_at, t)));
         }));
 
     var historyEvents = (m.history || []).slice().reverse();
@@ -324,7 +343,7 @@
                 ev.detail && h("p", { className: "wb-mem-history-detail" }, ev.detail),
                 h("small", null, formatFull(ev.at))));
           }))
-        : h("div", { className: "wb-mem-empty-soft" }, h("p", null, "暂无编辑历史")));
+        : h("div", { className: "wb-mem-empty-soft" }, h("p", null, t("memory.noHistory", "No edit history"))));
 
     return h("aside", { className: "wb-mem-detail" },
       h("div", { className: "wb-mem-detail-tabs" }, tabs.map(function (t) {
@@ -332,9 +351,9 @@
       })),
       tab === "detail" ? detailBody : tab === "cite" ? citeBody : tab === "related" ? relatedBody : historyBody,
       h("div", { className: "wb-mem-detail-foot" },
-        h("button", { type: "button", className: "wb-btn ghost", onClick: function () { props.onEdit(m); } }, "编辑记忆"),
-        h("button", { type: "button", className: "wb-btn ghost", disabled: props.busy, title: m.stale ? "恢复后会重新注入 Agent" : "过时后不再注入 Agent，但保留记录", onClick: function () { props.onToggleStale(m); } }, m.stale ? "恢复使用" : "标记过时"),
-        h("button", { type: "button", className: "wb-btn danger", onClick: function () { props.onDelete(m); } }, "删除记忆")));
+        h("button", { type: "button", className: "wb-btn ghost", onClick: function () { props.onEdit(m); } }, t("memory.edit", "Edit memory")),
+        h("button", { type: "button", className: "wb-btn ghost", disabled: props.busy, title: m.stale ? t("memory.restoreTitle", "Restore it to inject into the Agent again") : t("memory.staleTitle", "Outdated memories are no longer injected into the Agent, but remain in the record"), onClick: function () { props.onToggleStale(m); } }, m.stale ? t("memory.restore", "Restore") : t("memory.markStale", "Mark outdated")),
+        h("button", { type: "button", className: "wb-btn danger", onClick: function () { props.onDelete(m); } }, t("memory.delete", "Delete memory"))));
   }
 
   function learningSnapshot(data) {
@@ -1206,7 +1225,7 @@
         .finally(function () { setBusy(false); });
     }
     function handleDelete(m) {
-      window.CyreneUI.require("feedback").confirmModal({ body: "确定删除这条记忆吗？此操作不可撤销。", confirmLabel: "删除", danger: true }).then(function (ok) {
+      window.CyreneUI.require("feedback").confirmModal({ body: t("memory.deleteConfirm", "Delete this memory? This cannot be undone."), confirmLabel: t("common.delete", "Delete"), danger: true }).then(function (ok) {
         if (!ok) return;
         client.remove(m.id)
           .then(function (p) { applyPayload(p); if (selectedId === m.id) setSelectedId(""); })
@@ -1225,12 +1244,12 @@
 
     if (!project) {
       return h("section", { className: "wb-mem-page" },
-        h("div", { className: "wb-mem-empty" }, "请选择一个项目以查看其记忆。"));
+        h("div", { className: "wb-mem-empty" }, t("memory.selectProject", "Select a project to view its memory.")));
     }
 
-    var typeOptions = [{ id: "all", label: "全部类型" }].concat(CAT_ORDER.map(function (c) { return { id: c, label: CATS[c].label }; }));
-    var sourceOptions = [{ id: "", label: "全部来源" }, { id: "conversation", label: "对话" }, { id: "knowledge", label: "知识库" }, { id: "manual", label: "手动添加" }, { id: "agent", label: "Agent 记录" }, { id: "other", label: "其他" }];
-    var sortOptions = [{ id: "updated", label: "最新更新" }, { id: "created", label: "最近创建" }, { id: "citations", label: "引用最多" }];
+    var typeOptions = [{ id: "all", label: t("memory.allTypes", "All types") }].concat(CAT_ORDER.map(function (c) { return { id: c, label: catLabel(c, t) }; }));
+    var sourceOptions = [{ id: "", label: t("memory.allSources", "All sources") }, { id: "conversation", label: sourceLabel("conversation", t) }, { id: "knowledge", label: sourceLabel("knowledge", t) }, { id: "manual", label: sourceLabel("manual", t) }, { id: "agent", label: sourceLabel("agent", t) }, { id: "other", label: sourceLabel("other", t) }];
+    var sortOptions = [{ id: "updated", label: t("memory.sortUpdated", "Recently updated") }, { id: "created", label: t("memory.sortCreated", "Recently created") }, { id: "citations", label: t("memory.sortCitations", "Most cited") }];
     function curLabel(opts, val) { for (var i = 0; i < opts.length; i++) if (opts[i].id === val) return opts[i].label; return opts[0].label; }
 
     function dropdown(key, label, options, value, setter) {
@@ -1246,49 +1265,49 @@
     // ── category rail ──
     var rail = h("aside", { className: "wb-mem-rail" },
       h("div", { className: "wb-mem-rail-head" },
-        h("b", null, "记忆"),
+          h("b", null, t("memory.title", "Memory")),
         h("button", { type: "button", className: "wb-mem-new-btn", onClick: function () { setModal({ mode: "create", draft: {} }); } },
-          svg({ width: 13, height: 13, strokeWidth: 2.4 }, h("path", { d: "M12 5v14M5 12h14" })), h("span", null, "新建记忆"))),
+          svg({ width: 13, height: 13, strokeWidth: 2.4 }, h("path", { d: "M12 5v14M5 12h14" })), h("span", null, t("memory.new", "New memory")))),
       h("div", { className: "wb-mem-cats" },
         categories.map(function (c) {
           var meta = c.id === "all" ? { tone: "accent" } : catMeta(c.id);
           return h("button", { key: c.id, type: "button", className: "wb-mem-cat" + (!activePanel && activeCat === c.id ? " active" : ""), onClick: function () { setActivePanel(""); setActiveCat(c.id); } },
             h("span", { className: "wb-mem-cat-ico " + meta.tone }, c.id === "all" ? ICON.all(15) : catIcon(c.id, 15)),
-            h("span", { className: "wb-mem-cat-label" }, c.label),
+            h("span", { className: "wb-mem-cat-label" }, c.id === "all" ? t("memory.allTypes", "All types") : catLabel(c.id, t)),
             h("span", { className: "wb-mem-cat-count" }, c.count));
         }),
         h("button", { type: "button", className: "wb-mem-cat" + (activePanel === "learning" ? " active" : ""), onClick: function () { setActivePanel("learning"); setSelectedId(""); } },
           h("span", { className: "wb-mem-cat-ico blue" }, ICON.learning(15)),
-          h("span", { className: "wb-mem-cat-label" }, "技能学习"),
+          h("span", { className: "wb-mem-cat-label" }, t("memory.learningNav", "Skill learning")),
           h("span", { className: "wb-mem-cat-count" }, "›"))),
       h("div", { className: "wb-mem-card" },
-        h("div", { className: "wb-mem-card-head" }, "记忆概览"),
-        h("div", { className: "wb-mem-ov-row" }, h("span", null, "总记忆数"), h("b", null, overview.total || 0)),
-        h("div", { className: "wb-mem-ov-row" }, h("span", null, "近期新增"), h("b", null, overview.recent_added || 0)),
-        h("div", { className: "wb-mem-ov-row" }, h("span", null, "被引用次数"), h("b", null, overview.total_citations || 0)),
-        h("div", { className: "wb-mem-ov-row" }, h("span", null, "最后更新"), h("b", null, formatRel(overview.last_updated)))),
+        h("div", { className: "wb-mem-card-head" }, t("memory.overview", "Memory overview")),
+        h("div", { className: "wb-mem-ov-row" }, h("span", null, t("memory.total", "Total memories")), h("b", null, overview.total || 0)),
+        h("div", { className: "wb-mem-ov-row" }, h("span", null, t("memory.recentAdded", "Recently added")), h("b", null, overview.recent_added || 0)),
+        h("div", { className: "wb-mem-ov-row" }, h("span", null, t("memory.citations", "Citations")), h("b", null, overview.total_citations || 0)),
+        h("div", { className: "wb-mem-ov-row" }, h("span", null, t("memory.lastUpdated", "Last updated")), h("b", null, formatRel(overview.last_updated, t)))),
       h("div", { className: "wb-mem-card" },
-        h("div", { className: "wb-mem-card-head" }, "记忆来源"),
+        h("div", { className: "wb-mem-card-head" }, t("memory.sources", "Memory sources")),
         h("div", { className: "wb-mem-source-body" },
-          h(Donut, { segments: sources }),
+          h(Donut, { segments: sources, t: t }),
           h("div", { className: "wb-mem-source-legend" }, sources.map(function (s) {
             return h("div", { key: s.id, className: "wb-mem-legend-row" },
               h("span", { className: "wb-mem-legend-dot " + (SOURCE_TONE[s.id] || "slate") }),
-              h("span", { className: "wb-mem-legend-label" }, s.label),
+              h("span", { className: "wb-mem-legend-label" }, sourceLabel(s.id, t)),
               h("span", { className: "wb-mem-legend-pct" }, s.pct + "%"));
           })))));
 
     // ── memory card list ──
     function card(m) {
-      var meta = catMeta(m.category);
+      var meta = catMeta(m.category, t);
       return h("button", { key: m.id, type: "button", className: "wb-mem-item" + (!activePanel && selectedId === m.id ? " active" : "") + (m.stale ? " stale" : ""), onClick: function () { setActivePanel(""); setSelectedId(m.id); } },
         h("span", { className: "wb-mem-ico " + meta.tone }, catIcon(m.category, 17)),
         h("div", { className: "wb-mem-item-body" },
           h("div", { className: "wb-mem-item-top" },
             h("p", { className: "wb-mem-item-text" }, m.content),
-            h("time", null, formatRel(m.updated_at))),
+            h("time", null, formatRel(m.updated_at, t))),
           h("div", { className: "wb-mem-item-tags" },
-            h(Chip, { tone: meta.tone }, m.category_label),
+            h(Chip, { tone: meta.tone }, catLabel(m.category, t)),
             (m.tags || []).slice(0, 2).map(function (t, i) { return h(Chip, { key: i }, t); }),
             h(Chip, { tone: "ghost" }, m.source_label))));
     }
@@ -1328,7 +1347,7 @@
       h("div", { className: "wb-mem-toolbar" },
         h("div", { className: "wb-mem-searchbox" },
           svg({ width: 15, height: 15, strokeWidth: 1.9 }, h("circle", { cx: 11, cy: 11, r: 7 }), h("path", { d: "m20 20-3.2-3.2" })),
-          h("input", { type: "text", placeholder: "搜索记忆…", value: query, onChange: function (e) { setQuery(e.target.value); } })),
+          h("input", { type: "text", placeholder: t("memory.searchPlaceholder", "Search memory…"), value: query, onChange: function (e) { setQuery(e.target.value); } })),
         h("div", { className: "wb-mem-tools" },
           dropdown("type", curLabel(typeOptions, activeCat), typeOptions, activeCat, function (value) { setActivePanel(""); setActiveCat(value); }),
           dropdown("source", curLabel(sourceOptions, sourceFilter), sourceOptions, sourceFilter, setSourceFilter),
@@ -1337,20 +1356,21 @@
       h("div", { className: "wb-mem-list-col" },
         h("div", { className: "wb-mem-scroll" },
           loading
-            ? h("div", { className: "wb-mem-empty" }, "加载记忆中…")
+            ? h("div", { className: "wb-mem-empty" }, t("memory.loading", "Loading memory…"))
             : visible.length === 0
               ? h("div", { className: "wb-mem-empty" },
                 h("div", { className: "wb-mem-empty-icon" }, ICON.all(38)),
-                h("p", null, query || activeCat !== "all" || sourceFilter ? "没有匹配的记忆。" : "还没有记忆内容。"),
-                h("button", { type: "button", className: "wb-btn primary", onClick: function () { setModal({ mode: "create", draft: {} }); } }, "新建第一条记忆"))
+                h("p", null, query || activeCat !== "all" || sourceFilter ? t("memory.noMatch", "No matching memories.") : t("memory.empty", "No memories yet.")),
+                h("button", { type: "button", className: "wb-btn primary", onClick: function () { setModal({ mode: "create", draft: {} }); } }, t("memory.createFirst", "Create the first memory")))
               : h("div", { className: "wb-mem-list" }, visible.map(card))),
-        h("div", { className: "wb-mem-count" }, "共 " + visible.length + " 条记忆")));
+        h("div", { className: "wb-mem-count" }, t("memory.count", "{count} memories", { count: visible.length }))));
 
     return h("section", { className: "wb-mem-page" + (activePanel === "learning" ? " learning-active" : "") },
       activePanel === "learning" ? null : rail,
       main,
       activePanel === "learning" ? h(SkillLearningPanel, { learning: learning, detailKind: selectedLearningDetailKind, chain: selectedLearningChain, skill: selectedLearningSkill, onDeleteSkill: handleDeleteLearnedSkill }) : h(DetailPanel, {
         memory: selected, related: related, busy: busy,
+        t: t,
         onSelect: setSelectedId,
         onEdit: function (m) { setModal({ mode: "edit", id: m.id, draft: { content: m.content, category: m.category, source: m.source, confidence: m.confidence, tags: m.tags } }); },
         onDelete: handleDelete,
@@ -1358,7 +1378,7 @@
       }),
       menu && h("div", { className: "wb-mem-scrim", onClick: function () { setMenu(""); } }),
       modal && h(MemoryModal, {
-        mode: modal.mode, draft: modal.draft, busy: busy,
+        mode: modal.mode, draft: modal.draft, busy: busy, t: t,
         onClose: function () { setModal(null); },
         onSubmit: function (body) { if (modal.mode === "edit") handleEditSubmit(modal.id, body); else handleCreate(body); },
       }));

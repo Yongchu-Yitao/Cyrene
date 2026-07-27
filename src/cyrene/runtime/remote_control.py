@@ -88,8 +88,16 @@ DEFAULT_REMOTE_CAPABILITIES = (
     "task:dispatch",
     "task:control",
     "approval:clarification",
+    "approval:respond",
     "artifact:read",
 )
+_LEGACY_DEFAULT_REMOTE_CAPABILITIES = frozenset(
+    capability
+    for capability in DEFAULT_REMOTE_CAPABILITIES
+    if capability != "approval:respond"
+)
+_REMOTE_STORE_SUFFIX = ".remote-control"
+_REMOTE_STORE_MIGRATION_ID = "split_remote_control_store_v1"
 
 _COMMAND_CAPABILITIES = {
     "capabilities.read": "",
@@ -114,6 +122,7 @@ _COMMAND_CAPABILITIES = {
     "approvals.respond": "approval:respond",
     "artifacts.list": "artifact:read",
     "artifacts.read": "artifact:read",
+    "attachments.read": "artifact:read",
 }
 _PROJECT_SCOPED_COMMANDS = frozenset(
     command
@@ -395,6 +404,7 @@ class RemoteControlStore:
             )
         else:
             self.db_path = str(Path(db_path).expanduser().resolve())
+        self.remote_db_path = self.db_path + _REMOTE_STORE_SUFFIX
         self.identity_store = identity_store or RemoteIdentityStore(self.db_path)
         self._lock = threading.RLock()
         self._short_pairings: dict[str, dict[str, Any]] = {}
@@ -406,18 +416,23 @@ class RemoteControlStore:
         return self.identity_store.get_or_create()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=5)
+        conn = sqlite3.connect(self.remote_db_path, timeout=30)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA busy_timeout = 30000")
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def _initialize(self) -> None:
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.remote_db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._connect() as conn:
             conn.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS remote_store_migrations (
+                    migration_id TEXT PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS remote_settings (
                     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                     enabled INTEGER NOT NULL DEFAULT 0,
@@ -479,6 +494,7 @@ class RemoteControlStore:
                 );
                 """
             )
+            self._migrate_legacy_store(conn)
             dedupe_columns = {
                 str(row["name"])
                 for row in conn.execute(
@@ -517,6 +533,123 @@ class RemoteControlStore:
                     _utc_iso(),
                 ),
             )
+            self._upgrade_legacy_default_grants(conn)
+
+    def _migrate_legacy_store(self, conn: sqlite3.Connection) -> None:
+        """Move remote-only state away from the high-frequency runtime DB.
+
+        Workbench streams persist thousands of run events in the main runtime
+        database. Remote command audit and idempotency records must not compete
+        with that traffic because the audit write happens before the encrypted
+        command is sent. Copy legacy rows once into a dedicated WAL database;
+        the old tables remain untouched for rollback compatibility.
+        """
+        migrated = conn.execute(
+            """
+            SELECT 1 FROM remote_store_migrations
+            WHERE migration_id = ?
+            """,
+            (_REMOTE_STORE_MIGRATION_ID,),
+        ).fetchone()
+        legacy_path = Path(self.db_path)
+        if migrated is not None or not legacy_path.exists():
+            return
+        if legacy_path.resolve() == Path(self.remote_db_path).resolve():
+            return
+
+        conn.execute("ATTACH DATABASE ? AS legacy_remote", (str(legacy_path),))
+        try:
+            legacy_tables = {
+                str(row["name"])
+                for row in conn.execute(
+                    """
+                    SELECT name FROM legacy_remote.sqlite_master
+                    WHERE type = 'table'
+                    """
+                ).fetchall()
+            }
+            for table in (
+                "remote_settings",
+                "remote_peers",
+                "remote_pairings",
+                "remote_replay_nonces",
+                "remote_command_dedupe",
+                "remote_audit_events",
+            ):
+                if table not in legacy_tables:
+                    continue
+                target_columns = [
+                    str(row["name"])
+                    for row in conn.execute(
+                        f"PRAGMA main.table_info({table})"
+                    ).fetchall()
+                ]
+                legacy_columns = {
+                    str(row["name"])
+                    for row in conn.execute(
+                        f"PRAGMA legacy_remote.table_info({table})"
+                    ).fetchall()
+                }
+                columns = [
+                    column for column in target_columns
+                    if column in legacy_columns
+                ]
+                if not columns:
+                    continue
+                column_sql = ", ".join(f'"{column}"' for column in columns)
+                conflict = "REPLACE" if table == "remote_settings" else "IGNORE"
+                conn.execute(
+                    f"""
+                    INSERT OR {conflict} INTO main.{table} ({column_sql})
+                    SELECT {column_sql} FROM legacy_remote.{table}
+                    """
+                )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO remote_store_migrations(
+                    migration_id, applied_at
+                ) VALUES (?, ?)
+                """,
+                (_REMOTE_STORE_MIGRATION_ID, _utc_iso()),
+            )
+            conn.commit()
+        finally:
+            conn.execute("DETACH DATABASE legacy_remote")
+
+    @staticmethod
+    def _upgrade_legacy_default_grants(conn: sqlite3.Connection) -> None:
+        """Add approval responses only to untouched historical defaults."""
+        rows = conn.execute(
+            """
+            SELECT device_id, granted_capabilities_json,
+                   received_capabilities_json
+            FROM remote_peers
+            """
+        ).fetchall()
+        for row in rows:
+            updates: dict[str, str] = {}
+            for column in (
+                "granted_capabilities_json",
+                "received_capabilities_json",
+            ):
+                try:
+                    capabilities = {
+                        str(item)
+                        for item in json.loads(str(row[column]))
+                    }
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if capabilities == _LEGACY_DEFAULT_REMOTE_CAPABILITIES:
+                    capabilities.add("approval:respond")
+                    updates[column] = _json_dumps(sorted(capabilities))
+            if updates:
+                assignments = ", ".join(
+                    f"{column} = ?" for column in updates
+                )
+                conn.execute(
+                    f"UPDATE remote_peers SET {assignments} WHERE device_id = ?",
+                    (*updates.values(), str(row["device_id"])),
+                )
 
     def public_identity(self) -> dict[str, str]:
         identity = self.identity
@@ -1949,7 +2082,29 @@ class RemoteGateway:
         )
         try:
             await self.relay.send(envelope)
-            return await asyncio.wait_for(future, timeout=max(0.1, float(timeout)))
+            result = await asyncio.wait_for(
+                future,
+                timeout=max(0.1, float(timeout)),
+            )
+            self.store.audit(
+                "remote_command_completed",
+                peer_device_id=peer_device_id,
+                command=command,
+                outcome=(
+                    str(result.get("code") or "remote_error")
+                    if result.get("ok") is False
+                    else "ok"
+                ),
+            )
+            return result
+        except Exception as exc:
+            self.store.audit(
+                "remote_command_failed",
+                peer_device_id=peer_device_id,
+                command=command,
+                outcome=exc.__class__.__name__,
+            )
+            raise
         finally:
             self._pending.pop(request_id, None)
 

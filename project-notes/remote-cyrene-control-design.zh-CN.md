@@ -2,7 +2,7 @@
 > 版本化 Control API、设备身份与配对、方向性 Grant、Project Scope、
 > Signed + E2EE Envelope、局域网直连传输、Agent 远程工具、
 > Durable Run Event、直连防滥用、Grant 同步、IP + 短密钥配对、
-> 设置管理和
+> 独立远程控制数据库、无限总大小的分块文件传输、实时传输进度、设置管理和
 > “添加上下文”入口均已实现。远程桌面属于独立的后续可选能力。
 >
 > **当前安全边界：** 产品范围只包含同一局域网内的 Cyrene-to-Cyrene
@@ -52,6 +52,9 @@ Cyrene。主要能力是远程使用和监督 Agent；远程桌面只是后续�
   且拒绝未配对设备；
 - Run 元数据与 Event 使用 SQLite 持久化，保留七天；重启中断会形成明确的
   `process_restarted` 终态和可继续读取的 Cursor；
+- Remote Control 的 Pairing、Peer、Grant、Nonce、Idempotency 和 Audit
+  已迁移到独立的 `<runtime-db>.remote-control` SQLite Sidecar，不再和
+  高频 Agent Run Event 争用主运行库写锁；旧表会一次性兼容迁移；
 - Remote Event 使用固定类型和字段 Allowlist，不输出 Reasoning、Workspace
   Change、Tool 参数、绝对路径或调试字段；
 - Grant 通过 E2EE Envelope 周期同步，响应也携带被控端权威 Grant 快照；
@@ -59,8 +62,15 @@ Cyrene。主要能力是远程使用和监督 Agent；远程桌面只是后续�
 - 设置中的“远程设备管理”Tab 和设备/Grant/配对/审计管理；
 - 对话“添加上下文”可选择已配对设备，Agent 只可操作当前对话显式选中的
   设备；
-- 三个 Agent Tool：`ListRemoteDevices`、`RemoteCyreneStatus` 和
-  `RemoteCyreneAction`；
+- 四个 Agent Tool：`ListRemoteDevices`、`RemoteCyreneStatus`、
+  `RemoteCyreneAction` 和一键创建远程对话并启动 Agent 的
+  `RunRemoteCyrene`；
+- `RunRemoteCyrene` 只把用户级任务交给被控端 Agent。被控端 Agent 可使用
+  该设备上已经安装并授权的模型、工具、Skill、Browser、Computer Use、
+  文件和集成；执行始终经过被控端自己的 Harness、Sandbox 和审批；
+- Chat Attachment 与 Task Artifact 支持分块读取，不限制完整文件总大小；
+  控制端自动组装到本地附件，工具卡显示实时百分比，不把 Base64 内容放入
+  Agent 上下文；
 - capability 响应如实报告 Remote Transport 和 Durable Event 已可用；
 - Task 支持计划批准、逐步执行、Task 级审批，以及对真实 Goal Loop 的
   pause/resume/cancel。
@@ -85,7 +95,7 @@ Idempotency Key 安全重试；持久 Goal Loop 则由既有恢复器继续调�
 
 远程能力的用户入口已经确定，不能改成隐式自动发现或全局授权：
 
-1. 用户在“设置 → 远程设备管理”中启用远程访问；被控端生成本机局域网
+1. 用户在“设置 → 连接”中启用远程访问；被控端生成本机局域网
    `IP:37841` 和两分钟一次性短密钥，控制端输入二者并完成设备配对；
 2. 被控端明确选择授予的 Capability 和 Project Scope；
 3. 用户进入某个对话，点击 Composer 的“添加上下文”；
@@ -110,6 +120,8 @@ Idempotency Key 安全重试；持久 Goal Loop 则由既有恢复器继续调�
 - 回答澄清请求，并在远端 Policy 允许时提交审批决定；
 - interrupt、pause、resume 或 cancel；
 - 结果和文件默认保存在被控电脑；
+- 控制端可显式读取对话引用的 Attachment 和 Task Artifact；传输使用分块
+  协议、无完整文件大小上限，并显示进度；
 - 所有工具都由被控端 Harness 验证、授权和执行。
 
 远程桌面只用于 Agent 无法结构化呈现的本机 UI、登录、验证码、拖拽或人工
@@ -121,7 +133,8 @@ Idempotency Key 安全重试；持久 Goal Loop 则由既有恢复器继续调�
 
 - 控制端直接执行远端 Shell 或任意 Tool；
 - 远端把任意 HTTP Method、URL、数据库语句映射成本地调用；
-- 远程安装 Skill、MCP 或 Integration；
+- 直接协议命令安装 Skill、MCP 或 Integration（但远端 Agent 在其本机
+  Harness 明确授权后，仍可像本地对话一样使用或管理这些能力）；
 - 远程修改 Credential、SOUL、Memory 或全局 Permission；
 - 远程 Backup/Restore、Reset Data、Update、Restart 或 Shutdown；
 - 把控制端文本提升成 system/developer instruction；
@@ -185,7 +198,8 @@ src/
 │   │   ├── common.py               当前 Chat 设备上下文授权边界
 │   │   ├── list_devices.py         列出当前 Chat 选中的设备
 │   │   ├── status.py               远端只读查询
-│   │   └── action.py               受权限确认保护的远端操作
+│   │   ├── action.py               受权限确认保护的远端操作
+│   │   └── run.py                  创建远程 Chat 并启动远端 Agent
 │   └── workbench/
 │       └── chat_runs.py            run_id 查询、SQLite Event、重启恢复与重放
 └── route/
@@ -200,7 +214,7 @@ src/
         └── task_sessions.py        Task/Artifact 控制适配器
 
 src/webui/frontend/
-├── settings-overlay.jsx            “远程设备管理”设置页
+├── settings-overlay.jsx            “连接”设置页
 ├── workbench-chat.jsx              “添加上下文 → 远程设备”
 ├── workbench-i18n.jsx              中英文文案
 └── workbench.css                   设置/更新日志高度及远程管理样式
@@ -222,11 +236,11 @@ Service 以降低 Route 体积，但这是内部重构项，不影响当前远�
 
 ## 5. v1 Control API 契约
 
-当前共 21 个 Path、23 个 Operation：
+当前共 22 个 Path、24 个 Operation：
 
-RemoteGateway 使用 22 个固定领域命令覆盖这 23 个 Operation；两个
+RemoteGateway 使用 23 个固定领域命令覆盖这 24 个 Operation；两个
 Chat/Task Approval HTTP Operation 在远程协议中统一为带资源类型的
-`approvals.respond`。Agent 的只读/写入远程工具枚举完整覆盖这 22 个命令，
+`approvals.respond`。Agent 的只读/写入远程工具枚举完整覆盖这 23 个命令，
 但不会开放任意 HTTP、Tool 或 Shell。L3 远程桌面不属于本契约。
 
 | Method | Path | Operation ID | 状态 |
@@ -237,6 +251,7 @@ Chat/Task Approval HTTP Operation 在远程协议中统一为带资源类型的
 | POST | `/v1/control/chats` | `control_v1_create_chat` | 已实现 |
 | GET | `/v1/control/chats/{chat_id}` | `control_v1_get_chat` | 已实现 |
 | POST | `/v1/control/chats/{chat_id}/messages` | `control_v1_send_chat_message` | 已实现 |
+| GET | `/v1/control/chats/{chat_id}/attachments/{attachment_id}` | `control_v1_read_chat_attachment` | 已实现 |
 | GET | `/v1/control/runs/{run_id}` | `control_v1_get_run` | 已实现 |
 | GET | `/v1/control/runs/{run_id}/events` | `control_v1_list_run_events` | 已实现 |
 | POST | `/v1/control/runs/{run_id}/guidance` | `control_v1_guide_run` | 已实现 |
@@ -323,6 +338,22 @@ GET /v1/control/runs/{run_id}/events?after=<cursor>&limit=<1..500>
 Side-effect Command 必须携带 Idempotency Key；SQLite 会先原子占位，
 并发重复请求返回 `remote_command_in_progress`，完成后重放缓存结果，不会
 重复执行副作用。
+
+### 5.4 完整远端 Agent 使用语义
+
+“完整使用远程 Cyrene”不是把远端任意 HTTP、Shell 或 Tool 直接暴露给
+控制端，而是：
+
+1. `RunRemoteCyrene` 在已共享 Project 中创建 Chat；
+2. 通过 `chats.send` 启动被控端自己的 Agent；
+3. 被控端 Agent 使用其本机完整 Harness 能力执行任务；
+4. 控制端使用 `runs.events` 观察进度，通过 `runs.guide` 补充指导；
+5. 遇到 Pending Question 时使用 `approvals.respond` 回答；
+6. 完成后读取 Chat、Artifact 或 Attachment。
+
+这种方式既能覆盖远端 Cyrene 的 Agent 能力，又不会绕过被控设备的权限、
+Sandbox、Credential 边界和审计。旧的默认 Grant 会在精确匹配旧默认集合时
+自动补入 `approval:respond`；用户定制过的 Grant 不会被扩权。
 
 ## 6. 权限和安全边界
 
@@ -467,6 +498,15 @@ Response Bundle 仍是内部签名握手格式和兼容 API，不再要求用户
   Envelope 返回；
 - 长任务状态仍使用 Durable Event 和 Cursor 恢复，不依赖单次 HTTP 请求；
 - 退出时关闭 LAN Listener、拒绝 Pending Request 并注销 Agent Tool Gateway。
+- 控制端每个命令的发送、完成和失败分别记录 Audit，错误明确标记
+  `controller`、`transport` 或 `remote` 来源，避免把控制端数据库错误误报为
+  被控端执行错误。
+
+Remote Control Store 与主 Runtime Store 已分离。设备身份仍沿用原逻辑库
+路径派生，以保持升级前后的 Device ID 稳定；远程表则写入
+`<runtime-db>.remote-control`。首次打开会从旧主库复制远程表并记录迁移，
+旧表暂留用于回滚。即使主运行库正持有 `BEGIN IMMEDIATE` 写事务，远程命令
+仍可完成审计、加密投递和响应。
 
 仓库仍保留旧的 `cyrene-relay` 与 `WebSocketRemoteRelay` 作为兼容代码，但
 当前产品路径不实例化它们，设置界面也不再要求 Relay URL。除非产品范围重新
@@ -495,7 +535,12 @@ Task、Approval 和 Artifact 已进入当前 OpenAPI，具体 Path 见第 5 节�
   中断当前 Agent Run，而不是只修改展示状态；
 - Artifact List 返回受控 Metadata 和 API Download URL，不返回绝对路径；
 - 本机 Control API 的 Artifact Content 使用 `FileResponse`；
-- 远程 Envelope 的 Artifact Content 使用 Base64，单文件上限 10 MiB；
+- 远程 Envelope 的 Artifact/Attachment Content 使用最多 1 MiB 的单块
+  Base64；完整文件没有大小上限，默认以 512 KiB 分块；
+- 每块带 `offset`、`next_offset`、`size`、`eof` 和 `progress`，控制端验证
+  连续偏移、自动组装并发布 `tool_call_progress`；
+- Attachment 必须由目标 Chat 明确引用；引用项可指向 Cyrene 托管目录之外
+  的本机文件，但不能借附件接口读取未被该 Chat 引用的任意路径；
 - RemoteGateway 仍按 `artifact:read` Capability 和 Project Scope 校验。
 
 普通澄清和已被 Grant 允许的 Approval 可以远程回答；文件写入、Shell、
@@ -590,6 +635,7 @@ Credential 和桌面接管等高风险操作仍由被控端 Harness 的 Permissi
 - guidance 绑定 `run_id` 且 `request_id` 去重；
 - interrupt 绑定 `run_id`；
 - OpenAPI Path、Tag、Operation ID 和响应状态。
+- Chat Attachment 内容端点只读取对话明确引用的文件；
 - 配对方向性 Grant、单次邀请和 Project Scope；
 - Grant 更新、撤销与越权拒绝；
 - E2EE Envelope 篡改、签名和 Replay 拒绝；
@@ -604,6 +650,10 @@ Credential 和桌面接管等高风险操作仍由被控端 Harness 的 Permissi
 - Agent Tool 只能访问当前 Chat 选择的设备；
 - 隔离的 Context API 拒绝未知/已撤销设备；
 - 两个隔离数据库通过真实本机 WebSocket Relay 完成加密请求/响应；
+- 主 Runtime SQLite 持有写锁时，Remote Sidecar 仍能完成加密命令；
+- `RunRemoteCyrene` 通过双 Gateway 创建 Chat 并启动目标 Agent；
+- 超过 10 MiB、非托管目录但被 Chat 明确引用的附件可连续分块读取；
+- 控制端自动组装分块、返回本地附件且不把 Base64 暴露给 Agent；
 - 设置页 12 个 Tab 无侧栏滚动；
 - 设置与更新日志高度一致；
 - “添加上下文”显示配对设备并生成远程设备 Chip；
@@ -623,7 +673,8 @@ uv run pytest -q \
   tests/test_workbench_frontend_logic.py::test_workbench_about_related_actions_only_click_right_button
 ```
 
-结果：`77 passed in 8.51s`。
+结果：本轮聚焦远程、Control、路由、工具注册与前端测试
+`198 passed in 17.46s`；契约锁定复核 `55 passed in 16.16s`。
 
 完整回归：
 
@@ -631,21 +682,21 @@ uv run pytest -q \
 uv run pytest -q
 ```
 
-结果：`1442 passed in 94.17s`。
+结果：`1466 passed in 120.00s`。
 
 加入本阶段契约后：
 
-- Route Declaration：`294`；
-- OpenAPI Path：`247`；
-- OpenAPI Operation：`292`；
+- Route Declaration：`297`；
+- OpenAPI Path：`250`；
+- OpenAPI Operation：`295`；
 - FastAPI Baseline：`0.136.1`；
 - Pydantic Baseline：`2.13.4`；
 - Route Contract SHA-256：
-  `45874f60f3886a15439d32eec0020eb1c9e15ec812c466e2d3308556996b2f94`；
+  `e10af1293db61fb04053bcd1744bd9d080750a481189a567ecc675656b9dc95e`；
 - OpenAPI SHA-256：
-  `be748ca27aa82b9ae77c51f21ae28b16885cb36c99b3ab170fd71eddc57224e2`；
+  `f1762d75b0dc465fb980bb4f2d890b67115338b7e413845c0a4ad142babc5287`；
 - Tool Registry SHA-256：
-  `0526a805a0c4153e8b163f7bf8ce628dacc2c038aac4d90f0e29b11c1d6206ac`；
+  `3b44e3cd4554cf4f722c4dc03d18955307b5d21941ea8e5e8df0db9d61f3f8f8`；
 - Main Agent Wire Tool：`29`，SHA-256：
   `56f247691752283c226eb34ea1a8a902df14c8cd5c83ab94f92dbdd89f0e76f3`；
 - Subagent Wire Tool：`23`，SHA-256：

@@ -5,6 +5,198 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0b4] - 2026-07-27
+
+This is the fourth `0.7.0` beta and includes every change since
+`v0.7.0-beta.3`. It advances remote Cyrene control from a set of usable domain
+commands into a durable end-to-end Agent workflow: remote state is isolated
+from the high-write runtime database, a remote Agent can be started in one
+supervised action, artifacts and chat attachments transfer in chunks without a
+whole-file size ceiling, and the Workbench displays live transfer progress.
+It also fixes chat interruption races, completes bilingual Memory, Schedule,
+and Knowledge Base surfaces, and repairs Knowledge Base and Memory Sources
+layouts across languages and enlarged UI text.
+
+### Isolated remote-control database and upgrade migration
+
+- **Remote state moves to a dedicated SQLite sidecar** — Pairings, peers,
+  grants, replay nonces, command idempotency, and audit events now live in
+  `<runtime-db>.remote-control` instead of competing with high-volume Workbench
+  run events in the primary runtime database. The sidecar uses WAL, a
+  30-second busy timeout, and its own connection lock.
+- **Existing state migrates once and safely** — On first beta4 startup Cyrene
+  detects legacy remote tables in the main database, copies only columns shared
+  with the new schema, and records `split_remote_control_store_v1` in
+  `remote_store_migrations`. The operation is reentrant and legacy tables stay
+  in place for prerelease rollback.
+- **Device identity remains stable** — Identity derivation still uses the
+  original logical database path, preserving device IDs, fingerprints, and
+  established trust after the storage split.
+- **Default grants upgrade without broadening custom grants** — The default
+  capability set now includes `approval:respond`, enabling a controller to
+  answer a remote Agent's pending question. Migration adds it only when an
+  existing grant exactly matches beta3's untouched default set.
+- **Audit and errors identify their origin** — Remote Gateway records command
+  completion and failure. Tool errors carry stable `code`, `error_origin`, and
+  `retryable` fields so controller database contention, controller permission
+  errors, transport failures, timeouts, and remote domain errors remain
+  distinguishable.
+- **Local fixtures follow the sidecar contract** — Root-level
+  `.remote-control`, WAL, and SHM files are ignored, and regression fixtures
+  and the checked test database are synchronized with the new storage model.
+
+### Complete remote Agent workflow
+
+- **New `RunRemoteCyrene` Agent tool** — In one supervised action, Cyrene
+  resolves a trusted device explicitly selected by the current chat, creates a
+  remote chat inside a shared project, sends a user-level instruction to start
+  the remote Agent, and returns chat ID, run ID, cursor, state, and idempotency
+  metadata.
+- **The remote device retains its complete local harness** — Its Agent may use
+  locally installed and authorized models, tools, skills, browser and computer
+  use, files, and integrations. The controller gains no arbitrary HTTP, shell,
+  or raw-tool bypass and cannot skip the remote sandbox, credentials,
+  permissions, or approvals.
+- **Remote execution modes remain bounded** — Only `default` and `plan` are
+  accepted; cross-device requests cannot demand `auto` or `full_access`.
+  Derived idempotency keys separately protect chat creation and run start.
+- **Typed remote actions are documented precisely** — `RemoteCyreneAction`
+  describes Chat, Run, Task, and Approval payloads and directs full workflows
+  through chat creation, `chats.send`, `runs.events`, `runs.guide`, and
+  `approvals.respond` rather than arbitrary commands.
+- **Progressive tool registration is complete** — The new tool is wired into
+  native modules, catalog, main-only restrictions, resource keys, and the
+  `remote_control` capability package, while disclosure remains limited to
+  chats with an explicitly selected remote device.
+- **Architecture documentation is current** — The remote-control design now
+  covers sidecar storage, all four remote Agent tools, full remote-harness
+  semantics, approval loops, chunked files, permission boundaries, and current
+  route and OpenAPI contracts.
+
+### Unlimited whole-file artifact and attachment transfers
+
+- **The old 10 MiB whole-file cap is removed** — `artifacts.read` now uses an
+  offset-based protocol with 512 KiB default chunks and a 1 MiB maximum remote
+  chunk. Responses include offset, chunk size, next offset, total size, EOF,
+  progress, and Base64 chunk data while the complete file can be any size.
+- **New `attachments.read` remote command** — It reads an attachment explicitly
+  referenced by a target chat and preserves filename, media type, kind, width,
+  height, and size metadata under the existing `artifact:read` capability.
+- **New Control API attachment endpoint** —
+  `GET /v1/control/chats/{chat_id}/attachments/{attachment_id}` returns the
+  referenced file, while chat details expose a `download_url` for each valid
+  attachment. OpenAPI, operation lists, schemas, and route contracts are
+  updated.
+- **Reads are bound to transcript references** — An attachment ID must occur in
+  the target chat. Managed upload and export URLs remain confined to managed
+  roots; an explicitly referenced local absolute path is transferable, but the
+  endpoint cannot probe unrelated files.
+- **The controller assembles streams automatically** —
+  `RemoteCyreneStatus` requests consecutive chunks, verifies monotonic offsets,
+  assembles a temporary file under `remote_transfers`, and registers the final
+  result as a normal generated attachment. Partial and intermediate files are
+  cleaned on success or failure.
+- **Base64 stays out of model context** — The final tool result contains a local
+  attachment descriptor, filename, and size rather than chunk or whole-file
+  Base64, protecting context capacity.
+- **Transfers report live progress** — The executor publishes
+  `tool_call_progress` events with current and total bytes, ratio, and filename.
+  Workbench trace cards render an accent progress bar and percentage while
+  lifecycle merging preserves the richer resolved tool identity.
+
+### Workbench chat reliability and context menus
+
+- **Interruption no longer races persisted state** — `/api/chat/interrupt`
+  waits for the Workbench chat record to settle from running to idle before
+  responding. The frontend detaches its event stream only after the server
+  accepts the interruption, preventing a resync from reading stale running
+  state.
+- **Interrupted chats become idle immediately** — A dedicated
+  `onInterrupted` callback clears the live runtime and refreshes chat data.
+  Session info uses the actual runtime as the sole Replying signal instead of
+  trusting a stale `chat.status`.
+- **Interrupt failures are visible** — The model checks HTTP status, runtime
+  error feedback receives failures, and stream cleanup still runs safely.
+- **Tool lifecycle merging preserves richer entries** — Empty nonterminal
+  updates no longer overwrite a resolved tool name; progress, start, and finish
+  events merge into one stable trace entry.
+- **The Add Context menu stays inside narrow windows** — The entire context
+  chip row is now the positioning container, the add-button anchor is static,
+  and min/normal/max width constraints keep long Chinese and English labels
+  visible without clipping.
+
+### Memory, Schedule, and Knowledge Base localization
+
+- **Memory is fully connected to Workbench i18n** — Titles, categories,
+  sources, overview statistics, search, sorting, empty states, details,
+  citations, relations, history, editing, deletion, and relative times now use
+  shared translation keys with natural English date and relative-time output.
+- **Memory Sources uses a resilient card layout** — The donut is centered above
+  a full-width dot/label/percentage legend. Chinese, English, narrow sidebars,
+  and enlarged UI text no longer produce percentage overlap, one-character
+  English wrapping, or vertical labels.
+- **Schedule dates switch with language** — Day, month, range, all-day event,
+  and event-detail formatting uses Chinese or `en-US` month and weekday forms,
+  and the page subscribes to language changes.
+- **The real Knowledge Base route is localized** — The active Workbench route
+  uses `workbench-library.jsx`; beta4 localizes that actual entry instead of
+  only the unused fallback Knowledge page. Core sidebar, toolbar, filters,
+  sorting, table, card, empty-state, batch, metadata, note, and tag text now
+  switches language.
+- **The blank Knowledge Base result area is repaired** — Header, Add menu, Sort
+  menu, and batch-action JSX nesting is restored so toolbar, result table or
+  card grid, workspace, and right detail panel are siblings again and existing
+  items render normally.
+- **Knowledge metadata labels are consistent** — Bibliography and file types,
+  reading status, untitled fallbacks, author overflow, table columns,
+  attachments, abstracts, notes, and tags share the `library.*` namespace.
+
+### Settings, subagents, and compatibility
+
+- **Internal subagent fuses leave the ordinary settings form** — Agent settings
+  no longer expose execution-safety and discussion-limit implementation
+  controls as everyday behavior preferences. Existing configuration remains
+  compatible.
+- **Cost-fuse currency is corrected** — Execution worker prompts display `¥`,
+  and estimated USD cost is multiplied by 7.25 before comparison with the CNY
+  ceiling, aligning presentation and enforcement.
+- **All active version surfaces move to beta4** — Python package metadata,
+  Electron package and lock, README badges, documentation sidebar, WeChat
+  headers, WebUI and PDF asset cache keys, `uv.lock`, and version-contract tests
+  now agree on `0.7.0b4` / `0.7.0-beta.4`.
+- **README limitations move into dedicated documents** — The English and
+  Chinese READMEs retain concise entry links, while operator and security
+  boundaries, model and data requirements, API lifecycle, missing features,
+  Windows source constraints, and release/manual gates now live in
+  `docs/limitations.md` and `docs/limitations.zh-CN.md`.
+
+### Tests and release gates
+
+- **Remote storage regressions** cover legacy migration, the migration marker,
+  exact default-grant upgrades, successful commands while the runtime database
+  holds a write lock, audit completion, and error origins.
+- **Remote Agent regressions** use two gateways to verify chat creation, Agent
+  start, permission and language propagation, idempotency, and returned run
+  metadata.
+- **Transfer regressions** cover Control attachment downloads, chat-reference
+  enforcement, referenced external files above 10 MiB, first and final chunks,
+  continuous offsets, local assembly, attachment registration, Base64
+  isolation, and progress events.
+- **Workbench contract regressions** cover server-settled interruption, idle
+  persistence, trace progress, tool identity merging, context-menu bounds,
+  Memory/Schedule/Knowledge localization, Knowledge component hierarchy, and
+  Memory Sources layout.
+- **The local beta4 release gate passes** — The locked Python environment runs
+  all 1,466 pytest cases with unhandled thread warnings promoted to errors,
+  alongside 44 Electron App Use Node tests, rebuilding all 32 WebUI JSX
+  entries, Python `compileall`, version consistency, and `git diff --check`.
+- **The release workflow remains tag-driven** —
+  `v0.7.0-beta.4` triggers the existing macOS, Windows x64/ARM64, and Linux
+  PyInstaller plus Electron builds, frozen smoke tests, and a GitHub
+  prerelease whose notes are extracted from this section.
+
+---
+
 ## [0.7.0b3] - 2026-07-27
 
 This is the third `0.7.0` beta. It completes the direct Cyrene-device control

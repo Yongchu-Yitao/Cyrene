@@ -16,7 +16,10 @@ from typing import Any
 from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse, JSONResponse
 
-from cyrene.runtime.remote_commands import public_remote_event
+from cyrene.runtime.remote_commands import (
+    public_remote_event,
+    referenced_chat_attachment_target,
+)
 from cyrene.workbench import runtime as workbench_runtime
 from route import schemas as workbench_schemas
 from route.control_schemas import (
@@ -79,6 +82,7 @@ _CONTROL_OPERATIONS = [
     "approvals.respond",
     "artifacts.list",
     "artifacts.read",
+    "attachments.read",
 ]
 
 def _error_payload(response: JSONResponse) -> JSONResponse:
@@ -101,7 +105,7 @@ def _chat_summary(raw: dict[str, Any], run_manager: Any) -> ControlChatSummary:
     )
 
 
-def _message(raw: dict[str, Any]) -> ControlMessage:
+def _message(raw: dict[str, Any], chat_id: str) -> ControlMessage:
     attachments = raw.get("attachments")
     return ControlMessage(
         id=str(raw.get("id") or ""),
@@ -111,11 +115,26 @@ def _message(raw: dict[str, Any]) -> ControlMessage:
         attachments=[
             {
                 key: item[key]
-                for key in ("id", "name", "type", "mediaType", "size")
+                for key in (
+                    "id",
+                    "name",
+                    "type",
+                    "mediaType",
+                    "content_type",
+                    "kind",
+                    "size",
+                    "width",
+                    "height",
+                )
                 if key in item
+            } | {
+                "download_url": (
+                    f"/v1/control/chats/{chat_id}/attachments/"
+                    f"{item.get('id')}"
+                )
             }
             for item in attachments or []
-            if isinstance(item, dict)
+            if isinstance(item, dict) and str(item.get("id") or "")
         ],
         question_id=str(raw.get("questionId") or ""),
         question_kind=str(raw.get("questionKind") or ""),
@@ -127,7 +146,7 @@ def _chat_detail(raw: dict[str, Any], run_manager: Any) -> ControlChatDetail:
     return ControlChatDetail(
         **summary.model_dump(),
         messages=[
-            _message(item)
+            _message(item, str(raw.get("id") or ""))
             for item in raw.get("messages") or []
             if isinstance(item, dict)
         ],
@@ -1060,6 +1079,54 @@ def register_control_routes(
             filename=filename,
             media_type=mimetypes.guess_type(filename)[0]
             or "application/octet-stream",
+        )
+
+    @router.get(
+        "/v1/control/chats/{chat_id}/attachments/{attachment_id}",
+        responses={
+            **common_errors,
+            200: {"content": {"application/octet-stream": {}}},
+        },
+        tags=["Control"],
+        operation_id="control_v1_read_chat_attachment",
+    )
+    async def control_read_chat_attachment(chat_id: str, attachment_id: str):
+        result = await chat_adapter["get_chat"](chat_id)
+        if isinstance(result, JSONResponse):
+            return _error_payload(result)
+        chat = dict(result.get("chat") or {})
+        if not chat:
+            return JSONResponse(
+                {"error": "chat not found", "code": "chat_not_found"},
+                status_code=404,
+            )
+        try:
+            attachment, target = referenced_chat_attachment_target(
+                chat,
+                attachment_id,
+            )
+        except LookupError as exc:
+            return JSONResponse(
+                {"error": str(exc), "code": "attachment_not_found"},
+                status_code=404,
+            )
+        except FileNotFoundError as exc:
+            return JSONResponse(
+                {"error": str(exc), "code": "attachment_file_not_found"},
+                status_code=404,
+            )
+        filename = Path(
+            str(attachment.get("name") or target.name)
+        ).name or target.name
+        return FileResponse(
+            target,
+            filename=filename,
+            media_type=str(
+                attachment.get("content_type")
+                or attachment.get("mediaType")
+                or mimetypes.guess_type(filename)[0]
+                or "application/octet-stream"
+            ),
         )
 
 

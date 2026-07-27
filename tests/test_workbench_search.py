@@ -232,6 +232,22 @@ def test_delete_regular_workbench_chat_still_removes_store(
     assert payload["chats"] == []
 
 
+def test_interrupt_workbench_chat_settles_persisted_running_status(
+    client, search_env,
+):
+    chats_path = search_env["data_dir"] / "workbench_chats.json"
+    payload = json.loads(chats_path.read_text(encoding="utf-8"))
+    payload["chats"][0]["status"] = "running"
+    chats_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    response = client.post("/api/chat/interrupt?session_id=chat_1")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    settled = json.loads(chats_path.read_text(encoding="utf-8"))
+    assert settled["chats"][0]["status"] == "idle"
+
+
 def test_compact_workbench_chat_is_an_explicit_forced_action(
     client, search_env, monkeypatch,
 ):

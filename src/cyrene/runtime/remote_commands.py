@@ -27,7 +27,8 @@ from cyrene.runtime.remote_pairing import DirectPairingServer
 from cyrene.workbench import runtime as workbench_runtime
 from route import schemas as api_models
 
-_MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
+_DEFAULT_TRANSFER_CHUNK_BYTES = 512 * 1024
+_MAX_TRANSFER_CHUNK_BYTES = 1024 * 1024
 _REMOTE_PUBLIC_EVENT_TYPES = {
     "ack",
     "awaiting_user",
@@ -184,7 +185,17 @@ def _attachment_summary(item: Any) -> dict[str, Any] | None:
         return None
     result = {
         key: item[key]
-        for key in ("id", "name", "type", "mediaType", "size")
+        for key in (
+            "id",
+            "name",
+            "type",
+            "mediaType",
+            "content_type",
+            "kind",
+            "size",
+            "width",
+            "height",
+        )
         if key in item
     }
     return result or None
@@ -243,6 +254,81 @@ def _artifact_summary(item: Any) -> dict[str, Any] | None:
         "created_at": str(item.get("createdAt") or ""),
         "size": int(item["size"]) if item.get("size") is not None else None,
     }
+
+
+def _file_chunk(file_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    """Read one bounded transport chunk without limiting the complete file."""
+    size = file_path.stat().st_size
+    offset = max(0, int(payload.get("offset") or 0))
+    requested = int(payload.get("limit") or _DEFAULT_TRANSFER_CHUNK_BYTES)
+    limit = max(1, min(requested, _MAX_TRANSFER_CHUNK_BYTES))
+    if offset > size:
+        return {
+            "ok": False,
+            "code": "transfer_offset_invalid",
+            "error": "transfer offset is beyond the end of the file",
+            "size": size,
+            "offset": offset,
+        }
+    with file_path.open("rb") as handle:
+        handle.seek(offset)
+        content = handle.read(limit)
+    next_offset = offset + len(content)
+    return {
+        "size": size,
+        "offset": offset,
+        "chunk_size": len(content),
+        "next_offset": next_offset,
+        "eof": next_offset >= size,
+        "progress": 1.0 if size == 0 else min(1.0, next_offset / size),
+        "content_base64": base64.b64encode(content).decode("ascii"),
+    }
+
+
+def referenced_chat_attachment_target(
+    chat: dict[str, Any],
+    attachment_id: str,
+) -> tuple[dict[str, Any], Path]:
+    """Resolve only a file explicitly referenced by a chat transcript."""
+    attachment = next(
+        (
+            item
+            for message in chat.get("messages") or []
+            if isinstance(message, dict)
+            for item in message.get("attachments") or []
+            if isinstance(item, dict)
+            and str(item.get("id") or "") == str(attachment_id)
+        ),
+        None,
+    )
+    if attachment is None:
+        raise LookupError("attachment is not referenced by this chat")
+
+    referenced_path = str(attachment.get("path") or "").strip()
+    if referenced_path:
+        candidate = Path(referenced_path).expanduser().resolve()
+        if candidate.exists() and candidate.is_file():
+            return attachment, candidate
+
+    from cyrene.runtime.attachments import EXPORTS_DIR, UPLOADS_DIR
+
+    url = str(attachment.get("url") or "")
+    if url.startswith("/api/chat/upload/"):
+        candidate_roots = (UPLOADS_DIR,)
+    elif url.startswith("/api/chat/export/"):
+        candidate_roots = (EXPORTS_DIR,)
+    else:
+        candidate_roots = (EXPORTS_DIR, UPLOADS_DIR)
+    route_name = Path(url).name if url else Path(str(attachment_id)).name
+    for root in candidate_roots:
+        candidate = (root / route_name).resolve()
+        if (
+            candidate.exists()
+            and candidate.is_file()
+            and candidate.parent == root.resolve()
+        ):
+            return attachment, candidate
+    raise FileNotFoundError("referenced attachment file is unavailable")
 
 
 def _task_detail(task: dict[str, Any]) -> dict[str, Any]:
@@ -363,6 +449,8 @@ class RemoteCommandExecutor:
             return await self._artifacts_list(project_id, payload)
         if command == "artifacts.read":
             return await self._artifacts_read(project_id, payload)
+        if command == "attachments.read":
+            return await self._attachments_read(project_id, payload)
         return {
             "ok": False,
             "code": "remote_command_unsupported",
@@ -988,24 +1076,57 @@ class RemoteCommandExecutor:
         except (LookupError, ValueError, FileNotFoundError) as exc:
             return {"ok": False, "code": "artifact_unavailable", "error": str(exc)}
         file_path = Path(path)
-        size = file_path.stat().st_size
-        if size > _MAX_ARTIFACT_BYTES:
-            return {
-                "ok": False,
-                "code": "artifact_too_large",
-                "error": "artifact exceeds the 10 MiB remote transfer limit",
-                "size": size,
-            }
         return {
             "ok": True,
             "artifact": _artifact_summary(artifact),
             "filename": file_path.name,
             "media_type": mimetypes.guess_type(file_path.name)[0]
             or "application/octet-stream",
-            "size": size,
-            "content_base64": base64.b64encode(file_path.read_bytes()).decode(
-                "ascii"
+            **_file_chunk(file_path, payload),
+        }
+
+    async def _attachments_read(
+        self,
+        project_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Read one chunk of a file explicitly referenced by a shared chat."""
+        _chat_id, chat = await self._chat_for_project(project_id, payload)
+        if chat is None or chat.get("ok") is False:
+            return dict(chat or {"ok": False, "error": "chat not found"})
+        attachment_id = _require_text(
+            payload,
+            "attachment_id",
+            max_length=240,
+        )
+        try:
+            attachment, file_path = referenced_chat_attachment_target(
+                chat,
+                attachment_id,
+            )
+        except LookupError as exc:
+            return {
+                "ok": False,
+                "code": "attachment_not_found",
+                "error": str(exc),
+            }
+        except FileNotFoundError as exc:
+            return {
+                "ok": False,
+                "code": "attachment_unavailable",
+                "error": str(exc),
+            }
+        return {
+            "ok": True,
+            "attachment": _attachment_summary(attachment),
+            "filename": file_path.name,
+            "media_type": str(
+                attachment.get("content_type")
+                or attachment.get("mediaType")
+                or mimetypes.guess_type(file_path.name)[0]
+                or "application/octet-stream"
             ),
+            **_file_chunk(file_path, payload),
         }
 
 

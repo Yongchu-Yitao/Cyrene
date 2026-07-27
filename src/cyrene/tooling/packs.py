@@ -124,6 +124,7 @@ CAPABILITY_BINDINGS: dict[str, tuple[tuple[str, str], ...]] = {
         ("remote.devices.list", "ListRemoteDevices"),
         ("remote.status", "RemoteCyreneStatus"),
         ("remote.action", "RemoteCyreneAction"),
+        ("remote.run", "RunRemoteCyrene"),
     ),
     "integration_tools": (),
 }

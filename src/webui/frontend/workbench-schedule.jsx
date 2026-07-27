@@ -80,18 +80,18 @@
   }
 
   function dayHeading(d) {
-    if (currentLang() !== "zh") return d.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+    if (currentLang() !== "zh") return d.toLocaleDateString("en-US", { weekday: "short", year: "numeric", month: "short", day: "numeric" });
     return d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日 周" + WEEKDAY_CN[d.getDay()];
   }
   function monthHeading(d) {
-    if (currentLang() !== "zh") return d.toLocaleDateString(undefined, { year: "numeric", month: "long" });
+    if (currentLang() !== "zh") return d.toLocaleDateString("en-US", { year: "numeric", month: "long" });
     return d.getFullYear() + "年" + (d.getMonth() + 1) + "月";
   }
   function weekHeading(d) {
     var s = startOfWeekMon(d), e = addDays(s, 6);
     if (currentLang() !== "zh") {
-      return s.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " - " +
-        e.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+      return s.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " - " +
+        e.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
     }
     if (s.getMonth() === e.getMonth()) {
       return s.getFullYear() + "年" + (s.getMonth() + 1) + "月 " + s.getDate() + "–" + e.getDate() + " 日";
@@ -706,9 +706,9 @@
   function detailTimeText(ev) {
     if (ev.all_day) return (currentLang() === "zh"
       ? ev._start.getFullYear() + "年" + (ev._start.getMonth() + 1) + "月" + ev._start.getDate() + "日"
-      : ev._start.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })) + " · " + T("schedule.allDay");
+      : ev._start.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })) + " · " + T("schedule.allDay");
     if (currentLang() !== "zh") {
-      return ev._start.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" }) +
+      return ev._start.toLocaleDateString("en-US", { weekday: "short", year: "numeric", month: "short", day: "numeric" }) +
         " " + clockHM(ev._start) + " - " + clockHM(ev._end);
     }
     return ev._start.getFullYear() + "年" + (ev._start.getMonth() + 1) + "月" + ev._start.getDate() + "日 周" + WEEKDAY_CN[ev._start.getDay()] +
@@ -904,6 +904,7 @@
 
   // ── main page ────────────────────────────────────────────────────────
   function WorkbenchSchedulePage(props) {
+    window.CyreneUI.require("i18n").use();
     var project = props && props.project;
     var active = !props || props.active !== false;
     // Send the canonical id. The backend resolves it to the schedule dataKey

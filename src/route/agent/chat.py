@@ -432,9 +432,17 @@ def register_chat_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         interrupted = interrupt_active_run(session_id=session_id)
         if session_id:
             try:
-                from route.workbench.chat import _CHAT_RUN_MANAGER
+                from route.workbench.chat import (
+                    _CHAT_RUN_MANAGER,
+                    _settle_chat_running_status,
+                )
 
                 interrupted = _CHAT_RUN_MANAGER.interrupt(session_id) or interrupted
+                # Do not acknowledge a Workbench interruption while its durable
+                # chat record can still say "running". The frontend waits for
+                # this response before detaching its stream, so the subsequent
+                # re-sync cannot race an unfinished running -> idle write.
+                await asyncio.to_thread(_settle_chat_running_status, session_id)
             except Exception:
                 logger.exception("Failed to interrupt workbench chat run for %s", session_id)
         return {"ok": True, "interrupted": interrupted}

@@ -45,6 +45,7 @@ NATIVE_TOOL_MODULES = (
     "cyrene.tool_impl.remote.list_devices",
     "cyrene.tool_impl.remote.status",
     "cyrene.tool_impl.remote.action",
+    "cyrene.tool_impl.remote.run",
     "cyrene.tool_impl.control.quit",
     "cyrene.tool_impl.subagent.send_agent_message",
     "cyrene.tool_impl.subagent.broadcast_agent_message",

@@ -2133,7 +2133,7 @@ async def _run_subagent(
 - Use the minimum sufficient tool calls. Do not reread an unchanged file or repeat an equivalent search unless prior evidence shows a concrete reason.
 - The lease checkpoints every {limits["checkpoint_calls"]} tool calls. New evidence, state change, or a completed acceptance item renews it.
 - If a checkpoint shows no progress, change approach. After {limits["no_progress_turns"]} consecutive no-progress tool rounds, return the best partial/blocked result.
-- Absolute safety fuses are {limits["max_tool_calls"]} actual tool calls, {limits["max_wall_seconds"]} seconds, and ${limits["max_cost_usd"]:.2f} estimated model cost (0 disables the cost fuse). They are resource guards, never normal completion targets.
+- Absolute safety fuses are {limits["max_tool_calls"]} actual tool calls, {limits["max_wall_seconds"]} seconds, and ¥{limits["max_cost_usd"]:.2f} estimated model cost (0 disables the cost fuse). They are resource guards, never normal completion targets.
 - Context is mechanically compacted before it reaches {limits["max_context_tokens"] or "the active model's configured"} token window; the task contract and recent evidence are retained."""
         if effective_mode == EXECUTION_MODE else
         f"""## Discussion Worker Mode
@@ -2342,7 +2342,7 @@ You are a **participant** in this discussion. Rules:
                 if (
                     not force_finalize_reason
                     and limits["max_cost_usd"] > 0
-                    and lease_estimated_cost_usd >= limits["max_cost_usd"]
+                    and lease_estimated_cost_usd * 7.25 >= limits["max_cost_usd"]
                 ):
                     force_finalize_reason = "execution_cost_safety_limit"
                     incomplete_outcome = "resource_exhausted"

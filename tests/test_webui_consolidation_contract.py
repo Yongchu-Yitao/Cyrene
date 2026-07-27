@@ -20,11 +20,11 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 294
+OPENAPI_OPERATION_COUNT = 295
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "04469768dc61f47468ed3ce2d93d9049b1ba08558e1e0335ab53839cd35d2b19"
-TOOL_REGISTRY_SHA256 = "0526a805a0c4153e8b163f7bf8ce628dacc2c038aac4d90f0e29b11c1d6206ac"
+OPENAPI_SHA256 = "f1762d75b0dc465fb980bb4f2d890b67115338b7e413845c0a4ad142babc5287"
+TOOL_REGISTRY_SHA256 = "3b44e3cd4554cf4f722c4dc03d18955307b5d21941ea8e5e8df0db9d61f3f8f8"
 MAIN_WIRE_SHA256 = "56f247691752283c226eb34ea1a8a902df14c8cd5c83ab94f92dbdd89f0e76f3"
 SUBAGENT_WIRE_SHA256 = "2d29000a405e62b49ae6374bbbf43b1edb34fbf0fdee32e5816f73b026981c75"
 
@@ -100,9 +100,9 @@ def test_openapi_contract_matches_locked_generator_baseline():
 def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged():
     from cyrene.tooling import catalog, wire
 
-    assert len(catalog.TOOL_DEFS) == 97
-    assert len(catalog.TOOL_HANDLERS) == 97
-    assert len(catalog._MAIN_ONLY_TOOLS) == 36
+    assert len(catalog.TOOL_DEFS) == 98
+    assert len(catalog.TOOL_HANDLERS) == 98
+    assert len(catalog._MAIN_ONLY_TOOLS) == 37
     assert _sha256_json(catalog.TOOL_DEFS) == TOOL_REGISTRY_SHA256
 
     assert len(wire.get_main_wire_tool_defs()) == 29
@@ -147,44 +147,44 @@ def test_workbench_runtime_dependencies_keep_their_relative_script_order():
         "katex/katex.min.js",
         "purify.min.js",
         "highlight.min.js",
-        "compiled/platform/runtime.js?v=0.7.0b3",
-        "compiled/shared/markdown/math.js?v=0.7.0b3",
-        "compiled/shared/markdown/highlight.js?v=0.7.0b3",
+        "compiled/platform/runtime.js?v=0.7.0b4",
+        "compiled/shared/markdown/math.js?v=0.7.0b4",
+        "compiled/shared/markdown/highlight.js?v=0.7.0b4",
         "leaflet.js",
         "pdfjs/pdf.min.js?v=0.7.4",
         "pdfjs/pdf_viewer.js?v=0.7.4",
-        "compiled/platform/readiness.js?v=0.7.0b3",
-        "compiled/platform/events.js?v=0.7.0b3",
-        "compiled/platform/navigation.js?v=0.7.0b3",
-        "compiled/workbench-i18n.js?v=0.7.0b3",
-        "compiled/shared/i18n/format.js?v=0.7.0b3",
-        "compiled/shared/i18n/translations.js?v=0.7.0b3",
+        "compiled/platform/readiness.js?v=0.7.0b4",
+        "compiled/platform/events.js?v=0.7.0b4",
+        "compiled/platform/navigation.js?v=0.7.0b4",
+        "compiled/workbench-i18n.js?v=0.7.0b4",
+        "compiled/shared/i18n/format.js?v=0.7.0b4",
+        "compiled/shared/i18n/translations.js?v=0.7.0b4",
         "compiled/shared/pdf/bridge.js?v=0.7.4",
-        "compiled/shared/feedback/service.js?v=0.7.0b3",
-        "compiled/shared/markdown/renderer.js?v=0.7.0b3",
-        "compiled/platform/data-store.js?v=0.7.0b3",
-        "compiled/shared/browser/viewport.js?v=0.7.0b3",
-        "compiled/shared/search/overlay.js?v=0.7.0b3",
-        "compiled/shared/markdown/actions.js?v=0.7.0b3",
-        "compiled/shared/diff/viewer.js?v=0.7.0b3",
-        "compiled/platform/api.js?v=0.7.0b3",
-        "compiled/workbench-chat.js?v=0.7.0b3",
-        "compiled/workbench-quick-chat.js?v=0.7.0b3",
-        "compiled/workbench.js?v=0.7.0b3",
-        "compiled/settings-overlay.js?v=0.7.0b3",
-        "compiled/entry/bootstrap.js?v=0.7.0b3",
+        "compiled/shared/feedback/service.js?v=0.7.0b4",
+        "compiled/shared/markdown/renderer.js?v=0.7.0b4",
+        "compiled/platform/data-store.js?v=0.7.0b4",
+        "compiled/shared/browser/viewport.js?v=0.7.0b4",
+        "compiled/shared/search/overlay.js?v=0.7.0b4",
+        "compiled/shared/markdown/actions.js?v=0.7.0b4",
+        "compiled/shared/diff/viewer.js?v=0.7.0b4",
+        "compiled/platform/api.js?v=0.7.0b4",
+        "compiled/workbench-chat.js?v=0.7.0b4",
+        "compiled/workbench-quick-chat.js?v=0.7.0b4",
+        "compiled/workbench.js?v=0.7.0b4",
+        "compiled/settings-overlay.js?v=0.7.0b4",
+        "compiled/entry/bootstrap.js?v=0.7.0b4",
     ]
 
     positions = [scripts.index(script) for script in required_in_order]
     assert positions == sorted(positions)
     assert not {
-        "compiled/app.js?v=0.7.0b3",
-        "compiled/chat.js?v=0.7.0b3",
-        "compiled/dashboard.js?v=0.7.0b3",
-        "compiled/knowledge.js?v=0.7.0b3",
-        "compiled/memory.js?v=0.7.0b3",
-        "compiled/tasks.js?v=0.7.0b3",
-        "compiled/settings.js?v=0.7.0b3",
+        "compiled/app.js?v=0.7.0b4",
+        "compiled/chat.js?v=0.7.0b4",
+        "compiled/dashboard.js?v=0.7.0b4",
+        "compiled/knowledge.js?v=0.7.0b4",
+        "compiled/memory.js?v=0.7.0b4",
+        "compiled/tasks.js?v=0.7.0b4",
+        "compiled/settings.js?v=0.7.0b4",
     }.intersection(scripts)
 
 

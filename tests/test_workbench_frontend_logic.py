@@ -34,6 +34,28 @@ def test_new_workbench_chat_reuses_create_response_without_refetching():
     assert "handleCreateChat();" in source
 
 
+def test_workbench_chat_interrupt_waits_for_server_and_uses_live_status_everywhere():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    runtime_interrupt = source.split(
+        "  function interrupt(chatId, model) {", 1
+    )[1].split("\n  function deferSend", 1)[0]
+    side_status = source.split(
+        'wbcT("workbenchChat.statusLabel", "Status")', 1
+    )[1].split("</div>", 1)[0]
+
+    assert "Promise.resolve(request)" in runtime_interrupt
+    assert ".finally(function () {" in runtime_interrupt
+    assert "abort(chatId);" in runtime_interrupt
+    assert 'fire("onInterrupted", chatId);' in source
+    assert 'return { ...prev, status: "idle" };' in source
+    assert "runtime ?" in side_status
+    assert 'chat.status === "running"' not in side_status
+
+
 def test_workbench_chat_restores_project_cache_before_background_refresh():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
@@ -1505,8 +1527,8 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "输入内容以引导正在运行的 Agent" in (
         root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
-    assert "workbench-chat.js?v=0.7.0b3" in index
-    assert "workbench-i18n.js?v=0.7.0b3" in index
+    assert "workbench-chat.js?v=0.7.0b4" in index
+    assert "workbench-i18n.js?v=0.7.0b4" in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -1529,7 +1551,9 @@ def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
     assert "optimistic: true" in guidance_handler
     assert "response.userMessage" in guidance_handler
     assert "item.clientRequestId" in guidance_handler
-    assert 'status: toolStarted ? "running" : "completed"' in source
+    assert 'status: (toolStarted || toolProgress) ? "running" : "completed"' in source
+    assert 'event.type === "tool_call_progress"' in source
+    assert 'className="wbc-transfer-progress"' in trace_card
     assert 'entry.status === "running"' in trace_card
 
 
@@ -1550,7 +1574,8 @@ def test_workbench_tool_start_is_rendered_then_completed_in_place():
         'event.type === "tool_call_finished"'
     ) in runtime
     assert 'toolCallId: String(event.tool_call_id || "")' in runtime
-    assert 'status: toolStarted ? "running" : "completed"' in runtime
+    assert 'status: (toolStarted || toolProgress) ? "running" : "completed"' in runtime
+    assert 'progressCurrent: toolProgress ?' in runtime
     assert "wbcMergeToolLifecycleEntry(item, entry, terminalToolEvent)" in runtime
     assert "progress: mergeToolProgress(activity && activity.progress)" in runtime
     assert "matchedToolCall" in runtime
@@ -2390,7 +2415,7 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
     assert "padding-inline: 8px;" in compact_tabs[0]
     assert "padding-inline: 2px;" in compact_tabs[1]
     assert "font-size: calc(12px * var(--wb-ui-font-scale, 1));" in compact_tabs[1]
-    assert "workbench.css?v=0.7.0b3" in index
+    assert "workbench.css?v=0.7.0b4" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -2412,7 +2437,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.7.0b3" in index
+    assert "workbench.css?v=0.7.0b4" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -2485,7 +2510,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=0.7.0b3" in index
+    assert "settings-overlay.js?v=0.7.0b4" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -2664,18 +2689,26 @@ def test_workbench_context_picker_contains_long_workspace_paths():
     index = (root / "src" / "webui" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     picker_rule = styles.rsplit(".wbc-ctx-picker {", 1)[1].split("}", 1)[0]
+    chip_row_rule = styles.split(".wbc-context-chips {", 1)[1].split("}", 1)[0]
+    picker_anchor_rule = styles.split(
+        ".wbc-context-chips > .wbc-pop-anchor {", 1
+    )[1].split("}", 1)[0]
     text_rule = styles.rsplit(
         ".wbc-ctx-picker .wbc-popmenu-label,\n.wbc-ctx-picker .wbc-popmenu-desc {",
         1,
     )[1].split("}", 1)[0]
 
-    assert "max-width: calc(100vw - 24px);" in picker_rule
+    assert "position: relative;" in chip_row_rule
+    assert "position: static;" in picker_anchor_rule
+    assert "width: min(360px, 100%);" in picker_rule
+    assert "max-width: 100%;" in picker_rule
+    assert "min-width: min(220px, 100%);" in styles
     assert "overflow-x: hidden;" in picker_rule
     assert "min-width: 0;" in styles
     assert "text-overflow: ellipsis;" in text_rule
     assert "white-space: nowrap;" in text_rule
     assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=0.7.0b3" in index
+    assert "workbench-chat.js?v=0.7.0b4" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -2691,8 +2724,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=0.7.0b3" in index
-    assert "workbench.js?v=0.7.0b3" in index
+    assert "workbench-model.js?v=0.7.0b4" in index
+    assert "workbench.js?v=0.7.0b4" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -2820,7 +2853,7 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
     assert "p.models || p.primary_candidates || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=0.7.0b3" in index
+    assert "settings-overlay.js?v=0.7.0b4" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -3189,7 +3222,7 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=0.7.0b3" in index
+    assert "compiled/workbench-shortcuts.js?v=0.7.0b4" in index
 
 
 def test_workbench_about_related_actions_only_click_right_button():

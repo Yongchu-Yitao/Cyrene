@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <img src="https://img.shields.io/badge/version-0.7.0b3-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.7.0b4-blue" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
   <img src="https://img.shields.io/badge/status-beta-orange" alt="Status">
 </p>
@@ -41,30 +41,11 @@
   Workbench，包含 Quick Chat、Markdown、Code、Diff、Map、PDF、File Preview
   和 Browser View。
 
-Cyrene 只有一个正式 Web UI：**Workbench**。
 
 ## 当前限制
 
-- Cyrene 面向单一本地使用者；Project 是组织边界，不是独立 User 或安全租户。
-- Web Server 仅供本机访问，不适合直接暴露到公网。
-- Tool Permission 能减少误操作，但不等同于 OS、VM 或 Container Sandbox。
-- Prompt 和选中的 Context 会发送到配置的 Model Service；Integration 也可能
-  与其配置的服务交换数据。
-- Chat Model 目前需要 OpenAI-compatible Endpoint。
-- Usage Budget 是本地估算，不是 Provider Billing Control。
-- 数据没有自动 Retention Period，除非用户明确删除或 Reset。
-- Electron Browser Cookie 和 Login 会跨 Project 共享。
-- HTTP API 尚未作为稳定 Public API 版本化。
-- Literature DOI/Title Lookup、Zotero Web API 双向同步、Experiments 和
-  Manuscripts 尚未实现。
-- Windows 源码安装受上游 SimpleXNG 限制；请使用预构建 App 或仓库内 Release
-  Workflow。
-- Pull-request CI 在 Linux 上覆盖完整 Python Suite、WebUI Build 和 Electron
-  App Use Test；打包、视觉、升级和带 Credential 的 Integration 仍是
-  Release/Manual Gate。
-
-精确验证基线见[开发指南](docs/development.zh-CN.md)，已知工程风险见
-[当前开发进度](project-notes/CONTEXT_DEV_PROGRESS.zh-CN.md)。
+当前测试版的安全边界、服务要求、数据行为、平台限制和发布门禁统一记录在
+[当前限制](docs/limitations.zh-CN.md)。
 
 ## 快速开始
 

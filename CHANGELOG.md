@@ -2,6 +2,170 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.7.0b4] - 2026-07-27
+
+这是 `0.7.0` 的第四个测试版，完整包含 `v0.7.0-beta.3` 之后的全部改动。
+本版重点把“连接另一台 Cyrene”从可用的远程命令能力推进为可持续运行的完整
+远端 Agent 工作流：远程状态迁出主运行数据库，远端 Agent 可以一键创建对话并
+开始工作，Artifact 与 Chat Attachment 可以无总大小上限地分块传输并显示实时
+进度。同时修复 Workbench 对话中断竞态，完成记忆、日程和知识库的中英文适配，
+并修正知识库结果区与记忆来源卡片在不同语言和大字号下的布局。
+
+### 独立远程控制数据库与升级迁移
+
+- **远程状态迁入独立 SQLite Sidecar** — Pairing、Peer、Grant、Replay Nonce、
+  Command Idempotency 和 Audit Event 不再与高频 Workbench Run Event 共用主
+  Runtime 数据库，而是写入 `<runtime-db>.remote-control`。Sidecar 使用 WAL、
+  `30s` Busy Timeout 和独立连接锁，避免主运行流持有写事务时阻塞远程命令的
+  审计、加密投递或响应处理。
+- **旧数据一次性兼容迁移** — 首次打开 beta4 时会检测主库中的历史远程表，
+  只复制目标库实际存在的共同列，并按表使用 `INSERT OR IGNORE/REPLACE`。
+  `remote_store_migrations` 保存 `split_remote_control_store_v1` 标记，保证迁移
+  可重入且只执行一次；旧表暂不删除，便于测试版回滚。
+- **设备身份保持稳定** — Device Identity 仍从原逻辑数据库路径派生，升级前后
+  Device ID、Fingerprint 和已有信任关系不会因为数据文件拆分而改变。
+- **默认授权安全升级** — 新的默认 Remote Capability 加入
+  `approval:respond`，让远端 Agent 的 Pending Question 可以完成闭环。升级器
+  只在现有 Grant 精确等于 beta3 旧默认集合时补入该能力；用户手动收窄或定制
+  过的授权不会被静默扩权。
+- **审计区分完成与失败来源** — Remote Gateway 记录 Command 完成和失败，
+  Tool Error 统一携带稳定 `code`、`error_origin` 与 `retryable`。控制端数据库
+  Busy、控制端权限、传输不可达、超时和远端领域错误不再被压缩成同一个模糊
+  Error String。
+- **本地测试数据库配套更新** — `.gitignore` 新增根目录
+  `*.remote-control`、WAL 和 SHM 忽略规则，回归 Fixture 与现有测试数据库同步
+  到新的 Sidecar 存储约定。
+
+### 完整远端 Agent 工作流
+
+- **新增 `RunRemoteCyrene` Agent Tool** — 对当前对话明确选择的可信设备执行
+  一次受监督操作：先在共享 Project 中创建 Remote Chat，再发送用户级任务启动
+  被控端 Agent，并返回 `chat_id`、`run_id`、Cursor、状态和幂等信息。
+- **远端仍运行自己的完整 Harness** — 被控端 Agent 可以使用该设备本地已经
+  安装并授权的模型、工具、Skill、Browser、Computer Use、文件和集成；控制端
+  不会获得任意 HTTP、Shell 或底层 Tool 旁路，也不会绕过远端 Sandbox、审批、
+  Credential 和 Permission Mode。
+- **远程运行模式保持最小权限** — `RunRemoteCyrene` 只接受 `default` 或
+  `plan`，禁止跨设备请求 `auto/full_access`。创建和发送分别使用派生的稳定
+  Idempotency Key，重试不会重复创建对话或重复启动同一任务。
+- **远程操作描述更明确** — `RemoteCyreneAction` 现在完整列出 Chat、Run、
+  Task 和 Approval 的 Typed Payload；文案明确建议通过创建 Chat、发送指令、
+  跟踪 `runs.events`、补充 `runs.guide` 和回答 Pending Question 来使用远端
+  Cyrene，而不是尝试调用任意命令。
+- **Tool Catalog 与 Progressive Package 完整注册** — 新 Tool 加入 Native
+  Module、Catalog、Main-only Set、Resource Key 和 `remote_control`
+  Capability Binding，继续遵循“只有当前对话显式选择远端设备才披露能力”的
+  Progressive Tool 原则。
+- **设计与操作文档同步扩充** — Remote Control 设计文档补充 Sidecar 数据库、
+  四个 Remote Agent Tool、完整远端 Agent 使用语义、权限边界、分块协议、
+  Approval Loop、Attachment/Artifact 下载以及最新 Route/OpenAPI 契约数量。
+
+### 无总大小上限的 Artifact 与 Attachment 分块传输
+
+- **移除完整文件 10 MiB 上限** — `artifacts.read` 改为 Offset-based Chunk
+  Protocol：默认每块 `512 KiB`，远端单块最大 `1 MiB`，但完整文件总大小不再
+ 受限制。每次响应返回 `offset`、`chunk_size`、`next_offset`、`size`、
+  `eof`、`progress` 和 Base64 Chunk。
+- **新增 `attachments.read` Remote Command** — 可以读取目标 Chat 消息中
+  明确引用的 Attachment，保留 Filename、Media Type、Kind、Width、Height 和
+  Size 等元数据，Capability 继续复用 `artifact:read`。
+- **新增 Control API Attachment 下载端点** —
+  `GET /v1/control/chats/{chat_id}/attachments/{attachment_id}` 返回真实文件，
+  Chat Detail 同时为每个有效 Attachment 暴露 `download_url`。OpenAPI、
+  Operation List、Schema 和 Route Structure Contract 已同步更新。
+- **附件读取绑定对话引用** — Attachment ID 必须出现在目标 Chat Transcript
+  中。Cyrene 托管 Upload/Export 路径继续限制在受管根目录；对话明确引用的本机
+  绝对文件也可传输，但不能借该接口探测或读取未被 Chat 引用的任意路径。
+- **控制端自动流式组装** — `RemoteCyreneStatus` 对 Artifact/Attachment Read
+  自动循环拉取连续 Chunk，验证 Offset 单调前进，在本机
+  `remote_transfers` 临时目录组装，完成后注册为标准 Generated Attachment。
+  临时 `.part` 和中间文件在成功或失败后都会清理。
+- **Base64 不进入 Agent 上下文** — Tool 最终只返回本地 Attachment 描述、
+  Filename 和 Size，不把每块 Base64 或整个文件内容交给模型，降低上下文成本
+  并避免大文件破坏 Agent 回合。
+- **实时传输进度** — Tool Executor 新增 `tool_call_progress` Event，携带当前
+  Bytes、总 Bytes、比例和文件名。Workbench Trace Card 显示 Accent Progress
+  Bar 与百分比，并在后续 Lifecycle Event 合并时保留已经解析出的 Tool 名称。
+
+### Workbench 对话可靠性与上下文菜单
+
+- **修复中断后的“仍在回复”竞态** — `/api/chat/interrupt` 在响应前等待
+  Workbench Chat 的持久状态完成 `running → idle`，前端则在服务端接受中断后
+  才 Detach Event Stream，避免重新同步读回尚未落盘的旧状态。
+- **中断状态立即一致** — Runtime 新增专用 `onInterrupted` 回调，立即清理当前
+  Chat 的 Live Runtime 并刷新列表。会话信息只以真实 Runtime 判断“回复中”，
+  不再让残留的 `chat.status === "running"` 永久污染 UI。
+- **中断失败可以被看见** — Model Interrupt 现在校验 HTTP Status；Runtime
+  捕获错误并发送现有 Error Feedback，随后仍执行安全的 Stream Cleanup。
+- **Tool Lifecycle 合并保留 richer identity** — 非终态更新不再用空文本覆盖
+  已解析出的 Tool Name；Progress、Started 和 Finished Event 可以稳定合并为
+  同一 Trace Entry。
+- **修复添加上下文菜单窄窗口裁切** — Context Chips Row 成为定位容器，
+  Popover Anchor 不再固定到最右侧“添加”按钮；菜单从整行左侧定位，并同时限制
+  `min-width`、`width` 和 `max-width`，在窄窗口和长中英文标签下保持可见。
+
+### 记忆、日程与知识库 i18n
+
+- **记忆界面完整接入 Workbench i18n** — 页面标题、分类、来源、统计、搜索、
+  排序、空状态、详情、引用、关联、历史、编辑 Modal、删除确认和相对时间均使用
+  统一 Translation Key；英文日期和相对时间使用自然的本地化格式。
+- **记忆来源卡片重排** — 圆环图改为居中显示，图例使用占满卡片宽度的
+  Dot/Label/Percentage 三列布局。中文、英文、窄侧栏和放大 UI 字号下都不会再
+  出现百分比重叠、英文逐字断行或中英文标签被挤成竖排。
+- **日程日期完成中英文格式切换** — 日、月、区间、全天事件和事件详情会根据
+  Workbench Language 使用中文或 `en-US` Month/Weekday 格式，页面挂载时订阅
+  i18n 变化并即时刷新。
+- **知识库实际入口完成 i18n** — Workbench 当前路由使用
+  `workbench-library.jsx`，beta4 直接在这个真实入口接入翻译，而不是只修改未被
+  当前路由采用的备用 Knowledge Page。侧栏、Toolbar、筛选、排序、表格、卡片、
+  Empty State、Batch Action、Metadata、Notes 和 Tags 的核心文案均可切换。
+- **修复知识库结果区空白** — 文案替换期间被错误嵌套的 Header、Add Menu、
+  Sort Menu 和 Batch Action JSX 层级已恢复；Toolbar、Result Table/Card、
+  Workspace 和 Right Detail Panel 重新成为正确的兄弟节点，已有条目正常渲染。
+- **知识库类型与文件类型统一翻译** — Bibliography Type、File Type、
+  Reading Status、Untitled Fallback、Author Overflow、Column Header、
+  Attachment/Abstract/Note/Tag 元数据均使用一致的 `library.*` Key。
+
+### 设置、Subagent 与兼容性修正
+
+- **高级 Subagent Guardrail 不再暴露为普通设置表单** — Agents Settings
+  移除 Execution Safety、Discussion Limit 等内部资源熔断输入项，避免用户把
+  实现级安全阈值误认为日常可调 Agent 行为；现有配置兼容性不受影响。
+- **成本熔断单位修正为人民币** — Execution Worker Prompt 显示 `¥`，实际
+  Estimated USD Cost 按 `7.25` 换算后再与人民币上限比较，修正此前 UI 单位和
+  执行判定不一致的问题。
+- **版本与缓存键统一到 beta4** — Python Package、Electron Package/Lock、
+  README Badge、Docs Sidebar、WeChat Agent Header、WebUI/PDF Asset Cache
+  Key、`uv.lock` 和对应测试全部同步为 `0.7.0b4` /
+  `0.7.0-beta.4`。
+- **README 当前限制独立成文档** — 中英文 README 只保留精简入口，完整的单用户
+  安全边界、模型与数据要求、API 生命周期、未实现功能、Windows 源码限制和
+  Release/Manual Gate 分别迁入 `docs/limitations.md` 与
+  `docs/limitations.zh-CN.md`，便于后续独立维护。
+
+### 测试与发布门禁
+
+- **远程数据库回归** — 覆盖旧库迁移、Migration Marker、默认 Grant 精确升级、
+  主 Runtime DB 持写锁时远程命令仍可完成、Command Audit 与错误来源分类。
+- **远程 Agent 回归** — 双 Gateway 场景验证 `RunRemoteCyrene` 创建 Chat、
+  启动 Agent、传递 Permission/Language、保持幂等并返回可供后续状态查询的
+  Run Metadata。
+- **文件传输回归** — 覆盖 Control Attachment 下载、只读 Chat 引用文件、
+  超过 10 MiB 的外部引用文件、首尾 Chunk、连续 Offset、控制端组装、本地
+  Attachment 注册、Base64 隔离和实时 Progress Event。
+- **Workbench 契约回归** — 覆盖中断等待服务端、持久状态归零、Trace Progress、
+  Tool Identity 合并、上下文菜单边界、记忆/日程/知识库 i18n、知识库组件层级
+  和记忆来源卡片布局。
+- **本地 beta4 发布门禁通过** — 锁定 Python 环境完整执行 `1,466` 项 pytest，
+  未处理 Thread Warning 提升为 Error；同时通过 `44` 项 Electron App Use
+  Node Test、32 个 WebUI JSX Entry 重建、Python `compileall`、版本一致性和
+  `git diff --check`。
+- **发布工作流保持不变** — `v0.7.0-beta.4` Tag 将触发现有 Release Workflow，
+  为 macOS、Windows x64/ARM64 和 Linux 构建 PyInstaller + Electron 安装包，
+  执行 Frozen Smoke，并把本节 Changelog 作为 GitHub Prerelease Notes。
+
+---
+
 ## [0.7.0b3] - 2026-07-27
 
 这是 `0.7.0` 的第三个测试版，集中完成 `v0.7.0-beta.2` 之后的 Cyrene

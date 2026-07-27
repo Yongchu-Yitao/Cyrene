@@ -596,7 +596,7 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert "intentionally owns no sample data" in source
     assert "!nextItems.some" in source
     assert 'setSelectedId("")' in source
-    assert 'scope.type === "all" ? "知识库"' in source
+    assert 'scope.type === "all" ? L("library.title", "Knowledge base")' in source
     assert 'scope.type !== "all" && h("h2"' in source
     assert 'className: "wb-lib-head-button zotero"' not in source
     assert "wb-lib-side-section-toggle" in source
@@ -616,8 +616,10 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert ".wb-lib-batch-actions" in styles
     assert "filters.file_type" in source
     assert "params.file_type = filters.file_type" in source
-    assert '"文件类型"' in source
-    assert '"图片"' in source and '"音频"' in source and '"视频"' in source
+    assert 'L("library.filterFileType", "File type")' in source
+    assert 'L("library.fileType.image", "Images")' in source
+    assert 'L("library.fileType.audio", "Audio")' in source
+    assert 'L("library.fileType.video", "Video")' in source
     assert "wb-lib-card-description" in source
     assert "wb-lib-card-foot" in source
     assert 'className: "wb-lib-check wb-lib-card-check"' in source
@@ -648,8 +650,11 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert "wb-lib-trash-button" not in source
     assert "border-left: 3px solid var(--wb-accent)" not in styles
     assert "border: 1px solid var(--wb-accent)" in styles
-    assert '"aria-label": "文献具体信息"' in source
-    assert '"aria-label": "摘要、笔记和标签"' in source
+    assert '"aria-label": L("library.itemInfo", "Item information")' in source
+    assert (
+        '"aria-label": L("library.summaryNotesTags", "Summary, notes and tags")'
+        in source
+    )
     assert 'props.tab === "info" ? " info" : ""' in source
     assert ".wb-lib-work-body.info { overflow: hidden; padding: 0; }" in styles
     assert "border-right: 1px solid var(--wb-line)" in styles

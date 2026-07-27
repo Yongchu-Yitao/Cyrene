@@ -21,6 +21,9 @@ backups/
 # Stray root-level SQLite (runtime DBs live in store/ and data/)
 /db.sqlite3
 /db.sqlite3-*
+/*.remote-control
+/*.remote-control-shm
+/*.remote-control-wal
 
 # Environment
 .env
