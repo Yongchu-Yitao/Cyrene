@@ -16,6 +16,12 @@
 导致整套远程功能不可用，以及 Workbench“添加上下文”菜单无法点击外部关闭和
 显示设备指纹等问题。
 
+本次 beta5 重发进一步修复了安装版真实会话中暴露出的直接 Harness 授权误判：
+设备列表向 Agent 返回 `toolpack:<wire_name>` Grant，而初版控制器只接受裸
+`<wire_name>`，重复拼接前缀后把已经保存并同步的授权错误报告为未授权。重发版
+同时将兼容能力改为协议层始终开启、将工具包选择改为可持久保存的复选框，并
+修正远程设置列表圆角裁切和“浏览器工具”命名。
+
 ### 直接远程 Harness：新的首选控制路径
 
 - **新增 `RemoteHarness` Agent Tool** — 控制端可以对当前对话明确选择的配对
@@ -48,21 +54,35 @@
   `status`、`capability_id` 和结果正文；协议区分 Unsupported Pack、Grant
   Denied、Project Missing、Schema/Capability Error、Transport Error 和
   Timeout，控制端不再需要从远端自然语言回复猜测真实执行状态。
+- **工具包 Grant 名称兼容归一化** — `RemoteHarness` 同时接受 Catalog 使用的
+  裸 Wire Name（如 `browser_tools`）和设备列表返回的完整 Grant（如
+  `toolpack:browser_tools`），在控制端授权检查和跨设备 Payload 发送前统一为
+  裸 Wire Name。已授权工具包不再因重复生成
+  `toolpack:toolpack:<wire_name>` 而被误判为拒绝。
 
 ### 按设备授权的远程工具包开关
 
-- **“允许的能力”拆分为兼容能力与直接工具包** — 远程控制设置继续保留
-  Chat、Run、Task、Approval 和 Artifact 等兼容 Capability，同时新增
-  “允许远程直接调用的工具包”区域，避免把领域命令和 Agent Harness 权限混在
-  同一扁平列表中。
-- **交互复用“设置 → 能力”工具包样式** — 配对邀请和每台可信设备的授权编辑器
-  都使用现有 Field Row、说明文案和标准 Toggle，显示与本机能力页一致的工具包
-  名称和描述。
+- **兼容能力改为协议层始终开启** — Chat、Run、Task、Approval 和 Artifact
+  等固定兼容命令不再显示独立开关，也不能被普通设置请求关闭。Pairing、
+  Grant Update、Received Grant Sync 和历史 Peer Migration 都会强制合并
+  完整兼容能力集合，避免控制链因误关基础命令而失效。
+- **工具包改为紧凑复选框列表** — 配对邀请和每台可信设备的授权编辑器使用与
+  原兼容能力一致的双列 Checkbox；去掉占用大量高度的 Field Row Toggle，
+  保留本地化名称、Accessible Label 和 Hover Description。
+- **修复圆角边界裁切** — 工具包 Grid 增加安全内边距，位于左上角的“代码工具”
+  和左下角的“技能工具”选择框不再被滚动容器的圆角与 `overflow` 裁切。
+- **浏览器工具命名统一** — 设置页和工具包授权页的“浏览器自动化工具”统一简化
+  为“浏览器工具”，英文同步为 “Browser tools”。
 - **授权按可信设备独立保存** — 工具包 Grant 使用稳定
   `toolpack:<wire_name>` 标识并进入既有签名 Pairing Bundle、方向性 Peer
   Grant、加密 Grant Sync 和审计流程。修改某台设备不会扩大其他控制端权限。
-- **默认不静默扩权** — 新的直接工具包在配对界面默认关闭，用户必须显式开启；
-  升级已有 Peer 时也不会自动获得直接 Harness 权限。
+- **配对默认工具包真正持久化** — `remote_settings` 新增可迁移的
+  `default_tool_packs_json`；配对页勾选工具包后立即串行写入设置，关闭再打开
+  不会复位。快速连续点击使用稳定 Ref/函数式状态更新，不会因 React 闭包读取
+  旧数组而丢失选择。
+- **直接工具包仍不静默扩权** — 新的直接工具包默认关闭，用户必须显式开启；
+  升级已有 Peer 时只补齐始终开启的兼容能力，不会自动获得任何
+  `toolpack:*` Harness Grant。
 - **支持十二类可选工具包** — Code、Browser、Desktop、Memory、Knowledge、
   Task、Entity、Map、Subagent、Delivery、Skill 和 Integration 可以分别授权。
   即使远程 Grant 已开启，本机“设置 → 能力”关闭的包仍不会被 Harness 执行。
@@ -146,18 +166,18 @@
 - **远程安全回归扩充** — 覆盖工具包 Grant 正规化、拒绝递归
   `toolpack:remote_tools`、未授权包双端拒绝、目标 Project/Workspace Context、
   Full-access 单次绑定与复位、控制端只对 Invoke 审批、Discovery 不申请审批、
-  `202` 成功语义、Event Wait、监听端口迁移/回退/发现/同步和真实双 Gateway
-  往返。
-- **Workbench 回归扩充** — 覆盖直接工具包设置、标准 Toggle/i18n、回退端口
-  状态文案、远程 Chat Event Allowlist/刷新、Context Picker 外部关闭和设备
-  指纹移除。
+  完整/裸工具包名兼容、兼容能力强制保留、默认工具包设置持久化、`202` 成功
+  语义、Event Wait、监听端口迁移/回退/发现/同步和真实双 Gateway 往返。
+- **Workbench 回归扩充** — 覆盖直接工具包设置、复选框与 i18n、回退端口
+  状态文案、复选框持久化与圆角安全内边距、浏览器工具命名、远程 Chat Event
+  Allowlist/刷新、Context Picker 外部关闭和设备指纹移除。
 - **设计文档更新到直接 Harness 架构** — 远程控制 Handoff 记录首选调用链、
   本地审批边界、工具包授权、兼容回退、Event Wait 和实时列表语义。
 - **本地 beta5 发布门禁通过** — 使用 `uv sync --locked --all-extras` 的锁定
   环境完成 Python `compileall`，并以未处理线程警告提升为 Error 的配置运行
-  `1,473` 项 pytest；同时重建全部 `32` 个 WebUI JSX Entry、验证生成资源与
-  Frontend Source 一致、通过 `44` 项 Electron App Use Node Test、Ruff 和
-  `git diff --check`。
+  `1,474` 项 pytest；同时重建全部 `32` 个 WebUI JSX Entry、验证生成资源与
+  Frontend Source 一致、通过 `44` 项 Electron App Use Node Test、本次变更
+  Python 文件的 Ruff 检查和 `git diff --check`。
 - **全部版本面升级到 beta5** — Python Package、Electron Package/Lock、
   README Badge、Docs Sidebar、WeChat Channel Header、Workbench/PDF Cache
   Key、`uv.lock` 和版本契约测试统一为 `0.7.0b5` /

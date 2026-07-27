@@ -521,8 +521,15 @@ function SettingsOverlay({
 }
 
 // ── Remote Control Panel ──
-function remoteCapabilityLabel(t, capability) {
-  return t("settings.remoteCapability." + capability, null, capability);
+function remoteRequiredCapabilities(required, selected) {
+  return Array.from(new Set([].concat(required || [], selected || [])));
+}
+
+function remoteToolPackGrants(toolPackages, selectedWireNames) {
+  var selected = new Set(selectedWireNames || []);
+  return (toolPackages || [])
+    .filter(function (item) { return selected.has(item.wire_name); })
+    .map(function (item) { return item.grant; });
 }
 
 function remoteTransportDetail(t, transport) {
@@ -583,7 +590,7 @@ function RemotePanel(p) {
   var [busy, setBusy] = useStateSt("");
   var [notice, setNotice] = useStateSt("");
   var [pairingMode, setPairingMode] = useStateSt("share");
-  var [inviteCapabilities, setInviteCapabilities] = useStateSt([]);
+  var [inviteToolPacks, setInviteToolPacks] = useStateSt([]);
   var [inviteProjects, setInviteProjects] = useStateSt([]);
   var [pairingKey, setPairingKey] = useStateSt("");
   var [remoteAddress, setRemoteAddress] = useStateSt("");
@@ -593,6 +600,7 @@ function RemotePanel(p) {
   var remoteSaveQueueRef = useRefSt(Promise.resolve());
   var remoteSaveVersionRef = useRefSt(0);
   var remoteDraftRef = useRefSt(null);
+  var inviteToolPacksRef = useRefSt([]);
 
   function showRemoteNotice(message, type) {
     var feedback = window.CyreneUI && window.CyreneUI.require
@@ -609,8 +617,11 @@ function RemotePanel(p) {
     setLoading(true);
     return fetch("/api/remote/settings").then(readSettingsResponse).then(function (payload) {
       setRemote(payload);
-      setInviteCapabilities(function (current) {
-        return current.length ? current : (payload.default_capabilities || []);
+      remoteDraftRef.current = payload;
+      setInviteToolPacks(function (current) {
+        var next = current.length ? current : (payload.default_tool_packs || []);
+        inviteToolPacksRef.current = next;
+        return next;
       });
       setLoading(false);
       return payload;
@@ -642,6 +653,7 @@ function RemotePanel(p) {
       enabled: !!nextRemote.enabled,
       relay_url: "",
       device_name: String(nextRemote.device_name || "").trim(),
+      default_tool_packs: nextRemote.default_tool_packs || [],
     };
     setBusy("settings");
     var request = remoteSaveQueueRef.current.catch(function () {}).then(function () {
@@ -692,10 +704,25 @@ function RemotePanel(p) {
     persistSettings(remoteDraftRef.current, remoteSaveVersionRef.current);
   }
 
-  function toggleList(value, list, setter) {
-    setter(list.indexOf(value) >= 0
-      ? list.filter(function (item) { return item !== value; })
-      : list.concat([value]));
+  function toggleList(value, setter) {
+    setter(function (current) {
+      return current.indexOf(value) >= 0
+        ? current.filter(function (item) { return item !== value; })
+        : current.concat([value]);
+    });
+  }
+
+  function toggleInviteToolPack(wireName) {
+    var current = inviteToolPacksRef.current;
+    var next = current.indexOf(wireName) >= 0
+      ? current.filter(function (item) { return item !== wireName; })
+      : current.concat([wireName]);
+    inviteToolPacksRef.current = next;
+    setInviteToolPacks(next);
+    updateRemoteSettings({
+      ...(remoteDraftRef.current || remote),
+      default_tool_packs: next,
+    }, true);
   }
 
   function createInvitation() {
@@ -704,7 +731,10 @@ function RemotePanel(p) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        capabilities: inviteCapabilities,
+        capabilities: remoteRequiredCapabilities(
+          remote.default_capabilities,
+          remoteToolPackGrants(remote.remote_tool_packages, inviteToolPacks),
+        ),
         project_scopes: inviteProjects,
         ttl_seconds: 120,
       }),
@@ -859,27 +889,24 @@ function RemotePanel(p) {
               ),
               React.createElement("div", { className: "remote-pairing-share-grid" },
                 React.createElement("div", { className: "remote-pairing-group" },
-                  React.createElement("span", { className: "remote-pairing-group-title" }, t("settings.remoteCompatibilityCapabilities")),
-                  React.createElement("div", { className: "remote-option-list" },
-                    (remote.supported_capabilities || []).map(function (capability) {
-                      return React.createElement("label", { key: capability, className: "remote-option" },
-                        React.createElement("input", { type: "checkbox", checked: inviteCapabilities.indexOf(capability) >= 0, onChange: function () { toggleList(capability, inviteCapabilities, setInviteCapabilities); } }),
-                        React.createElement("span", null, remoteCapabilityLabel(t, capability)),
-                      );
-                    }),
-                  ),
                   React.createElement("span", { className: "remote-pairing-group-title" }, t("settings.remoteDirectToolPackages")),
-                  React.createElement("div", { className: "wb-tool-package-settings" },
+                  React.createElement("small", { className: "remote-required-capabilities" }, t("settings.remoteCompatibilityAlwaysOn")),
+                  React.createElement("div", { className: "remote-option-list remote-tool-package-options" },
                     (remote.remote_tool_packages || []).map(function (item) {
-                      var enabled = inviteCapabilities.indexOf(item.grant) >= 0;
+                      var enabled = inviteToolPacks.indexOf(item.wire_name) >= 0;
                       var name = t("toolName." + item.wire_name);
-                      return FieldRow(
-                        name,
-                        t("toolPackageDesc." + item.wire_name),
-                        Toggle(enabled, function () {
-                          toggleList(item.grant, inviteCapabilities, setInviteCapabilities);
-                        }, false, t("settings.remotePackageToggleLabel", { name: name })),
-                        "remote-invite-" + item.wire_name,
+                      return React.createElement("label", {
+                        key: item.wire_name,
+                        className: "remote-option",
+                        title: t("toolPackageDesc." + item.wire_name),
+                      },
+                        React.createElement("input", {
+                          type: "checkbox",
+                          checked: enabled,
+                          onChange: function () { toggleInviteToolPack(item.wire_name); },
+                          "aria-label": t("settings.remotePackageToggleLabel", { name: name }),
+                        }),
+                        React.createElement("span", null, name),
                       );
                     }),
                   ),
@@ -889,7 +916,7 @@ function RemotePanel(p) {
                   React.createElement("div", { className: "remote-project-choices" },
                     (remote.projects || []).map(function (project) {
                       return React.createElement("label", { key: project.id, className: "remote-option" },
-                        React.createElement("input", { type: "checkbox", checked: inviteProjects.indexOf(project.id) >= 0, onChange: function () { toggleList(project.id, inviteProjects, setInviteProjects); } }),
+                        React.createElement("input", { type: "checkbox", checked: inviteProjects.indexOf(project.id) >= 0, onChange: function () { toggleList(project.id, setInviteProjects); } }),
                         React.createElement("span", null, project.name || project.id),
                       );
                     }),
@@ -897,7 +924,7 @@ function RemotePanel(p) {
                 ),
               ),
               React.createElement("div", { className: "remote-pairing-actions" },
-                React.createElement("button", { className: "wb-btn primary", onClick: createInvitation, disabled: !remote.enabled || !inviteCapabilities.length || !inviteProjects.length || busy === "invite" }, busy === "invite" ? t("settings.loading") : t("settings.remoteCreateInvitation")),
+                React.createElement("button", { className: "wb-btn primary", onClick: createInvitation, disabled: !remote.enabled || !inviteProjects.length || busy === "invite" }, busy === "invite" ? t("settings.loading") : t("settings.remoteCreateInvitation")),
               ),
               pairingKey && React.createElement("div", { className: "remote-direct-offer" },
                 React.createElement("div", null,
@@ -979,17 +1006,26 @@ function RemotePeerCard(p) {
   var [grantedCapabilities, setGrantedCapabilities] = useStateSt(peer.granted_capabilities || []);
   var [grantedProjects, setGrantedProjects] = useStateSt(peer.granted_project_scopes || []);
 
-  function toggle(value, list, setter) {
-    setter(list.indexOf(value) >= 0 ? list.filter(function (item) { return item !== value; }) : list.concat([value]));
+  function toggle(value, setter) {
+    setter(function (current) {
+      return current.indexOf(value) >= 0
+        ? current.filter(function (item) { return item !== value; })
+        : current.concat([value]);
+    });
   }
 
   function saveGrant() {
+    var requiredGrant = remoteRequiredCapabilities(
+      capabilities,
+      grantedCapabilities,
+    );
     setBusy(true);
     fetch("/api/remote/peers/" + encodeURIComponent(peer.device_id), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ capabilities: grantedCapabilities, project_scopes: grantedProjects }),
+      body: JSON.stringify({ capabilities: requiredGrant, project_scopes: grantedProjects }),
     }).then(readSettingsResponse).then(function () {
+      setGrantedCapabilities(requiredGrant);
       setEditing(false);
       onNotice(t("settings.remoteGrantSaved"), "success");
       onChanged();
@@ -1016,7 +1052,13 @@ function RemotePeerCard(p) {
         React.createElement("code", null, peer.device_id),
       ),
       React.createElement("div", { className: "remote-peer-actions" },
-        React.createElement("button", { className: "wb-btn muted", onClick: function () { setEditing(!editing); }, disabled: busy }, editing ? t("settings.close") : t("settings.remoteEditGrant")),
+        React.createElement("button", { className: "wb-btn muted", onClick: function () {
+          if (!editing) {
+            setGrantedCapabilities(peer.granted_capabilities || []);
+            setGrantedProjects(peer.granted_project_scopes || []);
+          }
+          setEditing(!editing);
+        }, disabled: busy }, editing ? t("settings.close") : t("settings.remoteEditGrant")),
         React.createElement("button", { className: "wb-btn danger", onClick: revoke, disabled: busy }, t("settings.remoteRevoke")),
       ),
     ),
@@ -1027,28 +1069,26 @@ function RemotePeerCard(p) {
       React.createElement("span", null, peer.fingerprint || ""),
     ),
     editing && React.createElement("div", { className: "remote-grant-editor" },
-      React.createElement("div", { className: "remote-option-list" },
-        capabilities.map(function (capability) {
-          return React.createElement("label", { key: capability, className: "remote-option" },
-            React.createElement("input", { type: "checkbox", checked: grantedCapabilities.indexOf(capability) >= 0, onChange: function () { toggle(capability, grantedCapabilities, setGrantedCapabilities); } }),
-            React.createElement("span", null, remoteCapabilityLabel(t, capability)),
-          );
-        }),
-      ),
       React.createElement("div", { className: "remote-grant-tool-packages" },
         React.createElement("b", null, t("settings.remoteDirectToolPackages")),
+        React.createElement("small", null, t("settings.remoteCompatibilityAlwaysOn")),
         React.createElement("small", null, t("settings.remoteDirectToolPackagesHint")),
-        React.createElement("div", { className: "wb-tool-package-settings" },
+        React.createElement("div", { className: "remote-option-list remote-tool-package-options" },
           (toolPackages || []).map(function (item) {
             var enabled = grantedCapabilities.indexOf(item.grant) >= 0;
             var name = t("toolName." + item.wire_name);
-            return FieldRow(
-              name,
-              t("toolPackageDesc." + item.wire_name),
-              Toggle(enabled, function () {
-                toggle(item.grant, grantedCapabilities, setGrantedCapabilities);
-              }, false, t("settings.remotePackageToggleLabel", { name: name })),
-              "remote-peer-" + peer.device_id + "-" + item.wire_name,
+            return React.createElement("label", {
+              key: item.wire_name,
+              className: "remote-option",
+              title: t("toolPackageDesc." + item.wire_name),
+            },
+              React.createElement("input", {
+                type: "checkbox",
+                checked: enabled,
+                onChange: function () { toggle(item.grant, setGrantedCapabilities); },
+                "aria-label": t("settings.remotePackageToggleLabel", { name: name }),
+              }),
+              React.createElement("span", null, name),
             );
           }),
         ),
@@ -1056,7 +1096,7 @@ function RemotePeerCard(p) {
       React.createElement("div", { className: "remote-project-list" },
         projects.map(function (project) {
           return React.createElement("label", { key: project.id, className: "remote-option" },
-            React.createElement("input", { type: "checkbox", checked: grantedProjects.indexOf(project.id) >= 0, onChange: function () { toggle(project.id, grantedProjects, setGrantedProjects); } }),
+            React.createElement("input", { type: "checkbox", checked: grantedProjects.indexOf(project.id) >= 0, onChange: function () { toggle(project.id, setGrantedProjects); } }),
             React.createElement("span", null, project.name || project.id),
           );
         }),

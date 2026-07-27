@@ -111,11 +111,6 @@ REMOTE_TOOL_PACK_CAPABILITIES = frozenset(
     for wire_name in REMOTE_TOOL_PACK_WIRE_NAMES
 )
 ALL_REMOTE_GRANTS = REMOTE_CAPABILITIES | REMOTE_TOOL_PACK_CAPABILITIES
-_LEGACY_DEFAULT_REMOTE_CAPABILITIES = frozenset(
-    capability
-    for capability in DEFAULT_REMOTE_CAPABILITIES
-    if capability != "approval:respond"
-)
 _REMOTE_STORE_SUFFIX = ".remote-control"
 _REMOTE_STORE_MIGRATION_ID = "split_remote_control_store_v1"
 
@@ -464,6 +459,7 @@ class RemoteControlStore:
                     relay_url TEXT NOT NULL DEFAULT '',
                     device_name TEXT NOT NULL DEFAULT '',
                     listen_port INTEGER NOT NULL DEFAULT 37841,
+                    default_tool_packs_json TEXT NOT NULL DEFAULT '[]',
                     updated_at TEXT NOT NULL
                 );
 
@@ -560,6 +556,13 @@ class RemoteControlStore:
                     ADD COLUMN listen_port INTEGER NOT NULL DEFAULT 37841
                     """
                 )
+            if "default_tool_packs_json" not in settings_columns:
+                conn.execute(
+                    """
+                    ALTER TABLE remote_settings
+                    ADD COLUMN default_tool_packs_json TEXT NOT NULL DEFAULT '[]'
+                    """
+                )
             conn.execute(
                 """
                 INSERT OR IGNORE INTO remote_settings(
@@ -572,7 +575,7 @@ class RemoteControlStore:
                     _utc_iso(),
                 ),
             )
-            self._upgrade_legacy_default_grants(conn)
+            self._upgrade_required_compatibility_grants(conn)
 
     def _migrate_legacy_store(self, conn: sqlite3.Connection) -> None:
         """Move remote-only state away from the high-frequency runtime DB.
@@ -656,8 +659,10 @@ class RemoteControlStore:
             conn.execute("DETACH DATABASE legacy_remote")
 
     @staticmethod
-    def _upgrade_legacy_default_grants(conn: sqlite3.Connection) -> None:
-        """Add approval responses only to untouched historical defaults."""
+    def _upgrade_required_compatibility_grants(
+        conn: sqlite3.Connection,
+    ) -> None:
+        """Keep the compatibility protocol enabled for every trusted peer."""
         rows = conn.execute(
             """
             SELECT device_id, granted_capabilities_json,
@@ -678,8 +683,9 @@ class RemoteControlStore:
                     }
                 except (TypeError, ValueError, json.JSONDecodeError):
                     continue
-                if capabilities == _LEGACY_DEFAULT_REMOTE_CAPABILITIES:
-                    capabilities.add("approval:respond")
+                upgraded = capabilities | REMOTE_CAPABILITIES
+                if upgraded != capabilities:
+                    capabilities = upgraded
                     updates[column] = _json_dumps(sorted(capabilities))
             if updates:
                 assignments = ", ".join(
@@ -704,15 +710,25 @@ class RemoteControlStore:
     def get_settings(self) -> dict[str, Any]:
         with self._lock, self._connect() as conn:
             row = conn.execute(
-                "SELECT enabled, relay_url, device_name, listen_port, updated_at "
+                "SELECT enabled, relay_url, device_name, listen_port, "
+                "default_tool_packs_json, updated_at "
                 "FROM remote_settings WHERE singleton = 1"
             ).fetchone()
         assert row is not None
+        try:
+            default_tool_packs = [
+                str(item)
+                for item in json.loads(str(row["default_tool_packs_json"]))
+                if str(item) in REMOTE_TOOL_PACK_WIRE_NAMES
+            ]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            default_tool_packs = []
         return {
             "enabled": bool(row["enabled"]),
             "relay_url": str(row["relay_url"]),
             "device_name": str(row["device_name"]),
             "listen_port": int(row["listen_port"] or DIRECT_PAIRING_PORT),
+            "default_tool_packs": sorted(set(default_tool_packs)),
             "updated_at": str(row["updated_at"]),
         }
 
@@ -745,6 +761,7 @@ class RemoteControlStore:
         enabled: bool,
         relay_url: str,
         device_name: str,
+        default_tool_packs: list[str] | tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
         relay = str(relay_url or "").strip()
         if relay:
@@ -754,15 +771,41 @@ class RemoteControlStore:
             raise ValueError("device name is required")
         if len(name) > 120:
             raise ValueError("device name is too long")
+        current = self.get_settings()
+        packs = (
+            list(current["default_tool_packs"])
+            if default_tool_packs is None
+            else sorted({
+                str(item).strip()
+                for item in default_tool_packs
+                if str(item).strip()
+            })
+        )
+        invalid_packs = [
+            item for item in packs
+            if item not in REMOTE_TOOL_PACK_WIRE_NAMES
+        ]
+        if invalid_packs:
+            raise ValueError(
+                "unsupported remote tool packages: "
+                + ", ".join(invalid_packs)
+            )
         now = _utc_iso()
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 UPDATE remote_settings
-                SET enabled = ?, relay_url = ?, device_name = ?, updated_at = ?
+                SET enabled = ?, relay_url = ?, device_name = ?,
+                    default_tool_packs_json = ?, updated_at = ?
                 WHERE singleton = 1
                 """,
-                (int(bool(enabled)), relay, name, now),
+                (
+                    int(bool(enabled)),
+                    relay,
+                    name,
+                    _json_dumps(packs),
+                    now,
+                ),
             )
         self.audit(
             "remote_settings_updated",
@@ -777,7 +820,7 @@ class RemoteControlStore:
         invalid = [item for item in normalized if item not in ALL_REMOTE_GRANTS]
         if invalid:
             raise ValueError(f"unsupported remote capabilities: {', '.join(invalid)}")
-        return normalized
+        return sorted(set(normalized) | REMOTE_CAPABILITIES)
 
     @staticmethod
     def _normalize_scopes(values: list[str] | tuple[str, ...]) -> list[str]:

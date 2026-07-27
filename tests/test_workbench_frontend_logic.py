@@ -3257,7 +3257,7 @@ def test_workbench_about_related_actions_only_click_right_button():
     assert styles.count("height: var(--wb-settings-panel-height);") == 3
 
 
-def test_remote_settings_reuses_standard_toggle_and_localizes_capabilities():
+def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes():
     root = Path(__file__).resolve().parent.parent
     source = (
         root / "src" / "webui" / "frontend" / "settings-overlay.jsx"
@@ -3276,7 +3276,16 @@ def test_remote_settings_reuses_standard_toggle_and_localizes_capabilities():
     assert "Toggle(!!remote.enabled" in remote_panel
     assert "remote-status-card" not in remote_panel
     assert ".remote-status-card" not in styles
-    assert "remoteCapabilityLabel(t, capability)" in source
+    assert "remoteCapabilityLabel" not in source
+    assert "remoteCompatibilityCapabilities" not in remote_panel
+    assert 't("settings.remoteCompatibilityAlwaysOn")' in source
+    assert 'className: "remote-option-list remote-tool-package-options"' in source
+    assert "toggleInviteToolPack(item.wire_name)" in remote_panel
+    assert "inviteToolPacksRef.current = next" in remote_panel
+    assert "default_tool_packs: next," in remote_panel
+    assert "default_tool_packs: nextRemote.default_tool_packs || []" in remote_panel
+    assert "remoteRequiredCapabilities(" in source
+    assert "remoteToolPackGrants(" in source
     assert "remoteTransportDetail(t, transport)" in remote_panel
     assert "transport.port_fallback" in source
     assert i18n.count('"settings.remoteTransportAlternatePort"') == 2
@@ -3325,25 +3334,7 @@ def test_remote_settings_reuses_standard_toggle_and_localizes_capabilities():
     assert i18n.count('"settings.remotePairingKey"') == 2
     assert i18n.count('"settings.remoteDeviceAddress"') == 2
 
-    capabilities = (
-        "approval:clarification",
-        "approval:respond",
-        "artifact:read",
-        "chat:create",
-        "chat:guide",
-        "chat:interrupt",
-        "chat:read",
-        "chat:send",
-        "projects:list_shared",
-        "task:control",
-        "task:create",
-        "task:dispatch",
-        "task:read",
-    )
-    for capability in capabilities:
-        assert i18n.count(
-            f'"settings.remoteCapability.{capability}"'
-        ) == 2
+    assert i18n.count('"settings.remoteCompatibilityAlwaysOn"') == 2
 
     for status in (
         "Configured",

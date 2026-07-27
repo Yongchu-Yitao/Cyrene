@@ -144,6 +144,7 @@ def register_remote_routes(
                 enabled=request.enabled,
                 relay_url=request.relay_url,
                 device_name=request.device_name,
+                default_tool_packs=request.default_tool_packs,
             )
         except ValueError as exc:
             return JSONResponse(

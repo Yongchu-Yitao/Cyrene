@@ -34,7 +34,10 @@ TOOL_DEF = {
                 },
                 "tool_pack": {
                     "type": "string",
-                    "description": "Granted package wire name, such as desktop_tools.",
+                    "description": (
+                        "Granted package wire name, such as desktop_tools. "
+                        "The toolpack:desktop_tools grant form is also accepted."
+                    ),
                 },
                 "operation": {
                     "type": "string",
@@ -86,6 +89,8 @@ async def handler(
         )
         project_id = str(args.get("project_id") or "").strip()
         tool_pack = str(args.get("tool_pack") or "").strip()
+        if tool_pack.startswith(REMOTE_TOOL_PACK_PREFIX):
+            tool_pack = tool_pack[len(REMOTE_TOOL_PACK_PREFIX):]
         operation = str(args.get("operation") or "").strip()
         if not project_id or not tool_pack:
             raise ValueError("project_id and tool_pack are required")
@@ -133,7 +138,6 @@ async def handler(
         payload = {
             key: args[key]
             for key in (
-                "tool_pack",
                 "query",
                 "limit",
                 "capability_id",
@@ -143,6 +147,7 @@ async def handler(
             )
             if key in args
         }
+        payload["tool_pack"] = tool_pack
         payload["call_id"] = (
             f"{device['device_id']}:{project_id}:{operation}:"
             f"{str(args.get('capability_id') or tool_pack)}"

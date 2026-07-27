@@ -5311,11 +5311,23 @@ html[data-theme="light"] .wb-tool-list .mono {
   font-weight: 650;
 }
 
+.remote-required-capabilities {
+  display: block;
+  margin: -3px 0 9px;
+  color: var(--wb-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .remote-pairing-group .remote-option-list {
-  max-height: 156px;
-  padding: 0;
+  max-height: 220px;
+  padding: 3px;
   border: 0;
   background: transparent;
+}
+
+.remote-tool-package-options {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .remote-project-choices {

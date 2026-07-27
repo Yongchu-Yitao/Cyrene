@@ -23,6 +23,15 @@ appearing live on the controlled computer, compatibility runs becoming stuck
 at approvals, listener-port conflicts disabling all remote control, and
 Workbench context-picker interaction and fingerprint exposure.
 
+This beta5 reissue additionally fixes a direct-Harness authorization mismatch
+found in an installed-app conversation. The device list returned
+`toolpack:<wire_name>` grants while the first controller implementation
+accepted only bare wire names, prepended the prefix again, and rejected grants
+that had actually been saved and synchronized. The reissue also makes
+compatibility capabilities permanently enabled at the protocol layer, persists
+tool-package checkbox defaults, and repairs rounded-corner clipping and Browser
+tool naming in Remote Settings.
+
 ### Direct remote Harness: the new preferred control path
 
 - **New `RemoteHarness` Agent tool** — The controller can `discover`,
@@ -59,23 +68,40 @@ Workbench context-picker interaction and fingerprint exposure.
   status, capability identity, and result text. Unsupported packages, denied
   grants, missing projects, schema or capability errors, transport failures,
   and timeouts remain distinguishable.
+- **Tool-package grant names are normalized compatibly** — `RemoteHarness`
+  accepts both bare catalog wire names such as `browser_tools` and full grants
+  such as `toolpack:browser_tools`, normalizing them before controller
+  authorization and remote payload delivery. A valid grant can no longer turn
+  into `toolpack:toolpack:<wire_name>` and be falsely denied.
 
 ### Per-device remote tool-package switches
 
-- **Compatibility capabilities and direct packages are separated** — Remote
-  settings retain Chat, Run, Task, Approval, and Artifact commands while adding
-  a dedicated “Directly callable tool packages” section.
-- **The UI reuses Settings → Capabilities controls** — Pairing invitations and
-  each trusted-device grant editor use the established field rows,
-  descriptions, and standard toggles with the same names as local tool-package
-  settings.
+- **Compatibility capabilities are permanently enabled by protocol** — Fixed
+  Chat, Run, Task, Approval, and Artifact commands no longer expose individual
+  switches and cannot be disabled by ordinary settings updates. Pairing, grant
+  updates, received-grant synchronization, and historical-peer migration all
+  merge the complete compatibility set.
+- **Tool packages use compact checkbox lists** — Pairing invitations and each
+  trusted-device editor now use the original compatibility grid's two-column
+  checkboxes instead of tall field-row toggles, while retaining localized
+  names, accessible labels, and hover descriptions.
+- **Rounded-corner clipping is fixed** — Safe grid padding keeps the Code tools
+  checkbox in the upper-left and Skill tools checkbox in the lower-left from
+  being clipped by the scroll container's rounded `overflow` boundary.
+- **Browser naming is consistent** — “Browser automation tools” is shortened
+  to “Browser tools” in both local capability settings and remote grants.
 - **Authorization is stored per trusted device** — Stable
   `toolpack:<wire_name>` grants flow through signed pairing bundles,
   directional peer grants, encrypted grant synchronization, and audit.
   Changing one controller does not broaden another controller's authority.
-- **No silent privilege expansion** — Direct packages start disabled during
-  pairing and existing peers gain none during upgrade. The user must explicitly
-  enable each package.
+- **Pairing package defaults now persist** — A migratable
+  `default_tool_packs_json` setting is written immediately and serially when
+  checkboxes change, so closing and reopening Settings no longer resets them.
+  Stable refs and functional state updates prevent rapid clicks from dropping
+  selections through stale React closures.
+- **No silent direct-package expansion** — Direct packages still start
+  disabled and existing peers receive no new `toolpack:*` grants. Upgrades add
+  only the permanently enabled compatibility command set.
 - **Twelve package classes are independently grantable** — Code, Browser,
   Desktop, Memory, Knowledge, Task, Entity, Map, Subagent, Delivery, Skill, and
   Integration are available. A package disabled in local
@@ -173,20 +199,23 @@ Workbench context-picker interaction and fingerprint exposure.
   normalization, rejection of recursive `toolpack:remote_tools`, two-sided
   denial for ungranted packages, target project/workspace context, one-call
   permission binding and reset, approval only for invoke, read-only discovery,
-  202 success semantics, event waiting, listener migration/fallback/discovery/
-  synchronization, and real dual-gateway round trips.
+  prefixed/bare package-name compatibility, required compatibility grants,
+  persisted package defaults, 202 success semantics, event waiting, listener
+  migration/fallback/discovery/synchronization, and real dual-gateway round
+  trips.
 - **Workbench regressions expand** — Tests cover direct-package settings,
-  standard toggles and localization, fallback-port status, chat-event
-  allowlisting and refresh, outside-click behavior, and fingerprint removal.
+  checkbox persistence and rounded-edge padding, Browser tool naming,
+  localization, fallback-port status, chat-event allowlisting and refresh,
+  outside-click behavior, and fingerprint removal.
 - **The architecture handoff documents direct Harness control** — Design notes
   now record the preferred invocation chain, local approval boundary, package
   grants, compatibility fallback, event waiting, and live-list semantics.
 - **The local beta5 release gate passes** — The locked
   `uv sync --locked --all-extras` environment completes Python `compileall`
-  and all 1,473 pytest cases with unhandled thread warnings promoted to errors.
+  and all 1,474 pytest cases with unhandled thread warnings promoted to errors.
   All 32 WebUI JSX entries rebuild with generated assets matching frontend
-  sources, all 44 Electron App Use Node tests pass, and Ruff plus
-  `git diff --check` are clean.
+  sources, all 44 Electron App Use Node tests pass, modified Python surfaces
+  pass Ruff, and `git diff --check` is clean.
 - **All active version surfaces move to beta5** — Python package metadata,
   Electron package and lock, README badges, documentation sidebar, WeChat
   channel headers, Workbench and PDF cache keys, `uv.lock`, and version tests

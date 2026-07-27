@@ -98,18 +98,14 @@ def test_pairing_creates_directional_grants_and_single_use_invitation(
     controller_peer = controller.get_peer(target.identity.device_id)
 
     assert target_peer is not None
-    assert target_peer["granted_capabilities"] == [
-        "chat:read",
-        "chat:send",
-        "projects:list_shared",
-    ]
+    assert target_peer["granted_capabilities"] == sorted(
+        DEFAULT_REMOTE_CAPABILITIES
+    )
     assert target_peer["granted_project_scopes"] == ["project_1"]
     assert controller_peer is not None
-    assert controller_peer["received_capabilities"] == [
-        "chat:read",
-        "chat:send",
-        "projects:list_shared",
-    ]
+    assert controller_peer["received_capabilities"] == sorted(
+        DEFAULT_REMOTE_CAPABILITIES
+    )
     assert controller_peer["received_project_scopes"] == ["project_1"]
     assert target.identity.device_id.startswith("dev_")
     assert target.identity.device_id != controller.identity.device_id
@@ -167,10 +163,11 @@ def test_remote_tool_pack_grants_are_valid_but_remote_pack_is_not(monkeypatch, t
     )
 
     accepted = controller.accept_pairing_invitation(invitation["invitation"])
-    assert accepted["peer"]["received_capabilities"] == [
+    assert accepted["peer"]["received_capabilities"] == sorted([
+        *DEFAULT_REMOTE_CAPABILITIES,
         "toolpack:desktop_tools",
         "toolpack:integration_tools",
-    ]
+    ])
     with pytest.raises(ValueError, match="unsupported remote capabilities"):
         store.create_pairing_invitation(
             capabilities=["toolpack:remote_tools"],
@@ -208,7 +205,7 @@ def test_remote_store_migrates_out_of_runtime_database(monkeypatch, tmp_path):
     assert marker == ("split_remote_control_store_v1",)
 
 
-def test_legacy_default_grants_gain_approval_response_only_when_untouched(
+def test_existing_grants_gain_required_compatibility_capabilities(
     monkeypatch,
     tmp_path,
 ):
@@ -223,11 +220,7 @@ def test_legacy_default_grants_gain_approval_response_only_when_untouched(
     )
     accepted = controller.accept_pairing_invitation(invitation["invitation"])
     target.complete_pairing_response(accepted["response"])
-    legacy_caps = sorted(
-        capability
-        for capability in DEFAULT_REMOTE_CAPABILITIES
-        if capability != "approval:respond"
-    )
+    legacy_caps = ["toolpack:desktop_tools"]
     with sqlite3.connect(controller.remote_db_path) as conn:
         conn.execute(
             """
@@ -242,7 +235,30 @@ def test_legacy_default_grants_gain_approval_response_only_when_untouched(
     peer = reopened.get_peer(target.identity.device_id)
 
     assert peer is not None
-    assert "approval:respond" in peer["received_capabilities"]
+    assert peer["received_capabilities"] == sorted([
+        *DEFAULT_REMOTE_CAPABILITIES,
+        "toolpack:desktop_tools",
+    ])
+
+
+def test_remote_tool_pack_defaults_are_persisted(monkeypatch, tmp_path):
+    monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
+    db_path = str(tmp_path / "tool-pack-defaults.sqlite3")
+    store = RemoteControlStore(db_path)
+
+    updated = store.update_settings(
+        enabled=True,
+        relay_url="",
+        device_name="Target",
+        default_tool_packs=["desktop_tools", "code_tools"],
+    )
+    reopened = RemoteControlStore(db_path)
+
+    assert updated["default_tool_packs"] == ["code_tools", "desktop_tools"]
+    assert reopened.get_settings()["default_tool_packs"] == [
+        "code_tools",
+        "desktop_tools",
+    ]
 
 
 def test_runtime_database_write_lock_does_not_block_remote_command(
@@ -342,7 +358,9 @@ async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_pa
         assert result["peer"]["device_id"] == target.identity.device_id
         controller_peer = controller.get_peer(target.identity.device_id)
         target_peer = target.get_peer(controller.identity.device_id)
-        assert controller_peer["received_capabilities"] == ["chat:read", "chat:send"]
+        assert controller_peer["received_capabilities"] == sorted(
+            DEFAULT_REMOTE_CAPABILITIES
+        )
         assert controller_peer["lan_address"] == f"127.0.0.1:{target_port}"
         assert target_peer["granted_project_scopes"] == ["project_1"]
         assert target_peer["lan_address"] == f"127.0.0.1:{controller_port}"
@@ -413,10 +431,9 @@ async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_pa
     assert persisted_controller_peer["lan_address"] == (
         f"127.0.0.1:{target_port}"
     )
-    assert persisted_controller_peer["received_capabilities"] == [
-        "chat:read",
-        "chat:send",
-    ]
+    assert persisted_controller_peer["received_capabilities"] == sorted(
+        DEFAULT_REMOTE_CAPABILITIES
+    )
     assert persisted_target_peer is not None
     assert persisted_target_peer["lan_address"] == (
         f"127.0.0.1:{controller_port}"
@@ -669,7 +686,7 @@ def test_peer_grant_scope_and_revocation_are_enforced(paired_stores):
     ) == (False, "project_scope_denied")
     assert target.authorize_inbound(
         controller_id, "tasks.dispatch", "project_1"
-    ) == (False, "capability_denied")
+    ) == (True, "")
     assert target.authorize_inbound(
         controller_id, "chats.read", ""
     ) == (False, "project_scope_required")
@@ -679,7 +696,9 @@ def test_peer_grant_scope_and_revocation_are_enforced(paired_stores):
         capabilities=["task:read"],
         project_scopes=["project_2"],
     )
-    assert updated["granted_capabilities"] == ["task:read"]
+    assert updated["granted_capabilities"] == sorted(
+        DEFAULT_REMOTE_CAPABILITIES
+    )
     assert target.authorize_inbound(
         controller_id, "tasks.read", "project_2"
     ) == (True, "")
@@ -1046,7 +1065,7 @@ def test_remote_harness_approves_invoke_locally_but_not_discovery(monkeypatch):
         discovered = json.loads(await remote_harness(
             {
                 "project_id": "project_1",
-                "tool_pack": "desktop_tools",
+                "tool_pack": "toolpack:desktop_tools",
                 "operation": "discover",
                 "query": "desktop",
             },
@@ -1078,6 +1097,10 @@ def test_remote_harness_approves_invoke_locally_but_not_discovery(monkeypatch):
         assert [item["command"] for item in commands] == [
             "harness.discover",
             "harness.invoke",
+        ]
+        assert [item["payload"]["tool_pack"] for item in commands] == [
+            "desktop_tools",
+            "desktop_tools",
         ]
 
     asyncio.run(scenario())
@@ -1368,7 +1391,9 @@ def test_encrypted_grant_updates_and_revocation_propagate(paired_stores):
             )
             synchronized = controller.get_peer(target.identity.device_id)
             assert synchronized is not None
-            assert synchronized["received_capabilities"] == ["task:read"]
+            assert synchronized["received_capabilities"] == sorted(
+                DEFAULT_REMOTE_CAPABILITIES
+            )
             assert synchronized["received_project_scopes"] == ["project_2"]
 
             await target_gateway.notify_revocation(
