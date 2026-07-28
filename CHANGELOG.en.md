@@ -27,7 +27,8 @@ Debian `.deb`, and Red Hat/Fedora-family `.rpm` packages.
   the same configuration.
 - **Better notifications and UI behavior** — notifications return to the
   relevant project, chat, task, or resource, with improved keyboard access,
-  localization, fallback progress, and background efficiency.
+  localization, fallback progress, background efficiency, and memory-detail
+  wrapping for long text.
 - **Linux AppImage white-window fix** — Linux now uses the more compatible
   software-rendering path by default and includes window diagnostics plus a
   real UI smoke test.
@@ -198,6 +199,10 @@ Debian `.deb`, and Red Hat/Fedora-family `.rpm` packages.
   each turn's catalog snapshot remains frozen.
 - **Background Electron renderers remain throttled**, and model-fallback
   progress is localized in English and Chinese.
+- **Long memory details no longer widen or clip the panel** — detail, tabs,
+  metadata, body text, citations, and footer buttons combine `min-width: 0`,
+  horizontal-overflow isolation, and anywhere wrapping. Long URLs, paths,
+  identifiers, and larger text remain inside the panel.
 - **Project rail “New project” is shortened to “New”** for narrow layouts, and
   README links to the canonical Current Limitations document are restored.
 
@@ -262,7 +267,7 @@ Debian `.deb`, and Red Hat/Fedora-family `.rpm` packages.
   Development, Browser Live View, Limitations, project progress, CLI/topbar
   handoffs, and Design QA; the prototype and comparison image remain as audit
   artifacts.
-- **The local prerelease gate passes** — all `1,539` pytest tests, Electron
+- **The local prerelease gate passes** — all `1,540` pytest tests, Electron
   `node --check`, `44` App Use Node tests, Ruff across Python files changed
   since beta5, workflow YAML parsing, and `git diff --check` pass. The desktop
   smoke test mounted Workbench, removed the launch screen, captured `2,063,466`

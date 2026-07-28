@@ -18,7 +18,8 @@ Debian `.deb` 和 Red Hat/Fedora 系 `.rpm`。
 - **增强记忆与配置可靠性**：改进项目记忆、实体提取、搜索范围和历史兼容；
   加密配置改用安装级本地密钥，避免开发版与安装版切换后无法解密。
 - **完善通知与界面体验**：通知可返回对应 Project、Chat、Task 或资源；
-  同时补充键盘操作、本地化、模型回退提示和后台页面节能处理。
+  同时补充键盘操作、本地化、模型回退提示和后台页面节能处理，并修复记忆详情
+  长文本撑宽面板的问题。
 - **修复 Linux AppImage 白屏**：Linux 默认使用更兼容的软件渲染，并增加窗口
   故障日志与真实界面烟测。
 - **新增 Linux 系统安装包**：预发布同时提供 AppImage、Debian `.deb` 和
@@ -173,6 +174,9 @@ Debian `.deb` 和 Red Hat/Fedora 系 `.rpm`。
   Catalog Snapshot 继续冻结当轮可用边界。
 - **后台 Renderer 保持节能** — Electron Browser/Quick Chat 等后台页面使用
   适当的 `backgroundThrottling`，避免隐藏窗口持续以前台刷新频率消耗资源。
+- **记忆详情不再被长文本撑宽** — Detail、Tab、Metadata、正文、Citation 和
+  Footer Button 补齐 `min-width: 0`、横向 Overflow 隔离与任意位置换行；
+  长 URL、Path、连续 Identifier 和放大字号不会再产生横向滚动或裁切操作按钮。
 - **Model Fallback Progress 本地化** — Workbench 在模型回退期间显示明确的
   中英文进度，不把可恢复切换表现为无响应。
 - **Project Rail 英文按钮更紧凑** — “New project” 收敛为 “New”，在窄 Rail
@@ -236,7 +240,7 @@ Debian `.deb` 和 Red Hat/Fedora 系 `.rpm`。
 - **设计与使用文档完整更新** — Architecture、Usage、Development、Browser
   Live View、Limitations、Project Progress、CLI Handoff、Topbar Handoff 和
   Design QA 中英文内容同步当前实现，并保留交互原型与视觉对比图作为审计材料。
-- **本地发布前门禁通过** — 完整 pytest 共 `1,539` 项通过；Electron 主进程
+- **本地发布前门禁通过** — 完整 pytest 共 `1,540` 项通过；Electron 主进程
   `node --check`、`44` 项 App Use Node Test、beta5 以来变更 Python 文件的
   Ruff、Workflow YAML 解析和 `git diff --check` 通过。桌面烟测实际挂载
   Workbench、移除 Launch Screen，并捕获 `2,063,466` 个非白像素后正常退出。

@@ -3569,6 +3569,25 @@ def test_workbench_memory_history_tab_renders_events_not_hardcoded():
     assert "action_label" in source
 
 
+def test_workbench_memory_detail_wraps_long_content_without_horizontal_overflow():
+    root = Path(__file__).resolve().parent.parent
+    css = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    detail_block = css.split("\n.wb-mem-detail {", 1)[1].split("}", 1)[0]
+    scroll_block = css.split("\n.wb-mem-detail-scroll {", 1)[1].split("}", 1)[0]
+    hero_text_block = css.split("\n.wb-mem-detail-hero p {", 1)[1].split("}", 1)[0]
+    content_block = css.split("\n.wb-mem-content-full {", 1)[1].split("}", 1)[0]
+    citation_block = css.split("\n.wb-mem-cite-snippet {", 1)[1].split("}", 1)[0]
+    footer_button_block = css.split("\n.wb-mem-detail-foot .wb-btn {", 1)[1].split("}", 1)[0]
+
+    assert "overflow: hidden;" in detail_block
+    assert "overflow-x: hidden;" in scroll_block
+    assert "overflow-wrap: anywhere;" in hero_text_block
+    assert "overflow-wrap: anywhere;" in content_block
+    assert "overflow-wrap: anywhere;" in citation_block
+    assert "white-space: normal;" in footer_button_block
+
+
 def test_workbench_skill_learning_uses_actionable_candidate_status_only():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-memory.jsx").read_text(encoding="utf-8")
