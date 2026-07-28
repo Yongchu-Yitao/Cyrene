@@ -202,7 +202,8 @@ Debian `.deb` 和 Red Hat/Fedora 系 `.rpm`。
   非零状态阻止发布。
 - **Release 在真实 AppImage Runtime 下测试** — Linux CI 通过 `xvfb-run` 和
   `--appimage-extract-and-run` 启动最终 AppImage，不再只运行内部 PyInstaller
-  Binary 的 Import Smoke。
+  Binary 的 Import Smoke。由于临时解包目录无法保留 Root-owned SUID Sandbox，
+  仅该隔离 CI 烟测使用 `--no-sandbox`；正式 AppImage 的正常启动参数不变。
 
 #### Linux 安装包与发布链路
 

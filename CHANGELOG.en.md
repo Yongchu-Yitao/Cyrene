@@ -224,6 +224,9 @@ Debian `.deb`, and Red Hat/Fedora-family `.rpm` packages.
   It uses an isolated Electron profile and exits nonzero on failure.
 - **Linux CI runs that test against the final AppImage** under `xvfb-run` with
   `--appimage-extract-and-run`, not only against the inner Python binary.
+  Because temporary extraction cannot preserve the root-owned SUID sandbox,
+  only this isolated CI smoke test uses `--no-sandbox`; normal AppImage launch
+  arguments remain unchanged.
 
 #### Linux installers and release path
 

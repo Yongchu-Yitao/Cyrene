@@ -468,6 +468,7 @@ jobs:
           timeout 90s xvfb-run -a \
             dist-electron/Cyrene-*-x64.AppImage \
             --appimage-extract-and-run \
+            --no-sandbox \
             --desktop-smoke-test
 
       - name: Upload Linux packages

@@ -18,11 +18,12 @@ def test_linux_packages_include_appimage_deb_and_rpm():
     assert package["build"]["linux"]["artifactName"] == "Cyrene-${version}-x64.${ext}"
 
 
-def test_release_pipeline_smoke_tests_and_publishes_both_linux_packages():
+def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     assert "Smoke test packaged AppImage UI" in workflow
     assert "--appimage-extract-and-run" in workflow
+    assert "--no-sandbox" in workflow
     assert "--desktop-smoke-test" in workflow
     assert "name: linux-packages" in workflow
     assert "dist-electron/Cyrene-*-x64.AppImage" in workflow
