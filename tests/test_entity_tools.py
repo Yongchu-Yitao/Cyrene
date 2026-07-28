@@ -83,3 +83,31 @@ async def test_entity_tools_expose_ids_and_support_safe_delete_resolution(tmp_pa
     )
     assert unique["id"] in deleted_by_title
     assert await get_entity(db_path, unique["id"]) is None
+
+
+@pytest.mark.asyncio
+async def test_background_candidate_keeps_workbench_project_scope(tmp_path):
+    from cyrene.runtime.database import init_db
+    from cyrene.tool_impl.entity.store import (
+        add_candidate,
+        get_entity,
+        process_candidates,
+    )
+
+    db_path = str(tmp_path / "entities.db")
+    await init_db(db_path)
+    candidate_id = await add_candidate(
+        db_path,
+        type="project",
+        title="发布新版本",
+        content="用户决定下周发布新版本。",
+        confidence=0.9,
+        project_id="project_scope_test",
+    )
+
+    promoted = await process_candidates(db_path)
+
+    assert len(promoted) == 1
+    assert promoted[0]["project_id"] == "project_scope_test"
+    assert await get_entity(db_path, promoted[0]["id"]) == promoted[0]
+    assert candidate_id

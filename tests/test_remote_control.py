@@ -19,6 +19,7 @@ from cyrene.runtime.remote_control import (
     RemoteControlStore,
     RemoteEnvelopeCodec,
     RemoteGateway,
+    RemoteIdentityStore,
     WebSocketRemoteRelay,
     register_remote_gateway,
     unregister_remote_gateway,
@@ -39,6 +40,23 @@ from cyrene.tool_impl.remote.harness import handler as remote_harness
 from cyrene.tool_impl.remote.run import handler as run_remote_cyrene
 from cyrene.tool_impl.remote.status import handler as remote_cyrene_status
 from route.remote import register_remote_routes
+
+
+def test_remote_identity_uses_owner_only_local_file(tmp_path):
+    identity_path = tmp_path / "device.remote-identity"
+    store = RemoteIdentityStore(
+        str(tmp_path / "remote.sqlite3"),
+        fallback_path=identity_path,
+    )
+
+    first = store.get_or_create()
+    reloaded = RemoteIdentityStore(
+        str(tmp_path / "remote.sqlite3"),
+        fallback_path=identity_path,
+    ).get_or_create()
+
+    assert identity_path.stat().st_mode & 0o777 == 0o600
+    assert reloaded.device_id == first.device_id
 
 
 @pytest.fixture

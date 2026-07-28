@@ -123,6 +123,103 @@ def test_save_project_memory_tool_requires_user_language():
     assert "MUST use the user's configured language" in content_description
 
 
+def test_verified_tool_evidence_includes_successful_current_results_only():
+    messages = [
+        {
+            "id": "old",
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "old-call",
+                "function": {"name": "code_tools", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "old-call", "content": "old result"},
+        {
+            "id": "new",
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "ok-call",
+                    "function": {"name": "remote_tools", "arguments": "{}"},
+                },
+                {
+                    "id": "bad-call",
+                    "function": {"name": "code_tools", "arguments": "{}"},
+                },
+                {
+                    "id": "memory-call",
+                    "function": {"name": "memory_tools", "arguments": "{}"},
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "ok-call",
+            "content": '{"status":"success","result":"16GB RAM"}',
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "bad-call",
+            "content": '{"status":"error","message":"failed"}',
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "memory-call",
+            "content": '{"status":"success","result":"saved"}',
+        },
+    ]
+
+    evidence = memory.build_verified_tool_evidence(messages, {"old"})
+
+    assert "remote_tools" in evidence
+    assert "16GB RAM" in evidence
+    assert "old result" not in evidence
+    assert "failed" not in evidence
+    assert "memory_tools" not in evidence
+
+
+@pytest.mark.asyncio
+async def test_background_extractor_accepts_verified_tool_facts(monkeypatch, tmp_path):
+    _isolate_memory_store(monkeypatch, tmp_path, "zh")
+    captured = {}
+
+    async def fake_call_llm(messages, **kwargs):
+        captured["messages"] = messages
+        captured["kwargs"] = kwargs
+        return {
+            "content": json.dumps({
+                "memories": [{
+                    "content": "远程设备配备16GB内存。",
+                    "category": "fact",
+                    "confidence": "high",
+                }]
+            }, ensure_ascii=False)
+        }
+
+    monkeypatch.setattr(agent_state, "_call_llm", fake_call_llm)
+
+    added = await memory.capture_from_exchange(
+        "project-test",
+        "看看硬件信息",
+        "已查到机器配置。",
+        verified_evidence=(
+            '[tool:remote_tools verified result]\n'
+            '{"status":"success","result":"Memory: 16GB"}'
+        ),
+    )
+
+    assert added == 1
+    assert captured["messages"][0]["role"] == "system"
+    assert "成功工具结果直接验证" in captured["messages"][0]["content"]
+    assert "Memory: 16GB" in captured["messages"][1]["content"]
+    assert captured["kwargs"]["response_format"] == {"type": "json_object"}
+    stored = json.loads(
+        (tmp_path / "wb_memory_project-test.json").read_text(encoding="utf-8")
+    )
+    assert stored[0]["source"] == "conversation"
+    assert stored[0]["content"] == "远程设备配备16GB内存。"
+
+
 def test_language_neutral_path_does_not_require_translation():
     assert memory._content_matches_language("src/app.py", "zh")
     assert memory._content_matches_language("MAX_RETRIES=3", "zh")

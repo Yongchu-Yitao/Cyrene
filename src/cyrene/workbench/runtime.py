@@ -182,9 +182,15 @@ def schedule_capture(
     workspace_id: str | None,
     user_text: str,
     agent_text: str,
+    **kwargs: Any,
 ) -> None:
     """Compatibility facade for asynchronous Workbench memory capture."""
-    _memory_service().schedule_capture(workspace_id, user_text, agent_text)
+    _memory_service().schedule_capture(
+        workspace_id,
+        user_text,
+        agent_text,
+        **kwargs,
+    )
 
 
 def _notification_service():

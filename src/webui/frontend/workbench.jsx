@@ -348,6 +348,33 @@ function wbSuppressOnScreenNotifications(payload, view, model) {
   });
 }
 
+// Convert the stable locator stored with a notification into the same payload
+// used by global-search navigation. Keeping one navigation path means a click
+// can open an already-mounted module or wait for that module to finish loading.
+function wbNotificationNavigationTarget(item) {
+  if (!item) return null;
+  var meta = item.meta && typeof item.meta === "object" ? item.meta : {};
+  var base = {
+    projectId: item.projectId || "",
+    notificationId: item.id || "",
+  };
+  if (meta.chatId) return Object.assign(base, { type: "chat", chatId: meta.chatId });
+  if (meta.sessionId) return Object.assign(base, { type: "task", sessionId: meta.sessionId, runId: meta.runId || "" });
+  if (meta.taskId || meta.entityId) {
+    return Object.assign(base, {
+      type: "schedule",
+      taskId: meta.taskId || "",
+      entityId: meta.entityId || "",
+      nextRun: meta.nextRun || "",
+      dueDate: meta.dueDate || "",
+    });
+  }
+  if (meta.documentId || meta.docId) {
+    return Object.assign(base, { type: "knowledge", docId: meta.documentId || meta.docId });
+  }
+  return null;
+}
+
 // Right-panel resize plumbing -------------------------------------------------
 // The rightmost column width is stored in --wb-right-w on .workbench-grid and
 // consumed by both the task grid (column 4) and the chat .wbc-page (column 3).
@@ -1187,6 +1214,19 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     }, 5000);
   }
 
+  function navigateFromNotification(item) {
+    var meta = item && item.meta && typeof item.meta === "object" ? item.meta : {};
+    if (meta.category === "app_update" || String(item && item.source || "") === "updater") {
+      setSettingsTab("about");
+      setSettingsOpen(true);
+      return true;
+    }
+    var target = wbNotificationNavigationTarget(item);
+    if (!target) return false;
+    navigateFromSearch(target);
+    return true;
+  }
+
   useWorkbenchEffect(function () {
     return window.CyreneUI.require("navigation").setHandler(navigateFromSearch);
   }, [store.projects, store.activeProjectId]);
@@ -1437,6 +1477,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         chatCrumb={chatCrumb}
         notifications={notifications}
         onReloadNotifications={reloadNotifications}
+        onOpenNotification={navigateFromNotification}
         onSearch={function () { setSearchOpen(true); }}
         onSettings={function (tab) { setSettingsTab(typeof tab === "string" ? tab : ""); setSettingsOpen(true); }}
         onNewProject={createProject}
@@ -1638,7 +1679,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   );
 }
 
-function WorkbenchTopbar({ project, session, activePage, taskView, chatCrumb, notifications, onReloadNotifications, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
+function WorkbenchTopbar({ project, session, activePage, taskView, chatCrumb, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var dataState = window.CyreneUI.require("data").state;
   var title = project ? project.name : "Project";
@@ -1688,7 +1729,7 @@ function WorkbenchTopbar({ project, session, activePage, taskView, chatCrumb, no
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
           <span>{t("workbench.search")}</span>
         </button>
-        <WorkbenchNotificationCenter notifications={notifications} onReload={onReloadNotifications} onSettings={onSettings} />
+        <WorkbenchNotificationCenter notifications={notifications} onReload={onReloadNotifications} onOpenNotification={onOpenNotification} onSettings={onSettings} />
         <button type="button" className="workbench-icon-btn" onClick={onToggleTheme} title={themeTitle}>{themeIcon}</button>
         <WorkbenchHelpCenter onNewProject={onNewProject} onNewTask={onNewTask} onOpenPage={onOpenPage} onSettings={onSettings} />
         <button type="button" className="workbench-icon-btn" onClick={function () { onSettings(); }} title={t("nav.settings")}>
@@ -1704,7 +1745,7 @@ function WorkbenchTopbar({ project, session, activePage, taskView, chatCrumb, no
   );
 }
 
-function WorkbenchNotificationCenter({ notifications, onReload, onSettings }) {
+function WorkbenchNotificationCenter({ notifications, onReload, onOpenNotification, onSettings }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var model = window.CyreneUI.require("model");
   var [open, setOpen] = useWorkbenchState(false);
@@ -1754,6 +1795,12 @@ function WorkbenchNotificationCenter({ notifications, onReload, onSettings }) {
     });
   }
 
+  function openNotification(item) {
+    if (!item) return;
+    if (!item.read) markRead([item.id], false);
+    if (onOpenNotification && onOpenNotification(item)) setOpen(false);
+  }
+
   return (
     <div className={"workbench-notif-anchor" + (open ? " open" : "")} ref={rootRef}>
       <button type="button" className={"workbench-icon-btn workbench-notif-btn" + (open ? " active" : "")} title={t("notifications.title")} onClick={function () { setOpen(!open); }}>
@@ -1786,7 +1833,7 @@ function WorkbenchNotificationCenter({ notifications, onReload, onSettings }) {
           </div>
           <div className="workbench-notif-list">
             {!items.length ? <div className="workbench-notif-empty">{t("notifications.empty")}</div> : items.map(function (item) {
-              return <WorkbenchNotificationItem key={item.id} item={item} onOpen={function () { markRead([item.id], false); }} />;
+              return <WorkbenchNotificationItem key={item.id} item={item} onOpen={function () { openNotification(item); }} />;
             })}
           </div>
         </div>
@@ -1797,6 +1844,9 @@ function WorkbenchNotificationCenter({ notifications, onReload, onSettings }) {
 
 function WorkbenchNotificationItem({ item, onOpen }) {
   var { t } = window.CyreneUI.require("i18n").use();
+  var target = wbNotificationNavigationTarget(item);
+  var isUpdate = item && item.meta && item.meta.category === "app_update";
+  var canNavigate = !!target || !!isUpdate || String(item && item.source || "") === "updater";
   var tab = String(item && item.tab || "system");
   var iconClass = "system";
   var icon = null;
@@ -1823,7 +1873,12 @@ function WorkbenchNotificationItem({ item, onOpen }) {
     }
   }
   return (
-    <button type="button" className={"workbench-notif-item" + (item.read ? "" : " unread")} onClick={onOpen}>
+    <button
+      type="button"
+      className={"workbench-notif-item" + (item.read ? "" : " unread") + (canNavigate ? " navigable" : "")}
+      onClick={onOpen}
+      aria-label={canNavigate ? t("notifications.open", { title: item.title }) : item.title}
+    >
       <span className={"workbench-notif-item-icon " + iconClass}>{icon}</span>
       <span className="workbench-notif-item-main">
         <span className="workbench-notif-item-top">
@@ -1831,7 +1886,15 @@ function WorkbenchNotificationItem({ item, onOpen }) {
           <time>{window.CyreneUI.require("model").formatRelativeTime(item.createdAt)}</time>
         </span>
         {item.body ? <span className="workbench-notif-item-body">{item.body}</span> : null}
-        <span className="workbench-notif-item-meta">{item.sourceLabel || item.projectName || item.linkLabel || t("notifications.title")}</span>
+        <span className="workbench-notif-item-footer">
+          <span className="workbench-notif-item-meta">{item.linkLabel || item.sourceLabel || item.projectName || t("notifications.title")}</span>
+          {canNavigate ? (
+            <span className="workbench-notif-item-jump" aria-hidden="true">
+              {t("notifications.view")}
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m6 3 5 5-5 5"/></svg>
+            </span>
+          ) : null}
+        </span>
       </span>
     </button>
   );

@@ -282,7 +282,8 @@ You have access to memory. Consult it proactively — do not answer from only th
 - Use `memory.list` through `memory_tools` when you need the complete cross-session/current-project memory inventory or its exact count. Use `memory.recall` and `memory.recall_conversation` for relevant recent memories and older discussions or exact prior wording.
 - When `memory.recall` identifies stale or superseded short-term memory, invoke `memory.short_term.retire` through `memory_tools` with its exact ID.
 - In a Workbench project, invoke `memory.project.search` through `memory_tools` when prior decisions, constraints, approaches, preferences, or environment facts may matter.
-- Invoke `memory.project.save` and `memory.project.retire` through `memory_tools` for a small number of durable reusable project facts or stale facts. Do not save transient results, one-off output, secrets, or noisy implementation details.
+- In a Workbench project, use `memory.project.save` proactively when you learn something worth remembering across future runs. This decision rule is available before tool discovery: enter `memory_tools` and save confirmed constraints or decisions, a tool or approach that worked, a verified dead-end to avoid, a key file or command, a user preference or recurring collaboration habit, and durable environment facts learned from tool results. Do not wait for the user to ask you to remember them.
+- Keep project memory selective: do not save transient results, one-off output, secrets, guesses, or noisy implementation details. Use `memory.project.retire` for stale facts; saving a corrected replacement is preferred when you know the current fact.
 - Always check memory and conversation history first when the user says things like "remember", "last time", "previously", "before", "我们之前", "上次", "以前", "你还记得", or when continuing an ongoing project, stating preferences, or picking up unfinished work.
 - If memory/project-memory/conversation recall returns nothing and the current history lacks relevant context, proceed with the information available in the current turn.""",
 )
@@ -314,11 +315,11 @@ _MAIN_ENTITY_PROMPT = _tool_pack_prompt_block(
 - 更新状态前先用 `entity.query` 获取完整 ID，再调用 `entity.update`。
 - 删除或更新时使用完整 ID；`entity.delete` 遇到同名记录时必须根据候选 ID 逐条操作。
 
-### 何时记录（显式记录）
-用户明确要求记录时，先用 `entity.query` 去重，再调用 `entity.track`（source="explicit", confidence=1.0）。
-
-### 隐式提取说明
-隐式事务提取已改为后台自动完成（由 Steward Agent 每 30 分钟扫描对话记录），你不再需要在对话中主动推断记录。专注于用户的明确指令即可。
+### 何时记录（前台主动提取 + 后台兜底）
+- 用户明确要求记录时，先用 `entity.query` 去重，再调用 `entity.track`（source="explicit", confidence=1.0）。
+- 即使用户没有说“记住”，当本轮明确出现真实、持久且以后需要继续跟踪的 task、project、decision、knowledge、relationship、event、resource、idea、problem 或 habit 时，也要主动进入 `entity_tools`：先用 `entity.query` 去重；不存在时调用 `entity.track`（source="extracted"，按证据设置 confidence）。
+- 对明确且具体的信息才主动记录。不要记录寒暄、纯情绪、一次性操作、假设、玩笑、模型猜测或已存在的同义事务。
+- 前台提取负责即时可用；后台 Steward 每小时扫描归档作为漏提兜底。后台存在不免除前台 Agent 的主动提取责任。
 
 ### 用户反馈处理
 - 用户要求删除记录时调用 `entity.delete`

@@ -147,6 +147,42 @@ def test_memory_pack_exposes_inventory_listing():
     assert "memory.list" in ids
 
 
+def test_static_memory_prompt_exposes_proactive_save_triggers_before_discovery():
+    from cyrene.agent.prompts import (
+        _MAIN_AGENT_PROMPT_TEMPLATE,
+        _TOOL_PACK_PROMPT_TERMS,
+        prompt_for_enabled_tool_packs,
+    )
+
+    rendered = prompt_for_enabled_tool_packs(
+        _MAIN_AGENT_PROMPT_TEMPLATE,
+        set(_TOOL_PACK_PROMPT_TERMS),
+    )
+
+    assert "use `memory.project.save` proactively" in rendered
+    assert "This decision rule is available before tool discovery" in rendered
+    assert "durable environment facts learned from tool results" in rendered
+    assert "Do not wait for the user to ask you to remember them" in rendered
+
+
+def test_static_entity_prompt_requires_foreground_extraction_with_steward_fallback():
+    from cyrene.agent.prompts import (
+        _MAIN_AGENT_PROMPT_TEMPLATE,
+        _TOOL_PACK_PROMPT_TERMS,
+        prompt_for_enabled_tool_packs,
+    )
+
+    rendered = prompt_for_enabled_tool_packs(
+        _MAIN_AGENT_PROMPT_TEMPLATE,
+        set(_TOOL_PACK_PROMPT_TERMS),
+    )
+
+    assert "前台主动提取 + 后台兜底" in rendered
+    assert "先用 `entity.query` 去重" in rendered
+    assert '调用 `entity.track`（source="extracted"' in rendered
+    assert "后台存在不免除前台 Agent 的主动提取责任" in rendered
+
+
 def test_package_switch_omits_gateway_and_member_metadata_from_model_context(
     monkeypatch,
 ):

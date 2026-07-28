@@ -34,6 +34,27 @@ def test_new_workbench_chat_reuses_create_response_without_refetching():
     assert "handleCreateChat();" in source
 
 
+def test_notification_items_navigate_to_their_precise_context():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function wbNotificationNavigationTarget(item)" in source
+    assert 'type: "chat", chatId: meta.chatId' in source
+    assert 'type: "task", sessionId: meta.sessionId' in source
+    assert 'type: "schedule"' in source
+    assert 'type: "knowledge", docId: meta.documentId || meta.docId' in source
+    assert 'setSettingsTab("about")' in source
+    assert "navigateFromSearch(target);" in source
+    assert "onOpenNotification={navigateFromNotification}" in source
+    assert 'className="workbench-notif-item-jump"' in source
+    assert ".workbench-notif-item:focus-visible" in styles
+
+
 def test_workbench_chat_interrupt_waits_for_server_and_uses_live_status_everywhere():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
@@ -2657,6 +2678,15 @@ def test_workbench_chat_workspace_chip_follows_project_until_user_overrides_it()
     chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
         encoding="utf-8"
     )
+
+    # Both POSIX and Windows workspace paths render only their final directory
+    # name in the chip (for example, the default Windows path renders
+    # "workspace" instead of the full C:\Users\...\workspace path).
+    assert 'function wbcWorkspaceDisplayName(path)' in chat
+    assert 'replace(/[\\\\/]+$/, "")' in chat
+    assert 'normalized.split(/[\\\\/]/).filter(Boolean).pop()' in chat
+    assert "name: wbcWorkspaceDisplayName(wsDir)" in chat
+    assert "var name = wbcWorkspaceDisplayName(p);" in chat
 
     # The workspace override helpers take an optional draft namespace (default
     # "" for the main chat; the quick-chat window passes one) — the call sites

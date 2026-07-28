@@ -17,21 +17,10 @@ import threading
 from copy import deepcopy
 from pathlib import Path
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from cyrene.runtime import paths as app_paths
 
-try:
-    import keyring
-    import keyring.errors as keyring_errors
-except Exception:  # pragma: no cover - keyring missing entirely
-    keyring = None  # type: ignore[assignment]
-    keyring_errors = None  # type: ignore[assignment]
-
 logger = logging.getLogger(__name__)
-
-# OS keyring identifiers for the Fernet encryption key.
-_KEYRING_SERVICE = "cyrene"
-_KEYRING_USERNAME = "config_key"
 
 # ---------------------------------------------------------------------------
 # Path resolution (self-contained — do NOT import from cyrene.config)
@@ -168,105 +157,52 @@ _EDITABLE_ENV_KEYS = {
 # ---------------------------------------------------------------------------
 # Key storage
 #
-# The Fernet key is stored in the OS-backed secret store via the `keyring`
-# library (macOS Keychain, Windows Credential Locker, Linux Secret Service).
-# This keeps the key out of any plaintext file that a co-located process can
-# read.
-#
-# DEGRADED MODE: keyring may be unavailable (package missing) or raise
-# NoKeyringError/KeyringError — e.g. headless Linux with no Secret Service
-# daemon, or a locked keyring. In that case we fall back to the legacy
-# behavior of writing the key to a plaintext file (.config_key, chmod 0600)
-# and emit a WARNING. The key is then NOT encrypted at rest, providing only
-# filesystem-permission protection.
+# The Fernet key is deliberately stored next to the encrypted config in a
+# permission-restricted file. Do not use an OS keyring here: development and
+# packaged processes can have different keyring identities while sharing the
+# same DATA_DIR, which previously caused valid config to be mistaken for
+# corruption and replaced from a stale legacy backup.
 # ---------------------------------------------------------------------------
 
 
-def _keyring_available() -> bool:
-    # Explicit opt-out for portable/headless installs and isolated packaged-app
-    # diagnostics. Normal desktop launches keep using the OS keyring.
-    if str(os.environ.get("CYRENE_CONFIG_KEYRING") or "").strip().lower() in {
-        "0", "false", "no", "off",
-    }:
-        return False
-    return keyring is not None and keyring_errors is not None
+def _store_key(key: bytes) -> bytes:
+    """Create the local key file once and return the winning key.
 
-
-def _keyring_get() -> bytes | None:
-    """Return the stored Fernet key from the OS keyring, or None.
-
-    Returns None on a clean "not present"; raises on backend errors so the
-    caller can decide whether to fall back to degraded mode.
+    Exclusive creation prevents two processes on a first launch from choosing
+    different keys for the same config directory.
     """
-    if not _keyring_available():
-        return None
-    value = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
-    if value is None:
-        return None
-    return value.encode("ascii")
-
-
-def _keyring_set(key: bytes) -> bool:
-    """Store the Fernet key in the OS keyring and verify with a read-back.
-
-    Returns True on verified success, False if keyring is unavailable or the
-    backend raised an error (degraded mode).
-    """
-    if not _keyring_available():
-        return False
-    try:
-        keyring.set_password(_KEYRING_SERVICE, _KEYRING_USERNAME, key.decode("ascii"))
-        return _keyring_get() == key
-    except keyring_errors.KeyringError:
-        logger.warning("OS keyring unavailable when storing encryption key", exc_info=True)
-        return False
-
-
-def _write_plaintext_key(key: bytes) -> None:
-    """Degraded-mode fallback: persist the key to a 0600 plaintext file."""
     _KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _KEY_PATH.write_bytes(key)
-    os.chmod(_KEY_PATH, 0o600)
-    logger.warning(
-        "Storing encryption key in plaintext at %s (degraded mode — OS keyring "
-        "unavailable). Secrets are protected only by filesystem permissions, "
-        "not encrypted at rest.",
-        _KEY_PATH,
-    )
-
-
-def _store_key(key: bytes) -> None:
-    """Persist a Fernet key, preferring the OS keyring over plaintext."""
-    if _keyring_set(key):
-        return
-    _write_plaintext_key(key)
+    try:
+        fd = os.open(_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        existing = _KEY_PATH.read_bytes()
+        os.chmod(_KEY_PATH, 0o600)
+        return existing
+    try:
+        os.write(fd, key)
+    finally:
+        os.close(fd)
+    return key
 
 
 def _get_fernet() -> Fernet:
-    # 1. Prefer the OS keyring.
-    try:
-        keyring_key = _keyring_get()
-    except Exception:  # NoKeyringError / KeyringError / backend hiccup
-        logger.warning("OS keyring unavailable when reading encryption key", exc_info=True)
-        keyring_key = None
-    if keyring_key is not None:
-        return Fernet(keyring_key)
-
-    # 2. Migrate a legacy plaintext key file into the keyring (delete only
-    #    after a verified keyring write+read-back).
     if _KEY_PATH.exists():
         key = _KEY_PATH.read_bytes()
-        if _keyring_set(key):
-            try:
-                _KEY_PATH.unlink()
-            except OSError:
-                logger.warning("Could not remove legacy plaintext key file %s", _KEY_PATH)
-            logger.info("Migrated encryption key from plaintext file into OS keyring")
-        return Fernet(key)
+        os.chmod(_KEY_PATH, 0o600)
+        try:
+            return Fernet(key)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"Invalid local config key: {_KEY_PATH}") from exc
 
-    # 3. First-ever setup: generate a new key and store it.
+    # Never generate a replacement key for an existing encrypted config.
+    if _ENCRYPTED_PATH.exists():
+        raise RuntimeError(
+            f"Local config key is missing: {_KEY_PATH}; "
+            f"encrypted config was preserved at {_ENCRYPTED_PATH}"
+        )
+
     key = Fernet.generate_key()
-    _store_key(key)
+    key = _store_key(key)
     return Fernet(key)
 
 
@@ -363,19 +299,17 @@ def _migrate_if_needed() -> dict:
 
 
 def _generate_key_if_missing() -> None:
-    """Ensure an encryption key exists. Called on recovery paths where
-    the key may have been deleted but the encrypted store is intact."""
-    try:
-        existing = _keyring_get()
-    except Exception:
-        existing = None
-    if existing is not None or _KEY_PATH.exists():
+    """Ensure a local encryption key exists for a new config store."""
+    if _KEY_PATH.exists():
         return
+    if _ENCRYPTED_PATH.exists():
+        raise RuntimeError(
+            f"Refusing to replace missing key for existing config: {_ENCRYPTED_PATH}"
+        )
     key = Fernet.generate_key()
-    _store_key(key)
+    key = _store_key(key)
     global _fernet
     _fernet = Fernet(key)
-    logger.warning("Generated new encryption key — previously encrypted data is lost")
 
 
 # ---------------------------------------------------------------------------
@@ -412,9 +346,11 @@ def _read_config() -> dict:
         plain = _cipher().decrypt(encrypted)
         config = json.loads(plain.decode("utf-8"))
         return _apply_settings_migrations(config)
-    except Exception:
-        logger.exception("Failed to decrypt config store, attempting migration")
-        return _migrate_if_needed()
+    except InvalidToken as exc:
+        raise RuntimeError(
+            f"Cannot decrypt config with local key {_KEY_PATH}; "
+            f"existing config was preserved at {_ENCRYPTED_PATH}"
+        ) from exc
 
 
 _SETTINGS_MIGRATIONS_DONE: bool = False
@@ -485,7 +421,7 @@ def export_snapshot() -> dict:
     """Return a portable, detached snapshot of all configuration.
 
     The on-disk ``config.enc`` file cannot be copied between installations
-    because its Fernet key normally lives in the operating-system keyring.
+    because its Fernet key is installation-local.
     Backup archives therefore carry this logical snapshot and re-encrypt it
     with the destination installation's key during restore.
     """

@@ -1020,12 +1020,83 @@ def _has_new_conversation() -> bool:
         return False
 
 
+def _recent_workbench_conversations(
+    since_timestamp: float | None,
+    *,
+    now: float | None = None,
+    max_files: int = 12,
+    max_chars: int = 80_000,
+    max_chars_per_file: int = 12_000,
+) -> str:
+    """Read recently modified per-session Workbench conversation archives.
+
+    Workbench stores ``conversations/<session_id>.md`` instead of the legacy
+    daily ``YYYY-MM-DD.md`` files. Scan the default workspace plus every
+    configured project workspace, bounded by file count and characters.
+    """
+    current = float(now if now is not None else time.time())
+    cutoff = (
+        float(since_timestamp)
+        if since_timestamp is not None
+        else current - 24 * 60 * 60
+    )
+    directories: dict[Path, str] = {CONVERSATIONS_DIR: "default"}
+    try:
+        from cyrene.workbench import runtime as workbench_runtime
+        from cyrene.runtime.memory.conversations import session_conversations_dir
+
+        payload = workbench_runtime._read_workbench_store()
+        for project in payload.get("projects", []) or []:
+            if not isinstance(project, dict):
+                continue
+            workspace_path = str(project.get("workspacePath") or "").strip()
+            if workspace_path:
+                directories[session_conversations_dir(workspace_path)] = str(
+                    project.get("id") or "default"
+                )
+    except Exception:
+        logger.debug("Could not enumerate Workbench conversation directories", exc_info=True)
+
+    candidates: list[tuple[Path, str]] = []
+    for directory, project_id in directories.items():
+        try:
+            for path in directory.glob("*.md"):
+                # Legacy daily archives are loaded separately.
+                if _re.fullmatch(r"\d{4}-\d{2}-\d{2}\.md", path.name):
+                    continue
+                if path.stat().st_mtime > cutoff:
+                    candidates.append((path, project_id))
+        except OSError:
+            logger.debug("Could not scan Workbench conversations in %s", directory, exc_info=True)
+
+    candidates.sort(key=lambda item: item[0].stat().st_mtime, reverse=True)
+    parts: list[str] = []
+    used = 0
+    for path, project_id in candidates[:max_files]:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            logger.debug("Could not read Workbench conversation %s", path, exc_info=True)
+            continue
+        excerpt = content[-max_chars_per_file:]
+        block = (
+            "=== Workbench conversation: "
+            f"{path.name} project_id={project_id} ===\n{excerpt}"
+        )
+        if parts and used + len(block) > max_chars:
+            break
+        parts.append(block)
+        used += len(block)
+    return "\n\n".join(reversed(parts))
+
+
 async def _run_steward_if_needed(bot, db_path: str) -> None:
     """Check conditions and run the steward agent when appropriate.
 
     Triggers when:
     1. At least ``STEWARD_INTERVAL`` seconds have elapsed since the last run.
-    2. Today's conversation file exists and contains archived exchanges.
+    2. A legacy daily archive or a recently modified Workbench session archive
+       contains conversation text.
     """
     try:
         last_run = _get_last_steward_run()
@@ -1037,25 +1108,31 @@ async def _run_steward_if_needed(bot, db_path: str) -> None:
             )
             return
 
-        if not _has_new_conversation():
-            logger.debug("No new conversations today, skipping steward")
-            return
-
-        if OWNER_ID is None:
-            logger.debug("OWNER_ID not configured, skipping steward")
-            return
-
-        logger.info("Steward conditions met -- running steward agent")
-
-        conversation_text = await get_recent_conversations(days=1)
+        legacy_text = (
+            await get_recent_conversations(days=1)
+            if _has_new_conversation()
+            else ""
+        )
+        workbench_text = await asyncio.to_thread(
+            _recent_workbench_conversations,
+            last_run,
+            now=now,
+        )
+        conversation_text = "\n\n".join(
+            part for part in (legacy_text, workbench_text) if part
+        )
         soulmd_content = read_soul()
 
         if not conversation_text:
-            logger.debug("No conversation text available, skipping steward")
+            logger.debug("No new legacy or Workbench conversations, skipping steward")
             return
 
+        logger.info("Steward conditions met -- running steward agent")
+        # The steward does not deliver a chat reply. OWNER_ID is only a runtime
+        # context identifier here, so Desktop/Web installs can safely use 0.
+        steward_chat_id = OWNER_ID if OWNER_ID is not None else 0
         result = await run_steward_agent(
-            conversation_text, soulmd_content, bot, OWNER_ID, db_path,
+            conversation_text, soulmd_content, bot, steward_chat_id, db_path,
         )
 
         result_stripped = (result or "").strip()
@@ -1082,11 +1159,22 @@ async def _run_steward_if_needed(bot, db_path: str) -> None:
                 e_title = _re2.search(r'title="([^"]*)"', line)
                 e_conf = _re2.search(r'confidence="([^"]*)"', line)
                 e_content = _re2.search(r'content="([^"]*)"', line)
+                e_project = _re2.search(r'project_id="([^"]*)"', line)
                 if e_type and e_title and e_conf:
                     entity_type = e_type.group(1)
                     entity_title = e_title.group(1)
+                    project_id = (
+                        e_project.group(1).strip()
+                        if e_project
+                        else "default"
+                    ) or "default"
                     # 去重检查：同类型+相似标题的实体或候选已存在时跳过
-                    if await has_similar_entity(db_path, entity_type, entity_title):
+                    if await has_similar_entity(
+                        db_path,
+                        entity_type,
+                        entity_title,
+                        project_id=project_id,
+                    ):
                         logger.debug("Skipping duplicate entity: %s / %s", entity_type, entity_title)
                         continue
                     candidate_id = await add_candidate(
@@ -1095,6 +1183,7 @@ async def _run_steward_if_needed(bot, db_path: str) -> None:
                         title=entity_title,
                         content=e_content.group(1) if e_content else "",
                         confidence=float(e_conf.group(1)),
+                        project_id=project_id,
                         raw_text=line,
                     )
                     logger.info("Steward extracted entity candidate %s: %s", candidate_id[:8], entity_title)

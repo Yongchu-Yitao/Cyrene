@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -68,6 +69,70 @@ async def test_due_task_poll_does_not_run_heavy_maintenance(monkeypatch):
     proactive.assert_not_awaited()
     steward.assert_not_awaited()
     learning.assert_not_awaited()
+
+
+def test_steward_reads_recent_workbench_session_archives(tmp_path, monkeypatch):
+    from cyrene.runtime import scheduler
+    from cyrene.workbench import runtime as workbench_runtime
+
+    conversations = tmp_path / "conversations"
+    conversations.mkdir()
+    recent = conversations / "wbchat_recent.md"
+    recent.write_text(
+        "# Conversation wbchat_recent\n\n"
+        "## 2026-07-28 12:00:00 CST\n\n"
+        "**User**: 我决定下周发布新版本。\n",
+        encoding="utf-8",
+    )
+    old = conversations / "wbchat_old.md"
+    old.write_text("old conversation", encoding="utf-8")
+    old_timestamp = time.time() - 7200
+    old.touch()
+    import os
+    os.utime(old, (old_timestamp, old_timestamp))
+
+    monkeypatch.setattr(scheduler, "CONVERSATIONS_DIR", conversations)
+    monkeypatch.setattr(
+        workbench_runtime,
+        "_read_workbench_store",
+        lambda: {"projects": []},
+    )
+
+    text = scheduler._recent_workbench_conversations(time.time() - 3600)
+
+    assert "wbchat_recent.md" in text
+    assert "project_id=default" in text
+    assert "下周发布新版本" in text
+    assert "wbchat_old.md" not in text
+
+
+async def test_steward_processes_workbench_archive_without_owner_id(
+    tmp_path, monkeypatch
+):
+    from cyrene.runtime import scheduler
+
+    steward = AsyncMock(return_value="SKIP")
+    monkeypatch.setattr(scheduler, "_get_last_steward_run", lambda: None)
+    monkeypatch.setattr(scheduler, "_has_new_conversation", lambda: False)
+    monkeypatch.setattr(
+        scheduler,
+        "_recent_workbench_conversations",
+        lambda *_args, **_kwargs: "Workbench conversation text",
+    )
+    monkeypatch.setattr(scheduler, "OWNER_ID", None)
+    monkeypatch.setattr(scheduler, "read_soul", lambda: "")
+    monkeypatch.setattr(scheduler, "run_steward_agent", steward)
+    monkeypatch.setattr(scheduler, "_save_steward_run", lambda _timestamp: None)
+
+    await scheduler._run_steward_if_needed(None, str(tmp_path / "entities.db"))
+
+    steward.assert_awaited_once_with(
+        "Workbench conversation text",
+        "",
+        None,
+        0,
+        str(tmp_path / "entities.db"),
+    )
 
 
 async def test_behavior_learning_kicks_are_coalesced(monkeypatch):

@@ -879,7 +879,31 @@ def register_workbench_chat_routes(
             if finalized and not command and not retry:
                 # schedule_capture needs the running event loop, unlike the
                 # storage/archive work intentionally performed above in a thread.
-                R.schedule_capture(project_id, message, str(reply_text or ""))
+                from cyrene.workbench.memory import build_verified_tool_evidence
+
+                state_messages = await asyncio.to_thread(
+                    _session_state_messages, chat_id
+                )
+                round_id = next(
+                    (
+                        str(item.get("round_id") or "").strip()
+                        for item in reversed(state_messages)
+                        if isinstance(item, dict)
+                        and str(item.get("round_id") or "").strip()
+                    ),
+                    "",
+                )
+                R.schedule_capture(
+                    project_id,
+                    message,
+                    str(reply_text or ""),
+                    verified_evidence=build_verified_tool_evidence(
+                        state_messages,
+                        state_ids_before,
+                    ),
+                    session_id=chat_id,
+                    round_id=round_id,
+                )
             return finalized
 
         def _restore_retry_state() -> None:

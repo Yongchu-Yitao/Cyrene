@@ -259,6 +259,7 @@ CREATE TABLE IF NOT EXISTS entity_candidates (
     content         TEXT DEFAULT '',
     confidence      REAL NOT NULL,
     source_round_id TEXT,
+    project_id      TEXT DEFAULT 'default',
     raw_text        TEXT,
     created_at      TEXT NOT NULL
 );
@@ -375,6 +376,17 @@ async def init_db(db_path: str) -> None:
             pass  # Column already exists
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_entities_project_id ON entities(project_id)"
+        )
+        try:
+            await db.execute(
+                "ALTER TABLE entity_candidates "
+                "ADD COLUMN project_id TEXT DEFAULT 'default'"
+            )
+        except Exception:
+            pass  # Column already exists
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entity_candidates_project_id "
+            "ON entity_candidates(project_id)"
         )
         try:
             await db.execute("ALTER TABLE kb_documents ADD COLUMN content_hash TEXT DEFAULT ''")

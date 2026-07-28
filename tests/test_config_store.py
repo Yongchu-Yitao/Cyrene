@@ -38,17 +38,56 @@ def _write_encrypted(config_store, config: dict) -> None:
     config_store._ENCRYPTED_PATH.write_bytes(Fernet(key).encrypt(plain))
 
 
-def test_explicit_keyring_opt_out_uses_isolated_plaintext_key(
-    isolated_config_store,
-    monkeypatch,
-):
-    monkeypatch.setenv("CYRENE_CONFIG_KEYRING", "0")
-
+def test_config_uses_permission_restricted_local_key(isolated_config_store):
     cipher = isolated_config_store._get_fernet()
 
     assert cipher is not None
     assert isolated_config_store._KEY_PATH.exists()
     assert isolated_config_store._KEY_PATH.stat().st_mode & 0o777 == 0o600
+
+
+def test_decryption_failure_preserves_config_instead_of_restoring_legacy_backup(
+    isolated_config_store,
+):
+    stale_legacy = {
+        "vision_models": [{"model": "gpt-4.1-mini"}],
+    }
+    legacy_backup = isolated_config_store._LEGACY_SETTINGS_PATH.with_suffix(
+        ".json.bak"
+    )
+    legacy_backup.parent.mkdir(parents=True, exist_ok=True)
+    legacy_backup.write_text(json.dumps(stale_legacy), encoding="utf-8")
+
+    encrypted_key = Fernet.generate_key()
+    wrong_local_key = Fernet.generate_key()
+    encrypted = Fernet(encrypted_key).encrypt(
+        json.dumps(
+            {"env": {}, "settings": {"vision_models": [{"model": "new-vision"}]}}
+        ).encode("utf-8")
+    )
+    isolated_config_store._ENCRYPTED_PATH.parent.mkdir(parents=True, exist_ok=True)
+    isolated_config_store._ENCRYPTED_PATH.write_bytes(encrypted)
+    isolated_config_store._KEY_PATH.write_bytes(wrong_local_key)
+
+    with pytest.raises(RuntimeError, match="existing config was preserved"):
+        isolated_config_store._ensure_loaded()
+
+    assert isolated_config_store._ENCRYPTED_PATH.read_bytes() == encrypted
+    assert json.loads(legacy_backup.read_text(encoding="utf-8")) == stale_legacy
+
+
+def test_missing_local_key_does_not_replace_existing_encrypted_config(
+    isolated_config_store,
+):
+    encrypted = b"existing-encrypted-config"
+    isolated_config_store._ENCRYPTED_PATH.parent.mkdir(parents=True, exist_ok=True)
+    isolated_config_store._ENCRYPTED_PATH.write_bytes(encrypted)
+
+    with pytest.raises(RuntimeError, match="Local config key is missing"):
+        isolated_config_store._ensure_loaded()
+
+    assert isolated_config_store._ENCRYPTED_PATH.read_bytes() == encrypted
+    assert not isolated_config_store._KEY_PATH.exists()
 
 
 def test_migration_fixes_incomplete_model_entries(isolated_config_store):
@@ -113,9 +152,7 @@ def test_activate_workspace_updates_active_state_and_history_in_one_write(
 
 def test_portable_snapshot_is_detached_reencrypted_and_activated(
     isolated_config_store,
-    monkeypatch,
 ):
-    monkeypatch.setenv("CYRENE_CONFIG_KEYRING", "0")
     original = {
         "env": {"OPENAI_API_KEY": "old-secret", "OPENAI_MODEL": "old-model"},
         "settings": {"app_language": "en"},

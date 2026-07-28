@@ -78,6 +78,7 @@ def _row_to_entity(row: aiosqlite.Row) -> dict:
         "source_round_id": row["source_round_id"],
         "confidence": row["confidence"],
         "metadata": _deserialize_dict(row["metadata"]),
+        "project_id": row["project_id"] if "project_id" in row.keys() else "default",
     }
 
 
@@ -414,6 +415,7 @@ async def add_candidate(
     content: str = "",
     confidence: float,
     source_round_id: str | None = None,
+    project_id: str = "default",
     raw_text: str | None = None,
 ) -> str:
     """Add a candidate entity and return its ID."""
@@ -423,10 +425,23 @@ async def add_candidate(
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
             """
-            INSERT INTO entity_candidates (id, type, title, content, confidence, source_round_id, raw_text, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO entity_candidates (
+                id, type, title, content, confidence, source_round_id,
+                project_id, raw_text, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (candidate_id, type, title, content, confidence, source_round_id, raw_text, now),
+            (
+                candidate_id,
+                type,
+                title,
+                content,
+                confidence,
+                source_round_id,
+                str(project_id or "default"),
+                raw_text,
+                now,
+            ),
         )
         await db.commit()
 
@@ -450,6 +465,11 @@ async def list_candidates(db_path: str, limit: int = 50) -> list[dict]:
                 "content": row["content"],
                 "confidence": row["confidence"],
                 "source_round_id": row["source_round_id"],
+                "project_id": (
+                    row["project_id"]
+                    if "project_id" in row.keys()
+                    else "default"
+                ),
                 "raw_text": row["raw_text"],
                 "created_at": row["created_at"],
             }
@@ -479,6 +499,11 @@ async def promote_candidate(db_path: str, candidate_id: str) -> dict | None:
             confidence=row["confidence"],
             source="extracted",
             source_round_id=row["source_round_id"],
+            project_id=(
+                row["project_id"]
+                if "project_id" in row.keys()
+                else "default"
+            ),
         )
 
         # Delete the candidate
@@ -544,7 +569,13 @@ async def process_candidates(db_path: str) -> list[dict]:
     return promoted
 
 
-async def has_similar_entity(db_path: str, type: str, title: str) -> bool:
+async def has_similar_entity(
+    db_path: str,
+    type: str,
+    title: str,
+    *,
+    project_id: str = "default",
+) -> bool:
     """Check if a similar entity already exists (same type + overlapping title).
 
     Checks both the ``entities`` and ``entity_candidates`` tables.
@@ -554,8 +585,10 @@ async def has_similar_entity(db_path: str, type: str, title: str) -> bool:
     async with aiosqlite.connect(db_path) as db:
         # Check entities
         cursor = await db.execute(
-            "SELECT COUNT(*) FROM entities WHERE type = ? AND title LIKE ?",
-            (type, search),
+            "SELECT COUNT(*) FROM entities "
+            "WHERE type = ? AND title LIKE ? "
+            "AND COALESCE(project_id, 'default') = ?",
+            (type, search, str(project_id or "default")),
         )
         row = await cursor.fetchone()
         if row and row[0] > 0:
@@ -563,8 +596,10 @@ async def has_similar_entity(db_path: str, type: str, title: str) -> bool:
 
         # Check candidates
         cursor = await db.execute(
-            "SELECT COUNT(*) FROM entity_candidates WHERE type = ? AND title LIKE ?",
-            (type, search),
+            "SELECT COUNT(*) FROM entity_candidates "
+            "WHERE type = ? AND title LIKE ? "
+            "AND COALESCE(project_id, 'default') = ?",
+            (type, search, str(project_id or "default")),
         )
         row = await cursor.fetchone()
         if row and row[0] > 0:

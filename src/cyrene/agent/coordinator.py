@@ -1119,7 +1119,11 @@ async def run_steward_agent(conversation_text: str, soulmd_content: str, bot: An
         from cyrene.tool_impl.entity.store import list_entities
         _existing = await list_entities(db_path, limit=200)
         if _existing:
-            _lines = [f"- [{e['type']}] {e['title']}" for e in _existing]
+            _lines = [
+                f"- [project={e.get('project_id') or 'default'}] "
+                f"[{e['type']}] {e['title']}"
+                for e in _existing
+            ]
             _existing_entity_hint = "\n".join(_lines[:50])  # cap at 50 to keep prompt reasonable
     except Exception:
         pass
@@ -1144,7 +1148,10 @@ From the conversation, extract entities the user mentioned. Only extract when yo
 CRITICAL: Check the existing entities list below. If the conversation mentions something semantically equivalent to an existing entity (same topic, same intent, different wording), SKIP it — do NOT output a duplicate. Use meaning, not just exact string match.
 
 For each entity, output ENTITY with these fields:
-ENTITY type="task" title="Buy groceries" confidence="0.85" content="User mentioned needing to buy groceries this weekend"
+ENTITY project_id="project_abc" type="task" title="Buy groceries" confidence="0.85" content="User mentioned needing to buy groceries this weekend"
+
+Use the exact project_id shown in the Workbench conversation header. For
+legacy/global conversations without a project id, use project_id="default".
 
 Confidence guidelines:
 - ≥ 0.8: Clear actionable mention with specifics (dates, names, concrete actions)

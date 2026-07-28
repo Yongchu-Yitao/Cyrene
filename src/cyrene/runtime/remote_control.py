@@ -43,13 +43,6 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-try:
-    import keyring
-    import keyring.errors as keyring_errors
-except Exception:  # pragma: no cover - optional backend may be unavailable
-    keyring = None  # type: ignore[assignment]
-    keyring_errors = None  # type: ignore[assignment]
-
 logger = logging.getLogger(__name__)
 
 REMOTE_PROTOCOL_VERSION = 1
@@ -349,52 +342,25 @@ class RemoteIdentity:
 
 
 class RemoteIdentityStore:
-    """Store private device identity in the OS keyring with a 0600 fallback."""
+    """Store private device identity in a local owner-only file."""
 
     def __init__(self, db_path: str, *, fallback_path: Path | None = None) -> None:
         resolved = Path(db_path).expanduser().resolve()
-        digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:24]
-        self._username = f"device_identity_{digest}"
         self._fallback_path = fallback_path or resolved.with_suffix(
             resolved.suffix + ".remote-identity"
         )
         self._cached: RemoteIdentity | None = None
 
-    def _keyring_enabled(self) -> bool:
-        disabled = str(os.environ.get("CYRENE_REMOTE_KEYRING") or "").lower()
-        return (
-            disabled not in {"0", "false", "no", "off"}
-            and keyring is not None
-            and keyring_errors is not None
-        )
-
     def _read_secret(self) -> str:
-        if self._keyring_enabled():
-            try:
-                value = keyring.get_password("cyrene.remote", self._username)
-                if value:
-                    return value
-            except Exception:
-                logger.warning("Remote identity keyring read failed", exc_info=True)
         if self._fallback_path.exists():
+            os.chmod(self._fallback_path, 0o600)
             return self._fallback_path.read_text(encoding="utf-8").strip()
         return ""
 
     def _write_secret(self, value: str) -> None:
-        if self._keyring_enabled():
-            try:
-                keyring.set_password("cyrene.remote", self._username, value)
-                if keyring.get_password("cyrene.remote", self._username) == value:
-                    return
-            except Exception:
-                logger.warning("Remote identity keyring write failed", exc_info=True)
         self._fallback_path.parent.mkdir(parents=True, exist_ok=True)
         self._fallback_path.write_text(value, encoding="utf-8")
         os.chmod(self._fallback_path, 0o600)
-        logger.warning(
-            "Remote identity uses filesystem-only protection at %s",
-            self._fallback_path,
-        )
 
     def get_or_create(self) -> RemoteIdentity:
         if self._cached is not None:

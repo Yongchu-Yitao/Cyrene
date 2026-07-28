@@ -11,6 +11,11 @@ var {
   useCallback: useWbcCallback,
 } = React;
 
+function wbcWorkspaceDisplayName(path) {
+  var normalized = String(path || "").replace(/[\\/]+$/, "");
+  return normalized.split(/[\\/]/).filter(Boolean).pop() || normalized || "…";
+}
+
 // ---------------------------------------------------------------------------
 // Data access
 // ---------------------------------------------------------------------------
@@ -5341,7 +5346,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           {workspaceOn && (
             <span className="wbc-ctx-chip on">
               {WBC_ICONS.folder}
-              <span title={wsDir}>{wbcT("workbenchChat.workspaceChip", "Workspace: {name}", { name: wsDir.split("/").filter(Boolean).pop() || wsDir || "…" })}</span>
+              <span title={wsDir}>{wbcT("workbenchChat.workspaceChip", "Workspace: {name}", { name: wbcWorkspaceDisplayName(wsDir) })}</span>
               <button type="button" className="wbc-ctx-x" title={wbcT("workbenchChat.removeContext", "Remove")} onClick={wbcRemoveWorkspace}>{WBC_ICONS.x}</button>
             </span>
           )}
@@ -5492,7 +5497,7 @@ function WbcCtxPicker({ personaOn, workspaceOn, defaultWorkspacePath, wsHistory,
           <div className="wbc-popmenu-head">{wbcT("workbenchChat.workspaceSection", "Workspace")}</div>
           {workspaceOptions.map(function (option) {
             var p = option.path;
-            var name = p.split("/").filter(Boolean).pop() || p;
+            var name = wbcWorkspaceDisplayName(p);
             return (
               <button key={p} type="button" onClick={function () { onAddWorkspace(p); }}>
                 <span className="wbc-popmenu-label mono">
