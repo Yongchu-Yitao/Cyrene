@@ -4,7 +4,6 @@ Supports tracking and managing various entity types:
 - task, project, decision, knowledge, relationship, event, resource, idea, problem, habit
 """
 
-import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any

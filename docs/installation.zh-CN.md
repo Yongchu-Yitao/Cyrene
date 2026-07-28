@@ -36,6 +36,26 @@ pip install -e .
 首次运行会请求 API Key 并引导设置人格。正常使用不需要 `.env`；配置保存在
 加密 Store，由 Onboarding/Settings 管理。
 
+### Linux 预构建包
+
+Linux Release 同时提供便携 AppImage、Debian 安装包和 RPM 安装包：
+
+```bash
+# 便携 AppImage
+chmod +x Cyrene-*-x64.AppImage
+./Cyrene-*-x64.AppImage
+
+# Debian / Ubuntu
+sudo apt install ./Cyrene-*-x64.deb
+
+# Fedora / RHEL / Rocky Linux / AlmaLinux
+sudo dnf install ./Cyrene-*-x64.rpm
+```
+
+Linux 桌面版默认使用软件渲染，规避 Wayland、Mesa 或虚拟 GPU
+不兼容导致的 Electron 纯白窗口。仅在确认 GPU Stack 工作正常时设置
+`CYRENE_ENABLE_HARDWARE_ACCELERATION=1` 恢复硬件加速。
+
 ## Windows
 
 预构建 Windows Installer 是当前面向最终用户的受支持路径。

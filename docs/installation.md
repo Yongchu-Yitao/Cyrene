@@ -37,6 +37,26 @@ On first run, the onboarding wizard will ask for your API key and guide you thro
 
 > You do **not** need to create a `.env` file. Configuration is stored in an encrypted config store and managed through the Web UI or onboarding wizard. A legacy `.env.example` is still provided for backward compatibility.
 
+### Pre-built Linux packages
+
+Linux releases provide a portable `AppImage`, a Debian package, and an RPM package:
+
+```bash
+# Portable AppImage
+chmod +x Cyrene-*-x64.AppImage
+./Cyrene-*-x64.AppImage
+
+# Debian / Ubuntu
+sudo apt install ./Cyrene-*-x64.deb
+
+# Fedora / RHEL / Rocky Linux / AlmaLinux
+sudo dnf install ./Cyrene-*-x64.rpm
+```
+
+The desktop app uses software rendering by default on Linux to avoid blank
+Electron surfaces caused by incompatible Wayland, Mesa, or virtual GPU stacks.
+Set `CYRENE_ENABLE_HARDWARE_ACCELERATION=1` only to opt back into GPU rendering.
+
 ## Windows
 
 Use the pre-built Windows installer for the supported end-user path.

@@ -456,14 +456,28 @@ jobs:
       - name: Full build (PyInstaller + Electron)
         run: python build/build.py --ui-mode ${{ env.UI_MODE }}
 
-      - name: Smoke test packaged app
+      - name: Smoke test packaged Python app
         run: ./dist/Cyrene/Cyrene --smoke-test
 
-      - name: Upload AppImage
+      - name: Smoke test packaged AppImage UI
+        env:
+          CYRENE_USER_DATA_DIR: ${{ runner.temp }}/cyrene-desktop-smoke/data
+          CYRENE_CACHE_DIR: ${{ runner.temp }}/cyrene-desktop-smoke/cache
+          CYRENE_TEMP_DIR: ${{ runner.temp }}/cyrene-desktop-smoke/tmp
+        run: |
+          timeout 90s xvfb-run -a \
+            dist-electron/Cyrene-*-x64.AppImage \
+            --appimage-extract-and-run \
+            --desktop-smoke-test
+
+      - name: Upload Linux packages
         uses: actions/upload-artifact@v4
         with:
-          name: linux-appimage
-          path: dist-electron/Cyrene-*-x64.AppImage
+          name: linux-packages
+          path: |
+            dist-electron/Cyrene-*-x64.AppImage
+            dist-electron/Cyrene-*-x64.deb
+            dist-electron/Cyrene-*-x64.rpm
           if-no-files-found: error
           compression-level: 0
 
@@ -494,7 +508,7 @@ jobs:
       - name: Download Linux artifact
         uses: actions/download-artifact@v4
         with:
-          name: linux-appimage
+          name: linux-packages
           path: artifacts
 
       - name: List artifacts

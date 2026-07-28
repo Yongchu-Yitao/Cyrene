@@ -840,7 +840,7 @@ var WORKBENCH_TRANSLATIONS = {
     "create.task.priority": "Priority",
     "create.task.create": "Create task",
     "rail.projects": "Projects",
-    "rail.newProject": "New project",
+    "rail.newProject": "New",
     "rail.collapse": "Collapse sidebar",
     "rail.expand": "Expand sidebar",
     "rail.resizeHandle": "Drag to resize · double-click to reset",

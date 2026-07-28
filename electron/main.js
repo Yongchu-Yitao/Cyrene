@@ -108,6 +108,22 @@ function appendErrorLog(text) {
   if (s) s.write(text);
 }
 
+function installWindowDiagnostics(window, label) {
+  if (!window || !window.webContents) return;
+  const prefix = `[electron:${label}]`;
+  window.webContents.on('did-fail-load', (_event, code, description, targetUrl, isMainFrame) => {
+    // ERR_ABORTED is expected when a navigation is replaced or the app quits.
+    if (isMainFrame === false || Number(code) === -3) return;
+    appendErrorLog(`${prefix} did-fail-load code=${code} description=${description} url=${targetUrl}\n`);
+  });
+  window.webContents.on('render-process-gone', (_event, details) => {
+    appendErrorLog(`${prefix} render-process-gone ${JSON.stringify(details || {})}\n`);
+  });
+  window.on('unresponsive', () => {
+    appendErrorLog(`${prefix} window became unresponsive\n`);
+  });
+}
+
 function sha256File(filePath) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
@@ -167,6 +183,15 @@ const isWindows = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
 const supportsLoginItem = process.platform === 'darwin' || process.platform === 'win32';
 
+// Electron's GPU process can start successfully while producing an entirely
+// white compositor surface on some Linux/Wayland, virtualized, and older Mesa
+// setups. AppImage users cannot switch Electron builds or system libraries, so
+// prefer Chromium's software renderer there. Set the opt-out only when
+// diagnosing a machine known to have a working GPU stack.
+if (isLinux && process.env.CYRENE_ENABLE_HARDWARE_ACCELERATION !== '1') {
+  app.disableHardwareAcceleration();
+}
+
 let mainWindow = null;
 let quickChatWindow = null;
 let quickChatWindowReady = null;
@@ -190,6 +215,12 @@ let appUsePointerWindow = null;
 let appUsePointerHideTimer = null;
 let electronRpcServer = null;
 let electronRpcPort = null;
+const isDesktopSmokeTest = process.argv.includes('--desktop-smoke-test');
+if (isDesktopSmokeTest) {
+  // Keep release smoke tests independent from any resident desktop instance
+  // and avoid reading or changing the runner/user's normal Electron profile.
+  app.setPath('userData', path.join(getCyreneTempDir(), 'electron-smoke-profile'));
+}
 const BROWSER_USER_EVENT_CONSOLE_PREFIX = '__CYRENE_BROWSER_USER_EVENT__';
 
 const DEFAULT_DESKTOP_SETTINGS = Object.freeze({
@@ -1419,6 +1450,60 @@ class BrowserTabManager {
     };
   }
 
+  async pageViewportMatches(view, bounds) {
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return false;
+    const target = this.pageViewBounds(bounds);
+    try {
+      const viewport = await Promise.race([
+        view.webContents.executeJavaScript(
+          '({ width: window.innerWidth, height: window.innerHeight })',
+          true
+        ),
+        new Promise((resolve) => setTimeout(() => resolve(null), 80)),
+      ]);
+      return !!viewport
+        && Math.abs((Number(viewport.width) || 0) - target.width) <= 1
+        && Math.abs((Number(viewport.height) || 0) - target.height) <= 1;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async waitForPageViewport(view, bounds, attempts = 4) {
+    const count = Math.max(1, Math.round(Number(attempts) || 1));
+    for (let attempt = 0; attempt < count; attempt += 1) {
+      if (await this.pageViewportMatches(view, bounds)) return true;
+      if (attempt + 1 < count) {
+        await new Promise((resolve) => setTimeout(resolve, 24));
+      }
+    }
+    return false;
+  }
+
+  async settlePageViewport(view, bounds) {
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return false;
+    const target = this.pageViewBounds(bounds);
+    try { view.setBounds(target); } catch (_) {}
+    try { view.webContents.invalidate(); } catch (_) {}
+    if (await this.waitForPageViewport(view, target, 3)) return true;
+
+    // Electron 35 on macOS can acknowledge the first hidden PiP -> maximized
+    // setBounds call without delivering a resize to Chromium's layout viewport.
+    // A one-pixel geometry pulse forces a second native resize notification;
+    // verify window.innerWidth/innerHeight before treating the transition as
+    // settled so the renderer cannot cache a fullscreen shell around a PiP page.
+    const pulse = {
+      ...target,
+      width: target.width > 9 ? target.width - 1 : target.width,
+      height: target.height > 9 ? target.height - 1 : target.height,
+    };
+    try { view.setBounds(pulse); } catch (_) {}
+    await new Promise((resolve) => setTimeout(resolve, 24));
+    try { view.setBounds(target); } catch (_) {}
+    try { view.webContents.invalidate(); } catch (_) {}
+    return this.waitForPageViewport(view, target, 6);
+  }
+
   applyPageFrameStyle(view, radius = this.pageCornerRadius, force = false) {
     if (!view || !view.webContents || view.webContents.isDestroyed()) return;
     const wc = view.webContents;
@@ -1626,9 +1711,8 @@ class BrowserTabManager {
     const targetCornerRadius = this.pageCornerRadius;
     const targetBounds = this.pageViewBounds(this.bounds);
     try { active.view.setBorderRadius(targetCornerRadius); } catch (_) {}
-    try { active.view.setBounds(targetBounds); } catch (_) {}
     this.applyPageFrameStyle(active.view, targetCornerRadius);
-    try { active.view.webContents.invalidate(); } catch (_) {}
+    let viewportReady = await this.settlePageViewport(active.view, targetBounds);
     // capturePage waits for Chromium to produce a frame at the final size. Keep
     // the renderer's bitmap proxy visible until this promise resolves, so the
     // native compositor never exposes its temporary white surface.
@@ -1640,7 +1724,18 @@ class BrowserTabManager {
     this._boundsTransitioning = false;
     this.syncAttachedView();
     await new Promise((resolve) => setTimeout(resolve, 34));
+    // A hidden WebContentsView can defer its first resize until it is visible.
+    // Recheck after attachment and pulse once more if the hidden pass did not
+    // update Chromium's layout viewport.
+    if (!viewportReady && token === this._boundsTransitionToken) {
+      viewportReady = await this.settlePageViewport(active.view, targetBounds);
+    }
     if (token === this._boundsTransitionToken) this.repaintView(active);
+    if (!viewportReady && token === this._boundsTransitionToken) {
+      console.warn(
+        `[electron] Browser viewport did not settle at ${targetBounds.width}x${targetBounds.height}.`
+      );
+    }
     return this.state();
   }
 
@@ -3645,6 +3740,66 @@ async function openQuickChat() {
   }
 }
 
+async function runDesktopSmokeTest(window) {
+  const state = await window.webContents.executeJavaScript(`new Promise((resolve) => {
+    const startedAt = Date.now();
+    const inspect = () => {
+      const root = document.querySelector('#root');
+      const launchScreen = document.querySelector('#cyrene-launch-screen');
+      const result = {
+        readyState: document.readyState,
+        hasRoot: Boolean(root),
+        rootChildren: root ? root.childElementCount : 0,
+        launchScreenPresent: Boolean(launchScreen),
+        bodyText: String(document.body && document.body.innerText || '').trim().slice(0, 200)
+      };
+      if (
+        result.readyState === 'complete'
+        && result.rootChildren > 0
+        && !result.launchScreenPresent
+      ) {
+        resolve(result);
+        return;
+      }
+      if (Date.now() - startedAt >= 30000) {
+        resolve(result);
+        return;
+      }
+      window.setTimeout(inspect, 100);
+    };
+    inspect();
+  })`, true);
+  const image = await window.webContents.capturePage();
+  const bitmap = image.toBitmap();
+  let nonWhitePixels = 0;
+  for (let offset = 0; offset + 3 < bitmap.length; offset += 4) {
+    // BGRA on all Electron desktop platforms. Count pixels visibly darker than
+    // a blank white window; the Cyrene mark and text easily exceed this floor.
+    if (bitmap[offset] < 238 || bitmap[offset + 1] < 238 || bitmap[offset + 2] < 238) {
+      nonWhitePixels += 1;
+    }
+  }
+  if (
+    !state
+    || state.readyState !== 'complete'
+    || !state.hasRoot
+    || state.rootChildren < 1
+    || state.launchScreenPresent
+    || !state.bodyText.includes('Cyrene')
+    || image.isEmpty()
+    || nonWhitePixels < 100
+  ) {
+    throw new Error(`Desktop smoke test rendered an invalid surface: ${JSON.stringify({
+      ...state,
+      imageEmpty: image.isEmpty(),
+      nonWhitePixels,
+    })}`);
+  }
+  console.log(`DESKTOP_SMOKE_TEST=ok nonWhitePixels=${nonWhitePixels}`);
+  isQuitting = true;
+  app.quit();
+}
+
 async function createMainWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
@@ -3699,6 +3854,7 @@ async function createMainWindow() {
     windowOptions.trafficLightPosition = { x: 12, y: 21 };
   }
   mainWindow = new BrowserWindow(windowOptions);
+  installWindowDiagnostics(mainWindow, 'main');
 
   mainWindow.once('ready-to-show', () => {
     if (!launchHidden) {
@@ -3730,10 +3886,28 @@ async function createMainWindow() {
   // Navigate to the sole Workbench surface.
   const url = `http://127.0.0.1:${port}`;
   // Force clear cache so the app always loads fresh assets
-  mainWindow.webContents.session.clearCache();
-  mainWindow.loadURL(url);
-
   installLocalNavigationGuards(mainWindow, port, { allowLocalPopups: true });
+  await mainWindow.webContents.session.clearCache();
+  try {
+    await mainWindow.loadURL(url);
+    if (isDesktopSmokeTest) {
+      await runDesktopSmokeTest(mainWindow);
+    }
+  } catch (err) {
+    const detail = err && err.stack ? err.stack : String(err);
+    appendErrorLog(`[electron:main] load failed: ${detail}\n`);
+    if (isDesktopSmokeTest) {
+      console.error(`DESKTOP_SMOKE_TEST=failed ${detail}`);
+      isQuitting = true;
+      app.exit(1);
+      return;
+    }
+    dialog.showErrorBox(
+      'Cyrene - Window Error',
+      'The application window could not be rendered.\n\n'
+      + `Check cyrene_error.log in ${getCyreneTempDir()} for details.`
+    );
+  }
 }
 
 async function revealMainWindow() {
@@ -3984,7 +4158,16 @@ if (!gotSingleInstanceLock) {
     });
     spawnPython();
     if (!launchHidden) {
-      createMainWindow();
+      createMainWindow().catch((err) => {
+        const detail = err && err.stack ? err.stack : String(err);
+        appendErrorLog(`[electron:main] create window failed: ${detail}\n`);
+        console.error('[electron] Failed to create main window:', err);
+        if (isDesktopSmokeTest) {
+          console.error(`DESKTOP_SMOKE_TEST=failed ${detail}`);
+          isQuitting = true;
+          app.exit(1);
+        }
+      });
     }
   });
 
