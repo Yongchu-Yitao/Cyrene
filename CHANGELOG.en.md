@@ -7,22 +7,34 @@ The Chinese edition remains the most detailed record for older releases.
 
 ## [0.7.0b6] - 2026-07-28
 
-This is the sixth `0.7.0` beta and includes every commit and release-worktree
-change since `v0.7.0-beta.5`. It adds a first-class interactive CLI that shares
-Workbench conversations and run state, turns the desktop topbar into a
-switchable task/chat work set with a durable resource shelf, hardens memory
-capture, notification navigation, and configuration recovery, and fixes native
-Electron Browser views whose Chromium viewport did not follow bounds changes.
-
-Linux desktop delivery receives a dedicated reliability pass. The AppImage
-white window was traced to Electron's GPU compositor failing to produce a
-usable surface with some Wayland, Mesa, virtual-GPU, and older-driver
-combinations. Linux now defaults to software rendering, records renderer
-failures, treats window loading as an awaited operation, and runs a
-screenshot-based test against the real AppImage. Releases now publish AppImage,
-Debian `.deb`, and Red Hat/Fedora-family `.rpm` packages together.
+This is the sixth `0.7.0` beta and includes every change since
+`v0.7.0-beta.5`. It adds an interactive CLI, Workbench work tabs, and a pinned
+resource shelf; improves memory, configuration, and notifications; and fixes
+the Linux AppImage white-window issue. Linux prereleases now include AppImage,
+Debian `.deb`, and Red Hat/Fedora-family `.rpm` packages.
 
 ### Features
+
+- **Interactive CLI** — run `cyrene` to create, select, and resume Workbench
+  conversations from the terminal, including attachments, context, settings,
+  permission prompts, and run recovery.
+- **Upgraded Workbench topbar** — keep up to three task/chat work tabs and pin
+  files, knowledge items, selected text, or Browser pages in a durable resource
+  shelf for reuse across conversations.
+- **More reliable memory and configuration** — improved project memory,
+  entity capture, search scope, and history compatibility; installation-local
+  encryption keys prevent development and packaged apps from losing access to
+  the same configuration.
+- **Better notifications and UI behavior** — notifications return to the
+  relevant project, chat, task, or resource, with improved keyboard access,
+  localization, fallback progress, and background efficiency.
+- **Linux AppImage white-window fix** — Linux now uses the more compatible
+  software-rendering path by default and includes window diagnostics plus a
+  real UI smoke test.
+- **More Linux packages** — prereleases now ship AppImage, Debian `.deb`, and
+  Red Hat/Fedora-family `.rpm` packages together.
+
+### Technical details
 
 #### First-class interactive CLI shared with Workbench
 
@@ -188,8 +200,6 @@ Debian `.deb`, and Red Hat/Fedora-family `.rpm` packages together.
   progress is localized in English and Chinese.
 - **Project rail “New project” is shortened to “New”** for narrow layouts, and
   README links to the canonical Current Limitations document are restored.
-
-### Technical details
 
 #### Electron Browser views and Linux white-window fix
 

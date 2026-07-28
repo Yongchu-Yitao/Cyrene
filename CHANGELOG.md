@@ -4,19 +4,27 @@
 
 ## [0.7.0b6] - 2026-07-28
 
-这是 `0.7.0` 的第六个测试版，完整包含 `v0.7.0-beta.5` 之后的全部提交与
-发布工作区改动。本版新增与 Workbench 共享会话和运行状态的正式交互式 CLI，
-把桌面顶栏升级为可切换的 Task/Chat 工作集和持久固定资源 Shelf，补齐
-Workbench 记忆捕获、通知导航与配置密钥恢复边界，并修复 Electron 原生
-Browser View 在尺寸切换时未真正更新 Chromium Viewport 的问题。
-
-Linux 桌面发布也在本版完成专项加固：AppImage 纯白窗口被定位到 Electron GPU
-Compositor 与部分 Wayland、Mesa、虚拟 GPU 或旧驱动组合不兼容。Linux 现在
-默认使用软件渲染，并新增主 Renderer 故障诊断、显式加载失败处理和真实
-AppImage 截图烟测。Release Workflow 同时发布 AppImage、Debian `.deb` 与
-Red Hat/Fedora 系 `.rpm`，不再丢弃构建阶段已经生成的系统安装包。
+这是 `0.7.0` 的第六个测试版，包含 `v0.7.0-beta.5` 之后的全部改动。本版新增
+交互式 CLI、Workbench 工作标签和固定资源 Shelf，增强记忆、配置与通知体验，
+并修复 Linux AppImage 白屏问题。Linux 预发布现在同时提供 AppImage、
+Debian `.deb` 和 Red Hat/Fedora 系 `.rpm`。
 
 ### 功能更新
+
+- **新增交互式 CLI**：直接运行 `cyrene` 即可在终端中创建、选择和继续
+  Workbench 对话，并使用附件、上下文、配置、权限确认和运行恢复等功能。
+- **升级 Workbench 顶栏**：最多保留 3 个 Task/Chat 工作标签，并新增可持久化的
+  固定资源 Shelf，方便跨对话使用文件、知识条目、选中文字和 Browser 页面。
+- **增强记忆与配置可靠性**：改进项目记忆、实体提取、搜索范围和历史兼容；
+  加密配置改用安装级本地密钥，避免开发版与安装版切换后无法解密。
+- **完善通知与界面体验**：通知可返回对应 Project、Chat、Task 或资源；
+  同时补充键盘操作、本地化、模型回退提示和后台页面节能处理。
+- **修复 Linux AppImage 白屏**：Linux 默认使用更兼容的软件渲染，并增加窗口
+  故障日志与真实界面烟测。
+- **新增 Linux 系统安装包**：预发布同时提供 AppImage、Debian `.deb` 和
+  Red Hat/Fedora 系 `.rpm`。
+
+### 技术细节
 
 #### 与 Workbench 共享的正式交互式 CLI
 
@@ -169,8 +177,6 @@ Red Hat/Fedora 系 `.rpm`，不再丢弃构建阶段已经生成的系统安装�
   中英文进度，不把可恢复切换表现为无响应。
 - **Project Rail 英文按钮更紧凑** — “New project” 收敛为 “New”，在窄 Rail
   与大字号下减少挤压；README 的 Current Limitations Link 恢复到正式文档索引。
-
-### 技术细节
 
 #### Electron Browser View 与 Linux 白屏修复
 
