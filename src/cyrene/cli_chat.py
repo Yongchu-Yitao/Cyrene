@@ -15,6 +15,7 @@ import random
 import shlex
 import signal
 import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -24,7 +25,7 @@ from typing import Any, Awaitable, Callable, Iterable
 
 import httpx
 from prompt_toolkit import PromptSession
-from prompt_toolkit.application import Application
+from prompt_toolkit.application import Application, in_terminal
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
@@ -33,11 +34,15 @@ from prompt_toolkit.layout.containers import Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import get_cwidth
+from prompt_toolkit.widgets import TextArea
 from rich.console import Console
 from rich.live import Live
 from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
+
+from cyrene.runtime.version import get_version_label
 
 
 DEFAULT_DAEMON_URL = "http://localhost:4242"
@@ -548,7 +553,12 @@ class JsonRenderer:
     async def handle(self, event: dict[str, Any]) -> None:
         print(json.dumps(event, ensure_ascii=False, separators=(",", ":")), file=self.stream, flush=True)
 
-    def header(self, _session: str, _mode: str) -> None:
+    def header(
+        self,
+        _session: str,
+        _mode: str,
+        _details: dict[str, str] | None = None,
+    ) -> None:
         return
 
     def info(self, message: str) -> None:
@@ -574,13 +584,37 @@ class RichRenderer:
     """Append-only renderer that preserves normal terminal scrollback."""
 
     _ACTIVITY_SYMBOLS = ("✶", "✸", "✹", "✺", "✷", "◌")
+    _THINKING_PHRASES_ZH = (
+        "还得想一下",
+        "让我想想",
+        "先过一遍细节",
+        "我再确认下",
+        "把线索串一下",
+        "正在盘逻辑",
+        "看下哪里最稳",
+        "核对一下边界情况",
+        "再跑一轮看看",
+        "快了，再等等",
+    )
+    _THINKING_PHRASES_EN = (
+        "Thinking this through",
+        "Checking the details",
+        "Reviewing the context",
+        "Connecting the clues",
+        "Verifying the result",
+        "Working through the logic",
+        "Checking the safest approach",
+        "Reviewing the edge cases",
+        "Running one more check",
+        "Almost there",
+    )
 
     def __init__(
         self,
         *,
         color: bool = True,
         verbose: bool = False,
-        show_reasoning: bool = False,
+        lang: str = "zh",
     ) -> None:
         self.console = Console(
             no_color=not color,
@@ -588,35 +622,68 @@ class RichRenderer:
             highlight=False,
         )
         self.verbose = verbose
+        self.lang = str(lang or "zh")
         self.reply_open = False
         self.saw_reply_delta = False
         self._last_done_response = ""
         self._last_progress: dict[str, int] = {}
-        self.show_reasoning = bool(show_reasoning)
         self._turn_started_at = 0.0
         self._reasoning_started_at = 0.0
         self._reasoning_chunks: list[str] = []
         self._reasoning_rounds: list[tuple[float, str]] = []
         self._thought_summary_printed = False
         self._activity = "正在思考"
+        self._thinking_phrase = ""
+        self._thinking_phrase_deadline = 0.0
         self._status: Live | None = None
         self._activity_symbol = ""
         self._timer_task: asyncio.Task[None] | None = None
 
-    def header(self, session: str, mode: str) -> None:
+    def header(
+        self,
+        session: str,
+        mode: str,
+        details: dict[str, str] | None = None,
+    ) -> None:
+        details = details or {}
+        version = details.get("version") or get_version_label()
         self.console.print()
-        self.console.print("[bold bright_cyan]CYRENE[/]  [bold]Agent[/]")
+        brand = self._brand_logo()
+        brand.append("  Agent", style="bold")
+        brand.append(f"  {version}", style="dim")
+        self.console.print(brand)
         self.console.print(
             f"[dim]{escape(session)}  ·  {escape(mode)}[/]  [green]● 已连接[/]"
         )
-        self.console.rule(style="bright_black")
+        project = str(details.get("project") or "Project")
+        workspace = str(details.get("workspace") or "?")
         self.console.print(
-            "[dim]输入任务；/help 查看命令，Alt+Enter 换行，Ctrl+O 展开思考，Ctrl+C 退出。[/]"
+            f"[bold]{escape(project)}[/]  [dim]{escape(workspace)}[/]"
         )
         self.console.print()
 
-    def input_rule(self) -> None:
-        self.console.rule(style="bright_black")
+    @staticmethod
+    def _brand_logo() -> Text:
+        colors = (
+            "#159dff",
+            "#08baff",
+            "#00d0ec",
+            "#00dcc5",
+            "#16d99a",
+            "#52cf73",
+        )
+        logo = Text()
+        for character, color in zip("CYRENE", colors, strict=True):
+            logo.append(character, style=f"bold {color}")
+        return logo
+
+    def input_rule(self, rule: str) -> None:
+        self.console.print(
+            rule,
+            style="bright_black",
+            soft_wrap=True,
+            overflow="crop",
+        )
 
     async def handle(self, event: dict[str, Any]) -> None:
         event_type = str(event.get("type") or "")
@@ -786,6 +853,10 @@ class RichRenderer:
     def finish(self) -> None:
         self._break_reply()
 
+    @property
+    def has_reasoning(self) -> bool:
+        return bool(self._reasoning_rounds)
+
     async def begin_turn(self, activity: str = "正在思考") -> None:
         self._stop_status()
         if self._timer_task is not None:
@@ -796,6 +867,8 @@ class RichRenderer:
         self._reasoning_rounds = []
         self._thought_summary_printed = False
         self._activity = activity
+        self._thinking_phrase = ""
+        self._thinking_phrase_deadline = 0.0
         self._start_status()
         self._timer_task = asyncio.create_task(self._refresh_timer())
 
@@ -825,33 +898,26 @@ class RichRenderer:
     def resume_activity(self, activity: str = "正在继续") -> None:
         if not self._turn_started_at:
             return
+        if activity != self._activity:
+            self._thinking_phrase = ""
+            self._thinking_phrase_deadline = 0.0
         self._activity = activity
         self._start_status()
         self._update_status()
 
-    def toggle_reasoning(self) -> None:
-        self.show_reasoning = not self.show_reasoning
-        if not self.show_reasoning:
-            self.info("思考详情已折叠。")
-            return
-        if not self._reasoning_rounds:
-            self.info("当前还没有可显示的思考详情。")
-            return
-        self.console.print("[bold bright_cyan]思考详情[/]")
+    def reasoning_overlay_text(self) -> str:
+        lines = ["思考详情", "Ctrl+O / Esc 返回", ""]
         for index, (duration, content) in enumerate(self._reasoning_rounds, start=1):
             if len(self._reasoning_rounds) > 1:
-                self.console.print(
-                    f"[dim]第 {index} 段 · {self._format_elapsed(duration)}[/]"
-                )
-            self.console.print(content, markup=False, style="dim", soft_wrap=True)
+                lines.append(f"第 {index} 段 · {self._format_elapsed(duration)}")
+            lines.append(content)
+            lines.append("")
+        return "\n".join(lines).rstrip()
 
-    def _print_thought(self, duration: float, content: str) -> None:
-        suffix = "" if self.show_reasoning else "（Ctrl+O 展开）"
+    def _print_thought(self, duration: float, _content: str) -> None:
         self.console.print(
-            f"[dim]✻ 思考了 {self._format_elapsed(duration)}{suffix}[/]"
+            f"[dim]✻ 思考了 {self._format_elapsed(duration)}（Ctrl+O 查看）[/]"
         )
-        if self.show_reasoning and content:
-            self.console.print(content, markup=False, style="dim", soft_wrap=True)
 
     def _start_status(self) -> None:
         if self._status is not None:
@@ -876,10 +942,11 @@ class RichRenderer:
             return
         elapsed = max(0.0, time.monotonic() - self._turn_started_at)
         self._activity_symbol = self._next_activity_symbol()
+        activity = self._current_activity_label()
         self._status.update(
             Text.from_markup(
                 f"[bright_cyan]{self._activity_symbol}[/] "
-                f"[bold]{escape(self._activity)}[/]  "
+                f"[bold]{escape(activity)}[/]  "
                 f"[dim]{self._format_elapsed(elapsed)}[/]"
             ),
             refresh=True,
@@ -891,6 +958,25 @@ class RichRenderer:
             if symbol != self._activity_symbol
         ]
         return random.choice(choices)
+
+    def _current_activity_label(self) -> str:
+        if self._activity != "正在思考":
+            return self._activity
+        now = time.monotonic()
+        if self._thinking_phrase and now < self._thinking_phrase_deadline:
+            return self._thinking_phrase
+        phrases = (
+            self._THINKING_PHRASES_ZH
+            if self.lang.lower().startswith("zh")
+            else self._THINKING_PHRASES_EN
+        )
+        choices = [
+            phrase for phrase in phrases
+            if phrase != self._thinking_phrase
+        ]
+        self._thinking_phrase = random.choice(choices)
+        self._thinking_phrase_deadline = now + 4.0
+        return self._thinking_phrase
 
     async def _refresh_timer(self) -> None:
         while True:
@@ -916,7 +1002,6 @@ class ChatOptions:
     json_output: bool = False
     color: bool = True
     verbose: bool = False
-    show_reasoning: bool = False
     history_file: str = ""
     queued_attachments: list[dict[str, Any]] = field(default_factory=list)
 
@@ -934,6 +1019,13 @@ class InteractiveChat:
         self._prompt: PromptSession[str] | None = None
         self._ctrl_c_deadline = 0.0
         self._exit_requested = False
+        self._reasoning_overlay_open = False
+        self._config_tab_index = 0
+        self._config_item_indices: dict[str, int] = {}
+        self._model = "?"
+        self._context_used = 0
+        self._context_limit = 0
+        self._git_branch = "-"
 
     def _build_prompt_session(self) -> PromptSession[str]:
         history = (
@@ -949,19 +1041,18 @@ class InteractiveChat:
 
         @bindings.add("c-c")
         def _confirm_exit(event: Any) -> None:
-            if self._arm_ctrl_c_exit():
-                self._exit_requested = True
-                event.app.exit(result="")
-            else:
-                self.renderer.info("再次按 Ctrl+C 退出。")
-                event.app.invalidate()
+            self._handle_ctrl_c(event, result="")
 
         @bindings.add("c-o")
-        def _toggle_reasoning(event: Any) -> None:
-            if isinstance(self.renderer, RichRenderer):
-                self.renderer.toggle_reasoning()
-                self.options.show_reasoning = self.renderer.show_reasoning
-            event.app.invalidate()
+        def _show_reasoning(event: Any) -> None:
+            if not isinstance(self.renderer, RichRenderer):
+                return
+            if not self.renderer.has_reasoning:
+                self.renderer.info("当前还没有可查看的思考详情。")
+                event.app.invalidate()
+                return
+            if not self._reasoning_overlay_open:
+                event.app.create_background_task(self._show_reasoning_overlay())
 
         return PromptSession(
             history=history,
@@ -976,32 +1067,97 @@ class InteractiveChat:
             return Style.from_dict({})
         return Style.from_dict({
             "prompt": "bold ansibrightcyan",
+            "placeholder": "ansibrightblack",
             # prompt_toolkit gives bottom toolbars a reversed background by
             # default. Reset it so the lower input border stays a thin rule.
             "bottom-toolbar": "noreverse fg:ansibrightblack bg:default",
+            "exit-hint": "noreverse fg:#ff8a65 bg:default",
             "completion-menu.completion": "ansigray",
             "completion-menu.completion.current": "bold ansibrightcyan reverse",
             "selection-title": "bold ansibrightcyan",
             "selection-current": "bold ansibrightcyan reverse",
             "selection-help": "ansibrightblack",
+            "settings-title": "bold ansibrightcyan",
+            "settings-tab": "ansigray",
+            "settings-tab.current": "bold ansibrightcyan underline",
+            "settings-item.current": "bold ansibrightcyan reverse",
+            "settings-help": "ansibrightblack",
         })
+
+    def _input_placeholder(self) -> list[tuple[str, str]]:
+        if self.options.lang.startswith("zh"):
+            text = "今天想一起做点什么？需要帮助时，随时输入 /help。"
+        else:
+            text = "What would you like to work on? Type /help whenever you need it."
+        return [("class:placeholder", text)]
 
     def _prompt_session(self) -> PromptSession[str]:
         if self._prompt is None:
             self._prompt = self._build_prompt_session()
         return self._prompt
 
+    async def _show_reasoning_overlay(self) -> None:
+        if (
+            self._reasoning_overlay_open
+            or not isinstance(self.renderer, RichRenderer)
+            or not self.renderer.has_reasoning
+        ):
+            return
+        self._reasoning_overlay_open = True
+        try:
+            bindings = KeyBindings()
+
+            @bindings.add("c-o")
+            @bindings.add("escape")
+            @bindings.add("q")
+            def _close(event: Any) -> None:
+                event.app.exit()
+
+            @bindings.add("c-c")
+            def _exit_cli(event: Any) -> None:
+                self._handle_ctrl_c(event, result=None)
+
+            viewer = TextArea(
+                text=self.renderer.reasoning_overlay_text(),
+                read_only=True,
+                scrollbar=True,
+                wrap_lines=True,
+                focusable=True,
+                style="class:reasoning-viewer",
+            )
+            overlay = Application(
+                layout=Layout(viewer, focused_element=viewer),
+                key_bindings=bindings,
+                full_screen=True,
+                erase_when_done=True,
+                style=Style.from_dict({
+                    "reasoning-viewer": "fg:ansigray bg:default",
+                    "scrollbar.background": "bg:default",
+                    "scrollbar.button": "bg:ansibrightblack",
+                }),
+            )
+            async with in_terminal():
+                await overlay.run_async()
+        finally:
+            self._reasoning_overlay_open = False
+
     async def run(self) -> int:
-        await self.transport.health()
-        self.renderer.header(self.transport.session_label, self.options.mode)
+        status = await self.transport.health()
+        self.renderer.header(
+            self.transport.session_label,
+            self.options.mode,
+            await self._header_details(status),
+        )
         while True:
             try:
+                await self._refresh_status_context()
                 if isinstance(self.renderer, RichRenderer):
-                    self.renderer.input_rule()
+                    self.renderer.input_rule(self._input_bottom_rule())
                 with patch_stdout(raw=True):
                     text = (await self._prompt_session().prompt_async(
                         [("class:prompt", "› ")],
-                        bottom_toolbar=self._input_bottom_rule,
+                        placeholder=self._input_placeholder(),
+                        bottom_toolbar=self._input_bottom_toolbar,
                     )).strip()
             except EOFError:
                 self.renderer.info("会话已关闭；Daemon 继续运行。")
@@ -1025,6 +1181,9 @@ class InteractiveChat:
                     continue
                 if should_exit:
                     return 0
+                if self._exit_requested:
+                    self.renderer.info("会话已关闭；Daemon 继续运行。")
+                    return 0
                 continue
             await self._run_turn(text, allow_prompt=True)
             if self._exit_requested:
@@ -1043,6 +1202,135 @@ class InteractiveChat:
             return True
         self._ctrl_c_deadline = now + 2.0
         return False
+
+    def _handle_ctrl_c(self, event: Any, *, result: Any = None) -> None:
+        if self._arm_ctrl_c_exit():
+            self._exit_requested = True
+            event.app.exit(result=result)
+            return
+        event.app.invalidate()
+
+    def _input_bottom_toolbar(self) -> list[tuple[str, str]]:
+        model = self._model
+        if self._context_limit:
+            model = f"{model}[{self._status_tokens(self._context_limit)}]"
+        status = (
+            f"Model: {model} | Ctx: {self._status_tokens(self._context_used)}"
+            f" | {self._git_branch}"
+        )
+        permission = self._config_t("权限模式", "Permission mode")
+        permission = f"{permission}: {self._permission_mode_label()}"
+        fragments = [
+            ("class:bottom-toolbar", self._input_bottom_rule()),
+            ("class:bottom-toolbar", f"\n{status}\n{permission}"),
+        ]
+        if time.monotonic() <= self._ctrl_c_deadline:
+            hint = self._config_t(
+                "再次按 Ctrl+C 退出",
+                "Press Ctrl+C again to exit",
+            )
+            fragments.append(("class:exit-hint", f"\n{hint}"))
+        return fragments
+
+    def _permission_mode_label(self) -> str:
+        labels = {
+            "default": ("默认", "Default"),
+            "plan": ("计划", "Plan"),
+            "auto": ("自动", "Auto"),
+        }
+        zh, en = labels.get(
+            self.options.mode,
+            (self.options.mode, self.options.mode),
+        )
+        return self._config_t(zh, en)
+
+    @staticmethod
+    def _status_tokens(value: int) -> str:
+        number = max(0, int(value or 0))
+        if number >= 1_000_000:
+            return f"{number / 1_000_000:g}m"
+        if number >= 1_000:
+            return f"{number / 1_000:g}k"
+        return str(number)
+
+    async def _refresh_status_context(self) -> None:
+        if (
+            getattr(self.transport, "legacy", False)
+            or not str(getattr(self.transport, "chat_id", "") or "")
+        ):
+            return
+        try:
+            payload = await self.transport.context()
+        except ChatClientError:
+            return
+        self._context_used = int(payload.get("ctxUsed") or 0)
+        self._context_limit = int(payload.get("ctxLimit") or self._context_limit)
+
+    async def _header_details(self, status: dict[str, Any]) -> dict[str, str]:
+        workspace = ""
+        project_name = ""
+        try:
+            projects = await self.transport.list_projects()
+            project_id = str(getattr(self.transport, "project_id", "") or "")
+            project = next(
+                (
+                    item for item in projects
+                    if str(item.get("id") or "") == project_id
+                ),
+                None,
+            )
+            if project is None:
+                project = next(
+                    (
+                        item for item in projects
+                        if str(item.get("dataKey") or "") == "default"
+                    ),
+                    projects[0] if len(projects) == 1 else None,
+                )
+            if project is not None:
+                workspace = str(project.get("workspacePath") or "")
+                project_name = str(project.get("name") or "")
+        except ChatClientError:
+            pass
+        if not workspace:
+            try:
+                config = await self.transport.get_setting("/api/settings/config")
+                workspace = str(config.get("workspace_dir") or "")
+            except ChatClientError:
+                pass
+        model = str(status.get("model") or "?")
+        self._model = model
+        try:
+            from cyrene.runtime.config_store import effective_ctx_limit_for_model
+
+            self._context_limit = effective_ctx_limit_for_model(model)
+        except (ImportError, OSError, ValueError):
+            self._context_limit = 0
+        self._git_branch = self._workspace_git_branch(workspace)
+        return {
+            "model": model,
+            "project": project_name or "Project",
+            "workspace": workspace or str(Path.cwd()),
+            "version": get_version_label(),
+        }
+
+    @staticmethod
+    def _workspace_git_branch(workspace: str) -> str:
+        path = Path(workspace).expanduser() if workspace else Path.cwd()
+        if not path.is_dir():
+            return "-"
+        try:
+            result = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=path,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return "-"
+        return result.stdout.strip() or "-"
 
     async def run_once(self, text: str) -> int:
         await self.transport.health()
@@ -1076,6 +1364,8 @@ class InteractiveChat:
                         )
                     return False
                 answer = await self._ask_question(result.pending_question)
+                if self._exit_requested:
+                    return False
                 self.renderer.resume_activity("正在继续")
                 result = await self.transport.answer(
                     result.pending_question,
@@ -1159,6 +1449,8 @@ class InteractiveChat:
         while True:
             with patch_stdout(raw=True):
                 answer = (await self._prompt_session().prompt_async("确认 › ")).strip()
+            if self._exit_requested:
+                return ""
             if not answer:
                 continue
             if answer.isdigit() and 1 <= int(answer) <= len(options):
@@ -1264,7 +1556,7 @@ class InteractiveChat:
             ("/deep-reflect", "对当前对话运行深度反思"),
             ("/deep-research [TOPIC]", "运行深度研究"),
             ("/context", "查看当前 Session 的上下文占用"),
-            ("/config", "查看和修改全部设置"),
+            ("/config", "查看和修改设置"),
             ("/status", "查看 Daemon 与模型状态"),
             ("/mcp", "列出 MCP Server"),
             ("/exit", "退出 CLI，保留 Daemon"),
@@ -1274,8 +1566,19 @@ class InteractiveChat:
         self.renderer.console.print(table)
 
     async def _prompt_text(self, message: str) -> str:
+        bindings = KeyBindings()
+
+        @bindings.add("escape")
+        def _cancel(event: Any) -> None:
+            event.app.exit(result="")
+
         with patch_stdout(raw=True):
-            return (await self._prompt_session().prompt_async(message)).strip()
+            return (
+                await self._prompt_session().prompt_async(
+                    message,
+                    key_bindings=bindings,
+                )
+            ).strip()
 
     async def _choose(
         self,
@@ -1284,6 +1587,8 @@ class InteractiveChat:
         *,
         label: Callable[[dict[str, Any]], str],
         auto_single: bool = False,
+        item_lines: int = 1,
+        item_gap: int = 0,
     ) -> dict[str, Any] | None:
         if not items:
             self.renderer.info("没有可选择的项目。")
@@ -1291,7 +1596,13 @@ class InteractiveChat:
         if len(items) == 1 and auto_single:
             return items[0]
         if isinstance(self.renderer, RichRenderer):
-            return await self._choose_with_arrows(title, items, label=label)
+            return await self._choose_with_arrows(
+                title,
+                items,
+                label=label,
+                item_lines=item_lines,
+                item_gap=item_gap,
+            )
         while True:
             answer = await self._prompt_text("选择 › ")
             if answer in {"", "0"}:
@@ -1306,9 +1617,21 @@ class InteractiveChat:
         items: list[dict[str, Any]],
         *,
         label: Callable[[dict[str, Any]], str],
+        item_lines: int = 1,
+        item_gap: int = 0,
     ) -> dict[str, Any] | None:
         selected = 0
-        page_size = min(12, len(items))
+        lines_per_item = max(1, int(item_lines))
+        gap = max(0, int(item_gap))
+        available_rows = max(
+            lines_per_item + gap,
+            shutil.get_terminal_size(fallback=(80, 24)).lines - 5,
+        )
+        page_size = min(
+            len(items),
+            12,
+            max(1, available_rows // (lines_per_item + gap)),
+        )
         bindings = KeyBindings()
 
         def formatted_items() -> list[tuple[str, str]]:
@@ -1320,10 +1643,14 @@ class InteractiveChat:
             for index in range(start, end):
                 marker = "›" if index == selected else " "
                 style = "class:selection-current" if index == selected else ""
-                fragments.append((
-                    style,
-                    f" {marker} {label(items[index])}\n",
-                ))
+                raw_lines = str(label(items[index]) or "").splitlines()
+                visible_lines = raw_lines[:lines_per_item]
+                visible_lines.extend([""] * (lines_per_item - len(visible_lines)))
+                for line_index, line in enumerate(visible_lines):
+                    prefix = f" {marker} " if line_index == 0 else "   "
+                    fragments.append((style, f"{prefix}{line}\n"))
+                if gap and index + 1 < end:
+                    fragments.append(("", "\n" * gap))
             fragments.append((
                 "class:selection-help",
                 " ↑/↓ 选择  Enter 确认  Esc 取消",
@@ -1356,15 +1683,22 @@ class InteractiveChat:
             event.app.exit(result=items[selected])
 
         @bindings.add("escape")
-        @bindings.add("c-c")
         def _cancel(event: Any) -> None:
             event.app.exit(result=None)
+
+        @bindings.add("c-c")
+        def _exit_cli(event: Any) -> None:
+            self._handle_ctrl_c(event, result=None)
 
         app = Application(
             layout=Layout(
                 Window(
                     content=control,
-                    height=page_size + 3,
+                    height=(
+                        page_size * lines_per_item
+                        + max(0, page_size - 1) * gap
+                        + 3
+                    ),
                     dont_extend_height=True,
                     always_hide_cursor=True,
                 )
@@ -1412,11 +1746,9 @@ class InteractiveChat:
             selected = await self._choose(
                 "选择要继续的 Session",
                 targets,
-                label=lambda item: (
-                    f"{item.get('title') or 'Untitled'}  ·  "
-                    f"{item.get('projectName') or 'Unknown Project'}  ·  "
-                    f"{'运行中' if item.get('running') else item.get('preview') or '空对话'}"
-                ),
+                label=self._resume_session_label,
+                item_lines=2,
+                item_gap=1,
             )
         if selected is None:
             return
@@ -1426,6 +1758,58 @@ class InteractiveChat:
             f"{selected.get('projectName') or 'Unknown Project'}  "
             f"({chat.get('id')})"
         )
+
+    @classmethod
+    def _resume_session_label(cls, item: dict[str, Any]) -> str:
+        width = max(
+            30,
+            shutil.get_terminal_size(fallback=(80, 24)).columns - 8,
+        )
+        title = " ".join(str(item.get("title") or "Untitled").split())
+        project = " ".join(
+            str(item.get("projectName") or "Unknown Project").split()
+        )
+        status = "  ● 运行中" if item.get("running") else ""
+        separator = "  ·  "
+        reserved = get_cwidth(separator + status)
+        project = cls._clip_display_width(
+            project,
+            max(8, width - reserved - 10),
+        )
+        title_width = max(
+            8,
+            width - get_cwidth(separator + project + status),
+        )
+        first = (
+            cls._clip_display_width(title, title_width)
+            + separator
+            + project
+            + status
+        )
+        preview = (
+            "运行正在继续…"
+            if item.get("running")
+            else " ".join(str(item.get("preview") or "空对话").split())
+        )
+        second = cls._clip_display_width(preview, width)
+        return f"{first}\n{second}"
+
+    @staticmethod
+    def _clip_display_width(text: str, width: int) -> str:
+        target = max(1, int(width))
+        if get_cwidth(text) <= target:
+            return text
+        ellipsis = "…"
+        available = max(0, target - get_cwidth(ellipsis))
+        result: list[str] = []
+        used = 0
+        for character in text:
+            char_width = max(0, get_cwidth(character))
+            if used + char_width > available:
+                break
+            result.append(character)
+            used += char_width
+        return "".join(result).rstrip() + ellipsis
 
     @staticmethod
     def _redact_settings(value: Any, key: str = "") -> Any:
@@ -1452,109 +1836,389 @@ class InteractiveChat:
             self.renderer.info(json.dumps(safe, ensure_ascii=False))
 
     async def _config_menu(self) -> None:
-        sections = [
-            {"id": "general", "name": "General / Agent / Budget"},
-            {"id": "models", "name": "Models"},
-            {"id": "tools", "name": "Tools & Capability Packages"},
-            {"id": "keys", "name": "API Keys"},
-            {"id": "soul", "name": "SOUL / Personality"},
-            {"id": "integrations", "name": "Integrations"},
-            {"id": "mcp", "name": "MCP Servers"},
-            {"id": "skills", "name": "Skills"},
-            {"id": "remote", "name": "Remote Control"},
-            {"id": "search", "name": "Search"},
-            {"id": "profile", "name": "Profile"},
-            {"id": "budget", "name": "Budget Usage"},
-            {"id": "data", "name": "Data & Backups"},
-            {"id": "cli", "name": "CLI Preferences"},
-            {"id": "about", "name": "About / Runtime"},
-        ]
         while True:
-            selected = await self._choose(
-                "Settings",
-                sections,
-                label=lambda item: str(item["name"]),
+            tabs = self._config_tabs()
+            selected = (
+                await self._choose_config_action(tabs)
+                if isinstance(self.renderer, RichRenderer)
+                else await self._choose(
+                    self._config_t("设置", "Settings"),
+                    [
+                        item
+                        for tab in tabs
+                        for item in tab.get("items") or []
+                    ],
+                    label=lambda item: str(item["label"]),
+                )
             )
             if selected is None:
                 return
-            section = str(selected["id"])
-            if section == "general":
-                await self._config_general()
-            elif section == "tools":
-                await self._config_tools()
-            elif section == "keys":
-                await self._config_keys()
-            elif section == "soul":
-                await self._config_soul()
-            elif section == "mcp":
-                await self._config_json(
-                    "/api/settings/mcp",
-                    "/api/settings/mcp",
-                    extract=lambda data: data.get("configs") or [],
-                    wrap=lambda data: {"servers": data},
+            await self._run_config_action(str(selected["id"]))
+            if self._exit_requested:
+                return
+
+    def _config_tabs(self) -> list[dict[str, Any]]:
+        zh = self.options.lang.lower().startswith("zh")
+        labels = {
+            "general_tab": ("常规", "General"),
+            "models_tab": ("模型", "Models"),
+            "tools_tab": ("工具", "Tools"),
+            "connections_tab": ("连接", "Connections"),
+            "data_tab": ("数据", "Data"),
+            "about_tab": ("关于", "About"),
+            "general": ("常规与 Agent", "General & Agent"),
+            "profile": ("个人资料", "Profile"),
+            "soul": ("SOUL / 个性", "SOUL / Personality"),
+            "cli": ("CLI 偏好", "CLI Preferences"),
+            "models": ("模型设置", "Model Settings"),
+            "keys": ("API 密钥", "API Keys"),
+            "budget": ("预算用量", "Budget Usage"),
+            "tools": ("工具与能力包", "Tools & Capability Packages"),
+            "mcp": ("MCP 服务器", "MCP Servers"),
+            "skills": ("技能", "Skills"),
+            "search": ("搜索", "Search"),
+            "integrations": ("集成", "Integrations"),
+            "remote": ("远程控制", "Remote Control"),
+            "data": ("数据与备份", "Data & Backups"),
+            "about": ("关于与运行环境", "About & Runtime"),
+        }
+
+        def text(key: str) -> str:
+            return labels[key][0 if zh else 1]
+
+        def item(action: str) -> dict[str, str]:
+            return {"id": action, "label": text(action)}
+
+        return [
+            {
+                "id": "general",
+                "label": text("general_tab"),
+                "items": [
+                    item("general"),
+                    item("profile"),
+                    item("soul"),
+                    item("cli"),
+                ],
+            },
+            {
+                "id": "models",
+                "label": text("models_tab"),
+                "items": [
+                    item("models"),
+                    item("keys"),
+                    item("budget"),
+                ],
+            },
+            {
+                "id": "tools",
+                "label": text("tools_tab"),
+                "items": [
+                    item("tools"),
+                    item("mcp"),
+                    item("skills"),
+                    item("search"),
+                ],
+            },
+            {
+                "id": "connections",
+                "label": text("connections_tab"),
+                "items": [
+                    item("integrations"),
+                    item("remote"),
+                ],
+            },
+            {
+                "id": "data",
+                "label": text("data_tab"),
+                "items": [item("data")],
+            },
+            {
+                "id": "about",
+                "label": text("about_tab"),
+                "items": [item("about")],
+            },
+        ]
+
+    def _config_t(self, zh: str, en: str) -> str:
+        return zh if self.options.lang.lower().startswith("zh") else en
+
+    def _config_value_preview(self, key: str, value: Any) -> str:
+        safe = self._redact_settings(value, key)
+        if isinstance(safe, bool):
+            text = self._config_t(
+                "开启" if safe else "关闭",
+                "On" if safe else "Off",
+            )
+        elif safe is None:
+            text = self._config_t("未设置", "Not set")
+        elif isinstance(safe, (dict, list)):
+            text = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
+        else:
+            text = str(safe)
+        width = max(
+            16,
+            shutil.get_terminal_size(fallback=(80, 24)).columns
+            - get_cwidth(key)
+            - 10,
+        )
+        return self._clip_display_width(text, width)
+
+    def _config_field_label(self, key: str) -> str:
+        labels = {
+            "model": ("模型", "Model"),
+            "base_url": ("模型服务地址", "Model service URL"),
+            "assistant_name": ("助手名称", "Assistant name"),
+            "base_dir": ("应用目录", "Application directory"),
+            "data_dir": ("数据目录", "Data directory"),
+            "soul_path": ("SOUL 文件", "SOUL file"),
+            "workspace_dir": ("工作区目录", "Workspace directory"),
+            "soul_content": ("SOUL 内容", "SOUL content"),
+            "search_mode": ("搜索模式", "Search mode"),
+            "search_external_url": ("外部搜索地址", "External search URL"),
+            "spawn_policy": ("子任务策略", "Subtask policy"),
+            "heartbeat_interval": ("心跳间隔", "Heartbeat interval"),
+            "mode": ("权限模式", "Permission mode"),
+            "language": ("界面语言", "Interface language"),
+            "color": ("彩色显示", "Color output"),
+            "verbose": ("详细日志", "Verbose logging"),
+            "history_file": ("历史记录文件", "History file"),
+        }
+        localized = labels.get(key)
+        if localized is not None:
+            return self._config_t(*localized)
+        return key.replace("_", " ").strip().title()
+
+    async def _choose_config_action(
+        self,
+        tabs: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        tab_index = min(self._config_tab_index, max(0, len(tabs) - 1))
+        bindings = KeyBindings()
+
+        def current_items() -> list[dict[str, Any]]:
+            return [
+                dict(item)
+                for item in tabs[tab_index].get("items") or []
+                if isinstance(item, dict)
+            ]
+
+        def item_index() -> int:
+            tab_id = str(tabs[tab_index].get("id") or "")
+            return min(
+                self._config_item_indices.get(tab_id, 0),
+                max(0, len(current_items()) - 1),
+            )
+
+        def set_item_index(value: int) -> None:
+            tab_id = str(tabs[tab_index].get("id") or "")
+            items = current_items()
+            self._config_item_indices[tab_id] = (
+                value % len(items) if items else 0
+            )
+
+        def formatted_settings() -> list[tuple[str, str]]:
+            zh = self.options.lang.lower().startswith("zh")
+            fragments: list[tuple[str, str]] = [
+                (
+                    "class:settings-title",
+                    f"\n{'设置' if zh else 'Settings'}\n\n",
+                ),
+            ]
+            for index, tab in enumerate(tabs):
+                style = (
+                    "class:settings-tab.current"
+                    if index == tab_index
+                    else "class:settings-tab"
                 )
-            elif section == "profile":
-                await self._config_json(
-                    "/api/ui-data",
-                    "/api/profile",
-                    extract=lambda data: data.get("user") or {},
-                    merge=False,
+                fragments.append((style, f" {tab.get('label')} "))
+                if index + 1 < len(tabs):
+                    fragments.append(("", "  "))
+            fragments.append(("", "\n\n"))
+            selected_item = item_index()
+            for index, item in enumerate(current_items()):
+                marker = "›" if index == selected_item else " "
+                style = (
+                    "class:settings-item.current"
+                    if index == selected_item
+                    else ""
                 )
-            elif section == "budget":
-                self._print_json(
-                    await self.transport.get_setting("/api/settings/budget/stats")
+                fragments.append((
+                    style,
+                    f" {marker} {item.get('label')}\n",
+                ))
+            help_text = (
+                " ←/→ 切换 Tab  ↑/↓ 选择  Enter 打开  Esc 返回"
+                if zh
+                else " ←/→ Switch tab  ↑/↓ Select  Enter Open  Esc Back"
+            )
+            fragments.append(("class:settings-help", f"\n{help_text}"))
+            return fragments
+
+        control = FormattedTextControl(
+            text=formatted_settings,
+            focusable=True,
+            show_cursor=False,
+        )
+
+        @bindings.add("left")
+        @bindings.add("c-b")
+        def _left(event: Any) -> None:
+            nonlocal tab_index
+            tab_index = (tab_index - 1) % len(tabs)
+            self._config_tab_index = tab_index
+            event.app.invalidate()
+
+        @bindings.add("right")
+        @bindings.add("c-f")
+        def _right(event: Any) -> None:
+            nonlocal tab_index
+            tab_index = (tab_index + 1) % len(tabs)
+            self._config_tab_index = tab_index
+            event.app.invalidate()
+
+        @bindings.add("up")
+        @bindings.add("c-p")
+        def _up(event: Any) -> None:
+            set_item_index(item_index() - 1)
+            event.app.invalidate()
+
+        @bindings.add("down")
+        @bindings.add("c-n")
+        def _down(event: Any) -> None:
+            set_item_index(item_index() + 1)
+            event.app.invalidate()
+
+        @bindings.add("enter")
+        def _accept(event: Any) -> None:
+            items = current_items()
+            event.app.exit(result=items[item_index()] if items else None)
+
+        @bindings.add("escape")
+        def _cancel(event: Any) -> None:
+            event.app.exit(result=None)
+
+        @bindings.add("c-c")
+        def _exit_cli(event: Any) -> None:
+            self._handle_ctrl_c(event, result=None)
+
+        max_items = max(
+            (len(tab.get("items") or []) for tab in tabs),
+            default=1,
+        )
+        app: Application[dict[str, Any] | None] = Application(
+            layout=Layout(
+                Window(
+                    content=control,
+                    height=max_items + 7,
+                    dont_extend_height=True,
+                    always_hide_cursor=True,
                 )
-            elif section == "skills":
-                await self._config_skills()
-            elif section == "remote":
-                await self._config_json(
-                    "/api/remote/settings",
-                    "/api/remote/settings",
-                )
-            elif section == "data":
-                await self._config_data()
-            elif section == "cli":
-                await self._config_cli()
-            elif section == "about":
-                self._print_json(
-                    await self.transport.get_setting("/api/settings/config")
-                )
-            elif section == "search":
-                await self._config_json(
-                    "/api/settings/search",
-                    "/api/settings/search",
-                )
-            elif section == "integrations":
-                await self._config_json(
-                    "/api/settings/integrations",
-                    "/api/settings/integrations",
-                    merge=False,
-                )
-            else:
-                await self._config_json(
-                    f"/api/settings/{section}",
-                    f"/api/settings/{section}",
-                )
+            ),
+            key_bindings=bindings,
+            style=self._terminal_style(),
+            full_screen=False,
+            erase_when_done=False,
+        )
+        with patch_stdout(raw=True):
+            return await app.run_async()
+
+    async def _run_config_action(self, section: str) -> None:
+        if section == "general":
+            await self._config_general()
+        elif section == "tools":
+            await self._config_tools()
+        elif section == "keys":
+            await self._config_keys()
+        elif section == "soul":
+            await self._config_soul()
+        elif section == "mcp":
+            await self._config_json(
+                "/api/settings/mcp",
+                "/api/settings/mcp",
+                extract=lambda data: data.get("configs") or [],
+                wrap=lambda data: {"servers": data},
+            )
+        elif section == "profile":
+            await self._config_json(
+                "/api/ui-data",
+                "/api/profile",
+                extract=lambda data: data.get("user") or {},
+                merge=False,
+            )
+        elif section == "budget":
+            self._print_json(
+                await self.transport.get_setting("/api/settings/budget/stats")
+            )
+        elif section == "skills":
+            await self._config_skills()
+        elif section == "remote":
+            await self._config_json(
+                "/api/remote/settings",
+                "/api/remote/settings",
+            )
+        elif section == "data":
+            await self._config_data()
+        elif section == "cli":
+            await self._config_cli()
+        elif section == "about":
+            self._print_json(
+                await self.transport.get_setting("/api/settings/config")
+            )
+        elif section == "search":
+            await self._config_json(
+                "/api/settings/search",
+                "/api/settings/search",
+            )
+        elif section == "integrations":
+            await self._config_json(
+                "/api/settings/integrations",
+                "/api/settings/integrations",
+                merge=False,
+            )
+        else:
+            await self._config_json(
+                f"/api/settings/{section}",
+                f"/api/settings/{section}",
+            )
 
     async def _config_general(self) -> None:
         current = await self.transport.get_setting("/api/settings/config")
-        self._print_json(current)
-        key = await self._prompt_text("设置项（留空返回）› ")
-        if not key:
+        items = [
+            {"id": str(key), "value": value}
+            for key, value in current.items()
+        ]
+        selected = await self._choose(
+            self._config_t("选择常规设置项", "Select a general setting"),
+            items,
+            label=lambda item: (
+                f"{self._config_field_label(item['id'])}  ·  "
+                f"{self._config_value_preview(item['id'], item['value'])}"
+            ),
+        )
+        if selected is None:
             return
-        if key not in current:
-            self.renderer.error(f"未知设置项：{key}")
-            return
-        raw = await self._prompt_text(f"{key} [{current[key]}] › ")
+        key = str(selected["id"])
+        label = self._config_field_label(key)
+        raw = await self._prompt_text(
+            self._config_t(
+                f"{label}的新值 [{current[key]}] › ",
+                f"New value for {label} [{current[key]}] › ",
+            )
+        )
         if not raw:
             return
         try:
             value = self._coerce_value(raw, current[key])
-            result = await self.transport.update_setting(
+            await self.transport.update_setting(
                 "/api/settings/config",
                 {key: value},
             )
-            self.renderer.info(f"已更新：{', '.join(result.get('changed') or [key])}")
+            self.renderer.info(
+                self._config_t(
+                    f"已更新：{label}",
+                    f"Updated: {label}",
+                )
+            )
         except (ValueError, ChatClientError) as exc:
             self.renderer.error(str(exc))
 
@@ -1596,7 +2260,10 @@ class InteractiveChat:
             if isinstance(item, dict) and not bool(item.get("locked"))
         ]
         selected = await self._choose(
-            "选择要切换的 Capability Package 或 Tool",
+            self._config_t(
+                "选择要切换的能力包或工具",
+                "Select a capability package or tool",
+            ),
             items,
             label=lambda item: (
                 f"{'●' if item['enabled'] else '○'} {item['name']} "
@@ -1610,36 +2277,51 @@ class InteractiveChat:
             "/api/settings/tools",
             {key: {selected["id"]: not selected["enabled"]}},
         )
-        self.renderer.info(
-            f"{selected['name']} 已{'启用' if not selected['enabled'] else '停用'}。"
-        )
+        enabled = not selected["enabled"]
+        self.renderer.info(self._config_t(
+            f"{selected['name']} 已{'启用' if enabled else '停用'}。",
+            f"{selected['name']} {'enabled' if enabled else 'disabled'}.",
+        ))
 
     async def _config_keys(self) -> None:
         current = await self.transport.get_setting("/api/settings/keys")
         self._print_json(current)
-        name = await self._prompt_text("Key 名称（留空返回）› ")
+        name = await self._prompt_text(
+            self._config_t(
+                "密钥名称（留空返回）› ",
+                "Key name (blank to return) › ",
+            )
+        )
         if not name:
             return
-        value = await self._prompt_text(f"{name} 新值 › ")
+        value = await self._prompt_text(
+            self._config_t(f"{name} 的新值 › ", f"New value for {name} › ")
+        )
         if not value:
             return
         result = await self.transport.update_setting(
             "/api/settings/keys",
             {name: value},
         )
-        self.renderer.info(f"已更新：{', '.join(result.get('updated') or [name])}")
+        updated = ", ".join(result.get("updated") or [name])
+        self.renderer.info(
+            self._config_t(f"已更新：{updated}", f"Updated: {updated}")
+        )
 
     async def _config_soul(self) -> None:
         current = await self.transport.get_setting("/api/settings/soul")
         self._print_json(current)
-        content = await self._prompt_text("新的 SOUL 内容（留空返回，Alt+Enter 换行）› ")
+        content = await self._prompt_text(self._config_t(
+            "新的 SOUL 内容（留空返回，Alt+Enter 换行）› ",
+            "New SOUL content (blank to return, Alt+Enter for newline) › ",
+        ))
         if not content:
             return
         await self.transport.update_setting(
             "/api/settings/soul",
             {"content": content},
         )
-        self.renderer.info("SOUL 已更新。")
+        self.renderer.info(self._config_t("SOUL 已更新。", "SOUL updated."))
 
     async def _config_skills(self) -> None:
         payload = await self.transport.get_setting("/api/skills/installed")
@@ -1649,7 +2331,10 @@ class InteractiveChat:
             if isinstance(item, dict)
         ]
         selected = await self._choose(
-            "选择要启用/停用的 Skill",
+            self._config_t(
+                "选择要启用或停用的技能",
+                "Select a skill to enable or disable",
+            ),
             skills,
             label=lambda item: (
                 f"{'●' if item.get('enabled', True) else '○'} "
@@ -1658,7 +2343,10 @@ class InteractiveChat:
         )
         if selected is None:
             install_path = await self._prompt_text(
-                "安装 Skill 路径（留空返回）› "
+                self._config_t(
+                    "安装技能的路径（留空返回）› ",
+                    "Skill path to install (blank to return) › ",
+                )
             )
             if install_path:
                 await self.transport.update_setting(
@@ -1666,7 +2354,9 @@ class InteractiveChat:
                     {"path": install_path},
                     method="POST",
                 )
-                self.renderer.info("Skill 已安装。")
+                self.renderer.info(
+                    self._config_t("技能已安装。", "Skill installed.")
+                )
             return
         skill_id = str(selected.get("id") or "")
         await self.transport.update_setting(
@@ -1674,14 +2364,19 @@ class InteractiveChat:
             {},
             method="POST",
         )
-        self.renderer.info(f"{selected.get('name') or skill_id} 状态已切换。")
+        name = selected.get("name") or skill_id
+        self.renderer.info(self._config_t(
+            f"{name} 的状态已切换。",
+            f"{name} status toggled.",
+        ))
 
     async def _config_data(self) -> None:
         payload = await self.transport.get_setting("/api/backup/list")
         self._print_json(payload)
-        action = (await self._prompt_text(
-            "操作：export / reset / 返回（留空）› "
-        )).lower()
+        action = (await self._prompt_text(self._config_t(
+            "操作：export / reset / 返回（留空）› ",
+            "Action: export / reset / back (blank) › ",
+        ))).lower()
         if action == "export":
             result = await self.transport.update_setting(
                 "/api/backup/export",
@@ -1690,16 +2385,23 @@ class InteractiveChat:
             )
             self._print_json(result)
         elif action == "reset":
-            confirm = await self._prompt_text("输入 RESET CYRENE DATA 确认 › ")
+            confirm = await self._prompt_text(self._config_t(
+                "输入 RESET CYRENE DATA 确认 › ",
+                "Type RESET CYRENE DATA to confirm › ",
+            ))
             if confirm == "RESET CYRENE DATA":
                 await self.transport.update_setting(
                     "/api/settings/reset-data",
                     {},
                     method="POST",
                 )
-                self.renderer.info("应用数据已重置。")
+                self.renderer.info(
+                    self._config_t("应用数据已重置。", "Application data reset.")
+                )
             else:
-                self.renderer.info("已取消重置。")
+                self.renderer.info(
+                    self._config_t("已取消重置。", "Reset cancelled.")
+                )
 
     async def _config_cli(self) -> None:
         current = {
@@ -1707,44 +2409,58 @@ class InteractiveChat:
             "language": self.options.lang,
             "color": self.options.color,
             "verbose": self.options.verbose,
-            "thinking": "expanded" if self.options.show_reasoning else "compact",
             "history_file": self.options.history_file,
         }
-        self._print_json(current)
-        key = await self._prompt_text("设置项（留空返回）› ")
-        if not key:
+        selected = await self._choose(
+            self._config_t("选择 CLI 设置项", "Select a CLI setting"),
+            [
+                {"id": key, "value": value}
+                for key, value in current.items()
+            ],
+            label=lambda item: (
+                f"{self._config_field_label(item['id'])}  ·  "
+                f"{self._config_value_preview(item['id'], item['value'])}"
+            ),
+        )
+        if selected is None:
             return
-        if key not in current:
-            self.renderer.error(f"未知设置项：{key}")
-            return
-        raw = await self._prompt_text(f"{key} [{current[key]}] › ")
+        key = str(selected["id"])
+        label = self._config_field_label(key)
+        raw = await self._prompt_text(self._config_t(
+            f"{label}的新值 [{current[key]}] › ",
+            f"New value for {label} [{current[key]}] › ",
+        ))
         if not raw:
             return
         if key == "mode" and raw not in {"default", "plan", "auto"}:
-            self.renderer.error("mode 必须是 default、plan 或 auto。")
+            self.renderer.error(self._config_t(
+                "mode 必须是 default、plan 或 auto。",
+                "mode must be default, plan, or auto.",
+            ))
             return
         if key == "language" and raw not in {"zh", "en"}:
-            self.renderer.error("language 必须是 zh 或 en。")
-            return
-        if key == "thinking" and raw not in {"compact", "expanded"}:
-            self.renderer.error("thinking 必须是 compact 或 expanded。")
+            self.renderer.error(self._config_t(
+                "language 必须是 zh 或 en。",
+                "language must be zh or en.",
+            ))
             return
         if key == "mode":
             self.options.mode = raw
         elif key == "language":
             self.options.lang = raw
+            if isinstance(self.renderer, RichRenderer):
+                self.renderer.lang = raw
         elif key == "color":
             self.options.color = bool(self._coerce_value(raw, True))
         elif key == "verbose":
             self.options.verbose = bool(self._coerce_value(raw, False))
-        elif key == "thinking":
-            self.options.show_reasoning = raw == "expanded"
-            if isinstance(self.renderer, RichRenderer):
-                self.renderer.show_reasoning = self.options.show_reasoning
         elif key == "history_file":
             self.options.history_file = raw
             self._prompt = None
-        self.renderer.info(f"CLI {key} 已更新。")
+        self.renderer.info(self._config_t(
+            f"{label}已更新。",
+            f"{label} updated.",
+        ))
 
     async def _config_json(
         self,
@@ -1758,13 +2474,19 @@ class InteractiveChat:
         response = await self.transport.get_setting(get_path)
         current = extract(response) if extract else response
         self._print_json(current)
-        raw = await self._prompt_text("JSON Patch（留空返回）› ")
+        raw = await self._prompt_text(self._config_t(
+            "JSON Patch（留空返回）› ",
+            "JSON patch (blank to return) › ",
+        ))
         if not raw:
             return
         try:
             patch = json.loads(raw)
         except json.JSONDecodeError as exc:
-            self.renderer.error(f"JSON 无效：{exc}")
+            self.renderer.error(self._config_t(
+                f"JSON 无效：{exc}",
+                f"Invalid JSON: {exc}",
+            ))
             return
         if merge and isinstance(current, dict) and isinstance(patch, dict):
             payload: Any = self._merge_settings(current, patch)
@@ -1772,10 +2494,16 @@ class InteractiveChat:
             payload = patch
         body = wrap(payload) if wrap else payload
         if not isinstance(body, dict):
-            self.renderer.error("该设置需要 JSON Object。")
+            self.renderer.error(self._config_t(
+                "该设置需要 JSON Object。",
+                "This setting requires a JSON object.",
+            ))
             return
         await self.transport.update_setting(put_path, body)
-        self.renderer.info("设置已更新。")
+        self.renderer.info(self._config_t(
+            "设置已更新。",
+            "Settings updated.",
+        ))
 
     @classmethod
     def _merge_settings(
@@ -2053,7 +2781,7 @@ async def run_chat(args: Any) -> int:
     renderer = JsonRenderer() if json_output else RichRenderer(
         color=options.color,
         verbose=options.verbose,
-        show_reasoning=options.show_reasoning,
+        lang=options.lang,
     )
     transport = ChatTransport(
         base_url=str(getattr(args, "url", DEFAULT_DAEMON_URL) or DEFAULT_DAEMON_URL),

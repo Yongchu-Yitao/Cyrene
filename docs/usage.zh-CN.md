@@ -152,19 +152,25 @@ cyrene chat --mode plan
 会话内可使用 `/new`、`/resume`、`/mode`、`/attach`、`/attachments`、
 `/detach`、`/deep-reflect`、`/deep-research`、`/context`、`/config`、
 `/status`、`/mcp` 和 `/exit`。`/new` 会选择 Project；`/resume` 列出带
-Project 名称的 Session。选择菜单支持 ↑/↓ 和 Enter。Alt+Enter 插入换行；
+Project 名称的 Session；每个 Session 使用“标题与 Project / 内容摘要”
+两行卡片显示，卡片之间留空行。选择菜单支持 ↑/↓ 和 Enter。Alt+Enter 插入换行；
 第一次 Ctrl+C 提示确认，两秒内再次按下才退出 CLI，且不会中断后台 Run。
 若进入后直接输入内容，CLI 会在默认 Project 自动创建新对话。
 
 发送消息后，CLI 会使用随机变换且不连续重复的星形 Spinner
-（`✶ ✸ ✹ ✺ ✷ ◌`）实时显示当前活动与累计用时；
+（`✶ ✸ ✹ ✺ ✷ ◌`）实时显示当前活动与累计用时；思考阶段复用 App
+现有的自然话术池，并约每四秒随机切换且不连续重复。
 完成时显示总用时。模型提供的
-思考流默认折叠为“思考了 Ns”，按 Ctrl+O 可展开或再次折叠，也可在
-`/config` → CLI Preferences 中设置 `thinking=compact|expanded`。
+思考流默认折叠为“思考了 Ns”。按 Ctrl+O 会打开临时全屏详情，使用
+Ctrl+O、Esc、Q 或 Ctrl+C 返回后详情会真正从界面消失，不写入终端滚屏。
 
 `/context` 与 App 的“对话上下文”卡片读取同一份组成数据，显示消息 token
 总数、彩色比例条，以及“系统前缀 / 临时注入 / 对话消息”分组。用户、助手、
 工具和各系统注入块均缩进显示，并使用与 App 对应的语义颜色。
+
+`/config` 使用本地化的两轴设置导航：←/→ 在“常规、模型、工具、连接、数据、
+关于”Tab 之间切换，↑/↓ 选择当前 Tab 的详细设置项，Enter 打开。常规设置和
+CLI 偏好的具体字段也使用方向键选择；界面与操作提示随 `language` 切换中英文。
 
 CLI 显示文本回复和公开的 Tool/Phase/Plan 状态。Browser 实时画面与直接操作、
 富媒体 Viewer、Workbench 图形布局和 Raw PTY 不属于该终端界面。

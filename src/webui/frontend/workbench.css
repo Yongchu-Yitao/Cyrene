@@ -11252,15 +11252,15 @@ html[data-theme="light"] .wb-tool-list .mono {
   flex: 0 0 auto;
   display: flex; align-items: stretch; gap: 2px;
   min-width: 0;
-  padding: 14px 16px 0; border-bottom: 1px solid var(--wb-line);
+  padding: 8px 12px 0; border-bottom: 1px solid var(--wb-line);
 }
 .wb-mem-detail-tab {
   flex: 1 1 0; min-width: 0;
   border: none; background: none; cursor: pointer;
-  padding: 8px 10px 11px; margin-bottom: -1px;
-  color: var(--wb-muted); font-size: calc(12.5px * var(--wb-ui-font-scale, 1)); font-weight: 600;
+  padding: 7px 3px 9px; margin-bottom: -1px;
+  color: var(--wb-muted); font-size: calc(12px * var(--wb-ui-font-scale, 1)); font-weight: 600;
   border-bottom: 2px solid transparent;
-  white-space: normal; overflow-wrap: anywhere; line-height: 1.3;
+  white-space: nowrap; line-height: 1.2;
 }
 .wb-mem-detail-tab:hover { color: var(--wb-text); }
 .wb-mem-detail-tab.active { color: var(--wb-text); border-bottom-color: var(--wb-accent); }
@@ -11274,13 +11274,21 @@ html[data-theme="light"] .wb-tool-list .mono {
 .wb-mem-detail-scroll > * { min-width: 0; max-width: 100%; }
 .wb-mem-detail-scroll::-webkit-scrollbar-corner { background: transparent; }
 
-.wb-mem-detail-hero { min-width: 0; display: flex; align-items: flex-start; gap: 11px; }
+.wb-mem-detail-hero {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 11px;
+}
+.wb-mem-detail-hero > .wb-mem-ico { grid-column: 1; grid-row: 1; }
 .wb-mem-detail-hero p {
-  flex: 1 1 auto; min-width: 0; margin: 0;
+  grid-column: 1 / -1; grid-row: 2;
+  min-width: 0; margin: 0;
   font-size: calc(14px * var(--wb-ui-font-scale, 1)); line-height: 1.6; font-weight: 560; color: var(--wb-text);
   white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
 }
-.wb-mem-hero-actions { flex: 0 0 auto; display: flex; gap: 2px; }
+.wb-mem-hero-actions { grid-column: 3; grid-row: 1; display: flex; gap: 2px; }
 
 .wb-mem-meta { display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--wb-line); border-bottom: 1px solid var(--wb-line); padding: 6px 0; }
 .wb-mem-meta-row { display: flex; align-items: flex-start; gap: 12px; padding: 7px 2px; }

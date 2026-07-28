@@ -337,7 +337,7 @@ publish_event
 | `Enter` | 提交 | 不接受新的普通 Turn |
 | `Alt+Enter` / `Esc+Enter` | 插入换行 | 不适用 |
 | `Ctrl+C` | 第一次提示确认，两秒内再次退出 | 不清空输入、不取消后台 Run |
-| `Ctrl+O` | 展开/折叠最近一次模型思考 | Run 结束后可查看已收集的思考详情 |
+| `Ctrl+O` | 打开临时全屏思考详情；再次按下关闭 | 关闭后恢复 Prompt，不把详情写入滚屏 |
 | `Ctrl+D` | 退出 CLI | 不取消后台 Run |
 | `↑` / `↓` | 浏览历史 | 不改变 Run |
 | `Tab` | 补全斜杠命令 | 不改变 Run |
@@ -362,9 +362,11 @@ CLI 退出时关闭当前 HTTP Subscriber；Workbench Run 继续由 Daemon 持�
 ```
 
 `/new` 选择 Project 后创建无须手工标题的新对话；`/resume` 合并列表与切换
-行为，并显示 Session 所属 Project。`/config` 覆盖 Backend Settings、
+行为，并用两行卡片显示标题、Project 与摘要，Session 之间留空行。`/config` 覆盖 Backend Settings、
 Models、Capabilities、Keys、SOUL、Integrations、MCP、Skills、Remote、
 Profile、Budget、Data 与 CLI Preferences。正式交互 CLI 不提供 `/clear`。
+设置导航按语言显示六个 Tab，←/→ 切换 Tab，↑/↓ 选择详细项，Enter 打开；
+常规与 CLI 字段列表也使用方向键选择。
 `/context` 同时读取 Workbench 的 `context` 与 `context-blocks`，按 App 的
 系统前缀、临时注入、对话消息三层结构显示 token、彩色比例条与缩进明细。
 
@@ -467,7 +469,9 @@ Prompt。
 - Rich 行式区域显示活动工具与进度；
 - 发送后使用随机变换且不连续重复的单字符星形 Spinner 实时刷新活动计时，
   结束时显示总用时；
-- 消费 `reasoning_start/delta/done`，默认折叠并支持 Ctrl+O 展开；
+- 思考阶段复用 Workbench 已有中英文话术池，约每四秒随机切换且避免连续重复；
+- 消费 `reasoning_start/delta/done`，默认折叠并通过可擦除的 Ctrl+O
+  临时全屏界面查看；
 - 回复正文与运行状态分区；
 - 保证所有参数脱敏与 Result 截断；
 - 增加 Event 顺序、重复和未知事件兼容测试。

@@ -64,22 +64,152 @@ def test_header_uses_compact_agent_title():
     renderer = RichRenderer(color=False)
     renderer.console = Console(file=stream, no_color=True, highlight=False)
 
-    renderer.header("chat_1", "default")
+    renderer.header(
+        "chat_1",
+        "default",
+        {
+            "model": "deepseek-v4-flash",
+            "project": "Cyrene",
+            "workspace": "/tmp/cyrene-workspace",
+            "version": "v1.2.3",
+        },
+    )
 
     output = stream.getvalue()
-    assert "CYRENE  Agent" in output
+    assert "CYRENE  Agent  v1.2.3" in output
     assert "交互式 Agent" not in output
-    assert "Ctrl+C 退出" in output
+    assert "Cyrene  /tmp/cyrene-workspace" in output
+    assert "/tmp/cyrene-workspace" in output
+    assert "deepseek-v4-flash" not in output
+    assert "模型" not in output
+    assert "Workspace" not in output
+    assert "v1.2.3" in output
+    assert "─" not in output
+    assert "今天想一起做点什么" not in output
+    assert "输入任务；/help 查看命令" not in output
+
+
+def test_brand_logo_is_a_clear_single_line_gradient_mark():
+    from cyrene.cli_chat import RichRenderer
+
+    logo = RichRenderer._brand_logo()
+    assert logo.plain == "CYRENE"
+    assert len(logo.spans) == 6
+    assert "#159dff" in str(logo.spans[0].style)
+    assert "#52cf73" in str(logo.spans[-1].style)
 
 
 def test_selection_menu_binds_arrow_keys_and_input_has_bottom_rule():
     from cyrene.cli_chat import InteractiveChat
 
     source = inspect.getsource(InteractiveChat._choose_with_arrows)
+    run_source = inspect.getsource(InteractiveChat.run)
     assert '@bindings.add("up")' in source
     assert '@bindings.add("down")' in source
     assert '@bindings.add("enter")' in source
     assert InteractiveChat._input_bottom_rule().startswith("─")
+    assert "self.renderer.input_rule(self._input_bottom_rule())" in run_source
+    assert "placeholder=self._input_placeholder()" in run_source
+    assert "bottom_toolbar=self._input_bottom_toolbar" in run_source
+
+
+def test_input_placeholder_is_localized():
+    from cyrene.cli_chat import ChatOptions, InteractiveChat
+
+    chat = object.__new__(InteractiveChat)
+    chat.options = ChatOptions(lang="zh")
+    assert "今天想一起做点什么" in chat._input_placeholder()[0][1]
+
+    chat.options = ChatOptions(lang="en")
+    assert "What would you like to work on?" in chat._input_placeholder()[0][1]
+
+
+def test_config_field_labels_and_values_are_localized():
+    from cyrene.cli_chat import ChatOptions, InteractiveChat
+
+    chat = object.__new__(InteractiveChat)
+    chat.options = ChatOptions(lang="zh")
+    assert chat._config_field_label("model") == "模型"
+    assert chat._config_field_label("heartbeat_interval") == "心跳间隔"
+    assert chat._config_value_preview("color", True) == "开启"
+
+    chat.options = ChatOptions(lang="en")
+    assert chat._config_field_label("model") == "Model"
+    assert chat._config_value_preview("color", False) == "Off"
+
+
+def test_config_text_editor_binds_escape_to_cancel():
+    from cyrene.cli_chat import InteractiveChat
+
+    source = inspect.getsource(InteractiveChat._prompt_text)
+    assert '@bindings.add("escape")' in source
+    assert 'event.app.exit(result="")' in source
+
+
+def test_ctrl_c_is_global_exit_while_escape_is_cancel():
+    from cyrene.cli_chat import InteractiveChat
+
+    chooser = inspect.getsource(InteractiveChat._choose_with_arrows)
+    settings = inspect.getsource(InteractiveChat._choose_config_action)
+    overlay = inspect.getsource(InteractiveChat._show_reasoning_overlay)
+    for source in (chooser, settings, overlay):
+        assert "self._handle_ctrl_c(event" in source
+
+
+def test_ctrl_c_exit_hint_is_rendered_below_input_rule():
+    from cyrene.cli_chat import ChatOptions, InteractiveChat
+
+    chat = object.__new__(InteractiveChat)
+    chat.options = ChatOptions(lang="zh")
+    chat._ctrl_c_deadline = float("inf")
+    chat._model = "deepseek-v4-flash"
+    chat._context_used = 0
+    chat._context_limit = 1_000_000
+    chat._git_branch = "feature/cli"
+    toolbar = chat._input_bottom_toolbar()
+
+    assert toolbar[0][1].startswith("─")
+    assert toolbar[1] == (
+        "class:bottom-toolbar",
+        "\nModel: deepseek-v4-flash[1m] | Ctx: 0 | feature/cli"
+        "\n权限模式: 默认",
+    )
+    assert toolbar[2] == ("class:exit-hint", "\n再次按 Ctrl+C 退出")
+
+    style_source = inspect.getsource(InteractiveChat._terminal_style)
+    assert '"exit-hint": "noreverse fg:#ff8a65 bg:default"' in style_source
+
+
+def test_permission_mode_value_is_localized():
+    from cyrene.cli_chat import ChatOptions, InteractiveChat
+
+    chat = object.__new__(InteractiveChat)
+    chat.options = ChatOptions(lang="zh", mode="plan")
+    assert chat._permission_mode_label() == "计划"
+
+    chat.options = ChatOptions(lang="en", mode="auto")
+    assert chat._permission_mode_label() == "Auto"
+
+
+def test_resume_session_cards_use_two_clipped_lines_with_project(monkeypatch):
+    from prompt_toolkit.utils import get_cwidth
+    from cyrene.cli_chat import InteractiveChat
+
+    monkeypatch.setattr(
+        "cyrene.cli_chat.shutil.get_terminal_size",
+        lambda fallback: __import__("os").terminal_size((48, 24)),
+    )
+    label = InteractiveChat._resume_session_label({
+        "title": "这是一个很长很长的 Session 标题",
+        "projectName": "Cyrene",
+        "preview": "这是一段同样很长的回复摘要，不能把选择列表撑成一整行。",
+    })
+
+    lines = label.splitlines()
+    assert len(lines) == 2
+    assert "Cyrene" in lines[0]
+    assert all(get_cwidth(line) <= 40 for line in lines)
+    assert lines[1].endswith("…")
 
 
 def test_interactive_color_palette_has_distinct_semantic_styles():
@@ -98,6 +228,56 @@ def test_interactive_color_palette_has_distinct_semantic_styles():
     assert "noreverse" in styles["bottom-toolbar"]
     assert "bg:default" in styles["bottom-toolbar"]
     assert "reverse" in styles["selection-current"]
+
+
+def test_config_tabs_are_localized_and_use_two_axis_navigation():
+    from cyrene.cli_chat import ChatOptions, InteractiveChat, JsonRenderer
+
+    zh_app = InteractiveChat(
+        object(),
+        JsonRenderer(stream=io.StringIO()),
+        ChatOptions(lang="zh"),
+    )
+    en_app = InteractiveChat(
+        object(),
+        JsonRenderer(stream=io.StringIO()),
+        ChatOptions(lang="en"),
+    )
+
+    zh_tabs = zh_app._config_tabs()
+    en_tabs = en_app._config_tabs()
+    source = inspect.getsource(InteractiveChat._choose_config_action)
+
+    assert [tab["label"] for tab in zh_tabs] == [
+        "常规", "模型", "工具", "连接", "数据", "关于",
+    ]
+    assert [tab["label"] for tab in en_tabs] == [
+        "General", "Models", "Tools", "Connections", "Data", "About",
+    ]
+    assert [item["label"] for item in zh_tabs[0]["items"]] == [
+        "常规与 Agent", "个人资料", "SOUL / 个性", "CLI 偏好",
+    ]
+    assert '@bindings.add("left")' in source
+    assert '@bindings.add("right")' in source
+    assert '@bindings.add("up")' in source
+    assert '@bindings.add("down")' in source
+
+
+def test_help_config_description_does_not_claim_all_settings():
+    from rich.console import Console
+    from cyrene.cli_chat import ChatOptions, InteractiveChat, RichRenderer
+
+    stream = io.StringIO()
+    renderer = RichRenderer(color=False)
+    renderer.console = Console(file=stream, no_color=True, highlight=False)
+    app = InteractiveChat(object(), renderer, ChatOptions())
+
+    app._help()
+
+    output = stream.getvalue()
+    assert "/config" in output
+    assert "查看和修改设置" in output
+    assert "查看和修改全部设置" not in output
 
 
 @pytest.mark.asyncio
@@ -128,13 +308,26 @@ async def test_rich_renderer_shows_thinking_and_total_elapsed_time(monkeypatch):
     await renderer.end_turn(_success=True)
 
     output = stream.getvalue()
-    assert "思考了 3s（Ctrl+O 展开）" in output
+    assert "思考了 3s（Ctrl+O 查看）" in output
     assert "完成，用时 5s" in output
     assert "先检查上下文" not in output
 
-    renderer.toggle_reasoning()
-    assert "思考详情" in stream.getvalue()
-    assert "先检查上下文" in stream.getvalue()
+    overlay = renderer.reasoning_overlay_text()
+    assert "思考详情" in overlay
+    assert "Ctrl+O / Esc 返回" in overlay
+    assert "先检查上下文" in overlay
+    assert "先检查上下文" not in stream.getvalue()
+
+
+def test_reasoning_details_use_temporary_erasable_overlay():
+    from cyrene.cli_chat import InteractiveChat
+
+    source = inspect.getsource(InteractiveChat._show_reasoning_overlay)
+
+    assert "full_screen=True" in source
+    assert "erase_when_done=True" in source
+    assert '@bindings.add("c-o")' in source
+    assert "async with in_terminal()" in source
 
 
 def test_elapsed_time_format_matches_compact_cli_style():
@@ -158,6 +351,37 @@ def test_activity_symbol_changes_randomly_without_repeating(monkeypatch):
     assert set(renderer._ACTIVITY_SYMBOLS) == {"✶", "✸", "✹", "✺", "✷", "◌"}
     assert first in renderer._ACTIVITY_SYMBOLS
     assert second in renderer._ACTIVITY_SYMBOLS
+    assert second != first
+
+
+def test_thinking_activity_reuses_app_phrases_and_cycles_without_repeating(monkeypatch):
+    from cyrene.cli_chat import RichRenderer
+
+    renderer = RichRenderer(color=False, lang="zh")
+    renderer._activity = "正在思考"
+    now = {"value": 10.0}
+    monkeypatch.setattr("cyrene.cli_chat.time.monotonic", lambda: now["value"])
+    monkeypatch.setattr("cyrene.cli_chat.random.choice", lambda values: values[-1])
+
+    first = renderer._current_activity_label()
+    now["value"] = 13.9
+    unchanged = renderer._current_activity_label()
+    now["value"] = 14.1
+    second = renderer._current_activity_label()
+
+    assert renderer._THINKING_PHRASES_ZH == (
+        "还得想一下",
+        "让我想想",
+        "先过一遍细节",
+        "我再确认下",
+        "把线索串一下",
+        "正在盘逻辑",
+        "看下哪里最稳",
+        "核对一下边界情况",
+        "再跑一轮看看",
+        "快了，再等等",
+    )
+    assert unchanged == first
     assert second != first
 
 

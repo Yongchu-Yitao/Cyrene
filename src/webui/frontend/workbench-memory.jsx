@@ -272,8 +272,8 @@
     var tabs = [
       { id: "detail", label: t("memory.details", "Details") },
       { id: "cite", label: t("memory.citationTab", "Citations ({count})", { count: m.citation_count }) },
-      { id: "related", label: t("memory.relatedTab", "Related ({count})", { count: related.length }) },
-      { id: "history", label: t("memory.history", "Edit history") },
+      { id: "related", label: t("memory.relatedCompactTab", "Related ({count})", { count: related.length }) },
+      { id: "history", label: t("memory.historyCompactTab", "History") },
     ];
 
     var detailBody = h("div", { className: "wb-mem-detail-scroll" },

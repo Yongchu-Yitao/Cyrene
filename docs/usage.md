@@ -182,22 +182,30 @@ cyrene chat --mode plan
 In the session, use `/new`, `/resume`, `/mode`, `/attach`, `/attachments`,
 `/detach`, `/deep-reflect`, `/deep-research`, `/context`, `/config`, `/status`,
 `/mcp`, and `/exit`. `/new` selects a project; `/resume` lists sessions with
-their project names. Selection menus support Up/Down and Enter. Alt+Enter
+their project names. Each session uses a two-line title/project and preview
+card, with a blank line between cards. Selection menus support Up/Down and Enter. Alt+Enter
 inserts a newline; the first Ctrl+C asks for confirmation and a second press
 within two seconds exits the CLI without interrupting the background run.
 Entering text immediately creates a conversation in the default project.
 
 After a message is sent, the CLI uses a randomized, non-repeating star spinner
 (`✶ ✸ ✹ ✺ ✷ ◌`) to show the current activity and elapsed time, then prints the
-total duration on completion. Model-provided reasoning is
-collapsed to “Thought for Ns” by default; Ctrl+O toggles its details. The same
-preference is available under `/config` → CLI Preferences as
-`thinking=compact|expanded`.
+total duration on completion. While thinking, it reuses the app's existing
+localized phrase pool and picks a different phrase about every four seconds.
+Model-provided reasoning is
+collapsed to “Thought for Ns” by default. Ctrl+O opens a temporary full-screen
+viewer; Ctrl+O, Escape, Q, or Ctrl+C closes it and restores the prompt without
+leaving the reasoning text in terminal scrollback.
 
 `/context` uses the same composition data as the app's Conversation Context
 card. It shows message tokens, a colored composition bar, and grouped System
 Prefix, Ephemeral, and Conversation Message blocks. User, assistant, tool, and
 system-injection rows are consistently indented.
+
+`/config` uses a localized two-axis settings navigator: Left/Right switches
+between General, Models, Tools, Connections, Data, and About tabs; Up/Down
+selects a detailed setting in the active tab; Enter opens it. General and CLI
+preference fields also use arrow-key selection, and labels follow `language`.
 
 The CLI renders text replies and public tool, phase, and plan status. Live
 browser interaction, rich-media viewers, Workbench's graphical layout, and raw
