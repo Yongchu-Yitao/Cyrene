@@ -41,12 +41,6 @@
   Workbench，包含 Quick Chat、Markdown、Code、Diff、Map、PDF、File Preview
   和 Browser View。
 
-
-## 当前限制
-
-当前测试版的安全边界、服务要求、数据行为、平台限制和发布门禁统一记录在
-[当前限制](docs/limitations.zh-CN.md)。
-
 ## 快速开始
 
 ### Desktop App
@@ -98,6 +92,7 @@ uv run cyrene stop
 - [配置说明](docs/configuration.zh-CN.md)
 - [架构说明](docs/architecture.zh-CN.md)
 - [开发指南](docs/development.zh-CN.md)
+- [当前限制](docs/limitations.zh-CN.md)
 - [当前开发进度](project-notes/CONTEXT_DEV_PROGRESS.zh-CN.md)
 - [更新日志](CHANGELOG.md)
 

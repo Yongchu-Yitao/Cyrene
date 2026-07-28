@@ -41,13 +41,6 @@
   browser or desktop app, with Quick Chat, rich Markdown, code, diff, map, PDF,
   file-preview, and browser views.
 
-
-## Current limitations
-
-See [Current limitations](docs/limitations.md) for the security boundaries,
-service requirements, data behavior, platform constraints, and release gates
-that apply to the current beta.
-
 ## Quick start
 
 ### Desktop app
@@ -100,6 +93,7 @@ see [Installation](docs/installation.md) and
 - [Configuration](docs/configuration.md)
 - [Architecture](docs/architecture.md)
 - [Development](docs/development.md)
+- [Current limitations](docs/limitations.md)
 - [Current development progress](project-notes/CONTEXT_DEV_PROGRESS.md)
 - [Changelog](CHANGELOG.en.md)
 
