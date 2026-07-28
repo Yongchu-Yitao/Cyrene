@@ -61,6 +61,43 @@ The default Workbench UI is organized around projects:
 | **Settings overlay** | Configure models, integrations, capabilities, channels, agents, data, and budgets |
 | **Help/Profile/Search** | Secondary overlays and navigation, not separate legacy pages |
 
+### Topbar work tabs and pinned resources
+
+The topbar shows the three most recently opened task or chat sessions. Opening,
+creating, or switching a session updates this MRU list immediately. Right-click
+a session tab to pin/unpin it, copy its title, remove it from the topbar, or
+inspect the browser and file resources currently associated with a chat.
+Removing a tab does not delete or stop the underlying session.
+
+The resource shelf sits between the session tabs and Search. Its `+` target has
+a hover hint and accepts:
+
+- chat file cards and Knowledge/Library rows or cards;
+- selected text (native text drag on macOS);
+- the floating or minimized Electron Browser.
+
+Dropped files and browsers appear as SVG-only chips; hover or keyboard focus
+reveals the name. Dropping selected text or a library item without an attachment
+materializes a Markdown file. Dropping a file or text resource on another chat
+tab adds it to that chat's draft without sending.
+
+A Browser PiP, favicon-only minimized button, or pinned Browser chip can be
+dropped on another chat tab. The target conversation opens the same URL in its
+own Browser manager. Both conversations share the login profile but retain
+independent pages and control.
+
+The topbar is keyboard-operable. Once focused, Left/Right and Home/End traverse
+sessions and resources, Enter/Space opens, and Delete/Backspace removes.
+`Cmd/Ctrl+1…3` opens the three sessions directly, `Ctrl+Tab` and
+`Ctrl+Shift+Tab` cycle, and `Cmd/Ctrl+W` removes the current session without
+stopping it. The project shortcut is `Cmd/Ctrl+Shift+1`.
+
+Pinned files are listed as global user-provided resources for subsequent Agent
+turns. A pinned Browser remains controllable only by its owner session; other
+sessions can request a snapshot or screenshot but cannot navigate, click, type,
+reload, upload, or otherwise mutate it. Unpinning removes only the topbar
+reference and never deletes the source file, text, knowledge item, or page.
+
 ---
 
 Workbench is the only Web UI. Real-time Markdown chat, guidance, subagent and

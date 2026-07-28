@@ -717,3 +717,21 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert ".wb-lib-state-action {" in styles
     assert "props.onContentViewed" in source
     assert 'client.update(viewedId, { reading_status: "read" })' in source
+
+
+def test_library_rows_and_cards_publish_work_resource_drags():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src/webui/frontend/workbench-library.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src/webui/frontend/workbench-library.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function libraryResourcePayload" in source
+    assert 'sourceKind: "library"' in source
+    assert 'ownerSessionId = "library:"' in source
+    assert 'resourceApi.setDrag(event, libraryResourcePayload(' in source
+    assert "draggable: !!props.onDragStart" in source
+    assert 'classList.add("dragging")' in source
+    assert '.wb-lib-row[draggable="true"]' in styles

@@ -139,10 +139,10 @@ final result: passed
   - Impact: a white page makes the browser unusable after restoring the floating window.
   - Fix: validate PiP → fullscreen → PiP in the restarted Electron process and capture the revised states.
 - Fonts and typography: the title area now uses a compact green `浏览器` pill followed by the page title, in both floating and maximized states. Post-restart visual evidence is pending.
-- Spacing and layout rhythm: maximized browser chrome remains 58px tall, matching `.workbench-topbar`. The default floating browser is now 280 × 215px (half of the previous 560 × 430px), remains resizable from 240 × 180px up to the explicit conversation content region, and the minimized control remains a single 40px green pill. The movement region reuses the transcript's 18px top, 22px inline, and 8px bottom inset tokens, matching the red-box edges without clipping the floating shadow. Visual evidence is pending.
+- Spacing and layout rhythm: maximized browser chrome remains 58px tall, matching `.workbench-topbar`. The default floating browser is now 280 × 215px (half of the previous 560 × 430px), remains resizable from 240 × 180px up to the explicit conversation content region, and the minimized control is a 42px favicon-only round button. The movement region reuses the transcript's 18px top, 22px inline, and 8px bottom inset tokens, matching the red-box edges without clipping the floating shadow. Visual evidence is pending.
 - Colors and visual tokens: the standalone green status dot was removed. The semantic running state is carried by the bordered green `浏览器` pill; the minimized restore action reuses the Workbench accent surface.
-- Image quality and asset fidelity: the live browser remains a native `WebContentsView`; during manipulation its own captured PNG is used as a temporary proxy. The fullscreen restore action uses Google's Apache-2.0 Material `close_fullscreen` rounded asset; the minimized pill no longer contains a secondary icon.
-- Copy and content: the persistent `浏览器` pill replaces the ambiguous dot. The minimized state removes the oversized `打开` label while preserving localized restore labels and tooltips.
+- Image quality and asset fidelity: the live browser remains a native `WebContentsView`; during manipulation its own captured PNG is used as a temporary proxy. The fullscreen restore action uses Google's Apache-2.0 Material `close_fullscreen` rounded asset; the minimized button uses Electron's current-page favicon with a generic web-page SVG fallback.
+- Copy and content: the floating header retains the localized `浏览器` label. The minimized state contains no visible text and exposes the page title plus drag instruction through its localized tooltip and accessible label.
 
 ## Comparison history
 
@@ -159,6 +159,7 @@ final result: passed
 11. Follow-up validation found a short white interval after fullscreen-to-PiP restore. The renderer had removed its bitmap proxy before Electron completed the first frame at the smaller bounds. The transition IPC now stays pending while Electron pre-renders the final-size page with `capturePage`; the proxy remains mounted until that readiness promise resolves, then the live view is revealed and repainted.
 12. User requested a smaller default floating browser. Its initial width and height were each halved from 560 × 430px to 280 × 215px; the resize floor was reduced to 240 × 180px while the maximum remains the full bounded conversation region.
 13. The latest reference clarified that the movement boundary must match the inset conversation rectangle rather than the entire thread stage. A dedicated absolute movement region now shares the transcript's inset tokens, and all drag, resize, initial placement, and host-resize clamping resolve against that one DOM rectangle.
+14. Browser pinning from the PiP titlebar now checks pointer coordinates directly against the shelf rectangle, avoiding native-view and pointer-capture hit-test failures. Minimized mode is now a favicon-only round button and uses the same 3px click-versus-drag threshold.
 
 ## Verification
 
@@ -325,3 +326,41 @@ final result: passed
   acceptance.
 
 final result: passed
+---
+
+## Workbench topbar Work Tabs and pinned-resource acceptance — 2026-07-28
+
+### Outcome
+
+- The breadcrumb is replaced by three compact task/chat tabs with bordered
+  inactive and active states; the active state has no bottom color strip.
+- Session-tab context menus reuse the Workbench account-menu surface. Browser
+  previews remain visible beside both the menu and the live PiP browser.
+- Pinned resources occupy a separate shelf between session tabs and Search.
+  Chips are SVG-only at rest and reveal names on hover/focus.
+- The empty `+` drop target is centered and now exposes a localized hover hint.
+- Search is 168px wide and the action group reserves a 10px gap from the shelf,
+  preventing the accent drop outline from touching Search.
+- macOS traffic-light spacing, the 58px titlebar, compact density, native text
+  selection drag, and Browser `WebContentsView` layering remain intact.
+
+### Functional acceptance
+
+- Files, Knowledge/Library items, selected text, Browser PiP, and minimized
+  Browser pills can be pinned.
+- File/text resources can be dropped into another chat draft without sending.
+- Browser PiP, minimized favicon controls, and pinned Browser chips can be
+  dropped on another chat to create an independent same-URL page there.
+- Topbar sessions/resources support arrows, Home/End, Enter/Space,
+  Delete/Backspace, plus direct, cyclic, and removal session shortcuts.
+- Selection Markdown uses an ASCII storage key and a Unicode display name;
+  legacy Unicode export keys remain readable.
+- Pinned Browser access is owner-control / other-session read-only at tool
+  execution.
+
+### Verification
+
+- Frontend build passed.
+- Focused suites passed: 168 resource/library checks, 148 text-export and
+  attachment checks, and 13 titlebar-layout checks. These suites overlap and
+  are not a combined total.

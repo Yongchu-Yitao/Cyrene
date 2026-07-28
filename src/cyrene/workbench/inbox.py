@@ -44,6 +44,25 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _tool_result_is_error(result: Any) -> bool:
+    """Detect structured tool failures that were returned instead of raised."""
+    text = str(result or "").strip()
+    if not text:
+        return False
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        return str(parsed.get("status") or "").strip().lower() in {
+            "error",
+            "failed",
+            "failure",
+            "uncertain",
+        }
+    return text.lower().startswith(("error", "tool failed", "failed to", "failed:"))
+
+
 class WorkbenchAgentInbox:
     """One reliable, session-isolated event inbox for a live chat run."""
 
@@ -710,7 +729,7 @@ class WorkbenchAgentInbox:
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
                 "result": str(result),
-                "is_error": False,
+                "is_error": _tool_result_is_error(result),
             }
         except asyncio.CancelledError:
             payload = {

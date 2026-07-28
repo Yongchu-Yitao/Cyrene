@@ -377,6 +377,117 @@ def _describe_ids(arguments: dict[str, Any]) -> list[str]:
     return [single] if single else []
 
 
+def _normalize_module_arguments(
+    wire_name: str,
+    arguments: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Repair common, unambiguous gateway nesting mistakes.
+
+    This runs only at execution time. The stable model-facing tool definitions
+    remain unchanged, preserving prompt/tool-schema cache prefixes.
+    """
+    normalized = dict(arguments or {})
+    if wire_name not in module_wire_names():
+        return normalized
+
+    operation = str(normalized.get("operation") or "").strip()
+    nested = normalized.get("arguments")
+    if not isinstance(nested, dict):
+        return normalized
+
+    nested_copy = dict(nested)
+    changed = False
+    if operation == "invoke" and not str(
+        normalized.get("capability_id") or ""
+    ).strip():
+        nested_capability_id = nested_copy.get("capability_id")
+        if isinstance(nested_capability_id, str) and nested_capability_id.strip():
+            normalized["capability_id"] = nested_capability_id.strip()
+            nested_copy.pop("capability_id", None)
+            changed = True
+    elif operation == "describe":
+        for field in ("capability_id", "capability_ids"):
+            if field not in normalized and field in nested_copy:
+                normalized[field] = nested_copy.pop(field)
+                changed = True
+
+    if changed:
+        if nested_copy:
+            normalized["arguments"] = nested_copy
+        else:
+            normalized.pop("arguments", None)
+    return normalized
+
+
+def _invalid_argument_example(
+    wire_name: str,
+    arguments: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return a concrete gateway-call shape for an invalid argument response."""
+    if wire_name not in module_wire_names():
+        return None
+    args = dict(arguments or {})
+    operation = str(args.get("operation") or "").strip()
+    if operation == "discover":
+        return {
+            "tool": wire_name,
+            "arguments": {
+                "operation": "discover",
+                "query": str(args.get("query") or "<search terms>"),
+            },
+        }
+    if operation == "describe":
+        capability_ids = _describe_ids(args)
+        return {
+            "tool": wire_name,
+            "arguments": {
+                "operation": "describe",
+                "capability_ids": capability_ids or ["<capability_id>"],
+            },
+        }
+    if operation == "invoke":
+        nested = args.get("arguments")
+        concrete_arguments = dict(nested) if isinstance(nested, dict) else {}
+        nested_capability_id = concrete_arguments.pop("capability_id", "")
+        capability_id = str(
+            args.get("capability_id") or nested_capability_id or "<capability_id>"
+        ).strip()
+        return {
+            "tool": wire_name,
+            "arguments": {
+                "operation": "invoke",
+                "capability_id": capability_id,
+                "arguments": concrete_arguments,
+            },
+        }
+    return {
+        "tool": wire_name,
+        "arguments": {
+            "operation": "discover",
+            "query": "<search terms>",
+        },
+    }
+
+
+def _serialize_wire_error(
+    error: WireToolError,
+    wire_name: str,
+    arguments: dict[str, Any] | None,
+) -> str:
+    payload: dict[str, Any] = {
+        "status": "error",
+        "error": {
+            "type": error.code,
+            "message": error.message,
+        },
+    }
+    if error.code == "invalid_arguments":
+        example = _invalid_argument_example(wire_name, arguments)
+        if example is not None:
+            payload["error"]["expected_call"] = example
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _runtime_capability_available(
     capability_id: str,
     *,
@@ -398,15 +509,15 @@ async def execute_wire_tool(
     actor: str = "main",
     catalog_snapshot: ToolCatalogSnapshot | None = None,
 ) -> str:
+    args = _normalize_module_arguments(wire_name, arguments)
     try:
         selected_snapshot = _effective_snapshot(actor, catalog_snapshot)
         resolution = resolve_wire_call(
             wire_name,
-            arguments,
+            args,
             actor=actor,
             catalog_snapshot=selected_snapshot,
         )
-        args = dict(arguments or {})
         if resolution.operation == "discover":
             snapshot_specs = _snapshot_specs_for_wire(
                 resolution.wire_name,
@@ -568,7 +679,7 @@ async def execute_wire_tool(
             )
         return str(result)
     except WireToolError as error:
-        return serialize_error(error)
+        return _serialize_wire_error(error, wire_name, args)
 
 
 async def execute_wire_tool_in_context(
@@ -642,7 +753,7 @@ def get_wire_tool_execution_metadata(
     catalog_snapshot: ToolCatalogSnapshot | None = None,
 ) -> dict[str, Any]:
     """Resolve scheduler metadata from the concrete capability when possible."""
-    args = dict(arguments or {})
+    args = _normalize_module_arguments(wire_name, arguments)
     try:
         resolution = resolve_wire_call(
             wire_name,

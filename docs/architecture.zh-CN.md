@@ -131,6 +131,22 @@ Profile 和 Quick Chat 是 Overlay、Panel 或 Secondary Surface，不是旧 UI
 页面。唯一源码根是 `src/webui/frontend`，唯一生成输出根是
 `src/webui/static/app`。
 
+`WorkbenchTopbar` 明确维护两个独立集合：最多 3 个 Task/Chat Session 的本地
+MRU/置顶列表，以及持久化的 Pinned Resource Shelf。资源拖动使用内部 MIME
+`application/x-cyrene-work-resource+json`；macOS 原生文字拖动以
+`text/plain` 接收并固化为 Markdown。知识库附件由服务端解析，Renderer Payload
+不暴露本机绝对路径。
+
+固定资源 Registry 通过 Workbench Document Store 持久化。后续 Agent Context
+只注入紧凑的 File/Browser 索引，文件正文按需读取。Browser Reference 记录
+Owner Session：Owner 保留正常控制，其他 Session 在 Tool 执行层只能调用
+Snapshot/Screenshot。这是执行层权限约束，不只是 Prompt 提示。
+
+Browser 拖到另一个 Conversation 时不转移原 Browser Reference，也不提升固定
+资源权限。Renderer 通过 Electron `browser:create-tab` 为目标 Session 的
+`BrowserTabManager` 新建同 URL 页面，再以事件同步目标对话的 PiP 状态。Manager
+仍按 Session 隔离，只有持久 Partition（Cookie/Login）共享。
+
 Web UI 绑定 `127.0.0.1`，由 FastAPI Backend 提供。Electron 每次启动生成
 Shared Token、传给 Python Child，并把它作为 `X-Cyrene-Token` 注入 Desktop
 Request。OS Keyring 保存的是保护 `data/config.enc` 的 Fernet Key，不是该

@@ -209,6 +209,57 @@
     return !!(item && ((Array.isArray(item.attachments) && item.attachments.length) || Number(item.attachment_count || 0)));
   }
 
+  function libraryResourcePayload(item, workspace, rawUrl) {
+    var itemId = String(item && item.id || "");
+    var title = itemTitle(item);
+    var ownerSessionId = "library:" + String(workspace || "");
+    if (!hasAttachment(item)) {
+      var details = [
+        "# " + title,
+        String(item && item.abstract || "").trim(),
+        authorText(item) !== "—" ? "**Author:** " + authorText(item) : "",
+        item && item.year ? "**Year:** " + item.year : "",
+        String(item && (item.url || item.doi) || "").trim(),
+      ].filter(Boolean).join("\n\n");
+      return {
+        kind: "snippet",
+        sourceKind: "library",
+        libraryItemId: itemId,
+        ownerSessionId: ownerSessionId,
+        ownerProjectId: String(workspace || ""),
+        stableRef: "library:" + String(workspace || "") + ":" + itemId,
+        title: title,
+        text: details,
+      };
+    }
+    var name = String(item && (item.attachment_name || item.filename) || title).trim() || title;
+    var file = {
+      id: "library:" + String(workspace || "") + ":" + itemId,
+      name: name,
+      content_type: String(item && item.content_type || "application/octet-stream"),
+      size: Number(item && item.attachment_size || 0),
+      kind: itemFileType(item),
+      url: String(rawUrl || ""),
+      sourceKind: "library",
+      libraryItemId: itemId,
+      ownerProjectId: String(workspace || ""),
+    };
+    return {
+      kind: "file",
+      sourceKind: "library",
+      libraryItemId: itemId,
+      ownerSessionId: ownerSessionId,
+      ownerProjectId: String(workspace || ""),
+      stableRef: "library:" + String(workspace || "") + ":" + itemId,
+      title: name,
+      name: name,
+      url: file.url,
+      content_type: file.content_type,
+      size: file.size,
+      file: file,
+    };
+  }
+
   function requestJson(url, options) {
     return window.CyreneUI.require("api").json(url, options || {});
   }
@@ -362,6 +413,9 @@
     var isTrash = props.trash;
     return h("div", {
       className: "wb-lib-row wb-lib-table-grid" + (props.active ? " active" : ""), role: "row", tabIndex: 0,
+      draggable: !!props.onDragStart,
+      onDragStart: function (event) { if (props.onDragStart) props.onDragStart(event, item); },
+      onDragEnd: props.onDragEnd,
       onClick: function () { props.onSelect(item.id); },
       onKeyDown: function (event) { if (event.key === "Enter") props.onSelect(item.id); },
     },
@@ -383,6 +437,9 @@
     var tags = itemTags(item);
     return h("article", {
       className: "wb-lib-card" + (props.active ? " active" : ""),
+      draggable: !!props.onDragStart,
+      onDragStart: function (event) { if (props.onDragStart) props.onDragStart(event, item); },
+      onDragEnd: props.onDragEnd,
       onClick: function () { props.onSelect(item.id); },
       onKeyDown: function (event) { if (event.key === "Enter") props.onSelect(item.id); },
       tabIndex: 0,
@@ -1270,6 +1327,18 @@
     }
     function toggleChecked(id) { setChecked(function (prev) { var key = String(id); return prev.indexOf(key) >= 0 ? prev.filter(function (v) { return v !== key; }) : prev.concat([key]); }); }
     function toggleAll() { setChecked(checked.length === data.items.length ? [] : data.items.map(function (item) { return String(item.id); })); }
+    function startLibraryItemDrag(event, item) {
+      var resourceApi = window.CyreneUI.require("resources");
+      if (!resourceApi || !client || !item) {
+        event.preventDefault();
+        return;
+      }
+      resourceApi.setDrag(event, libraryResourcePayload(item, workspace, client.rawUrl(item.id)));
+      if (event.currentTarget) event.currentTarget.classList.add("dragging");
+    }
+    function endLibraryItemDrag(event) {
+      if (event.currentTarget) event.currentTarget.classList.remove("dragging");
+    }
 
     function loadCitation(style) {
       if (!client || !selectedId) return;
@@ -1323,8 +1392,8 @@
         error && h("div", { className: "wb-lib-error" }, h("span", null, error), h("button", { type: "button", onClick: function () { reload(); } }, icon("restore", 14), " ", L("library.retry", "Retry"))),
         h("section", { className: "wb-lib-results" + (selectedItem ? " with-workspace" : "") },
           loading && !data.items.length ? h(StatePanel, { loading: true, title: L("library.loading", "Loading knowledge base…") }) : !data.items.length ? h(StatePanel, { title: query || activeFilters || scope.type !== "all" ? L("library.noMatch", "No matching knowledge") : L("library.noItems", "This project has no knowledge items yet"), body: query || activeFilters || scope.type !== "all" ? L("library.emptyHint", "Try adjusting your search, categories or filters.") : L("library.importHint", "Upload documents, images, audio or video, or import RIS, BibTeX and Zotero references."), action: query || activeFilters || scope.type !== "all" ? function () { setQuery(""); setFilters({ file_type: "", item_type: "", status: "", year: "" }); setScope({ type: "all" }); } : function () { fileRef.current && fileRef.current.click(); }, actionLabel: query || activeFilters || scope.type !== "all" ? L("library.clearConditions", "Clear conditions") : L("library.importFirstItem", "Import the first item"), actionIcon: query || activeFilters || scope.type !== "all" ? "restore" : "upload" }) :
-            view === "table" ? h("div", { className: "wb-lib-table", role: "table" }, h(TableHead, { allSelected: data.items.length > 0 && checked.length === data.items.length, onToggleAll: toggleAll }), h("div", { className: "wb-lib-table-body" }, data.items.map(function (item) { return h(LibraryRow, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, trash: scope.type === "trash", onSelect: select, onToggle: toggleChecked, onStar: toggleStar, onRestore: restore }); }))) :
-              h("div", { className: "wb-lib-card-grid" }, data.items.map(function (item) { return h(LibraryCard, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, onSelect: select, onToggle: toggleChecked, onStar: toggleStar }); })),
+            view === "table" ? h("div", { className: "wb-lib-table", role: "table" }, h(TableHead, { allSelected: data.items.length > 0 && checked.length === data.items.length, onToggleAll: toggleAll }), h("div", { className: "wb-lib-table-body" }, data.items.map(function (item) { return h(LibraryRow, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, trash: scope.type === "trash", onSelect: select, onToggle: toggleChecked, onStar: toggleStar, onRestore: restore, onDragStart: scope.type === "trash" ? null : startLibraryItemDrag, onDragEnd: endLibraryItemDrag }); }))) :
+              h("div", { className: "wb-lib-card-grid" }, data.items.map(function (item) { return h(LibraryCard, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, onSelect: select, onToggle: toggleChecked, onStar: toggleStar, onDragStart: scope.type === "trash" ? null : startLibraryItemDrag, onDragEnd: endLibraryItemDrag }); })),
           data.items.length < data.total && h("button", { type: "button", className: "wb-lib-load-more", disabled: loadingMore, onClick: loadMore }, loadingMore ? h(Spinner) : null, loadingMore ? L("library.loadingMore", "Loading…") : L("library.loadMore", "Load more ({shown} / {total})", { shown: data.items.length, total: data.total })),
           loading && data.items.length > 0 && h("div", { className: "wb-lib-loading-bar" }, h(Spinner), " ", L("library.updating", "Updating…"))),
         selectedItem && h(ItemWorkspace, { item: selectedItem, loading: detailLoading, tab: workTab, onTab: setWorkTab, onUpdate: updateSelected, onAddNote: addNote, rawUrl: client.rawUrl(selectedId), citationProps: citationProps })),

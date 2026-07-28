@@ -52,6 +52,35 @@ interactive tools report that the browser runtime is unavailable.
 - All conversation managers intentionally share the same Electron partition, so
   signing in once makes that login available to other conversations.
 
+### Pinned Browser resources
+
+The entire floating Browser titlebar and the minimized Browser control can be
+dragged to the topbar resource shelf. PiP pinning uses direct pointer-to-shelf
+rectangle hit testing, so it remains reliable above Electron's native page;
+drops elsewhere still only move the window. The minimized control displays only
+the current page favicon and immediately falls back to the Browser SVG when the
+favicon fails to load. A click restores PiP, while movement past the drag
+threshold enters the pin interaction. The minimized control shares the PiP
+coordinate commit and transcript-avoidance path, so it can be freely positioned
+inside the conversation area. A body-level fixed drag proxy crosses above the
+conversation header's clipping and stacking contexts on the way to the shelf.
+Pinning
+preserves the original page and owner session; it does not move or duplicate
+the tab. Later Agent turns in every session can discover the pinned Browser
+resource ID.
+
+Dropping the PiP titlebar, minimized favicon button, or pinned Browser chip on
+another conversation creates a new same-URL page in that session's Browser
+manager. This copies the page entry instead of transferring ownership or
+control. Login state remains available through the shared partition, while
+tabs, navigation history, and subsequent operations are independent.
+
+The owner session keeps normal Browser control. Other sessions may pass the
+resource ID only to `browser_snapshot` or `browser_screenshot`. Navigation,
+clicking, typing, reload, history movement, uploads, and all other mutations are
+rejected by the browser execution layer. The topbar context menu can show a
+read-only current-page preview without hiding the original PiP view.
+
 ### Non-Electron Playwright mode
 
 - A single **persistent browser context** is launched lazily and reused across all

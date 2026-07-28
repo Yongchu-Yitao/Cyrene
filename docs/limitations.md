@@ -15,6 +15,10 @@ open bugs.
 - Tool permissions reduce accidental actions but do not provide an operating
   system, VM, or container sandbox.
 - Electron browser cookies and logins are shared across projects.
+- Pinning a file to the topbar is an explicit global-sharing action: every
+  session can discover its index and may read it through normal file tools.
+- A Browser pinned by another session is read-only at Cyrene's tool layer, but
+  all Electron Browser sessions still share the same local cookie partition.
 
 ## Models, integrations, and budgets
 

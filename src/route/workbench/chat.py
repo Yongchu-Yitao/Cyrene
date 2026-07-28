@@ -10,7 +10,7 @@ import shutil
 import time
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from cyrene.workbench import chat as _service
@@ -33,6 +33,8 @@ def register_workbench_chat_routes(
 ) -> dict[str, Any]:
     configure_store(db_path)
     _CHAT_RUN_MANAGER.configure(db_path)
+    from cyrene.workbench import pinned_resources
+    pinned_resources.configure(db_path)
 
     from cyrene.runtime.shell_wake import get_shell_wake_service
 
@@ -55,6 +57,129 @@ def register_workbench_chat_routes(
         R = _routes()
         project = R._workbench_find_project_lightweight(project_id)
         return R._workbench_project_data_key(project) if project else project_id
+
+    async def _resolve_library_file_payload(raw: dict[str, Any]) -> dict[str, Any]:
+        """Resolve a dragged knowledge item to its linked managed file."""
+        body = dict(raw or {})
+        nested = body.get("file") if isinstance(body.get("file"), dict) else {}
+        source_kind = str(body.get("sourceKind") or nested.get("sourceKind") or "")
+        item_id = str(body.get("libraryItemId") or nested.get("libraryItemId") or "")
+        workspace = str(
+            body.get("ownerProjectId") or nested.get("ownerProjectId") or ""
+        )
+        if source_kind != "library" or not item_id or not workspace:
+            return body
+        try:
+            from pathlib import Path
+            from cyrene.knowledge import library as knowledge_library
+            from cyrene.runtime.attachments import resolve_managed_attachment_path
+            from cyrene.workbench.knowledge import _ensure_kb_db
+            from route.workbench.library import _find_raw_attachment
+
+            kb_path = await _ensure_kb_db(workspace)
+            if not await knowledge_library.get_item(kb_path, item_id):
+                return body
+            attachment = await _find_raw_attachment(kb_path, item_id)
+            if not attachment:
+                return body
+            stored_path = str(
+                attachment.get("document_path") or attachment.get("path") or ""
+            )
+            path = Path(stored_path)
+            if not path.is_file():
+                path = resolve_managed_attachment_path(stored_path)
+            if path is None or not path.is_file():
+                return body
+            name = str(attachment.get("filename") or path.name)
+            content_type = str(
+                attachment.get("document_content_type")
+                or attachment.get("content_type")
+                or body.get("content_type")
+                or "application/octet-stream"
+            )
+            resolved_file = {
+                **nested,
+                "id": str(nested.get("id") or f"library:{workspace}:{item_id}"),
+                "name": name,
+                "path": str(path.resolve()),
+                "url": str(body.get("url") or nested.get("url") or ""),
+                "content_type": content_type,
+                "size": int(path.stat().st_size),
+                "kind": str(nested.get("kind") or "file"),
+                "sourceKind": "library",
+                "libraryItemId": item_id,
+                "ownerProjectId": workspace,
+            }
+            return {
+                **body,
+                "name": name,
+                "title": str(body.get("title") or name),
+                "path": str(path.resolve()),
+                "content_type": content_type,
+                "size": int(path.stat().st_size),
+                "sourceKind": "library",
+                "libraryItemId": item_id,
+                "file": resolved_file,
+            }
+        except Exception:
+            logger.exception(
+                "Failed to resolve dragged library item %s in %s",
+                item_id,
+                workspace,
+            )
+            return body
+
+    def _public_pinned_resource(item: dict[str, Any]) -> dict[str, Any]:
+        public = dict(item)
+        public.pop("path", None)
+        nested = public.get("file")
+        if isinstance(nested, dict):
+            public["file"] = {key: value for key, value in nested.items() if key != "path"}
+        return public
+
+    @router.get("/api/workbench/pinned-resources")
+    async def api_workbench_pinned_resources():
+        items = await asyncio.to_thread(pinned_resources.list_resources)
+        return {"resources": [_public_pinned_resource(item) for item in items]}
+
+    @router.post("/api/workbench/pinned-resources")
+    async def api_workbench_pin_resource(request: Request):
+        body = await request.json()
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "object body required"}, status_code=400)
+        if str(body.get("kind") or "") == "file":
+            body = await _resolve_library_file_payload(body)
+            file_payload = body.get("file") if isinstance(body.get("file"), dict) else {}
+            for key in ("name", "path", "url", "content_type", "size"):
+                if not body.get(key) and file_payload.get(key) is not None:
+                    body[key] = file_payload.get(key)
+            if not body.get("path"):
+                from pathlib import Path
+                from urllib.parse import unquote, urlparse
+                from cyrene.runtime.attachments import EXPORTS_DIR, UPLOADS_DIR
+                parsed = unquote(urlparse(str(body.get("url") or "")).path)
+                roots = (
+                    ("/api/chat/upload/", UPLOADS_DIR),
+                    ("/api/chat/export/", EXPORTS_DIR),
+                )
+                for prefix, root in roots:
+                    if parsed.startswith(prefix):
+                        candidate = (root / Path(parsed[len(prefix):]).name).resolve()
+                        if candidate.exists() and candidate.is_file():
+                            body["path"] = str(candidate)
+                        break
+        try:
+            item = await asyncio.to_thread(pinned_resources.upsert_resource, body)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"ok": True, "resource": _public_pinned_resource(item)}
+
+    @router.delete("/api/workbench/pinned-resources/{resource_id}")
+    async def api_workbench_unpin_resource(resource_id: str):
+        removed = await asyncio.to_thread(pinned_resources.remove_resource, resource_id)
+        if not removed:
+            return JSONResponse({"error": "resource not found"}, status_code=404)
+        return {"ok": True}
 
     @router.get("/api/workbench/chats")
     async def api_workbench_list_chats(project: str = ""):
@@ -660,6 +785,12 @@ def register_workbench_chat_routes(
 
         message = str(body.get("message") or "").strip()
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
+        if attachments:
+            attachments = [
+                await _resolve_library_file_payload(item)
+                if isinstance(item, dict) else item
+                for item in attachments
+            ]
         command = str(body.get("command") or "").strip()
         wants_stream = bool(body.get("stream"))
         retry = bool(body.get("retry"))
@@ -1184,10 +1315,15 @@ def register_workbench_chat_routes(
                     await run.publish({"type": "reply_start"})
                     for chunk in R._reply_stream_chunks(reply):
                         await run.publish({"type": "reply_delta", "delta": chunk})
-                    await run.publish({"type": "reply_done", "response": reply})
-                # ``reply_done`` belongs to an individual streamed model call and
-                # can precede a tool-channel reopen. This event is authoritative:
-                # the agent coroutine has returned and only durable finalization
+                # A streamed model call can finish before the agent reopens the
+                # tool channel, so its reply_done is not necessarily the text
+                # that _finalize_async will persist. Publish one authoritative
+                # terminal snapshot from the agent coroutine's return value.
+                # The client replaces (rather than appends) on reply_done, which
+                # also makes this harmless when the last model call already
+                # streamed exactly the same text.
+                await run.publish({"type": "reply_done", "response": reply})
+                # The agent coroutine has returned and only durable finalization
                 # remains. The UI can stop tool animations without pretending the
                 # transcript and workspace change set are already saved.
                 await run.publish({

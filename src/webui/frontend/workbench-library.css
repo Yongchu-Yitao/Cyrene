@@ -410,6 +410,10 @@
 .wb-lib-table-body::-webkit-scrollbar-track, .wb-lib-card-grid::-webkit-scrollbar-track { background: transparent; }
 .wb-lib-table-body::-webkit-scrollbar-thumb, .wb-lib-card-grid::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: var(--wb-line); background-clip: padding-box; }
 .wb-lib-row { min-height: 41px; padding: 0 14px; border: 0; border-radius: 0; position: relative; background: transparent; color: var(--wb-text); font-size: calc(13.5px * var(--wb-ui-font-scale, 1)); cursor: pointer; outline: 0; overflow: hidden; }
+.wb-lib-row[draggable="true"], .wb-lib-card[draggable="true"] { cursor: grab; }
+.wb-lib-row[draggable="true"]:active, .wb-lib-card[draggable="true"]:active { cursor: grabbing; }
+.wb-lib-row.dragging, .wb-lib-card.dragging { opacity: .58; }
+.wb-lib-row button, .wb-lib-row input, .wb-lib-card button, .wb-lib-card input { cursor: pointer; }
 .wb-lib-row:hover { background: transparent; }
 .wb-lib-row::after {
   content: "";

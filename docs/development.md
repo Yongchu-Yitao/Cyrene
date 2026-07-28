@@ -90,6 +90,14 @@ uv run pytest -q -W error::pytest.PytestUnhandledThreadExceptionWarning
 
 # Run a specific test file
 python -m pytest tests/test_context_trace.py -v
+
+# Topbar tabs, pinned resources, Library drag, export compatibility, and layout
+uv run pytest -q \
+  tests/test_workbench_recent_session_tabs.py \
+  tests/test_workbench_pinned_resources.py \
+  tests/test_workbench_library.py \
+  tests/test_chat_attachment_flow.py \
+  tests/test_electron_titlebar_alignment.py
 ```
 
 The normal suite uses fakes/local fixtures and must not require a live LLM

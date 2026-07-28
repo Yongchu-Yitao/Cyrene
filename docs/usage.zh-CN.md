@@ -53,6 +53,36 @@ Workbench 以项目为中心：
 | Settings Overlay | 配置 Model、Integration、Capability、Channel、Agent、Data 和 Budget |
 | Help/Profile/Search | Secondary Overlay/Navigation，不是旧 UI 页面 |
 
+### 顶栏 Work Tabs 与固定资源
+
+顶栏显示最近主动打开的 3 个 Task/Chat Session。打开、新建或切换 Session 会
+实时更新 MRU。右键 Session Tab 可置顶/取消置顶、复制标题、从顶栏移除，或查看
+该 Chat 当前关联的 Browser 和 File。移出顶栏不会删除或停止底层 Session。
+
+Session Tabs 与搜索之间是固定资源 Shelf。`+` 落点提供 Hover 提示，可接收：
+
+- Chat 文件卡片和 Knowledge/Library 表格行或卡片；
+- 选中文字（macOS 使用原生文字拖动）；
+- Electron Browser 的 PiP 小窗或最小化胶囊。
+
+固定后的 File/Browser 默认只显示 SVG 图标，Hover 或键盘 Focus 时才展开名称。
+选中文字和无附件 Library Item 会固化为 Markdown。把 File/Text 拖到其他 Chat
+Tab 只加入该 Chat 的输入草稿，不会自动发送。
+
+把 Browser PiP、favicon 最小化按钮或已固定 Browser 图标拖到另一个 Chat Tab，
+会在目标对话的 Browser 中新建同 URL 页面。两个对话共享登录 Profile，但拥有
+独立页面和控制权。
+
+顶栏支持键盘操作：Focus 后用左右方向键、Home/End 遍历 Session 与资源，
+Enter/Space 打开，Delete/Backspace 移除。`Cmd/Ctrl+1…3` 打开三个 Session，
+`Ctrl+Tab` / `Ctrl+Shift+Tab` 前后切换，`Cmd/Ctrl+W` 从顶栏移除当前 Session
+但不停止任务。项目快捷键为 `Cmd/Ctrl+Shift+1`。
+
+固定 File 会作为全局用户资源索引进入后续 Agent Turn。固定 Browser 只有所属
+Session 保留控制权；其他 Session 只能获取 Snapshot/Screenshot，不能导航、
+点击、输入、刷新、上传或进行其他页面修改。取消固定只删除顶栏引用，不删除源
+文件、文字、知识库条目或页面。
+
 Workbench 是唯一 Web UI。实时 Markdown 对话、运行 Guidance、Subagent 与
 Browser 状态、Session History、Memory、Knowledge/Search、Schedule、Map、
 Model/Tool/MCP/API Key 设置和主题能力都通过 Workbench 的页面、面板或

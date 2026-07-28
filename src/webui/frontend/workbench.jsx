@@ -127,6 +127,183 @@ function WorkbenchFileDropOverlay({ label, busy }) {
   );
 }
 
+function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedKeys, hiddenKeys, limit) {
+  var items = [];
+  (Array.isArray(projects) ? projects : []).forEach(function (project) {
+    if (!project) return;
+    var projectId = String(project.id || "");
+    (Array.isArray(project.sessions) ? project.sessions : []).forEach(function (session) {
+      if (!session || !session.id) return;
+      items.push({
+        id: String(session.id),
+        kind: "task",
+        title: String(session.title || "New task"),
+        projectId: projectId,
+        projectName: String(project.name || ""),
+        updatedAt: String(session.updatedAt || session.createdAt || ""),
+      });
+    });
+    var chats = chatsByProject && Array.isArray(chatsByProject[projectId])
+      ? chatsByProject[projectId]
+      : [];
+    chats.forEach(function (chat) {
+      if (!chat || !chat.id) return;
+      items.push({
+        id: String(chat.id),
+        kind: "chat",
+        title: String(chat.title || "New chat"),
+        projectId: projectId,
+        projectName: String(project.name || ""),
+        updatedAt: String(chat.updatedAt || chat.createdAt || ""),
+      });
+    });
+  });
+  var byKey = {};
+  items.forEach(function (item) {
+    byKey[item.kind + ":" + item.id] = item;
+  });
+  var ordered = [];
+  var seen = {};
+  var hidden = {};
+  (Array.isArray(hiddenKeys) ? hiddenKeys : []).forEach(function (key) {
+    hidden[String(key || "")] = true;
+  });
+  (Array.isArray(pinnedKeys) ? pinnedKeys : []).forEach(function (key) {
+    var normalizedKey = String(key || "");
+    var item = byKey[normalizedKey];
+    if (!item || hidden[normalizedKey] || seen[normalizedKey]) return;
+    seen[normalizedKey] = true;
+    ordered.push(Object.assign({}, item, { pinned: true }));
+  });
+  (Array.isArray(recentOpenedKeys) ? recentOpenedKeys : []).forEach(function (key) {
+    var normalizedKey = String(key || "");
+    var item = byKey[normalizedKey];
+    if (!item || hidden[normalizedKey] || seen[normalizedKey]) return;
+    seen[normalizedKey] = true;
+    ordered.push(item);
+  });
+  items.sort(function (left, right) {
+    var byTime = right.updatedAt.localeCompare(left.updatedAt);
+    if (byTime) return byTime;
+    return right.id.localeCompare(left.id);
+  });
+  items.forEach(function (item) {
+    var key = item.kind + ":" + item.id;
+    if (hidden[key] || seen[key]) return;
+    seen[key] = true;
+    ordered.push(item);
+  });
+  return ordered.slice(0, Math.max(0, Number(limit) || 0));
+}
+
+function wbDeliverResourceToChat(chatId, resource) {
+  var target = String(chatId || "");
+  if (!target || !resource || resource.kind === "browser") return false;
+  try {
+    if (resource.kind === "file") {
+      var file = resource.file || resource;
+      var attachKey = "cyrene-wbc-attach-" + target;
+      var current = JSON.parse(localStorage.getItem(attachKey) || "[]");
+      if (!Array.isArray(current)) current = [];
+      var identity = String(file.id || file.path || file.url || file.name || "");
+      if (!identity || !current.some(function (item) {
+        return String(item.id || item.path || item.url || item.name || "") === identity;
+      })) {
+        current.push(file);
+        localStorage.setItem(attachKey, JSON.stringify(current));
+      }
+    } else if (resource.kind === "snippet") {
+      var draftKey = "cyrene-wbc-draft-" + target;
+      var previous = localStorage.getItem(draftKey) || "";
+      var quote = String(resource.text || "").trim().split("\n").map(function (line) {
+        return "> " + line;
+      }).join("\n");
+      if (quote) localStorage.setItem(draftKey, previous ? previous + "\n\n" + quote : quote);
+    } else {
+      return false;
+    }
+    window.dispatchEvent(new CustomEvent("cyrene:add-chat-attachments", {
+      detail: { targetChatId: target, resource: resource },
+    }));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function wbCopyBrowserToChat(chatId, resource) {
+  var target = String(chatId || "");
+  var source = resource || {};
+  var owner = String(source.ownerSessionId || "");
+  var url = String(source.url || "").trim();
+  var bridge = window.cyrene && window.cyrene.browser;
+  if (!target || !url || target === owner || !bridge || typeof bridge.createTab !== "function") {
+    return Promise.resolve(false);
+  }
+  return bridge.createTab({
+    sessionId: target,
+    url: url,
+    activate: true,
+  }).then(function (state) {
+    if (!state || state.ok === false) throw new Error(state && state.error || "browser_copy_failed");
+    window.dispatchEvent(new CustomEvent("cyrene:browser-copied-to-chat", {
+      detail: {
+        targetChatId: target,
+        sourceChatId: owner,
+        url: url,
+        title: String(source.title || ""),
+      },
+    }));
+    return true;
+  }).catch(function () {
+    return false;
+  });
+}
+
+function WorkbenchSessionMenuFileName({ name }) {
+  var labelRef = useWorkbenchRef(null);
+  var [overflowWidth, setOverflowWidth] = useWorkbenchState(0);
+  var text = String(name || "");
+
+  useWorkbenchEffect(function () {
+    var node = labelRef.current;
+    if (!node) return undefined;
+    var frame = 0;
+    function measure() {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(function () {
+        var content = node.firstElementChild;
+        var contentWidth = content ? content.scrollWidth : node.scrollWidth;
+        var next = Math.max(0, Math.ceil(contentWidth - node.clientWidth));
+        setOverflowWidth(function (current) { return current === next ? current : next; });
+      });
+    }
+    measure();
+    var observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    if (observer) observer.observe(node);
+    window.addEventListener("resize", measure);
+    return function () {
+      cancelAnimationFrame(frame);
+      if (observer) observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [text]);
+
+  return (
+    <span
+      ref={labelRef}
+      className={"workbench-session-menu-file-name" + (overflowWidth > 0 ? " is-overflowing" : "")}
+      title={overflowWidth > 0 ? text : undefined}
+      style={{
+        "--wb-file-name-travel": overflowWidth + "px",
+        "--wb-file-name-duration": Math.max(2.4, Math.min(8, overflowWidth / 34)) + "s",
+      }}
+    >
+      <span>{text}</span>
+    </span>
+  );
+}
+
 // Keep an already-opened surface mounted so its local UI state (selection,
 // scroll position, drafts, side panels) survives navigation, but stop parent
 // Workbench updates from re-rendering it while hidden. In particular, changing
@@ -535,9 +712,40 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var [newChatRequestId, setNewChatRequestId] = useWorkbenchState(0);
   var [mountedPages, setMountedPages] = useWorkbenchState({});
   var [editProject, setEditProject] = useWorkbenchState(null);
-  var [chatCrumb, setChatCrumb] = useWorkbenchState("");
   var [notifications, setNotifications] = useWorkbenchState({ items: [], counts: { all: 0, mention: 0, comment: 0, system: 0 }, unreadByTab: { all: 0, mention: 0, comment: 0, system: 0 }, unreadCount: 0 });
   var [activeChatId, setActiveChatId] = useWorkbenchState("");
+  var [recentChatsByProject, setRecentChatsByProject] = useWorkbenchState({});
+  var [pinnedResources, setPinnedResources] = useWorkbenchState([]);
+  var [recentOpenedSessionKeys, setRecentOpenedSessionKeys] = useWorkbenchState(function () {
+    try {
+      var stored = JSON.parse(localStorage.getItem("wb-recent-opened-sessions") || "[]");
+      return Array.isArray(stored) ? stored.filter(function (key) {
+        return /^(task|chat):.+/.test(String(key || ""));
+      }).slice(0, 20) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  var [pinnedSessionKeys, setPinnedSessionKeys] = useWorkbenchState(function () {
+    try {
+      var stored = JSON.parse(localStorage.getItem("wb-pinned-sessions") || "[]");
+      return Array.isArray(stored) ? stored.filter(function (key) {
+        return /^(task|chat):.+/.test(String(key || ""));
+      }).slice(0, 20) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  var [hiddenSessionKeys, setHiddenSessionKeys] = useWorkbenchState(function () {
+    try {
+      var stored = JSON.parse(localStorage.getItem("wb-hidden-session-tabs") || "[]");
+      return Array.isArray(stored) ? stored.filter(function (key) {
+        return /^(task|chat):.+/.test(String(key || ""));
+      }).slice(0, 100) : [];
+    } catch (e) {
+      return [];
+    }
+  });
   // Always-fresh snapshot of what the user is looking at, read inside async
   // notification callbacks (interval / SSE closures captured once on mount).
   var activeViewRef = useWorkbenchRef({ page: null, taskView: "board", chatId: "", sessionId: "" });
@@ -612,6 +820,247 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       });
       return payload;
     }).catch(function () {});
+  }
+
+  function reloadRecentChats(projects) {
+    var projectList = Array.isArray(projects) ? projects : [];
+    if (!projectList.length) {
+      setRecentChatsByProject({});
+      return Promise.resolve({});
+    }
+    var api = window.CyreneUI.require("api");
+    return Promise.all(projectList.map(function (project) {
+      var projectId = String((project && project.id) || "");
+      if (!projectId) return Promise.resolve({ projectId: "", chats: [] });
+      return api.json("/api/workbench/chats?project=" + encodeURIComponent(projectId), { toast: false })
+        .then(function (payload) {
+          return {
+            projectId: projectId,
+            chats: payload && Array.isArray(payload.chats) ? payload.chats : [],
+          };
+        })
+        .catch(function () {
+          return { projectId: projectId, chats: [] };
+        });
+    })).then(function (results) {
+      var next = {};
+      results.forEach(function (result) {
+        if (result.projectId) next[result.projectId] = result.chats;
+      });
+      setRecentChatsByProject(next);
+      return next;
+    });
+  }
+
+  function reloadPinnedResources() {
+    return window.CyreneUI.require("api").json("/api/workbench/pinned-resources", { toast: false })
+      .then(function (payload) {
+        var resources = payload && Array.isArray(payload.resources) ? payload.resources : [];
+        setPinnedResources(resources);
+        return resources;
+      })
+      .catch(function () { return []; });
+  }
+
+  function pinTopbarResource(resource) {
+    if (!resource || ["file", "browser", "snippet"].indexOf(resource.kind) < 0) return Promise.resolve(null);
+    var enriched = Object.assign({}, resource);
+    if (!enriched.ownerProjectId && enriched.ownerSessionId) {
+      var owner = recentSessionTabs.find(function (item) {
+        return item.kind === "chat" && String(item.id || "") === String(enriched.ownerSessionId || "");
+      });
+      if (owner) enriched.ownerProjectId = owner.projectId;
+    }
+    return window.CyreneUI.require("api").json("/api/workbench/pinned-resources", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(enriched),
+      toast: false,
+    }).then(function (payload) {
+      var item = payload && payload.resource;
+      if (item) {
+        setPinnedResources(function (prev) {
+          return [item].concat((prev || []).filter(function (entry) { return entry.id !== item.id; }));
+        });
+        window.CyreneUI.require("feedback").showToast(
+          t("workbench.resourceShelf.pinned", "Pinned to topbar"),
+          "success"
+        );
+      }
+      return item;
+    }).catch(function (err) {
+      window.CyreneUI.require("feedback").showToast(err.message || String(err), "error");
+      return null;
+    });
+  }
+
+  function unpinTopbarResource(resource) {
+    if (!resource || !resource.id) return Promise.resolve(false);
+    return window.CyreneUI.require("api").fetch(
+      "/api/workbench/pinned-resources/" + encodeURIComponent(resource.id),
+      { method: "DELETE", toast: false }
+    ).then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      setPinnedResources(function (prev) {
+        return (prev || []).filter(function (item) { return item.id !== resource.id; });
+      });
+      return true;
+    }).catch(function (err) {
+      window.CyreneUI.require("feedback").showToast(err.message || String(err), "error");
+      return false;
+    });
+  }
+
+  useWorkbenchEffect(function () {
+    reloadPinnedResources();
+    function pinFromDrag(event) {
+      if (event && event.detail) pinTopbarResource(event.detail);
+    }
+    window.addEventListener("cyrene:pin-topbar-resource", pinFromDrag);
+    return function () {
+      window.removeEventListener("cyrene:pin-topbar-resource", pinFromDrag);
+    };
+  }, []);
+
+  function rememberOpenedSession(kind, sessionId) {
+    var normalizedKind = kind === "chat" ? "chat" : "task";
+    var normalizedId = String(sessionId || "");
+    if (!normalizedId) return;
+    var key = normalizedKind + ":" + normalizedId;
+    setRecentOpenedSessionKeys(function (prev) {
+      var next = [key].concat((Array.isArray(prev) ? prev : []).filter(function (item) {
+        return item !== key;
+      })).slice(0, 20);
+      try {
+        localStorage.setItem("wb-recent-opened-sessions", JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+    setHiddenSessionKeys(function (prev) {
+      if (!Array.isArray(prev) || prev.indexOf(key) < 0) return prev;
+      var next = prev.filter(function (item) { return item !== key; });
+      try {
+        localStorage.setItem("wb-hidden-session-tabs", JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+  }
+
+  function togglePinnedSession(item) {
+    if (!item || !item.id) return;
+    var key = item.kind + ":" + item.id;
+    setPinnedSessionKeys(function (prev) {
+      var list = Array.isArray(prev) ? prev : [];
+      var next = list.indexOf(key) >= 0
+        ? list.filter(function (entry) { return entry !== key; })
+        : [key].concat(list).slice(0, 20);
+      try {
+        localStorage.setItem("wb-pinned-sessions", JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+  }
+
+  function removeSessionTab(item) {
+    if (!item || !item.id) return;
+    var key = item.kind + ":" + item.id;
+    setPinnedSessionKeys(function (prev) {
+      var next = (Array.isArray(prev) ? prev : []).filter(function (entry) { return entry !== key; });
+      try {
+        localStorage.setItem("wb-pinned-sessions", JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+    setRecentOpenedSessionKeys(function (prev) {
+      var next = (Array.isArray(prev) ? prev : []).filter(function (entry) { return entry !== key; });
+      try {
+        localStorage.setItem("wb-recent-opened-sessions", JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+    setHiddenSessionKeys(function (prev) {
+      var next = [key].concat((Array.isArray(prev) ? prev : []).filter(function (entry) {
+        return entry !== key;
+      })).slice(0, 100);
+      try {
+        localStorage.setItem("wb-hidden-session-tabs", JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+  }
+
+  function loadSessionTabResources(item) {
+    if (!item || !item.id) return Promise.resolve({ browser: false, files: [] });
+    var bridge = window.cyrene && window.cyrene.browser;
+    var browserStatePromise = item.kind === "chat" && bridge && typeof bridge.getState === "function"
+      ? bridge.getState(item.id).catch(function () { return null; })
+      : Promise.resolve(null);
+    var browserPreviewPromise = browserStatePromise.then(function (browserState) {
+      var hasBrowser = !!(
+        browserState
+        && Array.isArray(browserState.tabs)
+        && browserState.tabs.length
+      );
+      if (!hasBrowser) return null;
+      var activeTab = browserState.tabs.find(function (tab) {
+        return String(tab && tab.id || "") === String(browserState.activeTabId || "");
+      }) || browserState.tabs[0] || {};
+      var fallback = {
+        title: String(activeTab.title || ""),
+        url: String(activeTab.url || ""),
+        previewUrl: "",
+      };
+      if (!bridge || typeof bridge.screenshot !== "function") return fallback;
+      return bridge.screenshot({
+        sessionId: item.id,
+        tabId: browserState.activeTabId || activeTab.id || "",
+      }).then(function (shot) {
+        if (!shot || !shot.ok || !shot.pngBase64) return fallback;
+        return {
+          title: String(shot.title || fallback.title),
+          url: String(shot.url || fallback.url),
+          previewUrl: "data:image/png;base64," + shot.pngBase64,
+        };
+      }).catch(function () { return fallback; });
+    });
+    var filesPromise = item.kind === "chat"
+      ? window.CyreneUI.require("api").json(
+        "/api/workbench/chats/" + encodeURIComponent(item.id),
+        { toast: false }
+      ).then(function (payload) {
+        var files = [];
+        var seen = {};
+        var messages = payload && payload.chat && Array.isArray(payload.chat.messages)
+          ? payload.chat.messages
+          : [];
+        messages.forEach(function (message) {
+          (Array.isArray(message && message.attachments) ? message.attachments : []).forEach(function (file) {
+            if (!file) return;
+            var key = String(file.id || file.url || file.name || "");
+            if (!key || seen[key]) return;
+            seen[key] = true;
+            files.push(file);
+          });
+        });
+        return files;
+      }).catch(function () { return []; })
+      : Promise.resolve([]);
+    return Promise.all([browserPreviewPromise, filesPromise]).then(function (results) {
+      return {
+        browser: results[0],
+        files: results[1],
+      };
+    });
+  }
+
+  function openSessionTabResource(item, resource) {
+    if (!item || !resource) return;
+    rememberOpenedSession(item.kind, item.id);
+    var payload = item.kind === "chat"
+      ? { type: "chat", projectId: item.projectId, chatId: item.id }
+      : { type: "task", projectId: item.projectId, sessionId: item.id };
+    payload.topbarResource = resource;
+    navigateFromSearch(payload);
   }
 
   function reloadWorkbench(nextProjectId, nextSessionId, options) {
@@ -800,6 +1249,22 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     reloadNotifications();
   }, []);
 
+  var recentProjectIds = (store.projects || []).map(function (project) {
+    return String((project && project.id) || "");
+  }).filter(Boolean).sort().join("|");
+  useWorkbenchEffect(function () {
+    reloadRecentChats(store.projects || []);
+  }, [recentProjectIds]);
+  useWorkbenchEffect(function () {
+    function onChatsChanged() {
+      reloadRecentChats(store.projects || []);
+    }
+    window.addEventListener("cyrene:wbc-refresh-chats", onChatsChanged);
+    return function () {
+      window.removeEventListener("cyrene:wbc-refresh-chats", onChatsChanged);
+    };
+  }, [recentProjectIds]);
+
   // Keep the static launch screen above the renderer until the workbench's
   // initial project payload and the shared UI bootstrap have both settled.
   useWorkbenchEffect(function () {
@@ -890,6 +1355,14 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       chatId: activeChatId || "",
       sessionId: (store && store.activeSessionId) || "",
     };
+  }, [fullPage, taskView, activeChatId, store && store.activeSessionId]);
+
+  useWorkbenchEffect(function () {
+    if (fullPage === "chat" && activeChatId) {
+      rememberOpenedSession("chat", activeChatId);
+    } else if (!fullPage && taskView === "detail" && store && store.activeSessionId) {
+      rememberOpenedSession("task", store.activeSessionId);
+    }
   }, [fullPage, taskView, activeChatId, store && store.activeSessionId]);
 
   // Global keyboard shortcuts (search, new chat/task, command palette,
@@ -1433,6 +1906,14 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   var showMemoryPage = isMemory || mountedPages.memory;
   var showWelcomePage = isWelcome || mountedPages.welcome;
   var showProfilePage = isProfile || mountedPages.profile;
+  var recentSessionTabs = wbRecentSessionTabs(
+    store.projects,
+    recentChatsByProject,
+    recentOpenedSessionKeys,
+    pinnedSessionKeys,
+    hiddenSessionKeys,
+    3
+  );
 
   // First-run onboarding (LLM + personality). Driven by the backend onboarding
   // state — the workbench's own setup flow, independent of the legacy wizard.
@@ -1470,11 +1951,46 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   return (
     <div className="workbench-shell" data-screen-label="Cyrene · workbench">
       <WorkbenchTopbar
-        project={store.activeProject}
-        session={store.activeSession}
         activePage={fullPage}
         taskView={taskView}
-        chatCrumb={chatCrumb}
+        activeTaskId={store.activeSessionId}
+        activeChatId={activeChatId}
+        recentSessions={recentSessionTabs}
+        pinnedResources={pinnedResources}
+        keyboardEnabled={!searchOpen && !settingsOpen && !newProjectOpen && !newTaskOpen}
+        onPinResource={pinTopbarResource}
+        onUnpinResource={unpinTopbarResource}
+        onOpenPinnedResource={function (resource) {
+          if (!resource) return;
+          if (resource.kind === "snippet") {
+            var snippetTarget = activePage === "chat" && activeChatId
+              ? activeChatId
+              : resource.ownerSessionId;
+            if (snippetTarget) wbDeliverResourceToChat(snippetTarget, resource);
+            return;
+          }
+          if (!resource.ownerSessionId) return;
+          var owner = recentSessionTabs.find(function (item) {
+            return item.kind === "chat" && String(item.id || "") === String(resource.ownerSessionId || "");
+          });
+          if (!owner) return;
+          openSessionTabResource(owner, resource.kind === "file"
+            ? { type: "file", file: resource.file && Object.keys(resource.file).length ? resource.file : resource }
+            : { type: "browser" });
+        }}
+        onTogglePinnedSession={togglePinnedSession}
+        onRemoveSessionTab={removeSessionTab}
+        onLoadSessionResources={loadSessionTabResources}
+        onOpenSessionResource={openSessionTabResource}
+        onOpenSession={function (item) {
+          if (!item) return;
+          rememberOpenedSession(item.kind, item.id);
+          if (item.kind === "chat") {
+            navigateFromSearch({ type: "chat", projectId: item.projectId, chatId: item.id });
+          } else {
+            navigateFromSearch({ type: "task", projectId: item.projectId, sessionId: item.id });
+          }
+        }}
         notifications={notifications}
         onReloadNotifications={reloadNotifications}
         onOpenNotification={navigateFromNotification}
@@ -1517,8 +2033,13 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
                 project: store.activeProject,
                 newChatRequestId: newChatRequestId,
                 onOpenTask: handleChatToTask,
-                onActiveChatChange: setChatCrumb,
                 onActiveChatIdChange: setActiveChatId,
+                onChatsChange: function (projectId, chats) {
+                  setRecentChatsByProject(function (prev) {
+                    if (prev[projectId] === chats) return prev;
+                    return Object.assign({}, prev, { [projectId]: chats });
+                  });
+                },
               })}
             </WorkbenchStableSurface>
           )}
@@ -1679,15 +2200,25 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   );
 }
 
-function WorkbenchTopbar({ project, session, activePage, taskView, chatCrumb, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
+function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, recentSessions, pinnedResources, keyboardEnabled, onPinResource, onUnpinResource, onOpenPinnedResource, onOpenSession, onTogglePinnedSession, onRemoveSessionTab, onLoadSessionResources, onOpenSessionResource, notifications, onReloadNotifications, onOpenNotification, onSearch, onSettings, onNewProject, onNewTask, onOpenPage, theme, actualTheme, onToggleTheme }) {
   var { t } = window.CyreneUI.require("i18n").use();
   var dataState = window.CyreneUI.require("data").state;
-  var title = project ? project.name : "Project";
-  var pageLabels = { chat: t("workbench.page.chat"), knowledge: t("workbench.page.knowledge"), schedule: t("workbench.page.schedule"), memory: t("workbench.page.memory"), welcome: t("workbench.page.welcome"), profile: t("rail.profile") };
-  var sessionTitle = activePage && pageLabels[activePage]
-    ? pageLabels[activePage]
-    : (taskView === "board" ? t("taskBoard.title") : (session ? session.title : t("workbench.page.task")));
-  var chatTail = activePage === "chat" ? String(chatCrumb || "").trim() : "";
+  var tabs = Array.isArray(recentSessions) ? recentSessions : [];
+  var resources = Array.isArray(pinnedResources) ? pinnedResources : [];
+  var [sessionMenu, setSessionMenu] = useWorkbenchState(null);
+  var [resourceMenu, setResourceMenu] = useWorkbenchState(null);
+  var [resourceDropActive, setResourceDropActive] = useWorkbenchState(false);
+  var topbarRef = useWorkbenchRef(null);
+  var sessionMenuSeqRef = useWorkbenchRef(0);
+  function acceptsResourceDrag(event, resourceApi) {
+    var transfer = event && event.dataTransfer;
+    if (!transfer || !resourceApi) return false;
+    var types = Array.prototype.slice.call(transfer.types || []);
+    if (types.indexOf(resourceApi.mime) >= 0) return true;
+    // Selected text on macOS uses Chromium's native text/plain drag. Files are
+    // deliberately excluded because their cards have the richer custom type.
+    return types.indexOf("text/plain") >= 0 && types.indexOf("Files") < 0;
+  }
   var themeTitle = theme === "system" ? t("workbench.theme.system") : actualTheme === "dark" ? t("workbench.theme.dark") : t("workbench.theme.light");
   var themeIcon = theme === "system" ? (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" stroke="none"/></svg>
@@ -1696,8 +2227,401 @@ function WorkbenchTopbar({ project, session, activePage, taskView, chatCrumb, no
   ) : (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
   );
+
+  function activeSessionIndex() {
+    return tabs.findIndex(function (item) {
+      return item.kind === "chat"
+        ? activePage === "chat" && String(activeChatId || "") === String(item.id || "")
+        : !activePage && taskView === "detail" && String(activeTaskId || "") === String(item.id || "");
+    });
+  }
+
+  function openSessionAt(index) {
+    if (!tabs.length) return;
+    var normalized = ((Number(index) || 0) % tabs.length + tabs.length) % tabs.length;
+    if (tabs[normalized] && onOpenSession) onOpenSession(tabs[normalized]);
+  }
+
+  function copyBrowserToConversation(targetChatId, resource) {
+    return wbCopyBrowserToChat(targetChatId, resource).then(function (copied) {
+      window.CyreneUI.require("feedback").showToast(
+        copied
+          ? t("workbench.resourceShelf.browserCopiedToChat", "Webpage copied to conversation browser")
+          : t("workbench.resourceShelf.browserCopyFailed", "Could not copy webpage to conversation"),
+        copied ? "success" : "error"
+      );
+      return copied;
+    });
+  }
+
+  function handleTopbarItemKeyDown(event, onRemove) {
+    var key = String(event.key || "");
+    if (key === "Delete" || key === "Backspace") {
+      if (onRemove) {
+        event.preventDefault();
+        onRemove();
+      }
+      return;
+    }
+    if (["ArrowLeft", "ArrowRight", "Home", "End"].indexOf(key) < 0) return;
+    var root = topbarRef.current;
+    var items = root ? Array.prototype.slice.call(root.querySelectorAll("[data-workbench-topbar-item]")) : [];
+    if (!items.length) return;
+    var current = items.indexOf(event.currentTarget);
+    if (current < 0) return;
+    var next = key === "Home"
+      ? 0
+      : key === "End"
+        ? items.length - 1
+        : (current + (key === "ArrowRight" ? 1 : -1) + items.length) % items.length;
+    event.preventDefault();
+    items[next].focus();
+  }
+
+  useWorkbenchEffect(function () {
+    function handleBrowserCopy(event) {
+      var detail = event && event.detail || {};
+      if (!detail.targetChatId || !detail.resource) return;
+      copyBrowserToConversation(detail.targetChatId, detail.resource);
+    }
+    window.addEventListener("cyrene:copy-browser-to-chat", handleBrowserCopy);
+    return function () {
+      window.removeEventListener("cyrene:copy-browser-to-chat", handleBrowserCopy);
+    };
+  }, []);
+
+  useWorkbenchEffect(function () {
+    function handleSessionShortcut(event) {
+      if (!keyboardEnabled) return;
+      var sc = window.CyreneUI.require("shortcuts");
+      if (!sc) return;
+      var direct = ["switch-session-1", "switch-session-2", "switch-session-3"];
+      for (var index = 0; index < direct.length; index += 1) {
+        if (sc.matches(event, direct[index])) {
+          if (!tabs[index]) return;
+          event.preventDefault();
+          openSessionAt(index);
+          return;
+        }
+      }
+      if (sc.matches(event, "next-session") || sc.matches(event, "previous-session")) {
+        event.preventDefault();
+        var current = activeSessionIndex();
+        var direction = sc.matches(event, "previous-session") ? -1 : 1;
+        openSessionAt((current < 0 ? 0 : current) + direction);
+        return;
+      }
+      if (sc.matches(event, "close-session-tab")) {
+        var activeIndex = activeSessionIndex();
+        if (activeIndex < 0 || !tabs[activeIndex] || !onRemoveSessionTab) return;
+        event.preventDefault();
+        onRemoveSessionTab(tabs[activeIndex]);
+      }
+    }
+    window.addEventListener("keydown", handleSessionShortcut);
+    return function () { window.removeEventListener("keydown", handleSessionShortcut); };
+  }, [keyboardEnabled, tabs, activePage, taskView, activeTaskId, activeChatId, onOpenSession, onRemoveSessionTab]);
+
+  useWorkbenchEffect(function () {
+    function handlePointerShelfDrag(event) {
+      setResourceDropActive(!!(event && event.detail && event.detail.active));
+    }
+    window.addEventListener("cyrene:resource-shelf-drag-state", handlePointerShelfDrag);
+    return function () {
+      window.removeEventListener("cyrene:resource-shelf-drag-state", handlePointerShelfDrag);
+    };
+  }, []);
+
+  useWorkbenchEffect(function () {
+    if (!sessionMenu && !resourceMenu) return undefined;
+    function closeMenu() {
+      sessionMenuSeqRef.current += 1;
+      setSessionMenu(null);
+      setResourceMenu(null);
+    }
+    function handleKey(event) {
+      if (event.key === "Escape") closeMenu();
+    }
+    window.addEventListener("resize", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    document.addEventListener("keydown", handleKey);
+    return function () {
+      window.removeEventListener("resize", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [!!sessionMenu, !!resourceMenu]);
+
+  function openSessionMenu(event, item) {
+    event.preventDefault();
+    event.stopPropagation();
+    var menuWidth = 224;
+    var menuHeight = 360;
+    var left = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8));
+    var top = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8));
+    var portalTheme = {};
+    var themeSource = document.querySelector(".workbench-shell");
+    if (themeSource && typeof getComputedStyle === "function") {
+      var computedTheme = getComputedStyle(themeSource);
+      [
+        "--wb-card-bg",
+        "--wb-line",
+        "--wb-text",
+        "--wb-muted",
+        "--wb-faint",
+        "--wb-control-hover-bg",
+        "--wb-row-hover-bg",
+        "--wb-red",
+        "--wb-ui-font-scale",
+      ].forEach(function (name) {
+        portalTheme[name] = computedTheme.getPropertyValue(name);
+      });
+      portalTheme.fontFamily = computedTheme.fontFamily;
+    }
+    var seq = sessionMenuSeqRef.current + 1;
+    sessionMenuSeqRef.current = seq;
+    setSessionMenu({ item: item, left: left, top: top, portalTheme: portalTheme, loading: true, resources: { browser: false, files: [] } });
+    Promise.resolve(onLoadSessionResources ? onLoadSessionResources(item) : null)
+      .then(function (resources) {
+        if (sessionMenuSeqRef.current !== seq) return;
+        setSessionMenu(function (current) {
+          if (!current || current.item.id !== item.id || current.item.kind !== item.kind) return current;
+          return Object.assign({}, current, {
+            loading: false,
+            resources: {
+              browser: resources && resources.browser ? resources.browser : null,
+              files: resources && Array.isArray(resources.files) ? resources.files : [],
+            },
+          });
+        });
+      })
+      .catch(function () {
+        if (sessionMenuSeqRef.current !== seq) return;
+        setSessionMenu(function (current) {
+          return current ? Object.assign({}, current, { loading: false }) : current;
+        });
+      });
+  }
+
+  function closeSessionMenu() {
+    sessionMenuSeqRef.current += 1;
+    setSessionMenu(null);
+  }
+
+  function runSessionMenuAction(action) {
+    closeSessionMenu();
+    if (action) action();
+  }
+
+  function copySessionTitle(item) {
+    var title = String((item && item.title) || "");
+    var copy = navigator.clipboard && navigator.clipboard.writeText
+      ? navigator.clipboard.writeText(title)
+      : Promise.reject(new Error("Clipboard unavailable"));
+    copy.then(function () {
+      window.CyreneUI.require("feedback").showToast(t("workbench.sessionMenu.copied", "Title copied"), "success");
+    }).catch(function () {
+      window.CyreneUI.require("feedback").showToast(title, "info");
+    });
+  }
+
+  function portalThemeAt(event, height) {
+    var menuWidth = 224;
+    var themeStyle = {};
+    var themeSource = document.querySelector(".workbench-shell");
+    if (themeSource && typeof getComputedStyle === "function") {
+      var computedTheme = getComputedStyle(themeSource);
+      ["--wb-card-bg", "--wb-line", "--wb-text", "--wb-muted", "--wb-faint",
+        "--wb-control-hover-bg", "--wb-row-hover-bg", "--wb-red", "--wb-ui-font-scale"].forEach(function (name) {
+        themeStyle[name] = computedTheme.getPropertyValue(name);
+      });
+      themeStyle.fontFamily = computedTheme.fontFamily;
+    }
+    return {
+      left: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
+      top: Math.max(8, Math.min(event.clientY, window.innerHeight - (height || 220) - 8)),
+      portalTheme: themeStyle,
+    };
+  }
+
+  function openResourceMenu(event, resource) {
+    event.preventDefault();
+    event.stopPropagation();
+    setSessionMenu(null);
+    setResourceMenu(Object.assign({ resource: resource }, portalThemeAt(event, 210)));
+  }
+
+  function closeResourceMenu() {
+    setResourceMenu(null);
+  }
+
+  function copyResourceReference(resource) {
+    var text = String(resource && (resource.path || resource.url || resource.title) || "");
+    var promise = navigator.clipboard && navigator.clipboard.writeText
+      ? navigator.clipboard.writeText(text)
+      : Promise.reject(new Error("Clipboard unavailable"));
+    promise.then(function () {
+      window.CyreneUI.require("feedback").showToast(t("workbench.resourceShelf.copied", "Resource reference copied"), "success");
+    }).catch(function () {
+      window.CyreneUI.require("feedback").showToast(text, "info");
+    });
+  }
+
+  var sessionMenuPortal = sessionMenu && typeof ReactDOM !== "undefined"
+    ? ReactDOM.createPortal((
+      <div className="workbench-session-menu-portal" style={sessionMenu.portalTheme}>
+        <div className="workbench-session-menu-scrim" onPointerDown={closeSessionMenu} />
+        <div
+          className="workbench-account-menu workbench-session-menu"
+          role="menu"
+          aria-label={sessionMenu.item.title}
+          style={{ left: sessionMenu.left, top: sessionMenu.top }}
+          onContextMenu={function (event) { event.preventDefault(); }}
+        >
+          <button type="button" role="menuitem" onClick={function () {
+            runSessionMenuAction(function () { if (onTogglePinnedSession) onTogglePinnedSession(sessionMenu.item); });
+          }}>
+            <span className="workbench-session-menu-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 17v5"/>
+                <path d="M5 17h14"/>
+                <path d="M17 3a1 1 0 0 1 1 1v4.6a2 2 0 0 0 .6 1.4l1.7 1.7A1 1 0 0 1 19.6 13H4.4a1 1 0 0 1-.7-1.7l1.7-1.7A2 2 0 0 0 6 8.2V4a1 1 0 0 1 1-1Z"/>
+              </svg>
+            </span>
+            <span>{sessionMenu.item.pinned
+              ? t("workbench.sessionMenu.unpin", "Unpin tab")
+              : t("workbench.sessionMenu.pin", "Pin tab")}</span>
+          </button>
+          {sessionMenu.resources.browser ? (
+            <button type="button" role="menuitem" className="workbench-session-browser-preview" onClick={function () {
+              var item = sessionMenu.item;
+              runSessionMenuAction(function () {
+                if (onOpenSessionResource) onOpenSessionResource(item, { type: "browser" });
+              });
+            }}>
+              <span className="workbench-session-browser-preview-head">
+                <span className="workbench-session-menu-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M6 6h.01M9 6h.01"/></svg>
+                </span>
+                <span>
+                  <b>{sessionMenu.resources.browser.title || t("workbench.sessionMenu.browserPreview", "Browser preview")}</b>
+                  <small>{sessionMenu.resources.browser.url}</small>
+                </span>
+              </span>
+              {sessionMenu.resources.browser.previewUrl ? (
+                <img src={sessionMenu.resources.browser.previewUrl} alt="" draggable="false" />
+              ) : (
+                <span className="workbench-session-browser-preview-empty">
+                  {t("workbench.sessionMenu.browserPreview", "Browser preview")}
+                </span>
+              )}
+            </button>
+          ) : null}
+          {sessionMenu.resources.files.length ? (
+            <>
+              <div className="workbench-session-menu-separator" />
+              <div className="wb-menu-head workbench-session-menu-label">{t("workbench.sessionMenu.files", "Files")}</div>
+              {sessionMenu.resources.files.map(function (file, index) {
+                var fileKey = String(file.id || file.url || file.name || index);
+                return (
+                  <button key={fileKey} type="button" role="menuitem" className="workbench-session-menu-file" onClick={function () {
+                    var item = sessionMenu.item;
+                    runSessionMenuAction(function () {
+                      if (onOpenSessionResource) onOpenSessionResource(item, { type: "file", file: file });
+                    });
+                  }}>
+                    <span className="workbench-session-menu-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 2h8l4 4v16H6Z"/><path d="M14 2v5h5"/></svg>
+                    </span>
+                    <WorkbenchSessionMenuFileName name={file.name || t("workbench.sessionMenu.untitledFile", "Untitled file")} />
+                  </button>
+                );
+              })}
+            </>
+          ) : null}
+          {sessionMenu.loading ? (
+            <div className="workbench-session-menu-loading">{t("workbench.sessionMenu.loading", "Loading resources…")}</div>
+          ) : null}
+          <div className="workbench-session-menu-separator" />
+          <button type="button" role="menuitem" onClick={function () {
+            var item = sessionMenu.item;
+            runSessionMenuAction(function () { copySessionTitle(item); });
+          }}>
+            <span className="workbench-session-menu-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+            </span>
+            <span>{t("workbench.sessionMenu.copyTitle", "Copy title")}</span>
+          </button>
+          <button type="button" role="menuitem" className="danger" onClick={function () {
+            var item = sessionMenu.item;
+            runSessionMenuAction(function () { if (onRemoveSessionTab) onRemoveSessionTab(item); });
+          }}>
+            <span className="workbench-session-menu-icon" aria-hidden="true">×</span>
+            <span>{t("workbench.sessionMenu.remove", "Remove from topbar")}</span>
+          </button>
+        </div>
+      </div>
+    ), document.body)
+    : null;
+
+  var resourceMenuPortal = resourceMenu && typeof ReactDOM !== "undefined"
+    ? ReactDOM.createPortal((
+      <div className="workbench-session-menu-portal" style={resourceMenu.portalTheme}>
+        <div className="workbench-session-menu-scrim" onPointerDown={closeResourceMenu} />
+        <div
+          className="workbench-account-menu workbench-session-menu workbench-resource-menu"
+          role="menu"
+          aria-label={resourceMenu.resource.title}
+          style={{ left: resourceMenu.left, top: resourceMenu.top }}
+          onContextMenu={function (event) { event.preventDefault(); }}
+        >
+          <button type="button" role="menuitem" onClick={function () {
+            var resource = resourceMenu.resource;
+            closeResourceMenu();
+            if (onOpenPinnedResource) onOpenPinnedResource(resource);
+          }}>
+            <span className="workbench-session-menu-icon" aria-hidden="true">
+              {resourceMenu.resource.kind === "browser"
+                ? <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M6 6h.01M9 6h.01"/></svg>
+                : <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 2h8l4 4v16H6Z"/><path d="M14 2v5h5"/></svg>}
+            </span>
+            <span>{resourceMenu.resource.kind === "browser"
+              ? t("workbench.resourceShelf.openBrowser", "Open owner conversation")
+              : resourceMenu.resource.kind === "snippet"
+                ? t("workbench.resourceShelf.useSnippet", "Add to current conversation")
+                : t("workbench.resourceShelf.openFile", "Open file")}</span>
+          </button>
+          {resourceMenu.resource.kind === "browser" ? (
+            <div className="workbench-resource-readonly-note">
+              {t("workbench.resourceShelf.readOnly", "Other sessions can only view this browser")}
+            </div>
+          ) : null}
+          <button type="button" role="menuitem" onClick={function () {
+            var resource = resourceMenu.resource;
+            closeResourceMenu();
+            copyResourceReference(resource);
+          }}>
+            <span className="workbench-session-menu-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+            </span>
+            <span>{t("workbench.resourceShelf.copyReference", "Copy reference")}</span>
+          </button>
+          <div className="workbench-session-menu-separator" />
+          <button type="button" role="menuitem" className="danger" onClick={function () {
+            var resource = resourceMenu.resource;
+            closeResourceMenu();
+            if (onUnpinResource) onUnpinResource(resource);
+          }}>
+            <span className="workbench-session-menu-icon" aria-hidden="true">×</span>
+            <span>{t("workbench.resourceShelf.remove", "Remove from topbar")}</span>
+          </button>
+        </div>
+      </div>
+    ), document.body)
+    : null;
+
   return (
-    <div className="workbench-topbar">
+    <div ref={topbarRef} className="workbench-topbar">
       <div className="workbench-brand">
         <div className="workbench-traffic-space"></div>
         <button
@@ -1711,18 +2635,163 @@ function WorkbenchTopbar({ project, session, activePage, taskView, chatCrumb, no
           <strong>Cyrene</strong>
         </button>
       </div>
-      <div className="workbench-crumbs">
-        <span>{title}</span>
-        <span>/</span>
-        {chatTail ? (
-          <>
-            <span>{sessionTitle}</span>
-            <span>/</span>
-            <b>{chatTail}</b>
-          </>
-        ) : (
-          <b>{sessionTitle}</b>
-        )}
+      <nav className="workbench-session-tabs" aria-label={t("workbench.recentSessions", "Recent sessions")}>
+        {tabs.map(function (item) {
+          var isActive = item.kind === "chat"
+            ? activePage === "chat" && String(activeChatId || "") === item.id
+            : !activePage && taskView === "detail" && String(activeTaskId || "") === item.id;
+          var kindLabel = item.kind === "chat"
+            ? t("workbench.page.chat", "Conversation")
+            : t("workbench.page.task", "Task");
+          return (
+            <button
+              key={item.kind + ":" + item.id}
+              type="button"
+              className={"workbench-session-tab" + (isActive ? " active" : "")}
+              data-workbench-topbar-item="session"
+              data-session-kind={item.kind}
+              data-session-id={item.id}
+              aria-current={isActive ? "page" : undefined}
+              aria-label={kindLabel + ": " + item.title}
+              title={[item.projectName, kindLabel, item.title].filter(Boolean).join(" · ")}
+              onClick={function () { if (onOpenSession) onOpenSession(item); }}
+              onKeyDown={function (event) {
+                handleTopbarItemKeyDown(event, function () {
+                  if (onRemoveSessionTab) onRemoveSessionTab(item);
+                });
+              }}
+              onContextMenu={function (event) { openSessionMenu(event, item); }}
+              onDragOver={item.kind === "chat" ? function (event) {
+                var resourceApi = window.CyreneUI.require("resources");
+                if (acceptsResourceDrag(event, resourceApi)) {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "copy";
+                  event.currentTarget.classList.add("resource-drop-target");
+                }
+              } : undefined}
+              onDragLeave={item.kind === "chat" ? function (event) {
+                event.currentTarget.classList.remove("resource-drop-target");
+              } : undefined}
+              onDrop={item.kind === "chat" ? function (event) {
+                event.preventDefault();
+                event.currentTarget.classList.remove("resource-drop-target");
+                var resourceApi = window.CyreneUI.require("resources");
+                var resource = resourceApi && resourceApi.readDrag(event);
+                if (!resource) return;
+                if (resource.kind === "browser") {
+                  copyBrowserToConversation(item.id, resource);
+                  return;
+                }
+                if (wbDeliverResourceToChat(item.id, resource)) {
+                  window.CyreneUI.require("feedback").showToast(
+                    t("workbench.resourceShelf.addedToChat", "Added to conversation input"),
+                    "success"
+                  );
+                }
+              } : undefined}
+            >
+              <span className="workbench-session-tab-icon" aria-hidden="true">
+                {item.kind === "chat" ? (
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11.5a7.5 7.5 0 0 1-10.6 6.8L4 20l1.6-4.6A7.5 7.5 0 1 1 20 11.5Z"/></svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="m8.5 9 1.5 1.5L13 7.5M8.5 15h7"/></svg>
+                )}
+              </span>
+              <span className="workbench-session-tab-title">{item.title}</span>
+              {item.pinned ? (
+                <span className="workbench-session-tab-pin" aria-label={t("workbench.sessionMenu.pinned", "Pinned")}>
+                  <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 17v5"/>
+                    <path d="M5 17h14"/>
+                    <path d="M17 3a1 1 0 0 1 1 1v4.6a2 2 0 0 0 .6 1.4l1.7 1.7A1 1 0 0 1 19.6 13H4.4a1 1 0 0 1-.7-1.7l1.7-1.7A2 2 0 0 0 6 8.2V4a1 1 0 0 1 1-1Z"/>
+                  </svg>
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </nav>
+      <div
+        className={"workbench-resource-shelf" + (resourceDropActive ? " drop-active" : "")}
+        aria-label={t("workbench.resourceShelf.title", "Pinned resources")}
+        onDragEnter={function (event) {
+          var resourceApi = window.CyreneUI.require("resources");
+          if (acceptsResourceDrag(event, resourceApi)) {
+            event.preventDefault();
+            setResourceDropActive(true);
+          }
+        }}
+        onDragOver={function (event) {
+          var resourceApi = window.CyreneUI.require("resources");
+          if (acceptsResourceDrag(event, resourceApi)) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+            setResourceDropActive(true);
+          }
+        }}
+        onDragLeave={function (event) {
+          if (!event.currentTarget.contains(event.relatedTarget)) setResourceDropActive(false);
+        }}
+        onDrop={function (event) {
+          event.preventDefault();
+          setResourceDropActive(false);
+          var resourceApi = window.CyreneUI.require("resources");
+          var resource = resourceApi && resourceApi.readDrag(event);
+          if (resource && onPinResource) onPinResource(resource);
+        }}
+      >
+        {resources.map(function (resource) {
+          var label = resource.kind === "file"
+            ? (resource.name || resource.title || "file")
+            : resource.kind === "snippet"
+              ? (resource.title || String(resource.text || "").slice(0, 48) || t("workbench.resourceShelf.snippet", "Text"))
+              : (resource.title || resource.url || t("workbench.resourceShelf.browser", "Browser"));
+          return (
+            <button
+              key={resource.id}
+              type="button"
+              className={"workbench-resource-chip " + resource.kind}
+              data-workbench-topbar-item="resource"
+              aria-label={label}
+              title={label}
+              onClick={function () { if (onOpenPinnedResource) onOpenPinnedResource(resource); }}
+              draggable={resource.kind === "browser" ? "true" : undefined}
+              onDragStart={resource.kind === "browser" ? function (event) {
+                var resourceApi = window.CyreneUI.require("resources");
+                if (resourceApi && resourceApi.setDrag) resourceApi.setDrag(event, resource);
+              } : undefined}
+              onKeyDown={function (event) {
+                handleTopbarItemKeyDown(event, function () {
+                  if (onUnpinResource) onUnpinResource(resource);
+                });
+              }}
+              onContextMenu={function (event) { openResourceMenu(event, resource); }}
+            >
+              <span className="workbench-resource-chip-icon" aria-hidden="true">
+                {resource.kind === "browser" ? (
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M6 6h.01M9 6h.01"/></svg>
+                ) : resource.kind === "snippet" ? (
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M7 8h10M7 12h7M7 16h5"/><rect x="3" y="3" width="18" height="18" rx="3"/></svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2h8l4 4v16H6Z"/><path d="M14 2v5h5"/></svg>
+                )}
+              </span>
+              <span className="workbench-resource-chip-label">{label}</span>
+            </button>
+          );
+        })}
+        {!resources.length ? (
+          <span
+            className="workbench-resource-shelf-empty"
+            role="img"
+            aria-label={t("workbench.resourceShelf.dropHint", "Drag a file, selected text, browser, or knowledge item here to pin it")}
+            title={t("workbench.resourceShelf.dropHint", "Drag a file, selected text, browser, or knowledge item here to pin it")}
+          >
+            <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M10 4v12M4 10h12" />
+            </svg>
+          </span>
+        ) : null}
       </div>
       <div className="workbench-top-actions">
         <button type="button" className="workbench-search-box" onClick={onSearch} title={t("workbench.search")}>
@@ -1741,6 +2810,8 @@ function WorkbenchTopbar({ project, session, activePage, taskView, chatCrumb, no
             : <span className="workbench-avatar">{WorkbenchModel.initials(dataState.user && dataState.user.name)}</span>}
         </button>
       </div>
+      {sessionMenuPortal}
+      {resourceMenuPortal}
     </div>
   );
 }

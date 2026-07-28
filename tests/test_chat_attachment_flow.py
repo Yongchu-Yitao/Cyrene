@@ -1,7 +1,10 @@
 import json
 import threading
+from urllib.parse import quote
 
 import pytest
+from fastapi import APIRouter, FastAPI
+from fastapi.testclient import TestClient
 
 
 def test_managed_attachment_path_rebases_after_portable_restore(
@@ -43,6 +46,27 @@ def test_managed_attachment_path_rebases_after_portable_restore(
         )
         is None
     )
+
+
+def test_chat_export_route_preserves_legacy_unicode_storage_key(
+    monkeypatch, tmp_path
+):
+    from route.agent import chat as chat_routes
+
+    export_name = "deadbeef_测试摘录.md"
+    (tmp_path / export_name).write_text("正文", encoding="utf-8")
+    monkeypatch.setattr(chat_routes, "_EXPORTS_DIR", tmp_path)
+
+    app = FastAPI()
+    router = APIRouter()
+    chat_routes.register_chat_routes(router, bot=None, db_path="")
+    app.include_router(router)
+
+    response = TestClient(app).get(
+        "/api/chat/export/" + quote(export_name, safe="")
+    )
+    assert response.status_code == 200
+    assert response.text == "正文"
 
 
 @pytest.mark.asyncio

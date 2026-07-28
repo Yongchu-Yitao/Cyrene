@@ -932,6 +932,11 @@ async def _run_chat_agent(
         # They are fixed for this run and inserted before the current user turn, so
         # each tool round can still reuse the full previous prompt as a prefix.
         conversation_identity = conversation_identity_block(_current_session_id.get())
+        try:
+            from cyrene.workbench.pinned_resources import global_agent_context
+            pinned_resource_context = global_agent_context(_current_session_id.get())
+        except Exception:
+            pinned_resource_context = ""
         effective_fixed_ephemeral = "\n\n".join(
             part
             for part in (
@@ -939,6 +944,7 @@ async def _run_chat_agent(
                 ephemeral_system,
                 temporal_context,
                 conversation_identity,
+                pinned_resource_context,
             )
             if part
         )

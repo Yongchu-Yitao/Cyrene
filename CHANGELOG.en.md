@@ -32,6 +32,37 @@ compatibility capabilities permanently enabled at the protocol layer, persists
 tool-package checkbox defaults, and repairs rounded-corner clipping and Browser
 tool naming in Remote Settings.
 
+### 2026-07-28 Workbench topbar work set and pinned resources
+
+- Replaced the breadcrumb with three real-time MRU task/chat session tabs.
+  Their context menu supports pinning, title copy, topbar removal, and live chat
+  browser/file inspection.
+- Added a Pinned Resource Shelf between session tabs and Search. Chat file
+  cards, Knowledge/Library rows or cards, native macOS selected text, and
+  floating/minimized Browser surfaces can be pinned. Chips remain SVG-only
+  until hover or keyboard focus reveals the label.
+- Browser PiP pinning now uses direct shelf-rectangle pointer hit testing
+  instead of unreliable `elementFromPoint` checks over the native view. The
+  minimized Browser is now a favicon-only round button with an immediate
+  Browser-SVG fallback. Click restores it; dragging past the threshold can
+  freely reposition it or pin it to the shelf while reusing PiP transcript
+  avoidance. A body-level proxy crosses above the conversation header without
+  clipping.
+- A Browser PiP, minimized button, or pinned Browser chip can be dropped on
+  another conversation. The target session opens the same URL in its own
+  Browser manager, sharing the login partition without sharing page control.
+- Added complete topbar keyboard control: arrows/Home/End traverse, Delete or
+  Backspace removes, `Cmd/Ctrl+1…3` opens a session directly, `Ctrl+Tab` cycles,
+  and `Cmd/Ctrl+W` removes the current tab.
+- Files and text can be dropped into another chat draft. Selected text and
+  attachment-free knowledge items become Markdown. New exports use ASCII
+  storage keys while the route remains compatible with legacy Unicode keys.
+- Pinned files enter later Agent turns as global user-resource indexes. A
+  pinned Browser remains owner-controlled; other sessions are restricted at
+  tool execution to snapshots and screenshots.
+- Reduced Search to 168px, reserved a 10px shelf/action gap, and added a hover
+  hint to the empty shelf `+` target.
+
 ### Direct remote Harness: the new preferred control path
 
 - **New `RemoteHarness` Agent tool** — The controller can `discover`,

@@ -95,9 +95,18 @@
 
     var binary = isBinaryDiff(diffText);
     var hunks = parseDiff(diffText);
+    var hasLeftLineNumbers = hunks.some(function (hunk) {
+      return hunk.lines.some(function (line) { return line.leftNum != null; });
+    });
+    var hasRightLineNumbers = hunks.some(function (hunk) {
+      return hunk.lines.some(function (line) { return line.rightNum != null; });
+    });
+    var lineNumberClass = !hasLeftLineNumbers && hasRightLineNumbers
+      ? " diff-only-new"
+      : (hasLeftLineNumbers && !hasRightLineNumbers ? " diff-only-old" : "");
 
     return createElement("div", {
-      className: "diff-viewer-panel",
+      className: "diff-viewer-panel" + lineNumberClass,
       style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" },
     },
       // Header (optional for compact embedded viewers such as Workbench Changes)

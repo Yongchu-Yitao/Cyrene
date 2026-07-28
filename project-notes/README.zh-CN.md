@@ -8,9 +8,11 @@
 - [当前开发进度](CONTEXT_DEV_PROGRESS.zh-CN.md)
 - [已完成的架构重构 Handoff](COMPLETED-refactor-handoff.zh-CN.md)
 - [Cyrene-to-Cyrene 远程控制 Handoff](remote-cyrene-control-design.zh-CN.md)
+- [动态交互式 CLI Handoff](interactive-cli-handoff.zh-CN.md)
 - [Research Workbench 路线图](research-workbench-roadmap.md)
 - [已完成的 WebUI / Workbench UI 合并重构计划](COMPLETED-webui-workbench-consolidation-refactor-plan.md)
 - [已完成的 WebUI / Workbench UI 合并实施记录](COMPLETED-webui-consolidation-implementation-log.md)
+- [顶栏 Work Tabs 与固定资源 Handoff](topbar-work-tabs-design.zh-CN.md)
 - [设计 QA](design-qa.zh-CN.md)
 - [浏览器浮窗动态避让可行性研究](browser-dynamic-layout-feasibility.md)
 

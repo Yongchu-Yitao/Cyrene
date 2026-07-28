@@ -16,6 +16,81 @@ function wbcWorkspaceDisplayName(path) {
   return normalized.split(/[\\/]/).filter(Boolean).pop() || normalized || "…";
 }
 
+var WBC_RESOURCE_DRAG_MIME = "application/x-cyrene-work-resource+json";
+
+function wbcSetResourceDrag(event, payload) {
+  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
+  if (!transfer || !payload) return;
+  try {
+    transfer.effectAllowed = "copy";
+    transfer.setData(WBC_RESOURCE_DRAG_MIME, JSON.stringify(payload));
+    transfer.setData("text/plain", payload.kind === "snippet"
+      ? String(payload.text || "")
+      : String(payload.title || payload.name || payload.url || ""));
+  } catch (e) {}
+}
+
+function wbcReadResourceDrag(event) {
+  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
+  if (!transfer) return null;
+  try {
+    var raw = transfer.getData(WBC_RESOURCE_DRAG_MIME);
+    if (raw) return JSON.parse(raw);
+    var types = Array.prototype.slice.call(transfer.types || []);
+    if (types.indexOf("Files") >= 0 || types.indexOf("text/plain") < 0) return null;
+    // macOS already gives selected text a native Chromium drag. Preserve that
+    // interaction and turn its text/plain payload into the same snippet shape
+    // used by the pinned-resource API; the server converts it to Markdown.
+    var text = String(transfer.getData("text/plain") || "").trim();
+    if (!text) return null;
+    var page = document.querySelector(".wbc-page");
+    var ownerSessionId = String(page && page.getAttribute("data-active-chat-id") || "");
+    var ownerProjectId = String(page && page.getAttribute("data-project-id") || "");
+    return {
+      kind: "snippet",
+      ownerSessionId: ownerSessionId,
+      ownerProjectId: ownerProjectId,
+      stableRef: "snippet:" + ownerSessionId + ":" + Date.now(),
+      title: text.replace(/\s+/g, " ").slice(0, 48),
+      text: text.slice(0, 12000),
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function wbcFileDragPayload(file, ownerSessionId, ownerProjectId) {
+  var safeFile = {
+    id: file && file.id,
+    name: file && file.name,
+    content_type: file && file.content_type,
+    size: file && file.size,
+    kind: file && file.kind,
+    url: file && file.url,
+    width: file && file.width,
+    height: file && file.height,
+  };
+  return {
+    kind: "file",
+    ownerSessionId: String(ownerSessionId || ""),
+    ownerProjectId: String(ownerProjectId || ""),
+    stableRef: String(file && (file.url || file.id || file.name) || ""),
+    title: String(file && (file.name || file.title) || "file"),
+    name: String(file && file.name || "file"),
+    url: String(file && file.url || ""),
+    content_type: String(file && file.content_type || ""),
+    size: Number(file && file.size || 0),
+    file: safeFile,
+  };
+}
+
+window.CyreneUI.resources = window.CyreneUI.register("resources", {
+  mime: WBC_RESOURCE_DRAG_MIME,
+  readDrag: wbcReadResourceDrag,
+  setDrag: wbcSetResourceDrag,
+  filePayload: wbcFileDragPayload,
+});
+
 // ---------------------------------------------------------------------------
 // Data access
 // ---------------------------------------------------------------------------
@@ -614,6 +689,9 @@ function wbcRandomThinkingPhrase() {
 }
 
 function wbcBrowserFullscreenStatusText(runtime) {
+  if (runtime && runtime.finalizing) {
+    return wbcT("workbenchChat.status.saving", "Saving");
+  }
   if (runtime && String(runtime.text || "").trim()) {
     return wbcT("workbenchChat.browserChatReplying", "Agent is replying…");
   }
@@ -698,6 +776,41 @@ function wbcNotifyBrowserLayoutChanged() {
 function wbcNotifyBrowserWindowInteraction(active, kind, sessionId) {
   window.dispatchEvent(new CustomEvent("workbench:browser-window-interaction", {
     detail: { active: active === true, kind: kind || "", sessionId: String(sessionId || "") },
+  }));
+}
+
+function wbcPointInsideResourceShelf(clientX, clientY) {
+  var shelf = document.querySelector(".workbench-resource-shelf");
+  if (!shelf) return false;
+  var rect = shelf.getBoundingClientRect();
+  var x = Number(clientX);
+  var y = Number(clientY);
+  return Number.isFinite(x) && Number.isFinite(y)
+    && x >= rect.left && x <= rect.right
+    && y >= rect.top && y <= rect.bottom;
+}
+
+function wbcConversationTabAtPoint(clientX, clientY, ownerSessionId) {
+  var x = Number(clientX);
+  var y = Number(clientY);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  var owner = String(ownerSessionId || "");
+  var tabs = document.querySelectorAll('.workbench-session-tab[data-session-kind="chat"]');
+  for (var index = 0; index < tabs.length; index += 1) {
+    var tab = tabs[index];
+    var targetId = String(tab.getAttribute("data-session-id") || "");
+    if (!targetId || targetId === owner) continue;
+    var rect = tab.getBoundingClientRect();
+    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+      return { node: tab, chatId: targetId };
+    }
+  }
+  return null;
+}
+
+function wbcNotifyResourceShelfPointerDrag(active) {
+  window.dispatchEvent(new CustomEvent("cyrene:resource-shelf-drag-state", {
+    detail: { active: active === true },
   }));
 }
 
@@ -1678,7 +1791,7 @@ var WorkbenchChatRuntimes = (function () {
 // Page
 // ---------------------------------------------------------------------------
 
-function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onActiveChatChange, onActiveChatIdChange }) {
+function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onActiveChatChange, onActiveChatIdChange, onChatsChange }) {
   window.CyreneUI.require("i18n").use();
   window.CyreneUI.require("data").useVersion();
   var isActive = active !== false;
@@ -1710,6 +1823,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     ) {
       chatCache.lists[projectId] = chats;
     }
+    if (onChatsChange && projectId) onChatsChange(projectId, chats);
   }, [chats]);
   useWbcEffect(function () {
     if (
@@ -1764,6 +1878,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var revealedPlanQidRef = useWbcRef("");
   // Holds a chat id requested by global search until the chat list is loaded.
   var pendingChatIdRef = useWbcRef("");
+  // A topbar context-menu action can navigate to another conversation and
+  // reveal one of its resources in the same operation.
+  var pendingTopbarResourceRef = useWbcRef(null);
   var chatFileDropActive = useWorkbenchFileDrop(function (files) {
     try {
       window.dispatchEvent(new CustomEvent("cyrene:add-chat-attachments", { detail: { files: files } }));
@@ -1775,6 +1892,20 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     setViewerFile(file);
     setSideTab("viewer");
     setSideVisible(true);
+  }
+
+  function revealTopbarResource(chatId, resource) {
+    if (!chatId || !resource) return;
+    if (resource.type === "browser") {
+      setBrowserActiveByChat(function (prev) {
+        return Object.assign({}, prev, { [chatId]: true });
+      });
+      setBrowserWindowModeByChat(function (prev) {
+        return Object.assign({}, prev, { [chatId]: "pip" });
+      });
+      return;
+    }
+    if (resource.type === "file" && resource.file) openViewer(resource.file);
   }
 
   function markViewerFileRead(file) {
@@ -1839,6 +1970,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var navigation = window.CyreneUI.require("navigation");
     var pending = navigation.getPending();
     var pendingChatId = pending && pending.type === "chat" ? (pending.chatId || pending.id) : "";
+    if (pendingChatId && pending.topbarResource) {
+      pendingTopbarResourceRef.current = { chatId: pendingChatId, resource: pending.topbarResource };
+    }
     var remembered = wbcLastChatByProject[projectId];
     function selectFrom(list) {
       var targetId = pendingChatId && list.some(function (c) { return c.id === pendingChatId; })
@@ -1963,6 +2097,15 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     });
   }, [activeChatId]);
 
+  // Run after the conversation-switch reset above so a requested file remains
+  // open and a requested browser session is restored directly as a PiP window.
+  useWbcEffect(function () {
+    var pendingResource = pendingTopbarResourceRef.current;
+    if (!pendingResource || String(pendingResource.chatId) !== String(activeChatId || "")) return;
+    pendingTopbarResourceRef.current = null;
+    revealTopbarResource(activeChatId, pendingResource.resource);
+  }, [activeChatId]);
+
   // Reveal a newly generated durable plan in the right panel. The plan remains
   // available after approval and across reloads until execution completes.
   useWbcEffect(function () {
@@ -2023,11 +2166,18 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     var pending = navigation.getPending();
     var targetId = pending && pending.type === "chat" ? (pending.chatId || pending.id) : "";
     if (!targetId) return;
+    var topbarResource = pending.topbarResource || null;
     if (Array.isArray(chatsRef.current) && chatsRef.current.some(function (c) { return c.id === targetId; })) {
-      setActiveChatId(targetId);
+      if (topbarResource && String(activeChatIdRef.current || "") === String(targetId)) {
+        revealTopbarResource(targetId, topbarResource);
+      } else {
+        if (topbarResource) pendingTopbarResourceRef.current = { chatId: targetId, resource: topbarResource };
+        setActiveChatId(targetId);
+      }
       navigation.clearPending(pending);
     } else {
       pendingChatIdRef.current = targetId;
+      if (topbarResource) pendingTopbarResourceRef.current = { chatId: targetId, resource: topbarResource };
     }
   }
 
@@ -2180,6 +2330,24 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   // 和 persistent partition 都由 chatId 隔离，刷新 UI 不会把别的对话误认
   // 为当前对话的浏览器。
   var browserRestoredRef = useWbcRef({});
+  useWbcEffect(function () {
+    function handleCopiedBrowser(event) {
+      var targetChatId = String(event && event.detail && event.detail.targetChatId || "");
+      if (!targetChatId) return;
+      browserRestoredRef.current[targetChatId] = true;
+      setBrowserActiveByChat(function (prev) {
+        return Object.assign({}, prev, { [targetChatId]: true });
+      });
+      setBrowserWindowModeByChat(function (prev) {
+        return Object.assign({}, prev, { [targetChatId]: "pip" });
+      });
+    }
+    window.addEventListener("cyrene:browser-copied-to-chat", handleCopiedBrowser);
+    return function () {
+      window.removeEventListener("cyrene:browser-copied-to-chat", handleCopiedBrowser);
+    };
+  }, []);
+
   useWbcEffect(function () {
     var bridge = window.cyrene && window.cyrene.browser;
     if (!bridge || typeof bridge.getState !== "function") return;
@@ -2724,7 +2892,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   }
 
   return (
-    <div className={"wbc-page" + (sideVisible ? "" : " wbc-side-hidden")}>
+    <div
+      className={"wbc-page" + (sideVisible ? "" : " wbc-side-hidden")}
+      data-active-chat-id={activeChatId || ""}
+      data-project-id={projectId || ""}
+    >
       {chatFileDropActive && <WorkbenchFileDropOverlay label={wbcT("workbenchChat.dropToAttach", "Release to add files to the message input")} />}
       <WbcRail
         chats={chats}
@@ -3042,11 +3214,16 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
 
 function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mode, runtime, running, latestAssistantReplyId, latestAssistantReplyText, onSend, onGuidance, onInterrupt, onMinimize, onMaximize, onRestore, onTakeoverComplete }) {
   var shellRef = useWbcRef(null);
+  var minimizedRef = useWbcRef(null);
   var frameRef = useWbcRef(null);
+  var minimizedFrameRef = useWbcRef(null);
   var interactionRef = useWbcRef(null);
+  var minimizedDragRef = useWbcRef(null);
+  var suppressMinimizedClickRef = useWbcRef(false);
   var modeTransitionRafRef = useWbcRef(0);
   var modeTransitionTimerRef = useWbcRef(null);
   var [frame, setFrame] = useWbcState(null);
+  var [minimizedFrame, setMinimizedFrame] = useWbcState(null);
   var [nativeBrowserState, setNativeBrowserState] = useWbcState(null);
   var [fullscreenDraft, setFullscreenDraft] = useWbcState("");
   var [fullscreenStatusRequested, setFullscreenStatusRequested] = useWbcState(false);
@@ -3057,6 +3234,11 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var fullscreenReplyBaselineRef = useWbcRef("");
   var effectiveMode = mode || "pip";
   var displayBrowserState = nativeBrowserState || browserState || {};
+  var displayBrowserTabs = Array.isArray(displayBrowserState.tabs) ? displayBrowserState.tabs : [];
+  var displayActiveBrowserTab = displayBrowserState.activeTab || displayBrowserTabs.find(function (tab) {
+    return String(tab && tab.id || "") === String(displayBrowserState.activeTabId || "");
+  }) || displayBrowserTabs[0] || {};
+  var displayBrowserFavicon = String(displayActiveBrowserTab.favicon || "");
   var hasNoBrowserTabs = Array.isArray(displayBrowserState.tabs) && displayBrowserState.tabs.length === 0;
   var browserBridge = window.cyrene && window.cyrene.browser;
   var hasNativeChatOverlay = !!(browserBridge && typeof browserBridge.setChatOverlay === "function");
@@ -3070,6 +3252,76 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     && fullscreenStatusRequested
     && (!!running || fullscreenSubmitting || !!fullscreenCompletedReply);
   var fullscreenStatusText = fullscreenCompletedReply || wbcBrowserFullscreenStatusText(runtime);
+
+  function browserDragPayload() {
+    return {
+      kind: "browser",
+      ownerSessionId: String(browserSessionId || ""),
+      stableRef: String(browserSessionId || ""),
+      title: String(displayActiveBrowserTab.title || wbcT("workbenchChat.browserWindowTitle", "Browser")),
+      url: String(displayActiveBrowserTab.url || ""),
+      tabId: String(displayActiveBrowserTab.id || displayBrowserState.activeTabId || ""),
+      favicon: displayBrowserFavicon,
+    };
+  }
+
+  function updateResourceShelfTarget(interaction, clientX, clientY) {
+    if (!interaction || interaction.kind !== "drag") return false;
+    interaction.lastClientX = clientX;
+    interaction.lastClientY = clientY;
+    var overShelf = wbcPointInsideResourceShelf(clientX, clientY);
+    if (interaction.overShelf !== overShelf) {
+      interaction.overShelf = overShelf;
+      wbcNotifyResourceShelfPointerDrag(overShelf);
+    }
+    var conversationTarget = overShelf
+      ? null
+      : wbcConversationTabAtPoint(clientX, clientY, browserSessionId);
+    var nextNode = conversationTarget && conversationTarget.node;
+    if (interaction.targetChatNode !== nextNode) {
+      if (interaction.targetChatNode) interaction.targetChatNode.classList.remove("resource-drop-target");
+      interaction.targetChatNode = nextNode || null;
+      if (interaction.targetChatNode) interaction.targetChatNode.classList.add("resource-drop-target");
+    }
+    interaction.targetChatId = conversationTarget ? conversationTarget.chatId : "";
+    if (interaction.ghost) {
+      interaction.ghost.classList.toggle("drop-ready", overShelf || !!interaction.targetChatId);
+    }
+    return overShelf || !!interaction.targetChatId;
+  }
+
+  function clearBrowserPointerDropTarget(interaction) {
+    if (interaction && interaction.targetChatNode) {
+      interaction.targetChatNode.classList.remove("resource-drop-target");
+      interaction.targetChatNode = null;
+      interaction.targetChatId = "";
+    }
+    wbcNotifyResourceShelfPointerDrag(false);
+  }
+
+  function pinBrowserFromPointerInteraction(interaction) {
+    if (!interaction || interaction.pinned || interaction.delivered) return false;
+    if (interaction.targetChatId) {
+      interaction.delivered = true;
+      try {
+        window.dispatchEvent(new CustomEvent("cyrene:copy-browser-to-chat", {
+          detail: {
+            targetChatId: interaction.targetChatId,
+            resource: browserDragPayload(),
+          },
+        }));
+      } catch (e) {}
+      return true;
+    }
+    if (!interaction.overShelf) return false;
+    interaction.pinned = true;
+    try {
+      window.dispatchEvent(new CustomEvent("cyrene:pin-topbar-resource", {
+        detail: browserDragPayload(),
+      }));
+    } catch (e) {}
+    return true;
+  }
 
   function clearFullscreenFinalReplyTimer() {
     if (!fullscreenFinalReplyTimerRef.current) return;
@@ -3147,8 +3399,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     });
   }
 
-  function measuredFrame() {
-    var node = shellRef.current;
+  function measuredFloatingFrame(node) {
     var area = node && node.parentElement;
     if (!node || !area) return null;
     var nodeRect = node.getBoundingClientRect();
@@ -3161,25 +3412,76 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     };
   }
 
+  function measuredFrame() {
+    return measuredFloatingFrame(shellRef.current);
+  }
+
   function commitFrame(next, area) {
     var host = area || (shellRef.current && shellRef.current.parentElement);
-    if (!host || !next) return;
-    var clamped = wbcClampBrowserWindowFrame(next, host.clientWidth, host.clientHeight, 240, 180);
-    frameRef.current = clamped;
+    commitFloatingFrame(shellRef.current, next, host, 240, 180, frameRef, setFrame);
+  }
+
+  // PiP and minimized mode share the same coordinate system and clamping
+  // path. This keeps drag persistence, resize handling, and transcript
+  // avoidance in sync instead of maintaining two subtly different movers.
+  function commitFloatingFrame(node, next, host, minWidth, minHeight, targetRef, updateState) {
+    if (!node || !host || !next) return null;
+    var clamped = wbcClampBrowserWindowFrame(
+      next,
+      host.clientWidth,
+      host.clientHeight,
+      minWidth,
+      minHeight
+    );
+    targetRef.current = clamped;
     // Keep the DOM shell and Electron's native WebContentsView on the same
     // pointer frame. Waiting for React to commit here makes the page visibly
     // trail the window chrome during a drag or resize.
-    var node = shellRef.current;
-    if (node) {
-      node.style.left = clamped.x + "px";
-      node.style.top = clamped.y + "px";
-      node.style.width = clamped.width + "px";
-      node.style.height = clamped.height + "px";
-      node.style.right = "auto";
-      node.style.bottom = "auto";
-    }
-    setFrame(clamped);
+    node.style.left = clamped.x + "px";
+    node.style.top = clamped.y + "px";
+    node.style.width = clamped.width + "px";
+    node.style.height = clamped.height + "px";
+    node.style.right = "auto";
+    node.style.bottom = "auto";
+    updateState(clamped);
     wbcNotifyBrowserLayoutChanged();
+    return clamped;
+  }
+
+  function commitMinimizedFrame(next, area) {
+    var node = minimizedRef.current;
+    var host = area || (node && node.parentElement);
+    return commitFloatingFrame(node, next, host, 42, 42, minimizedFrameRef, setMinimizedFrame);
+  }
+
+  function removeMinimizedDragGhost(interaction) {
+    var ghost = interaction && interaction.ghost;
+    if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost);
+    if (interaction) interaction.ghost = null;
+  }
+
+  function ensureMinimizedDragGhost(interaction) {
+    if (!interaction || interaction.ghost || !interaction.node) return interaction && interaction.ghost;
+    var rect = interaction.node.getBoundingClientRect();
+    var ghost = interaction.node.cloneNode(true);
+    ghost.removeAttribute("id");
+    ghost.removeAttribute("title");
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.setAttribute("tabindex", "-1");
+    ghost.classList.add("dragging", "wbc-browser-drag-ghost");
+    // Keep the preview slightly smaller than the resting control so it reads
+    // as a lifted drag token instead of merging with header action buttons.
+    var ghostInset = 3;
+    ghost.style.left = (rect.left + ghostInset) + "px";
+    ghost.style.top = (rect.top + ghostInset) + "px";
+    ghost.style.width = Math.max(32, rect.width - (ghostInset * 2)) + "px";
+    ghost.style.height = Math.max(32, rect.height - (ghostInset * 2)) + "px";
+    document.body.appendChild(ghost);
+    interaction.ghost = ghost;
+    interaction.ghostLeft = rect.left + ghostInset;
+    interaction.ghostTop = rect.top + ghostInset;
+    interaction.node.classList.add("drag-source-hidden");
+    return ghost;
   }
 
   function finalizeInteraction(interaction) {
@@ -3189,11 +3491,13 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     if (interactionRef.current === interaction) interactionRef.current = null;
     window.removeEventListener("workbench:browser-window-preview-ready", onBrowserWindowPreviewReady);
     document.body.classList.remove("wbc-browser-window-interacting");
+    clearBrowserPointerDropTarget(interaction);
     wbcNotifyBrowserLayoutChanged();
     wbcNotifyBrowserWindowInteraction(false, interaction.kind, browserSessionId);
   }
 
   function stopInteraction() {
+    var event = arguments[0];
     var interaction = interactionRef.current;
     if (interaction && interaction.captureNode && interaction.captureNode.releasePointerCapture) {
       try { interaction.captureNode.releasePointerCapture(interaction.pointerId); } catch (e) {}
@@ -3206,7 +3510,12 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     if (!interaction || !interaction.started) {
       interactionRef.current = null;
       window.removeEventListener("workbench:browser-window-preview-ready", onBrowserWindowPreviewReady);
+      clearBrowserPointerDropTarget(interaction);
       return;
+    }
+    if (event && event.type === "pointerup" && interaction.kind === "drag") {
+      updateResourceShelfTarget(interaction, event.clientX, event.clientY);
+      pinBrowserFromPointerInteraction(interaction);
     }
     interaction.pointerReleased = true;
     // A fast flick can release before capturePage resolves. Keep its final
@@ -3266,6 +3575,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
         onBrowserWindowPreviewReady({ detail: { sessionId: browserSessionId, fallback: true } });
       }, 250);
     }
+    updateResourceShelfTarget(interaction, event.clientX, event.clientY);
     interaction.pendingDx = dx;
     interaction.pendingDy = dy;
     // Keep the native page and shell at their original coordinates until the
@@ -3298,6 +3608,11 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       pendingDy: 0,
       pointerReleased: false,
       previewTimer: null,
+      overShelf: false,
+      targetChatId: "",
+      targetChatNode: null,
+      lastClientX: event.clientX,
+      lastClientY: event.clientY,
     };
     if (event.currentTarget && event.currentTarget.setPointerCapture) {
       try { event.currentTarget.setPointerCapture(event.pointerId); } catch (e) {}
@@ -3308,9 +3623,104 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     window.addEventListener("workbench:browser-window-preview-ready", onBrowserWindowPreviewReady);
   }
 
+  function finishMinimizedDrag(event) {
+    var interaction = minimizedDragRef.current;
+    if (!interaction) return;
+    minimizedDragRef.current = null;
+    window.removeEventListener("pointermove", moveMinimizedDrag);
+    window.removeEventListener("pointerup", finishMinimizedDrag);
+    window.removeEventListener("pointercancel", finishMinimizedDrag);
+    if (interaction.captureNode && interaction.captureNode.releasePointerCapture) {
+      try { interaction.captureNode.releasePointerCapture(interaction.pointerId); } catch (e) {}
+    }
+    if (interaction.node) interaction.node.classList.remove("dragging", "drag-source-hidden");
+    removeMinimizedDragGhost(interaction);
+    document.body.classList.remove("wbc-browser-window-interacting");
+    var handled = false;
+    if (event && event.type === "pointerup" && interaction.started) {
+      updateResourceShelfTarget(interaction, event.clientX, event.clientY);
+      handled = pinBrowserFromPointerInteraction(interaction);
+    }
+    // A resource drop is an operation on the browser, not a request to move
+    // its restore button to the stage boundary. Put the button back where the
+    // drag started after pinning/copying; ordinary drags keep their new frame.
+    if (handled && interaction.frame) {
+      commitMinimizedFrame(interaction.frame, interaction.area);
+    } else if (interaction.started) {
+      wbcNotifyBrowserLayoutChanged();
+    }
+    clearBrowserPointerDropTarget(interaction);
+    if (interaction.started) {
+      suppressMinimizedClickRef.current = true;
+      setTimeout(function () { suppressMinimizedClickRef.current = false; }, 0);
+    }
+  }
+
+  function moveMinimizedDrag(event) {
+    var interaction = minimizedDragRef.current;
+    if (!interaction) return;
+    var dx = event.clientX - interaction.clientX;
+    var dy = event.clientY - interaction.clientY;
+    if (!interaction.started) {
+      if ((dx * dx) + (dy * dy) < 9) return;
+      interaction.started = true;
+      document.body.classList.add("wbc-browser-window-interacting");
+      if (interaction.node) interaction.node.classList.add("dragging");
+      ensureMinimizedDragGhost(interaction);
+    }
+    updateResourceShelfTarget(interaction, event.clientX, event.clientY);
+    if (interaction.ghost) {
+      interaction.ghost.style.left = (interaction.ghostLeft + dx) + "px";
+      interaction.ghost.style.top = (interaction.ghostTop + dy) + "px";
+    }
+    if (interaction.frame) {
+      commitMinimizedFrame({
+        x: interaction.frame.x + dx,
+        y: interaction.frame.y + dy,
+        width: interaction.frame.width,
+        height: interaction.frame.height,
+      }, interaction.area);
+    }
+  }
+
+  function beginMinimizedDrag(event) {
+    if (event.button !== 0) return;
+    var node = event.currentTarget;
+    var area = node && node.parentElement;
+    var start = minimizedFrameRef.current || measuredFloatingFrame(node);
+    if (!node || !area || !start) return;
+    event.preventDefault();
+    minimizedDragRef.current = {
+      kind: "drag",
+      clientX: event.clientX,
+      clientY: event.clientY,
+      lastClientX: event.clientX,
+      lastClientY: event.clientY,
+      pointerId: event.pointerId,
+      captureNode: event.currentTarget,
+      node: node,
+      area: area,
+      frame: start,
+      ghost: null,
+      started: false,
+      overShelf: false,
+      targetChatId: "",
+      targetChatNode: null,
+      pinned: false,
+    };
+    if (event.currentTarget && event.currentTarget.setPointerCapture) {
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch (e) {}
+    }
+    window.addEventListener("pointermove", moveMinimizedDrag);
+    window.addEventListener("pointerup", finishMinimizedDrag);
+    window.addEventListener("pointercancel", finishMinimizedDrag);
+  }
+
   useWbcEffect(function () {
     frameRef.current = null;
+    minimizedFrameRef.current = null;
     setFrame(null);
+    setMinimizedFrame(null);
   }, [browserSessionId]);
 
   // A fullscreen session starts visually quiet. Only commands sent from this
@@ -3451,13 +3861,23 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   }, [visible, browserSessionId]);
 
   useWbcEffect(function () {
-    if (!visible || effectiveMode !== "pip") return undefined;
-    var node = shellRef.current;
+    if (!visible || (effectiveMode !== "pip" && effectiveMode !== "minimized")) return undefined;
+    var node = effectiveMode === "pip" ? shellRef.current : minimizedRef.current;
     var area = node && node.parentElement;
-    if (!area || typeof ResizeObserver === "undefined") return undefined;
+    if (!area) return undefined;
+    if (effectiveMode === "minimized" && !minimizedFrameRef.current) {
+      var initialMinimizedFrame = measuredFloatingFrame(node);
+      if (initialMinimizedFrame) commitMinimizedFrame(initialMinimizedFrame, area);
+    }
+    if (typeof ResizeObserver === "undefined") return undefined;
     var observer = new ResizeObserver(function () {
-      var current = frameRef.current;
-      if (current) commitFrame(current, area);
+      if (effectiveMode === "pip") {
+        var current = frameRef.current;
+        if (current) commitFrame(current, area);
+      } else {
+        var minimizedCurrent = minimizedFrameRef.current;
+        if (minimizedCurrent) commitMinimizedFrame(minimizedCurrent, area);
+      }
       wbcNotifyBrowserLayoutChanged();
     });
     observer.observe(area);
@@ -3467,7 +3887,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   useWbcEffect(function () {
     var raf = requestAnimationFrame(wbcNotifyBrowserLayoutChanged);
     return function () { cancelAnimationFrame(raf); };
-  }, [frame && frame.x, frame && frame.y, frame && frame.width, frame && frame.height, effectiveMode, visible]);
+  }, [frame && frame.x, frame && frame.y, frame && frame.width, frame && frame.height, minimizedFrame && minimizedFrame.x, minimizedFrame && minimizedFrame.y, effectiveMode, visible]);
 
   useWbcEffect(function () {
     if (effectiveMode !== "maximized") return undefined;
@@ -3481,6 +3901,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   useWbcEffect(function () {
     return function () {
       stopInteraction();
+      finishMinimizedDrag();
       cancelModeTransition();
     };
   }, []);
@@ -3488,9 +3909,39 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   if (!visible) return null;
   if (hasNoBrowserTabs && (effectiveMode === "pip" || effectiveMode === "minimized")) return null;
   if (effectiveMode === "minimized") {
+    var minimizedInlineStyle = minimizedFrame ? {
+      left: minimizedFrame.x + "px",
+      top: minimizedFrame.y + "px",
+      width: minimizedFrame.width + "px",
+      height: minimizedFrame.height + "px",
+      right: "auto",
+      bottom: "auto",
+    } : undefined;
     return (
-      <button type="button" className="wbc-browser-restore-float" onClick={onRestore} title={wbcT("workbenchChat.browserRestoreHint", "Reopen browser window")}>
-        <span>{wbcT("workbenchChat.browserWindowTitle", "Browser")}</span>
+      <button
+        ref={minimizedRef}
+        type="button"
+        className="wbc-browser-restore-float"
+        style={minimizedInlineStyle}
+        onPointerDown={beginMinimizedDrag}
+        onClick={function () {
+          if (!suppressMinimizedClickRef.current && onRestore) onRestore();
+        }}
+        aria-label={wbcBrowserWindowTitle(displayBrowserState)}
+        title={wbcBrowserWindowTitle(displayBrowserState) + " · " + wbcT("workbenchChat.dragBrowserToTopbar", "Drag to the topbar to pin")}
+      >
+        <span className="wbc-browser-restore-favicon" aria-hidden="true">
+          <svg className="fallback" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M6 6h.01M9 6h.01"/></svg>
+          {displayBrowserFavicon ? (
+            <img
+              key={displayBrowserFavicon}
+              src={displayBrowserFavicon}
+              alt=""
+              draggable="false"
+              onError={function (event) { event.currentTarget.hidden = true; }}
+            />
+          ) : null}
+        </span>
       </button>
     );
   }
@@ -3516,7 +3967,10 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
         onPointerDown={function (event) { beginInteraction(event, "drag", ""); }}
         onDoubleClick={function () { runModeTransition(effectiveMode === "pip" ? onMaximize : onRestore); }}
       >
-        <span className="wbc-browser-title-pill">{wbcT("workbenchChat.browserWindowTitle", "Browser")}</span>
+        <span
+          className="wbc-browser-title-pill"
+          title={wbcT("workbenchChat.dragBrowserToTopbar", "Drag to the topbar to pin")}
+        >{wbcT("workbenchChat.browserWindowTitle", "Browser")}</span>
         {wbcBrowserPageTitle(displayBrowserState) && <strong title={wbcBrowserWindowTitle(displayBrowserState)}>{wbcBrowserPageTitle(displayBrowserState)}</strong>}
         <div className="wbc-browser-window-actions">
           {effectiveMode === "pip" ? (
@@ -3778,6 +4232,11 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
   var stickyRestoreRafRef = useWbcRef(0);
   var avoidanceScrollingRef = useWbcRef(false);
   var avoidanceScrollTimerRef = useWbcRef(null);
+  // ResizeObserver reports the height changes caused by our own PiP lane
+  // classes. Treating those reports like fresh external layout changes creates
+  // a remove/re-add/restore loop which is especially visible at scrollTop=0.
+  var avoidanceApplyingRef = useWbcRef(false);
+  var avoidanceApplyingRafRef = useWbcRef(0);
   var durableMessages = chat && Array.isArray(chat.messages) ? chat.messages : [];
   var runtimeTimeline = wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime));
   var messages = wbcMergeChronologicalMessages(durableMessages, runtimeTimeline);
@@ -3834,6 +4293,12 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     if (!stage || !thread) return;
     var items = Array.prototype.slice.call(thread.querySelectorAll(":scope > [data-wbc-thread-item]"));
     if (!items.length) return;
+    avoidanceApplyingRef.current = true;
+    if (avoidanceApplyingRafRef.current) cancelAnimationFrame(avoidanceApplyingRafRef.current);
+    avoidanceApplyingRafRef.current = requestAnimationFrame(function () {
+      avoidanceApplyingRafRef.current = 0;
+      avoidanceApplyingRef.current = false;
+    });
 
     // Preserve the reader's visual anchor across text reflow.  At the live tail
     // the bottom is the anchor; in scrollback it is the first visible entry.
@@ -3868,7 +4333,8 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     });
     restoreViewport();
 
-    var browserWindow = stage.querySelector(".wbc-browser-window.pip");
+    var browserWindow = stage.querySelector(".wbc-browser-window.pip")
+      || stage.querySelector(".wbc-browser-restore-float");
     if (!browserWindow) return;
     var browserRect = browserWindow.getBoundingClientRect();
     var threadRect = thread.getBoundingClientRect();
@@ -3972,6 +4438,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     var observedItems = typeof WeakSet === "function" ? new WeakSet() : null;
     var itemObserver = typeof ResizeObserver === "function"
       ? new ResizeObserver(function () {
+          if (avoidanceApplyingRef.current) return;
           scheduleStickyViewportRestore();
           scheduleBrowserAvoidance();
         })
@@ -3987,6 +4454,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     observeItems();
     var stageObserver = typeof ResizeObserver === "function"
       ? new ResizeObserver(function () {
+          if (avoidanceApplyingRef.current) return;
           scheduleStickyViewportRestore();
           scheduleBrowserAvoidance();
         })
@@ -4006,6 +4474,9 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     return function () {
       if (avoidanceRafRef.current) cancelAnimationFrame(avoidanceRafRef.current);
       avoidanceRafRef.current = 0;
+      if (avoidanceApplyingRafRef.current) cancelAnimationFrame(avoidanceApplyingRafRef.current);
+      avoidanceApplyingRafRef.current = 0;
+      avoidanceApplyingRef.current = false;
       if (stickyRestoreRafRef.current) cancelAnimationFrame(stickyRestoreRafRef.current);
       stickyRestoreRafRef.current = 0;
       avoidanceScrollingRef.current = false;
@@ -4044,6 +4515,7 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
           project={project}
           chat={chat || chatSummary}
           running={running}
+          finalizing={!!(runtime && runtime.finalizing)}
           onRename={onRename}
           onDelete={onDelete}
           onToTask={onToTask}
@@ -4278,7 +4750,7 @@ function WbcErrorNotice({ message, kind, onRetry }) {
   );
 }
 
-function WbcHeader({ project, chat, running, onRename, onDelete, onToTask, toTaskBusy, sideVisible, onToggleSide }) {
+function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onToTask, toTaskBusy, sideVisible, onToggleSide }) {
   var [editing, setEditing] = useWbcState(false);
   var [draft, setDraft] = useWbcState(chat.title || "");
   var [menuOpen, setMenuOpen] = useWbcState(false);
@@ -4307,7 +4779,9 @@ function WbcHeader({ project, chat, running, onRename, onDelete, onToTask, toTas
   var isLegacy = !!chat.legacy;
   var statusText = isLegacy
     ? wbcT("workbenchChat.status.archived", "Archived")
-    : running ? wbcT("workbenchChat.status.replying", "Replying") : wbcT("workbenchChat.status.idle", "Idle");
+    : finalizing
+      ? wbcT("workbenchChat.status.saving", "Saving")
+      : running ? wbcT("workbenchChat.status.replying", "Replying") : wbcT("workbenchChat.status.idle", "Idle");
 
   return (
     <div className="wbc-header">
@@ -4386,6 +4860,15 @@ function WbcMessageAttachment({ file, onOpenFile }) {
       <img
         src={file.url}
         alt=""
+        draggable="true"
+        onDragStart={function (event) {
+          var page = event.currentTarget && event.currentTarget.closest(".wbc-page");
+          wbcSetResourceDrag(event, wbcFileDragPayload(
+            file,
+            page && page.getAttribute("data-active-chat-id"),
+            page && page.getAttribute("data-project-id")
+          ));
+        }}
         onClick={open}
         onError={function () { setImageFailed(true); }}
         style={{ cursor: "zoom-in" }}
@@ -4393,6 +4876,14 @@ function WbcMessageAttachment({ file, onOpenFile }) {
     );
   }
   var canOpen = !!(onOpenFile && file.url);
+  function startFileDrag(event) {
+    var page = event.currentTarget && event.currentTarget.closest(".wbc-page");
+    wbcSetResourceDrag(event, wbcFileDragPayload(
+      file,
+      page && page.getAttribute("data-active-chat-id"),
+      page && page.getAttribute("data-project-id")
+    ));
+  }
   var content = (
     <>
       <WbcFileVisual file={file} />
@@ -4408,9 +4899,9 @@ function WbcMessageAttachment({ file, onOpenFile }) {
       ) : null}
     </>
   );
-  if (!canOpen) return <div className="wbc-attach-file">{content}</div>;
+  if (!canOpen) return <div className="wbc-attach-file" draggable="true" onDragStart={startFileDrag}>{content}</div>;
   return (
-    <button type="button" className="wbc-attach-file" onClick={open} title={wbcT("workbenchChat.viewInSide", "View on the right")}>
+    <button type="button" className="wbc-attach-file" draggable="true" onDragStart={startFileDrag} onClick={open} title={wbcT("workbenchChat.viewInSide", "View on the right")}>
       {content}
     </button>
   );
@@ -4530,7 +5021,19 @@ function WbcAgentFiles({ files, onOpenFile }) {
     <div className="wbc-agent-files">
       {files.map(function (file, i) {
         return (
-          <div className="wbc-agent-file" key={file.id || file.url || i}>
+          <div
+            className="wbc-agent-file"
+            key={file.id || file.url || i}
+            draggable="true"
+            onDragStart={function (event) {
+              var page = event.currentTarget && event.currentTarget.closest(".wbc-page");
+              wbcSetResourceDrag(event, wbcFileDragPayload(
+                file,
+                page && page.getAttribute("data-active-chat-id"),
+                page && page.getAttribute("data-project-id")
+              ));
+            }}
+          >
             <span className="wbc-file-icon">{WBC_ICONS.file}</span>
             <span className="wbc-file-meta">
               <b title={file.name}>{file.name || "file"}</b>
@@ -5145,7 +5648,27 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }
   useWbcEffect(function () {
     function onDroppedFiles(event) {
-      var files = event && event.detail && event.detail.files;
+      var detail = event && event.detail || {};
+      if (detail.targetChatId && String(detail.targetChatId) !== String(chatId)) return;
+      if (detail.resource && detail.resource.kind === "file") {
+        var file = detail.resource.file || detail.resource;
+        setAttachments(function (prev) {
+          var key = String(file.id || file.path || file.url || file.name || "");
+          if (key && prev.some(function (item) {
+            return String(item.id || item.path || item.url || item.name || "") === key;
+          })) return prev;
+          return prev.concat([file]);
+        });
+        return;
+      }
+      if (detail.resource && detail.resource.kind === "snippet") {
+        var quote = String(detail.resource.text || "").trim().split("\n").map(function (line) {
+          return "> " + line;
+        }).join("\n");
+        if (quote) setDraft(function (prev) { return prev ? prev + "\n\n" + quote : quote; });
+        return;
+      }
+      var files = detail.files;
       addFiles(files);
     }
     window.addEventListener("cyrene:add-chat-attachments", onDroppedFiles);
@@ -6013,9 +6536,9 @@ function WbcChangesTab({ chatId }) {
             {files.map(function (item) {
               var active = item.path === selectedPath;
               return (
-                <button type="button" key={item.id || item.path} className={"wbc-change-file " + item.changeType + (active ? " active" : "")} onClick={function () { setSelectedPath(item.path); }}>
+                <button type="button" key={item.id || item.path} className={"wbc-change-file " + item.changeType + (active ? " active" : "")} aria-pressed={active} onClick={function () { setSelectedPath(item.path); }}>
                   <span className="wbc-change-file-path" title={item.path}>{item.path}</span>
-                  <small>{wbcChangeTypeLabel(item.changeType)}</small>
+                  <small className="wbc-change-file-status">{wbcChangeTypeLabel(item.changeType)}</small>
                   <span className="wbc-change-file-lines"><i>+{item.additions || 0}</i><em>−{item.deletions || 0}</em></span>
                 </button>
               );

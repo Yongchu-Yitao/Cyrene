@@ -483,7 +483,11 @@ function SettingsOverlay({
         // Sidebar tabs
         React.createElement("div", { className: "settings-overlay-nav" },
           SETTINGS_TAB_GROUPS.map(function (ids, groupIndex) {
-            return React.createElement("div", { key: ids.join("-"), className: "settings-overlay-nav-section" + (groupIndex === 0 ? " first" : "") },
+            return React.createElement("div", {
+              key: ids.join("-"),
+              className: "settings-overlay-nav-section" + (groupIndex === 0 ? " first" : ""),
+              style: { "--settings-tab-count": ids.length },
+            },
               ids.map(function (id) {
                 var item = TABS_BY_ID[id];
                 if (!item) return null;

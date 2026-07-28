@@ -827,6 +827,12 @@ class BrowserTabManager {
     wc.on('did-navigate', () => this.invalidateSnapshot());
     wc.on('did-navigate-in-page', () => this.invalidateSnapshot());
     wc.on('page-title-updated', update);
+    wc.on('page-favicon-updated', (_event, favicons) => {
+      const tab = this._tabForView(view);
+      if (!tab) return;
+      tab.favicon = String(Array.isArray(favicons) && favicons[0] || '');
+      update();
+    });
     wc.on('media-started-playing', update);
     wc.on('media-paused', update);
     wc.on('enter-html-full-screen', () => {
@@ -1220,6 +1226,7 @@ class BrowserTabManager {
       id: tab.id,
       title: wc.getTitle() || tab.title || '',
       url: wc.getURL() || tab.url || 'about:blank',
+      favicon: String(tab.favicon || ''),
       active: tab.id === this.activeTabId,
       loading: wc.isLoading(),
       canGoBack: wc.canGoBack(),
@@ -1274,6 +1281,7 @@ class BrowserTabManager {
       view,
       url: normalizeBrowserUrl(url),
       title: '',
+      favicon: '',
       debuggerReady: false,
       fileChoosers: new Map(),
       uploadTargets: new Map(),

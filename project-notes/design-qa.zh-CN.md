@@ -51,6 +51,43 @@
 
 ---
 
+# Workbench 顶栏 Work Tabs 与固定资源验收 — 2026-07-28
+
+## 结论
+
+- 原面包屑替换为 3 个紧凑 Task/Chat Tab；inactive/active 均有边框，active
+  不使用底部颜色条。
+- Session Tab 右键菜单复用 Workbench Account Menu。Browser Preview 与菜单、
+  实时 PiP Browser 可同时显示，不再互相遮蔽。
+- 固定资源使用 Session Tabs 与搜索之间的独立 Shelf。Chip 静止时只显示 SVG，
+  Hover/Focus 时展开名称。
+- 空 Shelf 的 `+` 居中，并提供本地化 Hover 提示。
+- 搜索宽度为 168px，Actions 与 Shelf 之间保留 10px，accent drop 指示框不会
+  与搜索框相贴或重叠。
+- macOS Traffic Lights、58px 标题栏、Compact Density、原生文字选择拖动和
+  Browser `WebContentsView` 层叠保持正常。
+
+## 功能验收
+
+- File、Knowledge/Library Item、选中文字、Browser PiP 和最小化 Browser 胶囊
+  都可固定。
+- File/Text 可加入其他 Chat 草稿，不自动发送。
+- Browser PiP、最小化 favicon 按钮和固定 Browser 图标可拖到其他 Chat，
+  在目标 Browser 中创建同 URL 的独立页面。
+- 顶栏 Session/Resource 支持方向键、Home/End、Enter/Space、Delete/Backspace，
+  并提供 Session 直达、循环和移除快捷键。
+- Selection Markdown 使用 ASCII Storage Key 和 Unicode 显示名；历史 Unicode
+  Export Key 仍可读取。
+- 固定 Browser 在 Tool 执行层实施 Owner Control / Other Session Read-only。
+
+## 验证
+
+- Frontend Build 通过。
+- 聚焦套件通过：168 项资源/Library、148 项文字导出/Attachment、13 项标题栏
+  Layout。套件之间有重叠，不相加为总测试数。
+
+---
+
 # 文献库既有文档兼容性验收
 
 ## 对照目标
@@ -103,7 +140,7 @@
   隐藏，隐藏时调整最终尺寸，显示后立即及 80ms 后重绘；仍需真实往返确认不白屏。
 - 浮窗与最大化标题使用绿色 `浏览器` pill；最大化栏高 58px。
 - 默认浮窗 280 × 215px，可在 240 × 180px 到对话内容区域之间调整；最小化是
-  单一 40px 绿色 pill。
+  42px favicon-only 圆形按钮，缺失 favicon 时显示通用网页 SVG。
 - 操作期间使用当前页面自身的 PNG 截图代理；全屏恢复使用 Material
   `close_fullscreen` 图标，没有伪造网页内容。
 
@@ -112,9 +149,12 @@
 1. 文字窗口按钮改为有无障碍标签的 SVG 图标，并让原生页面边界同步浮窗。
 2. Electron 35 的高频 `setBounds` 改为渲染端去重、主进程 32ms 稳定合并。
 3. 拖动/缩放改为 pointer capture + 截图代理，释放后再恢复原生视图。
-4. 统一 20px/16px 外内圆角、下边距和阴影，最终最小化状态只保留绿色 pill。
+4. 统一 20px/16px 外内圆角、下边距和阴影；最小化状态最终改为只显示当前页
+   favicon 的圆形按钮。
 5. 全屏双向切换保持原生视图 attached-but-hidden，并在最终尺寸预渲染完成前保留代理。
 6. 初始尺寸由 560 × 430px 减半；移动和缩放边界统一到对话内容的 inset 矩形。
+7. PiP 标题栏改用指针坐标与 Shelf 矩形命中；最小化按钮复用相同的固定语义，
+   以 3px 阈值区分点击恢复与拖动固定。
 
 ## 验证
 

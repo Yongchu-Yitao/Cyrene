@@ -3,7 +3,7 @@
 [English](CONTEXT_DEV_PROGRESS.md) ·
 [简体中文](CONTEXT_DEV_PROGRESS.zh-CN.md)
 
-更新时间：2026-07-26
+更新时间：2026-07-28
 
 分支：`feature/project-literature-library`
 
@@ -38,6 +38,21 @@ Cyrene 的包边界重构已经完成：
 - Electron 开发模式只保留 `src/cyrene/local_cli.py` 这个物理启动垫片；
 - 启动时会先把 `store/cyrene.db` 迁移到
   `store/cyrene.runtime.database`，再初始化数据库。
+
+## 当前 Workbench 顶栏检查点
+
+- 原面包屑已替换为最近主动打开的 3 个 Task/Chat Session 实时 MRU，并提供
+  持久化置顶/隐藏状态与右键菜单。
+- 独立的 Pinned Resource Shelf 可接收 Chat File、Knowledge/Library Item、
+  macOS 原生选中文字，以及 Electron Browser PiP/最小化胶囊。
+- File/Text 可加入其他 Chat 的输入草稿；选中文字和无附件知识库条目会固化为
+  Markdown。
+- Browser 可拖到其他 Chat，在目标 Session 的独立 Browser Manager 中复制
+  同 URL 页面；顶栏已支持方向键、直达/循环切换和移除快捷键。
+- 固定 File 作为后续 Agent Turn 的全局用户资源索引；固定 Browser 由 Owner
+  控制，其他 Session 在 Tool 执行层只读。
+- 详细实现与验收基线见
+  [顶栏 Work Tabs 与固定资源 Handoff](topbar-work-tabs-design.zh-CN.md)。
 
 ## 对 2026-06-01 原始目标的核查
 

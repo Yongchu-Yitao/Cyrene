@@ -14,6 +14,10 @@ TOOL_DEF = {
             "type": "object",
             "properties": {
                 "url": {"type": "string", "description": "Optional URL to screenshot. Omit to screenshot the current page."},
+                "resource_id": {
+                    "type": "string",
+                    "description": "Optional pinned topbar browser resource id. Captures the owner's current page read-only and cannot be combined with url.",
+                },
             },
         },
     },
@@ -23,7 +27,24 @@ TOOL_DEF = {
 async def _tool_browser_screenshot(args: dict[str, Any], _bot: Any, _chat_id: int, _db_path: str, _notify_state: dict[str, bool] | None) -> str:
     from cyrene.browser import screenshot
     url = str(args.get("url") or "").strip()
-    result = await screenshot(url)
+    resource_id = str(args.get("resource_id") or "").strip()
+    read_only = False
+    if resource_id:
+        if url:
+            return "Screenshot failed: url cannot be used with a pinned browser resource."
+        from cyrene.agent.context import current_session_id
+        from cyrene.workbench.pinned_resources import browser_snapshot_target
+        try:
+            target = browser_snapshot_target(resource_id, current_session_id())
+        except ValueError as exc:
+            return f"Screenshot failed: {exc}"
+        read_only = bool(target.get("readOnly"))
+        result = await screenshot(
+            session_id=str(target.get("ownerSessionId") or ""),
+            read_only=True,
+        )
+    else:
+        result = await screenshot(url)
     if result.get("ok"):
         path = str(result.get("path") or "")
         parts = [
@@ -31,6 +52,8 @@ async def _tool_browser_screenshot(args: dict[str, Any], _bot: Any, _chat_id: in
             f"Path: {path or '—'}",
             f"Title: {result.get('title', '—')}",
         ]
+        if read_only:
+            parts.append("Access: read-only pinned browser screenshot; interactions are not permitted.")
         from cyrene.runtime.attachments import analyze_image_with_primary_model, primary_model_supports_vision
 
         if path and primary_model_supports_vision():

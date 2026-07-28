@@ -11,6 +11,10 @@
 - Web Server 仅供本机访问，不适合直接暴露到公网。
 - Tool Permission 能减少误操作，但不等同于 OS、VM 或 Container Sandbox。
 - Electron Browser Cookie 和 Login 会跨 Project 共享。
+- 把 File 固定到顶栏是明确的全局分享动作：所有 Session 都能发现其索引，并可
+  通过正常 File Tool 读取。
+- 其他 Session 固定的 Browser 在 Cyrene Tool 层只读，但所有 Electron Browser
+  Session 仍共享同一个本地 Cookie Partition。
 
 ## 模型、集成与预算
 

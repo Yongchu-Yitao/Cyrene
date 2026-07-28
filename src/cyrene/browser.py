@@ -1936,12 +1936,20 @@ async def _httpx_navigate(
     return result
 
 
-async def screenshot(url: str = "", *, full_page: bool = True) -> dict[str, Any]:
+async def screenshot(
+    url: str = "",
+    *,
+    full_page: bool = True,
+    session_id: str | None = None,
+    read_only: bool = False,
+) -> dict[str, Any]:
     """Screenshot *url* or the current shared browser page.
 
     Returns ``{"ok": True, "path": "/tmp/…png"}`` or ``{"ok": False, "error": "..."}``.
     """
     url = str(url or "").strip()
+    if read_only and url:
+        return {"ok": False, "error": "Read-only browser screenshots cannot navigate."}
     if url:
         url = _normalize_http_url(url)
         try:
@@ -1952,10 +1960,19 @@ async def screenshot(url: str = "", *, full_page: bool = True) -> dict[str, Any]
         try:
             nav = {"ok": True, "title": ""}
             if url:
-                nav = await _electron_browser_rpc("navigate", {"url": url, "maxChars": 0})
+                nav = await _electron_browser_rpc(
+                    "navigate",
+                    {"url": url, "maxChars": 0},
+                    session_id=session_id,
+                )
             if nav.get("ok") is not True:
                 return {"ok": False, "error": str(nav.get("error") or "Electron desktop browser navigation failed.")}
-            result = await _electron_browser_rpc("screenshot", {})
+            result = await _electron_browser_rpc(
+                "screenshot",
+                {},
+                session_id=session_id,
+                round_id="" if read_only else None,
+            )
             if result.get("ok") is not True:
                 return {"ok": False, "error": str(result.get("error") or "Electron desktop browser screenshot failed.")}
             TEMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -1992,11 +2009,22 @@ async def screenshot(url: str = "", *, full_page: bool = True) -> dict[str, Any]
         return {"ok": False, "error": browser_runtime_unavailable_message(exc)}
 
 
-async def inspect_page(*, max_elements: int = 80, text_limit: int = 160) -> dict[str, Any]:
+async def inspect_page(
+    *,
+    max_elements: int = 80,
+    text_limit: int = 160,
+    session_id: str | None = None,
+    read_only: bool = False,
+) -> dict[str, Any]:
     """Return a structured snapshot of visible, actionable elements on the current page."""
     if electron_browser_available():
         try:
-            result = _normalize_browser_result(await _electron_browser_rpc("inspect", {"maxElements": max_elements, "textLimit": text_limit}))
+            result = _normalize_browser_result(await _electron_browser_rpc(
+                "inspect",
+                {"maxElements": max_elements, "textLimit": text_limit},
+                session_id=session_id,
+                round_id="" if read_only else None,
+            ))
             if result.get("ok") is True:
                 result.setdefault(
                     "page_signal",

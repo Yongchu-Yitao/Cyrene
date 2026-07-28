@@ -3,7 +3,7 @@
 [English](CONTEXT_DEV_PROGRESS.md) ·
 [简体中文](CONTEXT_DEV_PROGRESS.zh-CN.md)
 
-Updated: 2026-07-26
+Updated: 2026-07-28
 
 Branch: `feature/project-literature-library`
 
@@ -42,6 +42,23 @@ level:
   physical compatibility launcher;
 - startup migrates `store/cyrene.db` to
   `store/cyrene.runtime.database` before database initialization.
+
+## Current Workbench Topbar Checkpoint
+
+- The breadcrumb is replaced by a real-time MRU of the three most recently
+  opened task/chat sessions, with persistent pin/hide state and a context menu.
+- A distinct Pinned Resource Shelf accepts chat files, Knowledge/Library items,
+  native macOS selected text, and floating/minimized Electron Browser surfaces.
+- File/text resources can be delivered to another chat draft. Selected text
+  and knowledge items without attachments are materialized as Markdown.
+- Browsers can be dropped on another chat to copy the URL into that session's
+  independent Browser manager. The topbar now supports arrow traversal,
+  direct/cyclic session switching, and removal shortcuts.
+- Pinned files are global user-resource indexes for later Agent turns. Pinned
+  Browsers are owner-controlled and read-only to other sessions at tool
+  execution.
+- The detailed implementation and acceptance baseline is maintained in
+  [Topbar Work Tabs and Pinned Resources Handoff](topbar-work-tabs-design.zh-CN.md).
 
 ## Audit of the Original 2026-06-01 Goals
 

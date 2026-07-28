@@ -883,6 +883,13 @@ def _resolve_tool_path(path_str: str) -> Path:
         current_attachment_paths,
     )
     att_map = current_attachment_paths()
+    try:
+        from cyrene.workbench.pinned_resources import pinned_file_paths
+        global_pinned_paths = pinned_file_paths()
+        if global_pinned_paths:
+            att_map = {**global_pinned_paths, **(att_map or {})}
+    except Exception:
+        pass
     if att_map:
         basename = Path(path_str).name
         if basename in att_map:

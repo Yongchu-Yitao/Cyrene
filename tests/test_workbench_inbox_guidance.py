@@ -81,6 +81,35 @@ async def test_tool_result_is_delivered_when_persistence_fails(tmp_path, monkeyp
     await inbox.close()
 
 
+async def test_structured_tool_error_is_marked_as_error(tmp_path):
+    from cyrene.workbench.inbox import WorkbenchAgentInbox
+
+    db_path = tmp_path / "workbench.db"
+    inbox = WorkbenchAgentInbox("chat_structured_error", str(db_path))
+
+    async def failed_tool() -> str:
+        return json.dumps({
+            "status": "error",
+            "error": {
+                "type": "invalid_arguments",
+                "message": "bad arguments",
+            },
+        })
+
+    inbox.submit_tool("call_error", "browser_tools", failed_tool)
+    result = await asyncio.wait_for(
+        inbox.wait_for_tool_result("call_error"), timeout=1
+    )
+    assert json.loads(result)["status"] == "error"
+    await inbox.close()
+    with sqlite3.connect(db_path) as conn:
+        payload_json = conn.execute(
+            "SELECT payload_json FROM workbench_agent_inbox "
+            "WHERE event_type='tool_result'"
+        ).fetchone()[0]
+    assert json.loads(payload_json)["is_error"] is True
+
+
 async def test_live_snapshot_exposes_current_tool_state_and_result_content():
     from cyrene.workbench.inbox import WorkbenchAgentInbox
 

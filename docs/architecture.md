@@ -148,6 +148,26 @@ secondary surfaces rather than separate legacy pages. The source lives under
 `src/webui/frontend`; the only generated web output root is
 `src/webui/static/app`.
 
+`WorkbenchTopbar` keeps two deliberately separate collections: a local
+MRU/pinned list of at most three task/chat session tabs, and a persistent
+Pinned Resource Shelf. Resource drag payloads use the internal
+`application/x-cyrene-work-resource+json` MIME; native macOS text drags are
+accepted as `text/plain` and materialized as Markdown. Knowledge attachments
+are resolved server-side so renderer payloads do not expose absolute paths.
+
+The pinned-resource registry is stored through the Workbench document store.
+Only compact file/browser indexes enter subsequent Agent context. File content
+is read on demand. Browser references carry an owner session: the owner retains
+normal control, while tool execution restricts other sessions to snapshot and
+screenshot operations. This is an execution-layer policy, not only a prompt
+instruction.
+
+Dropping a Browser on another conversation does not transfer the original
+Browser reference or elevate pinned-resource permissions. The renderer calls
+Electron `browser:create-tab` for the target session's `BrowserTabManager`, then
+synchronizes that conversation's PiP state through an event. Managers remain
+session-isolated; only the persistent cookie/login partition is shared.
+
 The Web UI binds to `127.0.0.1` and is served by the FastAPI backend. Electron
 generates a shared token for each launch, passes it to the Python child, and
 injects it as `X-Cyrene-Token` on desktop requests. The OS keyring is used for

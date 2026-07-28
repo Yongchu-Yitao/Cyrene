@@ -11,6 +11,7 @@ developer guides remain under [`docs/`](../docs/).
 - [Research Workbench Roadmap](research-workbench-roadmap.en.md)
 - [Completed WebUI / Workbench Consolidation Refactor Plan](COMPLETED-webui-workbench-consolidation-refactor-plan.en.md)
 - [Completed WebUI / Workbench Consolidation Implementation Log](COMPLETED-webui-consolidation-implementation-log.md)
+- [Topbar Work Tabs and Pinned Resources Handoff (Chinese)](topbar-work-tabs-design.zh-CN.md)
 - [Design QA](design-qa.md)
 - [Browser PiP Dynamic Avoidance Feasibility](browser-dynamic-layout-feasibility.en.md)
 

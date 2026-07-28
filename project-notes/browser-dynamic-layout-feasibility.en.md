@@ -45,12 +45,13 @@ and unnecessarily increases scroll height.
 
 ## Recommended interaction rules
 
-1. Enable avoidance only for visible PiP mode; clear it when minimized,
-   maximized, or shown in the browser tab.
+1. Enable avoidance for a visible PiP or 42px minimized floating control; clear
+   it when maximized or shown in the browser tab.
 2. Measure the available width on both sides and choose the wider reading lane.
 3. Enable avoidance only if that lane meets
    `min(360px, 45% of conversation width)`.
-4. Affect only rows that vertically intersect the PiP, with 12–16px extra gap.
+4. Affect only rows that vertically intersect the PiP/minimized surface, with
+   12–16px extra gap.
 5. For a right-side PiP, add `padding-inline-end`; for a left-side PiP, add
    `padding-inline-start`.
 6. Keep overlay behavior when the PiP is centered or both lanes are too narrow.

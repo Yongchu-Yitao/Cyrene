@@ -39,6 +39,28 @@ Fetch，交互 Tool 返回 Runtime 不可用。
 - 用户和 Agent 在同一 Conversation 操作相同 Tab/Profile。
 - 所有 Manager 共享 Partition，因此一次登录可供其他 Conversation 使用。
 
+### 固定 Browser 资源
+
+Browser PiP 整个标题栏和最小化 Browser 按钮都可拖到顶栏资源 Shelf。PiP 拖动
+用指针坐标直接判断 Shelf 矩形，因此即使 Electron 原生页面位于上层也能可靠
+固定；拖到其他位置仍只移动小窗。最小化按钮只显示当前网页 favicon（缺失时
+立即回退到 Browser SVG），普通点击恢复 PiP，超过拖动阈值后才进入固定交互。
+最小化按钮与 PiP 复用同一套浮窗坐标提交和消息避让逻辑，可在对话内容区域内
+自由移动并持久保持当前显示位置。拖向顶栏时，`body` 级 fixed 拖动代理会越过
+对话标题栏的裁剪和层叠上下文，因此图标从标题栏上方穿过并准确进入 Shelf。
+固定会保留原页面和 Owner Session，不移动或复制 Tab。所有 Session 的后续
+Agent Turn 都能发现该固定 Browser 的 Resource ID。
+
+把 PiP 标题栏、最小化 favicon 按钮或顶栏固定 Browser 图标拖到另一个
+Conversation Tab，会在目标 Session 的 Browser Manager 中创建同 URL 的新
+页面。该操作复制页面入口而不是转移 Owner/控制权；登录态因共享 Partition
+继续可用，但两边的 Tab、导航历史和后续操作互相独立。
+
+Owner Session 保留正常 Browser 控制。其他 Session 只能把 Resource ID 传给
+`browser_snapshot` 或 `browser_screenshot`；Navigate、Click、Type、Reload、
+History、Upload 和其他页面修改都会在 Browser 执行层被拒绝。顶栏右键菜单可
+显示只读页面预览，同时不会隐藏原 PiP View。
+
 ### 非 Electron Playwright
 
 - Lazy 启动并复用一个 Persistent Browser Context；

@@ -780,12 +780,52 @@ def test_workbench_chat_opens_bounded_browser_window_from_live_browser_events():
     assert "wbc-browser-title-pill" not in minimized_surface
     assert "WBC_ICONS.windowMaximize" not in minimized_surface
     assert "WBC_ICONS.windowRestore" not in minimized_surface
+    assert "wbc-browser-restore-favicon" in minimized_surface
+    assert "displayBrowserFavicon" in minimized_surface
+    assert "beginMinimizedDrag" in minimized_surface
+    assert 'draggable="true"' not in minimized_surface
+    assert 'ref={minimizedRef}' in minimized_surface
+    assert 'onError={function (event) { event.currentTarget.hidden = true; }}' in minimized_surface
+    assert 'className="fallback"' in minimized_surface
     assert "wbc-material-icon close-fullscreen" in source
     assert 'close-fullscreen-rounded.svg' in styles
     assert "height: 58px;" in styles
     assert "wbc-browser-title-pill" in source
     assert "wbc-browser-restore-icon" not in source
     assert "browser-status-dot running" not in source.split("function WbcBrowserFloatingSurface", 1)[1].split("function WbcMain", 1)[0]
+
+
+def test_browser_floating_surfaces_use_pointer_shelf_hit_testing_and_favicon_state():
+    root = Path(__file__).resolve().parent.parent
+    main = (root / "electron" / "main.js").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
+    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
+
+    assert "wc.on('page-favicon-updated'" in main
+    assert "favicon: String(tab.favicon || '')" in main
+    assert "favicon: ''" in main
+    assert "function wbcPointInsideResourceShelf(clientX, clientY)" in source
+    assert 'document.querySelector(".workbench-resource-shelf")' in source
+    assert "updateResourceShelfTarget(interaction, event.clientX, event.clientY);" in source
+    assert "pinBrowserFromPointerInteraction(interaction);" in source
+    assert 'window.dispatchEvent(new CustomEvent("cyrene:resource-shelf-drag-state"' in source
+    assert 'window.addEventListener("cyrene:resource-shelf-drag-state"' in workbench
+    assert 'className="wbc-browser-title-pill"' in source
+    title_pill = source.split('className="wbc-browser-title-pill"', 1)[1].split("</span>", 1)[0]
+    assert "onPointerDown" not in title_pill
+    assert "onDragStart" not in title_pill
+    assert ".wbc-browser-restore-float.dragging" in styles
+    assert ".wbc-browser-restore-favicon img" in styles
+    assert "function commitFloatingFrame(" in source
+    assert "function commitMinimizedFrame(" in source
+    assert "ensureMinimizedDragGhost(interaction);" in source
+    assert 'ghost.classList.add("dragging", "wbc-browser-drag-ghost")' in source
+    assert 'stage.querySelector(".wbc-browser-restore-float")' in source
+    assert ".wbc-browser-restore-float.wbc-browser-drag-ghost" in styles
+    assert "position: fixed;" in styles.split(
+        ".wbc-browser-restore-float.wbc-browser-drag-ghost {", 1
+    )[1].split("}", 1)[0]
 
 
 def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
@@ -1623,6 +1663,45 @@ def test_workbench_marks_run_finalizing_before_workspace_save():
     saved = normal_completion.index('"type": "saved"')
 
     assert reply_done < finalizing < workspace_finalize < saved
+
+
+def test_workbench_terminal_reply_snapshot_is_authoritative_after_streamed_calls():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "route" / "workbench" / "chat.py").read_text(
+        encoding="utf-8"
+    )
+    run_streaming = source.split("async def run_streaming", 1)[1].split(
+        "run, _is_new", 1
+    )[0]
+    normal_completion = run_streaming.split("if not run.saw_reply_events:", 1)[1]
+    fallback_body, after_fallback = normal_completion.split(
+        "# A streamed model call can finish", 1
+    )
+
+    assert '"type": "reply_delta"' in fallback_body
+    assert '"type": "reply_done"' not in fallback_body
+    assert 'await run.publish({"type": "reply_done", "response": reply})' in after_fallback
+
+
+def test_workbench_pip_reflow_does_not_compete_with_scroll_anchor():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    main = source.split("function WbcMain", 1)[1].split(
+        "function WbcQuestionPrompt", 1
+    )[0]
+    thread_rule = styles.split(".wbc-thread {", 1)[1].split("}", 1)[0]
+
+    assert "avoidanceApplyingRef.current = true;" in main
+    assert main.count("if (avoidanceApplyingRef.current) return;") == 2
+    assert "avoidanceApplyingRef.current = false;" in main
+    assert "overflow-anchor: none;" in thread_rule
+    assert "finalizing={!!(runtime && runtime.finalizing)}" in main
+    assert 'wbcT("workbenchChat.status.saving", "Saving")' in source
 
 
 def test_workbench_context_tab_has_live_session_inbox_card():
@@ -3065,6 +3144,12 @@ def test_workbench_shortcuts_module_exposes_actions_and_platform_aware_mod():
     assert "new-task" in ids
     assert "composer-send" in ids
     assert "composer-newline" in ids
+    assert "switch-session-1" in ids
+    assert "switch-session-2" in ids
+    assert "switch-session-3" in ids
+    assert "next-session" in ids
+    assert "previous-session" in ids
+    assert "close-session-tab" in ids
 
 
 def test_workbench_shortcuts_matches_mod_k_on_windows_user_agent():

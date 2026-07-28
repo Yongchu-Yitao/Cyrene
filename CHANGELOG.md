@@ -22,6 +22,32 @@
 同时将兼容能力改为协议层始终开启、将工具包选择改为可持久保存的复选框，并
 修正远程设置列表圆角裁切和“浏览器工具”命名。
 
+### 2026-07-28 Workbench 顶栏工作集与固定资源
+
+- 原面包屑改为最近 3 个 Task/Chat Session Tab，手动打开、新建和切换会实时
+  更新 MRU；右键支持置顶、复制标题、移出顶栏，以及查看 Chat 的 Browser
+  缩略图和文件列表。
+- Session Tabs 与搜索之间新增 Pinned Resource Shelf。Chat 文件卡片、
+  Knowledge/Library 行或卡片、macOS 原生选中文字，以及 Browser PiP/最小化
+  胶囊均可拖入；固定项默认只显示 SVG，Hover/Focus 才展开名称。
+- Browser PiP 标题栏改用 Shelf 矩形命中，不再依赖原生 View 上方不稳定的
+  `elementFromPoint`；最小化 Browser 改为只显示当前网页 favicon 的圆形按钮，
+  favicon 失败立即回退 Browser SVG。点击恢复；拖动超过阈值后可在对话区自由
+  移动或固定到 Shelf，并复用 PiP 消息避让。顶层代理保证拖动图标从标题栏上方
+  穿过，不再被对话区裁切。
+- Browser PiP、最小化按钮或已固定 Browser 可拖到另一个 Conversation Tab；
+  目标对话会在自己的 Browser Manager 中新建同 URL 页面，共享登录 Partition
+  但不共享页面控制权。
+- 顶栏加入完整键盘控制：方向键/Home/End 遍历，Delete/Backspace 移除；
+  `Cmd/Ctrl+1…3` 直达、`Ctrl+Tab` 前后切换、`Cmd/Ctrl+W` 移除当前 Tab。
+- File/Text 可拖到其他 Chat Tab 的输入草稿。选中文字和无附件知识库条目会
+  固化为 Markdown；新文件使用 ASCII storage key，同时兼容旧版 Unicode
+  导出文件名。
+- 固定 File 作为全局用户资源索引进入后续 Agent Turn。固定 Browser 由 Owner
+  Session 保留控制，其他 Session 在 Tool 执行层仅允许 Snapshot/Screenshot。
+- 搜索按钮收紧为 168px，Shelf 与操作区保留 10px 间距；空 Shelf 的 `+`
+  增加 Hover 提示。
+
 ### 直接远程 Harness：新的首选控制路径
 
 - **新增 `RemoteHarness` Agent Tool** — 控制端可以对当前对话明确选择的配对

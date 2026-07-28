@@ -14,6 +14,10 @@ TOOL_DEF = {
             "type": "object",
             "properties": {
                 "max_elements": {"type": "integer", "description": "Maximum number of visible elements to return. Default 80, max 200."},
+                "resource_id": {
+                    "type": "string",
+                    "description": "Optional pinned topbar browser resource id. This is a strictly read-only snapshot when the browser belongs to another session.",
+                },
             },
         },
     },
@@ -55,13 +59,32 @@ async def _tool_browser_snapshot(args: dict[str, Any], _bot: Any, _chat_id: int,
         max_elements = int(args.get("max_elements") or 80)
     except (TypeError, ValueError):
         max_elements = 80
-    result = await inspect_page(max_elements=max_elements)
+    resource_id = str(args.get("resource_id") or "").strip()
+    if resource_id:
+        from cyrene.agent.context import current_session_id
+        from cyrene.workbench.pinned_resources import browser_snapshot_target
+        try:
+            target = browser_snapshot_target(resource_id, current_session_id())
+        except ValueError as exc:
+            return f"Browser snapshot failed: {exc}"
+        result = await inspect_page(
+            max_elements=max_elements,
+            session_id=str(target.get("ownerSessionId") or ""),
+            read_only=True,
+        )
+        if isinstance(result, dict):
+            result["resource_id"] = resource_id
+            result["read_only"] = bool(target.get("readOnly"))
+    else:
+        result = await inspect_page(max_elements=max_elements)
     if result.get("ok") is False:
         return f"Browser snapshot failed: {result.get('error', 'unknown error')}"
     parts = [
         f"Title: {result.get('title', '—')}",
         f"URL: {result.get('url', '—')}",
     ]
+    if result.get("read_only"):
+        parts.append("Access: read-only pinned browser snapshot; interactions are not permitted.")
     snapshot_token = str(result.get("snapshot_token") or "").strip()
     if snapshot_token:
         parts.append(

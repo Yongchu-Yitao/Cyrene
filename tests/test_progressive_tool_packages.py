@@ -317,6 +317,77 @@ async def test_gateway_discover_describe_invoke_routes_to_concrete_handler(monke
 
 
 @pytest.mark.asyncio
+async def test_gateway_repairs_nested_invoke_capability_id(monkeypatch):
+    from cyrene.tooling import execute_wire_tool
+    from cyrene.tooling import executor as tool_executor
+
+    concrete = AsyncMock(return_value="opened")
+    monkeypatch.setattr(tool_executor, "_execute_tool", concrete)
+
+    invoked = json.loads(await execute_wire_tool(
+        "browser_tools",
+        {
+            "operation": "invoke",
+            "arguments": {
+                "capability_id": "browser.navigate",
+                "url": "https://www.bilibili.com",
+                "reason": "starting_page",
+            },
+        },
+        None, 0, "", None,
+    ))
+
+    assert invoked["status"] == "success"
+    concrete.assert_awaited_once_with(
+        "browser_navigate",
+        {
+            "url": "https://www.bilibili.com",
+            "reason": "starting_page",
+        },
+        None, 0, "", None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_repairs_nested_describe_capability_ids():
+    from cyrene.tooling import execute_wire_tool
+
+    described = json.loads(await execute_wire_tool(
+        "browser_tools",
+        {
+            "operation": "describe",
+            "arguments": {"capability_ids": ["browser.navigate"]},
+        },
+        None, 0, "", None,
+    ))
+
+    assert described["status"] == "success"
+    assert described["capabilities"][0]["id"] == "browser.navigate"
+
+
+@pytest.mark.asyncio
+async def test_gateway_invalid_arguments_include_expected_call():
+    from cyrene.tooling import execute_wire_tool
+
+    result = json.loads(await execute_wire_tool(
+        "browser_tools",
+        {"operation": "invoke", "query": "https://www.bilibili.com"},
+        None, 0, "", None,
+    ))
+
+    assert result["status"] == "error"
+    assert result["error"]["type"] == "invalid_arguments"
+    assert result["error"]["expected_call"] == {
+        "tool": "browser_tools",
+        "arguments": {
+            "operation": "invoke",
+            "capability_id": "<capability_id>",
+            "arguments": {},
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_execute_capability_routes_through_explicit_catalog_snapshot(monkeypatch):
     from cyrene.tooling import build_catalog_snapshot, execute_capability
     from cyrene.tooling import executor as tool_executor
