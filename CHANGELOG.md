@@ -2,6 +2,247 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.7.0b6] - 2026-07-28
+
+这是 `0.7.0` 的第六个测试版，完整包含 `v0.7.0-beta.5` 之后的全部提交与
+发布工作区改动。本版新增与 Workbench 共享会话和运行状态的正式交互式 CLI，
+把桌面顶栏升级为可切换的 Task/Chat 工作集和持久固定资源 Shelf，补齐
+Workbench 记忆捕获、通知导航与配置密钥恢复边界，并修复 Electron 原生
+Browser View 在尺寸切换时未真正更新 Chromium Viewport 的问题。
+
+Linux 桌面发布也在本版完成专项加固：AppImage 纯白窗口被定位到 Electron GPU
+Compositor 与部分 Wayland、Mesa、虚拟 GPU 或旧驱动组合不兼容。Linux 现在
+默认使用软件渲染，并新增主 Renderer 故障诊断、显式加载失败处理和真实
+AppImage 截图烟测。Release Workflow 同时发布 AppImage、Debian `.deb` 与
+Red Hat/Fedora 系 `.rpm`，不再丢弃构建阶段已经生成的系统安装包。
+
+### 功能更新
+
+#### 与 Workbench 共享的正式交互式 CLI
+
+- **裸 `cyrene` 成为推荐终端入口** — 未带子命令时会发现健康 Daemon，必要时
+  后台启动并等待服务就绪，然后进入交互式 Chat；`cyrene chat` 提供等价的显式
+  入口。原 `start/status/stop/do/session` 等管理命令继续兼容。
+- **复用正式 Workbench Conversation** — CLI 不建立第三套 Agent Loop，也不
+  使用孤立的临时 Session。它可以创建、列出、选择和继续持久 Chat，显示所属
+  Project，并与 Web/Electron 看到相同的消息、任务、记忆和 Run 状态。
+- **新增按 Run 隔离的 NDJSON 流** — Workbench Chat Route 向当前客户端流式
+  发送公开 `run_start`、Phase、Tool、Plan、Reasoning、Reply、Pending
+  Question、Finalize、Interrupt 和 Error Event。CLI 不依赖会被多客户端竞争
+  消费的全局 SSE Queue，也不会混入其他会话事件。
+- **断线与恢复使用持久 Cursor** — `cyrene chat --chat <id> --resume
+  --cursor <n>` 可以从事件序号继续当前或最近 Run；`--list` 列出可恢复对话，
+  非交互调用也能明确选择 Chat，而不是表面接受任意 Session、实际固定落到
+  `run_live`。
+- **实时终端渲染完整 Agent 进度** — Rich 行式 UI 显示随机且不连续重复的
+  `✶ ✸ ✹ ✺ ✷ ◌` 活动符号、当前阶段、Tool Start/Progress/Finish、Plan 与
+  Step 状态、流式回复和最终总耗时。它保留 Shell Scrollback，不引入全屏 TUI。
+- **模型思考默认紧凑展示** — Reasoning 默认折叠为“思考了 Ns”，`Ctrl+O`
+  可以展开或再次折叠本轮公开思考内容；`/config` 的 CLI Preferences 可持久化
+  `thinking=compact|expanded`，且不会输出隐藏推理、Credential 或未脱敏参数。
+- **权限与问题在终端内闭环** — 收到 Pending Question 或 Permission Choice
+  时暂停动态状态、显示选项或文本输入，并通过正式 Answer Route 继续同一运行。
+  CLI 不自动批准；非交互模式遇到确认会返回明确的机器可读失败。
+- **附件与输入草稿可管理** — `/attach`、`/attachments` 和 `/detach` 使用
+  Workbench Attachment Contract 排队、查看和移除文件，发送后由同一 Chat
+  Run 消费；文件错误、大小限制和服务端拒绝会显示为可操作错误。
+- **新增完整会话命令面** — `/new`、`/resume`、`/mode`、`/status`、
+  `/deep-reflect`、`/deep-research`、`/context`、`/config`、`/mcp`、
+  `/help` 与 `/exit` 均由正式交互客户端处理；新的对话式 CLI 使用 `/new`
+  建立独立 Chat，不继承 Legacy REPL 的 `/clear` 语义。
+- **`/context` 对齐 App Context Card** — 读取同一份 Context Composition 与
+  Context Blocks，展示消息 Token、彩色占比条，以及 System Prefix、
+  Ephemeral Injection 和 Conversation Message 分组；User、Assistant、
+  Tool 与系统注入保持一致缩进和语义颜色。
+- **`/config` 覆盖常用管理面** — 可以查看或更新 Backend Settings、Model、
+  Capability Package/Tool、Key、SOUL、Integration、MCP、Skill、Remote、
+  Profile、Budget、Data 与 CLI Preferences，而不要求另开浏览器完成基础配置。
+- **终端交互边界更可靠** — Prompt Toolkit 提供异步输入、历史、补全、方向键
+  选择和 `Alt/Esc+Enter` 多行输入。第一次 `Ctrl+C` 只提示确认，两秒内再次
+  按下才退出；退出 CLI 不会误杀 Daemon 持有的后台 Run。
+- **支持自动化与管道** — `cyrene chat --json <text>` 逐行输出稳定公共 Event，
+  非 TTY 模式不启动 ANSI Live Renderer，NDJSON Decoder 可处理拆包、多行同包
+  和无结尾换行，适合脚本、日志采集与 CI。
+- **Electron 与 CLI 复用同一 Backend** — Electron 启动后在独立临时目录发布
+  当前 URL、Token、Electron PID 与 Backend PID。Unix 文件权限固定为 `0600`，
+  写入使用临时文件原子替换并在所属进程退出时清理，CLI 不再启动第二个会争用
+  Runtime DB、Scheduler 或端口的服务。
+- **本地认证自动衔接** — CLI 对独立 Daemon 读取显式
+  `CYRENE_AUTH_TOKEN`，对 Electron 读取上述本地 Connection Capability，
+  所有请求继续发送 `X-Cyrene-Token`；认证失败会说明连接方式，而不是只返回
+  模糊 HTTP Error。
+- **新依赖进入正式锁定环境** — `prompt-toolkit>=3.0.52` 与 `rich>=15.0.0`
+  加入核心依赖和 `uv.lock`，确保普通安装、PyInstaller 与开发环境获得相同的
+  CLI，而不是运行时静默降级。
+
+#### Workbench 顶栏工作集与固定资源
+
+- **Breadcrumb 替换为最多 3 个实时 Work Tab** — 手动打开、新建或切换
+  Task/Chat 会更新 MRU；Tab 混合显示 Task 与 Conversation，刷新 Chat 列表时
+  保持当前选择和最近顺序同步。
+- **Tab 状态可固定也可移出顶栏** — Context Menu 支持置顶/取消置顶、复制标题、
+  查看 Chat Browser/File 资源和移除。移除只影响顶栏集合，不删除 Chat、
+  不停止 Agent Run，也不修改底层 Task。
+- **新增独立 Pinned Resource Shelf** — Shelf 位于 Session Tabs 与 Search
+  之间，可接收 Chat File Card、Knowledge/Library Row 或 Card、macOS 原生
+  选中文字，以及浮动/最小化 Electron Browser。
+- **固定项保持紧凑但可访问** — File/Browser 默认仅显示 SVG，Hover 或键盘
+  Focus 才展开名称；空 Shelf 的 `+` 提供 Hover Hint，Search 收紧到 `168px`，
+  Shelf 与右侧 Action 保持 `10px` 安全间距。
+- **Selected Text 和 Knowledge 可固化为 Markdown** — 无 Attachment 的
+  Knowledge Item 与原生选中文字会写成可持久文件；新 Export 使用 ASCII
+  Storage Key，同时 Route 继续解析旧版 Unicode Export Name。
+- **资源可以投递到其他 Chat Draft** — File/Text 拖到另一个 Conversation Tab
+  会进入目标 Composer 的 Attachment Draft，不会自动发送，也不会改变源资源。
+- **Browser 可跨 Conversation 复制页面** — PiP、favicon 最小化按钮或固定
+  Browser 拖到另一 Chat 后，目标 Session 的独立 `BrowserTabManager` 新建同
+  URL 页面。两边共享登录 Partition，但不共享 DOM、Navigation 或控制权。
+- **PiP 固定命中不再依赖原生 View DOM** — Electron `WebContentsView` 覆盖
+  页面时 `elementFromPoint` 不稳定，现改为直接检测 Shelf Rectangle；
+  Body-level Drag Proxy 可以越过标题栏和对话裁切边界。
+- **最小化 Browser 改为 favicon 圆形按钮** — favicon 缺失或加载失败时立即
+  回退 Browser SVG；点击恢复，拖过阈值后可以移动、固定或投递到其他 Chat，
+  并继续复用 PiP 的消息避让逻辑。
+- **固定 File 进入后续 Agent Context** — Registry 只注入紧凑的全局用户资源
+  索引，正文按需读取，不把全部文件内容常驻 Prompt。
+- **固定 Browser 有明确 Owner 权限** — Owner Session 保留完整控制；其他
+  Session 即使知道 Resource ID，也在 Tool Execution Layer 只能调用
+  Snapshot/Screenshot，不能导航、点击、输入、刷新、上传或静默夺取页面。
+- **资源 Registry 正式持久化** — Upsert 去重、删除、Library Source Metadata、
+  Selected-text Materialization、Global File Context 和 Browser Read-only
+  Resolution 均进入 Workbench Document Store 与专门 API。
+- **完整键盘控制** — Focus 后用方向键和 Home/End 遍历 Session/Resource，
+  Enter/Space 打开，Delete/Backspace 移除；`Cmd/Ctrl+1…3` 直达 Work Tab，
+  `Ctrl+Tab` / `Ctrl+Shift+Tab` 循环，`Cmd/Ctrl+W` 移出当前 Tab，Project
+  Shortcut 调整为 `Cmd/Ctrl+Shift+1`。
+
+#### 记忆捕获、Entity 与配置数据可靠性
+
+- **Workbench Run 结束时携带可验证证据** — Memory Capture 接收当前
+  Session/Chat、用户语言和 Verified Tool Evidence；只纳入本轮成功结果，
+  排除失败、陈旧或未完成调用，减少把错误 Tool Output 固化成长期事实的风险。
+- **项目记忆遵循用户语言** — `SaveProjectMemory` Contract 明确要求目标语言，
+  英文占优的混合文本会按用户设置规范化；中性 Path/Identifier 不做无意义翻译。
+- **默认 Project Scope 不再混同 Global Short-term Memory** — Workspace
+  Resolver 区分默认项目、显式 Workspace 与全局存储，避免默认项目事实写入或
+  查询到错误作用域。
+- **Memory Search 更准确且有界** — 多关键词使用 OR 召回，过滤 Stale Item，
+  对大结果集限制数量和字符；对外 Search Payload 不暴露内部 History 字段，
+  Workbench Payload 也隐藏内部 Task Report。
+- **Citation 与变更历史兼容回填** — 序列化为新旧 Memory Item 补充 Citation、
+  Created/Updated History；旧记录可从 Timestamp 回填，不要求破坏性迁移。
+- **Steward 同时读取 Legacy 与 Workbench Archive** — 后台记忆整理扫描默认
+  Workspace 与各 Project 的最近 Session Markdown，按文件数、单文件字符和
+  总字符设置边界；按修改时间判断新内容并跳过旧式每日文件的重复读取。
+- **Foreground Entity Extraction 优先** — Agent Prompt 和 Entity Store 在
+  当前 Turn 主动提取确定实体，Steward 作为后台补偿；Stored Entity 更新补充
+  Source、Confidence 与重复合并测试，降低只依赖定时后台扫描造成的遗漏。
+- **Capture 调度接口可扩展** — `schedule_capture` 接受附加关键字参数，使
+  Route 可以传递 Evidence、Language 和 Session Metadata，同时保持旧调用兼容。
+- **配置密钥不再因进程身份变化被误判** — OS Keyring 与开发/安装进程身份可能
+  不一致，曾导致共享 `DATA_DIR` 的有效 `config.enc` 被当作损坏。现在使用与
+  配置同目录、权限为 `0600` 的 Installation-local Fernet Key，并用独占创建
+  解决首次启动竞态。
+- **加密配置失败时保留现场** — 已有 `config.enc` 缺 Key、Key 格式无效或
+  `InvalidToken` 时明确失败，绝不生成替代 Key、绝不从陈旧 Legacy Backup
+  覆盖现有数据。Portable Backup 继续导出逻辑 Snapshot，并在目标安装重新加密。
+- **移除不再使用的 Keyring 打包负担** — Python Dependency、`uv.lock` 与
+  PyInstaller Collection 不再包含 `keyring`，Headless Linux 也不会在启动或
+  Smoke Test 时打印无可用 Secret Service 的长 Traceback。
+
+#### 通知、Agent 响应与界面细节
+
+- **通知可以回到准确上下文** — Notification Row/Action 保存 Project、Chat、
+  Task 或相关 Resource 信息；点击后切换对应 Workspace/Session，而不是只标记
+  已读。Workspace Display Name 通过统一 Helper 生成。
+- **通知交互与无障碍补齐** — 新增中英文 Action Translation、Hover/Focus
+  样式、可点击状态与键盘路径，通知项在高对比和不同字号下保持清晰。
+- **Agent 等待优先使用 Inbox Wakeup** — Prompt 与 Subagent Monitoring 避免
+  固定两秒 Sleep/Busy Poll；有新 Guidance、Question 或 Completion 时通过
+  正式事件唤醒，降低空转和延迟。
+- **Learning Skill 保持 Progressive Disclosure** — Learned Skill 不自动塞入
+  Router；Capability Package 与 Tool Metadata 不污染 Model Context，
+  Catalog Snapshot 继续冻结当轮可用边界。
+- **后台 Renderer 保持节能** — Electron Browser/Quick Chat 等后台页面使用
+  适当的 `backgroundThrottling`，避免隐藏窗口持续以前台刷新频率消耗资源。
+- **Model Fallback Progress 本地化** — Workbench 在模型回退期间显示明确的
+  中英文进度，不把可恢复切换表现为无响应。
+- **Project Rail 英文按钮更紧凑** — “New project” 收敛为 “New”，在窄 Rail
+  与大字号下减少挤压；README 的 Current Limitations Link 恢复到正式文档索引。
+
+### 技术细节
+
+#### Electron Browser View 与 Linux 白屏修复
+
+- **修复原生 Browser 从 PiP 恢复后 Viewport 未收敛** — Electron 35 可能接受
+  Hidden `WebContentsView.setBounds()`，却不向 Chromium Layout Viewport
+  发送 Resize。结果会把 PiP 尺寸页面包进全屏 Shell，并在过渡中暴露白面。
+- **尺寸切换现在主动验证** — 每次 Transition 读取 `window.innerWidth/Height`
+  与目标 Bounds 比对；首次未命中时执行 1px Geometry Pulse、Invalidate 和
+  有界重试，View 重新 Attach 后再次校验，最终失败会写明确 Warning。
+- **Bitmap Proxy 延长到真实 Frame 就绪** — 原生 View 在最终 Viewport
+  `capturePage` 完成前继续由 Renderer Bitmap 遮挡，不再因为 Native
+  Compositor 提前显示而闪出白色中间帧。
+- **Linux 默认关闭硬件加速** — AppImage 纯白窗口的主因是 Chromium GPU
+  Compositor 在部分 Wayland/Mesa、虚拟 GPU 和旧驱动组合下启动但不输出有效
+  Surface。Linux 现在在 `app.ready` 前调用软件渲染回退；确认驱动正常时可用
+  `CYRENE_ENABLE_HARDWARE_ACCELERATION=1` 显式恢复。
+- **主窗口失败不再静默变白** — `did-fail-load`、`render-process-gone` 和
+  `unresponsive` 写入 `cyrene_error.log`；Cache Clear 与 `loadURL` 改为严格
+  Await，失败显示可定位日志路径的 Window Error。
+- **新增桌面界面烟测模式** — `--desktop-smoke-test` 使用隔离 Electron Profile，
+  等待 React Root 真正挂载和 Launch Screen 移除，再 `capturePage` 检查至少
+  100 个非白像素；空 Root、永久 Launch Screen、空截图或纯白 Surface 都以
+  非零状态阻止发布。
+- **Release 在真实 AppImage Runtime 下测试** — Linux CI 通过 `xvfb-run` 和
+  `--appimage-extract-and-run` 启动最终 AppImage，不再只运行内部 PyInstaller
+  Binary 的 Import Smoke。
+
+#### Linux 安装包与发布链路
+
+- **保留通用 AppImage** — x64 AppImage 继续作为无需安装的便携包，适合不同
+  Linux Distribution；使用说明补充执行权限和软件渲染开关。
+- **正式发布 Debian Package** — `electron-builder` 原本已经生成 `.deb`，
+  但 Artifact Step 只上传 AppImage，导致 Release 丢包。本版把 `.deb` 纳入
+  强制 Artifact Match 和最终 Prerelease Assets。
+- **新增 RPM Package** — Linux Target 增加 x64 `rpm`，覆盖 Fedora、RHEL、
+  CentOS Stream、Rocky Linux 与 AlmaLinux 的常规包管理安装路径。
+- **三种 Linux 产物统一发布** — Workflow 使用 `linux-packages` Artifact 同时
+  携带 `Cyrene-*-x64.AppImage`、`.deb` 和 `.rpm`；任一目标缺失都会因
+  `if-no-files-found: error` 或 Release Gate 失败，而不是悄悄发布不完整版本。
+- **中英文安装文档同步** — 分别给出 `chmod +x`、`apt install ./...deb` 与
+  `dnf install ./...rpm` 的可复制命令，并解释 Linux Software Renderer 默认值。
+
+#### 契约、测试、文档与 beta6 发布
+
+- **CLI 回归覆盖完整协议面** — 覆盖 NDJSON 拆包、认证错误、Parser、单次与交互
+  模式、Chat/Project 选择、Run Cursor 恢复、附件、Pending Question、
+  Ctrl+C/Ctrl+O、Spinner、Context、Config 与裸 `cyrene` 自动启动。
+- **Topbar/Resource 权限回归** — 覆盖 MRU 合并与上限、Pin/Remove、Context
+  Menu、跨 Chat Draft、Browser Copy、键盘控制、持久 File Context、Browser
+  Owner Read-only Boundary、去重、Library Source 和 Selected-text Markdown。
+- **Memory/Config 回归扩充** — 覆盖 Verified Evidence、Language Normalization、
+  Scope、Search Bound、Citation/History、Workbench Archive、Foreground
+  Entity、0600 Local Key、Missing Key、Invalid Token 与并发首次创建。
+- **Linux Packaging Contract 固化** — 新测试锁定 AppImage/deb/rpm Target、
+  Artifact 路径、真实 AppImage UI Smoke、软件渲染开关和 Renderer Diagnostic。
+- **设计与使用文档完整更新** — Architecture、Usage、Development、Browser
+  Live View、Limitations、Project Progress、CLI Handoff、Topbar Handoff 和
+  Design QA 中英文内容同步当前实现，并保留交互原型与视觉对比图作为审计材料。
+- **本地发布前门禁通过** — 完整 pytest 共 `1,539` 项通过；Electron 主进程
+  `node --check`、`44` 项 App Use Node Test、beta5 以来变更 Python 文件的
+  Ruff、Workflow YAML 解析和 `git diff --check` 通过。桌面烟测实际挂载
+  Workbench、移除 Launch Screen，并捕获 `2,063,466` 个非白像素后正常退出。
+- **全部版本面升级到 beta6** — Python Package/`uv.lock` 使用 `0.7.0b6`，
+  Electron Package/Lock 使用 `0.7.0-beta.6`；README Badge、Docs Sidebar、
+  WeChat Header、Workbench/PDF Cache Key 和版本契约测试同步更新。
+- **Tag 驱动 Prerelease** — `v0.7.0-beta.6` 继续触发现有 Release Workflow，
+  构建 macOS DMG、Windows x64/ARM64 Installer 和 Linux
+  AppImage/deb/rpm，执行 Frozen 与真实 Desktop Smoke，并提取本节作为
+  GitHub Prerelease Notes。
+
+---
+
 ## [0.7.0b5] - 2026-07-27
 
 这是 `0.7.0` 的第五个测试版，完整包含 `v0.7.0-beta.4` 之后的全部改动。
@@ -21,32 +262,6 @@
 `<wire_name>`，重复拼接前缀后把已经保存并同步的授权错误报告为未授权。重发版
 同时将兼容能力改为协议层始终开启、将工具包选择改为可持久保存的复选框，并
 修正远程设置列表圆角裁切和“浏览器工具”命名。
-
-### 2026-07-28 Workbench 顶栏工作集与固定资源
-
-- 原面包屑改为最近 3 个 Task/Chat Session Tab，手动打开、新建和切换会实时
-  更新 MRU；右键支持置顶、复制标题、移出顶栏，以及查看 Chat 的 Browser
-  缩略图和文件列表。
-- Session Tabs 与搜索之间新增 Pinned Resource Shelf。Chat 文件卡片、
-  Knowledge/Library 行或卡片、macOS 原生选中文字，以及 Browser PiP/最小化
-  胶囊均可拖入；固定项默认只显示 SVG，Hover/Focus 才展开名称。
-- Browser PiP 标题栏改用 Shelf 矩形命中，不再依赖原生 View 上方不稳定的
-  `elementFromPoint`；最小化 Browser 改为只显示当前网页 favicon 的圆形按钮，
-  favicon 失败立即回退 Browser SVG。点击恢复；拖动超过阈值后可在对话区自由
-  移动或固定到 Shelf，并复用 PiP 消息避让。顶层代理保证拖动图标从标题栏上方
-  穿过，不再被对话区裁切。
-- Browser PiP、最小化按钮或已固定 Browser 可拖到另一个 Conversation Tab；
-  目标对话会在自己的 Browser Manager 中新建同 URL 页面，共享登录 Partition
-  但不共享页面控制权。
-- 顶栏加入完整键盘控制：方向键/Home/End 遍历，Delete/Backspace 移除；
-  `Cmd/Ctrl+1…3` 直达、`Ctrl+Tab` 前后切换、`Cmd/Ctrl+W` 移除当前 Tab。
-- File/Text 可拖到其他 Chat Tab 的输入草稿。选中文字和无附件知识库条目会
-  固化为 Markdown；新文件使用 ASCII storage key，同时兼容旧版 Unicode
-  导出文件名。
-- 固定 File 作为全局用户资源索引进入后续 Agent Turn。固定 Browser 由 Owner
-  Session 保留控制，其他 Session 在 Tool 执行层仅允许 Snapshot/Screenshot。
-- 搜索按钮收紧为 168px，Shelf 与操作区保留 10px 间距；空 Shelf 的 `+`
-  增加 Hover 提示。
 
 ### 直接远程 Harness：新的首选控制路径
 

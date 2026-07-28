@@ -5,6 +5,264 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0b6] - 2026-07-28
+
+This is the sixth `0.7.0` beta and includes every commit and release-worktree
+change since `v0.7.0-beta.5`. It adds a first-class interactive CLI that shares
+Workbench conversations and run state, turns the desktop topbar into a
+switchable task/chat work set with a durable resource shelf, hardens memory
+capture, notification navigation, and configuration recovery, and fixes native
+Electron Browser views whose Chromium viewport did not follow bounds changes.
+
+Linux desktop delivery receives a dedicated reliability pass. The AppImage
+white window was traced to Electron's GPU compositor failing to produce a
+usable surface with some Wayland, Mesa, virtual-GPU, and older-driver
+combinations. Linux now defaults to software rendering, records renderer
+failures, treats window loading as an awaited operation, and runs a
+screenshot-based test against the real AppImage. Releases now publish AppImage,
+Debian `.deb`, and Red Hat/Fedora-family `.rpm` packages together.
+
+### Features
+
+#### First-class interactive CLI shared with Workbench
+
+- **Bare `cyrene` is the recommended terminal entry point** — it discovers a
+  healthy daemon, starts and waits for one when necessary, then enters chat.
+  `cyrene chat` is the equivalent explicit entry point; existing
+  `start/status/stop/do/session` commands remain compatible.
+- **Real Workbench conversations are reused** — the CLI creates, lists,
+  selects, and resumes durable chats with project names. It does not create a
+  third Agent loop or an isolated session, so Web, Electron, and terminal share
+  messages, tasks, memory, and run state.
+- **Per-run NDJSON replaces global-event competition** — the Workbench route
+  streams public run-start, phase, tool, plan, reasoning, reply,
+  pending-question, finalizing, interrupt, and error events for one run. The
+  CLI neither competes with Web clients for the global SSE queue nor receives
+  unrelated session events.
+- **Cursor-based reconnect is durable** — `cyrene chat --chat <id> --resume
+  --cursor <n>` continues a current or recent run from an event sequence;
+  `--list` exposes resumable conversations, and one-shot calls target an actual
+  chat instead of only appearing to support arbitrary legacy sessions.
+- **The line-oriented Rich UI shows the full public lifecycle** — randomized,
+  non-repeating `✶ ✸ ✹ ✺ ✷ ◌` activity marks accompany phase transitions, tool
+  start/progress/finish, plans, steps, streaming replies, and final elapsed
+  time while retaining normal shell scrollback instead of using a full-screen
+  TUI.
+- **Reasoning is compact by default** — public reasoning displays as “Thought
+  for Ns”; `Ctrl+O` toggles the current turn, and `/config` persists
+  `thinking=compact|expanded`. Hidden reasoning, credentials, and unredacted
+  tool arguments remain excluded.
+- **Permissions and questions complete in the terminal** — pending questions
+  pause dynamic status, show choices or a text prompt, and continue through the
+  canonical answer route. The CLI never auto-approves; non-interactive mode
+  returns a clear machine-readable failure when input is required.
+- **Attachment drafts are manageable** — `/attach`, `/attachments`, and
+  `/detach` queue, inspect, and remove files through the Workbench attachment
+  contract. Size errors, invalid files, and server rejection remain visible.
+- **The interactive command surface is complete** — `/new`, `/resume`, `/mode`,
+  `/status`, `/deep-reflect`, `/deep-research`, `/context`, `/config`, `/mcp`,
+  `/help`, and `/exit` are supported. The conversation CLI uses `/new` rather
+  than inheriting the legacy in-process REPL's `/clear` semantics.
+- **`/context` matches the app Context card** — it reads the same composition
+  data and blocks, showing tokens, a semantic color bar, and System Prefix,
+  Ephemeral Injection, and Conversation Message groups with consistent user,
+  assistant, tool, and system indentation.
+- **`/config` covers common administration** — backend settings, models,
+  capability packages/tools, keys, SOUL, integrations, MCP, skills, remote
+  control, profile, budget, data, and CLI preferences can be inspected or
+  updated without opening a browser for basic setup.
+- **Terminal behavior remains safe and asynchronous** — Prompt Toolkit provides
+  history, completion, arrow-key selection, and `Alt/Esc+Enter` multiline
+  input. The first `Ctrl+C` arms an exit warning and a second press within two
+  seconds exits; leaving the CLI does not kill a daemon-owned background run.
+- **Automation is supported** — `cyrene chat --json <text>` emits stable public
+  events one per line, non-TTY mode avoids ANSI Live output, and the decoder
+  handles split records, multiple records per chunk, and a final record without
+  a newline.
+- **Electron and CLI reuse one backend** — Electron atomically publishes URL,
+  token, Electron PID, and backend PID in an isolated temp directory with Unix
+  mode `0600`, then removes the capability when its owning process exits. The
+  CLI no longer starts a second service that competes for the runtime database,
+  scheduler, or port.
+- **Authentication is connected automatically** — standalone daemon clients
+  use explicit `CYRENE_AUTH_TOKEN`; Electron clients use the local connection
+  capability. Both send `X-Cyrene-Token`, and authentication errors explain
+  how to connect instead of returning only a generic HTTP failure.
+- **Terminal dependencies are locked product dependencies** —
+  `prompt-toolkit>=3.0.52` and `rich>=15.0.0` are in the core package and
+  `uv.lock`, keeping regular installs, PyInstaller, and development consistent.
+
+#### Workbench topbar work set and pinned resources
+
+- **The breadcrumb becomes up to three live task/chat work tabs** — opening,
+  creating, or switching a session updates the MRU. Refreshes preserve the
+  current selection and mixed task/conversation ordering.
+- **Tabs can be pinned or removed without changing underlying work** — the
+  context menu supports pin/unpin, title copy, browser/file inspection, and
+  topbar removal. Removal neither deletes a chat nor stops a run or task.
+- **A separate Pinned Resource Shelf accepts multiple sources** — chat file
+  cards, Knowledge/Library rows and cards, native macOS selected text, and
+  floating or minimized Electron Browsers can be pinned.
+- **Resources stay compact and keyboard-accessible** — file/browser chips are
+  SVG-only until hover or focus reveals a label. Search is reduced to `168px`,
+  a `10px` action gap is preserved, and the empty `+` has a hover hint.
+- **Selected text and attachment-free knowledge become Markdown** — new exports
+  use ASCII storage keys while routes retain compatibility with old Unicode
+  export names.
+- **Files and text can be delivered to another chat draft** without automatic
+  send or source mutation.
+- **Browsers can be copied across conversations** — dropping a PiP, minimized
+  favicon, or pinned Browser on another tab creates the same URL in that
+  session's independent `BrowserTabManager`. Login partition is shared; page
+  state and control are not.
+- **Native-view drag hit testing is reliable** — Browser pinning compares
+  directly with the shelf rectangle instead of depending on
+  `elementFromPoint` beneath a `WebContentsView`; a body-level proxy crosses
+  titlebar and transcript clipping boundaries.
+- **Minimized Browser becomes a favicon-only round button** with immediate
+  Browser-SVG fallback. Click restores; threshold dragging moves, pins, or
+  delivers it while retaining PiP transcript avoidance.
+- **Pinned files enter later Agent context as compact global indexes** and load
+  content only on demand.
+- **Pinned Browsers enforce ownership in the execution layer** — only the owner
+  has full control; other sessions are limited to snapshot/screenshot and
+  cannot navigate, click, type, reload, upload, or take over the page.
+- **The resource registry is durable and deduplicated** — removal, Library
+  source metadata, selected-text materialization, global file context, and
+  Browser read-only resolution have dedicated storage and APIs.
+- **Keyboard operation is complete** — arrows/Home/End traverse,
+  Enter/Space opens, Delete/Backspace removes, `Cmd/Ctrl+1…3` opens a work tab,
+  `Ctrl+Tab` cycles, and `Cmd/Ctrl+W` removes the current tab. Project moves to
+  `Cmd/Ctrl+Shift+1`.
+
+#### Memory capture, entities, and configuration reliability
+
+- **Run completion carries verified evidence** — memory capture now receives
+  session/chat, user language, and current successful tool evidence. Failed,
+  stale, and incomplete tool results are excluded before long-term facts are
+  written.
+- **Project memory follows the user's language** — `SaveProjectMemory` requires
+  the target language, English-dominant mixed content is normalized, and
+  neutral paths/identifiers avoid pointless translation.
+- **Default-project scope no longer aliases global short-term memory** — the
+  resolver distinguishes default project, explicit workspace, and global
+  storage.
+- **Memory search is more accurate and bounded** — multiple terms use OR
+  retrieval, stale items are excluded, large results have row/character limits,
+  external search hides internal history, and Workbench hides task reports.
+- **Citation and history backfill safely** — old records derive created/updated
+  history from timestamps without a destructive migration.
+- **Steward reads both legacy and Workbench archives** — it scans default and
+  project session Markdown with file-count, per-file, and total-character
+  bounds, while legacy daily archives remain on their existing path.
+- **Foreground entity extraction takes priority** — definite entities are
+  captured during the current turn, with Steward retained as a safety net.
+  Source, confidence, update, and deduplication behavior are tested.
+- **Capture scheduling accepts evidence, language, and session metadata**
+  through compatible keyword arguments.
+- **Configuration no longer breaks across process identities** — development
+  and packaged processes can see different OS-keyring identities while sharing
+  `DATA_DIR`. Cyrene now uses an installation-local Fernet key beside the
+  config with mode `0600` and exclusive creation for first-launch races.
+- **Decrypt failures preserve current data** — a missing/invalid key or
+  `InvalidToken` fails explicitly; no replacement key is generated and no
+  stale legacy backup overwrites `config.enc`. Portable backups still export a
+  logical snapshot and re-encrypt at the destination.
+- **Unused keyring packaging is removed** from Python dependencies, `uv.lock`,
+  and PyInstaller, eliminating headless Linux Secret Service tracebacks.
+
+#### Notifications, Agent responsiveness, and smaller UI fixes
+
+- **Notifications return to their precise context** — project, chat, task, or
+  resource metadata navigates to the associated workspace/session instead of
+  only marking a row read; workspace display names use a shared helper.
+- **Notification accessibility is complete** — bilingual action text,
+  hover/focus states, clickable semantics, and keyboard paths remain clear at
+  high contrast and larger text.
+- **Agent waiting prefers Inbox wakeups** — prompts and subagent monitoring
+  avoid fixed sleeps and busy polling, reducing idle work and latency.
+- **Learned skills retain progressive disclosure** — they are not injected as
+  an automatic router; package/member metadata stays out of model context and
+  each turn's catalog snapshot remains frozen.
+- **Background Electron renderers remain throttled**, and model-fallback
+  progress is localized in English and Chinese.
+- **Project rail “New project” is shortened to “New”** for narrow layouts, and
+  README links to the canonical Current Limitations document are restored.
+
+### Technical details
+
+#### Electron Browser views and Linux white-window fix
+
+- **Native Browser viewport converges after PiP restoration** — Electron 35 can
+  accept hidden `WebContentsView.setBounds()` without resizing Chromium. The
+  old behavior left a PiP-sized page in a full-size shell and exposed a white
+  transition surface.
+- **Transitions are verified against `window.innerWidth/Height`** — a miss
+  triggers a one-pixel geometry pulse, invalidation, and bounded retries, then
+  another check after attachment. A final miss emits a concrete warning.
+- **The renderer bitmap proxy stays until a real final-size frame exists** so
+  the native compositor cannot reveal a white intermediate frame.
+- **Linux defaults to software rendering** — the AppImage white-window root
+  cause is Chromium's GPU compositor failing on some Wayland/Mesa,
+  virtual-GPU, and older-driver stacks. Known-good machines can opt back in
+  with `CYRENE_ENABLE_HARDWARE_ACCELERATION=1`.
+- **Main-window failures are diagnosable** — `did-fail-load`,
+  `render-process-gone`, and `unresponsive` write `cyrene_error.log`; cache
+  clearing and `loadURL` are awaited, and failure shows the log location.
+- **A new `--desktop-smoke-test` waits for the React root**, requires the launch
+  screen to disappear, captures the page, and rejects empty or white surfaces.
+  It uses an isolated Electron profile and exits nonzero on failure.
+- **Linux CI runs that test against the final AppImage** under `xvfb-run` with
+  `--appimage-extract-and-run`, not only against the inner Python binary.
+
+#### Linux installers and release path
+
+- **Portable x64 AppImage remains available** across distributions.
+- **Debian `.deb` is now actually published** — it was already generated by
+  `electron-builder`, but the old artifact step selected only AppImage and
+  silently discarded it.
+- **New x64 RPM target** supports Fedora, RHEL, CentOS Stream, Rocky Linux, and
+  AlmaLinux package-management installation.
+- **One required `linux-packages` artifact carries AppImage, deb, and rpm**;
+  missing output fails artifact matching or the release gate instead of
+  producing an incomplete beta.
+- **Bilingual installation docs include copyable commands** for executable
+  AppImage, `apt install ./...deb`, and `dnf install ./...rpm`, plus the Linux
+  software-rendering override.
+
+#### Contracts, tests, documentation, and beta6 publication
+
+- **CLI protocol coverage** includes NDJSON chunking, authentication, parsing,
+  one-shot/interactive modes, chat/project selection, cursor resume,
+  attachments, pending questions, Ctrl+C/Ctrl+O, spinner behavior, context,
+  config, and bare-`cyrene` startup.
+- **Topbar/resource permission coverage** includes MRU merge/cap, pin/remove,
+  context menu, cross-chat drafts, Browser copy, keyboard control, durable file
+  context, Browser owner/read-only boundaries, deduplication, Library metadata,
+  and selected-text Markdown.
+- **Memory/config tests** cover verified evidence, language normalization,
+  scope, search bounds, citation/history, Workbench archives, foreground
+  entities, `0600` keys, missing/invalid keys, and concurrent first creation.
+- **Linux packaging tests lock AppImage/deb/rpm targets**, artifact paths, the
+  real-AppImage UI test, software-rendering switch, and renderer diagnostics.
+- **Bilingual docs now match the implementation** across Architecture, Usage,
+  Development, Browser Live View, Limitations, project progress, CLI/topbar
+  handoffs, and Design QA; the prototype and comparison image remain as audit
+  artifacts.
+- **The local prerelease gate passes** — all `1,539` pytest tests, Electron
+  `node --check`, `44` App Use Node tests, Ruff across Python files changed
+  since beta5, workflow YAML parsing, and `git diff --check` pass. The desktop
+  smoke test mounted Workbench, removed the launch screen, captured `2,063,466`
+  non-white pixels, and exited cleanly.
+- **Every version surface moves to beta6** — Python package/`uv.lock` use
+  `0.7.0b6`; Electron package/lock use `0.7.0-beta.6`; README badges, docs
+  sidebar, WeChat header, Workbench/PDF cache keys, and contract tests agree.
+- **Tag-driven prerelease** — `v0.7.0-beta.6` builds macOS DMG, Windows
+  x64/ARM64 installers, and Linux AppImage/deb/rpm, runs frozen and real-desktop
+  smoke tests, and uses this section as GitHub prerelease notes.
+
+---
+
 ## [0.7.0b5] - 2026-07-27
 
 This is the fifth `0.7.0` beta and contains every change since
@@ -31,37 +289,6 @@ that had actually been saved and synchronized. The reissue also makes
 compatibility capabilities permanently enabled at the protocol layer, persists
 tool-package checkbox defaults, and repairs rounded-corner clipping and Browser
 tool naming in Remote Settings.
-
-### 2026-07-28 Workbench topbar work set and pinned resources
-
-- Replaced the breadcrumb with three real-time MRU task/chat session tabs.
-  Their context menu supports pinning, title copy, topbar removal, and live chat
-  browser/file inspection.
-- Added a Pinned Resource Shelf between session tabs and Search. Chat file
-  cards, Knowledge/Library rows or cards, native macOS selected text, and
-  floating/minimized Browser surfaces can be pinned. Chips remain SVG-only
-  until hover or keyboard focus reveals the label.
-- Browser PiP pinning now uses direct shelf-rectangle pointer hit testing
-  instead of unreliable `elementFromPoint` checks over the native view. The
-  minimized Browser is now a favicon-only round button with an immediate
-  Browser-SVG fallback. Click restores it; dragging past the threshold can
-  freely reposition it or pin it to the shelf while reusing PiP transcript
-  avoidance. A body-level proxy crosses above the conversation header without
-  clipping.
-- A Browser PiP, minimized button, or pinned Browser chip can be dropped on
-  another conversation. The target session opens the same URL in its own
-  Browser manager, sharing the login partition without sharing page control.
-- Added complete topbar keyboard control: arrows/Home/End traverse, Delete or
-  Backspace removes, `Cmd/Ctrl+1…3` opens a session directly, `Ctrl+Tab` cycles,
-  and `Cmd/Ctrl+W` removes the current tab.
-- Files and text can be dropped into another chat draft. Selected text and
-  attachment-free knowledge items become Markdown. New exports use ASCII
-  storage keys while the route remains compatible with legacy Unicode keys.
-- Pinned files enter later Agent turns as global user-resource indexes. A
-  pinned Browser remains owner-controlled; other sessions are restricted at
-  tool execution to snapshots and screenshots.
-- Reduced Search to 168px, reserved a 10px shelf/action gap, and added a hover
-  hint to the empty shelf `+` target.
 
 ### Direct remote Harness: the new preferred control path
 

@@ -466,7 +466,7 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
 
 <script src="/static/app/pdfjs/pdf.min.js?v=0.7.4"></script>
 <script src="/static/app/pdfjs/pdf_viewer.js?v=0.7.4"></script>
-<script src="/static/app/compiled/platform/runtime.js?v=0.7.0b5"></script>
+<script src="/static/app/compiled/platform/runtime.js?v=0.7.0b6"></script>
 <script src="/static/app/compiled/shared/pdf/bridge.js?v=0.7.4"></script>
 <script>
 (function() {{
