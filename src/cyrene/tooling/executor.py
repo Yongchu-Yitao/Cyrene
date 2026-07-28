@@ -126,7 +126,7 @@ async def publish_tool_progress(
     label: str = "",
 ) -> None:
     """Publish bounded numeric progress for the currently executing tool."""
-    from cyrene.observability import debug
+    from cyrene.agent.context import publish_runtime_event
 
     run_context = current_run_context()
     tool_call_id = _active_tool_call_id.get()
@@ -134,20 +134,18 @@ async def publish_tool_progress(
         return
     safe_total = max(0, int(total))
     safe_current = max(0, min(int(current), safe_total)) if safe_total else 0
-    await debug.publish_event(
-        {
-            "type": "tool_call_progress",
-            "tool_call_id": tool_call_id,
-            "current": safe_current,
-            "total": safe_total,
-            "progress": (
-                1.0 if safe_total == 0 else min(1.0, safe_current / safe_total)
-            ),
-            "label": str(label or "")[:160],
-            "round_id": run_context.round_id,
-        },
-        session_id=run_context.session_id,
-    )
+    await publish_runtime_event({
+        "type": "tool_call_progress",
+        "tool_call_id": tool_call_id,
+        "current": safe_current,
+        "total": safe_total,
+        "progress": (
+            1.0 if safe_total == 0 else min(1.0, safe_current / safe_total)
+        ),
+        "label": str(label or "")[:160],
+        "round_id": run_context.round_id,
+        "session_id": run_context.session_id,
+    })
 
 
 def suspend_action_recording() -> ToolExecutionBinding:

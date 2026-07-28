@@ -76,10 +76,15 @@ npm run dev
 后台服务命令：
 
 ```bash
-uv run cyrene start
+uv run cyrene
 uv run cyrene status
 uv run cyrene stop
 ```
+
+裸命令 `cyrene` 会在需要时启动后台服务并直接进入交互界面。
+`cyrene chat` 提供流式回复、工具/计划进度、权限确认、附件、历史对话切换、
+运行中断与断线恢复；一次性调用可使用
+`cyrene chat --json "你的任务"`。
 
 平台安装、可选 Browser Support、Channel 和开发测试说明见
 [安装指南](docs/installation.zh-CN.md)与

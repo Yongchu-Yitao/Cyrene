@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import shutil
 import time
 from typing import Any
@@ -26,6 +28,14 @@ globals().update({
     for name, value in vars(_service).items()
     if not name.startswith("__")
 })
+
+_DETACHED_ANSWER_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _finish_detached_answer_task(task: asyncio.Task[Any]) -> None:
+    _DETACHED_ANSWER_TASKS.discard(task)
+    if not task.cancelled():
+        task.exception()
 
 
 def register_workbench_chat_routes(
@@ -602,7 +612,7 @@ def register_workbench_chat_routes(
         return JSONResponse(snapshot, headers={"Cache-Control": "no-store"})
 
     @router.get("/api/workbench/chats/{chat_id}/run-stream")
-    async def api_workbench_chat_run_stream(chat_id: str):
+    async def api_workbench_chat_run_stream(chat_id: str, cursor: int = 0):
         """Reconnect to an existing streamed run without submitting a message."""
         replay_lookup = getattr(
             _CHAT_RUN_MANAGER, "get_replayable", _CHAT_RUN_MANAGER.get
@@ -615,7 +625,7 @@ def register_workbench_chat_routes(
                 status_code=404,
             )
         return StreamingResponse(
-            _CHAT_RUN_MANAGER.stream(run),
+            _CHAT_RUN_MANAGER.stream(run, cursor=max(0, int(cursor or 0))),
             media_type="application/x-ndjson",
             headers={"Cache-Control": "no-cache"},
         )
@@ -1621,6 +1631,109 @@ def register_workbench_chat_routes(
         resume the SAME round. Returns the continued reply (appended as an
         assistant message) or a follow-up question. Session-scoped to this chat."""
         body = api_models.body_dict(body_model)
+        if bool(body.get("stream")):
+            async def event_stream():
+                from cyrene.agent.context import bind_run_context
+
+                queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+                saw_reply_events = False
+                subscriber_active = True
+
+                async def publish(event: dict[str, Any]) -> None:
+                    if subscriber_active:
+                        await queue.put(dict(event))
+
+                next_body = api_models.AnswerBody(**{**body, "stream": False})
+                binding = bind_run_context(
+                    reply_stream_writer=publish,
+                    runtime_event_writer=publish,
+                )
+                try:
+                    task = asyncio.create_task(
+                        api_workbench_chat_answer(chat_id, next_body)
+                    )
+                    _DETACHED_ANSWER_TASKS.add(task)
+                    task.add_done_callback(_finish_detached_answer_task)
+                finally:
+                    binding.reset()
+
+                try:
+                    while True:
+                        if task.done() and queue.empty():
+                            break
+                        try:
+                            event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                        except asyncio.TimeoutError:
+                            continue
+                        if str(event.get("type") or "").startswith("reply_"):
+                            saw_reply_events = True
+                        yield json.dumps(event, ensure_ascii=False) + "\n"
+
+                    response = await task
+                    if isinstance(response, JSONResponse):
+                        try:
+                            error_payload = json.loads(bytes(response.body).decode("utf-8"))
+                        except Exception:
+                            error_payload = {}
+                        yield json.dumps({
+                            "type": "error",
+                            "error": str(error_payload.get("error") or "answer_failed"),
+                            "message": str(
+                                error_payload.get("detail")
+                                or error_payload.get("error")
+                                or "Failed to resume the conversation."
+                            ),
+                        }, ensure_ascii=False) + "\n"
+                        return
+
+                    if not isinstance(response, dict):
+                        yield json.dumps({
+                            "type": "error",
+                            "error": "invalid_answer_response",
+                            "message": "Invalid answer response from the daemon.",
+                        }, ensure_ascii=False) + "\n"
+                        return
+                    if bool(response.get("awaitingUser")):
+                        yield json.dumps({
+                            "type": "awaiting_user",
+                            "pending_question": response.get("pendingQuestion"),
+                        }, ensure_ascii=False) + "\n"
+                        return
+                    assistant = response.get("assistantMessage")
+                    reply = (
+                        str(assistant.get("content") or "")
+                        if isinstance(assistant, dict)
+                        else ""
+                    )
+                    if not saw_reply_events:
+                        yield json.dumps({"type": "reply_start"}, ensure_ascii=False) + "\n"
+                        if reply:
+                            yield json.dumps({
+                                "type": "reply_delta",
+                                "delta": reply,
+                            }, ensure_ascii=False) + "\n"
+                    # Always publish one authoritative terminal snapshot. The
+                    # renderer replaces/settles its accumulated text from this.
+                    yield json.dumps({
+                        "type": "reply_done",
+                        "response": reply,
+                    }, ensure_ascii=False) + "\n"
+                    yield json.dumps({
+                        "type": "saved",
+                        "assistantMessage": assistant or {},
+                        "assistantMessages": response.get("assistantMessages") or [],
+                    }, ensure_ascii=False) + "\n"
+                finally:
+                    # The continuation owns persistence for the resumed round.
+                    # Detaching a terminal subscriber must not cancel that work.
+                    subscriber_active = False
+
+            return StreamingResponse(
+                event_stream(),
+                media_type="application/x-ndjson",
+                headers={"Cache-Control": "no-cache"},
+            )
+
         question_id = str(body.get("question_id") or "").strip()
         answer_text = str(body.get("answer") or body.get("selected_option") or "").strip()
         from cyrene.agent.state import PERMISSION_MODES

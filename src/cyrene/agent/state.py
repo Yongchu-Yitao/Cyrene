@@ -149,6 +149,7 @@ _persist_history_prefix_len: ContextVar[int] = ContextVar("_persist_history_pref
 _persist_insert_at: ContextVar[int | None] = ContextVar("_persist_insert_at", default=None)
 _pending_intermediate_user_replies: ContextVar[list[dict[str, Any]] | None] = ContextVar("_pending_intermediate_user_replies", default=None)
 _reply_stream_writer: ContextVar[Callable[[dict[str, Any]], Awaitable[None]] | None] = ContextVar("_reply_stream_writer", default=None)
+_runtime_event_writer: ContextVar[Callable[[dict[str, Any]], Awaitable[None]] | None] = ContextVar("_runtime_event_writer", default=None)
 # Usage dict of the most recent final-reply LLM call (streaming finals return
 # plain text, so token usage would otherwise be lost before persisting).
 _last_final_reply_usage: ContextVar[dict[str, Any] | None] = ContextVar("_last_final_reply_usage", default=None)
@@ -286,6 +287,18 @@ _init_session_epoch()
 # Runtime event helpers
 # ---------------------------------------------------------------------------
 
+_PUBLIC_RUN_EVENT_TYPES = frozenset({
+    "phase_transition",
+    "plan",
+    "plan_progress",
+    "tool_call_started",
+    "tool_call_progress",
+    "tool_call_finished",
+    "user_question",
+    "user_question_answered",
+})
+
+
 async def _publish_runtime_event(event: dict[str, Any]) -> None:
     round_id = _current_round_id.get()
     if round_id and not str(event.get("round_id", "")).strip():
@@ -294,6 +307,16 @@ async def _publish_runtime_event(event: dict[str, Any]) -> None:
     if session_id:
         event = {**event, "session_id": session_id}
     await debug.publish_event(event)
+    writer = _runtime_event_writer.get()
+    if writer is None or str(event.get("type") or "") not in _PUBLIC_RUN_EVENT_TYPES:
+        return
+    try:
+        await writer(dict(event))
+    except Exception:
+        # Per-run live activity is presentation state. A disconnected client or
+        # renderer must never turn an otherwise successful agent action into a
+        # failed run.
+        logger.debug("Failed to publish public run event", exc_info=True)
 
 
 async def _emit_reply_stream_event(event: dict[str, Any]) -> None:

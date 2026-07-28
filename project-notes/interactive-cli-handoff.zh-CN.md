@@ -1,13 +1,12 @@
-> **DESIGN COMPLETE / 设计完成、实现待开始 — 2026-07-28：**
-> 已完成现有命令行入口、HTTP/NDJSON/SSE 传输、Agent Runtime Event、
-> Pending Question、Interrupt 和会话语义审计。本文是动态交互式 CLI 的正式
-> 实施交接文档；除本文与项目记录索引外，本轮没有修改 CLI 或 Runtime 代码。
+> **IMPLEMENTED / 已完成 — 2026-07-28：**
+> 动态交互式 CLI 已按本文范围实现。`cyrene chat` 现在连接正式 Daemon 与
+> Workbench Conversation，支持流式回复、公开 Agent 活动、Pending Question、
+> Attachments、Interrupt、非 TTY/NDJSON 和按 Cursor 恢复 Run。
 >
-> **当前实施提示：** 第一阶段应新增 `cyrene chat` 并复用已经存在的
-> `/api/chat` NDJSON 回复流。不要先做全屏 TUI，也不要让 CLI 直接订阅当前
-> 单队列 `/api/events` 后与 Web UI 竞争消费事件。Browser 可视化交互、
+> **实现边界：** CLI 使用 Per-run NDJSON，不订阅单队列 `/api/events`。
+> Browser 可视化交互、
 > 富媒体 Viewer、Workbench 图形布局复刻和 Claude Code PTY 透传已明确排除，
-> 不属于后续 Phase。
+> 未在本实现中加入。
 
 # Cyrene 动态交互式 CLI Handoff
 
@@ -18,7 +17,7 @@
 
 分支：`feature/project-literature-library`
 
-代码基线：`92a3a24` + 当前未提交工作区改动
+实现入口：`src/cyrene/cli_chat.py`、`cyrene chat`
 
 交互原型：`project-notes/prototypes/interactive_cli_demo.py`
 
@@ -26,20 +25,21 @@
 uv run python project-notes/prototypes/interactive_cli_demo.py
 ```
 
-该脚本只演示界面，不连接 Daemon、不调用模型、不执行 Tool，也不是正式
-`cyrene chat` 实现。使用 `/demo`、`/plan`、`/permission` 和 `/error`
+该脚本只保留为离线界面演示；正式功能由 `cyrene chat` 提供。使用
+`/demo`、`/plan`、`/permission` 和 `/error`
 分别查看主要交互状态；也可在启动菜单输入 `1`–`4`，或直接输入任意任务。
 
 ## 1. 当前状态
 
-Cyrene 当前有三类命令行入口，但还没有一个同时具备连续输入、流式回复、
-运行状态、工具进度、权限确认和可靠中断的正式交互客户端。
+Cyrene 现在已有正式的 Daemon 型交互客户端，连续输入、流式回复、运行状态、
+工具进度、权限确认和可靠中断均由 `cyrene chat` 提供。
 
 | 入口 | 当前用途 | 当前交互能力 |
 |---|---|---|
 | `python -m cyrene` | 启动 Workbench Web UI | 只负责启动，不进入终端对话 |
 | `cyrene start/status/stop/do/...` | 后台 Daemon 的同步 HTTP Client | 一次一条命令，回复完成后整体输出 |
 | `python -m cyrene.runtime.host` | 进程内 Headless REPL | 连续对话，但使用阻塞 `input()`，完成后整体输出 |
+| `cyrene chat` | Daemon 的交互式流客户端 | 持久对话、公开运行事件、确认、中断与恢复 |
 
 正式安装入口由 `pyproject.toml` 定义：
 
@@ -157,7 +157,7 @@ cyrene chat --no-color
 - 模型回复实时增量输出；
 - Agent 执行期间有持续状态，不出现无反馈等待；
 - Pending Question 和权限选项可在终端直接回答；
-- `Ctrl+C` 优先中断当前 Run，空闲时再退出；
+- `Ctrl+C` 仅用于退出确认：第一次提示，两秒内第二次退出；不取消后台 Run；
 - 输入历史、多行编辑和斜杠命令补全；
 - 非 TTY、重定向和 `--json` 场景保持机器可读；
 - Daemon 未启动时给出明确提示，或按确定策略自动启动并等待健康。
@@ -336,32 +336,37 @@ publish_event
 |---|---|---|
 | `Enter` | 提交 | 不接受新的普通 Turn |
 | `Alt+Enter` / `Esc+Enter` | 插入换行 | 不适用 |
-| `Ctrl+C` | 清空当前输入；空输入再次退出 | 调用 `/api/chat/interrupt` |
-| `Ctrl+D` | 空输入时退出 | 先提示使用 `Ctrl+C` 中断 |
+| `Ctrl+C` | 第一次提示确认，两秒内再次退出 | 不清空输入、不取消后台 Run |
+| `Ctrl+O` | 展开/折叠最近一次模型思考 | Run 结束后可查看已收集的思考详情 |
+| `Ctrl+D` | 退出 CLI | 不取消后台 Run |
 | `↑` / `↓` | 浏览历史 | 不改变 Run |
 | `Tab` | 补全斜杠命令 | 不改变 Run |
 
-中断请求返回后，CLI 必须继续消费 Stream 到终态或连接关闭，避免留下半截动态
-区域。若服务端未在合理时间终止，应显示“中断已请求，Run 仍在收尾”，不能
-伪装成已经停止。
+CLI 退出时关闭当前 HTTP Subscriber；Workbench Run 继续由 Daemon 持有并完成
+持久化。重新进入后可通过 `/resume` 回到对应 Session。
 
 ### 6.3 斜杠命令
 
-第一阶段：
-
 ```text
 /help
-/clear
+/new
+/resume [SESSION_ID]
 /status
 /mode default|plan|auto
-/deep-reflect [focus]
-/mcp list
+/deep-reflect
+/deep-research [topic]
+/context
+/config
+/mcp
 /exit
 ```
 
-`/clear` 复用 `/api/chat/clear`；`/status` 复用 `/api/status`；`/deep-reflect`
-仍通过普通 Chat Payload 中的命令解析；写操作型 MCP 管理继续使用已有
-`cyrene mcp ...` 子命令，不必全部塞进交互会话。
+`/new` 选择 Project 后创建无须手工标题的新对话；`/resume` 合并列表与切换
+行为，并显示 Session 所属 Project。`/config` 覆盖 Backend Settings、
+Models、Capabilities、Keys、SOUL、Integrations、MCP、Skills、Remote、
+Profile、Budget、Data 与 CLI Preferences。正式交互 CLI 不提供 `/clear`。
+`/context` 同时读取 Workbench 的 `context` 与 `context-blocks`，按 App 的
+系统前缀、临时注入、对话消息三层结构显示 token、彩色比例条与缩进明细。
 
 ## 7. Pending Question 与权限确认
 
@@ -442,40 +447,43 @@ class InteractiveChat:
 
 ## 9. 分阶段实施
 
-### Phase 1：可用的流式聊天
+### Phase 1：可用的流式聊天（已完成）
 
 - 注册 `cyrene chat`；
 - 检查 Daemon 健康；
 - 使用 `AsyncClient.stream()` 请求 `/api/chat`；
 - 解析 `reply_*`、`awaiting_user`、`error`；
 - 支持 `/help`、`/clear`、`/exit`；
-- 支持 `Ctrl+C` 调用 Interrupt；
+- 支持双击 `Ctrl+C` 退出确认，且不取消后台 Run；
 - 非 TTY 与 `--json` 行为稳定；
-- 明确第一版 Session 为 `run_live`。
+- 默认使用持久 Workbench Conversation；`--legacy` 可显式使用 `run_live`。
 
 完成标准：长回复可以边生成边显示，断网、模型错误和用户中断后都能恢复到
 Prompt。
 
-### Phase 2：动态 Agent 活动
+### Phase 2：动态 Agent 活动（已完成）
 
 - 将公开 Tool/Phase/Plan 事件合并到 Per-run NDJSON；
-- Rich Live 区域显示活动工具与进度；
-- 回复正文与临时状态分区，完成后临时状态折叠为简短摘要；
+- Rich 行式区域显示活动工具与进度；
+- 发送后使用随机变换且不连续重复的单字符星形 Spinner 实时刷新活动计时，
+  结束时显示总用时；
+- 消费 `reasoning_start/delta/done`，默认折叠并支持 Ctrl+O 展开；
+- 回复正文与运行状态分区；
 - 保证所有参数脱敏与 Result 截断；
 - 增加 Event 顺序、重复和未知事件兼容测试。
 
 完成标准：CLI 不订阅全局 SSE 也能完整显示本轮公开活动。
 
-### Phase 3：交互质量
+### Phase 3：交互质量（已完成）
 
 - Prompt Toolkit 异步输入；
 - 历史记录持久化；
 - 多行编辑与命令补全；
-- Markdown/Code Block 输出；
+- Markdown/Code Block 保持原文输出；
 - 终端宽度变化、窄屏、无颜色和 Windows Terminal 验证；
-- 为 `cyrene do` 增加 `--stream`，复用相同 Decoder/Renderer。
+- 一次性流调用由 `cyrene chat "..."` 提供，不改变兼容命令 `cyrene do`。
 
-### Phase 4：Workbench Conversation
+### Phase 4：Workbench Conversation（已完成）
 
 - 允许选择或创建独立 Workbench Chat；
 - 使用 Workbench Chat Run Manager 的 Detached/Resume 能力；

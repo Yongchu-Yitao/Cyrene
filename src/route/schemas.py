@@ -166,6 +166,7 @@ class AnswerBody(APIBody):
     answer: str | None = Field(default=None, max_length=200_000)
     selected_option: str | None = Field(default=None, max_length=200_000)
     mode: str | None = Field(default=None, max_length=80)
+    stream: bool = False
 
 
 class InitSubmitBody(APIBody):

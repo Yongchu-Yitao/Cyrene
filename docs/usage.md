@@ -124,6 +124,7 @@ cyrene start
 
 # In a new terminal:
 cyrene status
+cyrene chat
 cyrene do "your task" --session run_live
 ```
 
@@ -133,6 +134,11 @@ cyrene do "your task" --session run_live
 |---|---|
 | `cyrene start` | Start the daemon in the background |
 | `cyrene stop` | Stop the daemon |
+| `cyrene chat [text]` | Open streaming interactive chat, or send one message and exit |
+| `cyrene chat --list` | List persistent Workbench conversations |
+| `cyrene chat --chat <id>` | Continue an existing Workbench conversation |
+| `cyrene chat --chat <id> --resume --cursor <n>` | Resume a current/recent run after an event sequence |
+| `cyrene chat --json <text>` | Emit public run events as NDJSON |
 | `cyrene do <text> --session <id>` | Send a message to an agent session |
 | `cyrene session list` | List all sessions (live + archived) |
 | `cyrene session status --session <id>` | Show session details |
@@ -155,10 +161,57 @@ Use `--json` for machine-readable output.
 `cyrene start` is idempotent: if a healthy Cyrene daemon already owns port
 4242, it reports that instance instead of launching a duplicate. `cyrene stop`
 only targets the detected daemon.
+When the target daemon enables local token authentication, the CLI reads
+`CYRENE_AUTH_TOKEN` and sends it as `X-Cyrene-Token`.
 
 ---
 
-## Interactive Local CLI
+## Interactive streaming CLI
+
+Bare `cyrene` is the recommended terminal interface: it starts the daemon in
+the background when needed, then enters interactive chat. `cyrene chat` is the
+equivalent explicit entry point. Both connect to the
+background daemon and shares Workbench's persistent conversations and runs:
+
+```bash
+cyrene
+cyrene chat --chat CHAT_ID
+cyrene chat --mode plan
+```
+
+In the session, use `/new`, `/resume`, `/mode`, `/attach`, `/attachments`,
+`/detach`, `/deep-reflect`, `/deep-research`, `/context`, `/config`, `/status`,
+`/mcp`, and `/exit`. `/new` selects a project; `/resume` lists sessions with
+their project names. Selection menus support Up/Down and Enter. Alt+Enter
+inserts a newline; the first Ctrl+C asks for confirmation and a second press
+within two seconds exits the CLI without interrupting the background run.
+Entering text immediately creates a conversation in the default project.
+
+After a message is sent, the CLI uses a randomized, non-repeating star spinner
+(`✶ ✸ ✹ ✺ ✷ ◌`) to show the current activity and elapsed time, then prints the
+total duration on completion. Model-provided reasoning is
+collapsed to “Thought for Ns” by default; Ctrl+O toggles its details. The same
+preference is available under `/config` → CLI Preferences as
+`thinking=compact|expanded`.
+
+`/context` uses the same composition data as the app's Conversation Context
+card. It shows message tokens, a colored composition bar, and grouped System
+Prefix, Ephemeral, and Conversation Message blocks. User, assistant, tool, and
+system-injection rows are consistently indented.
+
+The CLI renders text replies and public tool, phase, and plan status. Live
+browser interaction, rich-media viewers, Workbench's graphical layout, and raw
+PTY passthrough are intentionally outside the terminal UI.
+
+After Electron starts its backend, it publishes a local connection capability
+readable only by the current OS user (`0600` on Unix). The CLI discovers and
+connects to that same backend, so Electron and the CLI can run simultaneously
+while sharing projects, conversations, tasks, memory, and run state. A second
+backend is not started to contend for the database or scheduler.
+
+---
+
+## In-process local CLI (legacy)
 
 ```bash
 python -m cyrene.runtime.host

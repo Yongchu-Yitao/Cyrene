@@ -77,10 +77,15 @@ npm run dev
 Background service commands:
 
 ```bash
-uv run cyrene start
+uv run cyrene
 uv run cyrene status
 uv run cyrene stop
 ```
+
+Bare `cyrene` starts the background service when needed and enters interactive
+chat directly. `cyrene chat` provides streaming replies, tool and plan progress, permission
+prompts, attachments, conversation switching, interruption, and run resume.
+For scripts, use `cyrene chat --json "your task"`.
 
 For platform setup, optional browser support, channels, and development tests,
 see [Installation](docs/installation.md) and

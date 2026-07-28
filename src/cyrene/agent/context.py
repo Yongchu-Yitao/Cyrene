@@ -87,6 +87,7 @@ def bind_run_context(
     assistant_meta: object = _UNSET,
     attachment_paths: object = _UNSET,
     reply_stream_writer: object = _UNSET,
+    runtime_event_writer: object = _UNSET,
 ) -> ContextBinding:
     """Bind selected run values and return an idempotent reset handle."""
     assignments = (
@@ -104,6 +105,7 @@ def bind_run_context(
         (_state._ui_round_assistant_meta, assistant_meta),
         (_state._attachment_paths_by_name, attachment_paths),
         (_state._reply_stream_writer, reply_stream_writer),
+        (_state._runtime_event_writer, runtime_event_writer),
     )
     tokens: list[tuple[Any, Any]] = []
     try:

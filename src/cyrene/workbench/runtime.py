@@ -6556,7 +6556,10 @@ def _stream_agent_reply(run_coro_factory, user_message: str) -> StreamingRespons
         async def publish_reply_event(event: dict[str, Any]) -> None:
             await queue.put(dict(event))
 
-        binding = bind_run_context(reply_stream_writer=publish_reply_event)
+        binding = bind_run_context(
+            reply_stream_writer=publish_reply_event,
+            runtime_event_writer=publish_reply_event,
+        )
         try:
             task = asyncio.create_task(run_coro_factory())
         finally:

@@ -52,6 +52,7 @@ CYRENE_TOP_LEVEL_FILES = {
     "browser.py",
     "call_llm.py",
     "cli.py",
+    "cli_chat.py",
     "config.py",
     "local_cli.py",
     "memory.py",

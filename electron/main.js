@@ -29,6 +29,7 @@ const TEMP_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
 const BROWSER_UPLOAD_TARGET_TTL_MS = 15 * 60 * 1000;
 const BROWSER_UPLOAD_MAX_FILES = 10;
 const BROWSER_UPLOAD_MAX_FILE_BYTES = 100 * 1024 * 1024;
+const CLI_CONNECTION_FILENAME = 'cli-connection.json';
 let _errorLogStream = null;
 
 function getCyreneUserDataDir() {
@@ -53,6 +54,43 @@ function getCyreneTempDir() {
 
 function getErrorLogPath() {
   return path.join(getCyreneTempDir(), 'cyrene_error.log');
+}
+
+function getCliConnectionPath() {
+  return path.join(getCyreneTempDir(), CLI_CONNECTION_FILENAME);
+}
+
+function clearCliConnection() {
+  try {
+    const target = getCliConnectionPath();
+    if (!fs.existsSync(target)) return;
+    const payload = JSON.parse(fs.readFileSync(target, 'utf8'));
+    if (Number(payload && payload.electronPid) === process.pid) {
+      fs.rmSync(target, { force: true });
+    }
+  } catch (_) {}
+}
+
+function publishCliConnection(port) {
+  const tempDir = getCyreneTempDir();
+  const target = getCliConnectionPath();
+  const temporary = `${target}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(tempDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(temporary, JSON.stringify({
+      version: 1,
+      url: `http://127.0.0.1:${Number(port)}`,
+      token: AUTH_TOKEN,
+      electronPid: process.pid,
+      backendPid: pythonProcess && pythonProcess.pid ? pythonProcess.pid : null,
+    }), { encoding: 'utf8', mode: 0o600 });
+    try { fs.chmodSync(temporary, 0o600); } catch (_) {}
+    try { fs.rmSync(target, { force: true }); } catch (_) {}
+    fs.renameSync(temporary, target);
+  } catch (err) {
+    try { fs.rmSync(temporary, { force: true }); } catch (_) {}
+    console.error('[electron] Failed to publish CLI connection:', err.message);
+  }
 }
 
 function getErrorLogStream() {
@@ -102,6 +140,7 @@ function cleanupTemporaryArtifacts(ttlMs = TEMP_ARTIFACT_TTL_MS) {
   try {
     fs.mkdirSync(tempDir, { recursive: true });
     for (const name of fs.readdirSync(tempDir)) {
+      if (name === CLI_CONNECTION_FILENAME) continue;
       const target = path.join(tempDir, name);
       try {
         const stat = fs.lstatSync(target);
@@ -3174,6 +3213,7 @@ function getPythonArgs() {
 
 function spawnPython() {
   if (pythonProcess) return;
+  clearCliConnection();
   const binaryPath = getPythonBinaryPath();
   const args = getPythonArgs();
   const cwd = isDev ? path.join(__dirname, '..') : undefined;
@@ -3219,6 +3259,7 @@ function spawnPython() {
       // PORT event arrived before any window registered a pending resolver
       // (e.g. launch-at-login hidden startup).
       backendPort = port;
+      publishCliConnection(port);
       if (pendingPortResolve) {
         pendingPortResolve(port);
         pendingPortResolve = null;
@@ -3256,6 +3297,7 @@ function spawnPython() {
     console.log(`[electron] Python backend exited (code=${code})`);
     pythonProcess = null;
     backendPort = null;
+    clearCliConnection();
     if (code === 42) {
       // Exit code 42 = intentional restart after update.
       // Exit immediately to release the single-instance lock so the
@@ -3285,6 +3327,7 @@ function killPython() {
   isShuttingDown = true;
   const proc = pythonProcess;
   pythonProcess = null;
+  clearCliConnection();
 
   try {
     if (isWindows) {

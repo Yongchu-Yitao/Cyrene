@@ -552,7 +552,10 @@ class ChatRunManager:
             from cyrene.agent.context import bind_run_context
             from cyrene.workbench.inbox import _workbench_agent_inbox
 
-            binding = bind_run_context(reply_stream_writer=run.publish)
+            binding = bind_run_context(
+                reply_stream_writer=run.publish,
+                runtime_event_writer=run.publish,
+            )
             inbox_token = _workbench_agent_inbox.set(run.inbox)
             try:
                 run.task = asyncio.create_task(self._drive(run, runner))

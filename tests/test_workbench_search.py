@@ -759,3 +759,64 @@ def test_workbench_chat_answer_resumes_in_project_workspace(
     stored = json.loads(chats_path.read_text(encoding="utf-8"))["chats"][0]["messages"]
     assert [message["content"] for message in stored[-2:]] == ["continue", "continued"]
     assert stored[-2]["answerToQuestionId"] == "question_1"
+
+
+def test_workbench_chat_answer_can_stream_continuation_events(
+    client, search_env, monkeypatch,
+):
+    from cyrene.agent.context import emit_reply_stream_event, publish_runtime_event
+    from cyrene.workbench import runtime as routes_mod
+
+    chats_path = search_env["data_dir"] / "workbench_chats.json"
+    chats = json.loads(chats_path.read_text(encoding="utf-8"))
+    chats["chats"][0]["pendingQuestion"] = {"id": "question_stream"}
+    chats_path.write_text(json.dumps(chats), encoding="utf-8")
+
+    async def fake_answer_pending(*_args, **_kwargs):
+        await publish_runtime_event({
+            "type": "tool_call_started",
+            "tool_call_id": "tool_stream",
+            "tool": "search_files",
+        })
+        await emit_reply_stream_event({"type": "reply_start"})
+        await emit_reply_stream_event({
+            "type": "reply_delta",
+            "delta": "继续完成",
+        })
+        await emit_reply_stream_event({
+            "type": "reply_done",
+            "response": "继续完成",
+        })
+        return "继续完成"
+
+    monkeypatch.setattr(
+        routes_mod,
+        "_workbench_answer_pending",
+        fake_answer_pending,
+    )
+
+    response = client.post(
+        "/api/workbench/chats/chat_1/answer",
+        json={
+            "question_id": "question_stream",
+            "answer": "允许一次",
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    events = [
+        json.loads(line)
+        for line in response.text.splitlines()
+        if line.strip()
+    ]
+    assert [event["type"] for event in events] == [
+        "tool_call_started",
+        "reply_start",
+        "reply_delta",
+        "reply_done",
+        "reply_done",
+        "saved",
+    ]
+    assert events[-2]["response"] == "继续完成"

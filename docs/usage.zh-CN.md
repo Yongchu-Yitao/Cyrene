@@ -19,7 +19,7 @@ python -m cyrene.runtime.host
 ### `cyrene` 后台 Client
 
 ```bash
-cyrene start
+cyrene chat
 cyrene status
 cyrene stop
 ```
@@ -100,6 +100,7 @@ Readiness/API 请求会忽略环境代理。
 ```bash
 cyrene start
 cyrene status
+cyrene chat
 cyrene do "你的任务" --session run_live
 ```
 
@@ -107,6 +108,11 @@ cyrene do "你的任务" --session run_live
 |---|---|
 | `cyrene start` | 后台启动 Workbench Daemon |
 | `cyrene stop` | 停止检测到的 Daemon |
+| `cyrene chat [text]` | 打开交互式流式对话，或发送一条消息后退出 |
+| `cyrene chat --list` | 列出持久 Workbench 对话 |
+| `cyrene chat --chat <id>` | 继续已有 Workbench 对话 |
+| `cyrene chat --chat <id> --resume --cursor <n>` | 从事件序号恢复当前/最近运行 |
+| `cyrene chat --json <text>` | 将公开运行事件输出为 NDJSON |
 | `cyrene do <text> --session <id>` | 向 Session 发送消息 |
 | `cyrene session list` | 列出 Live/Archived Session |
 | `cyrene session status --session <id>` | 查看 Session |
@@ -128,8 +134,47 @@ cyrene do "你的任务" --session run_live
 
 `cyrene start` 是幂等操作：4242 已有健康 Cyrene 时只报告该实例，不启动重复
 进程。`cyrene stop` 只针对检测到的 Daemon。
+若目标 Daemon 启用了本地 Token 认证，CLI 会自动读取
+`CYRENE_AUTH_TOKEN` 并发送 `X-Cyrene-Token`。
 
-## 交互 Local CLI
+### 交互式流 CLI
+
+裸命令 `cyrene` 是推荐的终端交互入口：若 Daemon 尚未运行，它会自动后台启动，
+随后进入交互界面。`cyrene chat` 是等价的显式入口。两者连接后台 Daemon，并复用与 Workbench
+相同的持久 Conversation 和 Run：
+
+```bash
+cyrene
+cyrene chat --chat CHAT_ID
+cyrene chat --mode plan
+```
+
+会话内可使用 `/new`、`/resume`、`/mode`、`/attach`、`/attachments`、
+`/detach`、`/deep-reflect`、`/deep-research`、`/context`、`/config`、
+`/status`、`/mcp` 和 `/exit`。`/new` 会选择 Project；`/resume` 列出带
+Project 名称的 Session。选择菜单支持 ↑/↓ 和 Enter。Alt+Enter 插入换行；
+第一次 Ctrl+C 提示确认，两秒内再次按下才退出 CLI，且不会中断后台 Run。
+若进入后直接输入内容，CLI 会在默认 Project 自动创建新对话。
+
+发送消息后，CLI 会使用随机变换且不连续重复的星形 Spinner
+（`✶ ✸ ✹ ✺ ✷ ◌`）实时显示当前活动与累计用时；
+完成时显示总用时。模型提供的
+思考流默认折叠为“思考了 Ns”，按 Ctrl+O 可展开或再次折叠，也可在
+`/config` → CLI Preferences 中设置 `thinking=compact|expanded`。
+
+`/context` 与 App 的“对话上下文”卡片读取同一份组成数据，显示消息 token
+总数、彩色比例条，以及“系统前缀 / 临时注入 / 对话消息”分组。用户、助手、
+工具和各系统注入块均缩进显示，并使用与 App 对应的语义颜色。
+
+CLI 显示文本回复和公开的 Tool/Phase/Plan 状态。Browser 实时画面与直接操作、
+富媒体 Viewer、Workbench 图形布局和 Raw PTY 不属于该终端界面。
+
+Electron Desktop 启动 Backend 后会发布仅当前系统用户可读（Unix 权限
+`0600`）的本地连接凭据。CLI 会自动连接这一个 Backend，因此 Electron 与
+CLI 可以同时运行，并共享相同的 Project、Conversation、Task、Memory 和
+运行状态；不会启动第二份会争用数据库与 Scheduler 的 Backend。
+
+## 进程内 Local CLI（Legacy）
 
 ```bash
 python -m cyrene.runtime.host
@@ -144,7 +189,8 @@ python -m cyrene.runtime.host
 | `/deep-reflect [focus]` | Deep Reflection |
 | `quit` | 退出 |
 
-Web UI 与交互 CLI 均支持 `/deep-reflect` 和 `/clear`。
+进程内 Legacy CLI 继续支持 `/clear`；新的 `cyrene` 交互界面使用 `/new`
+创建独立对话，不提供 `/clear`。
 
 ## MCP
 

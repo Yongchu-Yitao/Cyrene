@@ -534,8 +534,12 @@ def test_existing_run_rejects_new_send_and_has_explicit_reconnect_endpoint(
         def get(self, chat_id):
             return object() if chat_id == "chat_running" else None
 
-        async def stream(self, _run):
-            yield json.dumps({"type": "ack", "chatId": "chat_running"}) + "\n"
+        async def stream(self, _run, cursor=0):
+            yield json.dumps({
+                "type": "ack",
+                "chatId": "chat_running",
+                "cursor": cursor,
+            }) + "\n"
 
     monkeypatch.setattr(chat_mod, "_CHAT_RUN_MANAGER", FakeManager())
 
@@ -544,13 +548,17 @@ def test_existing_run_rejects_new_send_and_has_explicit_reconnect_endpoint(
         json={"message": "must not be dropped", "stream": True},
     )
     reconnect = client.get(
-        "/api/workbench/chats/chat_running/run-stream",
+        "/api/workbench/chats/chat_running/run-stream?cursor=7",
     )
 
     assert send.status_code == 409
     assert send.json()["code"] == "chat_run_in_progress"
     assert reconnect.status_code == 200
-    assert json.loads(reconnect.text.strip())["type"] == "ack"
+    assert json.loads(reconnect.text.strip()) == {
+        "type": "ack",
+        "chatId": "chat_running",
+        "cursor": 7,
+    }
 
 
 @pytest.mark.asyncio
