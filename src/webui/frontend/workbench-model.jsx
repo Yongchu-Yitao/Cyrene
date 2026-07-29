@@ -295,6 +295,8 @@ function wbIsPermissionQuestionKind(kind) {
         attachments: options.attachments || [],
         mode: options.mode || undefined,
         command: options.command || undefined,
+        model: options.model || undefined,
+        reasoningEffort: options.reasoningEffort || "",
         stepId: options.stepId || undefined,
         stepTitle: options.stepTitle || undefined,
         action: options.action || undefined,
@@ -434,6 +436,8 @@ function wbIsPermissionQuestionKind(kind) {
         attachments: options.attachments || [],
         mode: options.mode || undefined,
         command: options.command || undefined,
+        model: options.model || undefined,
+        reasoningEffort: options.reasoningEffort || "",
         basePlanRevision: options.basePlanRevision,
       }),
     };
@@ -450,6 +454,8 @@ function wbIsPermissionQuestionKind(kind) {
       command: "workbench-task-repair",
       attachments: options.attachments || [],
       mode: options.mode,
+      model: options.model,
+      reasoningEffort: options.reasoningEffort,
     });
   }
 
@@ -463,6 +469,8 @@ function wbIsPermissionQuestionKind(kind) {
         attachments: options.attachments || [],
         mode: options.mode || undefined,
         command: options.command || undefined,
+        model: options.model || undefined,
+        reasoningEffort: options.reasoningEffort || "",
       }),
     };
     if (options.signal) init.signal = options.signal;

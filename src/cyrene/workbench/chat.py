@@ -716,6 +716,8 @@ def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
         "status": chat.get("status") or "idle",
         "model": chat.get("model") or "",
         "lastModel": chat.get("lastModel") or "",
+        "modelSelectionId": chat.get("modelSelectionId") or "",
+        "reasoningEffort": chat.get("reasoningEffort") or "",
         "permissionMode": chat.get("permissionMode") or "default",
         "createdAt": chat.get("createdAt"),
         "updatedAt": chat.get("updatedAt"),

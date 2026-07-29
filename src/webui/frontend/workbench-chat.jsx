@@ -278,6 +278,8 @@ var WorkbenchChatModel = (function () {
         attachments: input.attachments || [],
         mode: input.mode || "default",
         command: input.command || "",
+        model: input.model || "",
+        reasoningEffort: input.reasoningEffort || "",
         retry: !!input.retry,
         forkReplay: !!input.forkReplay,
         stream: true,
@@ -879,6 +881,9 @@ var WBC_ICONS = {
   folder: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>,
   device: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="14" height="11" rx="2"/><path d="M7 20h8M11 15v5M19 9h2M20 8v2"/></svg>,
   fork: <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/><path d="M6 8.2v7.6M8.2 6h7.6M8.2 18H15a3 3 0 0 0 3-3V8.2"/></svg>,
+  chevronRight: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>,
+  chevronDown: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>,
+  chevronLeft: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>,
   chevronsRight: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m13 7 5 5-5 5M6 7l5 5-5 5"/></svg>,
   download: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>,
   sidebar: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m9 10-2 2 2 2"/></svg>,
@@ -906,6 +911,40 @@ var WBC_MODES = [
   { id: "plan", labelKey: "workbenchChat.mode.plan.label", descKey: "workbenchChat.mode.plan.desc" },
   { id: "full_access", labelKey: "workbenchChat.mode.full_access.label", descKey: "workbenchChat.mode.full_access.desc" },
 ];
+var WBC_REASONING_EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra"];
+
+function wbcSupportedReasoningEfforts(model) {
+  var raw = model && (
+    model.supportedReasoningEfforts
+    || model.supported_reasoning_efforts
+  );
+  var efforts = (Array.isArray(raw) ? raw : []).map(function (option) {
+    return String(
+      option && (option.reasoningEffort || option.reasoning_effort)
+      || option
+      || ""
+    ).trim().toLowerCase();
+  }).filter(function (effort) {
+    return WBC_REASONING_EFFORT_ORDER.indexOf(effort) >= 0;
+  });
+  if (!efforts.length && model) efforts = ["low", "medium", "high"];
+  return Array.from(new Set(efforts)).sort(function (a, b) {
+    return WBC_REASONING_EFFORT_ORDER.indexOf(a) - WBC_REASONING_EFFORT_ORDER.indexOf(b);
+  });
+}
+
+function wbcFriendlyModelName(model, fallback) {
+  var configuredName = String(model && model.name || "").trim();
+  var modelId = String(model && model.model || fallback || "").trim();
+  if (configuredName && configuredName !== modelId) return configuredName;
+  if (!modelId) return configuredName;
+  var words = modelId.replace(/^gpt-/i, "").split(/[-_]+/).filter(Boolean);
+  return words.map(function (word) {
+    if (/^\d/.test(word)) return word.toUpperCase();
+    if (word.toLowerCase() === "deepseek") return "DeepSeek";
+    return word.charAt(0).toUpperCase() + word.slice(1);
+  }).join(" ");
+}
 
 function wbcNormalizePermissionMode(value, fallback) {
   var normalized = String(value || "").trim().toLowerCase();
@@ -5511,6 +5550,13 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var [failedImagePreviews, setFailedImagePreviews] = useWbcState({});
   var [slashOpen, setSlashOpen] = useWbcState(false);
   var [modeOpen, setModeOpen] = useWbcState(false);
+  var [modelOpen, setModelOpen] = useWbcState(false);
+  var [modelPanel, setModelPanel] = useWbcState("root");
+  var [configuredModels, setConfiguredModels] = useWbcState([]);
+  var [selectedModelId, setSelectedModelId] = useWbcState("");
+  var [reasoningEffort, setReasoningEffort] = useWbcState(function () {
+    return String(chat && chat.reasoningEffort || "").trim().toLowerCase();
+  });
   var [contextState, setContextState] = useWbcState(null);
   var [workspaceOverride, setWorkspaceOverride] = useWbcState(function () {
     return wbcLoadWorkspaceOverride(workspaceContextKey, draftNs);
@@ -5521,6 +5567,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var taRef = useWbcRef(null);
   var fileRef = useWbcRef(null);
   var ctxPickerRef = useWbcRef(null);
+  var modelPickerRef = useWbcRef(null);
   var uploadCountRef = useWbcRef(0);
   var draftRef = useWbcRef(draft);
   var attachRef = useWbcRef(attachments);
@@ -5574,6 +5621,73 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, [ctxPickerOpen]);
 
   useWbcEffect(function () {
+    if (!modelOpen) return undefined;
+    function closeModelPicker(event) {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(event.target)) {
+        setModelOpen(false);
+        setModelPanel("root");
+      }
+    }
+    document.addEventListener("pointerdown", closeModelPicker);
+    return function () { document.removeEventListener("pointerdown", closeModelPicker); };
+  }, [modelOpen]);
+
+  useWbcEffect(function () {
+    var cancelled = false;
+    window.CyreneUI.require("api").json("/api/settings/models", { toast: false })
+      .then(function (payload) {
+        var options = Array.isArray(payload.models) ? payload.models : [];
+        var needsCodexCatalog = options.some(function (item) {
+          return String(item.provider || "") === "codex_oauth";
+        });
+        var catalogRequest = needsCodexCatalog
+          ? window.CyreneUI.require("api").json("/api/settings/openai-oauth", { toast: false }).catch(function () { return {}; })
+          : Promise.resolve({});
+        return catalogRequest.then(function (catalog) {
+          if (cancelled) return;
+          var codexModels = Array.isArray(catalog.models) ? catalog.models : [];
+          options = options.map(function (item) {
+            if (String(item.provider || "") !== "codex_oauth") return item;
+            var match = codexModels.find(function (entry) {
+              var id = String(entry.model || entry.id || entry.slug || "").trim();
+              return id === String(item.model || "").trim();
+            });
+            return match ? Object.assign({}, item, {
+              supportedReasoningEfforts: match.supportedReasoningEfforts || match.supported_reasoning_efforts || [],
+            }) : item;
+          });
+          setConfiguredModels(options);
+        var chatSelection = String(
+          chat && (chat.modelSelectionId || chat.model || chat.lastModel) || ""
+        ).trim();
+        var selected = options.find(function (item) {
+          return chatSelection && [
+            String(item.id || ""),
+            String(item.model || ""),
+            String(item.name || ""),
+          ].indexOf(chatSelection) >= 0;
+        }) || options.find(function (item) {
+          return String(item.id || "") === String(payload.active || "");
+        }) || options[0];
+        if (selected) {
+          setSelectedModelId(String(selected.id || selected.model || ""));
+          setReasoningEffort(
+            String(
+              chat && chat.reasoningEffort
+              || selected.reasoning_effort
+              || ""
+            ).trim().toLowerCase()
+          );
+        }
+        });
+      })
+      .catch(function () {
+        if (!cancelled) setConfiguredModels([]);
+      });
+    return function () { cancelled = true; };
+  }, [chatId]);
+
+  useWbcEffect(function () {
     var prev = prevChatIdRef.current;
     if (prev !== chatId) {
       wbcSaveDraft(prev, draftRef.current, draftNs);
@@ -5584,10 +5698,12 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       setFailedImagePreviews({});
       prevChatIdRef.current = chatId;
     }
-    setCommand("");
-    setSlashOpen(false);
-    setModeOpen(false);
-    setCtxPickerOpen(false);
+      setCommand("");
+      setSlashOpen(false);
+      setModeOpen(false);
+      setModelOpen(false);
+      setModelPanel("root");
+      setCtxPickerOpen(false);
   }, [chatId]);
 
   useWbcEffect(function () {
@@ -5700,7 +5816,14 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
       return;
     }
     if (!text && attachments.length === 0) return;
-    var payload = { message: text, attachments: attachments, mode: mode, command: command };
+    var payload = {
+      message: text,
+      attachments: attachments,
+      mode: mode,
+      command: command,
+      model: selectedModelId,
+      reasoningEffort: reasoningEffort,
+    };
     // Optimistically clear on send; restored in the running-transition effect
     // if the send fails (error). The quick-chat surface passes clearOnSend=false
     // and manages its own draft lifecycle.
@@ -5736,6 +5859,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
     if (event.key === "Escape") {
       setSlashOpen(false);
       setModeOpen(false);
+      setModelOpen(false);
+      setModelPanel("root");
     }
   }
 
@@ -5815,7 +5940,15 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   // chosen from the composer remains selected when the user switches projects.
   var wsDir = workspaceOverride || projectWorkspacePath || (contextState && contextState.workspace_dir) || "";
   var wsHistory = (contextState && Array.isArray(contextState.workspace_history)) ? contextState.workspace_history : [];
+  var selectedModel = configuredModels.find(function (item) {
+    return String(item.id || item.model || "") === String(selectedModelId || "");
+  });
   var modelName = wbcCurrentModel(chat, project, runtime, null);
+  modelName = wbcFriendlyModelName(selectedModel, modelName);
+  var effortLabel = reasoningEffort
+    ? wbcT("settings.reasoningEffortValue." + reasoningEffort, reasoningEffort)
+    : "";
+  var supportedReasoningEfforts = wbcSupportedReasoningEfforts(selectedModel);
 
   function wbcTogglePersona() {
     window.CyreneUI.require("api").fetch(personaOn ? "/api/context/remove-soul" : "/api/context/add-soul", { method: "POST" })
@@ -6083,7 +6216,91 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
             )}
           </span>
           <span className="wbc-composer-spacer" />
-          {modelName ? <span className="wbc-model-label" title={wbcT("workbenchChat.currentModel", "Current model")}>{modelName}</span> : null}
+          {modelName ? (
+            <span className="wbc-pop-anchor wbc-model-anchor" ref={modelPickerRef}>
+              <button
+                type="button"
+                className={"wbc-model-button" + (modelOpen ? " active" : "")}
+                title={wbcT("workbenchChat.chooseModel", "Choose model")}
+                aria-haspopup="menu"
+                aria-expanded={modelOpen}
+                disabled={running}
+                onClick={function () {
+                  setModelOpen(!modelOpen);
+                  setModelPanel("root");
+                  setSlashOpen(false);
+                  setModeOpen(false);
+                }}
+              >
+                <span className="wbc-model-button-name">{modelName}</span>
+                {effortLabel ? <span className="wbc-model-button-effort">{effortLabel}</span> : null}
+                <span className="wbc-model-button-chevron">{WBC_ICONS.chevronDown}</span>
+              </button>
+              {modelOpen && (
+                <div className="wbc-popmenu wbc-model-menu" role="menu">
+                  {modelPanel === "root" && (
+                    <>
+                      <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("models"); }}>
+                        <span className="wbc-model-menu-key">{wbcT("workbenchChat.model", "Model")}</span>
+                        <span className="wbc-model-menu-value">{modelName}</span>
+                        <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
+                      </button>
+                      {supportedReasoningEfforts.length > 0 && (
+                        <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("effort"); }}>
+                          <span className="wbc-model-menu-key">{wbcT("workbenchChat.reasoningEffort", "Reasoning effort")}</span>
+                          <span className="wbc-model-menu-value">{effortLabel || "—"}</span>
+                          <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {modelPanel === "models" && (
+                    <>
+                      <button type="button" className="wbc-model-menu-back" onClick={function () { setModelPanel("root"); }}>
+                        <span>{WBC_ICONS.chevronLeft}</span>
+                        <span>{wbcT("workbenchChat.model", "Model")}</span>
+                      </button>
+                      {configuredModels.map(function (item) {
+                        var id = String(item.id || item.model || "");
+                        var active = id === selectedModelId;
+                        return (
+                          <button key={id} type="button" className={active ? "active" : ""} onClick={function () {
+                            setSelectedModelId(id);
+                            setReasoningEffort(String(item.reasoning_effort || "").trim().toLowerCase());
+                            setModelPanel("root");
+                          }}>
+                            <span className="wbc-popmenu-label">{item.name || item.model}</span>
+                            {item.desc ? <span className="wbc-popmenu-desc">{item.desc}</span> : null}
+                            {active ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+                  {modelPanel === "effort" && (
+                    <>
+                      <button type="button" className="wbc-model-menu-back" onClick={function () { setModelPanel("root"); }}>
+                        <span>{WBC_ICONS.chevronLeft}</span>
+                        <span>{wbcT("workbenchChat.reasoningEffort", "Reasoning effort")}</span>
+                      </button>
+                      {supportedReasoningEfforts.map(function (effort) {
+                        var active = effort === reasoningEffort;
+                        return (
+                          <button key={effort} type="button" className={active ? "active" : ""} onClick={function () {
+                            setReasoningEffort(effort);
+                            setModelPanel("root");
+                          }}>
+                            <span className="wbc-popmenu-label">{wbcT("settings.reasoningEffortValue." + effort, effort)}</span>
+                            {active ? <span className="wbc-popmenu-check">{WBC_ICONS.check}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+              )}
+            </span>
+          ) : null}
           <button
             type="button"
             className={"wbc-send" + (running && !hasRuntimeGuidance ? " stop" : "")}

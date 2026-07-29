@@ -807,6 +807,8 @@ def register_workbench_chat_routes(
         retry = bool(body.get("retry"))
         fork_replay = bool(body.get("forkReplay"))
         requested_mode = str(body.get("mode") or "").strip().lower()
+        requested_model = str(body.get("model") or "").strip()
+        requested_effort = str(body.get("reasoningEffort") or "").strip().lower()
         lang = str(body.get("lang") or "").strip().lower()
         # Persist the UI language so server-side flows (the proactive scheduler)
         # can reply in the same language even with no HTTP request to read.
@@ -846,6 +848,48 @@ def register_workbench_chat_routes(
         if not project:
             return JSONResponse({"error": "project not found"}, status_code=404)
         workspace_dir = R._workbench_resolve_workspace_dir(project)
+
+        selected_candidate = None
+        selected_key = requested_model or str(chat.get("modelSelectionId") or "").strip()
+        if selected_key:
+            from cyrene.runtime.settings_store import get_models
+
+            selected_candidate = next(
+                (
+                    candidate
+                    for candidate in (get_models() or [])
+                    if selected_key
+                    in {
+                        str(candidate.get("id") or "").strip(),
+                        str(candidate.get("model") or "").strip(),
+                        str(candidate.get("name") or "").strip(),
+                    }
+                ),
+                None,
+            )
+            if selected_candidate is None:
+                return JSONResponse({"error": "configured model not found"}, status_code=400)
+            from cyrene.model_runtime.client import set_session_model_preference
+
+            selected_model_name = str(
+                selected_candidate.get("model")
+                or selected_candidate.get("name")
+                or selected_key
+            ).strip()
+            selected_model_id = str(selected_candidate.get("id") or selected_key).strip()
+            selected_effort = requested_effort or str(
+                chat.get("reasoningEffort")
+                or selected_candidate.get("reasoning_effort")
+                or ""
+            ).strip().lower()
+            set_session_model_preference(
+                chat_id,
+                selected_candidate,
+                selected_effort,
+            )
+            chat["modelSelectionId"] = selected_model_id
+            chat["model"] = selected_model_name
+            chat["reasoningEffort"] = selected_effort
 
         existing_run = _CHAT_RUN_MANAGER.get(chat_id)
         if existing_run is not None:
@@ -910,7 +954,8 @@ def register_workbench_chat_routes(
             if is_first_message and chat.get("title") in ("", "新对话", None) and message:
                 chat["title"] = message.replace("\n", " ")[:24]
         chat["status"] = "running"
-        chat["model"] = R._get_model()
+        if selected_candidate is None:
+            chat["model"] = R._get_model()
         _mark_user_activity(chat, now)
         await asyncio.to_thread(_write_chats_store, payload)
 

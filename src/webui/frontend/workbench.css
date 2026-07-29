@@ -14901,14 +14901,88 @@ button.wbc-attach-file:focus-visible {
   flex: 1;
 }
 
-.wbc-model-label {
+.wbc-model-anchor {
+  min-width: 0;
+}
+
+.wbc-model-button {
+  height: 30px;
+  max-width: 190px;
+  margin-right: 6px;
+  padding: 0 8px 0 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 65%, var(--wb-bg-2));
+  color: var(--wb-text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
   font-size: calc(12px * var(--wb-ui-font-scale, 1));
-  color: var(--wb-muted);
-  font-family: var(--mono, "IBM Plex Mono", monospace);
-  max-width: 200px;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.wbc-model-button:hover:not(:disabled),
+.wbc-model-button.active {
+  background: var(--wb-control-hover-bg);
+  border-color: var(--wb-line);
+}
+
+.wbc-model-button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-accent) 20%, transparent);
+}
+
+.wbc-model-button:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.wbc-model-button-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wbc-model-button-effort,
+.wbc-model-button-chevron {
+  flex: 0 0 auto;
+  color: var(--wb-muted);
+}
+
+.wbc-model-button-chevron {
+  display: inline-flex;
+  transition: transform 0.14s ease;
+}
+
+.wbc-model-button.active .wbc-model-button-chevron {
+  transform: rotate(180deg);
+}
+
+html[data-theme="light"] .wbc-model-button {
+  background: #eaf0f4;
+  border-color: #e3e8ec;
+}
+
+html[data-theme="light"] .wbc-model-button:hover:not(:disabled) {
+  background: #e1e8ed;
+  border-color: #d4dde3;
+}
+
+html[data-theme="light"] .wbc-model-button.active {
+  background: #dce5eb;
+  border-color: #cdd7de;
+}
+
+html[data-theme="dark"] .wbc-model-button {
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 94%, var(--wb-text));
+}
+
+html[data-theme="dark"] .wbc-model-button:hover:not(:disabled),
+html[data-theme="dark"] .wbc-model-button.active {
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 89%, var(--wb-text));
+  border-color: var(--wb-line-2);
 }
 
 .wbc-send {
@@ -15008,6 +15082,80 @@ button.wbc-attach-file:focus-visible {
   align-self: center;
   color: var(--wb-accent);
   display: inline-flex;
+}
+
+.wbc-model-menu {
+  right: 0;
+  left: auto;
+  width: min(260px, calc(100vw - 32px));
+  min-width: min(260px, calc(100vw - 32px));
+  padding: 6px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 72%, var(--wb-bg-2));
+}
+
+html[data-theme="light"] .wbc-model-menu {
+  background: #f7f9fa;
+  border-color: #dfe5e9;
+}
+
+html[data-theme="light"] .wbc-model-menu > button:hover {
+  background: #eaf0f4;
+}
+
+html[data-theme="light"] .wbc-model-menu > button.active {
+  background: #e2ebf0;
+}
+
+html[data-theme="dark"] .wbc-model-menu {
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 96%, var(--wb-text));
+}
+
+html[data-theme="dark"] .wbc-model-menu > button:hover {
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 90%, var(--wb-text));
+}
+
+.wbc-popmenu > .wbc-model-menu-row {
+  grid-template-columns: minmax(86px, auto) minmax(0, 1fr) 18px;
+  grid-template-areas: "key value chevron";
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 10px;
+}
+
+.wbc-model-menu-key {
+  grid-area: key;
+  font-size: calc(14px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+}
+
+.wbc-model-menu-value {
+  grid-area: value;
+  min-width: 0;
+  color: var(--wb-muted);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-model-menu-chevron {
+  grid-area: chevron;
+  color: var(--wb-muted);
+  display: inline-flex;
+  justify-content: flex-end;
+}
+
+.wbc-popmenu > .wbc-model-menu-back {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 7px 9px;
+  color: var(--wb-muted);
+  font-size: calc(12px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
 }
 
 .wbc-ctx-picker {

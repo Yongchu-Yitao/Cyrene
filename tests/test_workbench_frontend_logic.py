@@ -3299,6 +3299,30 @@ def test_workbench_task_composer_uses_enter_to_send_via_shortcut_module():
     assert "event.metaKey || event.ctrlKey" not in composer_block.split("function onKeyDown")[1].split("}")[0]
 
 
+def test_workbench_task_composer_includes_model_and_reasoning_picker():
+    root = Path(__file__).resolve().parent.parent
+    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
+    model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(encoding="utf-8")
+
+    composer = workbench.split("function TaskComposer(", 1)[1].split(
+        "function ComposerDisclaimer", 1
+    )[0]
+    assert "wbc-model-button" in composer
+    assert 'setModelPanel("models")' in composer
+    assert 'setModelPanel("effort")' in composer
+    assert "onSelectedModelIdChange(id)" in composer
+    assert "onReasoningEffortChange(effort)" in composer
+    assert "model: options.model || undefined" in model
+    assert 'reasoningEffort: options.reasoningEffort || ""' in model
+    task_work_area = workbench.split("function TaskWorkArea(", 1)[1].split(
+        "function TaskComposer(", 1
+    )[0]
+    assert "applyInitialModels(options);" in task_work_area
+    assert task_work_area.index("applyInitialModels(options);") < task_work_area.index(
+        "return catalogRequest.then"
+    )
+
+
 def test_workbench_file_drop_routes_files_to_task_chat_and_knowledge():
     root = Path(__file__).resolve().parent.parent
     workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")

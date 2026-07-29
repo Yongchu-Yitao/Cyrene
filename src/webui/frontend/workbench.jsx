@@ -3855,6 +3855,9 @@ var ICONS = {
   cmdCompare: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M7 4 3 8l4 4M3 8h13M17 20l4-4-4-4M21 16H8"/></svg>,
   cmdCode: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="m8 8-4 4 4 4M16 8l4 4-4 4"/></svg>,
   checkSmall: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>,
+  chevronRight: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>,
+  chevronDown: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>,
+  chevronLeft: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>,
 };
 
 function wbT(key, fallback, params) {
@@ -3876,6 +3879,41 @@ function wbModeMeta(id) {
     if (WB_MODES[i].id === id) meta = WB_MODES[i];
   }
   return { ...meta, label: wbT(meta.labelKey, meta.id), desc: wbT(meta.descKey, "") };
+}
+
+var WB_REASONING_EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra"];
+
+function wbSupportedReasoningEfforts(model) {
+  var raw = model && (
+    model.supportedReasoningEfforts
+    || model.supported_reasoning_efforts
+  );
+  var efforts = (Array.isArray(raw) ? raw : []).map(function (option) {
+    return String(
+      option && (option.reasoningEffort || option.reasoning_effort)
+      || option
+      || ""
+    ).trim().toLowerCase();
+  }).filter(function (effort) {
+    return WB_REASONING_EFFORT_ORDER.indexOf(effort) >= 0;
+  });
+  if (!efforts.length && model) efforts = ["low", "medium", "high"];
+  return Array.from(new Set(efforts)).sort(function (a, b) {
+    return WB_REASONING_EFFORT_ORDER.indexOf(a) - WB_REASONING_EFFORT_ORDER.indexOf(b);
+  });
+}
+
+function wbFriendlyModelName(model, fallback) {
+  var configuredName = String(model && model.name || "").trim();
+  var modelId = String(model && model.model || fallback || "").trim();
+  if (configuredName && configuredName !== modelId) return configuredName;
+  if (!modelId) return configuredName;
+  var words = modelId.replace(/^gpt-/i, "").split(/[-_]+/).filter(Boolean);
+  return words.map(function (word) {
+    if (/^\d/.test(word)) return word.toUpperCase();
+    if (word.toLowerCase() === "deepseek") return "DeepSeek";
+    return word.charAt(0).toUpperCase() + word.slice(1);
+  }).join(" ");
 }
 
 function isDoneStepStatus(status) {
@@ -4075,6 +4113,8 @@ function useTaskController(session, onRefresh, runtime) {
         return model.createRun(sid, effectiveStepPrompt(patchedSession, step), {
           attachments: uploadCtx.concat((runtime && runtime.attachments) || []),
           mode: (runtime && runtime.mode) || undefined,
+          model: (runtime && runtime.model) || undefined,
+          reasoningEffort: (runtime && runtime.reasoningEffort) || "",
           stepId: step.id || undefined,
           stepTitle: stepTitle,
           action: "spawn_subagent",
@@ -4143,6 +4183,8 @@ function useTaskController(session, onRefresh, runtime) {
       return runAgentic({ kind: "dispatch", label: "正在理解你的输入…" }, model.dispatch(sid, input, {
         attachments: (runtime && runtime.attachments) || [],
         mode: (runtime && runtime.mode) || undefined,
+        model: (runtime && runtime.model) || undefined,
+        reasoningEffort: (runtime && runtime.reasoningEffort) || "",
         basePlanRevision: Number(session.planRevision || 0),
       }).then(function (store) {
         if (runtime && runtime.clearAttachments) runtime.clearAttachments();
@@ -4521,6 +4563,8 @@ function useTaskController(session, onRefresh, runtime) {
       return runAgentic({ kind: "repair", label: "正在参考验收结果继续修改…" }, model.continueAcceptanceRepair(sid, lines.join("\n"), {
         attachments: (runtime && runtime.attachments) || [],
         mode: (runtime && runtime.mode) || undefined,
+        model: (runtime && runtime.model) || undefined,
+        reasoningEffort: (runtime && runtime.reasoningEffort) || "",
       }).then(function (store) {
         if (runtime && runtime.clearAttachments) runtime.clearAttachments();
         return store;
@@ -4846,14 +4890,81 @@ function TaskWorkArea(props) {
   var active = props.active !== false;
   var [attachments, setAttachments] = useWorkbenchState([]);
   var [mode, setMode] = useWorkbenchState("auto");
+  var [configuredModels, setConfiguredModels] = useWorkbenchState([]);
+  var [selectedModelId, setSelectedModelId] = useWorkbenchState("");
+  var [reasoningEffort, setReasoningEffort] = useWorkbenchState("");
   var [goalLoopOpen, setGoalLoopOpen] = useWorkbenchState(false);
   var [goalLoopLimitsOpen, setGoalLoopLimitsOpen] = useWorkbenchState(false);
   var sid = session ? session.id : "";
   // Pending attachments belong to the task being composed — reset on switch.
   useWorkbenchEffect(function () { setAttachments([]); }, [sid]);
+  useWorkbenchEffect(function () {
+    var cancelled = false;
+    window.CyreneUI.require("api").json("/api/settings/models", { toast: false })
+      .then(function (payload) {
+        var options = Array.isArray(payload.models) ? payload.models : [];
+        function applyInitialModels(items) {
+          if (cancelled) return;
+          setConfiguredModels(items);
+          var sessionSelection = String(
+            session && (session.modelSelectionId || session.model) || ""
+          ).trim();
+          var selected = items.find(function (item) {
+            return sessionSelection && [
+              String(item.id || ""),
+              String(item.model || ""),
+              String(item.name || ""),
+            ].indexOf(sessionSelection) >= 0;
+          }) || items.find(function (item) {
+            return String(item.id || "") === String(payload.active || "");
+          }) || items[0];
+          if (selected) {
+            setSelectedModelId(String(selected.id || selected.model || ""));
+            setReasoningEffort(String(
+              session && session.reasoningEffort
+              || selected.reasoning_effort
+              || ""
+            ).trim().toLowerCase());
+          } else {
+            setSelectedModelId("");
+            setReasoningEffort("");
+          }
+        }
+        // Render the picker as soon as the configured model list arrives.
+        // Codex capability metadata is optional enrichment and must not delay UI.
+        applyInitialModels(options);
+        var needsCodexCatalog = options.some(function (item) {
+          return String(item.provider || "") === "codex_oauth";
+        });
+        var catalogRequest = needsCodexCatalog
+          ? window.CyreneUI.require("api").json("/api/settings/openai-oauth", { toast: false }).catch(function () { return {}; })
+          : Promise.resolve({});
+        return catalogRequest.then(function (catalog) {
+          if (cancelled) return;
+          var codexModels = Array.isArray(catalog.models) ? catalog.models : [];
+          options = options.map(function (item) {
+            if (String(item.provider || "") !== "codex_oauth") return item;
+            var match = codexModels.find(function (entry) {
+              var id = String(entry.model || entry.id || entry.slug || "").trim();
+              return id === String(item.model || "").trim();
+            });
+            return match ? Object.assign({}, item, {
+              supportedReasoningEfforts: match.supportedReasoningEfforts || match.supported_reasoning_efforts || [],
+            }) : item;
+          });
+          setConfiguredModels(options);
+        });
+      })
+      .catch(function () {
+        if (!cancelled) setConfiguredModels([]);
+      });
+    return function () { cancelled = true; };
+  }, [sid]);
   var controller = useTaskController(session, props.onRefresh, {
     attachments: attachments,
     mode: mode,
+    model: selectedModelId,
+    reasoningEffort: reasoningEffort,
     clearAttachments: function () { setAttachments([]); },
     onLocalPatch: props.onLocalPatch,
     onOpenGoalLoop: function () { setGoalLoopOpen(true); },
@@ -4922,6 +5033,11 @@ function TaskWorkArea(props) {
         onAttachmentsChange={setAttachments}
         mode={mode}
         onModeChange={setMode}
+        configuredModels={configuredModels}
+        selectedModelId={selectedModelId}
+        onSelectedModelIdChange={setSelectedModelId}
+        reasoningEffort={reasoningEffort}
+        onReasoningEffortChange={setReasoningEffort}
       />
       {goalLoopOpen && <GoalLoopWizard session={session} onClose={function () { setGoalLoopOpen(false); }} onStarted={props.onRefresh} />}
       {goalLoopLimitsOpen && <GoalLoopLimitsDialog session={session} onClose={function () { setGoalLoopLimitsOpen(false); }} onSaved={props.onRefresh} />}
@@ -6299,14 +6415,30 @@ function composerChips(status, controller, onRightTab, session) {
 
 // Composer is always bound to the current task. Behaviour + quick-chips depend
 // on the task status. Action row: attachments / permission mode / send · stop.
-function TaskComposer({ session, controller, onRightTab, attachments, onAttachmentsChange, mode, onModeChange }) {
+function TaskComposer({
+  session,
+  controller,
+  onRightTab,
+  attachments,
+  onAttachmentsChange,
+  mode,
+  onModeChange,
+  configuredModels,
+  selectedModelId,
+  onSelectedModelIdChange,
+  reasoningEffort,
+  onReasoningEffortChange,
+}) {
   var model = window.CyreneUI.require("model");
   var [draft, setDraft] = useWorkbenchState("");
   var [scopePrompt, setScopePrompt] = useWorkbenchState(null);
   var [modeOpen, setModeOpen] = useWorkbenchState(false);
+  var [modelOpen, setModelOpen] = useWorkbenchState(false);
+  var [modelPanel, setModelPanel] = useWorkbenchState("root");
   var [uploading, setUploading] = useWorkbenchState(false);
   var taRef = useWorkbenchRef(null);
   var fileRef = useWorkbenchRef(null);
+  var modelPickerRef = useWorkbenchRef(null);
   var uploadCountRef = useWorkbenchRef(0);
   var status = String(session.status || "idle");
   var running = status === "running";
@@ -6323,7 +6455,24 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
   }, []);
 
   // Reset transient composer state when switching tasks.
-  useWorkbenchEffect(function () { setScopePrompt(null); setModeOpen(false); }, [session.id]);
+  useWorkbenchEffect(function () {
+    setScopePrompt(null);
+    setModeOpen(false);
+    setModelOpen(false);
+    setModelPanel("root");
+  }, [session.id]);
+
+  useWorkbenchEffect(function () {
+    if (!modelOpen) return undefined;
+    function closeModelPicker(event) {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(event.target)) {
+        setModelOpen(false);
+        setModelPanel("root");
+      }
+    }
+    document.addEventListener("pointerdown", closeModelPicker);
+    return function () { document.removeEventListener("pointerdown", closeModelPicker); };
+  }, [modelOpen]);
 
   function syncHeight() {
     var ta = taRef.current;
@@ -6377,7 +6526,11 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
       submit();
       return;
     }
-    if (event.key === "Escape") { setModeOpen(false); }
+    if (event.key === "Escape") {
+      setModeOpen(false);
+      setModelOpen(false);
+      setModelPanel("root");
+    }
   }
 
   function pickFiles() { if (fileRef.current) fileRef.current.click(); }
@@ -6437,6 +6590,20 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
   var chips = awaitingAnswer ? [] : composerChips(status, controller, onRightTab, session);
   var disabled = controller.busy || running;
   var current = wbModeMeta(mode || "auto");
+  configuredModels = Array.isArray(configuredModels) ? configuredModels : [];
+  selectedModelId = String(selectedModelId || "");
+  var selectedModel = configuredModels.find(function (item) {
+    return String(item.id || item.model || "") === selectedModelId;
+  });
+  var modelName = wbFriendlyModelName(
+    selectedModel,
+    session && (session.model || session.lastModel) || ""
+  );
+  reasoningEffort = String(reasoningEffort || "").trim().toLowerCase();
+  var effortLabel = reasoningEffort
+    ? wbT("settings.reasoningEffortValue." + reasoningEffort, reasoningEffort)
+    : "";
+  var supportedReasoningEfforts = wbSupportedReasoningEfforts(selectedModel);
   var sendDisabled = running ? false : (disabled || (!draft.trim() && attachments.length === 0));
 
   return (
@@ -6495,7 +6662,11 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
             {uploading ? <span className="wb-spinner" /> : ICONS.attach}
           </button>
           <span className="wb-popover-anchor">
-            <button type="button" className={"wb-composer-icon mode" + (modeOpen ? " active" : "")} title={wbT("workbenchChat.permissionMode", "Permission mode")} onClick={function () { setModeOpen(!modeOpen); }}>
+            <button type="button" className={"wb-composer-icon mode" + (modeOpen ? " active" : "")} title={wbT("workbenchChat.permissionMode", "Permission mode")} onClick={function () {
+              setModeOpen(!modeOpen);
+              setModelOpen(false);
+              setModelPanel("root");
+            }}>
               <span className="wb-mode-ico">{current.icon}</span>
               <span className="wb-mode-label">{current.label}</span>
             </button>
@@ -6519,6 +6690,90 @@ function TaskComposer({ session, controller, onRightTab, attachments, onAttachme
             )}
           </span>
           <span className="wb-composer-spacer" />
+          {modelName ? (
+            <span className="wbc-pop-anchor wbc-model-anchor" ref={modelPickerRef}>
+              <button
+                type="button"
+                className={"wbc-model-button" + (modelOpen ? " active" : "")}
+                title={wbT("workbenchChat.chooseModel", "Choose model")}
+                aria-haspopup="menu"
+                aria-expanded={modelOpen}
+                disabled={running}
+                onClick={function () {
+                  setModelOpen(!modelOpen);
+                  setModelPanel("root");
+                  setModeOpen(false);
+                }}
+              >
+                <span className="wbc-model-button-name">{modelName}</span>
+                {effortLabel ? <span className="wbc-model-button-effort">{effortLabel}</span> : null}
+                <span className="wbc-model-button-chevron">{ICONS.chevronDown}</span>
+              </button>
+              {modelOpen && (
+                <div className="wbc-popmenu wbc-model-menu" role="menu">
+                  {modelPanel === "root" && (
+                    <>
+                      <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("models"); }}>
+                        <span className="wbc-model-menu-key">{wbT("workbenchChat.model", "Model")}</span>
+                        <span className="wbc-model-menu-value">{modelName}</span>
+                        <span className="wbc-model-menu-chevron">{ICONS.chevronRight}</span>
+                      </button>
+                      {supportedReasoningEfforts.length > 0 && (
+                        <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("effort"); }}>
+                          <span className="wbc-model-menu-key">{wbT("workbenchChat.reasoningEffort", "Reasoning effort")}</span>
+                          <span className="wbc-model-menu-value">{effortLabel || "—"}</span>
+                          <span className="wbc-model-menu-chevron">{ICONS.chevronRight}</span>
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {modelPanel === "models" && (
+                    <>
+                      <button type="button" className="wbc-model-menu-back" onClick={function () { setModelPanel("root"); }}>
+                        <span>{ICONS.chevronLeft}</span>
+                        <span>{wbT("workbenchChat.model", "Model")}</span>
+                      </button>
+                      {configuredModels.map(function (item) {
+                        var id = String(item.id || item.model || "");
+                        var active = id === selectedModelId;
+                        return (
+                          <button key={id} type="button" className={active ? "active" : ""} onClick={function () {
+                            onSelectedModelIdChange(id);
+                            onReasoningEffortChange(String(item.reasoning_effort || "").trim().toLowerCase());
+                            setModelPanel("root");
+                          }}>
+                            <span className="wbc-popmenu-label">{item.name || item.model}</span>
+                            {item.desc ? <span className="wbc-popmenu-desc">{item.desc}</span> : null}
+                            {active ? <span className="wbc-popmenu-check">{ICONS.checkSmall}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+                  {modelPanel === "effort" && (
+                    <>
+                      <button type="button" className="wbc-model-menu-back" onClick={function () { setModelPanel("root"); }}>
+                        <span>{ICONS.chevronLeft}</span>
+                        <span>{wbT("workbenchChat.reasoningEffort", "Reasoning effort")}</span>
+                      </button>
+                      {supportedReasoningEfforts.map(function (effort) {
+                        var active = effort === reasoningEffort;
+                        return (
+                          <button key={effort} type="button" className={active ? "active" : ""} onClick={function () {
+                            onReasoningEffortChange(effort);
+                            setModelPanel("root");
+                          }}>
+                            <span className="wbc-popmenu-label">{wbT("settings.reasoningEffortValue." + effort, effort)}</span>
+                            {active ? <span className="wbc-popmenu-check">{ICONS.checkSmall}</span> : null}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+              )}
+            </span>
+          ) : null}
           <button
             type="button"
             className={"wb-composer-send" + (running ? " stop" : "")}

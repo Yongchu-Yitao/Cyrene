@@ -153,6 +153,8 @@ class AgentInputBody(APIBody):
     attachments: list[Any] = Field(default_factory=list, max_length=100)
     mode: str | None = Field(default=None, max_length=80)
     command: str | None = Field(default=None, max_length=20_000)
+    model: str | None = Field(default=None, max_length=500)
+    reasoningEffort: Literal["", "low", "medium", "high", "xhigh", "max", "ultra"] = ""
     stepId: str | None = Field(default=None, max_length=200)
     stepTitle: str | None = Field(default=None, max_length=1000)
     action: str | None = Field(default=None, max_length=200)
@@ -197,6 +199,8 @@ class ChatMessageBody(APIBody):
     message: str | None = Field(default=None, max_length=200_000)
     attachments: list[Any] = Field(default_factory=list, max_length=100)
     command: str | None = Field(default=None, max_length=20_000)
+    model: str | None = Field(default=None, max_length=500)
+    reasoningEffort: Literal["", "low", "medium", "high", "xhigh", "max", "ultra"] = ""
     stream: bool = False
     retry: bool = False
     forkReplay: bool = False

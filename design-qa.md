@@ -124,3 +124,12 @@ Status: **Passed**
 - Targeted OAuth, onboarding, and frontend tests: `151 passed`.
 - In-app browser interaction and visual inspection: passed.
 - `git diff --check`: passed.
+
+---
+
+# Composer model picker QA
+
+- Detailed report: `design-qa-model-picker.md`
+- Runtime verification: passed.
+- Automated checks: `180 passed`.
+- final result: passed

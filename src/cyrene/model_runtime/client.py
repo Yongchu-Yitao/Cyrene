@@ -52,9 +52,11 @@ _http_clients: weakref.WeakKeyDictionary[
 _HTTP_MAX_CONNECTIONS = 40
 _HTTP_MAX_KEEPALIVE_CONNECTIONS = 20
 _LAST_SUCCESS_SETTING = "llm_last_success_endpoints"
+_SESSION_MODEL_PREFERENCE_SETTING = "llm_session_model_preferences"
 _SESSION_AFFINITY_PREFIX = "session:"
 _MAX_SESSION_AFFINITIES = 2048
 _last_success_cache: dict[str, dict[str, str]] | None = None
+_session_model_preference_cache: dict[str, dict[str, str]] | None = None
 
 
 def _bg_token_task(task: asyncio.Task) -> None:
@@ -125,6 +127,43 @@ def _session_affinity_key(model_type: str, session_id: str) -> str:
     return f"{_SESSION_AFFINITY_PREFIX}{session}:{str(model_type or 'primary')}"
 
 
+def _session_model_preferences() -> dict[str, dict[str, str]]:
+    global _session_model_preference_cache
+    if _session_model_preference_cache is None:
+        raw = get_setting(_SESSION_MODEL_PREFERENCE_SETTING, {})
+        _session_model_preference_cache = dict(raw) if isinstance(raw, dict) else {}
+    return _session_model_preference_cache
+
+
+def set_session_model_preference(
+    session_id: str,
+    candidate: dict[str, Any],
+    reasoning_effort: str = "",
+) -> None:
+    """Pin a configured primary candidate (and optional effort) to one chat."""
+    global _session_model_preference_cache
+
+    session = str(session_id or "").strip()
+    if not session:
+        return
+    preference = {
+        "candidate_id": str(candidate.get("id") or "").strip(),
+        "model": str(candidate.get("model") or candidate.get("name") or "").strip(),
+        "base_url": str(candidate.get("base_url") or "").strip(),
+        "reasoning_effort": str(
+            reasoning_effort or candidate.get("reasoning_effort") or ""
+        ).strip().lower(),
+    }
+    saved = _session_model_preferences()
+    if saved.get(session) == preference:
+        return
+    saved[session] = preference
+    while len(saved) > _MAX_SESSION_AFFINITIES:
+        saved.pop(next(iter(saved)))
+    _session_model_preference_cache = saved
+    set_setting(_SESSION_MODEL_PREFERENCE_SETTING, dict(saved))
+
+
 def _prioritize_last_success(
     candidates: list[dict[str, Any]], model_type: str, session_id: str = ""
 ) -> list[dict[str, Any]]:
@@ -132,6 +171,11 @@ def _prioritize_last_success(
     affinity = (
         _last_success_map().get(affinity_key) or {}
         if affinity_key
+        else {}
+    )
+    preference = (
+        _session_model_preferences().get(str(session_id or "").strip()) or {}
+        if model_type == "primary" and session_id
         else {}
     )
     prepared: list[dict[str, Any]] = []
@@ -149,11 +193,20 @@ def _prioritize_last_success(
             if preferred_endpoint in endpoints:
                 endpoints.remove(preferred_endpoint)
                 endpoints.insert(0, preferred_endpoint)
+        if (
+            str(candidate.get("id") or "") == str(preference.get("candidate_id") or "")
+            and str(candidate.get("model") or "") == str(preference.get("model") or "")
+            and _base_root(candidate.get("base_url") or "") == _base_root(preference.get("base_url") or "")
+        ):
+            requested_effort = str(preference.get("reasoning_effort") or "").strip()
+            if requested_effort:
+                candidate["reasoning_effort"] = requested_effort
         candidate["endpoints"] = endpoints
         prepared.append(candidate)
-    preferred_id = str(affinity.get("candidate_id") or "")
-    preferred_model = str(affinity.get("model") or "")
-    preferred_root = _base_root(affinity.get("base_url") or "")
+    selected = preference or affinity
+    preferred_id = str(selected.get("candidate_id") or "")
+    preferred_model = str(selected.get("model") or "")
+    preferred_root = _base_root(selected.get("base_url") or "")
     prepared.sort(
         key=lambda candidate: 0
         if (
@@ -1666,16 +1719,22 @@ async def call_llm(
                     continue
 
             except Exception as exc:
+                should_cooldown = True
                 if provider == "codex_oauth":
                     from cyrene.model_runtime.codex_provider import (
                         codex_availability_error,
+                        codex_error_should_cooldown,
                     )
 
                     normalized_error = codex_availability_error(exc)
                     if normalized_error is not None:
                         exc = normalized_error
+                    should_cooldown = codex_error_should_cooldown(exc)
                 last_error = exc
-                _set_candidate_cooldown(_candidate_key(candidate, session_id))
+                if should_cooldown:
+                    _set_candidate_cooldown(
+                        _candidate_key(candidate, session_id)
+                    )
                 failed_this_call.append(f"{_candidate_label(candidate)}: {exc.__class__.__name__}: {exc}")
                 if int(candidate.get("_configured_rank") or 0) == 0:
                     failed_primary_model = str(candidate.get("model") or "")

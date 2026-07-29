@@ -11,6 +11,8 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
+import tempfile
 import time
 import uuid
 from typing import Any, Awaitable, Callable
@@ -39,6 +41,7 @@ _TRANSPORT_ERROR_KEYS = frozenset(
 CODEX_QUOTA_EXHAUSTED = "quota_exhausted"
 CODEX_AUTHENTICATION_EXPIRED = "authentication_expired"
 CODEX_MODEL_UNAVAILABLE = "model_unavailable"
+_ISOLATED_CODEX_WORKSPACE: tempfile.TemporaryDirectory[str] | None = None
 
 
 class CodexTransportError(RuntimeError):
@@ -156,7 +159,41 @@ def codex_availability_error(
             detail or "Codex quota is exhausted",
         )
 
-    if normalized_info == "unauthorized" or status in {401, 403} or any(
+    model_error = (
+        normalized_info
+        in {
+            "modelnotfound",
+            "modelunavailable",
+            "unsupportedmodel",
+        }
+        or "model_not_found" in lowered
+        or "unsupported model" in lowered
+        or "unknown model" in lowered
+        or "invalid model" in lowered
+        or (
+            "model" in lowered
+            and any(
+                token in lowered
+                for token in (
+                    "not found",
+                    "not available",
+                    "unavailable",
+                    "no longer available",
+                    "does not exist",
+                    "is not supported",
+                    "access denied",
+                    "permission",
+                )
+            )
+        )
+    )
+    if model_error:
+        return CodexAvailabilityError(
+            CODEX_MODEL_UNAVAILABLE,
+            detail or "The selected Codex model is unavailable",
+        )
+
+    if normalized_info == "unauthorized" or status == 401 or any(
         token in lowered
         for token in (
             "unauthorized",
@@ -173,33 +210,20 @@ def codex_availability_error(
             detail or "Codex authentication has expired",
         )
 
-    model_error = (
-        status == 404
-        or "model_not_found" in lowered
-        or "unsupported model" in lowered
-        or "unknown model" in lowered
-        or "invalid model" in lowered
-        or (
-            "model" in lowered
-            and any(
-                token in lowered
-                for token in (
-                    "not found",
-                    "not available",
-                    "unavailable",
-                    "no longer available",
-                    "does not exist",
-                    "is not supported",
-                )
-            )
-        )
-    )
-    if model_error:
-        return CodexAvailabilityError(
-            CODEX_MODEL_UNAVAILABLE,
-            detail or "The selected Codex model is unavailable",
-        )
     return None
+
+
+def codex_error_should_cooldown(error: BaseException) -> bool:
+    """Whether a Codex failure indicates a temporarily unusable candidate."""
+    if isinstance(error, CodexProtocolError):
+        return False
+    availability = codex_availability_error(error)
+    if availability is not None:
+        return availability.kind in {
+            CODEX_QUOTA_EXHAUSTED,
+            CODEX_MODEL_UNAVAILABLE,
+        }
+    return True
 
 
 def _first_signal_timeout(request_timeout: float) -> float:
@@ -216,19 +240,81 @@ def _first_signal_timeout(request_timeout: float) -> float:
     return min(float(request_timeout), max(5.0, configured))
 
 
+def _codex_isolation_workspace() -> Path:
+    """Return an empty provider-owned cwd with no project instructions."""
+    global _ISOLATED_CODEX_WORKSPACE
+    if _ISOLATED_CODEX_WORKSPACE is None:
+        _ISOLATED_CODEX_WORKSPACE = tempfile.TemporaryDirectory(
+            prefix="cyrene-codex-provider-"
+        )
+        instruction_file = (
+            Path(_ISOLATED_CODEX_WORKSPACE.name) / "CYRENE_PROVIDER.md"
+        )
+        instruction_file.write_text(
+            "This directory belongs to Cyrene's isolated Codex provider.\n",
+            encoding="utf-8",
+        )
+    return Path(_ISOLATED_CODEX_WORKSPACE.name)
+
+
+def _disabled_host_skills_override() -> str:
+    """Build a non-persistent command-line override for every host skill."""
+    codex_home = Path(
+        os.environ.get("CODEX_HOME") or (Path.home() / ".codex")
+    ).expanduser()
+    skills_root = codex_home / "skills"
+    if not skills_root.is_dir():
+        return ""
+    skill_files = sorted(
+        {
+            path.resolve()
+            for path in skills_root.rglob("SKILL.md")
+            if path.is_file()
+        },
+        key=str,
+    )
+    if not skill_files:
+        return ""
+    entries = ",".join(
+        f"{{path={json.dumps(str(path))},enabled=false}}"
+        for path in skill_files
+    )
+    return f"skills.config=[{entries}]"
+
+
 def _codex_sdk_config() -> CodexConfig:
+    isolation_root = _codex_isolation_workspace()
+    overrides = [
+        "features.respect_system_proxy=true",
+        # This app-server process is a model transport, not an agent runtime.
+        # Disable every Codex-hosted action surface and instruction bundle.
+        "features.plugins=false",
+        "features.apps=false",
+        "features.shell_tool=false",
+        "features.unified_exec=false",
+        "features.browser_use=false",
+        "features.computer_use=false",
+        "features.image_generation=false",
+        "features.multi_agent=false",
+        "tools.web_search=false",
+        "include_permissions_instructions=false",
+        "include_apps_instructions=false",
+        "include_collaboration_mode_instructions=false",
+        "include_environment_context=false",
+        (
+            "model_instructions_file="
+            + json.dumps(str(isolation_root / "CYRENE_PROVIDER.md"))
+        ),
+    ]
+    skills_override = _disabled_host_skills_override()
+    if skills_override:
+        overrides.append(skills_override)
     return CodexConfig(
         # Published SDK builds own a same-version Codex runtime. Do not pass
         # codex_bin: that would fall back to an unpinned PATH/ChatGPT.app
         # executable.
-        config_overrides=(
-            "features.respect_system_proxy=true",
-            # Cyrene owns its tools and progressive capability catalog. Loading
-            # Codex host plugins would inject incompatible SKILL.md workflows
-            # (for example node_repl browser control) that are intentionally
-            # unavailable to this provider adapter.
-            "features.plugins=false",
-        ),
+        config_overrides=tuple(overrides),
+        cwd=str(isolation_root),
         client_name="cyrene",
         client_title="Cyrene",
         client_version="1",
@@ -529,6 +615,7 @@ class CodexAppServer:
                     "ephemeral": True,
                     "approvalPolicy": "never",
                     "sandbox": "read-only",
+                    "cwd": str(_codex_isolation_workspace()),
                 }
             ),
             timeout=min(timeout, 30),
@@ -892,14 +979,29 @@ def _provider_instructions(
     ]
     tool_contract = ""
     if tools and structured_actions:
+        tool_names = {
+            str((tool.get("function") or {}).get("name") or "").strip()
+            for tool in tools
+        }
+        require_action = "quit" in tool_names or len(tool_names) == 1
+        call_quantity = "one or more" if require_action else "zero or more"
+        completion_rule = (
+            "For a final answer, put the complete answer in `content` and call "
+            "`quit`. "
+            if "quit" in tool_names
+            else (
+                "When no action is needed, put the complete answer in `content` "
+                "and return an empty `tool_calls` array. "
+            )
+        )
         tool_contract = (
             "\nCyrene tools are application actions. Never claim that an action "
             "ran before Cyrene returns its tool result. Your response is constrained "
-            "to an object with `content` and one or more `tool_calls`. For each call, "
+            f"to an object with `content` and {call_quantity} `tool_calls`. For each call, "
             "set `name` to an available tool and set `arguments_json` to a JSON-object "
-            "string matching that tool's parameters. For a final answer, put the "
-            "complete answer in `content` and call `quit` when it is available. "
-            "For non-terminal actions, keep `content` empty. Do not wrap the object "
+            "string matching that tool's parameters. "
+            + completion_rule
+            + "For non-terminal actions, keep `content` empty. Do not wrap the object "
             "in Markdown or add any text outside the constrained object.\n"
             "Tool schemas:\n"
             + json.dumps(tools, ensure_ascii=False, default=str)
@@ -942,13 +1044,14 @@ def _provider_action_schema(
     ]
     if not names:
         return None
+    require_action = "quit" in names or len(names) == 1
     return {
         "type": "object",
         "properties": {
             "content": {"type": "string"},
             "tool_calls": {
                 "type": "array",
-                "minItems": 1,
+                "minItems": 1 if require_action else 0,
                 "maxItems": 16,
                 "items": {
                     "type": "object",
@@ -997,7 +1100,10 @@ def _normalize_provider_action(
         if str((tool.get("function") or {}).get("name") or "").strip()
     }
     raw_calls = payload.get("tool_calls")
-    if not isinstance(raw_calls, list) or not raw_calls:
+    if not isinstance(raw_calls, list):
+        raise CodexProtocolError("Codex action envelope tool_calls must be an array")
+    require_action = "quit" in allowed_names or len(allowed_names) == 1
+    if require_action and not raw_calls:
         raise CodexProtocolError(
             "Codex action envelope must contain at least one tool call"
         )
@@ -1039,7 +1145,7 @@ def _normalize_provider_action(
         )
 
     visible_content = str(payload.get("content") or "")
-    if not any(
+    if tool_calls and not any(
         str(call["function"]["name"]) == "quit" for call in tool_calls
     ):
         # Text accompanying a non-terminal action is untrusted model narration:

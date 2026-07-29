@@ -16,6 +16,67 @@ def register_task_session_routes(
     _bot = bot
     _db_path = db_path
 
+    def apply_task_model_preference(
+        session_id: str,
+        body: dict[str, Any],
+        session: dict[str, Any],
+    ):
+        requested_model = str(body.get("model") or "").strip()
+        selected_key = requested_model or str(
+            session.get("modelSelectionId") or ""
+        ).strip()
+        if not selected_key:
+            return None
+
+        from cyrene.runtime.settings_store import get_models
+
+        selected_candidate = next(
+            (
+                candidate
+                for candidate in (get_models() or [])
+                if selected_key
+                in {
+                    str(candidate.get("id") or "").strip(),
+                    str(candidate.get("model") or "").strip(),
+                    str(candidate.get("name") or "").strip(),
+                }
+            ),
+            None,
+        )
+        if selected_candidate is None:
+            if requested_model:
+                return JSONResponse(
+                    {"error": "configured model not found"},
+                    status_code=400,
+                )
+            return None
+
+        from cyrene.model_runtime.client import set_session_model_preference
+
+        requested_effort = str(body.get("reasoningEffort") or "").strip().lower()
+        selected_effort = requested_effort or str(
+            session.get("reasoningEffort")
+            or selected_candidate.get("reasoning_effort")
+            or ""
+        ).strip().lower()
+        selected_model_id = str(
+            selected_candidate.get("id") or selected_key
+        ).strip()
+        selected_model_name = str(
+            selected_candidate.get("model")
+            or selected_candidate.get("name")
+            or selected_key
+        ).strip()
+        set_session_model_preference(
+            session_id,
+            selected_candidate,
+            selected_effort,
+        )
+        session["modelSelectionId"] = selected_model_id
+        session["model"] = selected_model_name
+        session["reasoningEffort"] = selected_effort
+        return None
+
     @router.get("/api/task-sessions/{session_id}")
     async def api_workbench_get_session(session_id: str):
         payload = _read_workbench_store()
@@ -712,6 +773,9 @@ def register_task_session_routes(
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
+        model_error = apply_task_model_preference(session_id, body, session)
+        if model_error is not None:
+            return model_error
 
         # Snapshot task-meta before any mutation so we can later detect what the
         # agent changed mid-run via set_task_goal and avoid clobbering it.
@@ -915,6 +979,9 @@ def register_task_session_routes(
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
+        model_error = apply_task_model_preference(session_id, body, session)
+        if model_error is not None:
+            return model_error
         task_meta_before = _workbench_capture_task_meta(session)
         chat_run_start_ts = _utc_now_iso()
         workspace_root = _workbench_workspace_root(project)
@@ -998,6 +1065,9 @@ def register_task_session_routes(
         project, session = _workbench_find_session(payload, session_id)
         if not session or not project:
             return JSONResponse({"error": "session not found"}, status_code=404)
+        model_error = apply_task_model_preference(session_id, body, session)
+        if model_error is not None:
+            return model_error
 
         # ── Budget gate at dispatch entry (before any LLM call) ──
         _bgt = await _check_budget_gate(session_id)
@@ -1067,7 +1137,15 @@ def register_task_session_routes(
                 ) + 1
                 latest_session["approvedPlanDefinitionRevision"] = None
                 latest_session["acceptanceCriteria"] = acceptance
-            for field in ("goal", "title", "constraints", "reflection"):
+            for field in (
+                "goal",
+                "title",
+                "constraints",
+                "reflection",
+                "modelSelectionId",
+                "model",
+                "reasoningEffort",
+            ):
                 if field in session:
                     latest_session[field] = session[field]
             latest_session["status"] = "planning"

@@ -329,6 +329,7 @@ async def test_call_llm_returns_empty_when_no_model_configured(monkeypatch):
 
 
 def test_last_success_affinity_is_scoped_to_conversation_and_exact_endpoint():
+    cl._session_model_preference_cache = {}
     cl._last_success_cache = {
         "session:chat_existing:primary": {
             "candidate_id": "backup",
@@ -360,6 +361,30 @@ def test_last_success_affinity_is_scoped_to_conversation_and_exact_endpoint():
     assert ordered[0]["_configured_rank"] == 1
     assert [item["id"] for item in new_chat_order] == ["main", "backup"]
     assert [item["id"] for item in unscoped_order] == ["main", "backup"]
+
+
+def test_explicit_session_model_preference_controls_candidate_and_effort(monkeypatch):
+    writes = []
+    cl._session_model_preference_cache = {}
+    cl._last_success_cache = {}
+    monkeypatch.setattr(cl, "set_setting", lambda key, value: writes.append((key, value)))
+    candidates = [
+        {
+            "id": "main", "model": "main-model", "base_url": "https://main.example/v1",
+            "reasoning_effort": "low", "endpoints": ["https://main.example/v1/chat/completions"],
+        },
+        {
+            "id": "chosen", "model": "chosen-model", "base_url": "https://chosen.example/v1",
+            "reasoning_effort": "medium", "endpoints": ["https://chosen.example/v1/chat/completions"],
+        },
+    ]
+
+    cl.set_session_model_preference("chat_explicit", candidates[1], "high")
+    ordered = cl._prioritize_last_success(candidates, "primary", "chat_explicit")
+
+    assert [item["id"] for item in ordered] == ["chosen", "main"]
+    assert ordered[0]["reasoning_effort"] == "high"
+    assert writes[-1][0] == "llm_session_model_preferences"
 
 
 def test_successful_endpoint_affinity_is_persisted_only_when_changed(monkeypatch):
@@ -573,6 +598,96 @@ async def test_codex_quota_failure_publishes_actionable_notice_before_fallback(
             "failure_kind": "quota_exhausted",
         }
     ]
+
+
+async def test_codex_auth_failure_falls_back_without_arming_cooldown(
+    monkeypatch,
+):
+    class FakeCodex:
+        async def quota_available(self):
+            return True
+
+        async def complete(self, **_kwargs):
+            from cyrene.model_runtime.codex_provider import (
+                CODEX_AUTHENTICATION_EXPIRED,
+                CodexAvailabilityError,
+            )
+
+            raise CodexAvailabilityError(
+                CODEX_AUTHENTICATION_EXPIRED,
+                "Please log in again",
+            )
+
+        async def close(self):
+            return None
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {"message": {"role": "assistant", "content": "backup"}}
+                ],
+                "usage": {},
+            }
+
+    class FakeClient:
+        async def post(self, _endpoint, json=None, headers=None):
+            return FakeResponse()
+
+    import cyrene.model_runtime.codex_provider as codex_provider
+
+    async def ignore_notice(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        codex_provider,
+        "get_codex_provider",
+        lambda: FakeCodex(),
+    )
+    monkeypatch.setattr(
+        cl,
+        "_get_http_client",
+        lambda _timeout: (FakeClient(), "test", True),
+    )
+    monkeypatch.setattr(
+        cl,
+        "_publish_codex_availability_event",
+        ignore_notice,
+    )
+    candidates = [
+        {
+            "id": "codex",
+            "model": "gpt-5.6-sol",
+            "provider": "codex_oauth",
+            "base_url": "codex://oauth",
+            "api_key": "",
+            "endpoints": ["codex://oauth"],
+        },
+        {
+            "id": "backup",
+            "model": "backup",
+            "provider": "openai_compatible",
+            "base_url": "https://backup/v1",
+            "api_key": "",
+            "endpoints": ["https://backup/v1/chat/completions"],
+        },
+    ]
+
+    result = await cl.call_llm(
+        [{"role": "user", "content": "hi"}],
+        candidates=candidates,
+        publish_events=False,
+        record_usage=False,
+        session_id="chat_auth",
+        round_id="round_auth",
+    )
+
+    assert result["content"] == "backup"
+    assert not cl._candidate_cooling(
+        cl._candidate_key(candidates[0], "chat_auth")
+    )
 
 
 async def test_llm_event_identifies_codex_provider(monkeypatch):
