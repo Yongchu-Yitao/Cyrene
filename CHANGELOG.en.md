@@ -5,6 +5,281 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0b7] - 2026-07-29
+
+This is the seventh `0.7.0` beta and contains every change since
+`v0.7.0-beta.6`. It brings OpenAI Codex OAuth into model setup, onboarding,
+Workbench conversations, and task execution; adds per-session model and
+reasoning-effort selectors; and systematically strengthens Agent streaming,
+termination semantics, tool routing, model fallback, and the interactive CLI.
+The provider layer now uses a pinned Codex SDK without asking Cyrene to hold
+OAuth tokens, and Codex quota is presented separately from currency budgets.
+
+### Feature highlights
+
+- **OpenAI Codex OAuth is available as the primary model** — users can sign in
+  during onboarding or under Settings → Models, discover account-available
+  Codex models and reasoning efforts, and save the selected model.
+- **Chat and task composers gain model selectors** — a compact control in the
+  existing composer style lists every configured model. Codex uses the exact
+  capability catalog, while custom models without metadata use a conservative
+  Low/Medium/High compatibility set.
+- **Model choice is isolated per session** — Chat and Task can override the
+  model and effort for their next turn without changing global defaults; the
+  choice survives refresh, switching, and chat forks.
+- **Codex quota has a dedicated presentation** — Settings and the account menu
+  show available five-hour/weekly windows, remaining percentage, and reset time
+  without mixing plan quota with API currency budgets.
+- **Agent execution is more durable** — high-frequency reasoning/reply deltas
+  are batch-persisted and flushed at terminal boundaries; quit, parallel tools,
+  late guidance, cancellation, and recovery now have explicit semantics.
+- **The interactive CLI receives a full UX pass** — localized headers,
+  placeholders, status bars, permission modes, two-axis settings navigation,
+  two-line session cards, and a temporary reasoning viewer are included.
+
+### Technical details
+
+#### OpenAI Codex OAuth, model discovery, and quota
+
+- **The official Codex SDK runtime is pinned** — the core dependency adds
+  `openai-codex==0.144.4`; `uv.lock` pins both the Python adapter and
+  platform-specific `openai-codex-cli-bin`, keeping development, installation,
+  and release builds on the same protocol version.
+- **OAuth credentials remain owned by the Codex App Server** — Cyrene performs
+  login, logout, account, model discovery, turns, and rate-limit calls through
+  the SDK/App Server. It neither reads `~/.codex/auth.json` nor directly stores
+  access or refresh tokens.
+- **A complete settings API is available** —
+  `/api/settings/openai-oauth` reports connection, account, and models;
+  login/logout routes manage authentication; a separate `/limits` route keeps
+  slow quota requests from delaying connected state and model choices.
+- **Onboarding supports OpenAI sign-in** — setup can choose between a custom
+  OpenAI-compatible endpoint and OpenAI OAuth. Saving validates login, model
+  availability, and reasoning effort before writing the canonical candidate
+  and onboarding state.
+- **Codex is constrained to the primary text-model slot** — routes reject OAuth
+  candidates in fallback, secondary, and vision lists. The current adapter
+  does not claim image support until native image turn inputs are forwarded.
+- **Image attachments are not misrouted to text-only Codex** — a
+  vision-capable primary receives images directly. With Codex or another
+  text-only primary, Workbench uses the canonical attachment-analysis path and
+  configured vision model before providing usable extracted content to the
+  session.
+- **Custom and OAuth models coexist** — existing OpenAI-compatible candidates,
+  endpoints, API keys, fallback, secondary, and vision flows remain intact,
+  while candidates gain `provider` and `reasoning_effort` metadata.
+- **The primary source switcher is streamlined** — one compact menu switches
+  between Custom and OpenAI OAuth. Selected, hover, focus, Escape, and
+  click-outside states follow the existing settings visual language without
+  redundant nested cards.
+- **Model layout is denser without losing editability** — Primary stays
+  directly editable; fallback, secondary, and vision move into summarized
+  collapsible sections; Save and Apply remains in document flow and the fixed
+  settings height, responsive labels, and accessible states are preserved.
+- **Reasoning efforts come from the selected model's capabilities** — Low,
+  Medium, High, Extra High, and other values are filtered from
+  `supportedReasoningEfforts` instead of exposing one global hard-coded set.
+- **Quota windows share one parser** — a 300-minute window is the five-hour
+  quota and 10080 minutes is weekly. Missing windows are omitted, while
+  remaining percentage, progress, and reset time are normalized once for both
+  Settings and the account menu.
+- **Quota reads use stale-while-revalidate** — fresh cache is returned directly;
+  stale usable data returns immediately while refreshing in the background.
+  Temporary query failure does not disable a model, but a cached exhausted
+  state remains conservatively enforced to prevent retry storms bypassing quota.
+- **The existing account menu structure is preserved** — the Codex summary
+  appears above existing actions only when the primary provider is
+  `codex_oauth` and the account is connected; spacing, icons, radius, actions,
+  and footer remain unchanged.
+- **Codex quota monitoring is persisted independently** —
+  `codex_budget_enabled` is separate from currency budgets. Login enables plan
+  quota monitoring without mutating ordinary API budget settings.
+
+#### Codex provider, tool routing, and recoverable fallback
+
+- **The provider uses an isolated SDK client** — Codex turns run in ephemeral
+  threads with a read-only sandbox and `approvalPolicy=never`. Cyrene's own
+  Agent loop still owns permissions, tool execution, and user confirmation;
+  host tools are not directly exposed to the Codex App Server.
+- **Conversation replay is thread-correct** — system/developer instructions are
+  assembled separately from conversation messages without duplicating the
+  system prompt. Concurrent sessions use independent thread/turn notification
+  queues and cannot cross-stream events.
+- **Transport honors the system proxy and fails early** — connection failure,
+  provider stop, or a long absence of upstream signals interrupts the turn and
+  advances fallback instead of waiting for a generic request timeout.
+- **Reasoning summaries and usage are preserved** — public reasoning, effort,
+  input/output/total tokens, and prompt-cache hits flow to CLI, Workbench, and
+  budget/diagnostic consumers.
+- **Host plugins and skills cannot contaminate provider behavior** — provider
+  startup isolates its working directory and disables host plugins, apps,
+  Browser, Computer Use, Image Generation, Shell, Unified Exec, Web Search,
+  multi-agent, and discovered skills.
+- **Actions use a structured contract** — JSON Schema carries visible content
+  and one or more tool calls; strict `arguments_json` validation rejects
+  malformed arguments, unknown tools, and tool markup leaking into user text.
+- **Phase 1 and execution tools have explicit boundaries** — the understanding
+  phase receives only enter-execution/finish control actions. Authorized Cyrene
+  catalog tools are exposed after execution begins, reducing premature or
+  impossible tool choices.
+- **Tool discovery understands more natural intent** — capability search ranks
+  detailed Browser intents more effectively and falls back to the package
+  catalog for Chinese shorthand or unknown terms instead of returning an empty
+  discovery result.
+- **Codex failures become actionable states** — quota exhausted,
+  authentication expired, and model unavailable are conservatively classified
+  from SDK ErrorInfo, HTTP context, and messages. Ambiguous 401/403 values are
+  not guessed, and explicit model errors override status-code heuristics.
+- **Workbench surfaces provider-specific warnings** — failures publish phase
+  events carrying provider, failure kind, translation key, and model
+  parameters, so the UI can explain the corrective action before continuing to
+  the next candidate.
+- **Cooldown is limited to persistent failures** — quota exhaustion may
+  temporarily suppress a candidate, while immediately recoverable
+  authentication or model-selection errors do not incorrectly keep it cold.
+- **Stop and cancellation cleanup is explicit** — provider-stop notifications,
+  turn interruption, reader termination, pending requests, and notification
+  queues are settled so canceled turns cannot leak work into the next run.
+- **Model events retain provider identity** — LLM start/delta/done and failure
+  events carry provider, model, phase, and usage, allowing Workbench to render
+  Codex and OpenAI-compatible activity correctly.
+
+#### Agent streaming, termination semantics, and run recovery
+
+- **Delta persistence is batched** — `reasoning_delta` and `reply_delta` are
+  grouped for up to 50ms/128 events per SQLite transaction while retaining
+  every sequence number and cursor. Replay semantics remain unchanged while
+  token-stream database backpressure drops.
+- **Terminal states force persistence** — finalize, interrupt, error, and run
+  completion flush pending batches first. Writes canceled while in a worker
+  thread are safely re-queued using idempotent `(run_id, seq)` keys.
+- **The reasoning lifecycle is complete** — Workbench and CLI consume
+  `reasoning_start/delta/done`; Phase 1 reasoning merges into the matching LLM
+  activity instead of creating flickering or duplicate cards.
+- **Execution cards distinguish understanding from tools** — Phase 1 shows
+  “Understanding/Understood the request” with a compact reasoning preview.
+  Later summaries use the real tool-call count, and Codex does not expose an
+  irrelevant expandable internal trace.
+- **Replies show total processing duration** — one formatter covers subsecond,
+  second, minute, and hour values without excluding reasoning, tools, or queue
+  time.
+- **`quit` is an irreversible terminal signal** — the complete answer belongs
+  in normal assistant content and quit is control-only. If a batch mixes quit
+  with other tools, all siblings are skipped and the run cannot re-enter
+  execution.
+- **Post-termination reply recovery is safe** — empty, placeholder, or
+  tool-markup replies can only be repaired through the no-tool final-reply
+  path; completed tool work is never followed by a fabricated answer the model
+  did not write.
+- **Legacy/DSML tool markup no longer leaks** — terminal replies and Workbench
+  messages suppress old tool blocks, DSML markers, and pseudo-replies hidden in
+  quit arguments; only normal assistant content is accepted, and empty Enter
+  does not create a meaningless turn.
+- **Late guidance is preserved** — finalization waits for active tools and then
+  checks the Inbox. New guidance creates a continuation rather than reviving a
+  terminated tool batch.
+- **Hidden session-naming work is removed** — chat runs no longer schedule
+  invisible title-generation calls. The compatibility label refresh is a no-op,
+  avoiding extra model calls, crossed events, and completion latency.
+- **Agent prompts use one lifecycle contract** — main agent, subagent, deep
+  reflection, and runtime guidance now agree on tool entry, progress updates,
+  and termination, fixing quit/tool-result pairing, search, and stop regressions.
+
+#### Composer model selection and session preferences
+
+- **Chat Composer gains a compact model button** — it shows a friendly model
+  name, current effort, and chevron. Root/model/effort menus support Escape,
+  click-outside, ARIA expanded state, and checked current items.
+- **Task Composer uses the same component language** — it lists every
+  configured candidate with the same menu width, row density, typography,
+  icons, interaction, and bilingual text as Chat.
+- **Light and dark states are calibrated separately** — light normal uses
+  `#eaf0f4` with clearer hover/active states; dark normal is lighter than the
+  previous attempt while hover/active retain hierarchy without a teal cast.
+- **Menu density matches the reference UI** — the panel is tightened to about
+  `260px`, long model names truncate safely, secondary values and chevrons
+  align, and the button sits closer to the composer edge without crowding Send.
+- **Efforts are normalized per model** — Codex uses the current model's declared
+  capabilities ordered Low → Medium → High → Extra High → Max → Ultra. Custom
+  models without a capability catalog fall back only to Low/Medium/High rather
+  than exposing undeclared Max/Ultra levels.
+- **The Task selector no longer appears late** — the button renders as soon as
+  `/api/settings/models` returns; the slower OAuth capability catalog enriches
+  it asynchronously instead of blocking the entire control.
+- **Request contracts carry model preferences** — Chat/Task bodies accept
+  optional `model` and `reasoningEffort`; routes validate the candidate,
+  normalize effort, and set session preferences before the Agent starts.
+- **Runtime resolves candidates per session** — each session may override
+  candidate ID, model, base URL, and effort while unset sessions continue using
+  global ordering, preventing one conversation's choice from changing others.
+- **Session payloads restore the choice** — Chat/Task responses include
+  `modelSelectionId` and `reasoningEffort`, preserving composer state across
+  refreshes, switches, and forks.
+- **Authentication fallback does not create a long cooldown** — selecting a
+  Codex model that needs reauthentication may fall back to the next candidate
+  while remaining immediately retryable after sign-in.
+
+#### Interactive CLI, Workbench tabs, and UI details
+
+- **The CLI header carries complete context** — model, project,
+  workspace/Git branch, and version appear below a single-line brand mark, with
+  terminal-display-width-aware clipping for long paths.
+- **The input area is fully localized** — placeholders, bottom toolbar,
+  permission mode, exit hint, settings labels, and value previews follow the
+  selected language.
+- **Resume uses two-line session cards** — title/project appear on the first
+  line and preview on the second, with blank lines between cards and safe
+  clipping for both CJK and Latin display widths.
+- **`/config` has two-axis navigation** — Left/Right moves across General,
+  Models, Tools, Connections, Data, and About; Up/Down selects a setting and
+  Enter opens it. General and CLI-preference field lists use the same keyboard
+  model.
+- **Reasoning details use a temporary viewer** — `Ctrl+O` opens a full-screen,
+  scrollable public-reasoning view; Ctrl+O, Escape, Q, or Ctrl+C closes it,
+  restores the prompt, and leaves no reasoning text in shell scrollback.
+- **Thinking activity reuses the app phrase pool** — a different localized
+  phrase is selected about every four seconds without consecutive repetition,
+  while completion retains the compact “Thought for Ns” summary.
+- **Ctrl+C and Escape have distinct jobs** — Ctrl+C keeps the global
+  double-confirm exit behavior, while Escape cancels the current modal/editor;
+  closing Settings or the viewer cannot accidentally stop the CLI or run.
+- **Recent Workbench tab ordering is stable** — selecting an already visible
+  session no longer reorders the entire topbar. Only opening a hidden session
+  updates the recent list, which keeps up to 20 stable keys.
+- **Memory compact labels are complete** — Related/History use shorter English
+  and Chinese labels on narrow layouts, with improved grid, padding, and
+  long-content alignment in the detail hero.
+
+#### Contracts, tests, versioning, and beta7 publication
+
+- **The OpenAPI contract includes model fields** — the schema SHA256 is
+  intentionally refreshed after adding optional Chat/Task fields, while the
+  operation count and locked FastAPI/Pydantic generator versions remain fixed.
+- **Codex provider regression coverage expands** — login, account, models,
+  limits, turn streaming, usage, tool actions, cancellation, provider stop,
+  host isolation, quota/auth/model classification, and cooldown are covered.
+- **Model selection is tested end to end** — frontend menus, session
+  preferences, chat forks, task dispatch, route validation, candidate override,
+  reasoning effort, and asynchronous capability enrichment have regression
+  coverage.
+- **Agent and CLI regressions are locked down** — durable delta batches, cursor
+  replay, phase activity, total duration, mixed quit batches, late guidance,
+  no-tool reply recovery, CLI localization, viewer behavior, config navigation,
+  and session cards are covered.
+- **The complete local suite passes** — all `1,605` pytest tests pass in the
+  project `.venv`; the beta7 frontend production build, OpenAPI contract,
+  focused Codex/Workbench regressions, and `git diff --check` also pass.
+- **Every version surface moves to beta7** — Python package/`uv.lock` use
+  `0.7.0b7`; Electron package/lock use `0.7.0-beta.7`; README badges, docs
+  sidebar, WeChat header, Workbench/PDF cache keys, and version-contract tests
+  agree.
+- **Tag-driven prerelease** — `v0.7.0-beta.7` triggers the existing release
+  workflow to build macOS DMG, Windows x64/ARM64 installers, and Linux
+  AppImage/deb/rpm, run frozen and real-desktop smoke tests, and extract this
+  section as GitHub prerelease notes.
+
+---
+
 ## [0.7.0b6] - 2026-07-28
 
 This is the sixth `0.7.0` beta and includes every change since

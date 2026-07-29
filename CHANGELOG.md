@@ -2,6 +2,231 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.7.0b7] - 2026-07-29
+
+这是 `0.7.0` 的第七个测试版，包含 `v0.7.0-beta.6` 之后的全部改动。本版将
+OpenAI Codex OAuth 正式接入模型配置、首次设置、Workbench 对话与任务执行，
+新增会话级模型/推理强度选择器，并系统性强化 Agent 流式事件、终止语义、工具
+路由、模型降级和交互式 CLI。模型供应商层改用锁定版本的 Codex SDK，用户无需
+把 OAuth Token 交给 Cyrene；Codex 配额与货币预算也分别呈现。
+
+### 功能更新
+
+- **新增 OpenAI Codex OAuth 主模型**：可以从首次设置或“设置 → 模型”登录
+  OpenAI 账户，读取当前账户可用的 Codex 模型及其推理强度，并将选中模型保存为
+  主模型。
+- **对话和任务输入框新增模型选择器**：Composer 左侧使用与现有界面一致的紧凑
+  按钮，列出所有已配置模型；Codex 模型严格使用能力目录中的推理档位，自定义
+  模型缺少能力元数据时使用保守的 Low/Medium/High 兼容集合。
+- **模型选择按会话隔离**：Chat 与 Task 可以为下一轮单独选择模型和推理强度，
+  不修改全局默认模型；选择会随会话保存、恢复，并在 Fork 后保持一致。
+- **Codex 配额独立显示**：设置页和账户菜单显示可用的 5 小时/每周额度窗口、
+  剩余比例和重置时间，不再与 API 货币预算混为一谈。
+- **Agent 执行更稳定**：高频 Reasoning/Reply Delta 批量持久化，结束前强制
+  Flush；`quit`、并行工具、晚到 Guidance、取消和恢复都具有明确边界。
+- **交互式 CLI 完成一轮体验升级**：增加本地化 Header、输入提示、状态栏、
+  Permission Mode、两轴设置导航、两行 Session 卡片和临时思考详情 Viewer。
+
+### 技术细节
+
+#### OpenAI Codex OAuth、模型发现与配额
+
+- **锁定官方 Codex SDK 运行时** — 核心依赖新增
+  `openai-codex==0.144.4`，`uv.lock` 同步锁定 Python Adapter 与各平台
+  `openai-codex-cli-bin`，开发环境、普通安装和发布构建使用相同协议版本。
+- **OAuth 凭据由 Codex App Server 持有** — Cyrene 通过 SDK/App Server 完成
+  Login、Logout、Account、Model Discovery、Turn 和 Rate Limit 调用，不读取
+  `~/.codex/auth.json`，也不直接保存 Access/Refresh Token。
+- **新增完整设置 API** — `/api/settings/openai-oauth` 返回连接状态、账户和模型；
+  Login/Logout Route 管理登录；独立 `/limits` Route 获取配额，避免慢速额度请求
+  阻塞“已连接”和模型列表的显示。
+- **首次设置支持 OpenAI 登录** — Onboarding 可以在自定义 OpenAI-compatible
+  Endpoint 与 OpenAI OAuth 之间选择；保存前校验登录状态、模型可用性和所选
+  Reasoning Effort，完成后写入正式模型候选和 Onboarding State。
+- **Codex 只允许作为主文本模型** — Route 明确拒绝把 OAuth Candidate 放入
+  Fallback、Secondary 或 Vision 列表；当前 Adapter 不宣称图像能力，避免把
+  未转发的图片输入误报为可用。
+- **图片附件不会错误发给文本 Codex** — 主模型具备 Vision 能力时直接发送图片；
+  Codex 等纯文本主模型收到图片时，Workbench 先调用正式 Attachment Analysis
+  路径并使用已配置视觉模型提取内容，再把可用结果交给当前会话。
+- **自定义模型与 OAuth 模型共存** — 模型设置保留现有 OpenAI-compatible
+  Candidate、Endpoint、API Key、Fallback、Secondary 和 Vision 流程，同时为
+  Candidate 增加 `provider` 与 `reasoning_effort` 元数据。
+- **主模型来源切换器重新整理** — 主模型区域使用紧凑 Source Menu 切换
+  Custom/OpenAI OAuth；Selected、Hover、Focus 和 Escape/Click-outside 状态
+  遵循既有设置页视觉语言，不再出现重复嵌套卡片。
+- **模型配置布局更紧凑** — Primary 保持直接可编辑；Fallback、Secondary 和
+  Vision 收入带摘要的折叠区；Save and Apply 保持在文档流中，设置面板高度、
+  Responsive Label 与可访问状态保持稳定。
+- **推理强度来自模型能力目录** — Low、Medium、High、Extra High 等选项不再
+  使用全局硬编码全集，而是按当前 Codex 模型的
+  `supportedReasoningEfforts` 过滤并保存到 Candidate。
+- **配额窗口统一解析** — 300 分钟窗口显示为 5 小时额度，10080 分钟窗口显示为
+  每周额度；不存在的窗口不会制造空进度条，剩余比例、进度和重置时间由设置页与
+  账户菜单共享同一规范化逻辑。
+- **配额读取使用 Stale-while-revalidate** — 新鲜缓存直接返回；过期但可用的额度
+  先返回并后台刷新。临时查询失败不会禁用模型，但已经缓存的“额度耗尽”状态仍被
+  保守执行，避免请求风暴绕过配额。
+- **账户菜单保持原有结构** — Codex 摘要仅在主模型使用 `codex_oauth` 且账户已
+  连接时显示，放在现有 Action 之上，不改变 Logout、Settings 等操作的间距、
+  图标、圆角和 Footer。
+- **Codex 配额开关独立持久化** — `codex_budget_enabled` 与货币 Budget 分开
+  保存；登录时启用 Codex 配额监控，但普通 API 预算设置不受影响。
+
+#### Codex Provider、工具路由与可恢复降级
+
+- **Provider 改为隔离的 SDK Client** — Codex Turn 使用临时 Thread、只读
+  Sandbox 和 `approvalPolicy=never`；Cyrene 的权限、工具执行和用户确认仍由
+  自己的 Agent Loop 控制，不把宿主工具直接暴露给 Codex App Server。
+- **对话历史按 Thread 正确重放** — System/Developer 指令与 Conversation
+  Message 分开组装，不重复注入 System Prompt；并发 Session 使用各自的
+  Thread/Turn Notification Queue，不会串流或互相抢 Event。
+- **Transport 遵循系统代理并可提前失败** — SDK 启用系统 Proxy；连接失败、
+  Provider Stop 或长期无上游信号时会中断当前 Turn 并进入候选回退，而不是一直
+  等到通用请求超时。
+- **Reasoning Summary 与 Usage 完整转发** — Provider 保留模型公开的思考摘要、
+  Effort、Input/Output/Total Token 与 Prompt Cache 命中量，供 CLI、Workbench
+  和预算/诊断路径复用。
+- **宿主插件和技能不会污染 Provider** — Provider 启动时显式隔离工作目录，
+  禁用宿主 Plugin、App、Browser、Computer Use、Image Generation、Shell、
+  Unified Exec、Web Search、Multi-agent 与已发现 Skill，避免用户本机 Codex
+  配置改变 Cyrene 内部模型行为。
+- **使用结构化 Action Contract** — 模型输出通过 JSON Schema 表达可见回复与
+  一个或多个工具调用；参数使用严格 `arguments_json` 校验，非法 JSON、未知
+  Tool 或泄漏到正文的 Tool Markup 会被拒绝或进入安全恢复路径。
+- **Phase 1 与执行阶段工具边界明确** — 初始理解阶段只暴露进入执行或结束所需的
+  控制 Action；进入执行后再按 Cyrene Catalog 提供已授权工具，降低模型提前
+  选择不可执行 Tool 的概率。
+- **工具发现支持更自然的查询** — Capability Search 对 Browser 等详细意图改善
+  排序，并在中文简称或未知词未命中时回退 Package Catalog，不再返回空发现结果。
+- **Codex 错误被分类为可操作状态** — Quota Exhausted、Authentication
+  Expired 和 Model Unavailable 从 SDK ErrorInfo、HTTP Context 与错误消息中
+  保守识别；模糊 401/403 不再被武断归类，明确的 Model Error 优先于状态码猜测。
+- **Workbench 显示模型可用性警告** — 模型失败会发布带 Provider、
+  Failure Kind、翻译 Key 和 Model 参数的 Phase Event，界面显示可操作的中英文
+  提示，再继续候选模型降级。
+- **Cooldown 只用于真正需要冷却的错误** — 额度耗尽等持续性错误可以暂时跳过；
+  认证过期、模型不可用等用户可立即修复的问题不会错误地让 Candidate 长时间
+  失活。
+- **停止和取消更加可靠** — Provider 停止通知、Turn Interrupt、Reader 结束、
+  Pending Request 和 Notification Queue 都有明确清理；取消不会遗留后台 Turn
+  或把旧通知送入下一轮。
+- **模型事件携带 Provider 身份** — LLM Start/Delta/Done 与失败事件保留
+  `provider`、Model、Phase 和 Usage，使 Workbench 能区别 Codex 与普通
+  OpenAI-compatible 模型并采用正确展示方式。
+
+#### Agent 流式事件、终止语义与运行恢复
+
+- **Delta 写入改为批处理** — `reasoning_delta` 与 `reply_delta` 最多按
+  50ms/128 条合并到一次 SQLite Transaction，同时保留每条 Event 的 Sequence
+  和 Cursor，可重放语义不变但显著降低 Token Stream 的数据库背压。
+- **终态前强制持久化** — Finalize、Interrupt、Error 和 Run Completion 会先
+  Flush Pending Batch；取消中的后台写入可幂等重排，避免终态越过尚未落盘的
+  Delta。
+- **Reasoning Event 生命周期补齐** — Workbench 与 CLI 消费
+  `reasoning_start/delta/done`；Phase 1 Reasoning 与同阶段 LLM Activity
+  合并，不再生成跳动或重复的卡片。
+- **执行卡片区分理解与工具阶段** — Phase 1 显示“正在理解/已理解请求”和紧凑
+  Reasoning Preview；后续卡片按真实 Tool Call 数量汇总，Codex Provider 不展示
+  不适用的可展开内部 Trace。
+- **回复显示完整处理时长** — 最终消息使用统一 Formatter 显示亚秒、秒、分钟或
+  小时级总耗时，且不把 Reasoning、Tool 或排队时间遗漏在外。
+- **`quit` 成为不可逆终止信号** — 完整答案必须位于普通 Assistant Content；
+  `quit` 只负责控制。当同一批次混入其他 Tool 时，其他调用全部跳过，Run 不会在
+  已终止后重新进入执行。
+- **终止后的回复恢复更安全** — 空回复、Placeholder 或 Tool Markup 只允许通过
+  无工具 Final Reply Path 修复；已经执行过工具时不会凭空重建模型没有写出的
+  答案。
+- **Legacy/DSML Tool Markup 不再泄漏** — Terminal Reply 和 Workbench Message
+  会压制旧式 Tool Block、DSML 标记及塞进 `quit` 参数的伪回复，只接受正常
+  Assistant Content；空 Enter 也不会创建无意义 Turn。
+- **晚到 Guidance 不丢失** — `quit` 或 Final Reply 正在收尾时会等待活动 Tool，
+  再检查 Inbox；新 Guidance 会建立 Continuation，而不是复活已经终止的 Tool
+  Batch。
+- **隐藏 Session 命名任务被移除** — Chat Run 不再在后台偷偷调度标题生成；
+  兼容的 Label Refresh 成为 No-op，避免额外模型调用、事件交叉和结束延迟。
+- **Agent/System Prompt 收敛** — Main Agent、Subagent、Deep Reflection 与
+  Runtime Guidance 对“何时使用工具、如何发送进度、如何结束”使用一致语义，
+  并修复 `quit` 与 Tool Result 配对、Search 和 Stop 路径的回归。
+
+#### Composer 模型选择与会话级偏好
+
+- **Chat Composer 新增紧凑模型按钮** — 按钮展示友好模型名、当前推理强度和
+  Chevron；Root Menu 可进入模型或推理强度子菜单，支持 Escape、
+  Click-outside、ARIA Expanded 和当前项 Check。
+- **Task Composer 使用同一组件语言** — 任务界面也列出全部已配置 Candidate，
+  与 Chat 使用相同的菜单宽度、Row Density、Typography、Icon、交互和中英文
+  文案。
+- **浅色与深色状态分别校准** — 浅色 Normal 使用 `#eaf0f4` 基础色并提供更明显
+  的 Hover/Active；深色 Normal 适当提亮，Hover/Active 保留层级但不出现突兀
+  蓝绿色。
+- **菜单密度与参考界面一致** — 菜单收紧到约 `260px`，长模型名可安全截断，
+  Secondary Value 与 Chevron 对齐，按钮靠近 Composer 左侧且不挤压 Send。
+- **推理档位按模型规范化** — Codex 使用当前模型声明的能力，顺序统一为 Low →
+  Medium → High → Extra High → Max → Ultra；自定义模型没有能力目录时仅回退到
+  Low/Medium/High，不会显示 Max/Ultra 等未经声明的高档位。
+- **Task 选择器不再延迟出现** — `/api/settings/models` 返回后立即渲染按钮；
+  较慢的 OAuth Capability Catalog 只做异步增强，不再阻塞整个选择器。
+- **请求契约传递模型偏好** — Chat/Task Body 新增可选 `model` 与
+  `reasoningEffort`，Route 校验 Candidate、规范化 Effort，并在启动 Agent 前
+  写入会话偏好。
+- **Runtime 按 Session 解析 Candidate** — 每个 Session 可以覆盖 Candidate ID、
+  Model、Base URL 和 Reasoning Effort；未设置时仍使用全局顺序，避免选择一个
+  会话模型后影响其他对话。
+- **Session Payload 可恢复选择** — Chat/Task Response 返回
+  `modelSelectionId` 和 `reasoningEffort`；刷新、切换和 Fork 后 Composer 能恢复
+  正确状态。
+- **认证失败不会误触发长期冷却** — 选择器切到需要重新登录的 Codex 模型时，
+  Runtime 可以回退到下一候选，同时保留该 Candidate 供用户登录后立即重试。
+
+#### 交互式 CLI、Workbench 标签与界面细节
+
+- **CLI Header 提供完整上下文** — 单行 Brand Mark 下显示当前 Model、
+  Project、Workspace/Git Branch 和版本，长路径按终端显示宽度裁切。
+- **输入区全面本地化** — Placeholder、Bottom Toolbar、Permission Mode、
+  Exit Hint、Settings Label 和 Value Preview 随 `language` 切换中英文。
+- **Session 恢复列表改为两行卡片** — 第一行显示 Title 与 Project，第二行显示
+  Preview，卡片之间留空行；中英文宽字符都使用显示宽度安全裁切。
+- **`/config` 使用两轴导航** — Left/Right 在 General、Models、Tools、
+  Connections、Data、About 间切换，Up/Down 选择当前 Tab 项，Enter 打开；
+  普通字段和 CLI Preference 也使用一致的键盘选择。
+- **思考详情改为临时 Viewer** — `Ctrl+O` 打开全屏、可滚动的公开 Reasoning；
+  再按 Ctrl+O、Escape、Q 或 Ctrl+C 关闭并恢复 Prompt，内容不残留在 Shell
+  Scrollback。
+- **思考活动复用 App 话术池** — CLI 约每四秒随机切换本地化活动短语且避免连续
+  重复，完成后仍保留紧凑的“思考了 Ns”摘要。
+- **Ctrl+C 与 Escape 职责分离** — Ctrl+C 保持全局两次确认退出，Escape 用于
+  取消当前 Modal/Editor；关闭设置或 Viewer 不会意外终止 CLI 或后台 Run。
+- **Workbench 最近标签顺序更稳定** — 点击已经可见的 Session 不再重排整个
+  Topbar；只有打开尚未显示的 Session 才更新最近列表，并保留最多 20 个稳定 Key。
+- **Memory Compact Tab 文案补齐** — Related/History 在窄布局使用更短的中英文
+  Label，Detail Hero 改进 Grid、Padding 和长内容对齐。
+
+#### 契约、测试、版本与 beta7 发布
+
+- **OpenAPI 契约同步模型字段** — Chat/Task 新增可选字段后重新锁定 Schema
+  SHA256，Operation Count 和 FastAPI/Pydantic Generator 版本保持不变。
+- **Codex Provider 回归覆盖扩大** — 测试 Login、Account、Models、Limits、
+  Turn Stream、Usage、Tool Action、取消、Provider Stop、Host Isolation、
+  Quota/Auth/Model Error 分类和 Cooldown。
+- **模型选择回归覆盖端到端路径** — 覆盖前端菜单、Session Preference、
+  Chat Fork、Task Dispatch、Route Validation、Candidate Override、Reasoning
+  Effort 与异步 Capability Enrichment。
+- **Agent/CLI 回归补齐** — 覆盖 Durable Delta Batch、Cursor Replay、Phase
+  Activity、Total Duration、Quit Mixed Batch、Late Guidance、No-tool Reply
+  Recovery、CLI Localization、Viewer、Config Navigation 和 Session Card。
+- **本地完整测试通过** — 项目 `.venv` 中完整 pytest 共 `1,605` 项通过；
+  beta7 前端生产构建、OpenAPI 单项契约、相关 Codex/Workbench 回归和
+  `git diff --check` 均通过。
+- **全部版本面升级到 beta7** — Python Package/`uv.lock` 使用 `0.7.0b7`，
+  Electron Package/Lock 使用 `0.7.0-beta.7`；README Badge、Docs Sidebar、
+  WeChat Header、Workbench/PDF Cache Key 和版本契约测试同步更新。
+- **Tag 驱动 Prerelease** — `v0.7.0-beta.7` 触发现有 Release Workflow，构建
+  macOS DMG、Windows x64/ARM64 Installer 和 Linux AppImage/deb/rpm，执行
+  Frozen 与真实 Desktop Smoke，并提取本节作为 GitHub Prerelease Notes。
+
+---
+
 ## [0.7.0b6] - 2026-07-28
 
 这是 `0.7.0` 的第六个测试版，包含 `v0.7.0-beta.5` 之后的全部改动。本版新增
