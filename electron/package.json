@@ -105,6 +105,12 @@
       "category": "Utility",
       "artifactName": "Cyrene-${version}-x64.${ext}"
     },
+    "deb": {
+      "afterInstall": "linux-after-install.sh"
+    },
+    "rpm": {
+      "afterInstall": "linux-after-install.sh"
+    },
     "files": [
       "main.js",
       "browser-input.js",

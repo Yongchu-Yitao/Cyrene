@@ -183,6 +183,24 @@ const isWindows = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
 const supportsLoginItem = process.platform === 'darwin' || process.platform === 'win32';
 
+// Chromium aborts with SIGTRAP when its Linux SUID sandbox helper exists but
+// is not root-owned with mode 4755. deb/rpm installers repair that permission;
+// portable/AppImage or manually copied builds cannot rely on a privileged
+// install step, so fall back to Chromium's no-sandbox mode instead of crashing.
+if (isLinux) {
+  const sandboxPath = path.join(path.dirname(process.execPath), 'chrome-sandbox');
+  let hasUsableSuidSandbox = false;
+  try {
+    const sandboxStat = fs.statSync(sandboxPath);
+    hasUsableSuidSandbox = !process.env.APPIMAGE
+      && sandboxStat.uid === 0
+      && (sandboxStat.mode & 0o4000) !== 0;
+  } catch (_) {}
+  if (!hasUsableSuidSandbox) {
+    app.commandLine.appendSwitch('no-sandbox');
+  }
+}
+
 // Electron's GPU process can start successfully while producing an entirely
 // white compositor surface on some Linux/Wayland, virtualized, and older Mesa
 // setups. AppImage users cannot switch Electron builds or system libraries, so

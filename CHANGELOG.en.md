@@ -58,6 +58,10 @@ OAuth tokens, and Codex quota is presented separately from currency budgets.
   required knowledge-data directories automatically, so chats, tasks, and
   Knowledge initialization no longer depend on files left by an earlier Cyrene
   run.
+- **Ubuntu packages no longer crash on sandbox permissions** — `.deb` and
+  `.rpm` installs configure Chromium's sandbox correctly, while AppImage or
+  manually copied builds use a compatible fallback when the helper is
+  unavailable instead of exiting with `SIGTRAP` or “crashed unexpectedly.”
 
 ### Detailed changes and compatibility notes
 
@@ -292,7 +296,11 @@ OAuth tokens, and Codex quota is presented separately from currency budgets.
   before contract tests, while CLI help, temporary knowledge databases, and
   local-time tests no longer depend on a developer machine's existing setup,
   data directories, or timezone. Strict thread-warning mode is stable.
-- **The complete local suite passes** — all `1,606` pytest tests pass in the
+- **Linux packages receive a real installation smoke test** — the release gate
+  now installs the `.deb` on an Ubuntu runner, verifies root/4755 ownership for
+  `chrome-sandbox`, and launches the desktop app through `/usr/bin/cyrene`,
+  covering the same path users run after installation.
+- **The complete local suite passes** — all `1,607` pytest tests pass in the
   project `.venv` with no pre-existing Cyrene data directories; the beta7
   frontend production build, OpenAPI contract, focused Codex/Workbench
   regressions, and `git diff --check` also pass.

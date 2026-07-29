@@ -471,6 +471,18 @@ jobs:
             --no-sandbox \
             --desktop-smoke-test
 
+      - name: Install and smoke test Debian package
+        env:
+          CYRENE_USER_DATA_DIR: ${{ runner.temp }}/cyrene-deb-smoke/data
+          CYRENE_CACHE_DIR: ${{ runner.temp }}/cyrene-deb-smoke/cache
+          CYRENE_TEMP_DIR: ${{ runner.temp }}/cyrene-deb-smoke/tmp
+        run: |
+          sudo apt-get install -y ./dist-electron/Cyrene-*-x64.deb
+          test "$(stat -c '%u:%a' /opt/Cyrene/chrome-sandbox)" = "0:4755"
+          timeout 90s xvfb-run -a \
+            /usr/bin/cyrene \
+            --desktop-smoke-test
+
       - name: Upload Linux packages
         uses: actions/upload-artifact@v4
         with:

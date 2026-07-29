@@ -43,6 +43,9 @@ OpenAI Codex OAuth 正式接入模型配置、首次设置、Workbench 对话与
   的“相关/历史”标签在窄布局下更紧凑，长内容的对齐和留白也得到改善。
 - **全新安装可以直接打开知识库**：首次启动时会自动创建知识库所需的数据目录，
   不再因为电脑上尚无 Cyrene 历史数据而导致对话、任务或知识库页面初始化失败。
+- **Ubuntu 安装包不再因 Sandbox 权限崩溃**：安装 `.deb` 或 `.rpm` 时会正确
+  配置 Chromium Sandbox；AppImage 或手动复制版本在辅助程序不可用时会自动采用
+  兼容启动方式，不再出现 `SIGTRAP`、“意外退出”或启动即崩溃。
 
 ### 详细变更与兼容性说明
 
@@ -235,8 +238,11 @@ OpenAI Codex OAuth 正式接入模型配置、首次设置、Workbench 对话与
 - **干净 CI 环境与本地结果一致** — Python Job 在运行契约测试前构建 WebUI
   Fixture；CLI Help、临时知识数据库和本地时间测试不再依赖开发机已有设置、
   数据目录或时区，严格线程告警模式下也能稳定完成。
+- **Linux 安装包执行真实安装冒烟** — Release Gate 除 AppImage 外，还会在
+  Ubuntu Runner 上实际安装 `.deb`，校验 `chrome-sandbox` 的 root/4755 权限，
+  并从 `/usr/bin/cyrene` 启动完整 Desktop Smoke，覆盖用户真实启动路径。
 - **本地完整测试通过** — 在没有任何既有 Cyrene 数据目录的隔离环境中，项目
-  `.venv` 完整 pytest 共 `1,606` 项通过；
+  `.venv` 完整 pytest 共 `1,607` 项通过；
   beta7 前端生产构建、OpenAPI 单项契约、相关 Codex/Workbench 回归和
   `git diff --check` 均通过。
 - **全部版本面升级到 beta7** — Python Package/`uv.lock` 使用 `0.7.0b7`，
