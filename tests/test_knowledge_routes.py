@@ -45,7 +45,12 @@ def client(temp_db):
     app = FastAPI()
     register_routes(app, bot=None, db_path=temp_db)
     with TestClient(app) as test_client:
-        yield test_client
+        try:
+            yield test_client
+        finally:
+            from cyrene.knowledge.ingest import cancel_pending_tasks
+
+            test_client.portal.call(cancel_pending_tasks)
 
 
 class TestKnowledgeRoutes:
