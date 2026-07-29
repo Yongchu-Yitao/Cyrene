@@ -479,9 +479,14 @@ jobs:
         run: |
           sudo apt-get install -y ./dist-electron/Cyrene-*-x64.deb
           test "$(stat -c '%u:%a' /opt/Cyrene/chrome-sandbox)" = "0:4755"
+          mkdir -p "$CYRENE_USER_DATA_DIR/data"
+          printf '%s' 'unreadable-config-without-local-key' \
+            > "$CYRENE_USER_DATA_DIR/data/config.enc"
           timeout 90s xvfb-run -a \
             /opt/Cyrene/cyrene \
             --desktop-smoke-test
+          test -f "$CYRENE_USER_DATA_DIR/data/config.enc.missing-key.bak"
+          test -f "$CYRENE_USER_DATA_DIR/data/.config_key"
 
       - name: Upload Linux packages
         uses: actions/upload-artifact@v4

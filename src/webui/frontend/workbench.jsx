@@ -29,6 +29,12 @@ function wbSetBrowserOverlayObscured(delta) {
     });
   }
 }
+// Other classic-script bundles (chat composer and shared feedback host) render
+// overlays too. Register the reference-counted coordinator instead of creating
+// an ad-hoc browser global or letting each surface race a boolean call.
+window.CyreneUI.browserOverlays = window.CyreneUI.register("browser-overlays", {
+  adjust: wbSetBrowserOverlayObscured,
+});
 
 // Tag the host platform on <html> so CSS can reserve the macOS traffic-light
 // gutter only where it actually exists. window.cyrene.platform comes from the
@@ -2394,6 +2400,12 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
     };
   }, [!!sessionMenu, !!resourceMenu]);
 
+  useWorkbenchEffect(function () {
+    if (!sessionMenu && !resourceMenu) return undefined;
+    wbSetBrowserOverlayObscured(1);
+    return function () { wbSetBrowserOverlayObscured(-1); };
+  }, [!!sessionMenu, !!resourceMenu]);
+
   function openSessionMenu(event, item) {
     event.preventDefault();
     event.stopPropagation();
@@ -3424,6 +3436,12 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
               key={project.id}
               className={"workbench-project-card" + (active ? " active" : "") + (menuOpen ? " menu-open" : "")}
               title={project.workspacePath}
+              onContextMenu={function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                setAccountMenuOpen(false);
+                setMenuProjectId(project.id);
+              }}
             >
               <button type="button" className="workbench-project-main" onClick={function () { onSelectProject(project.id); setMenuProjectId(""); }}>
                 <span
@@ -3732,6 +3750,11 @@ function TaskBoardCard({ session, column, menuOpen, onMenu, onOpen, onDelete }) 
       tabIndex={0}
       className={"wb-board-card is-" + column + (menuOpen ? " menu-open" : "")}
       onClick={onOpen}
+      onContextMenu={function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!menuOpen) onMenu();
+      }}
       onKeyDown={function (event) {
         if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); }
       }}
@@ -3781,6 +3804,11 @@ function TaskRail({ project, activeSessionId, onSelectSession, onCreateSession, 
               tabIndex={0}
               className={"workbench-task-card" + (session.id === activeSessionId ? " active" : "") + (isMenuOpen ? " menu-open" : "")}
               onClick={function () { setMenuId(""); onSelectSession(session.id); }}
+              onContextMenu={function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                setMenuId(session.id);
+              }}
               onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelectSession(session.id); } }}
             >
               <span className="workbench-task-top">
@@ -6453,6 +6481,12 @@ function TaskComposer({
     window.addEventListener("wb-focus-composer", onFocus);
     return function () { window.removeEventListener("wb-focus-composer", onFocus); };
   }, []);
+
+  useWorkbenchEffect(function () {
+    if (!modelOpen) return undefined;
+    wbSetBrowserOverlayObscured(1);
+    return function () { wbSetBrowserOverlayObscured(-1); };
+  }, [modelOpen]);
 
   // Reset transient composer state when switching tasks.
   useWorkbenchEffect(function () {

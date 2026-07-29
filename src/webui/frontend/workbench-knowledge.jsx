@@ -275,6 +275,11 @@
       {
         className: "wb-kb-card" + (listMode ? " list" : "") + (props.active ? " active" : ""),
         onClick: function () { props.onSelect(doc.id); },
+        onContextMenu: function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          props.onMenu(doc, e);
+        },
         role: "button",
         tabIndex: 0,
         onKeyDown: function (e) { if (e.key === "Enter") props.onSelect(doc.id); },
@@ -1003,8 +1008,20 @@
             active: doc.id === selectedId,
             onSelect: selectDoc,
             onMenu: function (d, e) {
+              var isContextMenu = e && e.type === "contextmenu";
               var rect = e && e.currentTarget ? e.currentTarget.getBoundingClientRect() : null;
-              if (rect) setMenuPos({ x: Math.min(rect.right, window.innerWidth - 160), y: rect.bottom + 4 });
+              if (isContextMenu) {
+                setMenuPos({
+                  x: Math.max(8, Math.min(e.clientX, window.innerWidth - 176)),
+                  y: Math.max(8, Math.min(e.clientY, window.innerHeight - 176)),
+                });
+                setOpenMenu("card:" + d.id);
+                return;
+              }
+              if (rect) setMenuPos({
+                x: Math.max(8, Math.min(rect.right, window.innerWidth - 176)),
+                y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 176)),
+              });
               setOpenMenu(openMenu === ("card:" + d.id) ? null : ("card:" + d.id));
             },
           });

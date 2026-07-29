@@ -145,6 +145,8 @@ for _package in (
     "pypdf",
     "reportlab",
     "PIL",
+    "openai_codex",
+    "codex_cli_bin",
     # simplexng runtime deps
     "waitress",
     "flask",

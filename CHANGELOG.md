@@ -46,6 +46,16 @@ OpenAI Codex OAuth 正式接入模型配置、首次设置、Workbench 对话与
 - **Ubuntu 安装包不再因 Sandbox 权限崩溃**：安装 `.deb` 或 `.rpm` 时会正确
   配置 Chromium Sandbox；AppImage 或手动复制版本在辅助程序不可用时会自动采用
   兼容启动方式，不再出现 `SIGTRAP`、“意外退出”或启动即崩溃。
+- **本地配置密钥丢失时仍可启动**：如果升级、复制数据或异常清理后只剩下
+  `config.enc`、但安装专用密钥已经丢失，Cyrene 会保留无法解密的原文件并用
+  默认设置重新启动，不再让桌面后端因 `Local config key is missing` 直接退出。
+- **安装版可以正常登录 OpenAI**：桌面安装包现在会完整携带锁定版本的 Codex
+  App Server、平台可执行文件和辅助资源；发布测试会实际执行该运行时，不再出现
+  “登录 OpenAI”按钮因 OAuth 后端不可用而变灰的情况。
+- **浏览器不会再盖住浮层**：打开模型/推理强度选择器、确认提示或顶栏 Tab
+  右键菜单时，嵌入式浏览器会暂时让出原生内容层，关闭浮层后自动恢复。
+- **常用条目可以直接右键操作**：项目、任务、对话和知识条目卡片现在都能通过
+  右键打开已有操作菜单，不必先寻找卡片角落里的更多按钮。
 
 ### 详细变更与兼容性说明
 
@@ -240,9 +250,10 @@ OpenAI Codex OAuth 正式接入模型配置、首次设置、Workbench 对话与
   数据目录或时区，严格线程告警模式下也能稳定完成。
 - **Linux 安装包执行真实安装冒烟** — Release Gate 除 AppImage 外，还会在
   Ubuntu Runner 上实际安装 `.deb`，校验 `chrome-sandbox` 的 root/4755 权限，
-  并从安装目录启动完整 Desktop Smoke，覆盖桌面图标使用的真实启动路径。
+  并从安装目录启动完整 Desktop Smoke，覆盖桌面图标使用的真实启动路径；测试还会
+  预置“加密配置存在但本地密钥缺失”的升级残留，确认后端保留原文件并正常启动。
 - **本地完整测试通过** — 在没有任何既有 Cyrene 数据目录的隔离环境中，项目
-  `.venv` 完整 pytest 共 `1,607` 项通过；
+  `.venv` 完整 pytest 共 `1,611` 项通过；
   beta7 前端生产构建、OpenAPI 单项契约、相关 Codex/Workbench 回归和
   `git diff --check` 均通过。
 - **全部版本面升级到 beta7** — Python Package/`uv.lock` 使用 `0.7.0b7`，

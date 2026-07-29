@@ -13,6 +13,7 @@ import importlib
 import importlib.util
 import jinja2
 import multipart
+import subprocess
 import simplexng
 import sniffio
 import websockets
@@ -78,6 +79,26 @@ def _run_smoke_test() -> None:
     for _name, _ver in _smoke_imports.items():
         print(f"{_name}={_ver}")
     print(f"legacy_module_aliases={len(compatibility_aliases)}")
+
+    # OAuth model discovery and login depend on the pinned Codex App Server
+    # executable shipped by openai-codex-cli-bin. Importing the Python adapter
+    # alone is insufficient: PyInstaller must also retain the platform binary,
+    # package metadata, and companion PATH tools.
+    from codex_cli_bin import bundled_codex_path
+    from openai_codex import CodexConfig
+
+    codex_path = bundled_codex_path()
+    codex_version = subprocess.run(
+        [str(codex_path), "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    ).stdout.strip()
+    if not codex_version:
+        raise RuntimeError(f"Bundled Codex runtime returned no version: {codex_path}")
+    print(f"codex_runtime={codex_version}")
+    print(f"codex_config={CodexConfig.__name__}")
 
     import os
 

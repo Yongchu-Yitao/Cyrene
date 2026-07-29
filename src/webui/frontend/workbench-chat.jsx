@@ -3255,6 +3255,11 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
               tabIndex={0}
               className={"wbc-chat-card" + (active ? " active" : "") + (isMenuOpen ? " menu-open" : "")}
               onClick={function () { setMenuId(""); onSelect(chat.id); }}
+              onContextMenu={function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                setMenuId(chat.id);
+              }}
               onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(chat.id); } }}
             >
               <span className="wbc-chat-card-top">
@@ -5584,6 +5589,15 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   useWbcEffect(function () { attachRef.current = attachments; });
   useWbcEffect(function () { workspaceOverrideRef.current = workspaceOverride; });
   useWbcEffect(function () { remoteDeviceIdsRef.current = remoteDeviceIds; });
+
+  useWbcEffect(function () {
+    if (!modelOpen) return undefined;
+    var overlays;
+    try { overlays = window.CyreneUI.require("browser-overlays"); } catch (e) {}
+    if (!overlays || typeof overlays.adjust !== "function") return undefined;
+    overlays.adjust(1);
+    return function () { overlays.adjust(-1); };
+  }, [modelOpen]);
 
   useWbcEffect(function () {
     if (prevChatIdRef.current === chatId) wbcSaveDraft(chatId, draft, draftNs);

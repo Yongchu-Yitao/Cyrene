@@ -76,18 +76,43 @@ def test_decryption_failure_preserves_config_instead_of_restoring_legacy_backup(
     assert json.loads(legacy_backup.read_text(encoding="utf-8")) == stale_legacy
 
 
-def test_missing_local_key_does_not_replace_existing_encrypted_config(
+def test_missing_local_key_preserves_existing_config_and_starts_with_defaults(
     isolated_config_store,
 ):
     encrypted = b"existing-encrypted-config"
     isolated_config_store._ENCRYPTED_PATH.parent.mkdir(parents=True, exist_ok=True)
     isolated_config_store._ENCRYPTED_PATH.write_bytes(encrypted)
 
-    with pytest.raises(RuntimeError, match="Local config key is missing"):
-        isolated_config_store._ensure_loaded()
+    loaded = isolated_config_store._ensure_loaded()
 
-    assert isolated_config_store._ENCRYPTED_PATH.read_bytes() == encrypted
-    assert not isolated_config_store._KEY_PATH.exists()
+    backup = isolated_config_store._ENCRYPTED_PATH.with_name(
+        "config.enc.missing-key.bak"
+    )
+    assert backup.read_bytes() == encrypted
+    assert isolated_config_store._KEY_PATH.exists()
+    assert isolated_config_store._KEY_PATH.stat().st_mode & 0o777 == 0o600
+    assert loaded["env"] == isolated_config_store._DEFAULT_ENV
+    assert loaded["settings"] == isolated_config_store._DEFAULT_SETTINGS
+
+    persisted = isolated_config_store._ENCRYPTED_PATH.read_bytes()
+    plain = Fernet(isolated_config_store._KEY_PATH.read_bytes()).decrypt(persisted)
+    assert json.loads(plain.decode("utf-8")) == loaded
+
+
+def test_missing_local_key_uses_unique_backup_name(isolated_config_store):
+    encrypted = b"new-unreadable-config"
+    isolated_config_store._ENCRYPTED_PATH.parent.mkdir(parents=True, exist_ok=True)
+    isolated_config_store._ENCRYPTED_PATH.write_bytes(encrypted)
+    first_backup = isolated_config_store._ENCRYPTED_PATH.with_name(
+        "config.enc.missing-key.bak"
+    )
+    first_backup.write_bytes(b"previous-unreadable-config")
+
+    isolated_config_store._ensure_loaded()
+
+    assert first_backup.read_bytes() == b"previous-unreadable-config"
+    second_backup = first_backup.with_name("config.enc.missing-key.bak.1")
+    assert second_backup.read_bytes() == encrypted
 
 
 def test_migration_fixes_incomplete_model_entries(isolated_config_store):

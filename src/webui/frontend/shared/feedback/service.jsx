@@ -145,6 +145,15 @@
 
     useEffect(function () {
       if (!active) return undefined;
+      var overlays;
+      try { overlays = platform.require("browser-overlays"); } catch (error) {}
+      if (!overlays || typeof overlays.adjust !== "function") return undefined;
+      overlays.adjust(1);
+      return function () { overlays.adjust(-1); };
+    }, [active ? active.id : 0]);
+
+    useEffect(function () {
+      if (!active) return undefined;
       function onKey(event) {
         if (event.key === "Escape") {
           event.preventDefault();

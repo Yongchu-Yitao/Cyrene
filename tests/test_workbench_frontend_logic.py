@@ -2729,6 +2729,27 @@ def test_electron_browser_panel_uses_native_browser_bridge():
     assert "browser_user_events" in (root / "src" / "cyrene" / "tooling" / "catalog.py").read_text(encoding="utf-8")
 
 
+def test_native_browser_yields_to_model_confirm_and_topbar_overlays():
+    root = Path(__file__).resolve().parent.parent
+    workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    feedback = (
+        root / "src" / "webui" / "frontend" / "shared" / "feedback" / "service.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert 'window.CyreneUI.register("browser-overlays"' in workbench
+    assert "if (!sessionMenu && !resourceMenu) return undefined;" in workbench
+    assert "if (!modelOpen) return undefined;" in workbench
+    assert 'window.CyreneUI.require("browser-overlays")' in chat
+    assert 'platform.require("browser-overlays")' in feedback
+    assert "overlays.adjust(1);" in feedback
+    assert "return function () { overlays.adjust(-1); };" in feedback
+
+
 def test_electron_browser_type_uses_react_compatible_native_setter():
     root = Path(__file__).resolve().parent.parent
     main = (root / "electron" / "main.js").read_text(encoding="utf-8")

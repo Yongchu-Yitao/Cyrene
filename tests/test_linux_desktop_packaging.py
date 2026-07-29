@@ -30,6 +30,8 @@ def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():
     assert "Install and smoke test Debian package" in workflow
     assert "stat -c '%u:%a' /opt/Cyrene/chrome-sandbox" in workflow
     assert "/opt/Cyrene/cyrene" in workflow
+    assert "config.enc.missing-key.bak" in workflow
+    assert "data/.config_key" in workflow
     assert "name: linux-packages" in workflow
     assert "dist-electron/Cyrene-*-x64.AppImage" in workflow
     assert "dist-electron/Cyrene-*-x64.deb" in workflow
@@ -61,3 +63,13 @@ def test_linux_install_script_repairs_chromium_sandbox_permissions():
     assert 'sandbox_path="/opt/Cyrene/chrome-sandbox"' in script
     assert 'chown root:root "$sandbox_path"' in script
     assert 'chmod 4755 "$sandbox_path"' in script
+
+
+def test_frozen_build_bundles_and_executes_codex_runtime():
+    spec = (ROOT / "build" / "cyrene.spec").read_text(encoding="utf-8")
+    entrypoint = (ROOT / "build" / "run_cyrene.py").read_text(encoding="utf-8")
+
+    assert '"openai_codex"' in spec
+    assert '"codex_cli_bin"' in spec
+    assert "from codex_cli_bin import bundled_codex_path" in entrypoint
+    assert '[str(codex_path), "--version"]' in entrypoint

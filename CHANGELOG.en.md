@@ -62,6 +62,20 @@ OAuth tokens, and Codex quota is presented separately from currency budgets.
   `.rpm` installs configure Chromium's sandbox correctly, while AppImage or
   manually copied builds use a compatible fallback when the helper is
   unavailable instead of exiting with `SIGTRAP` or “crashed unexpectedly.”
+- **A missing local configuration key no longer blocks startup** — if an
+  upgrade, copied data directory, or partial cleanup leaves `config.enc`
+  without its installation-local key, Cyrene preserves the unreadable file and
+  starts with default settings instead of terminating the desktop backend.
+- **Installed builds can sign in to OpenAI** — desktop packages now include the
+  pinned Codex App Server executable and all companion resources, and the
+  release smoke test executes that runtime so the OpenAI login button is not
+  disabled by a missing OAuth backend.
+- **Browser content no longer covers overlays** — the embedded native browser
+  temporarily yields while model/reasoning menus, confirmation prompts, or
+  topbar tab context menus are open, then restores automatically.
+- **Common items expose their actions on right-click** — project, task, chat,
+  and knowledge cards can now open their existing action menus directly,
+  without first finding the small overflow button.
 
 ### Detailed changes and compatibility notes
 
@@ -299,8 +313,10 @@ OAuth tokens, and Codex quota is presented separately from currency budgets.
 - **Linux packages receive a real installation smoke test** — the release gate
   now installs the `.deb` on an Ubuntu runner, verifies root/4755 ownership for
   `chrome-sandbox`, and launches the app from its installed location, covering
-  the same executable used by the desktop entry.
-- **The complete local suite passes** — all `1,607` pytest tests pass in the
+  the same executable used by the desktop entry. The test also seeds an
+  encrypted config without its local key and verifies that the backend
+  preserves it and still starts successfully.
+- **The complete local suite passes** — all `1,611` pytest tests pass in the
   project `.venv` with no pre-existing Cyrene data directories; the beta7
   frontend production build, OpenAPI contract, focused Codex/Workbench
   regressions, and `git diff --check` also pass.

@@ -176,7 +176,8 @@ def test_session_tab_context_menu_supports_pinning_resources_and_removal():
     topbar = shell.split("function WorkbenchTopbar", 1)[1].split(
         "function WorkbenchNotificationCenter", 1
     )[0]
-    assert "wbSetBrowserOverlayObscured" not in topbar
+    assert "wbSetBrowserOverlayObscured(1)" in topbar
+    assert "wbSetBrowserOverlayObscured(-1)" in topbar
     assert "pendingTopbarResourceRef" in chat
     assert 'resource.type === "browser"' in chat
     assert 'resource.type === "file"' in chat

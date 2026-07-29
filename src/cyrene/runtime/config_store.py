@@ -218,6 +218,42 @@ def _cipher() -> Fernet:
     return _fernet
 
 
+def _next_recovery_path(reason: str) -> Path:
+    """Return a non-destructive backup path for an unreadable config."""
+    base = _ENCRYPTED_PATH.with_name(f"{_ENCRYPTED_PATH.name}.{reason}.bak")
+    if not base.exists():
+        return base
+    index = 1
+    while True:
+        candidate = base.with_name(f"{base.name}.{index}")
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def _recover_config_without_key() -> dict:
+    """Preserve an undecryptable store and start with a fresh local key."""
+    global _fernet, _migrated
+
+    backup_path = _next_recovery_path("missing-key")
+    _ENCRYPTED_PATH.replace(backup_path)
+    logger.error(
+        "Local config key is missing; preserved unreadable config at %s and "
+        "started with default settings",
+        backup_path,
+    )
+
+    key = _store_key(Fernet.generate_key())
+    _fernet = Fernet(key)
+    config = {
+        "env": deepcopy(_DEFAULT_ENV),
+        "settings": deepcopy(_DEFAULT_SETTINGS),
+    }
+    _persist(config)
+    _migrated = True
+    return config
+
+
 # ---------------------------------------------------------------------------
 # In-memory cache
 # ---------------------------------------------------------------------------
@@ -343,6 +379,8 @@ def _persist(config: dict) -> None:
 def _read_config() -> dict:
     if not _ENCRYPTED_PATH.exists():
         return _migrate_if_needed()
+    if not _KEY_PATH.exists():
+        return _recover_config_without_key()
     try:
         encrypted = _ENCRYPTED_PATH.read_bytes()
         plain = _cipher().decrypt(encrypted)
