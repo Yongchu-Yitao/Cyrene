@@ -44,7 +44,8 @@ def client(temp_db):
     """Create a FastAPI test client with knowledge routes."""
     app = FastAPI()
     register_routes(app, bot=None, db_path=temp_db)
-    return TestClient(app)
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 class TestKnowledgeRoutes:
@@ -193,8 +194,7 @@ class TestKnowledgeRoutes:
         data = response.json()
         assert "error" in data
 
-    @pytest.mark.asyncio
-    async def test_sync_documents(self, client, temp_db):
+    def test_sync_documents(self, client, temp_db):
         """Test syncing documents from filesystem."""
         response = client.post("/api/knowledge/sync")
         assert response.status_code == 200
@@ -208,8 +208,7 @@ class TestKnowledgeRoutes:
         # FastAPI returns 422 for missing multipart files parameter
         assert response.status_code in [400, 422]
 
-    @pytest.mark.asyncio
-    async def test_upload_duplicate_file_reuses_document(self, client, temp_db, tmp_path, monkeypatch):
+    def test_upload_duplicate_file_reuses_document(self, client, temp_db, tmp_path, monkeypatch):
         """Uploading identical bytes twice should return the canonical document."""
         import route.knowledge as routes_knowledge
 
@@ -233,13 +232,14 @@ class TestKnowledgeRoutes:
 
         from cyrene.knowledge import store
 
-        all_docs = await store.list_documents(temp_db)
+        import asyncio
+
+        all_docs = asyncio.run(store.list_documents(temp_db))
         assert len(all_docs) == 1
         assert all_docs[0]["content_hash"]
         assert len(list(tmp_path.iterdir())) == 1
 
-    @pytest.mark.asyncio
-    async def test_chat_upload_duplicate_keeps_each_session_attachment(
+    def test_chat_upload_duplicate_keeps_each_session_attachment(
         self, client, temp_db, tmp_path, monkeypatch
     ):
         """KB deduplication must not delete paths returned to chat sessions."""
@@ -269,7 +269,9 @@ class TestKnowledgeRoutes:
 
         from cyrene.knowledge import store
 
-        all_docs = await store.list_documents(temp_db)
+        import asyncio
+
+        all_docs = asyncio.run(store.list_documents(temp_db))
         assert len(all_docs) == 1
         assert len(list(tmp_path.iterdir())) == 2
 
