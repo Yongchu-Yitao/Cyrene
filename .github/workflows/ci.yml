@@ -39,6 +39,19 @@ jobs:
       - name: Sync locked environment with all testable extras
         run: uv sync --locked --all-extras
 
+      - name: Set up Node.js for generated WebUI fixtures
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: src/webui/package-lock.json
+
+      - name: Build WebUI fixtures used by the Python contract suite
+        working-directory: src/webui
+        run: |
+          npm ci
+          npm run build
+
       - name: Compile Python sources
         run: uv run --locked python -m compileall -q src
 

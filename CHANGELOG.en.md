@@ -284,6 +284,10 @@ OAuth tokens, and Codex quota is presented separately from currency budgets.
   replay, phase activity, total duration, mixed quit batches, late guidance,
   no-tool reply recovery, CLI localization, viewer behavior, config navigation,
   and session cards are covered.
+- **Clean CI now matches local results** — the Python job builds WebUI fixtures
+  before contract tests, while CLI help, temporary knowledge databases, and
+  local-time tests no longer depend on a developer machine's existing setup,
+  data directories, or timezone. Strict thread-warning mode is stable.
 - **The complete local suite passes** — all `1,605` pytest tests pass in the
   project `.venv`; the beta7 frontend production build, OpenAPI contract,
   focused Codex/Workbench regressions, and `git diff --check` also pass.

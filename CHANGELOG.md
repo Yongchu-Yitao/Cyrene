@@ -230,6 +230,9 @@ OpenAI Codex OAuth 正式接入模型配置、首次设置、Workbench 对话与
 - **Agent/CLI 回归补齐** — 覆盖 Durable Delta Batch、Cursor Replay、Phase
   Activity、Total Duration、Quit Mixed Batch、Late Guidance、No-tool Reply
   Recovery、CLI Localization、Viewer、Config Navigation 和 Session Card。
+- **干净 CI 环境与本地结果一致** — Python Job 在运行契约测试前构建 WebUI
+  Fixture；CLI Help、临时知识数据库和本地时间测试不再依赖开发机已有设置、
+  数据目录或时区，严格线程告警模式下也能稳定完成。
 - **本地完整测试通过** — 项目 `.venv` 中完整 pytest 共 `1,605` 项通过；
   beta7 前端生产构建、OpenAPI 单项契约、相关 Codex/Workbench 回归和
   `git diff --check` 均通过。

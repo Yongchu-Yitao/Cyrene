@@ -65,7 +65,12 @@ if __name__ == "cyrene.local_cli":
 
     alias_module(__name__, "cyrene.runtime.host")
 else:
-    from cyrene.runtime.host import main
+    if __name__ == "__main__" and any(
+        flag in sys.argv[1:] for flag in ("--help", "-h")
+    ):
+        from cyrene.cli import main
+    else:
+        from cyrene.runtime.host import main
 
     __all__ = ["main"]
 

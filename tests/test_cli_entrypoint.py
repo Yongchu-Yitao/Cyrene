@@ -63,7 +63,7 @@ def test_direct_local_cli_prefers_checkout_virtualenv(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert "Cyrene CLI mode." in result.stdout
+    assert "Cyrene AI Agent CLI" in result.stdout
     assert "ModuleNotFoundError" not in result.stderr
 
 
