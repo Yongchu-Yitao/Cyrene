@@ -196,6 +196,39 @@ function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedK
   return ordered.slice(0, Math.max(0, Number(limit) || 0));
 }
 
+function wbRememberOpenedSessionKey(recentOpenedKeys, visibleSessionKeys, key, limit) {
+  var list = Array.isArray(recentOpenedKeys) ? recentOpenedKeys : [];
+  var visible = Array.isArray(visibleSessionKeys) ? visibleSessionKeys : [];
+  var normalizedKey = String(key || "");
+  var maxItems = Math.max(0, Number(limit) || 0);
+  if (!normalizedKey || !maxItems) return list;
+
+  // Selecting a tab that is already visible must not turn the strip into an
+  // MRU carousel. Snapshot any fallback tabs at the end of the stored order so
+  // later title/status/timestamp refreshes cannot reshuffle them either.
+  if (visible.indexOf(normalizedKey) >= 0) {
+    var stable = list.slice();
+    visible.forEach(function (visibleKey) {
+      var normalizedVisibleKey = String(visibleKey || "");
+      if (normalizedVisibleKey && stable.indexOf(normalizedVisibleKey) < 0) {
+        stable.push(normalizedVisibleKey);
+      }
+    });
+    stable = stable.slice(0, maxItems);
+    if (
+      stable.length === list.length
+      && stable.every(function (item, index) { return item === list[index]; })
+    ) {
+      return list;
+    }
+    return stable;
+  }
+
+  return [normalizedKey].concat(list.filter(function (item) {
+    return item !== normalizedKey;
+  })).slice(0, maxItems);
+}
+
 function wbDeliverResourceToChat(chatId, resource) {
   var target = String(chatId || "");
   if (!target || !resource || resource.kind === "browser") return false;
@@ -928,9 +961,18 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     if (!normalizedId) return;
     var key = normalizedKind + ":" + normalizedId;
     setRecentOpenedSessionKeys(function (prev) {
-      var next = [key].concat((Array.isArray(prev) ? prev : []).filter(function (item) {
-        return item !== key;
-      })).slice(0, 20);
+      var visibleKeys = wbRecentSessionTabs(
+        store.projects,
+        recentChatsByProject,
+        prev,
+        pinnedSessionKeys,
+        hiddenSessionKeys,
+        3
+      ).map(function (item) {
+        return item.kind + ":" + item.id;
+      });
+      var next = wbRememberOpenedSessionKey(prev, visibleKeys, key, 20);
+      if (next === prev) return prev;
       try {
         localStorage.setItem("wb-recent-opened-sessions", JSON.stringify(next));
       } catch (e) {}

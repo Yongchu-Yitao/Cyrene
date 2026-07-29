@@ -71,6 +71,53 @@ process.stdout.write(JSON.stringify(wbRecentSessionTabs(projects, chats, opened,
     assert items[0]["pinned"] is True
 
 
+def test_existing_topbar_session_keeps_order_until_an_unshown_session_is_opened():
+    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    helper = source.split("function wbRememberOpenedSessionKey", 1)[1].split(
+        "\nfunction wbDeliverResourceToChat", 1
+    )[0]
+    script = (
+        "function wbRememberOpenedSessionKey"
+        + helper
+        + """
+const initial = ["task:t1", "chat:c1", "task:t2"];
+const visible = initial.slice();
+const existing = wbRememberOpenedSessionKey(initial, visible, "chat:c1", 20);
+const newlyOpened = wbRememberOpenedSessionKey(existing, visible, "task:t3", 20);
+const fallbackSnapshot = wbRememberOpenedSessionKey(
+  ["task:t1"],
+  ["task:t1", "chat:c1", "task:t2"],
+  "chat:c1",
+  20
+);
+process.stdout.write(JSON.stringify({
+  existing,
+  existingUsesSameArray: existing === initial,
+  newlyOpened,
+  fallbackSnapshot
+}));
+"""
+    )
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["existing"] == ["task:t1", "chat:c1", "task:t2"]
+    assert result["existingUsesSameArray"] is True
+    assert result["newlyOpened"][:4] == [
+        "task:t3",
+        "task:t1",
+        "chat:c1",
+        "task:t2",
+    ]
+    assert result["fallbackSnapshot"] == ["task:t1", "chat:c1", "task:t2"]
+
+
 def test_recent_conversation_lists_stay_in_sync_with_chat_page():
     shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
     chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
