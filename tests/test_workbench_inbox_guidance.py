@@ -1401,3 +1401,22 @@ def test_workbench_has_localized_model_fallback_progress_message():
     source = Path("src/webui/frontend/workbench-i18n.jsx").read_text(encoding="utf-8")
     assert '"phase.modelFallback": "Primary model unavailable' in source
     assert '"phase.modelFallback": "主模型不可用，正在切换备用模型' in source
+
+
+def test_workbench_has_actionable_codex_failure_alerts():
+    from pathlib import Path
+
+    i18n = Path("src/webui/frontend/workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+    chat = Path("src/webui/frontend/workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    for key in (
+        "phase.codexQuotaExhausted",
+        "phase.codexAuthenticationExpired",
+        "phase.codexModelUnavailable",
+    ):
+        assert i18n.count(f'"{key}"') == 2
+    assert "if (event.alert && window.CyreneUI.require(\"feedback\").showToast)" in chat
+    assert "failed: !!event.failed" in chat

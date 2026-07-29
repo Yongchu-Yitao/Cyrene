@@ -1378,6 +1378,7 @@ var WorkbenchChatRuntimes = (function () {
         update(chatId, function (cur) {
           if (!cur) return null;
           var eventPhase = String(event && event.phase || "");
+          var eventProvider = String(event && event.provider || "");
           var activities = Array.isArray(cur.activities) ? cur.activities : [];
           var last = activities.length ? activities[activities.length - 1] : null;
           var reuseLlmCard = !!(
@@ -1409,6 +1410,7 @@ var WorkbenchChatRuntimes = (function () {
                   mergeReasoning: false,
                   fallbackReasoningApplied: false,
                   llmPhase: eventPhase || activity.llmPhase || "",
+                  provider: eventProvider || activity.provider || "",
                 };
               })
             : appendActivity(cur, {
@@ -1418,6 +1420,7 @@ var WorkbenchChatRuntimes = (function () {
                 reasoningStreamSeen: true,
                 awaitingLlmEvent: true,
                 llmPhase: eventPhase,
+                provider: eventProvider,
               });
           return { ...next, lastEventAt: Date.now() };
         });
@@ -1426,6 +1429,7 @@ var WorkbenchChatRuntimes = (function () {
         update(chatId, function (cur) {
           if (!cur) return null;
           var eventPhase = String(event && event.phase || "");
+          var eventProvider = String(event && event.provider || "");
           var next = updateLastActivity(cur, function (activity) {
             return {
               ...activity,
@@ -1434,8 +1438,9 @@ var WorkbenchChatRuntimes = (function () {
               reasoningStreamSeen: true,
               awaitingLlmEvent: true,
               llmPhase: eventPhase || activity.llmPhase || "",
+              provider: eventProvider || activity.provider || "",
             };
-          }, { reasoningActive: true, reasoningStreamSeen: true, awaitingLlmEvent: true, llmPhase: eventPhase });
+          }, { reasoningActive: true, reasoningStreamSeen: true, awaitingLlmEvent: true, llmPhase: eventPhase, provider: eventProvider });
           return { ...next, lastEventAt: Date.now() };
         }, true);
       },
@@ -1443,6 +1448,7 @@ var WorkbenchChatRuntimes = (function () {
         update(chatId, function (cur) {
           if (!cur) return null;
           var eventPhase = String(event && event.phase || "");
+          var eventProvider = String(event && event.provider || "");
           var next = updateLastActivity(cur, function (activity) {
             var current = String(activity.reasoning || "");
             var callStart = Math.max(0, Math.min(Number(activity.reasoningCallStart || 0), current.length));
@@ -1451,8 +1457,9 @@ var WorkbenchChatRuntimes = (function () {
               reasoning: current.slice(0, callStart) + (text || current.slice(callStart)),
               reasoningActive: false,
               llmPhase: eventPhase || activity.llmPhase || "",
+              provider: eventProvider || activity.provider || "",
             };
-          }, { reasoning: text || "", reasoningCallStart: 0, awaitingLlmEvent: true, llmPhase: eventPhase });
+          }, { reasoning: text || "", reasoningCallStart: 0, awaitingLlmEvent: true, llmPhase: eventPhase, provider: eventProvider });
           return { ...next, lastEventAt: Date.now() };
         });
       },
@@ -1646,6 +1653,7 @@ var WorkbenchChatRuntimes = (function () {
                   llmStartedEventId: eventId,
                   llmEventIds: eventId ? eventIds.concat([eventId]).slice(-100) : eventIds,
                   model: String(event.model || ""),
+                  provider: String(event.provider || activity.provider || ""),
                   llmPhase: eventPhase || activity.llmPhase || "",
                   reasoningStreamSeen: activity.awaitingLlmEvent ? activity.reasoningStreamSeen : false,
                   mergeReasoning: activity.llmStatus === "completed",
@@ -1657,6 +1665,7 @@ var WorkbenchChatRuntimes = (function () {
                 llmStartedEventId: eventId,
                 llmEventIds: eventId ? [eventId] : [],
                 model: String(event.model || ""),
+                provider: String(event.provider || ""),
                 llmPhase: eventPhase,
                 reasoningCallStart: 0,
                 reasoningStreamSeen: false,
@@ -1683,6 +1692,7 @@ var WorkbenchChatRuntimes = (function () {
                 llmEventId: eventId,
                 llmEventIds: eventId ? eventIds.concat([eventId]).slice(-100) : eventIds,
                 model: String(event.model || ""),
+                provider: String(event.provider || activity.provider || ""),
                 llmPhase: eventPhase || activity.llmPhase || "",
                 reasoning: reasoning,
                 reasoningCallStart: callStart,
@@ -1696,6 +1706,7 @@ var WorkbenchChatRuntimes = (function () {
               llmEventId: eventId,
               llmEventIds: eventId ? [eventId] : [],
               model: String(event.model || ""),
+              provider: String(event.provider || ""),
               llmPhase: eventPhase,
               reasoning: eventReasoning,
               reasoningCallStart: 0,
@@ -1738,7 +1749,23 @@ var WorkbenchChatRuntimes = (function () {
         progressTotal: toolProgress ? Math.max(0, Number(event.total) || 0) : undefined,
       };
     } else if (event.type === "phase_transition" && (event.detail || event.detail_key)) {
-      entry = { kind: "phase", text: event.detail ? String(event.detail).slice(0, 80) : "", detailKey: event.detail_key || "", detailParams: event.detail_params || {}, preview: "" };
+      var phaseText = event.detail_key
+        ? wbcT(event.detail_key, String(event.detail || ""), event.detail_params || {})
+        : String(event.detail || "");
+      if (event.alert && window.CyreneUI.require("feedback").showToast) {
+        window.CyreneUI.require("feedback").showToast(
+          phaseText,
+          String(event.alert_level || "warning")
+        );
+      }
+      entry = {
+        kind: "phase",
+        text: event.detail ? String(event.detail).slice(0, 160) : "",
+        detailKey: event.detail_key || "",
+        detailParams: event.detail_params || {},
+        preview: "",
+        failed: !!event.failed,
+      };
     } else if (event.type === "subagent_update") {
       entry = {
         kind: "subagent",
@@ -5321,10 +5348,12 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
     return entry && entry.kind === "tool";
   }).length;
   var hasReasoning = !!String(item.reasoning || "").trim();
+  var isCodexProvider = String(item.provider || "") === "codex_oauth";
   var phase1Detail = hasReasoning
     ? String(item.reasoning || "")
     : wbcPhase1ProgressDetail(visibleEntries);
-  var hasExpandableDetail = hasReasoning || (isPhase1 && !!phase1Detail);
+  var hasExpandableDetail = !isCodexProvider
+    && (hasReasoning || (isPhase1 && !!phase1Detail));
   var [showReasoning, setShowReasoning] = useWbcState(false);
   var [lockedHeight, setLockedHeight] = useWbcState(0);
   var cardRef = useWbcRef(null);
@@ -5368,11 +5397,11 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
       live={true}
       running={isPhase1 ? phase1Running : active}
       reasoning={phase1Detail}
-      showReasoning={showReasoning}
+      showReasoning={hasExpandableDetail && showReasoning}
       onToggle={hasExpandableDetail ? toggleReasoning : null}
       cardRef={cardRef}
       reasoningRef={reasoningRef}
-      lockedHeight={lockedHeight}
+      lockedHeight={hasExpandableDetail ? lockedHeight : 0}
       label={label}
     />
   );

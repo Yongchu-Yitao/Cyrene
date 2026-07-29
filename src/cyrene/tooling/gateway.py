@@ -532,29 +532,16 @@ async def execute_wire_tool(
                     limit=int(args.get("limit") or 20),
                 )
             else:
-                terms = [
-                    term.casefold()
-                    for term in str(args.get("query") or "").split()
-                    if term
-                ]
-                matched = [
-                    spec
-                    for spec in snapshot_specs
-                    if not terms
-                    or all(
-                        term in (
-                            spec.capability_id
-                            + " "
-                            + spec.description
-                            + " "
-                            + spec.concrete_name
-                        ).casefold()
-                        for term in terms
-                    )
-                ]
+                from cyrene.tooling.catalog import search_capability_items
+
+                matched = search_capability_items(
+                    snapshot_specs,
+                    query=str(args.get("query") or ""),
+                    limit=int(args.get("limit") or 20),
+                )
                 result = [
                     {"id": spec.capability_id, "description": spec.description}
-                    for spec in matched[: int(args.get("limit") or 20)]
+                    for spec in matched
                 ]
             result = [
                 item

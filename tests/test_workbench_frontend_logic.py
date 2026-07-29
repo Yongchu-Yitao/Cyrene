@@ -2251,9 +2251,13 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert 'setShowReasoning(function (visible) { return !visible; });' in chat
     assert 'var hasReasoning = !!String(item.reasoning || "").trim();' in activity_card
     assert "function wbcPhase1ProgressDetail(entries)" in chat
-    assert "var hasExpandableDetail = hasReasoning || (isPhase1 && !!phase1Detail);" in activity_card
+    assert 'var isCodexProvider = String(item.provider || "") === "codex_oauth";' in activity_card
+    assert "var hasExpandableDetail = !isCodexProvider" in activity_card
     assert 'if (!hasExpandableDetail) return;' in activity_card
     assert 'onToggle={hasExpandableDetail ? toggleReasoning : null}' in activity_card
+    assert 'showReasoning={hasExpandableDetail && showReasoning}' in activity_card
+    assert 'lockedHeight={hasExpandableDetail ? lockedHeight : 0}' in activity_card
+    assert 'provider: String(event.provider || activity.provider || "")' in chat
     assert 'detail.scrollTop = active ? detail.scrollHeight : 0;' in activity_card
     assert "if (!msg.runtimeActivityActive && activityEntries.length === 0) return null;" in chat
     assert "wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime))" in chat

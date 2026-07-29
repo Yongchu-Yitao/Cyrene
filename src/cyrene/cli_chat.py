@@ -806,7 +806,11 @@ class RichRenderer:
             detail = str(event.get("detail") or "")
             transition = f"{source} → {target}".strip(" →")
             suffix = f"  {escape(detail)}" if detail else ""
-            self.console.print(f"[bright_cyan]→[/] [dim]{escape(transition)}{suffix}[/]")
+            failed = bool(event.get("failed"))
+            symbol, color = ("×", "yellow") if failed else ("→", "bright_cyan")
+            self.console.print(
+                f"[{color}]{symbol}[/] [dim]{escape(transition)}{suffix}[/]"
+            )
             return
         if event_type in {"plan", "plan_progress"}:
             self._break_reply()

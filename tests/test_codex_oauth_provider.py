@@ -10,13 +10,22 @@ from cyrene.model_runtime.client import _normalized_candidate
 from cyrene.model_runtime import client as model_client
 from cyrene.model_runtime.codex_provider import (
     CODEX_BASE_URL,
+    CODEX_AUTHENTICATION_EXPIRED,
+    CODEX_MODEL_UNAVAILABLE,
     CODEX_PROVIDER,
+    CODEX_QUOTA_EXHAUSTED,
     CodexAppServer,
+    CodexAvailabilityError,
+    CodexProtocolError,
     CodexTransportError,
     _codex_sdk_config,
+    _normalize_provider_action,
     _normalized_effort,
+    _provider_action_schema,
+    _provider_action_tools,
     _provider_input,
     _provider_instructions,
+    codex_availability_error,
 )
 
 
@@ -27,6 +36,46 @@ def test_codex_sdk_uses_its_pinned_runtime_and_system_proxy() -> None:
     assert config.config_overrides == ("features.respect_system_proxy=true",)
     assert _normalized_effort("LOW") == "low"
     assert _normalized_effort("MAX") == "max"
+
+
+@pytest.mark.parametrize(
+    ("error", "message", "expected_kind"),
+    [
+        (
+            {"codexErrorInfo": "usageLimitExceeded"},
+            "Usage limit reached",
+            CODEX_QUOTA_EXHAUSTED,
+        ),
+        (
+            {"codexErrorInfo": "unauthorized"},
+            "Unauthorized",
+            CODEX_AUTHENTICATION_EXPIRED,
+        ),
+        (
+            {"codexErrorInfo": "badRequest"},
+            "The model 'gpt-retired' does not exist",
+            CODEX_MODEL_UNAVAILABLE,
+        ),
+        (
+            {
+                "codexErrorInfo": {
+                    "httpConnectionFailed": {"httpStatusCode": 401}
+                }
+            },
+            "Request failed",
+            CODEX_AUTHENTICATION_EXPIRED,
+        ),
+    ],
+)
+def test_codex_availability_errors_are_classified(
+    error: dict,
+    message: str,
+    expected_kind: str,
+) -> None:
+    classified = codex_availability_error(error, message=message)
+
+    assert isinstance(classified, CodexAvailabilityError)
+    assert classified.kind == expected_kind
 
 
 def test_codex_candidate_never_inherits_api_credentials() -> None:
@@ -292,6 +341,77 @@ async def test_codex_completion_routes_streams_per_thread_and_runs_concurrently(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_kind"),
+    [
+        (
+            {
+                "message": "Your login session has expired",
+                "codexErrorInfo": "unauthorized",
+            },
+            CODEX_AUTHENTICATION_EXPIRED,
+        ),
+        (
+            {
+                "message": "The model 'gpt-retired' does not exist",
+                "codexErrorInfo": "badRequest",
+            },
+            CODEX_MODEL_UNAVAILABLE,
+        ),
+    ],
+)
+async def test_codex_completion_preserves_actionable_availability_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    error: dict,
+    expected_kind: str,
+) -> None:
+    provider = CodexAppServer()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    class FakeClient:
+        async def thread_start(self, params: dict) -> dict:
+            return {"thread": {"id": "thread-1"}}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            input_items: list[dict],
+            params: dict,
+        ) -> dict:
+            queue.put_nowait(
+                SimpleNamespace(
+                    method="error",
+                    payload={"error": error, "willRetry": False},
+                )
+            )
+            return {"turn": {"id": "turn-1"}}
+
+        async def next_turn_notification(self, turn_id: str) -> SimpleNamespace:
+            return await queue.get()
+
+        def unregister_turn_notifications(self, turn_id: str) -> None:
+            pass
+
+        async def turn_interrupt(self, thread_id: str, turn_id: str) -> dict:
+            return {}
+
+    async def ready_client() -> FakeClient:
+        return FakeClient()
+
+    monkeypatch.setattr(provider, "_ready_client", ready_client)
+
+    with pytest.raises(CodexAvailabilityError) as exc_info:
+        await provider.complete(
+            messages=[{"role": "user", "content": "Say OK"}],
+            tools=None,
+            model="gpt-5.6-sol",
+            timeout=2,
+        )
+
+    assert exc_info.value.kind == expected_kind
+
+
+@pytest.mark.asyncio
 async def test_codex_completion_forwards_reasoning_summary_and_low_effort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -368,6 +488,204 @@ async def test_codex_completion_forwards_reasoning_summary_and_low_effort(
         "reasoning_done",
         "reply_done",
     ]
+
+
+@pytest.mark.asyncio
+async def test_codex_completion_uses_structured_cyrene_actions_without_leaking_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+    queue: asyncio.Queue = asyncio.Queue()
+    seen_thread_params: dict = {}
+    seen_turn_params: dict = {}
+    action_text = (
+        '{"content":"I already opened the browser.",'
+        '"tool_calls":[{"name":"use_tools",'
+        '"arguments_json":"{\\"task\\":\\"打开 B 站，用浏览器\\"}"}]}'
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "use_tools",
+                "description": "Enter execution.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"task": {"type": "string"}},
+                    "required": ["task"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "quit",
+                "description": "Finish.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "WebSearch",
+                "description": "Search.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
+        },
+    ]
+
+    class FakeClient:
+        async def thread_start(self, params: dict) -> dict:
+            seen_thread_params.update(params)
+            return {"thread": {"id": "thread-1"}}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            input_items: list[dict],
+            params: dict,
+        ) -> dict:
+            seen_turn_params.update(params)
+            queue.put_nowait(
+                SimpleNamespace(
+                    method="item/agentMessage/delta",
+                    payload={"delta": action_text[:40]},
+                )
+            )
+            queue.put_nowait(
+                SimpleNamespace(
+                    method="item/agentMessage/delta",
+                    payload={"delta": action_text[40:]},
+                )
+            )
+            queue.put_nowait(
+                SimpleNamespace(
+                    method="turn/completed",
+                    payload={
+                        "turn": {
+                            "id": "turn-1",
+                            "status": "completed",
+                            "items": [
+                                {"type": "agentMessage", "text": action_text}
+                            ],
+                        }
+                    },
+                )
+            )
+            return {"turn": {"id": "turn-1"}}
+
+        async def next_turn_notification(self, turn_id: str) -> SimpleNamespace:
+            return await queue.get()
+
+        def unregister_turn_notifications(self, turn_id: str) -> None:
+            pass
+
+        async def turn_interrupt(self, thread_id: str, turn_id: str) -> dict:
+            return {}
+
+    async def ready_client() -> FakeClient:
+        return FakeClient()
+
+    monkeypatch.setattr(provider, "_ready_client", ready_client)
+    events: list[dict] = []
+
+    async def collect(event: dict) -> None:
+        events.append(event)
+
+    response = await provider.complete(
+        messages=[{"role": "user", "content": "打开 B 站，用浏览器"}],
+        tools=tools,
+        model="gpt-5.3-codex-spark",
+        phase="phase1",
+        timeout=2,
+        stream_callback=collect,
+    )
+
+    assert response["content"] == ""
+    assert response["tool_calls"][0]["function"] == {
+        "name": "use_tools",
+        "arguments": '{"task": "打开 B 站，用浏览器"}',
+    }
+    assert events == []
+    assert seen_turn_params["outputSchema"]["properties"]["tool_calls"][
+        "minItems"
+    ] == 1
+    action_names = seen_turn_params["outputSchema"]["properties"]["tool_calls"][
+        "items"
+    ]["properties"]["name"]["enum"]
+    assert action_names == ["use_tools", "quit"]
+    assert "WebSearch" not in seen_thread_params["baseInstructions"]
+    assert "DSML" not in seen_thread_params["baseInstructions"]
+    assert "Do not invoke Codex built-in tools" in seen_thread_params[
+        "baseInstructions"
+    ]
+    assert "Never invoke Codex-hosted tools" in seen_thread_params[
+        "developerInstructions"
+    ]
+
+
+def test_codex_structured_action_preserves_only_terminal_content() -> None:
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "quit",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    response = _normalize_provider_action(
+        '{"content":"完成。","tool_calls":['
+        '{"name":"quit","arguments_json":"{}"}]}',
+        tools,
+    )
+
+    assert response["content"] == "完成。"
+    assert response["tool_calls"][0]["function"]["name"] == "quit"
+
+
+def test_codex_structured_action_rejects_invalid_arguments_json() -> None:
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "use_tools",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    with pytest.raises(CodexProtocolError, match="invalid arguments"):
+        _normalize_provider_action(
+            '{"content":"","tool_calls":['
+            '{"name":"use_tools","arguments_json":"not-json"}]}',
+            tools,
+        )
+
+
+def test_codex_phase1_action_contract_hides_execution_tools() -> None:
+    tools = [
+        {"type": "function", "function": {"name": "use_tools"}},
+        {"type": "function", "function": {"name": "ask_user"}},
+        {"type": "function", "function": {"name": "quit"}},
+        {"type": "function", "function": {"name": "browser_tools"}},
+    ]
+
+    action_tools = _provider_action_tools(tools, phase="phase1")
+    schema = _provider_action_schema(action_tools)
+
+    assert [
+        tool["function"]["name"] for tool in action_tools
+    ] == ["use_tools", "ask_user", "quit"]
+    assert schema is not None
+    assert schema["properties"]["tool_calls"]["items"]["properties"]["name"][
+        "enum"
+    ] == ["use_tools", "ask_user", "quit"]
 
 
 @pytest.mark.asyncio

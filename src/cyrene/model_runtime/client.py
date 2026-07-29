@@ -274,6 +274,40 @@ def _claim_model_fallback_notice(
     fallback_model: str,
 ) -> bool:
     """Claim one fallback notice per model transition in a runtime round."""
+    return _claim_model_notice(
+        session_id=session_id,
+        round_id=round_id,
+        failed_model=failed_model,
+        notice_kind="fallback",
+        target=fallback_model,
+    )
+
+
+def _claim_model_availability_notice(
+    *,
+    session_id: str,
+    round_id: str,
+    failed_model: str,
+    failure_kind: str,
+) -> bool:
+    """Claim one actionable provider notice per failure kind and runtime round."""
+    return _claim_model_notice(
+        session_id=session_id,
+        round_id=round_id,
+        failed_model=failed_model,
+        notice_kind="availability",
+        target=failure_kind,
+    )
+
+
+def _claim_model_notice(
+    *,
+    session_id: str,
+    round_id: str,
+    failed_model: str,
+    notice_kind: str,
+    target: str,
+) -> bool:
     session = str(session_id or "").strip()
     round_key = str(round_id or "").strip()
     if not session or not round_key:
@@ -285,7 +319,7 @@ def _claim_model_fallback_notice(
         session,
         round_key,
         str(failed_model or "").strip(),
-        str(fallback_model or "").strip(),
+        f"{str(notice_kind or '').strip()}:{str(target or '').strip()}",
     )
     if key in _published_fallback_notices:
         return False
@@ -959,6 +993,7 @@ async def _publish_llm_event(
     response: dict,
     model: str,
     duration_ms: int,
+    provider: str = "",
     session_id: str = "",
     round_id: str = "",
     status: str = "completed",
@@ -970,6 +1005,7 @@ async def _publish_llm_event(
         "caller": caller,
         "phase": phase,
         "model": model,
+        "provider": str(provider or ""),
         "tools": [t.get("function", {}).get("name") for t in (tools or [])],
         "messages": _sanitize_messages_for_llm(messages),
         "context_trace": summarize_context_trace(messages),
@@ -1005,6 +1041,57 @@ async def _publish_model_fallback_event(
             "failedModel": str(failed_model or ""),
             "fallbackModel": str(fallback_model or ""),
         },
+    }
+    if round_id:
+        event["round_id"] = round_id
+    await debug.publish_event(event, session_id=session_id)
+
+
+async def _publish_codex_availability_event(
+    *,
+    session_id: str,
+    round_id: str,
+    model: str,
+    failure_kind: str,
+) -> None:
+    """Surface actionable Codex failures even when another model can recover."""
+    from cyrene.model_runtime.codex_provider import (
+        CODEX_AUTHENTICATION_EXPIRED,
+        CODEX_MODEL_UNAVAILABLE,
+        CODEX_QUOTA_EXHAUSTED,
+    )
+    from cyrene.observability import debug
+
+    detail_by_kind = {
+        CODEX_QUOTA_EXHAUSTED: (
+            "Codex quota is exhausted. Wait for the quota window to reset "
+            "or switch models."
+        ),
+        CODEX_AUTHENTICATION_EXPIRED: (
+            "Codex authentication has expired. Sign in to Codex again."
+        ),
+        CODEX_MODEL_UNAVAILABLE: (
+            "The selected Codex model is unavailable. Choose another Codex model."
+        ),
+    }
+    detail_key_by_kind = {
+        CODEX_QUOTA_EXHAUSTED: "phase.codexQuotaExhausted",
+        CODEX_AUTHENTICATION_EXPIRED: "phase.codexAuthenticationExpired",
+        CODEX_MODEL_UNAVAILABLE: "phase.codexModelUnavailable",
+    }
+    if failure_kind not in detail_by_kind:
+        return
+    event = {
+        "type": "phase_transition",
+        "from": "codex_model",
+        "to": "model_attention",
+        "detail": detail_by_kind[failure_kind],
+        "detail_key": detail_key_by_kind[failure_kind],
+        "detail_params": {"model": str(model or "")},
+        "failed": True,
+        "alert": True,
+        "alert_level": "warning",
+        "failure_kind": failure_kind,
     }
     if round_id:
         event["round_id"] = round_id
@@ -1223,6 +1310,7 @@ async def call_llm(
         for candidate_position, candidate in enumerate(available):
             is_secondary = candidate.get("id") == "secondary"
             max_conc = int(candidate.get("max_concurrency") or 0)
+            provider = str(candidate.get("provider") or "openai_compatible")
 
             # Concurrency guard for secondary model
             if is_secondary and max_conc > 0 and _secondary_in_flight >= max_conc:
@@ -1252,7 +1340,6 @@ async def call_llm(
                 if is_secondary and max_conc > 0:
                     _secondary_in_flight += 1
                 model = str(candidate.get("model") or "").strip()
-                provider = str(candidate.get("provider") or "openai_compatible")
                 payload = _build_payload(messages, tools, max_tokens, stream, model, thinking, response_format)
 
                 headers = {"Content-Type": "application/json"}
@@ -1267,7 +1354,8 @@ async def call_llm(
                     if publish_events:
                         await _publish_llm_event(
                             caller, phase, messages, tools, {}, model, 0,
-                            session_id=session_id, round_id=round_id, status="started",
+                            provider=provider, session_id=session_id,
+                            round_id=round_id, status="started",
                         )
                     try:
                         network_retries = 0
@@ -1287,6 +1375,7 @@ async def call_llm(
                                         "caller": caller,
                                         "phase": phase,
                                         "model": model,
+                                        "provider": provider,
                                     })
 
                             async def _tracked_transport_callback(
@@ -1304,19 +1393,23 @@ async def call_llm(
                             try:
                                 if provider == "codex_oauth":
                                     from cyrene.model_runtime.codex_provider import (
+                                        CODEX_QUOTA_EXHAUSTED,
+                                        CodexAvailabilityError,
                                         get_codex_provider,
                                     )
 
                                     codex = get_codex_provider()
                                     if bool(get_setting("codex_budget_enabled", True)):
                                         if not await codex.quota_available():
-                                            raise RuntimeError(
+                                            raise CodexAvailabilityError(
+                                                CODEX_QUOTA_EXHAUSTED,
                                                 "Codex quota is exhausted; wait for the quota window to reset"
                                             )
                                     msg = await codex.complete(
                                         messages=messages,
                                         tools=tools,
                                         model=model,
+                                        phase=phase,
                                         reasoning_effort=str(
                                             candidate.get("reasoning_effort") or ""
                                         ),
@@ -1530,7 +1623,8 @@ async def call_llm(
                         if publish_events:
                             await _publish_llm_event(
                                 caller, phase, messages, tools, msg, model, duration_ms,
-                                session_id=session_id, round_id=round_id, status="completed",
+                                provider=provider, session_id=session_id,
+                                round_id=round_id, status="completed",
                             )
 
                         if record_usage or success_latency_event is not None:
@@ -1572,11 +1666,36 @@ async def call_llm(
                     continue
 
             except Exception as exc:
+                if provider == "codex_oauth":
+                    from cyrene.model_runtime.codex_provider import (
+                        codex_availability_error,
+                    )
+
+                    normalized_error = codex_availability_error(exc)
+                    if normalized_error is not None:
+                        exc = normalized_error
                 last_error = exc
                 _set_candidate_cooldown(_candidate_key(candidate, session_id))
                 failed_this_call.append(f"{_candidate_label(candidate)}: {exc.__class__.__name__}: {exc}")
                 if int(candidate.get("_configured_rank") or 0) == 0:
                     failed_primary_model = str(candidate.get("model") or "")
+                failure_kind = str(getattr(exc, "kind", "") or "")
+                if (
+                    provider == "codex_oauth"
+                    and failure_kind
+                    and _claim_model_availability_notice(
+                        session_id=session_id,
+                        round_id=round_id,
+                        failed_model=str(candidate.get("model") or ""),
+                        failure_kind=failure_kind,
+                    )
+                ):
+                    await _publish_codex_availability_event(
+                        session_id=session_id,
+                        round_id=round_id,
+                        model=str(candidate.get("model") or ""),
+                        failure_kind=failure_kind,
+                    )
                 if model_type == "vision" and _looks_like_vision_capability_error(exc):
                     continue
                 continue

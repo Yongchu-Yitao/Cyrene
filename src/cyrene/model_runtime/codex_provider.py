@@ -12,12 +12,16 @@ import json
 import logging
 import os
 import time
+import uuid
 from typing import Any, Awaitable, Callable
 
 from openai_codex import CodexConfig
 from openai_codex.async_client import AsyncCodexClient
 from openai_codex.generated.v2_all import GetAccountRateLimitsResponse
 from pydantic import BaseModel
+
+from cyrene.tooling.results import ToolProtocolError
+from cyrene.tooling.validation import validate_schema
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +36,25 @@ _TRANSPORT_ERROR_KEYS = frozenset(
         "responseTooManyFailedAttempts",
     }
 )
+CODEX_QUOTA_EXHAUSTED = "quota_exhausted"
+CODEX_AUTHENTICATION_EXPIRED = "authentication_expired"
+CODEX_MODEL_UNAVAILABLE = "model_unavailable"
 
 
 class CodexTransportError(RuntimeError):
     """A Codex upstream transport failed before a usable model response."""
+
+
+class CodexProtocolError(RuntimeError):
+    """Codex returned an invalid Cyrene action envelope."""
+
+
+class CodexAvailabilityError(RuntimeError):
+    """A user-actionable Codex availability failure."""
+
+    def __init__(self, kind: str, message: str) -> None:
+        super().__init__(message)
+        self.kind = str(kind or "")
 
 
 def _model_dump(value: Any) -> dict[str, Any]:
@@ -64,6 +83,123 @@ def _transport_error_kind(error: dict[str, Any]) -> str:
     if not isinstance(info, dict):
         return ""
     return next((key for key in _TRANSPORT_ERROR_KEYS if key in info), "")
+
+
+def _codex_error_info(error: dict[str, Any]) -> Any:
+    return (
+        error.get("codexErrorInfo")
+        if "codexErrorInfo" in error
+        else error.get("codex_error_info")
+    )
+
+
+def _codex_http_status(info: Any) -> int | None:
+    if not isinstance(info, dict):
+        return None
+    for value in info.values():
+        if not isinstance(value, dict):
+            continue
+        status = value.get("httpStatusCode")
+        if status is None:
+            status = value.get("http_status_code")
+        try:
+            return int(status) if status is not None else None
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def codex_availability_error(
+    error_or_exception: dict[str, Any] | BaseException,
+    *,
+    message: str = "",
+) -> CodexAvailabilityError | None:
+    """Normalize the SDK's structured and legacy textual availability errors."""
+    if isinstance(error_or_exception, CodexAvailabilityError):
+        return error_or_exception
+
+    if isinstance(error_or_exception, dict):
+        error = error_or_exception
+    else:
+        raw_data = getattr(error_or_exception, "data", None)
+        error = raw_data if isinstance(raw_data, dict) else {}
+        if not message:
+            message = str(
+                getattr(error_or_exception, "message", "")
+                or error_or_exception
+            )
+
+    info = _codex_error_info(error)
+    normalized_info = str(info or "").strip().lower()
+    detail = str(message or error.get("message") or "").strip()
+    lowered = detail.lower()
+    status = _codex_http_status(info)
+
+    if normalized_info in {
+        "usagelimitexceeded",
+        "sessionbudgetexceeded",
+    } or any(
+        token in lowered
+        for token in (
+            "usage limit",
+            "quota exceeded",
+            "quota exhausted",
+            "insufficient_quota",
+            "rate limit reached",
+            "credits depleted",
+            "credit balance",
+            "no credit",
+        )
+    ):
+        return CodexAvailabilityError(
+            CODEX_QUOTA_EXHAUSTED,
+            detail or "Codex quota is exhausted",
+        )
+
+    if normalized_info == "unauthorized" or status in {401, 403} or any(
+        token in lowered
+        for token in (
+            "unauthorized",
+            "authentication expired",
+            "token expired",
+            "refresh token",
+            "please log in",
+            "login required",
+            "not logged in",
+        )
+    ):
+        return CodexAvailabilityError(
+            CODEX_AUTHENTICATION_EXPIRED,
+            detail or "Codex authentication has expired",
+        )
+
+    model_error = (
+        status == 404
+        or "model_not_found" in lowered
+        or "unsupported model" in lowered
+        or "unknown model" in lowered
+        or "invalid model" in lowered
+        or (
+            "model" in lowered
+            and any(
+                token in lowered
+                for token in (
+                    "not found",
+                    "not available",
+                    "unavailable",
+                    "no longer available",
+                    "does not exist",
+                    "is not supported",
+                )
+            )
+        )
+    )
+    if model_error:
+        return CodexAvailabilityError(
+            CODEX_MODEL_UNAVAILABLE,
+            detail or "The selected Codex model is unavailable",
+        )
+    return None
 
 
 def _first_signal_timeout(request_timeout: float) -> float:
@@ -348,19 +484,25 @@ class CodexAppServer:
         tools: list[dict[str, Any]] | None,
         model: str,
         timeout: float,
+        phase: str = "",
         reasoning_effort: str = "",
         stream_callback: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         transport_callback: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
         """Run one provider turn without exposing Codex's own host tools.
 
-        Cyrene's tool loop remains authoritative. Tool schemas are described in
-        the base instructions and Codex is asked to emit the existing DSML
-        envelope, which the normal model-runtime parser converts back to
-        OpenAI-style tool calls.
+        Cyrene's tool loop remains authoritative. When tools are available,
+        Codex returns a schema-constrained action envelope which this adapter
+        converts to the same OpenAI-style tool calls used by other providers.
         """
         client = await self._ready_client()
-        instructions = _provider_instructions(messages, tools)
+        action_tools = _provider_action_tools(tools, phase=phase)
+        action_schema = _provider_action_schema(action_tools)
+        instructions = _provider_instructions(
+            messages,
+            action_tools,
+            structured_actions=action_schema is not None,
+        )
         effort = _normalized_effort(reasoning_effort)
         thread_result = await asyncio.wait_for(
             client.thread_start(
@@ -369,7 +511,8 @@ class CodexAppServer:
                     "baseInstructions": instructions,
                     "developerInstructions": (
                         "Act only as Cyrene's language-model backend. "
-                        "Do not inspect files, run commands, browse, or call built-in tools."
+                        "Never invoke Codex-hosted tools. Request Cyrene actions "
+                        "through the required structured response instead."
                     ),
                     "ephemeral": True,
                     "approvalPolicy": "never",
@@ -479,6 +622,8 @@ class CodexAppServer:
             }
             if effort:
                 turn_params["effort"] = effort
+            if action_schema is not None:
+                turn_params["outputSchema"] = action_schema
             logger.info(
                 "Starting Codex turn [model=%s effort=%s proxy=system]",
                 model,
@@ -503,7 +648,7 @@ class CodexAppServer:
             usage: dict[str, Any] = {}
             reasoning_started = False
             upstream_signal_seen = False
-            if stream_callback:
+            if stream_callback and action_schema is None:
                 await stream_callback({"type": "reply_start"})
             loop = asyncio.get_running_loop()
             deadline = loop.time() + timeout
@@ -566,7 +711,7 @@ class CodexAppServer:
                             upstream_signal_seen = True
                             await emit_transport("connected")
                         text_parts.append(delta)
-                        if stream_callback:
+                        if stream_callback and action_schema is None:
                             await stream_callback(
                                 {"type": "reply_delta", "delta": delta}
                             )
@@ -589,6 +734,10 @@ class CodexAppServer:
                     error = error if isinstance(error, dict) else {}
                     message = str(error.get("message") or "Codex provider error")
                     will_retry = bool(params.get("willRetry"))
+                    availability_error = codex_availability_error(
+                        error,
+                        message=message,
+                    )
                     kind = _transport_error_kind(error)
                     logger.warning(
                         "Codex upstream error [kind=%s will_retry=%s model=%s effort=%s]: %s",
@@ -604,6 +753,8 @@ class CodexAppServer:
                         kind=kind,
                         will_retry=will_retry,
                     )
+                    if availability_error is not None and not will_retry:
+                        raise availability_error
                     if kind:
                         # Cyrene owns cross-provider fallback. Do not also pay
                         # Codex's internal multi-retry budget for a broken
@@ -632,9 +783,16 @@ class CodexAppServer:
                         continue
                     if completed_turn.get("status") == "failed":
                         error = completed_turn.get("error") or {}
-                        raise RuntimeError(
-                            str(error.get("message") or "Codex model request failed")
+                        message = str(
+                            error.get("message") or "Codex model request failed"
                         )
+                        availability_error = codex_availability_error(
+                            error,
+                            message=message,
+                        )
+                        if availability_error is not None:
+                            raise availability_error
+                        raise RuntimeError(message)
                     if not upstream_signal_seen:
                         upstream_signal_seen = True
                         await emit_transport("connected")
@@ -648,6 +806,17 @@ class CodexAppServer:
 
             content = final_text or "".join(text_parts)
             reasoning_content = "".join(reasoning_parts)
+            response = {
+                "role": "assistant",
+                "content": content,
+                "usage": usage,
+            }
+            if action_schema is not None:
+                response = _normalize_provider_action(
+                    content,
+                    action_tools,
+                    usage=usage,
+                )
             if reasoning_started and stream_callback:
                 await stream_callback(
                     {
@@ -655,13 +824,21 @@ class CodexAppServer:
                         "response": reasoning_content,
                     }
                 )
-            if stream_callback:
+            if stream_callback and action_schema is None:
                 await stream_callback({"type": "reply_done", "response": content})
-            response = {
-                "role": "assistant",
-                "content": content,
-                "usage": usage,
-            }
+            elif (
+                stream_callback
+                and not response.get("tool_calls")
+                and str(response.get("content") or "")
+            ):
+                visible_content = str(response["content"])
+                await stream_callback({"type": "reply_start"})
+                await stream_callback(
+                    {"type": "reply_delta", "delta": visible_content}
+                )
+                await stream_callback(
+                    {"type": "reply_done", "response": visible_content}
+                )
             if reasoning_content:
                 response["reasoning_content"] = reasoning_content
             return response
@@ -691,7 +868,10 @@ class CodexAppServer:
 
 
 def _provider_instructions(
-    messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    *,
+    structured_actions: bool = False,
 ) -> str:
     system_parts = [
         str(message.get("content") or "")
@@ -699,23 +879,164 @@ def _provider_instructions(
         if message.get("role") in {"system", "developer"}
     ]
     tool_contract = ""
-    if tools:
+    if tools and structured_actions:
         tool_contract = (
-            "\nAvailable Cyrene tools are listed below. Never execute them yourself. "
-            "When a tool is needed, output only this DSML envelope and stop:\n"
-            "<||DSML||tool_calls><||DSML||invoke name=\"TOOL_NAME\">"
-            "<||DSML||parameter name=\"ARG_NAME\">JSON_VALUE"
-            "</||DSML||parameter></||DSML||invoke></||DSML||tool_calls>\n"
+            "\nCyrene tools are application actions. Never claim that an action "
+            "ran before Cyrene returns its tool result. Your response is constrained "
+            "to an object with `content` and one or more `tool_calls`. For each call, "
+            "set `name` to an available tool and set `arguments_json` to a JSON-object "
+            "string matching that tool's parameters. For a final answer, put the "
+            "complete answer in `content` and call `quit` when it is available. "
+            "For non-terminal actions, keep `content` empty. Do not wrap the object "
+            "in Markdown or add any text outside the constrained object.\n"
             "Tool schemas:\n"
             + json.dumps(tools, ensure_ascii=False, default=str)
         )
     return (
         "You are the model backend for Cyrene. Follow the supplied conversation "
-        "and return the next assistant message. Do not use Codex built-in tools, "
-        "the filesystem, shell, browser, network tools, or subagents."
+        "and return the next assistant message. Do not invoke Codex built-in tools; "
+        "request actions from Cyrene instead."
         + ("\nSystem instructions:\n" + "\n\n".join(system_parts) if system_parts else "")
         + tool_contract
     )
+
+
+def _provider_action_tools(
+    tools: list[dict[str, Any]] | None,
+    *,
+    phase: str = "",
+) -> list[dict[str, Any]]:
+    normalized = [tool for tool in (tools or []) if isinstance(tool, dict)]
+    if str(phase or "").strip().lower() != "phase1":
+        return normalized
+    control_names = {"use_tools", "ask_user", "quit"}
+    return [
+        tool
+        for tool in normalized
+        if str((tool.get("function") or {}).get("name") or "").strip()
+        in control_names
+    ]
+
+
+def _provider_action_schema(
+    tools: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    names = [
+        str((tool.get("function") or {}).get("name") or "").strip()
+        for tool in (tools or [])
+        if str((tool.get("function") or {}).get("name") or "").strip()
+    ]
+    if not names:
+        return None
+    return {
+        "type": "object",
+        "properties": {
+            "content": {"type": "string"},
+            "tool_calls": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "enum": names,
+                        },
+                        "arguments_json": {"type": "string"},
+                    },
+                    "required": ["name", "arguments_json"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["content", "tool_calls"],
+        "additionalProperties": False,
+    }
+
+
+def _normalize_provider_action(
+    content: str,
+    tools: list[dict[str, Any]],
+    *,
+    usage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        payload = json.loads(str(content or ""))
+    except (TypeError, ValueError) as exc:
+        raise CodexProtocolError(
+            "Codex returned invalid structured action JSON"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise CodexProtocolError("Codex action envelope must be an object")
+
+    allowed_names = {
+        str((tool.get("function") or {}).get("name") or "").strip()
+        for tool in tools
+        if str((tool.get("function") or {}).get("name") or "").strip()
+    }
+    parameter_schemas = {
+        str((tool.get("function") or {}).get("name") or "").strip(): (
+            (tool.get("function") or {}).get("parameters") or {}
+        )
+        for tool in tools
+        if str((tool.get("function") or {}).get("name") or "").strip()
+    }
+    raw_calls = payload.get("tool_calls")
+    if not isinstance(raw_calls, list) or not raw_calls:
+        raise CodexProtocolError(
+            "Codex action envelope must contain at least one tool call"
+        )
+
+    tool_calls: list[dict[str, Any]] = []
+    for raw_call in raw_calls:
+        if not isinstance(raw_call, dict):
+            raise CodexProtocolError("Codex tool call must be an object")
+        name = str(raw_call.get("name") or "").strip()
+        if name not in allowed_names:
+            raise CodexProtocolError(f"Codex requested unavailable tool: {name}")
+        arguments_text = str(raw_call.get("arguments_json") or "").strip()
+        try:
+            arguments = json.loads(arguments_text or "{}")
+        except (TypeError, ValueError) as exc:
+            raise CodexProtocolError(
+                f"Codex returned invalid arguments for tool: {name}"
+            ) from exc
+        if not isinstance(arguments, dict):
+            raise CodexProtocolError(
+                f"Codex arguments for {name} must be a JSON object"
+            )
+        try:
+            validate_schema(arguments, parameter_schemas.get(name) or {})
+        except ToolProtocolError as exc:
+            raise CodexProtocolError(
+                f"Codex returned invalid arguments for tool {name}: {exc}"
+            ) from exc
+        tool_calls.append(
+            {
+                "index": len(tool_calls),
+                "id": f"call_codex_{uuid.uuid4().hex[:16]}",
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(arguments, ensure_ascii=False),
+                },
+            }
+        )
+
+    visible_content = str(payload.get("content") or "")
+    if not any(
+        str(call["function"]["name"]) == "quit" for call in tool_calls
+    ):
+        # Text accompanying a non-terminal action is untrusted model narration:
+        # the harness has not executed anything yet, so never surface it.
+        visible_content = ""
+    return {
+        "role": "assistant",
+        "content": visible_content,
+        "tool_calls": tool_calls,
+        "usage": dict(usage or {}),
+    }
 
 
 def _provider_input(messages: list[dict[str, Any]]) -> str:

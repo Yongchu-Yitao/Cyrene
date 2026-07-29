@@ -501,6 +501,105 @@ async def test_primary_failure_publishes_fallback_ui_event(monkeypatch):
     }]
 
 
+async def test_codex_quota_failure_publishes_actionable_notice_before_fallback(
+    monkeypatch,
+):
+    availability_notices = []
+
+    class FakeCodex:
+        async def quota_available(self):
+            return False
+
+        async def close(self):
+            return None
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {"message": {"role": "assistant", "content": "backup"}}
+                ],
+                "usage": {},
+            }
+
+    class FakeClient:
+        async def post(self, _endpoint, json=None, headers=None):
+            return FakeResponse()
+
+    async def capture(**kwargs):
+        availability_notices.append(kwargs)
+
+    import cyrene.model_runtime.codex_provider as codex_provider
+
+    monkeypatch.setattr(codex_provider, "get_codex_provider", lambda: FakeCodex())
+    monkeypatch.setattr(cl, "_get_http_client", lambda _timeout: (FakeClient(), "test", True))
+    monkeypatch.setattr(cl, "_publish_codex_availability_event", capture)
+    candidates = [
+        {
+            "id": "codex",
+            "model": "gpt-5.6-sol",
+            "provider": "codex_oauth",
+            "base_url": "codex://oauth",
+            "api_key": "",
+            "endpoints": ["codex://oauth"],
+        },
+        {
+            "id": "backup",
+            "model": "backup",
+            "provider": "openai_compatible",
+            "base_url": "https://backup/v1",
+            "api_key": "",
+            "endpoints": ["https://backup/v1/chat/completions"],
+        },
+    ]
+
+    result = await cl.call_llm(
+        [{"role": "user", "content": "hi"}],
+        candidates=candidates,
+        publish_events=False,
+        record_usage=False,
+        session_id="chat_codex",
+        round_id="round_codex",
+    )
+
+    assert result["content"] == "backup"
+    assert availability_notices == [
+        {
+            "session_id": "chat_codex",
+            "round_id": "round_codex",
+            "model": "gpt-5.6-sol",
+            "failure_kind": "quota_exhausted",
+        }
+    ]
+
+
+async def test_llm_event_identifies_codex_provider(monkeypatch):
+    published = []
+
+    from cyrene.observability import debug
+
+    async def capture(event, **kwargs):
+        published.append((event, kwargs))
+
+    monkeypatch.setattr(debug, "publish_event", capture)
+
+    await cl._publish_llm_event(
+        "main_agent",
+        "phase1",
+        [{"role": "user", "content": "hi"}],
+        None,
+        {},
+        "gpt-5.6-sol",
+        0,
+        provider="codex_oauth",
+        session_id="chat_codex",
+    )
+
+    assert published[0][0]["provider"] == "codex_oauth"
+
+
 async def test_fallback_ui_event_is_deduplicated_across_calls_in_same_round(monkeypatch):
     published = []
 

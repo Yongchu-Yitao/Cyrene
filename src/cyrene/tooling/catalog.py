@@ -523,6 +523,40 @@ def get_capability_by_concrete_name(
     )
 
 
+def search_capability_items(
+    items: list[Any],
+    *,
+    query: str = "",
+    limit: int = 20,
+) -> list[Any]:
+    """Rank a pack-scoped capability list without making verbose queries empty."""
+    bounded_limit = max(1, min(int(limit or 20), 50))
+    terms = list(dict.fromkeys(
+        term.casefold()
+        for term in re.findall(r"[\w.-]+", str(query or ""), flags=re.UNICODE)
+        if term
+    ))
+    if not terms:
+        return list(items[:bounded_limit])
+
+    ranked: list[tuple[int, int, Any]] = []
+    for index, item in enumerate(items):
+        capability_id = str(getattr(item, "capability_id", "") or "")
+        concrete_name = str(getattr(item, "concrete_name", "") or "")
+        description = str(getattr(item, "description", "") or "")
+        identity = f"{capability_id} {concrete_name}".casefold()
+        haystack = f"{identity} {description}".casefold()
+        matched = sum(1 for term in terms if term in haystack)
+        identity_matches = sum(1 for term in terms if term in identity)
+        # Identity hits are more discriminating than prose hits. Keep the
+        # declaration order as the final tie-breaker so results stay stable.
+        ranked.append((matched + identity_matches * 2, index, item))
+
+    if any(score > 0 for score, _index, _item in ranked):
+        ranked.sort(key=lambda row: (-row[0], row[1]))
+    return [item for _score, _index, item in ranked[:bounded_limit]]
+
+
 def discover_capabilities(
     wire_name: str,
     *,
@@ -530,25 +564,9 @@ def discover_capabilities(
     query: str = "",
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    terms = [term.casefold() for term in str(query or "").split() if term]
     items = capabilities_for_pack(wire_name, actor=actor)
-    if terms:
-        items = [
-            capability
-            for capability in items
-            if all(
-                term in (
-                    capability.capability_id
-                    + " "
-                    + capability.description
-                    + " "
-                    + capability.concrete_name
-                ).casefold()
-                for term in terms
-            )
-        ]
-    bounded_limit = max(1, min(int(limit or 20), 50))
-    return [capability.summary() for capability in items[:bounded_limit]]
+    matches = search_capability_items(items, query=query, limit=limit)
+    return [capability.summary() for capability in matches]
 
 
 def describe_capabilities(

@@ -317,6 +317,42 @@ async def test_gateway_discover_describe_invoke_routes_to_concrete_handler(monke
 
 
 @pytest.mark.asyncio
+async def test_gateway_discovery_ranks_verbose_browser_intent_without_empty_result():
+    from cyrene.tooling import execute_wire_tool
+
+    discovered = json.loads(await execute_wire_tool(
+        "browser_tools",
+        {
+            "operation": "discover",
+            "query": "in-app browser open navigate Bilibili bilibili.com",
+        },
+        None, 0, "", None,
+    ))
+
+    assert discovered["status"] == "success"
+    assert discovered["capabilities"]
+    assert discovered["capabilities"][0]["id"] == "browser.navigate"
+
+
+@pytest.mark.asyncio
+async def test_gateway_discovery_falls_back_to_pack_catalog_for_unknown_terms():
+    from cyrene.tooling import execute_wire_tool
+
+    discovered = json.loads(await execute_wire_tool(
+        "browser_tools",
+        {
+            "operation": "discover",
+            "query": "B站",
+            "limit": 3,
+        },
+        None, 0, "", None,
+    ))
+
+    assert len(discovered["capabilities"]) == 3
+    assert discovered["capabilities"][0]["id"] == "browser.navigate"
+
+
+@pytest.mark.asyncio
 async def test_gateway_repairs_nested_invoke_capability_id(monkeypatch):
     from cyrene.tooling import execute_wire_tool
     from cyrene.tooling import executor as tool_executor
