@@ -2181,6 +2181,7 @@ async def test_send_message_tool_from_scheduler_persists_system_message(monkeypa
 async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch):
     from datetime import datetime, timedelta, timezone
     from cyrene.tool_impl.task import schedule_task as tools
+    from cyrene.runtime import schedule_spec
 
     seen = {}
     local_timezone = timezone(timedelta(hours=8))
@@ -2205,6 +2206,7 @@ async def test_schedule_task_once_normalizes_naive_local_time_to_utc(monkeypatch
 
     monkeypatch.setattr(tools.db, "create_task", fake_create_task)
     monkeypatch.setattr(tools, "datetime", _FakeLocalNow)
+    monkeypatch.setattr(schedule_spec, "_local_tzinfo", lambda: local_timezone)
 
     result = await tools._tool_schedule_task(
         {

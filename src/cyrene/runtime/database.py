@@ -9,6 +9,7 @@ import re
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import aiosqlite
 
@@ -660,7 +661,9 @@ async def init_knowledge_db(db_path: str) -> None:
     Used for per-workspace knowledge base databases (kb_<workspace_id>.db).
     Safe to call multiple times — uses IF NOT EXISTS.
     """
-    async with aiosqlite.connect(db_path) as db:
+    path = Path(db_path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    async with aiosqlite.connect(str(path)) as db:
         await db.executescript(KB_TABLES_SQL)
         await db.execute(KB_FTS_SQL)
         await db.execute(LIBRARY_FTS_SQL)

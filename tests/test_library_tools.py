@@ -7,6 +7,17 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
+@pytest.mark.asyncio
+async def test_init_knowledge_db_creates_missing_parent_directory(tmp_path):
+    from cyrene.runtime import database as db
+
+    db_path = tmp_path / "fresh-profile" / "store" / "knowledge.db"
+
+    await db.init_knowledge_db(str(db_path))
+
+    assert db_path.is_file()
+
+
 @pytest.fixture
 async def library_db(tmp_path, monkeypatch):
     from cyrene.runtime import database as db

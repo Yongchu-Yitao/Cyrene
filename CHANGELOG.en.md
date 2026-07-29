@@ -54,6 +54,10 @@ OAuth tokens, and Codex quota is presented separately from currency budgets.
 - **Small Workbench layouts are steadier** — clicking an already visible work
   tab no longer reshuffles the topbar, and compact Memory tabs plus long-content
   alignment are improved.
+- **A fresh install can open Knowledge immediately** — startup creates the
+  required knowledge-data directories automatically, so chats, tasks, and
+  Knowledge initialization no longer depend on files left by an earlier Cyrene
+  run.
 
 ### Detailed changes and compatibility notes
 
@@ -288,9 +292,10 @@ OAuth tokens, and Codex quota is presented separately from currency budgets.
   before contract tests, while CLI help, temporary knowledge databases, and
   local-time tests no longer depend on a developer machine's existing setup,
   data directories, or timezone. Strict thread-warning mode is stable.
-- **The complete local suite passes** — all `1,605` pytest tests pass in the
-  project `.venv`; the beta7 frontend production build, OpenAPI contract,
-  focused Codex/Workbench regressions, and `git diff --check` also pass.
+- **The complete local suite passes** — all `1,606` pytest tests pass in the
+  project `.venv` with no pre-existing Cyrene data directories; the beta7
+  frontend production build, OpenAPI contract, focused Codex/Workbench
+  regressions, and `git diff --check` also pass.
 - **Every version surface moves to beta7** — Python package/`uv.lock` use
   `0.7.0b7`; Electron package/lock use `0.7.0-beta.7`; README badges, docs
   sidebar, WeChat header, Workbench/PDF cache keys, and version-contract tests

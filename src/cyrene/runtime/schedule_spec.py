@@ -23,6 +23,11 @@ from croniter import croniter
 SCHEDULE_TYPES = ("cron", "interval", "once")
 
 
+def _local_tzinfo():
+    """Return the machine timezone used to interpret naive user input."""
+    return datetime.now().astimezone().tzinfo or timezone.utc
+
+
 def normalize_datetime(raw_value: str) -> str:
     """Normalize a user-facing datetime string to UTC ISO-8601.
 
@@ -31,8 +36,7 @@ def normalize_datetime(raw_value: str) -> str:
     """
     parsed = datetime.fromisoformat(raw_value)
     if parsed.tzinfo is None:
-        local_tz = datetime.now().astimezone().tzinfo or timezone.utc
-        parsed = parsed.replace(tzinfo=local_tz)
+        parsed = parsed.replace(tzinfo=_local_tzinfo())
     return parsed.astimezone(timezone.utc).isoformat()
 
 
