@@ -40,8 +40,8 @@ from cyrene.agent.prompts import (
 from cyrene.agent.session import (
     _expand_report_reference_history,
     _load_session_messages,
-    _schedule_session_label_refresh,
     _save_session_messages,
+    _schedule_session_label_refresh,  # noqa: F401 - compatibility no-op
     get_session_labels,
 )
 from cyrene.agent.state import (
@@ -672,8 +672,6 @@ async def _run_chat_agent(
                 _ensure_message_identity([assistant_entry])
                 await _save_session_messages([*visible_history, user_entry, assistant_entry])
 
-                if refresh_labels:
-                    _schedule_session_label_refresh(visible_command_text, round_id)
                 final_output = main_text
                 await _publish_runtime_event({
                     "type": "chat_message",
@@ -694,8 +692,6 @@ async def _run_chat_agent(
                         logger.warning("Failed to finalize behavior-learning turn", exc_info=True)
                 return final_output
 
-            if refresh_labels:
-                _schedule_session_label_refresh(visible_command_text, round_id)
             focus_text = str(user_message or "").strip()
             if any("\u4e00" <= ch <= "\u9fff" for ch in visible_command_text):
                 user_message = (
@@ -967,8 +963,6 @@ async def _run_chat_agent(
             ephemeral_system=effective_volatile_ephemeral,
         )
 
-        if refresh_labels:
-            _schedule_session_label_refresh(user_message, round_id)
         if main_text == _AWAITING_USER_SENTINEL:
             return main_text
         if main_text:

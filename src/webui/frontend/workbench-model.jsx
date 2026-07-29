@@ -93,6 +93,52 @@ function wbIsPermissionQuestionKind(kind) {
       });
   }
 
+  var CODEX_QUOTA_CACHE_KEY = "cyrene-codex-quota-v1";
+
+  function readCodexQuotaCache() {
+    try {
+      var cached = JSON.parse(localStorage.getItem(CODEX_QUOTA_CACHE_KEY) || "null");
+      return cached && cached.payload && typeof cached.payload === "object"
+        ? cached.payload
+        : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writeCodexQuotaCache(payload) {
+    try {
+      if (!payload || payload.connected !== true) {
+        localStorage.removeItem(CODEX_QUOTA_CACHE_KEY);
+        return;
+      }
+      localStorage.setItem(CODEX_QUOTA_CACHE_KEY, JSON.stringify({
+        savedAt: Date.now(),
+        payload: {
+          available: payload.available !== false,
+          connected: true,
+          account: payload.account || null,
+          limits: payload.limits || {},
+          quota_enabled: payload.quota_enabled !== false,
+        },
+      }));
+    } catch (error) {}
+  }
+
+  function codexPlanLabel(account, limits) {
+    var planType = String(account && (account.planType || account.plan_type) || "").trim();
+    if (!planType) {
+      var buckets = codexLimitBuckets(limits);
+      var bucket = buckets.find(function (item) { return item.id === "codex"; }) || buckets[0];
+      planType = String(bucket && (bucket.planType || bucket.plan_type) || "").trim();
+    }
+    var normalized = planType.toLowerCase().replace(/[\s_-]+/g, "");
+    if (normalized === "plus") return "plus";
+    if (normalized === "prolite") return "pro 5x";
+    if (normalized === "pro") return "pro 20x";
+    return planType ? planType.toLowerCase() : "";
+  }
+
   function normalizeStore(payload) {
     var store = payload && typeof payload === "object" ? payload : {};
     var projects = Array.isArray(store.projects) ? store.projects : [];
@@ -940,6 +986,9 @@ function wbIsPermissionQuestionKind(kind) {
     codexLimitBuckets: codexLimitBuckets,
     codexWindowLabel: codexWindowLabel,
     codexQuotaWindows: codexQuotaWindows,
+    codexPlanLabel: codexPlanLabel,
+    readCodexQuotaCache: readCodexQuotaCache,
+    writeCodexQuotaCache: writeCodexQuotaCache,
   };
 
   window.CyreneUI.model = window.CyreneUI.register("model", service);

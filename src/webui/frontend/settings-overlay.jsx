@@ -1598,20 +1598,22 @@ function ModelsPanel(p) {
     var targetModel = selectedModel || codexModel;
     var targetEffort = selectedEffort != null ? selectedEffort : codexEffort;
     if (!targetModel) return;
-    var candidate = normalizeModel({
-      id: "codex-" + targetModel,
-      model: targetModel,
-      desc: "OpenAI OAuth",
-      price: t("settings.codexQuota"),
-      provider: "codex_oauth",
-      reasoning_effort: targetEffort,
-      api_key: "",
-      base_url: "codex://oauth",
-    }, models.length, "", "");
-    var rest = models.filter(function (m) {
-      return m.provider !== "codex_oauth";
+    setModels(function (currentModels) {
+      var candidate = normalizeModel({
+        id: "codex-" + targetModel,
+        model: targetModel,
+        desc: "OpenAI OAuth",
+        price: t("settings.codexQuota"),
+        provider: "codex_oauth",
+        reasoning_effort: targetEffort,
+        api_key: "",
+        base_url: "codex://oauth",
+      }, currentModels.length, "", "");
+      var rest = currentModels.filter(function (m) {
+        return m.provider !== "codex_oauth";
+      });
+      return [candidate].concat(rest);
     });
-    setModels([candidate].concat(rest));
     setCodexNotice(t("settings.openaiOAuthPrimaryReady"));
   }
 
@@ -1756,11 +1758,7 @@ function ModelsPanel(p) {
                 onChange: function (e) {
                   var value = e.target.value;
                   setCodexEffort(value);
-                  setModels(models.map(function (model, index) {
-                    return index === 0 && model.provider === "codex_oauth"
-                      ? { ...model, reasoning_effort: value }
-                      : model;
-                  }));
+                  setCodexPrimaryCandidate(codexModel, value);
                 },
               }, ((codexState.models || []).find(function (item) { return codexModelId(item) === codexModel; }) || {}).supportedReasoningEfforts?.map(function (option) {
                 var effort = String(option.reasoningEffort || option.reasoning_effort || "");
@@ -3586,8 +3584,10 @@ function BudgetPanel(p) {
   var [budgetMode, setBudgetMode] = useStateSt(config.budget_mode || "normal");
   var [budgetStartDay, setBudgetStartDay] = useStateSt(String(config.budget_start_day != null ? config.budget_start_day : 1));
   var [budgetSaved, setBudgetSaved] = useStateSt("");
+  var codexQuotaModel = window.CyreneUI.require("model");
+  var cachedCodexQuota = codexQuotaModel.readCodexQuotaCache();
   var [codexQuotaEnabled, setCodexQuotaEnabled] = useStateSt(config.codex_budget_enabled !== false);
-  var [codexQuota, setCodexQuota] = useStateSt({ connected: false, limits: {} });
+  var [codexQuota, setCodexQuota] = useStateSt(cachedCodexQuota || { connected: false, limits: {} });
 
   var BUDGET_KEY = "cyrene-budget";
 
@@ -3651,6 +3651,7 @@ function BudgetPanel(p) {
       .then(readSettingsResponse)
       .then(function (data) {
         setCodexQuota(data);
+        codexQuotaModel.writeCodexQuotaCache(data);
         setCodexQuotaEnabled(data.quota_enabled !== false);
       })
       .catch(function () {});
@@ -3696,7 +3697,9 @@ function BudgetPanel(p) {
   var budgetNum = Number(budgetMonthly) || 0;
   var budgetRatio = budgetNum > 0 ? Math.min(totalCost / budgetNum, 1) : 0;
   var currencySymbol = budgetCurrency === "CNY" ? "¥" : "$";
-  var codexWindows = window.CyreneUI.require("model").codexQuotaWindows(
+  var codexWindows = codexQuotaModel.codexQuotaWindows(codexQuota.limits);
+  var codexPlan = codexQuotaModel.codexPlanLabel(
+    codexQuota.account,
     codexQuota.limits
   );
 
@@ -3724,7 +3727,7 @@ function BudgetPanel(p) {
       codexWindows.length > 0 && React.createElement("div", { className: "wb-codex-quota" },
           React.createElement("div", { className: "wb-codex-quota-head" },
             React.createElement("strong", null, "Codex"),
-            React.createElement("span", null, t("settings.codexQuotaIndependent")),
+            React.createElement("span", null, t("settings.codexQuotaPlan", { plan: codexPlan || "—" })),
           ),
           codexWindows.map(function (windowData) {
             var used = windowData.usedPercent;

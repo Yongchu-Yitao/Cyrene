@@ -1006,13 +1006,11 @@ async def test_run_chat_agent_keeps_global_short_term_out_of_workbench_sessions(
     assert "stable trait" in seen["system_prompt"]
 
 
-async def test_run_chat_agent_schedules_session_label_refresh_without_blocking_reply(monkeypatch, tmp_path):
+async def test_run_chat_agent_does_not_schedule_hidden_session_naming(monkeypatch, tmp_path):
     from cyrene import agent
     from cyrene.learning import engine as behavior_learning
     from cyrene.agent import agent as _agent_core
-    from cyrene.agent import coordinator as _agent_coordinator
-
-    scheduled: list[tuple[str, str]] = []
+    from cyrene.agent import session as _agent_session
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
     _patch_data_dir(monkeypatch, tmp_path)
@@ -1022,15 +1020,14 @@ async def test_run_chat_agent_schedules_session_label_refresh_without_blocking_r
         return "ok"
 
     monkeypatch.setattr(_agent_core, "_run_main_agent", fake_run_main_agent)
-    monkeypatch.setattr(_agent_coordinator, "_schedule_session_label_refresh", lambda message, round_id: scheduled.append((message, round_id)))
+    hidden_namer = AsyncMock()
+    monkeypatch.setattr(_agent_session, "_refresh_session_labels", hidden_namer)
     monkeypatch.setattr(behavior_learning, "begin_turn", AsyncMock(return_value=None))
 
     result = await asyncio.wait_for(agent._run_chat_agent("hello", None, 0, "db.sqlite3"), timeout=0.1)
 
     assert result == "ok"
-    assert len(scheduled) == 1
-    assert scheduled[0][0] == "hello"
-    assert scheduled[0][1].startswith("round_")
+    hidden_namer.assert_not_awaited()
 
 
 async def test_call_llm_falls_back_to_next_model_candidate(monkeypatch):
@@ -5571,7 +5568,7 @@ async def test_run_main_agent_retries_invalid_phase1_tool_and_returns_model_expl
     assert saved
 
 
-async def test_refresh_session_labels_persists_titles(monkeypatch, tmp_path):
+async def test_refresh_session_labels_is_a_compatibility_noop(monkeypatch, tmp_path):
     from cyrene import agent
 
     _patch_state_file(monkeypatch, tmp_path / "state.json")
@@ -5582,23 +5579,26 @@ async def test_refresh_session_labels_persists_titles(monkeypatch, tmp_path):
         {"role": "assistant", "content": "ok", "round_id": "round_1"},
     ])
 
-    async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
-        return {"content": '{"round_title":"加密货币辩论","session_title":"加密货币多代理讨论"}'}
-
-    _patch_call_llm(monkeypatch, fake_call_llm)
+    hidden_namer = AsyncMock()
+    _patch_call_llm(monkeypatch, hidden_namer)
 
     await agent._refresh_session_labels("讨论加密货币辩论结构", "round_1")
     state = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
     labels = agent.get_session_labels()
 
-    assert state["session_title"] == "加密货币多代理讨论"
-    assert all(msg.get("round_title") == "加密货币辩论" for msg in state["messages"] if msg.get("round_id") == "round_1")
-    assert labels["round_title"] == "加密货币辩论"
-    assert labels["session_title"] == "加密货币多代理讨论"
+    hidden_namer.assert_not_awaited()
+    assert "session_title" not in state
+    assert all(
+        "round_title" not in msg
+        for msg in state["messages"]
+        if msg.get("round_id") == "round_1"
+    )
+    assert labels["round_title"] == ""
+    assert labels["session_title"] == ""
 
     await agent._save_session_messages(state["messages"])
     preserved = json.loads(agent.STATE_FILE.read_text(encoding="utf-8"))
-    assert preserved["session_title"] == "加密货币多代理讨论"
+    assert "session_title" not in preserved
 
 
 def test_build_current_session_uses_saved_session_and_round_titles(tmp_path, monkeypatch):

@@ -3190,10 +3190,16 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
   var [menuProjectId, setMenuProjectId] = useWorkbenchState("");
   var [accountMenuOpen, setAccountMenuOpen] = useWorkbenchState(false);
   var [budgetState, setBudgetState] = useWorkbenchState(null);
+  var cachedCodexQuota = WorkbenchModel.readCodexQuotaCache();
   var [codexQuotaState, setCodexQuotaState] = useWorkbenchState({
     primary: false,
-    connected: false,
-    windows: [],
+    connected: !!(cachedCodexQuota && cachedCodexQuota.connected),
+    windows: cachedCodexQuota
+      ? WorkbenchModel.codexQuotaWindows(cachedCodexQuota.limits)
+      : [],
+    plan: cachedCodexQuota
+      ? WorkbenchModel.codexPlanLabel(cachedCodexQuota.account, cachedCodexQuota.limits)
+      : "",
   });
 
   // Fetch budget status from API (also pinged when the account menu opens)
@@ -3210,23 +3216,32 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
       .then(function (modelsPayload) {
         var primary = (modelsPayload.models || modelsPayload.primary_candidates || [])[0];
         if (!primary || primary.provider !== "codex_oauth") {
-          setCodexQuotaState({ primary: false, connected: false, windows: [] });
+          setCodexQuotaState({ primary: false, connected: false, windows: [], plan: "" });
           return null;
+        }
+        var cached = WorkbenchModel.readCodexQuotaCache();
+        if (cached) {
+          setCodexQuotaState({
+            primary: true,
+            connected: cached.connected === true,
+            windows: WorkbenchModel.codexQuotaWindows(cached.limits),
+            plan: WorkbenchModel.codexPlanLabel(cached.account, cached.limits),
+          });
         }
         return fetch("/api/settings/openai-oauth/limits")
           .then(function (r) { return r.json(); })
           .then(function (quotaPayload) {
+            WorkbenchModel.writeCodexQuotaCache(quotaPayload);
             setCodexQuotaState({
               primary: true,
               connected: quotaPayload.connected === true,
               windows: WorkbenchModel.codexQuotaWindows(quotaPayload.limits),
+              plan: WorkbenchModel.codexPlanLabel(quotaPayload.account, quotaPayload.limits),
             });
             return quotaPayload;
           });
       })
-      .catch(function () {
-        setCodexQuotaState({ primary: false, connected: false, windows: [] });
-      });
+      .catch(function () {});
   }
   useWorkbenchEffect(function () { fetchBudget(); function onFocus() { fetchBudget(); } try { window.addEventListener("wb-focus-composer", onFocus); } catch (e) {} return function () { try { window.removeEventListener("wb-focus-composer", onFocus); } catch (e) {} }; }, []);
   useWorkbenchEffect(function () { fetchCodexQuotaSummary(); }, []);
@@ -3437,7 +3452,9 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
           <div className="workbench-account-meta">
             <div className="workbench-account-name">
               <b>{dataState.user && dataState.user.name || "User"}</b>
-              <span className="workbench-pro-badge">Pro</span>
+              {codexQuotaState.primary && codexQuotaState.connected && codexQuotaState.plan && (
+                <span className="workbench-pro-badge">{codexQuotaState.plan}</span>
+              )}
             </div>
             <small>{(dataState.sessions && dataState.sessions[0] && dataState.sessions[0].model) || dataState.appVersion || "model"}</small>
           </div>
@@ -3449,7 +3466,7 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
                 <div className="wb-account-menu-codex">
                   <div className="wb-account-menu-codex-head">
                     <strong>{t("settings.codexQuota")}</strong>
-                    <span>{t("settings.codexQuotaIndependent")}</span>
+                    <span>{t("settings.codexQuotaPlan", { plan: codexQuotaState.plan || "—" })}</span>
                   </div>
                   {codexQuotaState.windows.map(function (windowData) {
                     return (

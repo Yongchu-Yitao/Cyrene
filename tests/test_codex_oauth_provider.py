@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,9 +12,21 @@ from cyrene.model_runtime.codex_provider import (
     CODEX_BASE_URL,
     CODEX_PROVIDER,
     CodexAppServer,
+    CodexTransportError,
+    _codex_sdk_config,
+    _normalized_effort,
     _provider_input,
     _provider_instructions,
 )
+
+
+def test_codex_sdk_uses_its_pinned_runtime_and_system_proxy() -> None:
+    config = _codex_sdk_config()
+
+    assert config.codex_bin is None
+    assert config.config_overrides == ("features.respect_system_proxy=true",)
+    assert _normalized_effort("LOW") == "low"
+    assert _normalized_effort("MAX") == "max"
 
 
 def test_codex_candidate_never_inherits_api_credentials() -> None:
@@ -154,6 +167,46 @@ async def test_codex_quota_returns_stale_value_before_background_refresh(
 
 
 @pytest.mark.asyncio
+async def test_codex_snapshot_can_return_stale_limits_without_loading_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+    cached_limits = {
+        "rateLimitsByLimitId": {
+            "codex": {"primary": {"usedPercent": 25}}
+        }
+    }
+    provider._limits_cache = (time.monotonic(), cached_limits)
+
+    async def account() -> dict:
+        return {
+            "account": {
+                "type": "chatgpt",
+                "planType": "prolite",
+            }
+        }
+
+    async def models() -> list[dict]:
+        raise AssertionError("quota snapshot should not load models")
+
+    async def rate_limits() -> dict:
+        raise AssertionError("fresh cache should be returned immediately")
+
+    monkeypatch.setattr(provider, "account", account)
+    monkeypatch.setattr(provider, "models", models)
+    monkeypatch.setattr(provider, "rate_limits", rate_limits)
+
+    snapshot = await provider.snapshot(
+        include_models=False,
+        stale_limits=True,
+    )
+
+    assert snapshot["account"]["planType"] == "prolite"
+    assert snapshot["models"] == []
+    assert snapshot["limits"] == cached_limits
+
+
+@pytest.mark.asyncio
 async def test_codex_completion_routes_streams_per_thread_and_runs_concurrently(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -161,53 +214,53 @@ async def test_codex_completion_routes_streams_per_thread_and_runs_concurrently(
     thread_counter = 0
     turns_started = 0
     both_turns_started = asyncio.Event()
+    notification_queues: dict[str, asyncio.Queue] = {}
 
-    async def ensure_started() -> None:
-        return None
-
-    async def request_raw(
-        method: str,
-        params: dict,
-        *,
-        timeout: float = 30,
-    ) -> dict:
-        nonlocal thread_counter, turns_started
-        if method == "thread/start":
+    class FakeClient:
+        async def thread_start(self, params: dict) -> dict:
+            nonlocal thread_counter
             thread_counter += 1
             return {"thread": {"id": f"thread-{thread_counter}"}}
-        if method != "turn/start":
-            raise AssertionError(f"unexpected method: {method}")
 
-        thread_id = str(params["threadId"])
-        turn_id = f"turn-{thread_id}"
-        turns_started += 1
-        if turns_started == 2:
-            both_turns_started.set()
-        await asyncio.wait_for(both_turns_started.wait(), timeout=1)
+        async def turn_start(
+            self,
+            thread_id: str,
+            input_items: list[dict],
+            params: dict,
+        ) -> dict:
+            nonlocal turns_started
+            turn_id = f"turn-{thread_id}"
+            notification_queues[turn_id] = asyncio.Queue()
+            turns_started += 1
+            if turns_started == 2:
+                both_turns_started.set()
+            await asyncio.wait_for(both_turns_started.wait(), timeout=1)
+            queue = notification_queues[turn_id]
+            queue.put_nowait(SimpleNamespace(
+                method="item/agentMessage/delta",
+                payload={"delta": f"reply:{thread_id}"},
+            ))
+            queue.put_nowait(SimpleNamespace(
+                method="turn/completed",
+                payload={"turn": {"id": turn_id, "status": "completed"}},
+            ))
+            return {"turn": {"id": turn_id}}
 
-        async def emit() -> None:
-            await asyncio.sleep(0)
-            provider._route_notification({
-                "method": "item/agentMessage/delta",
-                "params": {
-                    "threadId": thread_id,
-                    "turnId": turn_id,
-                    "delta": f"reply:{thread_id}",
-                },
-            })
-            provider._route_notification({
-                "method": "turn/completed",
-                "params": {
-                    "threadId": thread_id,
-                    "turn": {"id": turn_id, "status": "completed"},
-                },
-            })
+        async def next_turn_notification(self, turn_id: str) -> SimpleNamespace:
+            return await notification_queues[turn_id].get()
 
-        asyncio.create_task(emit())
-        return {"turn": {"id": turn_id}}
+        def unregister_turn_notifications(self, turn_id: str) -> None:
+            notification_queues.pop(turn_id, None)
 
-    monkeypatch.setattr(provider, "_ensure_started", ensure_started)
-    monkeypatch.setattr(provider, "_request_raw", request_raw)
+        async def turn_interrupt(self, thread_id: str, turn_id: str) -> dict:
+            return {}
+
+    fake_client = FakeClient()
+
+    async def ready_client() -> FakeClient:
+        return fake_client
+
+    monkeypatch.setattr(provider, "_ready_client", ready_client)
     streams: list[list[dict]] = [[], []]
 
     async def run(index: int) -> dict:
@@ -235,7 +288,219 @@ async def test_codex_completion_routes_streams_per_thread_and_runs_concurrently(
         assert events[1]["type"] == "reply_delta"
         assert set(events[2]) == {"type", "response"}
         assert events[2]["type"] == "reply_done"
-    assert provider._notification_queues == {}
+    assert notification_queues == {}
+
+
+@pytest.mark.asyncio
+async def test_codex_completion_forwards_reasoning_summary_and_low_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+    queue: asyncio.Queue = asyncio.Queue()
+    seen_turn_params: dict = {}
+
+    class FakeClient:
+        async def thread_start(self, params: dict) -> dict:
+            return {"thread": {"id": "thread-1"}}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            input_items: list[dict],
+            params: dict,
+        ) -> dict:
+            seen_turn_params.update(params)
+            queue.put_nowait(SimpleNamespace(
+                method="item/reasoning/summaryTextDelta",
+                payload={"delta": "Checked the request."},
+            ))
+            queue.put_nowait(SimpleNamespace(
+                method="item/agentMessage/delta",
+                payload={"delta": "OK"},
+            ))
+            queue.put_nowait(SimpleNamespace(
+                method="turn/completed",
+                payload={
+                    "turn": {
+                        "id": "turn-1",
+                        "status": "completed",
+                        "items": [{"type": "agentMessage", "text": "OK"}],
+                    }
+                },
+            ))
+            return {"turn": {"id": "turn-1"}}
+
+        async def next_turn_notification(self, turn_id: str) -> SimpleNamespace:
+            return await queue.get()
+
+        def unregister_turn_notifications(self, turn_id: str) -> None:
+            pass
+
+        async def turn_interrupt(self, thread_id: str, turn_id: str) -> dict:
+            return {}
+
+    async def ready_client() -> FakeClient:
+        return FakeClient()
+
+    monkeypatch.setattr(provider, "_ready_client", ready_client)
+    events: list[dict] = []
+
+    async def collect_stream(event: dict) -> None:
+        events.append(event)
+
+    response = await provider.complete(
+        messages=[{"role": "user", "content": "Say OK"}],
+        tools=None,
+        model="gpt-5.6-sol",
+        reasoning_effort="LOW",
+        timeout=2,
+        stream_callback=collect_stream,
+    )
+
+    assert seen_turn_params["effort"] == "low"
+    assert seen_turn_params["summary"] == "auto"
+    assert response["reasoning_content"] == "Checked the request."
+    assert [event["type"] for event in events] == [
+        "reply_start",
+        "reasoning_start",
+        "reasoning_delta",
+        "reply_delta",
+        "reasoning_done",
+        "reply_done",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_codex_transport_retry_interrupts_and_falls_back_early(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+    queue: asyncio.Queue = asyncio.Queue()
+    interrupted: list[tuple[str, str]] = []
+
+    class FakeClient:
+        async def thread_start(self, params: dict) -> dict:
+            return {"thread": {"id": "thread-1"}}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            input_items: list[dict],
+            params: dict,
+        ) -> dict:
+            queue.put_nowait(SimpleNamespace(
+                method="error",
+                payload={
+                    "threadId": thread_id,
+                    "turnId": "turn-1",
+                    "willRetry": True,
+                    "error": {
+                        "message": "stream disconnected",
+                        "codexErrorInfo": {
+                            "responseStreamDisconnected": {
+                                "httpStatusCode": None,
+                            }
+                        },
+                    },
+                },
+            ))
+            return {"turn": {"id": "turn-1"}}
+
+        async def next_turn_notification(self, turn_id: str) -> SimpleNamespace:
+            return await queue.get()
+
+        def unregister_turn_notifications(self, turn_id: str) -> None:
+            pass
+
+        async def turn_interrupt(self, thread_id: str, turn_id: str) -> dict:
+            interrupted.append((thread_id, turn_id))
+            return {}
+
+    fake_client = FakeClient()
+
+    async def ready_client() -> FakeClient:
+        return fake_client
+
+    monkeypatch.setattr(provider, "_ready_client", ready_client)
+    transport_events: list[dict] = []
+
+    async def collect_transport(event: dict) -> None:
+        transport_events.append(event)
+
+    with pytest.raises(CodexTransportError, match="stream disconnected"):
+        await provider.complete(
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=None,
+            model="gpt-5.6-sol",
+            reasoning_effort="low",
+            timeout=2,
+            transport_callback=collect_transport,
+        )
+
+    assert interrupted == [("thread-1", "turn-1")]
+    assert transport_events[-1]["status"] == "retrying"
+    assert transport_events[-1]["error_kind"] == "responseStreamDisconnected"
+
+
+@pytest.mark.asyncio
+async def test_codex_without_an_upstream_signal_interrupts_before_request_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+    never_notified = asyncio.Event()
+    interrupted: list[tuple[str, str]] = []
+
+    class FakeClient:
+        async def thread_start(self, params: dict) -> dict:
+            return {"thread": {"id": "thread-1"}}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            input_items: list[dict],
+            params: dict,
+        ) -> dict:
+            return {"turn": {"id": "turn-1"}}
+
+        async def next_turn_notification(self, turn_id: str) -> SimpleNamespace:
+            await never_notified.wait()
+            return SimpleNamespace(
+                method="turn/completed",
+                payload={"turn": {"id": turn_id, "status": "interrupted"}},
+            )
+
+        def unregister_turn_notifications(self, turn_id: str) -> None:
+            pass
+
+        async def turn_interrupt(self, thread_id: str, turn_id: str) -> dict:
+            interrupted.append((thread_id, turn_id))
+            never_notified.set()
+            return {}
+
+    async def ready_client() -> FakeClient:
+        return FakeClient()
+
+    monkeypatch.setattr(provider, "_ready_client", ready_client)
+    monkeypatch.setattr(
+        "cyrene.model_runtime.codex_provider._first_signal_timeout",
+        lambda _timeout: 0.01,
+    )
+    transport_events: list[dict] = []
+
+    async def collect_transport(event: dict) -> None:
+        transport_events.append(event)
+
+    with pytest.raises(CodexTransportError, match="no upstream model signal"):
+        await provider.complete(
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=None,
+            model="gpt-5.6-sol",
+            timeout=20,
+            transport_callback=collect_transport,
+        )
+
+    assert interrupted == [("thread-1", "turn-1")]
+    assert transport_events[-1]["status"] == "timed_out"
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ dependencies = [
     "uvicorn>=0.34.0",
     "websockets>=15.0.1",
     "winloop>=0.2.1; sys_platform == 'win32'",
+    "openai-codex==0.144.4",
 ]
 
 [project.scripts]

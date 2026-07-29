@@ -332,7 +332,7 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
         "id": str(raw.get("id") or f"candidate-{index + 1}").strip() or f"candidate-{index + 1}",
         "model": model,
         "provider": provider,
-        "reasoning_effort": str(raw.get("reasoning_effort") or "").strip(),
+        "reasoning_effort": str(raw.get("reasoning_effort") or "").strip().lower(),
         "vision_capable": (
             raw.get("vision_capable")
             if isinstance(raw.get("vision_capable"), bool)
@@ -1011,6 +1011,38 @@ async def _publish_model_fallback_event(
     await debug.publish_event(event, session_id=session_id)
 
 
+async def _publish_llm_transport_event(
+    *,
+    session_id: str,
+    round_id: str,
+    caller: str,
+    phase: str,
+    model: str,
+    event: dict[str, Any],
+) -> None:
+    """Publish provider connection/retry state without exposing hidden reasoning."""
+    from cyrene.observability import debug
+
+    payload = {
+        "type": "llm_transport",
+        "provider": str(event.get("provider") or ""),
+        "transport": str(event.get("transport") or ""),
+        "status": str(event.get("status") or ""),
+        "error_kind": str(event.get("error_kind") or ""),
+        "will_retry": bool(event.get("will_retry")),
+        "message": str(event.get("message") or "")[:1000],
+        "thread_id": str(event.get("thread_id") or ""),
+        "turn_id": str(event.get("turn_id") or ""),
+        "reasoning_effort": str(event.get("reasoning_effort") or ""),
+        "caller": caller,
+        "phase": phase,
+        "model": model,
+    }
+    if round_id:
+        payload["round_id"] = round_id
+    await debug.publish_event(payload, session_id=session_id)
+
+
 # ---------------------------------------------------------------------------
 # The unified call_llm function
 # ---------------------------------------------------------------------------
@@ -1257,6 +1289,18 @@ async def call_llm(
                                         "model": model,
                                     })
 
+                            async def _tracked_transport_callback(
+                                event: dict[str, Any],
+                            ) -> None:
+                                await _publish_llm_transport_event(
+                                    session_id=session_id,
+                                    round_id=round_id,
+                                    caller=caller,
+                                    phase=phase,
+                                    model=model,
+                                    event=event,
+                                )
+
                             try:
                                 if provider == "codex_oauth":
                                     from cyrene.model_runtime.codex_provider import (
@@ -1280,6 +1324,7 @@ async def call_llm(
                                         stream_callback=(
                                             _tracked_stream_callback if stream else None
                                         ),
+                                        transport_callback=_tracked_transport_callback,
                                     )
                                 elif stream:
                                     msg = await _handle_stream(

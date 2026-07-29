@@ -5281,6 +5281,22 @@ function wbcPhase1ReasoningPreview(text) {
   return compact.length > 220 ? compact.slice(0, 217).trimEnd() + "…" : compact;
 }
 
+function wbcPhase1ProgressDetail(entries) {
+  return (Array.isArray(entries) ? entries : []).map(function (entry) {
+    var text = String(entry && (entry.text || entry.tool) || "").trim();
+    if (entry && entry.detailKey) {
+      text = wbcT(entry.detailKey, text, entry.detailParams || {});
+    } else if (entry && (entry.kind === "tool" || entry.tool)) {
+      text = wbcT("toolName." + text, text);
+    }
+    var preview = String(entry && entry.preview || "").trim();
+    var mark = entry && entry.failed ? "×" : (entry && entry.status === "running" ? "◌" : "✓");
+    return [mark, text, preview ? "（" + wbcToolPreviewText(preview) + "）" : ""]
+      .filter(Boolean)
+      .join(" ");
+  }).filter(Boolean).join("\n");
+}
+
 function WbcLiveActivityCard({ activity, active, hasReplyText }) {
   var item = activity || {};
   var entries = Array.isArray(item.progress) ? item.progress : [];
@@ -5305,12 +5321,16 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
     return entry && entry.kind === "tool";
   }).length;
   var hasReasoning = !!String(item.reasoning || "").trim();
+  var phase1Detail = hasReasoning
+    ? String(item.reasoning || "")
+    : wbcPhase1ProgressDetail(visibleEntries);
+  var hasExpandableDetail = hasReasoning || (isPhase1 && !!phase1Detail);
   var [showReasoning, setShowReasoning] = useWbcState(false);
   var [lockedHeight, setLockedHeight] = useWbcState(0);
   var cardRef = useWbcRef(null);
   var reasoningRef = useWbcRef(null);
   function toggleReasoning() {
-    if (!hasReasoning) return;
+    if (!hasExpandableDetail) return;
     if (typeof window.getSelection === "function" && String(window.getSelection() || "")) return;
     if (!showReasoning && !lockedHeight && cardRef.current) {
       setLockedHeight(cardRef.current.getBoundingClientRect().height);
@@ -5347,9 +5367,9 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
       trace={visibleEntries}
       live={true}
       running={isPhase1 ? phase1Running : active}
-      reasoning={item.reasoning}
+      reasoning={phase1Detail}
       showReasoning={showReasoning}
-      onToggle={hasReasoning ? toggleReasoning : null}
+      onToggle={hasExpandableDetail ? toggleReasoning : null}
       cardRef={cardRef}
       reasoningRef={reasoningRef}
       lockedHeight={lockedHeight}

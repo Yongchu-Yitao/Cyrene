@@ -188,12 +188,19 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         write_env_keys(updates)
         return {"ok": True, "updated": list(updates.keys())}
 
-    async def _codex_oauth_snapshot(*, include_limits: bool = True) -> dict[str, Any]:
+    async def _codex_oauth_snapshot(
+        *,
+        include_limits: bool = True,
+        include_models: bool = True,
+        stale_limits: bool = False,
+    ) -> dict[str, Any]:
         from cyrene.model_runtime.codex_provider import get_codex_provider
         from cyrene.runtime.settings_store import get as get_setting
 
         snapshot = await get_codex_provider().snapshot(
-            include_limits=include_limits
+            include_limits=include_limits,
+            include_models=include_models,
+            stale_limits=stale_limits,
         )
         snapshot["quota_enabled"] = bool(
             get_setting("codex_budget_enabled", True)
@@ -236,7 +243,13 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
     @router.get("/api/settings/openai-oauth/limits")
     async def api_get_openai_oauth_limits():
         try:
-            snapshot = await _codex_oauth_snapshot()
+            # This surface only needs account + quota data. Reuse the latest
+            # snapshot immediately and refresh old limits in the background;
+            # model discovery belongs to the separate model-settings endpoint.
+            snapshot = await _codex_oauth_snapshot(
+                include_models=False,
+                stale_limits=True,
+            )
             return {
                 "available": snapshot.get("available", True),
                 "connected": snapshot.get("connected", False),
@@ -291,7 +304,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                         "name": str(model.get("name") or model_identifier).strip() or model_identifier,
                         "model": model_identifier,
                         "provider": provider,
-                        "reasoning_effort": str(model.get("reasoning_effort") or "").strip(),
+                        "reasoning_effort": str(model.get("reasoning_effort") or "").strip().lower(),
                         "desc": str(model.get("desc") or "").strip(),
                         "ctx": str(model.get("ctx") or "").strip(),
                         "price": user_price,
@@ -439,7 +452,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                         "name": model_identifier,
                         "model": model_identifier,
                         "provider": provider,
-                        "reasoning_effort": str(model.get("reasoning_effort") or "").strip(),
+                        "reasoning_effort": str(model.get("reasoning_effort") or "").strip().lower(),
                         "desc": str(model.get("desc") or "").strip(),
                         "ctx": str(model.get("ctx") or "").strip(),
                         "price": str(model.get("price") or "").strip(),

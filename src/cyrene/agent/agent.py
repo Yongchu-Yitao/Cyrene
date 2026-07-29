@@ -808,16 +808,49 @@ async def _run_main_agent_impl(
                         await _save(_session_messages_to_save(messages))
                         continue
                 if done_via_quit:
+                    for tc in tcs:
+                        is_quit = (
+                            str(tc.get("function", {}).get("name") or "") == "quit"
+                        )
+                        tool_entry = {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": (
+                                "Agent requested to finish."
+                                if is_quit
+                                else "Skipped because the same batch contained terminal quit."
+                            ),
+                        }
+                        if round_id:
+                            tool_entry["round_id"] = round_id
+                        messages.append(tool_entry)
                     await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
                 # A missing/invalid terminal answer may be repaired, but only by
                 # the no-tool final-reply path used inside ``_ensure_text_reply``.
                 # Once quit is observed, this run can never reopen execution.
                 final_text = await _ensure_text_reply(response, messages)
-                messages[-1]["content"] = final_text
-                messages[-1].pop("tool_calls", None)
-                _attach_final_usage(messages[-1])
+                final_entry = entry
+                if done_via_quit:
+                    # Preserve a valid assistant(tool_calls) -> tool-results
+                    # sequence, then store the user-visible answer as the
+                    # terminal assistant message after that sequence.
+                    entry["content"] = ""
+                    final_entry = _apply_assistant_meta(
+                        {
+                            "role": "assistant",
+                            "content": final_text,
+                            **({"round_id": round_id} if round_id else {}),
+                        }
+                    )
+                    if entry.get("usage"):
+                        final_entry["usage"] = entry.pop("usage")
+                    messages.append(final_entry)
+                else:
+                    entry["content"] = final_text
+                    entry.pop("tool_calls", None)
+                _attach_final_usage(final_entry)
                 if client_request_id:
-                    messages[-1]["client_request_id"] = client_request_id
+                    final_entry["client_request_id"] = client_request_id
 
                 # Guidance that arrived while a no-tool repair was in flight
                 # starts a continuation; it does not revive the terminated batch.
@@ -827,7 +860,7 @@ async def _run_main_agent_impl(
                     else []
                 )
                 if late_guidance:
-                    messages[-1]["intermediate_reply"] = True
+                    final_entry["intermediate_reply"] = True
                     await _inject_runtime_guidance(messages, late_guidance)
                     await _save(_session_messages_to_save(messages))
                     continue

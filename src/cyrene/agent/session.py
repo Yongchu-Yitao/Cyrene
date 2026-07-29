@@ -1,11 +1,10 @@
-"""Session persistence: message I/O, pending questions, labels, lifecycle.
+"""Session persistence: message I/O, pending questions, metadata, lifecycle.
 
-Depends on ``state`` (ContextVars, ``_call_llm``) and ``message``
+Depends on ``state`` (ContextVars, ``_call_llm``) and message helpers
 (message utilities), but not on ``guidance``, ``coordinator``, or ``agent``.
 """
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -19,7 +18,6 @@ from cyrene.runtime.io import atomic_write_json, read_json_safe
 from cyrene.agent.message_utils import (
     dedupe_messages_by_id as _dedupe_messages_by_id,
     ensure_message_identity as _ensure_message_identity,
-    extract_json_object as _extract_json_object,
     fallback_label as _fallback_label,
     is_replaceable_live_message as _is_replaceable_live_message,
     message_suffix_after_persisted_prefix as _message_suffix_after_persisted_prefix,
@@ -1192,110 +1190,19 @@ def get_session_labels(round_id: str = "") -> dict[str, str]:
 
 
 def _schedule_session_label_refresh(current_user_message: str, round_id: str) -> None:
-    session_id = _current_session_id.get()
-    async def _runner() -> None:
-        try:
-            await _refresh_session_labels(current_user_message, round_id, session_id=session_id)
-        except Exception:
-            logger.warning("Async session naming failed for %s", round_id or "<unknown>", exc_info=True)
+    """Compatibility no-op: Workbench owns visible chat titles.
 
-    task = asyncio.create_task(_runner())
-    ctx = _ensure_session(session_id)
-    track_task(
-        task,
-        ctx.pending_label_refreshes,
-        logger=logger,
-        label="session label refresh",
-    )
+    Automatic LLM-based session naming was removed because its result is not
+    displayed by the current frontend and it added one full model call per
+    completed user turn.
+    """
 
-
-async def _refresh_session_labels(current_user_message: str, round_id: str, session_id: str = "") -> None:
-    state = _load_session_state(session_id=session_id)
-    messages = state.get("messages", []) if isinstance(state.get("messages"), list) else []
-    if not messages:
-        return
-
-    session_user_inputs = [
-        str(msg.get("content", "")).strip()
-        for msg in messages
-        if msg.get("role") == "user" and str(msg.get("content", "")).strip()
-    ]
-    round_user_inputs = [
-        str(msg.get("content", "")).strip()
-        for msg in messages
-        if msg.get("role") == "user"
-        and str(msg.get("round_id", "")).strip() == round_id
-        and str(msg.get("content", "")).strip()
-    ]
-    if not round_user_inputs:
-        round_user_inputs = [_fallback_label(current_user_message, limit=80)]
-    if not session_user_inputs:
-        session_user_inputs = round_user_inputs
-
-    existing_round_title = next(
-        (
-            str(message.get("round_title") or "").strip()
-            for message in messages
-            if str(message.get("round_id") or "").strip() == round_id
-            and str(message.get("round_title") or "").strip()
-        ),
-        "",
-    )
-    round_fallback = existing_round_title or _fallback_label(
-        " / ".join(round_user_inputs),
-        limit=40,
-    )
-    existing_session_title = str(state.get("session_title") or "").strip()
-    session_fallback = existing_session_title or _fallback_label(
-        " / ".join(session_user_inputs),
-        limit=56,
-    )
-    token = _caller_type.set("session_namer")
-    try:
-        response = await _call_llm([
-            {
-                "role": "system",
-                "content": (
-                    "You generate concise UI labels for chat sessions and rounds. "
-                    "Return strict JSON with keys round_title and session_title only."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    "Summarize the following chat inputs into compact labels.\n"
-                    "Rules:\n"
-                    "- round_title: summarize only the current round's user input(s)\n"
-                    "- session_title: summarize all user inputs in the session so far\n"
-                    "- Keep each label under 12 words\n"
-                    "- Use the user's language when obvious\n"
-                    "- No quotes, markdown, numbering, or trailing punctuation\n\n"
-                    f"Current round user inputs:\n{json.dumps(round_user_inputs, ensure_ascii=False)}\n\n"
-                    f"All session user inputs:\n{json.dumps(session_user_inputs, ensure_ascii=False)}\n\n"
-                    "Return JSON only."
-                ),
-            },
-        ], tools=None, secondary=True)
-        payload = _extract_json_object(assistant_text(response))
-    except Exception:
-        logger.warning("Session naming failed", exc_info=True)
-        payload = {}
-    finally:
-        _caller_type.reset(token)
-
-    round_title = _fallback_label(payload.get("round_title") or round_fallback, limit=40)
-    session_title = _fallback_label(payload.get("session_title") or session_fallback, limit=56)
-
-    async with _ensure_session(session_id).session_state_lock:
-        latest_state = _load_session_state(session_id=session_id)
-        latest_messages = latest_state.get("messages", [])
-        full_messages = list(latest_messages) if isinstance(latest_messages, list) else []
-        for msg in full_messages:
-            if str(msg.get("round_id", "")).strip() == round_id:
-                msg["round_title"] = round_title
-        latest_state["messages"] = full_messages
-        latest_state["session_title"] = session_title
-        _write_session_state(latest_state, session_id=session_id)
+async def _refresh_session_labels(
+    current_user_message: str,
+    round_id: str,
+    session_id: str = "",
+) -> None:
+    """Compatibility no-op for integrations importing the former helper."""
 
 
 # ---------------------------------------------------------------------------

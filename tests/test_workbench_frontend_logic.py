@@ -2250,14 +2250,16 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert 'style={lockedHeight ? { height: lockedHeight + "px" } : null}' in chat
     assert 'setShowReasoning(function (visible) { return !visible; });' in chat
     assert 'var hasReasoning = !!String(item.reasoning || "").trim();' in activity_card
-    assert 'if (!hasReasoning) return;' in activity_card
-    assert 'onToggle={hasReasoning ? toggleReasoning : null}' in activity_card
+    assert "function wbcPhase1ProgressDetail(entries)" in chat
+    assert "var hasExpandableDetail = hasReasoning || (isPhase1 && !!phase1Detail);" in activity_card
+    assert 'if (!hasExpandableDetail) return;' in activity_card
+    assert 'onToggle={hasExpandableDetail ? toggleReasoning : null}' in activity_card
     assert 'detail.scrollTop = active ? detail.scrollHeight : 0;' in activity_card
     assert "if (!msg.runtimeActivityActive && activityEntries.length === 0) return null;" in chat
     assert "wbcRuntimeSegmentMessages(runtime).concat(wbcRuntimeTimelineMessages(runtime))" in chat
     assert "if (msg.runtimeActivity || msg.activityCard)" in chat
     assert "activity={activity}" in chat
-    assert "reasoning={item.reasoning}" in activity_card
+    assert "reasoning={phase1Detail}" in activity_card
     assert "useWbcState(false)" not in live_message
     assert "useWbcState(0)" not in live_message
     assert "trace: hasLiveActivities ? []" in chat
@@ -2276,6 +2278,17 @@ def test_workbench_live_trace_keeps_each_llm_activity_independent():
     assert "margin-right: -8px;" in detail_text_css
     assert "padding-right: 8px;" in detail_text_css
     assert "查看思考详情" in i18n
+
+
+def test_codex_reasoning_effort_updates_the_primary_candidate_without_stale_state():
+    root = Path(__file__).resolve().parent.parent
+    settings = (
+        root / "src" / "webui" / "frontend" / "settings-overlay.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert "setModels(function (currentModels)" in settings
+    assert "selectedEffort != null ? selectedEffort : codexEffort" in settings
+    assert "setCodexPrimaryCandidate(codexModel, value);" in settings
 
 
 def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
@@ -3789,12 +3802,19 @@ def test_account_menu_codex_quota_requires_primary_oauth_and_login():
     assert "codexQuotaState.primary && codexQuotaState.connected" in shell
     assert 'fetch("/api/settings/openai-oauth/limits")' in shell
     assert "WorkbenchModel.codexQuotaWindows(quotaPayload.limits)" in shell
+    assert "WorkbenchModel.readCodexQuotaCache()" in shell
+    assert "WorkbenchModel.writeCodexQuotaCache(quotaPayload)" in shell
+    assert "WorkbenchModel.codexPlanLabel(quotaPayload.account, quotaPayload.limits)" in shell
 
     # The settings panel and account menu share one duration-based parser.
     assert "function codexQuotaWindows(limits)" in model
+    assert "function codexPlanLabel(account, limits)" in model
+    assert 'if (normalized === "prolite") return "pro 5x"' in model
+    assert 'if (normalized === "pro") return "pro 20x"' in model
     assert 'durationMins === 300' in model
     assert 'durationMins >= 10080' in model
-    assert 'window.CyreneUI.require("model").codexQuotaWindows(' in settings
+    assert "codexQuotaModel.codexQuotaWindows(codexQuota.limits)" in settings
+    assert 't("settings.codexQuotaPlan"' in settings
 
 
 def test_phase1_stream_is_rendered_as_a_distinct_execution_card():

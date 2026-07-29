@@ -8,7 +8,6 @@ module-level cycle.
 import asyncio
 import json
 import logging
-import re
 from typing import Any
 
 import httpx
@@ -28,7 +27,6 @@ from cyrene.agent.context import (
     publish_runtime_event as _publish_runtime_event,
     session_interrupt_event,
 )
-from cyrene.model_runtime.errors import format_httpx_error
 from cyrene.observability import debug
 from cyrene.agent.message import (
     _ensure_message_identity,
@@ -49,10 +47,10 @@ from cyrene.agent.session import (
     _pending_question_resume_context,
     _pending_question_is_permission_elevation,
     _restore_pending_question,
-    _schedule_session_label_refresh,
     _write_session_messages_locked,
     get_session_labels,
 )
+from cyrene.model_runtime.errors import format_httpx_error  # noqa: F401
 from cyrene.model_runtime.messages import assistant_text
 
 logger = logging.getLogger(__name__)
@@ -479,7 +477,7 @@ async def _synthesize_subagent_results(
 
 # Preserve the historical guidance-module exports while keeping one live
 # implementation of final-reply behavior.
-from cyrene.agent import replies as _reply_helpers
+from cyrene.agent import replies as _reply_helpers  # noqa: E402
 
 _default_final_reply_call = _call_llm
 _default_final_reply_stream_call = _call_llm_stream
@@ -721,7 +719,6 @@ async def _process_main_inbox_message(message: dict[str, Any], bot: Any, chat_id
             client_request_id=context["client_request_id"],
             subagent_flow_snapshot=flow_snapshot if not interrupted else None,
         )
-        _schedule_session_label_refresh(content, target_round_id)
         return reply
 
     guidance_system = (
