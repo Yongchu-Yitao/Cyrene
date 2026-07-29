@@ -17,27 +17,45 @@ OAuth tokens, and Codex quota is presented separately from currency budgets.
 
 ### Feature highlights
 
-- **OpenAI Codex OAuth is available as the primary model** — users can sign in
-  during onboarding or under Settings → Models, discover account-available
-  Codex models and reasoning efforts, and save the selected model.
-- **Chat and task composers gain model selectors** — a compact control in the
-  existing composer style lists every configured model. Codex uses the exact
-  capability catalog, while custom models without metadata use a conservative
-  Low/Medium/High compatibility set.
-- **Model choice is isolated per session** — Chat and Task can override the
-  model and effort for their next turn without changing global defaults; the
-  choice survives refresh, switching, and chat forks.
-- **Codex quota has a dedicated presentation** — Settings and the account menu
-  show available five-hour/weekly windows, remaining percentage, and reset time
-  without mixing plan quota with API currency budgets.
-- **Agent execution is more durable** — high-frequency reasoning/reply deltas
-  are batch-persisted and flushed at terminal boundaries; quit, parallel tools,
-  late guidance, cancellation, and recovery now have explicit semantics.
-- **The interactive CLI receives a full UX pass** — localized headers,
-  placeholders, status bars, permission modes, two-axis settings navigation,
-  two-line session cards, and a temporary reasoning viewer are included.
+- **Use Codex models from your OpenAI account directly** — sign in during
+  onboarding or under Settings → Models. Cyrene lists the models available to
+  that account without requiring an API key or storing the OAuth token itself.
+- **Choose a model before sending** — both chat and task composers now have a
+  compact model button that lists every configured model and lets you choose
+  the reasoning effort for the current one.
+- **Different conversations can use different models** — changing the model in
+  one Chat or Task does not alter other conversations or the global default.
+  The choice is restored after reopening, refreshing, or forking a chat.
+- **Reasoning choices stay realistic** — Codex shows the efforts supported by
+  that exact model. Custom models without capability metadata offer only
+  Low/Medium/High rather than presenting unsupported extreme levels.
+- **The task selector appears immediately** — the control renders as soon as
+  configured models load and fills in detailed Codex capabilities afterward,
+  instead of leaving a temporary empty space.
+- **Images still reach the right model** — when the current primary cannot see
+  images, Cyrene uses the configured vision model to analyze the attachment
+  before continuing, rather than sending an image to text-only Codex.
+- **Codex quota is visible where you need it** — Settings and the account menu
+  show the five-hour or weekly windows actually provided by the account,
+  including remaining percentage and reset time, separately from API spending.
+- **Model problems are actionable** — Workbench distinguishes exhausted quota,
+  expired sign-in, and unavailable models, explains what to do, and continues
+  to a configured fallback instead of appearing frozen.
+- **Long replies and tool-heavy tasks run more smoothly** — streaming saves
+  with less overhead, while cancellation, recovery, parallel tools, and new
+  instructions arriving near completion are handled more reliably.
+- **Reasoning is easier to follow** — Workbench separates request understanding
+  from later tool execution and shows total processing time. Codex no longer
+  presents an expandable internal-detail area that does not apply to it.
+- **The terminal app feels closer to the desktop app** — localized model,
+  project, workspace, input, and permission context; clearer session cards;
+  left/right settings categories; and a temporary `Ctrl+O` reasoning viewer are
+  now available without polluting shell scrollback.
+- **Small Workbench layouts are steadier** — clicking an already visible work
+  tab no longer reshuffles the topbar, and compact Memory tabs plus long-content
+  alignment are improved.
 
-### Technical details
+### Detailed changes and compatibility notes
 
 #### OpenAI Codex OAuth, model discovery, and quota
 
