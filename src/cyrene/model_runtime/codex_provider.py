@@ -221,7 +221,14 @@ def _codex_sdk_config() -> CodexConfig:
         # Published SDK builds own a same-version Codex runtime. Do not pass
         # codex_bin: that would fall back to an unpinned PATH/ChatGPT.app
         # executable.
-        config_overrides=("features.respect_system_proxy=true",),
+        config_overrides=(
+            "features.respect_system_proxy=true",
+            # Cyrene owns its tools and progressive capability catalog. Loading
+            # Codex host plugins would inject incompatible SKILL.md workflows
+            # (for example node_repl browser control) that are intentionally
+            # unavailable to this provider adapter.
+            "features.plugins=false",
+        ),
         client_name="cyrene",
         client_title="Cyrene",
         client_version="1",
@@ -512,7 +519,12 @@ class CodexAppServer:
                     "developerInstructions": (
                         "Act only as Cyrene's language-model backend. "
                         "Never invoke Codex-hosted tools. Request Cyrene actions "
-                        "through the required structured response instead."
+                        "through the required structured response instead. "
+                        "Codex host skills, plugins, AGENTS.md files, and their "
+                        "SKILL.md files are not Cyrene capabilities: never read "
+                        "or follow them. Ignore any host-provided skill catalog "
+                        "and select actions only from Cyrene's required response "
+                        "schema."
                     ),
                     "ephemeral": True,
                     "approvalPolicy": "never",
@@ -895,7 +907,9 @@ def _provider_instructions(
     return (
         "You are the model backend for Cyrene. Follow the supplied conversation "
         "and return the next assistant message. Do not invoke Codex built-in tools; "
-        "request actions from Cyrene instead."
+        "request actions from Cyrene instead. Ignore Codex host skills, plugins, "
+        "AGENTS.md files, and SKILL.md files because their tools are not available "
+        "inside Cyrene."
         + ("\nSystem instructions:\n" + "\n\n".join(system_parts) if system_parts else "")
         + tool_contract
     )

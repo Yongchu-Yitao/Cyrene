@@ -33,7 +33,10 @@ def test_codex_sdk_uses_its_pinned_runtime_and_system_proxy() -> None:
     config = _codex_sdk_config()
 
     assert config.codex_bin is None
-    assert config.config_overrides == ("features.respect_system_proxy=true",)
+    assert config.config_overrides == (
+        "features.respect_system_proxy=true",
+        "features.plugins=false",
+    )
     assert _normalized_effort("LOW") == "low"
     assert _normalized_effort("MAX") == "max"
 
@@ -626,6 +629,10 @@ async def test_codex_completion_uses_structured_cyrene_actions_without_leaking_j
     assert "Never invoke Codex-hosted tools" in seen_thread_params[
         "developerInstructions"
     ]
+    assert "never read or follow them" in seen_thread_params[
+        "developerInstructions"
+    ]
+    assert "Ignore Codex host skills" in seen_thread_params["baseInstructions"]
 
 
 def test_codex_structured_action_preserves_only_terminal_content() -> None:
