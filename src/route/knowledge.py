@@ -30,12 +30,16 @@ def register_knowledge_routes(router: APIRouter, workspace_id: str = "default") 
     from cyrene.knowledge import store, ingest, retrieve
 
     db_path = str(get_knowledge_db_path(workspace_id))
-    # Defer init — lazily initialised on first use when inside a running loop.
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(init_knowledge_db(db_path))
-    except RuntimeError:
-        asyncio.run(init_knowledge_db(db_path))
+    # The normal application startup initializes this database before routes
+    # are registered. Only bootstrap a missing file here; scheduling a redundant
+    # aiosqlite initialization task for every app/test instance can outlive the
+    # caller's event loop and leave its worker thread with a closed loop.
+    if not Path(db_path).exists():
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(init_knowledge_db(db_path))
+        except RuntimeError:
+            asyncio.run(init_knowledge_db(db_path))
 
     @router.post("/api/knowledge/documents")
     async def api_upload_documents(files: list[UploadFile]):
