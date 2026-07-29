@@ -938,11 +938,11 @@ async def test_main_agent_resumes_from_tool_result_and_applies_runtime_guidance(
         )
         return {
             "role": "assistant",
-            "content": "",
+            "content": "已按引导完成",
             "tool_calls": [{
                 "id": "call_quit",
                 "type": "function",
-                "function": {"name": "quit", "arguments": '{"reply":"已按引导完成"}'},
+                "function": {"name": "quit", "arguments": "{}"},
             }],
         }
 
@@ -977,6 +977,60 @@ async def test_main_agent_resumes_from_tool_result_and_applies_runtime_guidance(
         await inbox.close()
 
     assert len(model_calls) == 3
+
+
+async def test_main_agent_quit_waits_for_already_submitted_tool(monkeypatch, tmp_path):
+    from cyrene.agent import agent as agent_mod
+    from cyrene.agent import state as state_mod
+    from cyrene.workbench.inbox import WorkbenchAgentInbox, _workbench_agent_inbox
+
+    inbox = WorkbenchAgentInbox("chat_quit_wait", str(tmp_path / "workbench.db"))
+    tool_started = asyncio.Event()
+    release_tool = asyncio.Event()
+    quit_generated = asyncio.Event()
+
+    async def existing_tool():
+        tool_started.set()
+        await release_tool.wait()
+        return "existing result"
+
+    inbox.submit_tool("existing_call", "Read", existing_tool)
+    await asyncio.wait_for(tool_started.wait(), timeout=1)
+
+    async def fake_llm(_messages, tools=None, **_kwargs):
+        quit_generated.set()
+        return {
+            "role": "assistant",
+            "content": "在途工具已经完成，当前任务现已结束。",
+            "tool_calls": [{
+                "id": "quit_now",
+                "type": "function",
+                "function": {"name": "quit", "arguments": "{}"},
+            }],
+        }
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(agent_mod, "_call_llm", fake_llm)
+    monkeypatch.setattr(agent_mod, "_append_session_message", noop)
+    monkeypatch.setattr(agent_mod, "_save_session_messages", noop)
+
+    round_token = state_mod._current_round_id.set("round_quit_wait")
+    inbox_token = _workbench_agent_inbox.set(inbox)
+    try:
+        task = asyncio.create_task(
+            agent_mod._run_main_agent("结束", [], None, 0, "db.sqlite3")
+        )
+        await asyncio.wait_for(quit_generated.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert not task.done()
+        release_tool.set()
+        assert await asyncio.wait_for(task, timeout=2) == "在途工具已经完成，当前任务现已结束。"
+    finally:
+        _workbench_agent_inbox.reset(inbox_token)
+        state_mod._current_round_id.reset(round_token)
+        await inbox.close()
 
 
 async def test_main_agent_runs_independent_read_calls_in_parallel(monkeypatch, tmp_path):
@@ -1020,7 +1074,7 @@ async def test_main_agent_runs_independent_read_calls_in_parallel(monkeypatch, t
             "role": "assistant", "content": "parallel reads completed successfully",
             "tool_calls": [{
                 "id": "call_quit", "type": "function",
-                "function": {"name": "quit", "arguments": '{"reply":"parallel reads completed successfully"}'},
+                "function": {"name": "quit", "arguments": "{}"},
             }],
         }
 
@@ -1077,7 +1131,7 @@ async def test_main_agent_applies_guidance_sent_while_model_call_is_in_flight(mo
                 "role": "assistant", "content": "旧答案",
                 "tool_calls": [{
                     "id": "quit_old", "type": "function",
-                    "function": {"name": "quit", "arguments": '{"reply":"旧答案"}'},
+                    "function": {"name": "quit", "arguments": "{}"},
                 }],
             }
         assert any(
@@ -1088,7 +1142,7 @@ async def test_main_agent_applies_guidance_sent_while_model_call_is_in_flight(mo
             "role": "assistant", "content": "新答案",
             "tool_calls": [{
                 "id": "quit_new", "type": "function",
-                "function": {"name": "quit", "arguments": '{"reply":"新答案"}'},
+                "function": {"name": "quit", "arguments": "{}"},
             }],
         }
 
@@ -1166,14 +1220,14 @@ async def test_main_agent_keeps_wrap_reply_and_continues_with_late_guidance(monk
             }],
         }
 
-    async def fake_final_reply(_messages, _tools, max_tokens=None):
+    async def fake_final_reply(_messages, max_tokens=None):
         nonlocal wrap_calls
         wrap_calls += 1
         if wrap_calls == 1:
             wrap_started.set()
             await release_wrap.wait()
-            return {"role": "assistant", "content": "已经生成的旧回复"}
-        return {"role": "assistant", "content": "按新指令完成的回复"}
+            return "已经生成的旧回复"
+        return "按新指令完成的回复"
 
     async def fake_save(messages, **_kwargs):
         saved.append([dict(message) for message in messages])
@@ -1182,7 +1236,7 @@ async def test_main_agent_keeps_wrap_reply_and_continues_with_late_guidance(monk
         return None
 
     monkeypatch.setattr(agent_mod, "_call_llm", fake_llm)
-    monkeypatch.setattr(agent_mod, "_final_reply_with_tools", fake_final_reply)
+    monkeypatch.setattr(agent_mod, "_final_user_reply_from_history", fake_final_reply)
     monkeypatch.setattr(agent_mod, "_append_session_message", noop)
     monkeypatch.setattr(agent_mod, "_save_session_messages", fake_save)
     monkeypatch.setattr(agent_mod, "_publish_runtime_event", noop)

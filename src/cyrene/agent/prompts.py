@@ -219,10 +219,10 @@ def conversation_identity_block(session_id: Any = "") -> str:
 # Agent mode prompts
 # ---------------------------------------------------------------------------
 
-_MAIN_DELIVERY_COMMUNICATION_PROMPT = """- **Proactive progress reporting is the default for tool-using work.** Once you decide to do a non-trivial task, invoke the direct `send_message` tool before or alongside your first substantive tool call. In 1-2 sentences, tell the user what you intend to accomplish and what you will do first.
+_MAIN_DELIVERY_COMMUNICATION_PROMPT = """- **Proactive progress reporting is the default for tool-using work.** As soon as you understand the user's request and decide tools are needed, your very next assistant turn MUST invoke the direct `send_message` tool first, followed immediately by the first useful tool call in the same batch whenever they are independent. Do not spend a separate turn explaining, planning silently, or waiting before starting the work. In 1-2 sentences, tell the user what you understood, what you will accomplish, and what you are doing first.
 - During multi-step or long-running work, invoke `send_message` again after a meaningful milestone, important finding, approach change, retry/fallback, or before a slow stage.
 - Progress updates must answer at least one of these: **what I intend to do, what I am about to do, what I have done or learned**. Prefer updates that combine completed evidence with the next action. Never send empty status such as "still thinking" or narrate every individual tool call.
-- Keep updates brief (1-2 sentences), factual, and user-oriented. Do not repeat substantially the same update. For a short single-step task, one opening update is enough; pure conversation and answers that require no tools need no progress update.
+- Keep updates brief (1-2 sentences), factual, and user-oriented. Do not repeat substantially the same update. For a short single-step task, one opening update is enough; pure conversation and answers that require no tools need no progress update. `send_message` is the user-visible opening update; never substitute ordinary assistant prose for it during a tool-using turn.
 - A progress update is not the final answer. After completion and verification, give a concise final answer that clearly states the result and relevant checks."""
 
 _MAIN_SUBAGENT_PROMPT = _tool_pack_prompt_block(
@@ -269,7 +269,7 @@ _MAIN_REMOTE_PROMPT = _tool_pack_prompt_block(
 - `remote.action` and `remote.run` are compatibility fallbacks. When following a fallback run, prefer the event-driven `runs.wait` status command over repeated `runs.events` polling.""",
 )
 
-_MAIN_DELIVERY_PROGRESS_PROMPT = """- Use the direct `send_message` tool for the proactive progress-reporting protocol above. For non-trivial tool work, the opening update is required and should be the first invocation in the batch when possible. Additional updates require real new information; do not use it for questions or as a substitute for the final answer."""
+_MAIN_DELIVERY_PROGRESS_PROMPT = """- Use the direct `send_message` tool for the proactive progress-reporting protocol above. For non-trivial tool work, the opening update is required and MUST be the first invocation in the first execution batch. Put the first substantive tool call directly after it in that same batch whenever safe, so the user sees the update while work starts rather than before an avoidable pause. Additional updates require real new information; do not use them for questions or as a substitute for the final answer."""
 
 _MAIN_MEMORY_PROMPT = _tool_pack_prompt_block(
     "memory_tools",
@@ -367,7 +367,7 @@ _MAIN_AGENT_PROMPT_TEMPLATE = f"""You are {ASSISTANT_NAME}, a personal AI compan
 - If you need to ask the user anything, you MUST use `ask_user`. Do not ask questions in a normal assistant text reply. Progress updates and final answers must be statements, not questions.
 - When you judge that your current approach is not satisfying the user's goal, repeated work is not converging, or user guidance shows the direction is wrong, call `DeepReflect` to reframe the next working context. Do NOT call it just because a single tool failed.
 - For a complex, multi-step, or risky task where the user would benefit from reviewing the approach first, call `enter_plan_mode`. It decomposes the request into steps → tasks, shows the plan in the 计划 sidebar tab, and pauses for the user to approve / reject / revise before any real work happens.
-- When a task is complete, call the `quit` tool, putting your complete final reply to the user in its `reply` argument (the user sees this text verbatim — write the actual answer/result there, not a description of what you did).
+- When a task is complete, write the complete final answer as normal assistant content, then call `quit` as a terminal control signal. Keep quit's arguments free of answer text and tool syntax. Never combine `quit` with another tool call.
 
 {_MAIN_MEMORY_PROMPT}
 
@@ -385,7 +385,8 @@ _PHASE1_DECISION_PROMPT = """Decision phase rules:
 - This is the decision phase. The tool list shows direct tools and stable module gateways, but here you may ONLY call `use_tools`, `ask_user`, or `quit`. Route real work through `use_tools`, which enters the execution phase.
 - ALWAYS call `use_tools` when the user asks you to DO anything — file ops, search, web, code, shell, scheduling, data queries, sub-agents, browser automation, notifications, etc.
 - Call `use_tools` when the request may depend on project history, workspace documents, saved user context, or the knowledge base, even if the user did not explicitly ask you to search it.
-- Call `quit` ONLY when the request is pure conversation (greetings, abstract opinions) with zero benefit from real-world data. When you do, put your COMPLETE reply to the user in quit's `reply` argument — that text is shown to the user verbatim, so write the actual answer there. Most questions — including explanations, how-things-work, recommendations, technical topics, or anything factual — can benefit from a web search: call `use_tools` instead.
+- Decide promptly. Once the request is clear enough for tool work, call `use_tools` immediately; do not write a preamble, draft a plan in assistant text, or spend tokens describing tools. The execution phase will send the required user-visible opening update through `send_message` and start the first useful tool in the same batch.
+- Call `quit` ONLY when the request is pure conversation (greetings, abstract opinions) with zero benefit from real-world data. Write the COMPLETE reply as normal assistant content and call `quit` only as the terminal signal; its arguments must not contain the answer or another tool call. Most questions — including explanations, how-things-work, recommendations, technical topics, or anything factual — can benefit from a web search: call `use_tools` instead.
 - Call `ask_user` when the request is unclear, incomplete, or has multiple valid interpretations. Prefer asking over guessing — a quick question avoids wrong work. Common triggers: missing file paths, ambiguous scope, conflicting instructions, unclear preferences among reasonable alternatives.
 - If you need to ask the user anything at all, use `ask_user`. Never put a question to the user in plain assistant text.
 - When in doubt between answering directly or calling `use_tools`, call `use_tools`. It is always better to have tools available than to answer blindly.
@@ -426,7 +427,7 @@ Rules:
 - Return the RESULT of what you did, not a conversation.
 - Be concise in tool usage.
 - Before finishing, compare the result with the original request, inspect the produced state or artifact, and run the most relevant available validation. Fix detected problems before reporting completion.
-- When done and verified, call the `quit` tool, putting your complete final reply to the user in its `reply` argument (shown to the user verbatim — write the actual answer/result there). State any check that could not be run instead of implying it passed.
+- When done and verified, write the complete final answer as normal assistant content, then call `quit` as the terminal control signal. Do not put the answer or tool syntax in quit's arguments, and never combine `quit` with another tool call. State any check that could not be run instead of implying it passed.
 - Do not fabricate results. If a tool fails or returns nothing useful, state that clearly.
 """
 
@@ -616,7 +617,7 @@ question or conversational follow-up, not as a request to execute a task.
 - Do not inspect files, run commands, edit files, send files, spawn subagents, or update the task plan merely because this is a Workbench task.
 - Use tools only when the user explicitly asks you to inspect/execute/modify something, or when an accurate answer truly requires workspace or external facts that are not already in context.
 - If the user asks to add, delete, reorder, or materially change task steps, invoke `task.plan.update` through `task_tools`; otherwise do not change the plan.
-- When a direct reply is enough, call `quit` with the complete user-facing answer in `reply`.
+- When a direct reply is enough, write it as normal assistant content and call `quit` only as a terminal control signal with no answer text in its arguments.
 - Match the user's language.
 """
 

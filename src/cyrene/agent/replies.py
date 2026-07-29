@@ -21,11 +21,20 @@ _default_call_llm_stream = _call_llm_stream
 _default_streaming_reply_requested = _streaming_reply_requested
 
 _VISIBLE_DSML_TOOL_BLOCK_RE = re.compile(
-    r"<(?:｜｜|\|\|)DSML(?:｜｜|\|\|)tool_calls>.*?</(?:｜｜|\|\|)DSML(?:｜｜|\|\|)tool_calls>",
-    re.DOTALL,
+    r"(?:"
+    r"<(?:｜｜|\|\|)DSML(?:｜｜|\|\|)tool_calls>.*?</(?:｜｜|\|\|)DSML(?:｜｜|\|\|)tool_calls>"
+    r"|<tool_call>.*?</tool_call>"
+    r")",
+    re.DOTALL | re.IGNORECASE,
 )
 _VISIBLE_DSML_TOOL_MARKUP_RE = re.compile(
+    r"(?:"
     r"</?(?:｜｜|\|\|)DSML(?:｜｜|\|\|)"
+    r"|</?tool_call\b"
+    r"|<function="
+    r"|<parameter="
+    r")",
+    re.IGNORECASE,
 )
 
 
@@ -263,7 +272,7 @@ def _strip_visible_dsml_tool_blocks(text: str) -> str:
 
 
 def _contains_visible_dsml_tool_markup(text: str) -> bool:
-    """Return whether text contains complete or partial DSML tool syntax."""
+    """Return whether text contains complete or partial textual tool syntax."""
     return bool(_VISIBLE_DSML_TOOL_MARKUP_RE.search(str(text or "")))
 
 
@@ -292,7 +301,7 @@ async def _validated_final_no_tool_reply(
     call_llm_stream: Any = None,
     streaming_reply_requested: Any = None,
 ) -> str:
-    """Generate final text without leaking textual DSML tool markup."""
+    """Generate final text without leaking textual tool-call markup."""
     call_llm = call_llm or _legacy_guidance_dependency(
         "_call_llm",
         _default_call_llm,
@@ -330,7 +339,7 @@ async def _validated_final_no_tool_reply(
         {
             "role": "user",
             "content": (
-                "Your previous message was DSML/tool-call markup, but tools are "
+                "Your previous message was textual tool-call markup, but tools are "
                 "not available in this final-answer step. Write the final answer "
                 "to the user in plain text only, using the already gathered "
                 "context. Do not output XML, DSML, JSON tool calls, or any "

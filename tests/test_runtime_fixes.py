@@ -444,12 +444,12 @@ async def test_use_tools_phase_hides_internal_attachment_prompt(
             }],
         },
         {
-            "content": "",
+            "content": "Attachment inspection completed.",
             "tool_calls": [{
                 "id": "quit1",
                 "function": {
                     "name": "quit",
-                    "arguments": '{"reply":"done"}',
+                    "arguments": "{}",
                 },
             }],
         },
@@ -1248,7 +1248,7 @@ async def test_final_reply_retries_visible_dsml_tool_markup(monkeypatch):
 
     assert text == "目前没有确认的国泰香港到布拉格直飞结果。"
     assert len(calls) == 2
-    assert "DSML/tool-call markup" in calls[1][-1]["content"]
+    assert "textual tool-call markup" in calls[1][-1]["content"]
 
 
 def test_retry_safe_guide_round_id_drops_completed_round_target():
@@ -3217,10 +3217,10 @@ async def test_run_main_agent_chat_only_streams_final_reply(monkeypatch):
     assert saved["messages"][-1]["client_request_id"] == "req_stream"
 
 
-async def test_streaming_phase2_delivers_valid_quit_reply_without_wrapup(
+async def test_streaming_phase2_delivers_valid_assistant_content_on_quit(
     tmp_path, monkeypatch
 ):
-    """A complete quit(reply) is already the final answer; do not rebuild it."""
+    """Normal assistant content on a quit turn is delivered without rebuilding."""
     from cyrene.agent import agent as _agent_core
     from cyrene.agent import state as _agent_state
 
@@ -3247,12 +3247,12 @@ async def test_streaming_phase2_delivers_valid_quit_reply_without_wrapup(
             }],
         },
         {
-            "content": "",
+            "content": "已经完成检查。",
             "tool_calls": [{
                 "id": "quit1",
                 "function": {
                     "name": "quit",
-                    "arguments": json.dumps({"reply": "已经完成检查。"}),
+                    "arguments": "{}",
                 },
             }],
             "usage": {
@@ -3303,10 +3303,10 @@ async def test_streaming_phase2_delivers_valid_quit_reply_without_wrapup(
     assert saved["messages"][-1]["usage"]["prompt_tokens"] == 1200
 
 
-async def test_streaming_phase2_dsml_quit_reply_uses_guarded_wrapup(
+async def test_streaming_phase2_dsml_assistant_content_uses_no_tool_wrapup(
     tmp_path, monkeypatch
 ):
-    """DSML hidden by the stream filter must not return via quit arguments."""
+    """Tool markup on a quit turn is repaired without reopening tools."""
     from cyrene.agent import agent as _agent_core
     from cyrene.agent import state as _agent_state
 
@@ -3339,12 +3339,12 @@ async def test_streaming_phase2_dsml_quit_reply_uses_guarded_wrapup(
             }],
         },
         {
-            "content": "",
+            "content": dsml,
             "tool_calls": [{
                 "id": "quit1",
                 "function": {
                     "name": "quit",
-                    "arguments": json.dumps({"reply": dsml}),
+                    "arguments": "{}",
                 },
             }],
         },
@@ -3395,7 +3395,8 @@ async def test_streaming_phase2_dsml_quit_reply_uses_guarded_wrapup(
 
     assert result == "安全的最终答复。"
     assert len(wrap_tools) == 1
-    assert wrap_tools[0] == calls[0] == calls[1]
+    assert wrap_tools[0] == "null"
+    assert calls[0] == calls[1]
     assert all("DSML" not in str(event) for event in streamed)
     assert all(
         "DSML" not in str(message.get("content") or "")
@@ -3403,9 +3404,8 @@ async def test_streaming_phase2_dsml_quit_reply_uses_guarded_wrapup(
     )
 
 
-async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeypatch):
-    """A tool intent the model only surfaces while writing the final answer is
-    executed (re-entering the tool loop) instead of being leaked or discarded."""
+async def test_quit_wrap_up_never_reenters_tool_loop(tmp_path, monkeypatch):
+    """Once quit is observed, recovery is no-tool and cannot revive execution."""
     from cyrene.agent import agent as _agent_core
     from cyrene.agent import state as _agent_state
 
@@ -3427,21 +3427,21 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
         llm_calls.append(tools)
         if len(llm_calls) == 1:  # decision phase → route into execution
             return {"content": "", "tool_calls": [{"id": "d1", "function": {"name": "use_tools", "arguments": "{\"task\":\"看 github 实现\"}"}}]}
-        # execution phase: the model believes it is done and quits early
-        return {"content": "", "tool_calls": [{"id": "q1", "function": {"name": "quit", "arguments": "{}"}}]}
+        # A malformed terminal batch must not execute the sibling tool.
+        return {
+            "content": "",
+            "tool_calls": [
+                {"id": "wf1", "function": {"name": "WebFetch", "arguments": "{\"url\":\"https://example.com/x\"}"}},
+                {"id": "q1", "function": {"name": "quit", "arguments": "{}"}},
+            ],
+        }
 
     async def fake_call_llm_stream(messages, max_tokens=32000, tools=None):
         stream_calls["n"] += 1
-        if stream_calls["n"] == 1:
-            # while composing the answer the model realizes it must fetch the source
-            await _agent_core._emit_reply_stream_event({"type": "reply_start"})
-            await _agent_core._emit_reply_stream_event({"type": "reply_delta", "delta": "让我核对 GitHub 源。"})
-            return {
-                "role": "assistant", "content": "让我核对 GitHub 源。",
-                "tool_calls": [{"id": "wf1", "type": "function", "function": {"name": "WebFetch", "arguments": "{\"url\":\"https://example.com/x\"}"}}],
-            }
+        assert tools is None
+        await _agent_core._emit_reply_stream_event({"type": "reply_start"})
         await _agent_core._emit_reply_stream_event({"type": "reply_delta", "delta": "已对比完成"})
-        await _agent_core._emit_reply_stream_event({"type": "reply_done", "response": "让我核对 GitHub 源。已对比完成"})
+        await _agent_core._emit_reply_stream_event({"type": "reply_done", "response": "已对比完成"})
         return {"role": "assistant", "content": "已对比完成"}
 
     async def fake_execute_tool(name, args, *rest, **kw):
@@ -3472,8 +3472,8 @@ async def test_wrap_up_honors_late_tool_call_and_reenters_loop(tmp_path, monkeyp
         _agent_state._reply_stream_writer.reset(writer_token)
 
     assert result == "已对比完成"
-    assert "WebFetch" in executed              # the late tool intent was honored
-    assert stream_calls["n"] == 2              # wrap-up: reopen tools, then finalize
+    assert executed == []
+    assert stream_calls["n"] == 1
     deltas = "".join(e.get("delta", "") for e in streamed if e["type"] == "reply_delta")
     assert "DSML" not in deltas
     assert "已对比完成" in deltas

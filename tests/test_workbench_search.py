@@ -541,9 +541,19 @@ def test_workbench_chat_run_uses_project_workspace(client, search_env, monkeypat
     )
 
     assert response.status_code == 200
-    assert response.json()["assistantMessage"]["content"] == "done"
+    assistant_message = response.json()["assistantMessage"]
+    assert assistant_message["content"] == "done"
+    assert isinstance(assistant_message["processingDurationMs"], int)
+    assert assistant_message["processingDurationMs"] >= 0
     assert captured["workspace_dir"] == str(
         (search_env["data_dir"].parent / "workspace").resolve()
+    )
+    chats = json.loads(
+        (search_env["data_dir"] / "workbench_chats.json").read_text(encoding="utf-8")
+    )
+    assert (
+        chats["chats"][0]["messages"][-1]["processingDurationMs"]
+        == assistant_message["processingDurationMs"]
     )
 
 

@@ -1686,6 +1686,41 @@ def test_workbench_marks_run_finalizing_before_workspace_save():
     assert reply_done < finalizing < workspace_finalize < saved
 
 
+def test_workbench_assistant_footer_formats_persisted_processing_duration():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helper = "function wbcFormatProcessingDuration(" + source.split(
+        "function wbcFormatProcessingDuration(", 1
+    )[1].split("function wbcConfirmOptimisticMessage", 1)[0]
+    script = f"""
+{helper}
+const values = [undefined, -1, 0, 500, 1000, 61000, 3661000];
+process.stdout.write(JSON.stringify(values.map(wbcFormatProcessingDuration)));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True
+    )
+    assert json.loads(completed.stdout) == [
+        "",
+        "",
+        "<0.1s",
+        "0.5s",
+        "1s",
+        "1m 1s",
+        "1h 1m",
+    ]
+
+    footer = source.split('<div className="wbc-msg-foot">', 1)[1].split(
+        "</div>", 1
+    )[0]
+    assert footer.index("wbcFormatTime(msg.createdAt)") < footer.index(
+        "processingDuration"
+    )
+    assert footer.index("processingDuration") < footer.index("total_tokens")
+
+
 def test_workbench_terminal_reply_snapshot_is_authoritative_after_streamed_calls():
     root = Path(__file__).resolve().parents[1]
     source = (root / "src" / "route" / "workbench" / "chat.py").read_text(
@@ -3760,3 +3795,24 @@ def test_account_menu_codex_quota_requires_primary_oauth_and_login():
     assert 'durationMins === 300' in model
     assert 'durationMins >= 10080' in model
     assert 'window.CyreneUI.require("model").codexQuotaWindows(' in settings
+
+
+def test_phase1_stream_is_rendered_as_a_distinct_execution_card():
+    root = Path(__file__).resolve().parent.parent
+    source = (
+        root / "src" / "webui" / "frontend" / "workbench-chat.jsx"
+    ).read_text(encoding="utf-8")
+    styles = (
+        root / "src" / "webui" / "frontend" / "workbench.css"
+    ).read_text(encoding="utf-8")
+    translations = (
+        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
+    ).read_text(encoding="utf-8")
+
+    assert 'String(item.llmPhase || "") === "phase1"' in source
+    assert 'kind: "phase1"' in source
+    assert 'wbcT("workbenchChat.phase1Card"' in source
+    assert "String(last.llmPhase) === eventPhase" in source
+    assert '"workbenchChat.phase1Card": "正在理解指令"' in translations
+    assert '"workbenchChat.phase1Understood": "已理解用户需求"' in translations
+    assert "border-radius: 16px" in styles

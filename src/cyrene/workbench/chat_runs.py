@@ -64,6 +64,12 @@ _RETENTION_SECONDS = 45.0
 # before cancelling them (so a planned restart still persists replies).
 _SHUTDOWN_GRACE_SECONDS = 20.0
 _DURABLE_RETENTION_DAYS = 7
+# High-frequency model deltas stay individually cursor-addressable, but their
+# SQLite work is grouped into one connection/transaction. This removes database
+# backpressure from the upstream token loop without changing replay semantics.
+_DURABLE_EVENT_BATCH_INTERVAL_SECONDS = 0.05
+_DURABLE_EVENT_BATCH_MAX = 128
+_BATCHABLE_DURABLE_EVENT_TYPES = frozenset({"reasoning_delta", "reply_delta"})
 
 # Event types that suppress the synthesized reply (the agent already streamed a
 # real reply). Mirrors the legacy generator's ``startswith("reply_")`` check.
@@ -164,8 +170,48 @@ class ChatRunEventStore:
                 self._append_locked(conn, run.run_id, event)
 
     def append(self, run_id: str, event: dict[str, Any]) -> None:
+        self.append_many(run_id, [event])
+
+    def append_many(
+        self,
+        run_id: str,
+        events: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    ) -> None:
+        """Persist a cursor-preserving event batch in one transaction."""
+        if not events:
+            return
         with self._lock, self._connect() as conn:
-            self._append_locked(conn, run_id, event)
+            rows = [
+                (
+                    str(run_id),
+                    int(event.get("_seq") or 0),
+                    json.dumps(
+                        event,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        default=str,
+                    ),
+                    datetime.now(timezone.utc).isoformat(),
+                )
+                for event in events
+            ]
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO workbench_chat_run_events(
+                    run_id, seq, event_json, created_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                rows,
+            )
+            last_seq = max(row[1] for row in rows)
+            conn.execute(
+                """
+                UPDATE workbench_chat_runs
+                SET last_seq = CASE WHEN last_seq < ? THEN ? ELSE last_seq END
+                WHERE run_id = ?
+                """,
+                (last_seq, last_seq, str(run_id)),
+            )
 
     @staticmethod
     def _append_locked(
@@ -320,6 +366,9 @@ class ChatRun:
         self.run_id = f"run_{uuid4().hex}"
         self.created_at = datetime.now(timezone.utc).isoformat()
         self._event_store: ChatRunEventStore | None = None
+        self._event_store_pending: list[dict[str, Any]] = []
+        self._event_store_flush_lock = asyncio.Lock()
+        self._event_store_flush_task: asyncio.Task[None] | None = None
         self.inbox = WorkbenchAgentInbox(
             self.chat_id, db_path=db_path, run_id=self.run_id
         )
@@ -363,6 +412,9 @@ class ChatRun:
         run.run_id = str(run_id)
         run.created_at = str(created_at)
         run._event_store = None
+        run._event_store_pending = []
+        run._event_store_flush_lock = asyncio.Lock()
+        run._event_store_flush_task = None
         run.inbox = None
         run.max_buffer = max(_MAX_BUFFER_EVENTS, len(events))
         run.seq = int(last_seq)
@@ -387,6 +439,67 @@ class ChatRun:
         self._event_store = store
         await asyncio.to_thread(store.create, self)
 
+    def _schedule_event_store_flush(self) -> None:
+        task = self._event_store_flush_task
+        if task is not None and not task.done():
+            return
+        task = asyncio.create_task(self._flush_event_store_after_delay())
+        self._event_store_flush_task = task
+
+        def _settled(done: asyncio.Task[None]) -> None:
+            if self._event_store_flush_task is done:
+                self._event_store_flush_task = None
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception(
+                    "Failed to batch durable chat events for run %s",
+                    self.run_id,
+                )
+
+        task.add_done_callback(_settled)
+
+    async def _flush_event_store_after_delay(self) -> None:
+        await asyncio.sleep(_DURABLE_EVENT_BATCH_INTERVAL_SECONDS)
+        await self._flush_event_store_now()
+
+    async def _flush_event_store_now(self) -> None:
+        store = self._event_store
+        if store is None:
+            self._event_store_pending.clear()
+            return
+        async with self._event_store_flush_lock:
+            if not self._event_store_pending:
+                return
+            batch = self._event_store_pending
+            self._event_store_pending = []
+            try:
+                await asyncio.to_thread(store.append_many, self.run_id, batch)
+            except asyncio.CancelledError:
+                # ``to_thread`` work may still commit after its awaiter is
+                # cancelled. Re-queueing is safe because writes are idempotent
+                # by (run_id, seq), and guarantees a terminal flush cannot race
+                # past an in-flight batch.
+                self._event_store_pending = [*batch, *self._event_store_pending]
+                raise
+            except Exception:
+                # Preserve order for a later terminal flush/retry.
+                self._event_store_pending = [*batch, *self._event_store_pending]
+                raise
+
+    async def flush_event_store(self) -> None:
+        """Flush queued durable events before terminal/finalize boundaries."""
+        scheduled = self._event_store_flush_task
+        current = asyncio.current_task()
+        if scheduled is not None and scheduled is not current and not scheduled.done():
+            scheduled.cancel()
+            await asyncio.gather(scheduled, return_exceptions=True)
+        if self._event_store_flush_task is scheduled:
+            self._event_store_flush_task = None
+        await self._flush_event_store_now()
+
     async def publish(self, event: dict[str, Any]) -> None:
         """Append an event to the buffer and fan it out to attached clients.
 
@@ -407,11 +520,15 @@ class ChatRun:
         stored = {"_seq": self.seq, "runId": self.run_id, **dict(event)}
         self.events.append(stored)
         if self._event_store is not None:
-            await asyncio.to_thread(
-                self._event_store.append,
-                self.run_id,
-                stored,
-            )
+            self._event_store_pending.append(stored)
+            event_type = str(event.get("type") or "")
+            if (
+                event_type not in _BATCHABLE_DURABLE_EVENT_TYPES
+                or len(self._event_store_pending) >= _DURABLE_EVENT_BATCH_MAX
+            ):
+                await self.flush_event_store()
+            else:
+                self._schedule_event_store_flush()
         if len(self.events) > self.max_buffer:
             # Keep the ack (events[0]); drop the oldest events after it.
             overflow = len(self.events) - self.max_buffer
@@ -629,6 +746,7 @@ class ChatRunManager:
             run.status = "done" if run.status in {"running", "finishing"} else run.status
             if self._event_store is not None:
                 try:
+                    await run.flush_event_store()
                     await asyncio.to_thread(self._event_store.finalize, run)
                 except Exception:
                     logger.exception(

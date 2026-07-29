@@ -115,7 +115,7 @@ async def test_app_use_round_keeps_identical_wire_tool_array(monkeypatch):
             "content": "App Use cache stability was verified successfully.",
             "tool_calls": [{
                 "id": "done",
-                "function": {"name": "quit", "arguments": json.dumps({"reply": "App Use cache stability was verified successfully."})},
+                "function": {"name": "quit", "arguments": "{}"},
             }],
         },
     ])

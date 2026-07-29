@@ -1789,19 +1789,6 @@ def _message_fingerprint(content: Any) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def _quit_reply(response: dict[str, Any]) -> str:
-    for call in response.get("tool_calls") or []:
-        if str((call.get("function") or {}).get("name") or "") != "quit":
-            continue
-        try:
-            args = json.loads((call.get("function") or {}).get("arguments") or "{}")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return ""
-        reply = args.get("reply") if isinstance(args, dict) else ""
-        return str(reply or "").strip()
-    return ""
-
-
 def _quit_arguments(response: dict[str, Any]) -> dict[str, Any]:
     for call in response.get("tool_calls") or []:
         if str((call.get("function") or {}).get("name") or "") != "quit":
@@ -2151,7 +2138,7 @@ async def _run_subagent(
         if effective_mode == DISCUSSION_MODE else
         """## Peer Communication
 - Execution workers are independent and must not send peer messages or broadcasts.
-- Return findings to the parent through quit."""
+- Return findings to the parent in normal assistant content, then call quit."""
     )
     subagent_prompt = f"""You are a Cyrene sub-agent with a single assigned responsibility.
 
@@ -2161,8 +2148,8 @@ async def _run_subagent(
 {criteria_block}
 - Concrete deferred capabilities are behind module gateways. Use operation=discover, then describe, then invoke.
 - You cannot ask the user, spawn subagents, query the parent round, or deliver the parent agent's final answer.
-- If your task produces a file, write it inside the workspace and report the path in your `quit` result.
-- For a normal round, return the complete result through `quit(reply=...)`. The parent collects that reply.
+- If your task produces a file, write it inside the workspace and report the path in normal assistant content.
+- For a normal round, write the complete result in normal assistant content, then call `quit` only as the terminal signal. Do not put the result in quit's arguments. The parent collects the assistant content.
 - If you receive a [DIRECT_MESSAGE] from the user, acknowledge it once through delivery.send_message_to_user when available, then adjust the work immediately.
 - Every tool call must be grounded in the assigned task. Do not fabricate tool success or evidence.
 
@@ -2440,7 +2427,7 @@ You are a **participant** in this discussion. Rules:
                     "content": (
                         "[Runtime Finalization]\n"
                         f"Stop reason: {force_finalize_reason}. Do not call additional work tools. "
-                        "Return the best available result through quit(reply=...). "
+                        "Write the best available result in normal assistant content, then call quit only as the terminal signal. "
                         "State what is complete, what remains, and any blocker."
                     ),
                 })
@@ -2618,7 +2605,6 @@ You are a **participant** in this discussion. Rules:
                 ]
                 agent_text = (
                     assistant_text(response).strip()
-                    or _quit_reply(response)
                     or "Done."
                 )
                 if sent_output:

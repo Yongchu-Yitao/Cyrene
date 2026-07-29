@@ -119,6 +119,43 @@ async def test_finished_run_events_reload_from_sqlite_after_memory_cleanup(
     assert restored.events[-1]["response"] == "durable reply"
 
 
+async def test_stream_deltas_are_batched_into_one_sqlite_transaction(
+    monkeypatch,
+    tmp_path,
+):
+    from cyrene.workbench.chat_runs import ChatRun, ChatRunEventStore
+
+    store = ChatRunEventStore(str(tmp_path / "batched-events.sqlite3"))
+    run = ChatRun("chat_batched", {"type": "ack", "chatId": "chat_batched"})
+    await run.configure_event_store(store)
+    batch_sizes = []
+    original_append_many = store.append_many
+
+    def tracked_append_many(run_id, events):
+        batch_sizes.append(len(events))
+        return original_append_many(run_id, events)
+
+    monkeypatch.setattr(store, "append_many", tracked_append_many)
+    for index in range(32):
+        await run.publish({"type": "reply_delta", "delta": str(index)})
+
+    # In-memory fanout remains immediate while SQLite work waits for a bounded
+    # batch or a terminal event.
+    assert len(run.events) == 33
+    assert batch_sizes == []
+
+    await run.publish({"type": "reply_done", "response": "done"})
+
+    assert batch_sizes == [33]
+    restored = store.load_by_run_id(run.run_id)
+    assert restored is not None
+    assert [event["type"] for event in restored.events] == [
+        "ack",
+        *(["reply_delta"] * 32),
+        "reply_done",
+    ]
+
+
 def test_startup_marks_unfinished_durable_run_as_process_restarted(tmp_path):
     from cyrene.workbench.chat_runs import ChatRun, ChatRunEventStore, ChatRunManager
 

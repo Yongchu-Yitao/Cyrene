@@ -68,9 +68,8 @@ async def test_execution_mode_is_not_bounded_by_main_agent_round_limit(monkeypat
         {"content": "", "tool_calls": [_tool_call("r1", "Read", {"path": "a.txt"})]},
         {"content": "", "tool_calls": [_tool_call("r2", "Read", {"path": "b.txt"})]},
         {
-            "content": "",
+            "content": "execution complete",
             "tool_calls": [_tool_call("q1", "quit", {
-                "reply": "execution complete",
                 "completion_status": "completed",
                 "criteria_evidence": [{
                     "criterion": "Both files inspected",
@@ -124,7 +123,7 @@ async def test_execution_checkpoint_rechecks_success_without_stopping(monkeypatc
         {"content": "", "tool_calls": [_tool_call("r1", "Read", {"path": "a.txt"})]},
         {"content": "", "tool_calls": [_tool_call("r2", "Read", {"path": "b.txt"})]},
         {"content": "", "tool_calls": [_tool_call("r3", "Read", {"path": "c.txt"})]},
-        {"content": "", "tool_calls": [_tool_call("q1", "quit", {"reply": "done"})]},
+        {"content": "done", "tool_calls": [_tool_call("q1", "quit", {})]},
     ]
     calls = _patch_runtime(
         monkeypatch,
@@ -166,8 +165,8 @@ async def test_execution_mode_stops_after_repeated_no_progress(monkeypatch):
         {"content": "", "tool_calls": [_tool_call("r2", "Read", repeated_read)]},
         {"content": "", "tool_calls": [_tool_call("r3", "Read", repeated_read)]},
         {
-            "content": "",
-            "tool_calls": [_tool_call("q1", "quit", {"reply": "partial evidence retained"})],
+            "content": "partial evidence retained",
+            "tool_calls": [_tool_call("q1", "quit", {})],
         },
     ]
     calls = _patch_runtime(monkeypatch, responses, tool_result="unchanged contents")
@@ -206,8 +205,8 @@ async def test_execution_absolute_safety_fuse_is_resource_exhausted(monkeypatch)
     responses = [
         {"content": "", "tool_calls": [_tool_call("r1", "Read", {"path": "a.txt"})]},
         {
-            "content": "",
-            "tool_calls": [_tool_call("q1", "quit", {"reply": "safety summary"})],
+            "content": "safety summary",
+            "tool_calls": [_tool_call("q1", "quit", {})],
         },
     ]
     calls = _patch_runtime(monkeypatch, responses, tool_result="new evidence")
@@ -255,8 +254,8 @@ async def test_discussion_mode_enforces_message_limit_and_then_summarizes(monkey
             "tool_calls": [_tool_call("m1", "subagent_tools", send_point)],
         },
         {
-            "content": "",
-            "tool_calls": [_tool_call("q1", "quit", {"reply": "Final discussion position."})],
+            "content": "Final discussion position.",
+            "tool_calls": [_tool_call("q1", "quit", {})],
         },
     ]
     calls = _patch_runtime(monkeypatch, responses, tool_result="Message sent to bob.")
@@ -327,7 +326,7 @@ async def test_discussion_message_length_is_separate_from_message_count(monkeypa
     responses = [
         {"content": "", "tool_calls": [_tool_call("m1", "subagent_tools", too_long)]},
         {"content": "", "tool_calls": [_tool_call("m2", "subagent_tools", short_enough)]},
-        {"content": "", "tool_calls": [_tool_call("q1", "quit", {"reply": "done"})]},
+        {"content": "done", "tool_calls": [_tool_call("q1", "quit", {})]},
     ]
     _patch_runtime(monkeypatch, responses, tool_result="Message sent to bob.")
 
@@ -381,7 +380,7 @@ async def test_execution_worker_cannot_bypass_discussion_budget(monkeypatch):
     }
     responses = [
         {"content": "", "tool_calls": [_tool_call("m1", "subagent_tools", communication)]},
-        {"content": "", "tool_calls": [_tool_call("q1", "quit", {"reply": "reported to parent"})]},
+        {"content": "reported to parent", "tool_calls": [_tool_call("q1", "quit", {})]},
     ]
     executed = []
 
@@ -413,10 +412,10 @@ async def test_terminal_quit_pairs_every_tool_call_in_mixed_batch(monkeypatch):
     from cyrene import subagent
 
     responses = [{
-        "content": "",
+        "content": "done",
         "tool_calls": [
             _tool_call("read1", "Read", {"path": "should-not-run.txt"}),
-            _tool_call("quit1", "quit", {"reply": "done"}),
+            _tool_call("quit1", "quit", {}),
         ],
     }]
     executed = []
@@ -514,7 +513,7 @@ async def test_model_message_override_cannot_raise_admin_discussion_cap(monkeypa
             "capability_id": "subagent.send_message",
             "arguments": {"to": "bob", "content": "one point"},
         })]},
-        {"content": "", "tool_calls": [_tool_call("q1", "quit", {"reply": "summary"})]},
+        {"content": "summary", "tool_calls": [_tool_call("q1", "quit", {})]},
     ]
     calls = _patch_runtime(monkeypatch, responses, tool_result="Message sent to bob.")
     await subagent.clear()
@@ -579,16 +578,14 @@ async def test_missing_success_evidence_requires_correction_before_completion(mo
     from cyrene import subagent
 
     responses = [
-        {"content": "", "tool_calls": [
+        {"content": "premature", "tool_calls": [
             _tool_call("read1", "Read", {"path": "artifact.txt"}),
             _tool_call("quit1", "quit", {
-                "reply": "premature",
                 "completion_status": "completed",
                 "criteria_evidence": [],
             }),
         ]},
-        {"content": "", "tool_calls": [_tool_call("quit2", "quit", {
-            "reply": "verified",
+        {"content": "verified", "tool_calls": [_tool_call("quit2", "quit", {
             "completion_status": "completed",
             "criteria_evidence": [{
                 "criterion": "Artifact verified",
@@ -635,9 +632,8 @@ async def test_execution_worker_can_report_honest_non_success_outcome(
     from cyrene import subagent
 
     _patch_runtime(monkeypatch, [{
-        "content": "",
+        "content": "The dependency is unavailable.",
         "tool_calls": [_tool_call("quit1", "quit", {
-            "reply": "The dependency is unavailable.",
             "completion_status": completion_status,
         })],
     }])
@@ -701,7 +697,7 @@ async def test_execution_cost_fuse_requests_finalization(monkeypatch):
             "content": "",
             "tool_calls": [_tool_call("r1", "Read", {"path": "a.txt"})],
         },
-        {"content": "", "tool_calls": [_tool_call("q1", "quit", {"reply": "cost summary"})]},
+        {"content": "cost summary", "tool_calls": [_tool_call("q1", "quit", {})]},
     ]
     calls = _patch_runtime(monkeypatch, responses, tool_result="new evidence")
     await subagent.clear()

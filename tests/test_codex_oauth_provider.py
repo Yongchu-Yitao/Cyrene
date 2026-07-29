@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import time
+
 import pytest
 
 from cyrene.model_runtime.client import _normalized_candidate
@@ -113,9 +116,126 @@ async def test_codex_quota_check_failure_uses_stale_exhausted_cache(
     async def limits() -> dict:
         raise RuntimeError("usage endpoint unavailable")
 
-    monkeypatch.setattr(provider, "rate_limits_cached", limits)
+    monkeypatch.setattr(provider, "rate_limits", limits)
 
     assert await provider.quota_available() is False
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_codex_quota_returns_stale_value_before_background_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+    provider._limits_cache = (
+        time.monotonic() - 60,
+        {
+            "rateLimitsByLimitId": {
+                "codex": {"primary": {"usedPercent": 25}}
+            }
+        },
+    )
+    refresh_started = asyncio.Event()
+    release_refresh = asyncio.Event()
+
+    async def refresh() -> dict:
+        refresh_started.set()
+        await release_refresh.wait()
+        return {}
+
+    monkeypatch.setattr(provider, "rate_limits", refresh)
+
+    assert await provider.quota_available() is True
+    await asyncio.wait_for(refresh_started.wait(), timeout=1)
+    assert provider._limits_refresh_task is not None
+
+    release_refresh.set()
+    await provider._limits_refresh_task
+
+
+@pytest.mark.asyncio
+async def test_codex_completion_routes_streams_per_thread_and_runs_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+    thread_counter = 0
+    turns_started = 0
+    both_turns_started = asyncio.Event()
+
+    async def ensure_started() -> None:
+        return None
+
+    async def request_raw(
+        method: str,
+        params: dict,
+        *,
+        timeout: float = 30,
+    ) -> dict:
+        nonlocal thread_counter, turns_started
+        if method == "thread/start":
+            thread_counter += 1
+            return {"thread": {"id": f"thread-{thread_counter}"}}
+        if method != "turn/start":
+            raise AssertionError(f"unexpected method: {method}")
+
+        thread_id = str(params["threadId"])
+        turn_id = f"turn-{thread_id}"
+        turns_started += 1
+        if turns_started == 2:
+            both_turns_started.set()
+        await asyncio.wait_for(both_turns_started.wait(), timeout=1)
+
+        async def emit() -> None:
+            await asyncio.sleep(0)
+            provider._route_notification({
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "threadId": thread_id,
+                    "turnId": turn_id,
+                    "delta": f"reply:{thread_id}",
+                },
+            })
+            provider._route_notification({
+                "method": "turn/completed",
+                "params": {
+                    "threadId": thread_id,
+                    "turn": {"id": turn_id, "status": "completed"},
+                },
+            })
+
+        asyncio.create_task(emit())
+        return {"turn": {"id": turn_id}}
+
+    monkeypatch.setattr(provider, "_ensure_started", ensure_started)
+    monkeypatch.setattr(provider, "_request_raw", request_raw)
+    streams: list[list[dict]] = [[], []]
+
+    async def run(index: int) -> dict:
+        async def collect(event: dict) -> None:
+            streams[index].append(event)
+
+        return await provider.complete(
+            messages=[{"role": "user", "content": f"request {index}"}],
+            tools=None,
+            model="gpt-5.6-sol",
+            timeout=2,
+            stream_callback=collect,
+        )
+
+    first, second = await asyncio.gather(run(0), run(1))
+
+    assert {first["content"], second["content"]} == {
+        "reply:thread-1",
+        "reply:thread-2",
+    }
+    assert turns_started == 2
+    for events in streams:
+        assert events[0] == {"type": "reply_start"}
+        assert set(events[1]) == {"type", "delta"}
+        assert events[1]["type"] == "reply_delta"
+        assert set(events[2]) == {"type", "response"}
+        assert events[2]["type"] == "reply_done"
+    assert provider._notification_queues == {}
 
 
 @pytest.mark.asyncio

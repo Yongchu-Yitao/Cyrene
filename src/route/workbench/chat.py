@@ -790,6 +790,7 @@ def register_workbench_chat_routes(
         *,
         detached: bool = False,
     ):
+        processing_started_at = time.monotonic()
         from cyrene.agent import run_agent
         from cyrene.agent.state import PERMISSION_MODES, _attachment_paths_by_name
 
@@ -974,6 +975,9 @@ def register_workbench_chat_routes(
                 "content": str(reply_text or ""),
                 "createdAt": _utc_now_iso(),
                 "model": model_name,
+                "processingDurationMs": max(
+                    0, int(round((time.monotonic() - processing_started_at) * 1000))
+                ),
             }
             if any(usage.values()):
                 assistant_entry["usage"] = usage
@@ -1736,6 +1740,7 @@ def register_workbench_chat_routes(
 
         question_id = str(body.get("question_id") or "").strip()
         answer_text = str(body.get("answer") or body.get("selected_option") or "").strip()
+        processing_started_at = time.monotonic()
         from cyrene.agent.state import PERMISSION_MODES
         requested_mode = str(body.get("mode") or "").strip().lower()
         if not question_id or not answer_text:
@@ -1883,6 +1888,9 @@ def register_workbench_chat_routes(
             "content": str(reply or ""),
             "createdAt": _utc_now_iso(),
             "model": model_name,
+            "processingDurationMs": max(
+                0, int(round((time.monotonic() - processing_started_at) * 1000))
+            ),
         }
         if any(usage.values()):
             assistant_entry["usage"] = usage

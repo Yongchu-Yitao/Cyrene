@@ -13,13 +13,10 @@ from uuid import uuid4
 
 from cyrene.agent.replies import (
     _contains_visible_dsml_tool_markup,
-    _delivery_fallback_text,
     _final_plain_reply_from_history,
     _final_reply_from_history,
-    _final_reply_with_tools,
     _final_user_reply_from_history,
     _is_placeholder_reply,
-    _strip_visible_dsml_tool_blocks,
     _tool_result_fallback_text,
 )
 from cyrene.agent.deep_reflection import create_deep_reflection_record, project_history_for_llm
@@ -235,64 +232,6 @@ def _attach_final_usage(entry: dict[str, Any]) -> dict[str, Any]:
     return entry
 
 
-def _quit_reply_from_response(response_obj: dict[str, Any]) -> str:
-    """Extract the user-facing answer the model placed in ``quit(reply=...)``.
-
-    The ``quit`` tool carries an optional ``reply`` argument holding the final
-    text for the user. Returning it lets the caller deliver that text directly
-    instead of firing a separate tools=None reconstruction call. Returns "" when
-    there is no quit call, no ``reply``, or the arguments are unparseable."""
-    for tc in (response_obj.get("tool_calls") or []):
-        if not isinstance(tc, dict):
-            continue
-        if str(tc.get("function", {}).get("name") or "") != "quit":
-            continue
-        try:
-            args = json.loads(tc.get("function", {}).get("arguments") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            return ""
-        reply = args.get("reply") if isinstance(args, dict) else None
-        return reply.strip() if isinstance(reply, str) else ""
-    return ""
-
-
-def _materialize_quit_reply_for_history(response_obj: dict[str, Any], assistant_entry: dict[str, Any]) -> None:
-    """Persist a terminal ``quit(reply=...)`` as a normal assistant message.
-
-    Workbench shows the value returned by ``_ensure_text_reply()``, but the next
-    model turn reads ``data/sessions/<id>/state.json``. If the reply stays only in
-    the quit tool arguments, the visible transcript and LLM history diverge. A
-    terminal quit has no matching ``role=tool`` result, so keeping its tool call
-    would also make the LLM payload sanitizer discard the whole assistant reply.
-    """
-    tool_calls = response_obj.get("tool_calls") or []
-    if not tool_calls or not all(
-        isinstance(call, dict)
-        and str(call.get("function", {}).get("name") or "") == "quit"
-        for call in tool_calls
-    ):
-        return
-    if not str(assistant_entry.get("content") or "").strip():
-        reply = _quit_reply_from_response(response_obj)
-        if reply and not _contains_visible_dsml_tool_markup(reply):
-            assistant_entry["content"] = reply
-    if str(assistant_entry.get("content") or "").strip():
-        assistant_entry.pop("tool_calls", None)
-
-
-def _wrap_final_text_from_response(wrap: dict[str, Any], messages: list[dict[str, Any]]) -> str:
-    content = _strip_visible_dsml_tool_blocks(wrap.get("content") or "")
-    if _contains_visible_dsml_tool_markup(content):
-        content = ""
-    quit_reply = _quit_reply_from_response(wrap)
-    if _contains_visible_dsml_tool_markup(quit_reply):
-        quit_reply = ""
-    final_text = content or quit_reply
-    if _is_placeholder_reply(final_text):
-        final_text = _delivery_fallback_text(messages)
-    return final_text or "Done."
-
-
 def _history_has_tool_results(messages: list[dict[str, Any]]) -> bool:
     return any(
         (
@@ -313,26 +252,18 @@ def _safe_terminal_reply_from_response(
 ) -> str:
     """Return an existing terminal reply only when it is safe and complete.
 
-    Normal assistant content remains authoritative when the provider returns
-    both text and ``quit(reply=...)``; the explicit reply is the fallback for
-    the common tool-only terminal turn. DSML-bearing candidates are never delivered directly: the
-    upstream stream filter intentionally withheld that syntax from the UI, and
-    the guarded wrap-up path can still normalize or repair it. After real tool
-    work, placeholder-only replies also require wrap-up.
+    A terminal answer must live in normal assistant content. ``quit`` is only a
+    control signal, so its arguments are intentionally ignored. Tool-markup
+    content is never delivered directly, and placeholder-only replies after real
+    tool work require a no-tool recovery call.
     """
     has_tool_results = _history_has_tool_results(base_messages)
-    candidates = (
-        assistant_text(response_obj).strip(),
-        _quit_reply_from_response(response_obj),
-    )
-    for candidate in candidates:
-        text = str(candidate or "").strip()
-        if not text or _contains_visible_dsml_tool_markup(text):
-            continue
-        if has_tool_results and _is_placeholder_reply(text):
-            continue
-        return text
-    return ""
+    text = assistant_text(response_obj).strip()
+    if not text or _contains_visible_dsml_tool_markup(text):
+        return ""
+    if has_tool_results and _is_placeholder_reply(text):
+        return ""
+    return text
 
 
 def _economy_compact_messages(messages: list[dict], current_round_id: str) -> list[dict]:
@@ -614,7 +545,7 @@ async def _run_main_agent_impl(
         phase1_decision = (
             "Decision phase rules:\n"
             "- You are in Quick Answer mode. The user wants a fast, text-only answer.\n"
-            "- Call `quit` immediately, putting your answer in its `reply` argument (shown to the user verbatim). Do NOT call `use_tools`.\n"
+            "- Write the complete answer as normal assistant content, then call `quit` only as the terminal signal. Keep quit's arguments empty. Do NOT call `use_tools`.\n"
             "- Call `ask_user` ONLY if the question is genuinely unclear.\n"
             "- This mode is for pure conversation only — no tools, no research."
         )
@@ -622,7 +553,7 @@ async def _run_main_agent_impl(
         phase1_decision = (
             "Decision phase rules:\n"
             "- You are replying inside a Workbench task, and this turn is a question/follow-up rather than a work request.\n"
-            "- If the current task/session context is enough, call `quit` immediately and put the complete answer in `reply`.\n"
+            "- If the current task/session context is enough, write the complete answer as normal assistant content and call `quit` only as the terminal signal with empty arguments.\n"
             "- Do NOT call `use_tools` merely because the conversation is attached to a task, project, plan, or workspace.\n"
             "- Call `use_tools` only if the user explicitly asks you to inspect, execute, modify, or if an accurate answer truly needs facts not present in the current context.\n"
             "- If clarification is needed before answering, call `ask_user`."
@@ -650,8 +581,8 @@ async def _run_main_agent_impl(
         fallback: str = "Done.",
     ) -> str:
         # A valid terminal answer has already paid for the main model call.
-        # Deliver it directly instead of rebuilding the full history. DSML-bearing
-        # or placeholder replies deliberately fall through to guarded recovery.
+        # Deliver it directly instead of rebuilding the full history. Tool-markup
+        # or placeholder replies deliberately fall through to no-tool recovery.
         text = _safe_terminal_reply_from_response(response_obj, base_messages)
         if text:
             if _streaming_reply_requested():
@@ -661,8 +592,7 @@ async def _run_main_agent_impl(
             return text
         # System-initiated rounds (e.g. the proactive heartbeat) must honor the
         # agent's choice to stay silent. When the terminal turn carried no genuine
-        # user-facing text — typically because it called `quit` with only internal
-        # reasoning — never reconstruct a reply it didn't write: the reconstruction
+        # user-facing text, never reconstruct a reply it didn't write: the reconstruction
         # below re-prompts the model to "answer directly" and would manufacture an
         # unsolicited check-in, overriding the quit. Deliver nothing instead.
         meta = _ui_round_assistant_meta.get()
@@ -770,7 +700,6 @@ async def _run_main_agent_impl(
     tool_calls = response.get("tool_calls") or []
     messages = [*run_prefix, llm_user_entry, *phase1_runtime_guidance_entries]
     assistant_entry = _assistant_entry_from_response(response, round_id)
-    _materialize_quit_reply_for_history(response, assistant_entry)
     messages.append(assistant_entry)
 
     use_tools_call = None
@@ -782,10 +711,15 @@ async def _run_main_agent_impl(
         elif name == "ask_user" and not system_initiated:
             ask_user_call = tc
         elif name == "quit":
+            if runtime_inbox is not None:
+                await runtime_inbox.wait_for_active_tools()
+            final_text = await _ensure_text_reply(response, messages)
+            messages[-1]["content"] = final_text
+            messages[-1].pop("tool_calls", None)
             if client_request_id:
                 messages[-1]["client_request_id"] = client_request_id
             await _save(_session_messages_to_save(messages))
-            return await _ensure_text_reply(response, messages)
+            return final_text
 
     if ask_user_call:
         try:
@@ -840,13 +774,16 @@ async def _run_main_agent_impl(
                 entry["usage"] = response["usage"]
             if round_id:
                 entry["round_id"] = round_id
-            _materialize_quit_reply_for_history(response, entry)
             messages.append(_apply_assistant_meta(entry))
 
             tcs = response.get("tool_calls") or []
             tool_names = [str(t.get("function", {}).get("name") or "") for t in tcs]
-            done_via_quit = bool(tcs) and all(name == "quit" for name in tool_names)
+            # ``quit`` is a hard terminal signal. If the model mistakenly mixes
+            # it with sibling calls, none of those siblings may execute.
+            done_via_quit = "quit" in tool_names
             if done_via_quit or not tcs:
+                if done_via_quit and runtime_inbox is not None:
+                    await runtime_inbox.wait_for_active_tools()
                 # Guidance may have arrived while this model call was in flight.
                 # Do not finalize an answer that the user has already superseded.
                 if runtime_inbox is not None:
@@ -854,10 +791,15 @@ async def _run_main_agent_impl(
                     if pending_guidance:
                         if done_via_quit:
                             for tc in tcs:
+                                is_quit = str(tc.get("function", {}).get("name") or "") == "quit"
                                 tool_entry = {
                                     "role": "tool",
                                     "tool_call_id": tc["id"],
-                                    "content": "Completion deferred because new user guidance arrived.",
+                                    "content": (
+                                        "Completion deferred because new user guidance arrived."
+                                        if is_quit else
+                                        "Skipped because the same batch contained terminal quit."
+                                    ),
                                 }
                                 if round_id:
                                     tool_entry["round_id"] = round_id
@@ -867,78 +809,30 @@ async def _run_main_agent_impl(
                         continue
                 if done_via_quit:
                     await _publish_runtime_event({"type": "phase_transition", "from": "execution", "to": "done", "detail": "Agent called quit", "detail_key": "phase.agentQuit"})
-                if _streaming_reply_requested():
-                    # The intermediate call forwarded reasoning only, so a safe,
-                    # complete terminal answer can now be emitted and persisted
-                    # directly. This avoids an otherwise redundant full-history
-                    # model call and its cache miss.
-                    terminal_text = _safe_terminal_reply_from_response(
-                        response, messages
-                    )
-                    if terminal_text:
-                        messages[-1]["content"] = terminal_text
-                        messages[-1].pop("tool_calls", None)
-                        if client_request_id:
-                            messages[-1]["client_request_id"] = client_request_id
-                        await _save(_session_messages_to_save(messages))
-                        return await _ensure_text_reply(response, messages)
+                # A missing/invalid terminal answer may be repaired, but only by
+                # the no-tool final-reply path used inside ``_ensure_text_reply``.
+                # Once quit is observed, this run can never reopen execution.
+                final_text = await _ensure_text_reply(response, messages)
+                messages[-1]["content"] = final_text
+                messages[-1].pop("tool_calls", None)
+                _attach_final_usage(messages[-1])
+                if client_request_id:
+                    messages[-1]["client_request_id"] = client_request_id
 
-                    # Empty, placeholder, or DSML-bearing terminal output still
-                    # needs guarded wrap-up. Keep the tool channel open so a
-                    # genuine late tool call can re-enter the shared loop instead
-                    # of leaking as markup or being silently discarded.
-                    messages.pop()  # drop the bare quit/empty turn
-                    wrap = await _final_reply_with_tools(project_history_for_llm(messages), wire_tool_defs, max_tokens=None)
-                    wrap_real = [t for t in (wrap.get("tool_calls") or []) if str(t.get("function", {}).get("name") or "") != "quit"]
-                    if wrap_real:
-                        await _publish_runtime_event({"type": "phase_transition", "from": "done", "to": "execution", "detail": "Wrap-up reopened tools", "detail_key": "phase.wrapUpReopen"})
-                        wrap_entry: dict[str, Any] = {"role": "assistant", "content": wrap.get("content") or ""}
-                        if wrap.get("reasoning_content"):
-                            wrap_entry["reasoning_content"] = wrap["reasoning_content"]
-                        wrap_entry["tool_calls"] = wrap_real
-                        if wrap.get("usage"):
-                            wrap_entry["usage"] = wrap["usage"]
-                        if round_id:
-                            wrap_entry["round_id"] = round_id
-                        messages.append(_apply_assistant_meta(wrap_entry))
-                        response = wrap
-                        tcs = wrap_real
-                        # fall through to the shared tool-execution block below
-                    else:
-                        # No real tool call. The stream handler already filtered
-                        # DSML from the live deltas; strip any residue (markup for
-                        # an unknown tool that normalization left in place) so the
-                        # persisted reply matches what the user saw.
-                        final_text = _wrap_final_text_from_response(wrap, messages)
-                        final_entry: dict[str, Any] = _attach_final_usage({"role": "assistant", "content": final_text})
-                        if client_request_id:
-                            final_entry["client_request_id"] = client_request_id
-                        if round_id:
-                            final_entry["round_id"] = round_id
-                        # Guidance can arrive while the streamed wrap-up LLM call
-                        # above is in flight. Keep the reply the user has already
-                        # seen, but turn it into an intermediate transcript
-                        # boundary and continue the same run with the new
-                        # instruction instead of finalizing and cancelling it.
-                        late_guidance = (
-                            runtime_inbox.collect_guidance_nowait()
-                            if runtime_inbox is not None
-                            else []
-                        )
-                        if late_guidance:
-                            final_entry["intermediate_reply"] = True
-                            messages.append(_apply_assistant_meta(final_entry))
-                            await _inject_runtime_guidance(messages, late_guidance)
-                            await _save(_session_messages_to_save(messages))
-                            continue
-                        messages.append(_apply_assistant_meta(final_entry))
-                        await _save(_session_messages_to_save(messages))
-                        return final_text
-                else:
-                    if client_request_id:
-                        messages[-1]["client_request_id"] = client_request_id
+                # Guidance that arrived while a no-tool repair was in flight
+                # starts a continuation; it does not revive the terminated batch.
+                late_guidance = (
+                    runtime_inbox.collect_guidance_nowait()
+                    if runtime_inbox is not None
+                    else []
+                )
+                if late_guidance:
+                    messages[-1]["intermediate_reply"] = True
+                    await _inject_runtime_guidance(messages, late_guidance)
                     await _save(_session_messages_to_save(messages))
-                    return await _ensure_text_reply(response, messages)
+                    continue
+                await _save(_session_messages_to_save(messages))
+                return final_text
 
             awaiting_user = False
             spawned = False

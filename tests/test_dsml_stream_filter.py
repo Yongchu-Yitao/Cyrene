@@ -24,6 +24,14 @@ WEBFETCH_BLOCK = (
     '</｜｜DSML｜｜tool_calls>'
 )
 
+LEGACY_TOOL_BLOCK = (
+    "<tool_call>"
+    "<function=update_conversation_title>"
+    "<parameter=title>新的标题</parameter>"
+    "</function>"
+    "</tool_call>"
+)
+
 
 def _feed_in_chunks(text: str, size: int) -> str:
     f = _DsmlStreamFilter()
@@ -59,6 +67,14 @@ def test_ascii_pipe_variant_is_suppressed():
     raw = "before<||DSML||tool_calls><||DSML||invoke name=\"quit\"/></||DSML||tool_calls>after"
     for size in (1, 4, 999):
         assert _feed_in_chunks(raw, size) == "beforeafter"
+
+
+def test_legacy_tool_call_block_is_suppressed():
+    raw = "before" + LEGACY_TOOL_BLOCK + "after"
+    for size in (1, 4, 999):
+        visible = _feed_in_chunks(raw, size)
+        assert visible == "beforeafter"
+        assert "<tool_call>" not in visible
 
 
 def test_split_at_every_boundary_never_leaks_marker():

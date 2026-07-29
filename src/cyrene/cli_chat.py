@@ -631,6 +631,9 @@ class RichRenderer:
         self._reasoning_started_at = 0.0
         self._reasoning_chunks: list[str] = []
         self._reasoning_rounds: list[tuple[float, str]] = []
+        self._reasoning_phase = ""
+        self._phase1_header_printed = False
+        self._phase1_contents: set[str] = set()
         self._thought_summary_printed = False
         self._activity = "正在思考"
         self._thinking_phrase = ""
@@ -688,26 +691,48 @@ class RichRenderer:
     async def handle(self, event: dict[str, Any]) -> None:
         event_type = str(event.get("type") or "")
         if event_type == "reasoning_start":
+            self._reasoning_phase = str(event.get("phase") or "")
             if not self._reasoning_started_at:
                 self._reasoning_started_at = time.monotonic()
             self._reasoning_chunks = []
-            self.resume_activity("正在思考")
+            if self._reasoning_phase == "phase1":
+                self.resume_activity(
+                    "正在理解指令"
+                    if self.lang.startswith("zh")
+                    else "Understanding the instruction"
+                )
+            else:
+                self.resume_activity("正在思考")
             return
         if event_type == "reasoning_delta":
+            event_phase = str(event.get("phase") or "")
+            if event_phase:
+                self._reasoning_phase = event_phase
             delta = str(event.get("delta") or "")
             if delta:
                 self._reasoning_chunks.append(delta)
             return
         if event_type == "reasoning_done":
+            event_phase = str(event.get("phase") or "")
+            if event_phase:
+                self._reasoning_phase = event_phase
             response = str(event.get("response") or "".join(self._reasoning_chunks)).strip()
             started = self._reasoning_started_at or self._turn_started_at
             duration = max(0.0, time.monotonic() - started)
             self._stop_status()
             if response:
                 self._reasoning_rounds.append((duration, response))
+            if self._reasoning_phase == "phase1":
+                self._print_phase1_header()
+                self._print_phase1_content(response)
+                self._thought_summary_printed = True
+                self._reasoning_started_at = 0.0
+                self._reasoning_phase = ""
+                return
             self._print_thought(duration, response)
             self._thought_summary_printed = True
             self._reasoning_started_at = 0.0
+            self._reasoning_phase = ""
             return
         if event_type == "reply_start":
             self._stop_status()
@@ -865,6 +890,9 @@ class RichRenderer:
         self._reasoning_started_at = self._turn_started_at
         self._reasoning_chunks = []
         self._reasoning_rounds = []
+        self._reasoning_phase = ""
+        self._phase1_header_printed = False
+        self._phase1_contents = set()
         self._thought_summary_printed = False
         self._activity = activity
         self._thinking_phrase = ""
@@ -918,6 +946,27 @@ class RichRenderer:
         self.console.print(
             f"[dim]✻ 思考了 {self._format_elapsed(duration)}（Ctrl+O 查看）[/]"
         )
+
+    def _print_phase1_header(self) -> None:
+        if self._phase1_header_printed:
+            return
+        self._stop_status()
+        label = (
+            "正在理解指令"
+            if self.lang.startswith("zh")
+            else "Understanding the instruction"
+        )
+        self.console.print(f"[bright_cyan]◌[/] [bold]{escape(label)}[/]")
+        self._phase1_header_printed = True
+
+    def _print_phase1_content(self, content: str) -> None:
+        compact = " ".join(str(content or "").split())
+        if not compact or compact in self._phase1_contents:
+            return
+        self._phase1_contents.add(compact)
+        line = Text("  ✓ ", style="green")
+        line.append(compact, style="dim")
+        self.console.print(line, soft_wrap=True)
 
     def _start_status(self) -> None:
         if self._status is not None:
@@ -1039,6 +1088,10 @@ class InteractiveChat:
         def _insert_newline(event: Any) -> None:
             event.current_buffer.insert_text("\n")
 
+        @bindings.add("enter", eager=True)
+        def _accept_non_empty(event: Any) -> None:
+            self._accept_input(event)
+
         @bindings.add("c-c")
         def _confirm_exit(event: Any) -> None:
             self._handle_ctrl_c(event, result="")
@@ -1061,6 +1114,13 @@ class InteractiveChat:
             key_bindings=bindings,
             style=self._terminal_style(),
         )
+
+    @staticmethod
+    def _accept_input(event: Any) -> None:
+        """Submit the prompt only when it contains non-whitespace text."""
+        buffer = event.current_buffer
+        if buffer.text.strip():
+            buffer.validate_and_handle()
 
     def _terminal_style(self) -> Style:
         if not self.options.color:

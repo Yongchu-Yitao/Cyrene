@@ -185,7 +185,7 @@ async def test_first_round_phase1_uses_full_wire_tools():
         calls.append((messages, tools))
         return {
             "content": "direct answer",
-            "tool_calls": [{"id": "q1", "function": {"name": "quit", "arguments": json.dumps({"reply": "done"})}}],
+            "tool_calls": [{"id": "q1", "function": {"name": "quit", "arguments": "{}"}}],
         }
 
     _orig_llm = _patch(_agent_core, "_call_llm", fake_call_llm)
@@ -218,7 +218,7 @@ async def test_fixed_ephemeral_stays_before_user_across_tool_rounds():
         },
         {
             "content": "final answer",
-            "tool_calls": [{"id": "q1", "function": {"name": "quit", "arguments": json.dumps({"reply": "final answer"})}}],
+            "tool_calls": [{"id": "q1", "function": {"name": "quit", "arguments": "{}"}}],
         },
     ])
     saved_messages = []

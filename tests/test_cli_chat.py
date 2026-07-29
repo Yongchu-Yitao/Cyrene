@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import io
 import inspect
 import json
@@ -103,14 +104,68 @@ def test_selection_menu_binds_arrow_keys_and_input_has_bottom_rule():
     from cyrene.cli_chat import InteractiveChat
 
     source = inspect.getsource(InteractiveChat._choose_with_arrows)
+    prompt_source = inspect.getsource(InteractiveChat._build_prompt_session)
     run_source = inspect.getsource(InteractiveChat.run)
     assert '@bindings.add("up")' in source
     assert '@bindings.add("down")' in source
     assert '@bindings.add("enter")' in source
+    assert '@bindings.add("enter", eager=True)' in prompt_source
+    assert "self._accept_input(event)" in prompt_source
     assert InteractiveChat._input_bottom_rule().startswith("─")
     assert "self.renderer.input_rule(self._input_bottom_rule())" in run_source
     assert "placeholder=self._input_placeholder()" in run_source
     assert "bottom_toolbar=self._input_bottom_toolbar" in run_source
+
+
+def test_empty_input_is_not_submitted():
+    from cyrene.cli_chat import InteractiveChat
+
+    class Buffer:
+        def __init__(self, text):
+            self.text = text
+            self.submissions = 0
+
+        def validate_and_handle(self):
+            self.submissions += 1
+
+    class Event:
+        def __init__(self, text):
+            self.current_buffer = Buffer(text)
+
+    for text in ("", "   ", "\n\t"):
+        event = Event(text)
+        InteractiveChat._accept_input(event)
+        assert event.current_buffer.submissions == 0
+
+    event = Event("hello")
+    InteractiveChat._accept_input(event)
+    assert event.current_buffer.submissions == 1
+
+
+@pytest.mark.asyncio
+async def test_prompt_session_keeps_empty_enter_in_the_same_input():
+    from prompt_toolkit.application import create_app_session
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    from cyrene.cli_chat import ChatOptions, InteractiveChat, JsonRenderer
+
+    app = InteractiveChat(
+        object(),
+        JsonRenderer(stream=io.StringIO()),
+        ChatOptions(),
+    )
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=DummyOutput()):
+            prompt = app._build_prompt_session()
+            result = asyncio.create_task(prompt.prompt_async("› "))
+            await asyncio.sleep(0.01)
+
+            pipe_input.send_text("\r")
+            await asyncio.sleep(0.01)
+            assert not result.done()
+
+            pipe_input.send_text("hello\r")
+            assert await asyncio.wait_for(result, timeout=1) == "hello"
 
 
 def test_input_placeholder_is_localized():
@@ -317,6 +372,43 @@ async def test_rich_renderer_shows_thinking_and_total_elapsed_time(monkeypatch):
     assert "Ctrl+O / Esc 返回" in overlay
     assert "先检查上下文" in overlay
     assert "先检查上下文" not in stream.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_rich_renderer_displays_phase1_content_in_terminal(monkeypatch):
+    from rich.console import Console
+    from cyrene.cli_chat import RichRenderer
+
+    stream = io.StringIO()
+    renderer = RichRenderer(color=False, lang="zh")
+    renderer.console = Console(
+        file=stream,
+        no_color=True,
+        highlight=False,
+        width=100,
+    )
+    monkeypatch.setattr(renderer, "_start_status", lambda: None)
+    renderer._turn_started_at = 100.0
+    renderer._reasoning_started_at = 100.0
+
+    await renderer.handle({"type": "reasoning_start", "phase": "phase1"})
+    assert renderer._phase1_header_printed is False
+    await renderer.handle({
+        "type": "reasoning_delta",
+        "phase": "phase1",
+        "delta": "用户希望打开 B 站，",
+    })
+    await renderer.handle({
+        "type": "reasoning_done",
+        "phase": "phase1",
+        "response": "用户希望打开 B 站，需要使用浏览器工具。",
+    })
+
+    output = stream.getvalue()
+    assert output.count("正在理解指令") == 1
+    assert "正在理解指令" in output
+    assert "用户希望打开 B 站，需要使用浏览器工具。" in output
+    assert "思考了" not in output
 
 
 def test_reasoning_details_use_temporary_erasable_overlay():

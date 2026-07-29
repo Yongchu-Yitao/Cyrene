@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -2157,6 +2158,7 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
     from cyrene.agent import run_agent
     from cyrene.agent.context import is_permission_mode
     legacy_routes = runtime_service()
+    processing_started_at = time.monotonic()
 
     chat_id = str(wake.get("chat_id") or "").strip()
     prompt = str(wake.get("prompt") or "").strip()
@@ -2235,6 +2237,9 @@ async def dispatch_shell_wake_run(wake: dict[str, Any], *, bot: Any, db_path: st
             "content": str(reply_text or ""),
             "createdAt": _utc_now_iso(),
             "model": model_name,
+            "processingDurationMs": max(
+                0, int(round((time.monotonic() - processing_started_at) * 1000))
+            ),
             "shellWake": True,
             "wakeId": str(wake.get("wake_id") or ""),
         }

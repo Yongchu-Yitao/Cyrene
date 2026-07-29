@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 CODEX_PROVIDER = "codex_oauth"
 CODEX_BASE_URL = "codex://oauth"
+_MAX_ORPHAN_NOTIFICATION_THREADS = 128
+_MAX_GLOBAL_NOTIFICATIONS = 256
 
 
 def _codex_executable() -> str:
@@ -46,10 +48,14 @@ class CodexAppServer:
         self._stderr_task: asyncio.Task | None = None
         self._pending: dict[int, asyncio.Future] = {}
         self._notifications: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._notification_queues: dict[
+            str, asyncio.Queue[dict[str, Any]]
+        ] = {}
+        self._notification_backlog: dict[str, list[dict[str, Any]]] = {}
         self._request_id = 0
         self._start_lock = asyncio.Lock()
-        self._operation_lock = asyncio.Lock()
         self._limits_cache: tuple[float, dict[str, Any]] | None = None
+        self._limits_refresh_task: asyncio.Task[dict[str, Any]] | None = None
 
     async def _ensure_started(self) -> None:
         current_loop = asyncio.get_running_loop()
@@ -123,7 +129,7 @@ class CodexAppServer:
                     await self._reply_unsupported_request(int(request_id))
                     continue
                 if message.get("method"):
-                    await self._notifications.put(message)
+                    self._route_notification(message)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -134,6 +140,66 @@ class CodexAppServer:
                 if not future.done():
                     future.set_exception(error)
             self._pending.clear()
+            stopped = {
+                "method": "cyrene/providerStopped",
+                "params": {"message": str(error)},
+            }
+            for queue in list(self._notification_queues.values()):
+                queue.put_nowait(stopped)
+
+    @staticmethod
+    def _notification_thread_id(message: dict[str, Any]) -> str:
+        params = message.get("params") if isinstance(message, dict) else {}
+        if not isinstance(params, dict):
+            return ""
+        direct = str(params.get("threadId") or "").strip()
+        if direct:
+            return direct
+        for key in ("thread", "turn", "item"):
+            nested = params.get(key)
+            if not isinstance(nested, dict):
+                continue
+            nested_thread = str(
+                nested.get("threadId")
+                or (
+                    nested.get("id")
+                    if key == "thread"
+                    else ""
+                )
+                or ""
+            ).strip()
+            if nested_thread:
+                return nested_thread
+        return ""
+
+    def _route_notification(self, message: dict[str, Any]) -> None:
+        """Route app-server notifications to the owning provider thread."""
+        thread_id = self._notification_thread_id(message)
+        queue = self._notification_queues.get(thread_id) if thread_id else None
+        if queue is not None:
+            queue.put_nowait(message)
+            return
+        if thread_id:
+            if (
+                thread_id not in self._notification_backlog
+                and len(self._notification_backlog)
+                >= _MAX_ORPHAN_NOTIFICATION_THREADS
+            ):
+                oldest_thread_id = next(iter(self._notification_backlog))
+                self._notification_backlog.pop(oldest_thread_id, None)
+            backlog = self._notification_backlog.setdefault(thread_id, [])
+            backlog.append(message)
+            # A provider thread is ephemeral and normally gets its queue within
+            # the same event-loop turn as ``thread/start``. Keep a defensive
+            # bound so an unexpected foreign notification cannot grow forever.
+            if len(backlog) > 64:
+                del backlog[:-64]
+            return
+        # Account/model notifications are not tied to a completion. Keep the
+        # legacy queue for diagnostics and forward compatibility.
+        if self._notifications.qsize() >= _MAX_GLOBAL_NOTIFICATIONS:
+            self._notifications.get_nowait()
+        self._notifications.put_nowait(message)
 
     async def _stderr_loop(self) -> None:
         assert self._process is not None and self._process.stderr is not None
@@ -240,8 +306,61 @@ class CodexAppServer:
             return cached[1]
         return await self.rate_limits()
 
+    def _schedule_rate_limits_refresh(self) -> None:
+        task = self._limits_refresh_task
+        if task is not None and not task.done():
+            return
+        task = asyncio.create_task(self.rate_limits())
+        self._limits_refresh_task = task
+
+        def _settled(done: asyncio.Task[dict[str, Any]]) -> None:
+            if self._limits_refresh_task is done:
+                self._limits_refresh_task = None
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                # Quota telemetry is advisory; the provider still owns the hard
+                # enforcement path for the model request.
+                logger.warning(
+                    "Codex quota refresh failed in the background: %s",
+                    exc,
+                )
+
+        task.add_done_callback(_settled)
+
+    @staticmethod
+    def _quota_available_from_limits(limits: dict[str, Any]) -> bool:
+        buckets = limits.get("rateLimitsByLimitId") or {}
+        if isinstance(buckets, dict):
+            codex_limit = buckets.get("codex")
+            candidates = [codex_limit] if isinstance(codex_limit, dict) else []
+        else:
+            candidates = []
+        if not candidates and isinstance(limits.get("rateLimits"), dict):
+            candidates = [limits["rateLimits"]]
+        for bucket in candidates:
+            if bucket.get("rateLimitReachedType"):
+                return False
+            windows = [bucket.get("primary"), bucket.get("secondary")]
+            if any(
+                isinstance(window, dict)
+                and float(window.get("usedPercent") or 0) >= 100
+                for window in windows
+                if window is not None
+            ):
+                return False
+        return True
+
     async def quota_available(self) -> bool:
-        """Return whether the account's Codex bucket can accept another turn."""
+        """Return quota state without blocking on refresh when stale data exists."""
+        cached = self._limits_cache
+        if cached is not None:
+            age = time.monotonic() - cached[0]
+            if age > 30:
+                self._schedule_rate_limits_refresh()
+            return self._quota_available_from_limits(cached[1])
         try:
             limits = await self.rate_limits_cached()
         except (RuntimeError, OSError, TimeoutError) as exc:
@@ -263,26 +382,7 @@ class CodexAppServer:
                 "Codex quota check unavailable; using the last cached limits: %s",
                 exc,
             )
-        buckets = limits.get("rateLimitsByLimitId") or {}
-        if isinstance(buckets, dict):
-            codex_limit = buckets.get("codex")
-            candidates = [codex_limit] if isinstance(codex_limit, dict) else []
-        else:
-            candidates = []
-        if not candidates and isinstance(limits.get("rateLimits"), dict):
-            candidates = [limits["rateLimits"]]
-        for bucket in candidates:
-            if bucket.get("rateLimitReachedType"):
-                return False
-            windows = [bucket.get("primary"), bucket.get("secondary")]
-            if any(
-                isinstance(window, dict)
-                and float(window.get("usedPercent") or 0) >= 100
-                for window in windows
-                if window is not None
-            ):
-                return False
-        return True
+        return self._quota_available_from_limits(limits)
 
     async def snapshot(self, *, include_limits: bool = True) -> dict[str, Any]:
         account = await self.account()
@@ -340,34 +440,35 @@ class CodexAppServer:
         envelope, which the normal model-runtime parser converts back to
         OpenAI-style tool calls.
         """
-        async with self._operation_lock:
-            await self._ensure_started()
-            while not self._notifications.empty():
-                self._notifications.get_nowait()
+        await self._ensure_started()
+        instructions = _provider_instructions(messages, tools)
+        thread_result = await self._request_raw(
+            "thread/start",
+            {
+                "model": model,
+                "baseInstructions": instructions,
+                "developerInstructions": (
+                    "Act only as Cyrene's language-model backend. "
+                    "Do not inspect files, run commands, browse, or call built-in tools."
+                ),
+                "dynamicTools": [],
+                "environments": [],
+                "ephemeral": True,
+                "approvalPolicy": "never",
+                "sandbox": "read-only",
+            },
+            timeout=min(timeout, 30),
+        )
+        thread = (thread_result or {}).get("thread") or {}
+        thread_id = str(thread.get("id") or "")
+        if not thread_id:
+            raise RuntimeError("Codex did not create a provider thread")
 
-            instructions = _provider_instructions(messages, tools)
-            thread_result = await self._request_raw(
-                "thread/start",
-                {
-                    "model": model,
-                    "baseInstructions": instructions,
-                    "developerInstructions": (
-                        "Act only as Cyrene's language-model backend. "
-                        "Do not inspect files, run commands, browse, or call built-in tools."
-                    ),
-                    "dynamicTools": [],
-                    "environments": [],
-                    "ephemeral": True,
-                    "approvalPolicy": "never",
-                    "sandbox": "read-only",
-                },
-                timeout=min(timeout, 30),
-            )
-            thread = (thread_result or {}).get("thread") or {}
-            thread_id = str(thread.get("id") or "")
-            if not thread_id:
-                raise RuntimeError("Codex did not create a provider thread")
-
+        notifications: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._notification_queues[thread_id] = notifications
+        for notification in self._notification_backlog.pop(thread_id, []):
+            notifications.put_nowait(notification)
+        try:
             user_input = _provider_input(messages)
             turn_result = await self._request_raw(
                 "turn/start",
@@ -399,19 +500,19 @@ class CodexAppServer:
                 if remaining <= 0:
                     raise TimeoutError("Codex model request timed out")
                 notification = await asyncio.wait_for(
-                    self._notifications.get(), timeout=remaining
+                    notifications.get(), timeout=remaining
                 )
                 method = str(notification.get("method") or "")
                 params = notification.get("params") or {}
-                if str(params.get("threadId") or "") != thread_id:
-                    continue
+                if method == "cyrene/providerStopped":
+                    raise RuntimeError("Codex app server stopped during model request")
                 if method == "item/agentMessage/delta":
                     delta = str(params.get("delta") or "")
                     if delta:
                         text_parts.append(delta)
                         if stream_callback:
                             await stream_callback(
-                                {"type": "reply_delta", "content": delta}
+                                {"type": "reply_delta", "delta": delta}
                             )
                 elif method == "item/completed":
                     item = params.get("item") or {}
@@ -446,12 +547,14 @@ class CodexAppServer:
 
             content = final_text or "".join(text_parts)
             if stream_callback:
-                await stream_callback({"type": "reply_done", "content": content})
+                await stream_callback({"type": "reply_done", "response": content})
             return {
                 "role": "assistant",
                 "content": content,
                 "usage": usage,
             }
+        finally:
+            self._notification_queues.pop(thread_id, None)
 
     async def close(self) -> None:
         process = self._process
@@ -471,7 +574,11 @@ class CodexAppServer:
                 # If that loop has gone away, kill and reap without awaiting
                 # its foreign-loop Future.
                 process.kill()
-        for task in (self._reader_task, self._stderr_task):
+        for task in (
+            self._reader_task,
+            self._stderr_task,
+            self._limits_refresh_task,
+        ):
             if task is not None:
                 try:
                     task.cancel()
@@ -480,6 +587,9 @@ class CodexAppServer:
                     pass
         self._reader_task = None
         self._stderr_task = None
+        self._limits_refresh_task = None
+        self._notification_queues.clear()
+        self._notification_backlog.clear()
 
 
 def _provider_instructions(

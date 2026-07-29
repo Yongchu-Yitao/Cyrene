@@ -235,8 +235,8 @@ var WorkbenchChatModel = (function () {
       if (type === "ack" && handlers.onAck) handlers.onAck(event);
       else if (type === "intermediate_message" && handlers.onIntermediateMessage) handlers.onIntermediateMessage(event);
       else if (type === "reasoning_start" && handlers.onReasoningStart) handlers.onReasoningStart(event);
-      else if (type === "reasoning_delta" && handlers.onReasoningDelta) handlers.onReasoningDelta(event.delta || "");
-      else if (type === "reasoning_done" && handlers.onReasoningDone) handlers.onReasoningDone(event.response || "");
+      else if (type === "reasoning_delta" && handlers.onReasoningDelta) handlers.onReasoningDelta(event.delta || "", event);
+      else if (type === "reasoning_done" && handlers.onReasoningDone) handlers.onReasoningDone(event.response || "", event);
       else if (type === "reply_start" && handlers.onReplyStart) handlers.onReplyStart(event);
       else if (type === "reply_delta" && handlers.onReplyDelta) handlers.onReplyDelta(event.delta || "");
       else if (type === "reply_done" && handlers.onReplyDone) handlers.onReplyDone(event.response || "");
@@ -388,6 +388,22 @@ function wbcFormatTime(value) {
   } catch (e) {
     return "";
   }
+}
+
+function wbcFormatProcessingDuration(value) {
+  var milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "";
+  if (milliseconds < 100) return "<0.1s";
+  if (milliseconds < 1000) {
+    return (Math.round(milliseconds / 100) / 10).toFixed(1) + "s";
+  }
+  var totalSeconds = Math.max(1, Math.round(milliseconds / 1000));
+  var hours = Math.floor(totalSeconds / 3600);
+  var minutes = Math.floor((totalSeconds % 3600) / 60);
+  var seconds = totalSeconds % 60;
+  if (hours > 0) return hours + "h " + minutes + "m";
+  if (minutes > 0) return minutes + "m " + seconds + "s";
+  return seconds + "s";
 }
 
 function wbcConfirmOptimisticMessage(previous, confirmed) {
@@ -1358,12 +1374,17 @@ var WorkbenchChatRuntimes = (function () {
       onReplyStart: function () {
         update(chatId, function (cur) { return cur ? { ...cur, replying: true, lastEventAt: Date.now() } : null; });
       },
-      onReasoningStart: function () {
+      onReasoningStart: function (event) {
         update(chatId, function (cur) {
           if (!cur) return null;
+          var eventPhase = String(event && event.phase || "");
           var activities = Array.isArray(cur.activities) ? cur.activities : [];
           var last = activities.length ? activities[activities.length - 1] : null;
-          var reuseLlmCard = !!(last && !last.timelineClosed);
+          var reuseLlmCard = !!(
+            last
+            && !last.timelineClosed
+            && (!eventPhase || !last.llmPhase || String(last.llmPhase) === eventPhase)
+          );
           var next = reuseLlmCard
             ? updateLastActivity(cur, function (activity) {
                 var current = String(activity.reasoning || "");
@@ -1387,6 +1408,7 @@ var WorkbenchChatRuntimes = (function () {
                   reasoningStreamSeen: true,
                   mergeReasoning: false,
                   fallbackReasoningApplied: false,
+                  llmPhase: eventPhase || activity.llmPhase || "",
                 };
               })
             : appendActivity(cur, {
@@ -1395,13 +1417,15 @@ var WorkbenchChatRuntimes = (function () {
                 reasoningActive: true,
                 reasoningStreamSeen: true,
                 awaitingLlmEvent: true,
+                llmPhase: eventPhase,
               });
           return { ...next, lastEventAt: Date.now() };
         });
       },
-      onReasoningDelta: function (delta) {
+      onReasoningDelta: function (delta, event) {
         update(chatId, function (cur) {
           if (!cur) return null;
+          var eventPhase = String(event && event.phase || "");
           var next = updateLastActivity(cur, function (activity) {
             return {
               ...activity,
@@ -1409,14 +1433,16 @@ var WorkbenchChatRuntimes = (function () {
               reasoningActive: true,
               reasoningStreamSeen: true,
               awaitingLlmEvent: true,
+              llmPhase: eventPhase || activity.llmPhase || "",
             };
-          }, { reasoningActive: true, reasoningStreamSeen: true, awaitingLlmEvent: true });
+          }, { reasoningActive: true, reasoningStreamSeen: true, awaitingLlmEvent: true, llmPhase: eventPhase });
           return { ...next, lastEventAt: Date.now() };
         }, true);
       },
-      onReasoningDone: function (text) {
+      onReasoningDone: function (text, event) {
         update(chatId, function (cur) {
           if (!cur) return null;
+          var eventPhase = String(event && event.phase || "");
           var next = updateLastActivity(cur, function (activity) {
             var current = String(activity.reasoning || "");
             var callStart = Math.max(0, Math.min(Number(activity.reasoningCallStart || 0), current.length));
@@ -1424,8 +1450,9 @@ var WorkbenchChatRuntimes = (function () {
               ...activity,
               reasoning: current.slice(0, callStart) + (text || current.slice(callStart)),
               reasoningActive: false,
+              llmPhase: eventPhase || activity.llmPhase || "",
             };
-          }, { reasoning: text || "", reasoningCallStart: 0, awaitingLlmEvent: true });
+          }, { reasoning: text || "", reasoningCallStart: 0, awaitingLlmEvent: true, llmPhase: eventPhase });
           return { ...next, lastEventAt: Date.now() };
         });
       },
@@ -1590,6 +1617,7 @@ var WorkbenchChatRuntimes = (function () {
         var eventId = String(event.event_id || "");
         var eventReasoning = String(event.response && event.response.reasoning_content || "");
         var eventStatus = String(event.status || "completed").toLowerCase();
+        var eventPhase = String(event.phase || "");
         var activities = Array.isArray(latest.activities) ? latest.activities : [];
         var duplicate = eventId && activities.some(function (activity) {
           var ids = activity && Array.isArray(activity.llmEventIds) ? activity.llmEventIds : [];
@@ -1603,7 +1631,11 @@ var WorkbenchChatRuntimes = (function () {
             // different connections, so either may arrive first. Reuse the
             // provisional reasoning card (or a retrying start card) instead of
             // creating two cards for one LLM call.
-            var continuesActivity = !!(last && !last.timelineClosed);
+            var continuesActivity = !!(
+              last
+              && !last.timelineClosed
+              && (!eventPhase || !last.llmPhase || String(last.llmPhase) === eventPhase)
+            );
             if (continuesActivity) {
               next = updateLastActivity(latest, function (activity) {
                 var eventIds = Array.isArray(activity.llmEventIds) ? activity.llmEventIds : [];
@@ -1614,6 +1646,7 @@ var WorkbenchChatRuntimes = (function () {
                   llmStartedEventId: eventId,
                   llmEventIds: eventId ? eventIds.concat([eventId]).slice(-100) : eventIds,
                   model: String(event.model || ""),
+                  llmPhase: eventPhase || activity.llmPhase || "",
                   reasoningStreamSeen: activity.awaitingLlmEvent ? activity.reasoningStreamSeen : false,
                   mergeReasoning: activity.llmStatus === "completed",
                 };
@@ -1624,6 +1657,7 @@ var WorkbenchChatRuntimes = (function () {
                 llmStartedEventId: eventId,
                 llmEventIds: eventId ? [eventId] : [],
                 model: String(event.model || ""),
+                llmPhase: eventPhase,
                 reasoningCallStart: 0,
                 reasoningStreamSeen: false,
               });
@@ -1649,6 +1683,7 @@ var WorkbenchChatRuntimes = (function () {
                 llmEventId: eventId,
                 llmEventIds: eventId ? eventIds.concat([eventId]).slice(-100) : eventIds,
                 model: String(event.model || ""),
+                llmPhase: eventPhase || activity.llmPhase || "",
                 reasoning: reasoning,
                 reasoningCallStart: callStart,
                 mergeReasoning: false,
@@ -1661,6 +1696,7 @@ var WorkbenchChatRuntimes = (function () {
               llmEventId: eventId,
               llmEventIds: eventId ? [eventId] : [],
               model: String(event.model || ""),
+              llmPhase: eventPhase,
               reasoning: eventReasoning,
               reasoningCallStart: 0,
               reasoningStreamSeen: false,
@@ -5136,6 +5172,7 @@ function WbcTraceCard({ trace, live, running, label, reasoning, showReasoning, o
 
 function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
   var [copied, setCopied] = useWbcState(false);
+  var processingDuration = wbcFormatProcessingDuration(msg.processingDurationMs);
   // Parse each finalized message's markdown once and reuse it: the whole thread
   // re-renders on every streaming frame, so without this every prior message
   // would be re-parsed + re-sanitized per frame.
@@ -5169,6 +5206,12 @@ function WbcAssistantMessage({ msg, onOpenFile, onRetryMessage }) {
           </button>
         )}
         <time>{wbcFormatTime(msg.createdAt)}</time>
+        {processingDuration ? (
+          <small
+            className="wbc-msg-duration"
+            title={wbcT("workbenchChat.processingDuration", "Total processing time")}
+          >{processingDuration}</small>
+        ) : null}
         {msg.usage && msg.usage.total_tokens ? <small>{wbcCompactNumber(msg.usage.total_tokens)} tokens</small> : null}
       </div>
     </div>
@@ -5232,12 +5275,35 @@ function WbcHeartbeat({ startedAt, lastEventAt, finalizing }) {
   );
 }
 
+function wbcPhase1ReasoningPreview(text) {
+  var compact = String(text || "").replace(/\s+/g, " ").trim();
+  if (!compact) return "";
+  return compact.length > 220 ? compact.slice(0, 217).trimEnd() + "…" : compact;
+}
+
 function WbcLiveActivityCard({ activity, active, hasReplyText }) {
   var item = activity || {};
   var entries = Array.isArray(item.progress) ? item.progress : [];
+  var isPhase1 = String(item.llmPhase || "") === "phase1";
+  var phase1Running = isPhase1 && active && String(item.llmStatus || "") !== "completed";
+  var phase1Preview = isPhase1 ? wbcPhase1ReasoningPreview(item.reasoning) : "";
+  var visibleEntries = entries;
+  if (isPhase1) {
+    visibleEntries = [{
+      kind: "phase1",
+      text: phase1Running
+        ? wbcT("workbenchChat.phase1Understanding", "Understanding the request")
+        : wbcT("workbenchChat.phase1Understood", "Understood the request"),
+      preview: phase1Preview,
+      status: phase1Running ? "running" : "completed",
+    }].concat(entries);
+  }
   var hasRunningTools = entries.some(function (entry) {
     return entry && entry.kind === "tool" && entry.status === "running";
   });
+  var toolCount = entries.filter(function (entry) {
+    return entry && entry.kind === "tool";
+  }).length;
   var hasReasoning = !!String(item.reasoning || "").trim();
   var [showReasoning, setShowReasoning] = useWbcState(false);
   var [lockedHeight, setLockedHeight] = useWbcState(0);
@@ -5266,19 +5332,21 @@ function WbcLiveActivityCard({ activity, active, hasReplyText }) {
     }
   }, [item.reasoning, showReasoning, active]);
 
-  var label = entries.length
+  var label = toolCount
     ? (hasRunningTools && !hasReplyText
       ? wbcT("workbenchChat.toolRunning", "Calling tools...")
-      : wbcT("workbenchChat.traceSummary", "Execution ({count} tool calls)", { count: entries.length }))
-    : (active
+      : wbcT("workbenchChat.traceSummary", "Execution ({count} tool calls)", { count: toolCount }))
+    : (isPhase1
+      ? wbcT("workbenchChat.phase1Card", "Execution · Phase 1")
+      : active
       ? wbcT("workbenchChat.traceIdle", "Thinking...")
       : wbcT("workbenchChat.traceLabel", "Execution"));
 
   return (
     <WbcTraceCard
-      trace={entries}
+      trace={visibleEntries}
       live={true}
-      running={active}
+      running={isPhase1 ? phase1Running : active}
       reasoning={item.reasoning}
       showReasoning={showReasoning}
       onToggle={hasReasoning ? toggleReasoning : null}

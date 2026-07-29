@@ -573,12 +573,12 @@ async def test_normal_phase1_and_phase2_receive_identical_wire_defs(monkeypatch)
             }],
         },
         {
-            "content": "",
+            "content": "Wire definitions match across phases.",
             "tool_calls": [{
                 "id": "done",
                 "function": {
                     "name": "quit",
-                    "arguments": json.dumps({"reply": "done"}),
+                    "arguments": "{}",
                 },
             }],
         },
@@ -598,7 +598,7 @@ async def test_normal_phase1_and_phase2_receive_identical_wire_defs(monkeypatch)
     monkeypatch.setattr(agent_module, "_save_session_messages", AsyncMock())
     assert await agent_module._run_main_agent(
         "inspect", [], None, 0, "db.sqlite3",
-    ) == "done"
+    ) == "Wire definitions match across phases."
     assert len(calls) == 2
     assert calls[0] == calls[1]
     assert "browser_tools" not in calls[0]
@@ -732,12 +732,12 @@ async def test_internal_execution_agent_uses_run_fixed_snapshot(monkeypatch):
             coordinator.get_main_wire_tool_defs()
         )
         return {
-            "content": "",
+            "content": "Scheduled work complete.",
             "tool_calls": [{
                 "id": "done",
                 "function": {
                     "name": "quit",
-                    "arguments": json.dumps({"reply": "done"}),
+                    "arguments": "{}",
                 },
             }],
         }

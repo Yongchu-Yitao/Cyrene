@@ -1250,7 +1250,12 @@ async def call_llm(
                                 nonlocal stream_event_emitted
                                 stream_event_emitted = True
                                 if stream_callback:
-                                    await stream_callback(event)
+                                    await stream_callback({
+                                        **event,
+                                        "caller": caller,
+                                        "phase": phase,
+                                        "model": model,
+                                    })
 
                             try:
                                 if provider == "codex_oauth":
@@ -1551,14 +1556,21 @@ async def call_llm(
 # Streaming handler
 # ---------------------------------------------------------------------------
 
-# Textual DSML tool-call markers can be streamed as ordinary content deltas
-# (DeepSeek's fallback when it cannot use the structured tool-call channel).
-# The block is parsed back into real tool calls *after* the stream completes
-# (`_normalize_dsml_tool_calls`), but the raw deltas would otherwise reach the
-# UI verbatim mid-stream. `_DsmlStreamFilter` withholds the markup from the
-# forwarded stream while the caller keeps the raw text for normalization.
-_DSML_STREAM_OPENERS = ("<｜｜DSML｜｜tool_calls>", "<||DSML||tool_calls>")
-_DSML_STREAM_CLOSERS = ("</｜｜DSML｜｜tool_calls>", "</||DSML||tool_calls>")
+# Textual tool-call markers can be streamed as ordinary content deltas. DSML
+# blocks are normalized into structured calls after the stream; legacy
+# ``<tool_call>`` blocks are invalid but must still never leak into the UI.
+# `_DsmlStreamFilter` withholds both forms while the caller keeps raw text for
+# normalization and terminal validation.
+_DSML_STREAM_OPENERS = (
+    "<｜｜DSML｜｜tool_calls>",
+    "<||DSML||tool_calls>",
+    "<tool_call>",
+)
+_DSML_STREAM_CLOSERS = (
+    "</｜｜DSML｜｜tool_calls>",
+    "</||DSML||tool_calls>",
+    "</tool_call>",
+)
 _DSML_STREAM_MAX_OPENER = max(len(opener) for opener in _DSML_STREAM_OPENERS)
 
 
@@ -1584,7 +1596,7 @@ def _trailing_marker_prefix(text: str, markers: tuple[str, ...]) -> int:
 
 
 class _DsmlStreamFilter:
-    """Strip DSML tool-call blocks from a forwarded delta stream incrementally."""
+    """Strip textual tool-call blocks from a forwarded delta stream incrementally."""
 
     def __init__(self) -> None:
         self._buf = ""

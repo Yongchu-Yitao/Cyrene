@@ -1057,6 +1057,20 @@ class WorkbenchAgentInbox:
             await self._queue.put(self._queue_item(event))
             await asyncio.sleep(0)
 
+    async def wait_for_active_tools(self) -> None:
+        """Wait for already-submitted tool work without cancelling or starting work.
+
+        A terminal ``quit`` prevents new submissions, but it must not discard a
+        tool that is already queued or running. Batch tasks remain active until
+        all of their child tool runners finish, so waiting on this set covers
+        both single calls and concurrent batches.
+        """
+        while True:
+            active = [task for task in self._tasks if not task.done()]
+            if not active:
+                return
+            await asyncio.gather(*active, return_exceptions=True)
+
     def collect_guidance_nowait(self) -> list[dict[str, Any]]:
         while True:
             try:

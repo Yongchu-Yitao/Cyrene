@@ -16,8 +16,10 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                'parameters': {'type': 'object', 'properties': {'text': {'type': 'string'}}, 'required': ['text']}}},
  {'type': 'function',
   'function': {'name': 'send_message',
-               'description': 'Main agent only. Send a brief user-visible mid-run reply in the current chat. Never use '
-                              'this for subagent coordination or subagent final delivery.',
+               'description': 'Main agent only. Send a brief user-visible mid-run reply in the current chat. For '
+                              'tool-using work this MUST be the first call in the first execution batch, immediately '
+                              'followed by the first useful tool call in the same batch whenever safe. Never use this '
+                              'for subagent coordination or subagent final delivery.',
                'parameters': {'type': 'object', 'properties': {'text': {'type': 'string'}}, 'required': ['text']}}},
  {'type': 'function',
   'function': {'name': 'send_message_to_user',
@@ -511,17 +513,11 @@ _NATIVE_TOOL_DEFS: tuple[dict[str, Any], ...] = tuple([{'type': 'function',
                'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}}, 'required': ['query']}}},
  {'type': 'function',
   'function': {'name': 'quit',
-               'description': 'Call this when the task is complete and the interaction should end. Put your COMPLETE '
-                              'final reply to the user in `reply` — the user is shown this text verbatim, so write the '
-                              "actual answer/result here (in the user's language), not a description of what you did. "
-                              'Omit `reply` only when there is genuinely nothing to say.',
+               'description': 'Terminal control signal. Call this only after writing the complete result in normal '
+                              'assistant content. Do not put answer text or tool syntax in the arguments, and never '
+                              'combine quit with another tool call.',
                'parameters': {'type': 'object',
-                              'properties': {'reply': {'type': 'string',
-                                                       'description': "The final user-facing reply, in the user's "
-                                                                      'language. Shown to the user verbatim — write '
-                                                                      'the real answer, not a summary of your '
-                                                                      'actions.'},
-                                             'completion_status': {'type': 'string',
+                              'properties': {'completion_status': {'type': 'string',
                                                                    'enum': ['completed', 'partial', 'blocked'],
                                                                    'description': 'Subagents with explicit success '
                                                                                   'criteria must state whether those '
