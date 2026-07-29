@@ -298,8 +298,8 @@ OAuth tokens, and Codex quota is presented separately from currency budgets.
   data directories, or timezone. Strict thread-warning mode is stable.
 - **Linux packages receive a real installation smoke test** — the release gate
   now installs the `.deb` on an Ubuntu runner, verifies root/4755 ownership for
-  `chrome-sandbox`, and launches the desktop app through `/usr/bin/cyrene`,
-  covering the same path users run after installation.
+  `chrome-sandbox`, and launches the app from its installed location, covering
+  the same executable used by the desktop entry.
 - **The complete local suite passes** — all `1,607` pytest tests pass in the
   project `.venv` with no pre-existing Cyrene data directories; the beta7
   frontend production build, OpenAPI contract, focused Codex/Workbench

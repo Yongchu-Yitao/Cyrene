@@ -29,7 +29,7 @@ def test_release_pipeline_smoke_tests_and_publishes_all_linux_packages():
     assert "--desktop-smoke-test" in workflow
     assert "Install and smoke test Debian package" in workflow
     assert "stat -c '%u:%a' /opt/Cyrene/chrome-sandbox" in workflow
-    assert "/usr/bin/cyrene" in workflow
+    assert "/opt/Cyrene/cyrene" in workflow
     assert "name: linux-packages" in workflow
     assert "dist-electron/Cyrene-*-x64.AppImage" in workflow
     assert "dist-electron/Cyrene-*-x64.deb" in workflow

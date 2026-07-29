@@ -240,7 +240,7 @@ OpenAI Codex OAuth 正式接入模型配置、首次设置、Workbench 对话与
   数据目录或时区，严格线程告警模式下也能稳定完成。
 - **Linux 安装包执行真实安装冒烟** — Release Gate 除 AppImage 外，还会在
   Ubuntu Runner 上实际安装 `.deb`，校验 `chrome-sandbox` 的 root/4755 权限，
-  并从 `/usr/bin/cyrene` 启动完整 Desktop Smoke，覆盖用户真实启动路径。
+  并从安装目录启动完整 Desktop Smoke，覆盖桌面图标使用的真实启动路径。
 - **本地完整测试通过** — 在没有任何既有 Cyrene 数据目录的隔离环境中，项目
   `.venv` 完整 pytest 共 `1,607` 项通过；
   beta7 前端生产构建、OpenAPI 单项契约、相关 Codex/Workbench 回归和
