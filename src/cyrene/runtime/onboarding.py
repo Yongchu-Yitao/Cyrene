@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -57,8 +58,10 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
         "llm": {
             "completed_at": str(llm.get("completed_at") or "").strip(),
             "source": str(llm.get("source") or "").strip(),
+            "provider": str(llm.get("provider") or "").strip(),
             "base_url": str(llm.get("base_url") or "").strip(),
             "model": str(llm.get("model") or "").strip(),
+            "reasoning_effort": str(llm.get("reasoning_effort") or "").strip(),
         },
         "personality": {
             "completed_at": str(personality.get("completed_at") or "").strip(),
@@ -194,6 +197,7 @@ def _merge_inferred_state(state: dict[str, Any]) -> tuple[dict[str, Any], str]:
     if not merged["llm"]["completed_at"] and _api_key_present():
         merged["llm"]["completed_at"] = _now_iso()
         merged["llm"]["source"] = "legacy-env"
+        merged["llm"]["provider"] = "openai_compatible"
         merged["llm"]["base_url"] = os.environ.get("OPENAI_BASE_URL", OPENAI_BASE_URL).strip()
         merged["llm"]["model"] = os.environ.get("OPENAI_MODEL", OPENAI_MODEL).strip()
         dirty = True
@@ -247,8 +251,16 @@ def get_onboarding_status() -> dict[str, Any]:
         "llm": {
             "configured": llm_configured,
             "hasApiKey": _api_key_present(),
-            "baseUrl": os.environ.get("OPENAI_BASE_URL", OPENAI_BASE_URL).strip(),
-            "model": os.environ.get("OPENAI_MODEL", OPENAI_MODEL).strip(),
+            "provider": state["llm"].get("provider") or "openai_compatible",
+            "baseUrl": (
+                state["llm"].get("base_url")
+                or os.environ.get("OPENAI_BASE_URL", OPENAI_BASE_URL).strip()
+            ),
+            "model": (
+                state["llm"].get("model")
+                or os.environ.get("OPENAI_MODEL", OPENAI_MODEL).strip()
+            ),
+            "reasoningEffort": state["llm"].get("reasoning_effort", ""),
             "completedAt": state["llm"].get("completed_at", ""),
         },
         "personality": {
@@ -381,13 +393,113 @@ async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> di
     state["llm"] = {
         "completed_at": _now_iso(),
         "source": "wizard",
+        "provider": "openai_compatible",
         "base_url": clean_base_url,
         "model": clean_model,
+        "reasoning_effort": "",
     }
     save_onboarding_state(state)
     return {
         "ok": True,
         "preview": preview,
+        "onboarding": get_onboarding_status(),
+    }
+
+
+async def save_codex_oauth_setup(
+    model: str,
+    reasoning_effort: str = "",
+) -> dict[str, Any]:
+    """Persist a logged-in Codex model as the primary onboarding candidate."""
+    from cyrene.model_runtime.codex_provider import (
+        CODEX_BASE_URL,
+        CODEX_PROVIDER,
+        get_codex_provider,
+    )
+    from cyrene.runtime.settings_store import get_models, save_models
+
+    clean_model = model.strip()
+    clean_effort = reasoning_effort.strip().lower()
+    if not clean_model:
+        raise ValueError("Codex model is required")
+
+    provider = get_codex_provider()
+    account_result, available_items = await asyncio.gather(
+        provider.account(),
+        provider.models(),
+    )
+    account = account_result.get("account")
+    if not (
+        isinstance(account, dict)
+        and account.get("type") == "chatgpt"
+    ):
+        raise ValueError("OpenAI OAuth login is required")
+
+    selected = next(
+        (
+            item
+            for item in available_items
+            if str(item.get("model") or item.get("id") or "").strip()
+            == clean_model
+        ),
+        None,
+    )
+    if selected is None:
+        raise ValueError("Selected Codex model is unavailable")
+
+    supported_efforts = {
+        str(
+            item.get("reasoningEffort")
+            or item.get("reasoning_effort")
+            or item.get("effort")
+            or ""
+        ).strip().lower()
+        if isinstance(item, dict)
+        else str(item).strip().lower()
+        for item in (selected.get("supportedReasoningEfforts") or [])
+        if isinstance(item, (str, dict))
+    }
+    supported_efforts.discard("")
+    if clean_effort and supported_efforts and clean_effort not in supported_efforts:
+        raise ValueError("Selected reasoning effort is unavailable for this model")
+
+    candidate = {
+        "id": f"codex-{clean_model}",
+        "name": clean_model,
+        "model": clean_model,
+        "provider": CODEX_PROVIDER,
+        "reasoning_effort": clean_effort,
+        "desc": "OpenAI OAuth",
+        "ctx": "",
+        "price": "Codex quota",
+        "api_key": "",
+        "base_url": CODEX_BASE_URL,
+        "vision_capable": False,
+        "vision_checked_at": "",
+        "vision_check_error": (
+            "Codex OAuth image input is not supported by this adapter"
+        ),
+    }
+    other_candidates = [
+        item
+        for item in (get_models() or [])
+        if str(item.get("provider") or "") != CODEX_PROVIDER
+    ]
+    save_models([candidate, *other_candidates])
+    write_env_keys({"OPENAI_MODEL": clean_model})
+
+    state = load_onboarding_state()
+    state["llm"] = {
+        "completed_at": _now_iso(),
+        "source": "wizard",
+        "provider": CODEX_PROVIDER,
+        "base_url": CODEX_BASE_URL,
+        "model": clean_model,
+        "reasoning_effort": clean_effort,
+    }
+    save_onboarding_state(state)
+    return {
+        "ok": True,
         "onboarding": get_onboarding_status(),
     }
 

@@ -3190,6 +3190,11 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
   var [menuProjectId, setMenuProjectId] = useWorkbenchState("");
   var [accountMenuOpen, setAccountMenuOpen] = useWorkbenchState(false);
   var [budgetState, setBudgetState] = useWorkbenchState(null);
+  var [codexQuotaState, setCodexQuotaState] = useWorkbenchState({
+    primary: false,
+    connected: false,
+    windows: [],
+  });
 
   // Fetch budget status from API (also pinged when the account menu opens)
   function fetchBudget() {
@@ -3198,7 +3203,33 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
       .then(function (d) { setBudgetState(d); })
       .catch(function () {});
   }
+
+  function fetchCodexQuotaSummary() {
+    return fetch("/api/settings/models")
+      .then(function (r) { return r.json(); })
+      .then(function (modelsPayload) {
+        var primary = (modelsPayload.models || modelsPayload.primary_candidates || [])[0];
+        if (!primary || primary.provider !== "codex_oauth") {
+          setCodexQuotaState({ primary: false, connected: false, windows: [] });
+          return null;
+        }
+        return fetch("/api/settings/openai-oauth/limits")
+          .then(function (r) { return r.json(); })
+          .then(function (quotaPayload) {
+            setCodexQuotaState({
+              primary: true,
+              connected: quotaPayload.connected === true,
+              windows: WorkbenchModel.codexQuotaWindows(quotaPayload.limits),
+            });
+            return quotaPayload;
+          });
+      })
+      .catch(function () {
+        setCodexQuotaState({ primary: false, connected: false, windows: [] });
+      });
+  }
   useWorkbenchEffect(function () { fetchBudget(); function onFocus() { fetchBudget(); } try { window.addEventListener("wb-focus-composer", onFocus); } catch (e) {} return function () { try { window.removeEventListener("wb-focus-composer", onFocus); } catch (e) {} }; }, []);
+  useWorkbenchEffect(function () { fetchCodexQuotaSummary(); }, []);
 
   function formatTimeDiff(isoStr) {
     if (!isoStr) return "";
@@ -3230,9 +3261,21 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
   }
   function cs(curr) { return curr === "CNY" ? "¥" : curr === "USD" ? "$" : curr === "EUR" ? "€" : curr === "GBP" ? "£" : curr || ""; }
   function formatBudgetAmount(v, curr) { return cs(curr) + v.toFixed(2); }
+  function codexQuotaWindowName(windowData) {
+    if (windowData.kind === "five_hour") return t("rail.budgetFiveHour");
+    if (windowData.kind === "weekly") return t("rail.budgetWeekly");
+    return windowData.label || t("settings.codexQuotaWindow");
+  }
+  function codexQuotaResetTime(windowData) {
+    if (!windowData.resetsAt) return "—";
+    return new Date(windowData.resetsAt * 1000).toLocaleString();
+  }
   // Re-fetch whenever the menu opens so the user sees fresh data
   useWorkbenchEffect(function () {
-    if (accountMenuOpen) fetchBudget();
+    if (accountMenuOpen) {
+      fetchBudget();
+      fetchCodexQuotaSummary();
+    }
   }, [accountMenuOpen]);
   // Re-fetch when budget settings are saved in the settings panel
   useWorkbenchEffect(function () {
@@ -3401,6 +3444,36 @@ function ProjectRail({ projects, activeProjectId, activePage, collapsed, onToggl
         </div>
         {accountMenuOpen && (
           <div className="workbench-account-menu" onClick={function (e) { e.stopPropagation(); }}>
+            {codexQuotaState.primary && codexQuotaState.connected && codexQuotaState.windows.length > 0 && (
+              <>
+                <div className="wb-account-menu-codex">
+                  <div className="wb-account-menu-codex-head">
+                    <strong>{t("settings.codexQuota")}</strong>
+                    <span>{t("settings.codexQuotaIndependent")}</span>
+                  </div>
+                  {codexQuotaState.windows.map(function (windowData) {
+                    return (
+                      <div className="wb-account-menu-codex-window" key={windowData.kind + "-" + windowData.durationMins}>
+                        <div className="wb-account-menu-usage-row">
+                          <span>{codexQuotaWindowName(windowData)}</span>
+                          <span className={"wb-account-menu-usage-val" + (windowData.remainingPercent <= 0 ? " over" : "")}>
+                            {t("settings.codexQuotaRemaining", { pct: windowData.remainingPercent })}
+                          </span>
+                        </div>
+                        <div className="wb-budget-progress-bar">
+                          <div
+                            className={"wb-budget-progress-fill" + (windowData.usedPercent >= 100 ? " over" : windowData.usedPercent >= 80 ? " high" : "")}
+                            style={{ width: Math.round(windowData.usedPercent) + "%" }}
+                          />
+                        </div>
+                        <small>{t("settings.codexQuotaResets", { time: codexQuotaResetTime(windowData) })}</small>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="wb-account-menu-divider"></div>
+              </>
+            )}
             {budgetState && budgetState.monthly_budget > 0 && (
               <>
                 <div className="wb-account-menu-usage">

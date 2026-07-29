@@ -2178,6 +2178,14 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     } else {
       pendingChatIdRef.current = targetId;
       if (topbarResource) pendingTopbarResourceRef.current = { chatId: targetId, resource: topbarResource };
+      // A notification may target a chat created after this long-lived page
+      // last loaded its list. Refresh the current project now; otherwise the
+      // pending id has no state change that would ever cause it to be applied.
+      // A cross-project target is handled by the project-change loading effect.
+      var targetProjectId = String(pending.projectId || "");
+      if (!targetProjectId || targetProjectId === String(projectIdRef.current || "")) {
+        refreshChats(targetId);
+      }
     }
   }
 

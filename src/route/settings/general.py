@@ -38,6 +38,22 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 status_code=502,
             )
 
+    @router.post("/api/onboarding/openai-oauth")
+    async def api_onboarding_openai_oauth(request: Request):
+        body = await request.json()
+        try:
+            return await save_codex_oauth_setup(
+                str(body.get("model") or ""),
+                str(body.get("reasoning_effort") or ""),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except (RuntimeError, OSError, TimeoutError) as exc:
+            return JSONResponse(
+                {"error": "Codex model validation failed", "detail": str(exc)},
+                status_code=503,
+            )
+
     @router.post("/api/onboarding/personality")
     async def api_onboarding_personality(request: Request):
         body = await request.json()
@@ -172,6 +188,68 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         write_env_keys(updates)
         return {"ok": True, "updated": list(updates.keys())}
 
+    async def _codex_oauth_snapshot(*, include_limits: bool = True) -> dict[str, Any]:
+        from cyrene.model_runtime.codex_provider import get_codex_provider
+        from cyrene.runtime.settings_store import get as get_setting
+
+        snapshot = await get_codex_provider().snapshot(
+            include_limits=include_limits
+        )
+        snapshot["quota_enabled"] = bool(
+            get_setting("codex_budget_enabled", True)
+        )
+        return snapshot
+
+    @router.get("/api/settings/openai-oauth")
+    async def api_get_openai_oauth():
+        try:
+            # Login state + model choices are the interactive path. Quota has a
+            # separate endpoint/panel and must not delay showing "connected".
+            return await _codex_oauth_snapshot(include_limits=False)
+        except (RuntimeError, OSError, TimeoutError) as exc:
+            return {
+                "available": False, "connected": False, "models": [],
+                "limits": {}, "quota_enabled": True, "error": str(exc),
+            }
+
+    @router.post("/api/settings/openai-oauth/login")
+    async def api_start_openai_oauth_login():
+        from cyrene.model_runtime.codex_provider import get_codex_provider
+        from cyrene.runtime.settings_store import set_ as set_setting
+
+        set_setting("codex_budget_enabled", True)
+        try:
+            return await get_codex_provider().start_login()
+        except (RuntimeError, OSError, TimeoutError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
+    @router.post("/api/settings/openai-oauth/logout")
+    async def api_openai_oauth_logout():
+        from cyrene.model_runtime.codex_provider import get_codex_provider
+
+        try:
+            await get_codex_provider().logout()
+        except (RuntimeError, OSError, TimeoutError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+        return {"ok": True}
+
+    @router.get("/api/settings/openai-oauth/limits")
+    async def api_get_openai_oauth_limits():
+        try:
+            snapshot = await _codex_oauth_snapshot()
+            return {
+                "available": snapshot.get("available", True),
+                "connected": snapshot.get("connected", False),
+                "account": snapshot.get("account"),
+                "limits": snapshot.get("limits") or {},
+                "quota_enabled": snapshot.get("quota_enabled", True),
+            }
+        except (RuntimeError, OSError, TimeoutError) as exc:
+            return {
+                "available": False, "connected": False, "limits": {},
+                "quota_enabled": True, "error": str(exc),
+            }
+
     @router.get("/api/settings/models")
     async def api_get_models():
         from cyrene.runtime.settings_store import get_models, get_vision_models, get_secondary_model
@@ -179,6 +257,8 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         from cyrene.model_runtime.pricing import price_hint as _price_hint
 
         def _normalize_candidates(raw_items: list[dict[str, Any]] | None, fallback_api_key: str, fallback_base_url: str) -> list[dict[str, Any]]:
+            from cyrene.model_runtime.codex_provider import CODEX_BASE_URL, CODEX_PROVIDER
+
             normalized_items: list[dict[str, Any]] = []
             for index, model in enumerate(raw_items or []):
                 model_identifier = str(
@@ -189,9 +269,16 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 ).strip()
                 if not model_identifier:
                     continue
-                model_base_url = str(model.get("base_url") or fallback_base_url or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL
+                provider = str(model.get("provider") or "openai_compatible").strip()
+                model_base_url = (
+                    CODEX_BASE_URL
+                    if provider == CODEX_PROVIDER
+                    else str(model.get("base_url") or fallback_base_url or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL
+                )
                 raw_model_api_key = strip_wrapping_quotes(str(model.get("api_key") or "").strip())
-                if raw_model_api_key:
+                if provider == CODEX_PROVIDER:
+                    model_api_key = ""
+                elif raw_model_api_key:
                     model_api_key = raw_model_api_key
                 elif model_base_url.rstrip("/") == (fallback_base_url or DEFAULT_OPENAI_BASE_URL).rstrip("/"):
                     model_api_key = fallback_api_key
@@ -203,6 +290,8 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                         "id": str(model.get("id") or f"candidate-{index + 1}").strip() or f"candidate-{index + 1}",
                         "name": str(model.get("name") or model_identifier).strip() or model_identifier,
                         "model": model_identifier,
+                        "provider": provider,
+                        "reasoning_effort": str(model.get("reasoning_effort") or "").strip(),
                         "desc": str(model.get("desc") or "").strip(),
                         "ctx": str(model.get("ctx") or "").strip(),
                         "price": user_price,
@@ -331,6 +420,8 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             return JSONResponse({"error": "vision_models must be a non-empty list"}, status_code=400)
 
         def _normalize_candidates(raw_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            from cyrene.model_runtime.codex_provider import CODEX_BASE_URL, CODEX_PROVIDER
+
             normalized_items: list[dict[str, Any]] = []
             for index, model in enumerate(raw_items):
                 model_identifier = str(
@@ -341,16 +432,27 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 ).strip()
                 if not model_identifier:
                     continue
+                provider = str(model.get("provider") or "openai_compatible").strip()
                 normalized_items.append(
                     {
                         "id": str(model.get("id") or f"candidate-{index + 1}").strip() or f"candidate-{index + 1}",
                         "name": model_identifier,
                         "model": model_identifier,
+                        "provider": provider,
+                        "reasoning_effort": str(model.get("reasoning_effort") or "").strip(),
                         "desc": str(model.get("desc") or "").strip(),
                         "ctx": str(model.get("ctx") or "").strip(),
                         "price": str(model.get("price") or "").strip(),
-                        "api_key": strip_wrapping_quotes(str(model.get("api_key") or "").strip()),
-                        "base_url": str(model.get("base_url") or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL,
+                        "api_key": (
+                            ""
+                            if provider == CODEX_PROVIDER
+                            else strip_wrapping_quotes(str(model.get("api_key") or "").strip())
+                        ),
+                        "base_url": (
+                            CODEX_BASE_URL
+                            if provider == CODEX_PROVIDER
+                            else str(model.get("base_url") or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL
+                        ),
                     }
                 )
             return normalized_items
@@ -362,6 +464,30 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             return JSONResponse({"error": "models must contain at least one valid model"}, status_code=400)
         if raw_vision_models is not None and not normalized_vision:
             return JSONResponse({"error": "vision_models must contain at least one valid model"}, status_code=400)
+        if any(
+            candidate.get("provider") == "codex_oauth"
+            for candidate in normalized[1:]
+        ):
+            return JSONResponse(
+                {"error": "Codex OAuth can only be used as the primary model"},
+                status_code=400,
+            )
+        if any(
+            candidate.get("provider") == "codex_oauth"
+            for candidate in normalized_vision
+        ):
+            return JSONResponse(
+                {"error": "Codex OAuth cannot be used as a vision model"},
+                status_code=400,
+            )
+        if (
+            isinstance(raw_secondary, dict)
+            and str(raw_secondary.get("provider") or "") == "codex_oauth"
+        ):
+            return JSONResponse(
+                {"error": "Codex OAuth cannot be used as the secondary model"},
+                status_code=400,
+            )
 
         primary = normalized[0]
         primary_model = str(primary.get("model") or "").strip()
@@ -369,7 +495,28 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         primary_api_key = strip_wrapping_quotes(str(primary.get("api_key") or "").strip())
 
         try:
-            await _test_llm_connection(primary_api_key, primary_base_url, primary_model)
+            if primary.get("provider") == "codex_oauth":
+                from cyrene.model_runtime.codex_provider import get_codex_provider
+
+                codex_provider = get_codex_provider()
+                account_result, codex_models = await asyncio.gather(
+                    codex_provider.account(),
+                    codex_provider.models(),
+                )
+                account = account_result.get("account")
+                if not (
+                    isinstance(account, dict)
+                    and account.get("type") == "chatgpt"
+                ):
+                    raise ValueError("OpenAI OAuth login is required")
+                available_models = {
+                    str(item.get("model") or item.get("id") or "").strip()
+                    for item in codex_models
+                }
+                if primary_model not in available_models:
+                    raise ValueError("Selected Codex model is unavailable")
+            else:
+                await _test_llm_connection(primary_api_key, primary_base_url, primary_model)
         except httpx.TimeoutException as exc:
             return JSONResponse(
                 {"error": "upstream model timed out", "detail": str(exc)},
@@ -380,6 +527,11 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 {"error": "upstream model request failed", "detail": format_httpx_error(exc)},
                 status_code=502,
             )
+        except (RuntimeError, OSError) as exc:
+            return JSONResponse(
+                {"error": "Codex model validation failed", "detail": str(exc)},
+                status_code=503,
+            )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -387,6 +539,18 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         # configurations so the default primary/vision mirror costs one probe.
         vision_checks: dict[tuple[str, str, str], dict[str, Any]] = {}
         for candidate in [*normalized, *normalized_vision]:
+            if candidate.get("provider") == "codex_oauth":
+                candidate.update(
+                    {
+                        # The current app-server adapter sends text-only turns.
+                        # Do not advertise multimodal support until image inputs
+                        # are forwarded as native Codex turn input items.
+                        "vision_capable": False,
+                        "vision_checked_at": "",
+                        "vision_check_error": "Codex OAuth image input is not supported by this adapter",
+                    }
+                )
+                continue
             check_key = (
                 str(candidate.get("model") or ""),
                 str(candidate.get("base_url") or "").rstrip("/"),
@@ -407,13 +571,15 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             save_vision_models(normalized_vision)
         if isinstance(raw_secondary, dict):
             save_secondary_model(raw_secondary)
-        write_env_keys(
-            {
-                "OPENAI_MODEL": primary_model,
-                "OPENAI_BASE_URL": primary_base_url,
-                "OPENAI_API_KEY": primary_api_key,
-            }
-        )
+        env_updates = {"OPENAI_MODEL": primary_model}
+        if primary.get("provider") != "codex_oauth":
+            env_updates.update(
+                {
+                    "OPENAI_BASE_URL": primary_base_url,
+                    "OPENAI_API_KEY": primary_api_key,
+                }
+            )
+        write_env_keys(env_updates)
         saved_secondary = get_secondary_model()
         sec_model = str(saved_secondary.get("model") or "").strip()
         ctx_limit = int(saved_secondary.get("ctx_limit") or 0)
@@ -778,6 +944,11 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         if "budget_enabled" in body:
             set_setting("budget_enabled", bool(body["budget_enabled"]))
             changed.append("budget_enabled")
+        if "codex_budget_enabled" in body:
+            set_setting(
+                "codex_budget_enabled", bool(body["codex_budget_enabled"])
+            )
+            changed.append("codex_budget_enabled")
         if "budget_monthly" in body:
             value = float(body.get("budget_monthly") or 0)
             if not math.isfinite(value) or value < 0:

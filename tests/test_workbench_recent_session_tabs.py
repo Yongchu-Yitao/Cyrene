@@ -88,7 +88,11 @@ def test_session_tabs_remain_interactive_inside_the_draggable_titlebar():
     assert ".workbench-session-tabs {" in css
     tabstrip = css.split(".workbench-session-tabs {", 1)[1].split("}", 1)[0]
     tab = css.split(".workbench-session-tab {", 1)[1].split("}", 1)[0]
-    assert "-webkit-app-region: no-drag" in tabstrip
+    assert "-webkit-app-region: no-drag" not in tabstrip
+    assert '.workbench-topbar button,' in css
+    assert '-webkit-app-region: no-drag' in css.split(
+        '.workbench-topbar button,', 1
+    )[1].split("}", 1)[0]
     assert "border: 1px solid" in tab
     assert "flex: 0 1 136px" in tab
     assert "padding: 0 6px" in tab

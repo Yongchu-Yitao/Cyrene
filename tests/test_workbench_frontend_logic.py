@@ -39,6 +39,9 @@ def test_notification_items_navigate_to_their_precise_context():
     source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
         encoding="utf-8"
     )
+    chat_source = (
+        root / "src" / "webui" / "frontend" / "workbench-chat.jsx"
+    ).read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
@@ -52,6 +55,8 @@ def test_notification_items_navigate_to_their_precise_context():
     assert "navigateFromSearch(target);" in source
     assert "onOpenNotification={navigateFromNotification}" in source
     assert 'className="workbench-notif-item-jump"' in source
+    assert 'targetProjectId === String(projectIdRef.current || "")' in chat_source
+    assert "refreshChats(targetId);" in chat_source
     assert ".workbench-notif-item:focus-visible" in styles
 
 
@@ -3730,3 +3735,28 @@ def test_workbench_composers_upload_files_pasted_from_clipboard():
         assert "if (!files.length) return; // Preserve the browser's normal text paste." in source
         assert "event.preventDefault();" in source
         assert "addFiles(files);" in source
+
+
+def test_account_menu_codex_quota_requires_primary_oauth_and_login():
+    root = Path(__file__).resolve().parent.parent
+    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    model = (root / "src" / "webui" / "frontend" / "workbench-model.jsx").read_text(
+        encoding="utf-8"
+    )
+    settings = (root / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'primary.provider !== "codex_oauth"' in shell
+    assert "quotaPayload.connected === true" in shell
+    assert "codexQuotaState.primary && codexQuotaState.connected" in shell
+    assert 'fetch("/api/settings/openai-oauth/limits")' in shell
+    assert "WorkbenchModel.codexQuotaWindows(quotaPayload.limits)" in shell
+
+    # The settings panel and account menu share one duration-based parser.
+    assert "function codexQuotaWindows(limits)" in model
+    assert 'durationMins === 300' in model
+    assert 'durationMins >= 10080' in model
+    assert 'window.CyreneUI.require("model").codexQuotaWindows(' in settings

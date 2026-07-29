@@ -94,6 +94,7 @@ from cyrene.runtime.onboarding import (
     get_onboarding_status,
     reset_onboarding_state,
     save_and_test_llm_setup,
+    save_codex_oauth_setup,
     save_personality_setup,
 )
 from cyrene.runtime.settings_store import get_all as get_web_settings
@@ -6272,9 +6273,46 @@ async def _workbench_agent_reply(
     normalized = _workbench_normalize_attachments(attachments)
     public_attachments = [build_public_attachment_payload(item) for item in normalized] or None
     message = str(user_input or "")
+    llm_user_content = None
     attachment_binding = None
     if normalized:
-        message = (message or "[Attachment upload]") + _attachment_prompt_block(normalized)
+        from cyrene.model_runtime.client import primary_candidate_supports_vision
+
+        image_items = [
+            item for item in normalized
+            if str(item.get("kind") or "") == "image"
+        ]
+        primary_handles_images = bool(image_items) and primary_candidate_supports_vision(
+            session_id
+        )
+        tool_items = [
+            item for item in normalized
+            if not primary_handles_images or str(item.get("kind") or "") != "image"
+        ]
+        if tool_items:
+            message = (message or "[Attachment upload]") + _attachment_prompt_block(tool_items)
+        if primary_handles_images:
+            content: list[dict[str, Any]] = [
+                {
+                    "type": "text",
+                    "text": message or "Describe the uploaded image in detail and extract any visible text.",
+                }
+            ]
+            for item in image_items:
+                path = Path(str(item.get("path") or "")).resolve()
+                mime = str(
+                    item.get("content_type")
+                    or mimetypes.guess_type(str(path))[0]
+                    or "image/png"
+                )
+                image_b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{image_b64}"},
+                    }
+                )
+            llm_user_content = content
         # Auto-allow uploaded files for tool read guards (same as /api/chat).
         att_map: dict[str, str] = {}
         for item in normalized:
@@ -6302,6 +6340,7 @@ async def _workbench_agent_reply(
             # contains the private attachment instruction block.
             public_user_message=str(user_input or ""),
             public_attachments=public_attachments,
+            llm_user_content=llm_user_content,
             workspace_dir=workspace_dir,
             ephemeral_system=str(ephemeral_system or ""),
             volatile_ephemeral_system=str(volatile_ephemeral_system or ""),
@@ -8826,6 +8865,7 @@ def _build_config() -> dict:
         "beta_updates": settings.get("beta_updates", False),
         "auto_update": settings.get("auto_update", True),
         "budget_enabled": settings.get("budget_enabled", False),
+        "codex_budget_enabled": settings.get("codex_budget_enabled", True),
         "budget_monthly": settings.get("budget_monthly", 50),
         "budget_currency": settings.get("budget_currency", "CNY"),
         "budget_action": settings.get("budget_action", "warn"),

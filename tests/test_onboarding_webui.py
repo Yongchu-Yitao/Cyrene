@@ -108,6 +108,63 @@ async def test_save_and_test_llm_setup_persists_completion(monkeypatch, tmp_path
     assert models[0]["vision_capable"] is True
 
 
+async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp_path):
+    from cyrene.model_runtime import codex_provider
+    from cyrene.runtime import onboarding, settings_store
+
+    default_soul = "# Cyrene's Soul\n\n## SELF:IDENTITY\n- default\n"
+    _patch_paths(monkeypatch, tmp_path, default_soul, default_soul)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    class FakeProvider:
+        async def account(self):
+            return {
+                "account": {
+                    "type": "chatgpt",
+                    "email": "user@example.com",
+                }
+            }
+
+        async def models(self):
+            return [{
+                "id": "gpt-5.6-terra",
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low"},
+                    {"reasoningEffort": "high"},
+                ],
+            }]
+
+        async def close(self):
+            return None
+
+    saved = {}
+    env_updates = {}
+    monkeypatch.setattr(codex_provider, "get_codex_provider", lambda: FakeProvider())
+    monkeypatch.setattr(settings_store, "get_models", lambda: [{
+        "id": "custom-primary",
+        "model": "deepseek-chat",
+        "provider": "openai_compatible",
+    }])
+    monkeypatch.setattr(settings_store, "save_models", lambda models: saved.setdefault("models", models))
+    monkeypatch.setattr(onboarding, "write_env_keys", lambda updates: env_updates.update(updates))
+
+    payload = await onboarding.save_codex_oauth_setup(
+        "gpt-5.6-terra",
+        "high",
+    )
+
+    assert payload["ok"] is True
+    assert payload["onboarding"]["llm"]["provider"] == "codex_oauth"
+    assert payload["onboarding"]["llm"]["model"] == "gpt-5.6-terra"
+    assert payload["onboarding"]["llm"]["reasoningEffort"] == "high"
+    assert payload["onboarding"]["activeStep"] == "personality"
+    assert saved["models"][0]["provider"] == "codex_oauth"
+    assert saved["models"][0]["model"] == "gpt-5.6-terra"
+    assert saved["models"][0]["reasoning_effort"] == "high"
+    assert saved["models"][1]["model"] == "deepseek-chat"
+    assert env_updates == {"OPENAI_MODEL": "gpt-5.6-terra"}
+
+
 async def test_vision_capability_probe_sends_an_image(monkeypatch):
     from cyrene.runtime import onboarding
 
@@ -181,6 +238,35 @@ def test_settings_model_save_persists_vision_probe_result(monkeypatch, tmp_path)
     assert saved["models"][0]["vision_checked_at"]
     assert saved["vision_models"][0]["vision_capable"] is True
     assert response.json()["models"][0]["vision_capable"] is True
+
+
+def test_settings_rejects_codex_oauth_as_fallback(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    response = TestClient(app).put("/api/settings/models", json={
+        "models": [
+            {
+                "id": "custom-primary",
+                "model": "deepseek-chat",
+                "provider": "openai_compatible",
+                "api_key": "sk-test",
+                "base_url": "https://example.test/v1",
+            },
+            {
+                "id": "codex-fallback",
+                "model": "gpt-5.6-sol",
+                "provider": "codex_oauth",
+            },
+        ],
+    })
+
+    assert response.status_code == 400
+    assert response.json()["error"] == (
+        "Codex OAuth can only be used as the primary model"
+    )
 
 
 async def test_save_personality_setup_marks_setup_done(monkeypatch, tmp_path):

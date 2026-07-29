@@ -27,7 +27,7 @@ function readCapability(key, fallback) {
 function createEmptyModel() {
   return {
     id: "candidate-" + Date.now() + "-" + Math.random().toString(16).slice(2, 6),
-    name: "", model: "", desc: "", ctx: "", price: "", priceHint: "", api_key: "", base_url: DEFAULT_MODEL_BASE_URL,
+    name: "", model: "", desc: "", ctx: "", price: "", priceHint: "", api_key: "", base_url: DEFAULT_MODEL_BASE_URL, provider: "openai_compatible",
   };
 }
 
@@ -40,9 +40,15 @@ function normalizeModel(raw, idx, fbBaseUrl, fbKey) {
     ctx: String(raw && raw.ctx || "").trim(),
     price: String(raw && raw.price || "").trim(),
     priceHint: String(raw && raw.priceHint || "").trim(),
+    provider: String(raw && raw.provider || "openai_compatible").trim(),
+    reasoning_effort: String(raw && raw.reasoning_effort || "").trim(),
     api_key: String(raw && raw.api_key || fbKey || "").trim(),
-    base_url: String(raw && raw.base_url || fbBaseUrl || DEFAULT_MODEL_BASE_URL).trim() || DEFAULT_MODEL_BASE_URL,
+    base_url: String(raw && raw.base_url || (raw && raw.provider === "codex_oauth" ? "codex://oauth" : fbBaseUrl) || DEFAULT_MODEL_BASE_URL).trim() || DEFAULT_MODEL_BASE_URL,
   };
+}
+
+function codexModelId(item) {
+  return String(item && (item.model || item.id || item.slug) || "").trim();
 }
 
 async function readSettingsResponse(response) {
@@ -184,6 +190,7 @@ function SettingsOverlay({
   var [draftVision, setDraftVision] = useStateSt(createEmptyModel());
   var [secondaryModel, setSecondaryModel] = useStateSt(null);
   var [modelsSaved, setModelsSaved] = useStateSt("");
+  var [modelsSaving, setModelsSaving] = useStateSt(false);
 
   // ── Config state ──
   var [config, setConfig] = useStateSt({
@@ -345,6 +352,8 @@ function SettingsOverlay({
     var norm = models.map(function (m, i) { return normalizeModel(m, i, config.base_url || DEFAULT_MODEL_BASE_URL, ""); }).filter(function (m) { return m.model; });
     var vNorm = visionModels.map(function (m, i) { return normalizeModel(m, i, config.base_url || DEFAULT_MODEL_BASE_URL, ""); }).filter(function (m) { return m.model; });
     if (!norm.length || !vNorm.length) { setModelsSaved(t("settings.modelCandidateRequired")); return; }
+    if (modelsSaving) return;
+    setModelsSaving(true);
     setModelsSaved(t("settings.saving"));
     fetch("/api/settings/models", {
       method: "PUT", headers: { "Content-Type": "application/json" },
@@ -380,6 +389,8 @@ function SettingsOverlay({
       setTimeout(function () { setModelsSaved(""); }, 1500);
     }).catch(function (e) {
       setModelsSaved(t("settings.error") + ": " + (e.message || ""));
+    }).finally(function () {
+      setModelsSaving(false);
     });
   }
 
@@ -507,7 +518,7 @@ function SettingsOverlay({
         // Content area
         React.createElement("div", { className: "settings-overlay-content" },
           tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
-          tab === "models" && ModelsPanel({ t, models, setModels, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, saveModels, config }),
+          tab === "models" && React.createElement(ModelsPanel, { t, models, setModels, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "remote" && React.createElement(RemotePanel, { t }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
@@ -1444,8 +1455,182 @@ function GeneralPanel(p) {
 }
 
 // ── Models Panel ──
+function modelCredentialFields(model, update, t) {
+  if (model.provider === "codex_oauth") {
+    return [
+      ModelField(t("settings.modelIdentifierLabel"), React.createElement("input", {
+        className: "wb-input mono", value: model.model, readOnly: true,
+      })),
+      React.createElement("div", { className: "wb-codex-provider-note", key: "provider" },
+        React.createElement("span", { className: "wb-status-dot good" }),
+        React.createElement("span", null, t("settings.openaiOAuthManaged")),
+      ),
+    ];
+  }
+  return [
+    ModelField(t("settings.modelIdentifierLabel"), React.createElement("input", { className: "wb-input mono", value: model.model, onChange: function (e) { update("model", e.target.value); }, placeholder: t("settings.placeholderModelIdentifier") })),
+    ModelField(t("settings.apiKey"), React.createElement("input", { className: "wb-input mono", type: "password", value: model.api_key, onChange: function (e) { update("api_key", e.target.value); }, placeholder: "sk-..." })),
+    ModelField(t("settings.baseUrlLabel"), React.createElement("input", { className: "wb-input mono", value: model.base_url, onChange: function (e) { update("base_url", e.target.value); }, placeholder: DEFAULT_MODEL_BASE_URL })),
+  ];
+}
+
 function ModelsPanel(p) {
-  var { t, models, setModels, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, saveModels, config } = p;
+  var { t, models, setModels, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config } = p;
+  var savedCodexCandidate = models[0] && models[0].provider === "codex_oauth"
+    ? models[0]
+    : null;
+  var [codexState, setCodexState] = useStateSt({
+    available: true,
+    connected: !!savedCodexCandidate,
+    checking: true,
+    models: [],
+    limits: {},
+    quota_enabled: true,
+  });
+  var [codexModel, setCodexModel] = useStateSt(savedCodexCandidate ? savedCodexCandidate.model : "");
+  var [codexEffort, setCodexEffort] = useStateSt(savedCodexCandidate ? savedCodexCandidate.reasoning_effort : "");
+  var [codexBusy, setCodexBusy] = useStateSt("");
+  var [codexNotice, setCodexNotice] = useStateSt("");
+  var [primaryMenuOpen, setPrimaryMenuOpen] = useStateSt(false);
+  var [hoveredPrimarySource, setHoveredPrimarySource] = useStateSt("");
+  var [primarySource, setPrimarySource] = useStateSt(
+    models[0] && models[0].provider === "codex_oauth" ? "codex" : "custom"
+  );
+  var codexPoll = useRefSt(null);
+  var primarySourceRef = useRefSt(null);
+
+  useEffectSt(function () {
+    if (!primaryMenuOpen) return;
+    function closePrimaryMenu(event) {
+      if (primarySourceRef.current && !primarySourceRef.current.contains(event.target)) {
+        setPrimaryMenuOpen(false);
+        setHoveredPrimarySource("");
+      }
+    }
+    function closePrimaryMenuOnEscape(event) {
+      if (event.key === "Escape") {
+        setPrimaryMenuOpen(false);
+        setHoveredPrimarySource("");
+      }
+    }
+    document.addEventListener("pointerdown", closePrimaryMenu, true);
+    document.addEventListener("keydown", closePrimaryMenuOnEscape);
+    return function () {
+      document.removeEventListener("pointerdown", closePrimaryMenu, true);
+      document.removeEventListener("keydown", closePrimaryMenuOnEscape);
+    };
+  }, [primaryMenuOpen]);
+
+  useEffectSt(function () {
+    var saved = models[0] && models[0].provider === "codex_oauth"
+      ? models[0]
+      : null;
+    if (!saved) return;
+    setCodexModel(saved.model || "");
+    setCodexEffort(saved.reasoning_effort || "");
+    if (models[0] && models[0].provider === "codex_oauth") {
+      setPrimarySource("codex");
+      setCodexState(function (previous) {
+        return { ...previous, connected: true };
+      });
+    }
+  }, [models]);
+
+  function loadCodexState() {
+    return fetch("/api/settings/openai-oauth")
+      .then(readSettingsResponse)
+      .then(function (data) {
+        setCodexState({ ...data, checking: false });
+        var options = data.models || [];
+        var saved = models[0] && models[0].provider === "codex_oauth"
+          ? models[0]
+          : null;
+        var savedModel = saved && saved.model || "";
+        var selected = options.find(function (item) { return codexModelId(item) === savedModel; });
+        var preferred = selected || options.find(function (item) { return item.isDefault || item.is_default; }) || options[0];
+        if (preferred) {
+          setCodexModel(savedModel || codexModelId(preferred));
+          setCodexEffort(saved && saved.reasoning_effort || String(preferred.defaultReasoningEffort || preferred.default_reasoning_effort || ""));
+        }
+        return data;
+      })
+      .catch(function (error) {
+        setCodexState(function (previous) {
+          return { ...previous, available: false, checking: false, models: [], error: error.message };
+        });
+      });
+  }
+
+  useEffectSt(function () {
+    loadCodexState();
+    return function () { if (codexPoll.current) clearInterval(codexPoll.current); };
+  }, []);
+
+  function startCodexLogin() {
+    setCodexBusy("login"); setCodexNotice("");
+    fetch("/api/settings/openai-oauth/login", { method: "POST" })
+      .then(readSettingsResponse)
+      .then(function (data) {
+        var authUrl = data.authUrl || data.auth_url || data.url;
+        if (authUrl) window.open(authUrl, "_blank", "noopener,noreferrer");
+        if (codexPoll.current) clearInterval(codexPoll.current);
+        codexPoll.current = setInterval(function () {
+          loadCodexState().then(function (state) {
+            if (state && state.connected) {
+              clearInterval(codexPoll.current); codexPoll.current = null;
+              setCodexBusy(""); setCodexNotice(t("settings.openaiOAuthConnected"));
+            }
+          });
+        }, 1500);
+      })
+      .catch(function (error) { setCodexBusy(""); setCodexNotice(error.message); });
+  }
+
+  function logoutCodex() {
+    setCodexBusy("logout"); setCodexNotice("");
+    fetch("/api/settings/openai-oauth/logout", { method: "POST" })
+      .then(readSettingsResponse)
+      .then(function () { setCodexBusy(""); setCodexModel(""); return loadCodexState(); })
+      .catch(function (error) { setCodexBusy(""); setCodexNotice(error.message); });
+  }
+
+  function setCodexPrimaryCandidate(selectedModel, selectedEffort) {
+    var targetModel = selectedModel || codexModel;
+    var targetEffort = selectedEffort != null ? selectedEffort : codexEffort;
+    if (!targetModel) return;
+    var candidate = normalizeModel({
+      id: "codex-" + targetModel,
+      model: targetModel,
+      desc: "OpenAI OAuth",
+      price: t("settings.codexQuota"),
+      provider: "codex_oauth",
+      reasoning_effort: targetEffort,
+      api_key: "",
+      base_url: "codex://oauth",
+    }, models.length, "", "");
+    var rest = models.filter(function (m) {
+      return m.provider !== "codex_oauth";
+    });
+    setModels([candidate].concat(rest));
+    setCodexNotice(t("settings.openaiOAuthPrimaryReady"));
+  }
+
+  function selectCustomPrimary() {
+    setPrimaryMenuOpen(false); setPrimarySource("custom");
+    if (models[0] && models[0].provider === "codex_oauth") {
+      var custom = models.find(function (m) { return m.provider !== "codex_oauth"; });
+      if (custom) {
+        setModels([custom].concat(models.filter(function (m) { return m.id !== custom.id; })));
+      } else {
+        setModels([createEmptyModel()].concat(models));
+      }
+    }
+  }
+
+  function selectCodexPrimary() {
+    setPrimaryMenuOpen(false); setPrimarySource("codex");
+    if (codexState.connected && codexModel) setCodexPrimaryCandidate();
+  }
 
   function updateModel(id, field, val) {
     setModels(models.map(function (m) {
@@ -1482,25 +1667,120 @@ function ModelsPanel(p) {
 
   function updateSecondary(field, val) { setSecondaryModel(function (prev) { return prev ? { ...prev, [field]: val, name: field === "model" ? val : prev.name } : prev; }); }
 
-  return React.createElement("div", { className: "settings-panel" },
+  var fallbackCount = Math.max(0, models.length - 1);
+  var visionFallbackCount = Math.max(0, visionModels.length - 1);
+  var secondaryConfigured = !!String(secondaryModel && secondaryModel.model || "").trim();
+  var visionConfigured = !!String(visionModels[0] && visionModels[0].model || "").trim();
+
+  return React.createElement("div", { className: "settings-panel wb-models-panel" },
     SectionTitle(t("settings.models"), t("settings.modelsSubtitle")),
 
     // Primary model
-    SectionBlock(t("settings.primaryModelSlot"), null,
-      models[0] && ModelCard([
-        ModelField(t("settings.modelIdentifierLabel"), React.createElement("input", { className: "wb-input mono", value: models[0].model, onChange: function (e) { updateModel(models[0].id, "model", e.target.value); }, placeholder: t("settings.placeholderModelIdentifier") })),
-        ModelField(t("settings.apiKey"), React.createElement("input", { className: "wb-input mono", type: "password", value: models[0].api_key, onChange: function (e) { updateModel(models[0].id, "api_key", e.target.value); }, placeholder: "sk-..." })),
-        ModelField(t("settings.baseUrlLabel"), React.createElement("input", { className: "wb-input mono", value: models[0].base_url, onChange: function (e) { updateModel(models[0].id, "base_url", e.target.value); }, placeholder: DEFAULT_MODEL_BASE_URL })),
+    ModelSettingsSection({
+      title: t("settings.primaryModelSlot"),
+      headerAction: React.createElement("div", { className: "wb-primary-source", ref: primarySourceRef },
+        React.createElement("button", {
+          className: "wb-primary-source-trigger",
+          onClick: function () { setPrimaryMenuOpen(!primaryMenuOpen); },
+          "aria-expanded": primaryMenuOpen,
+        },
+          React.createElement("span", null, primarySource === "codex" ? "OpenAI OAuth" : t("settings.customModel")),
+        ),
+        primaryMenuOpen && React.createElement("div", {
+          className: "wb-primary-source-menu",
+          onMouseLeave: function () { setHoveredPrimarySource(""); },
+        },
+          React.createElement("button", {
+            className: "wb-menu-item" + (!hoveredPrimarySource && primarySource === "custom" ? " active" : ""),
+            onMouseEnter: function () { setHoveredPrimarySource("custom"); },
+            onClick: selectCustomPrimary,
+          },
+            React.createElement("strong", null, t("settings.customModel")),
+            React.createElement("small", null, t("settings.customModelHint")),
+          ),
+          React.createElement("button", {
+            className: "wb-menu-item" + (!hoveredPrimarySource && primarySource === "codex" ? " active" : ""),
+            onMouseEnter: function () { setHoveredPrimarySource("codex"); },
+            onClick: selectCodexPrimary,
+          },
+            React.createElement("strong", null, "OpenAI OAuth"),
+            React.createElement("small", null, codexState.connected ? t("settings.openaiOAuthConnected") : t("settings.openaiOAuthNotConnected")),
+          ),
+        ),
+      ),
+      className: "is-primary" + (primaryMenuOpen ? " is-menu-open" : ""),
+      children: [
+        primarySource === "custom" && models[0] && ModelCard([
+        ...modelCredentialFields(models[0], function (field, value) { updateModel(models[0].id, field, value); }, t),
         React.createElement("div", { className: "wb-model-meta" },
           React.createElement("div", null, React.createElement("small", null, t("settings.descriptionLabel")), React.createElement("input", { className: "wb-input mono small", value: models[0].desc, onChange: function (e) { updateModel(models[0].id, "desc", e.target.value); }, placeholder: t("settings.placeholderDesc") })),
           React.createElement("div", null, React.createElement("small", null, t("settings.contextLabel")), React.createElement("input", { className: "wb-input mono small", value: models[0].ctx, onChange: function (e) { updateModel(models[0].id, "ctx", e.target.value); }, placeholder: t("settings.placeholderCtx") })),
           React.createElement("div", null, React.createElement("small", null, t("settings.priceLabel")), React.createElement("input", { className: "wb-input mono small", value: models[0].price, onChange: function (e) { updateModel(models[0].id, "price", e.target.value); }, placeholder: models[0].priceHint || t("settings.placeholderPrice") })),
         ),
-      ]),
-    ),
+        ]),
+        primarySource === "codex" && React.createElement("div", { className: "wb-codex-auth" },
+          React.createElement("div", { className: "wb-codex-auth-main" },
+            React.createElement("div", { className: "wb-codex-auth-copy" },
+              React.createElement("strong", null, codexState.connected
+                ? String(codexState.account && (codexState.account.email || codexState.account.planType || codexState.account.plan_type) || "OpenAI")
+                : t("settings.openaiOAuthTitle")),
+              React.createElement("span", null, codexState.connected ? t("settings.openaiOAuthConnectedHint") : t("settings.openaiOAuthHint")),
+            ),
+            !codexState.connected && React.createElement("button", {
+              className: "wb-btn primary", disabled: !!codexBusy || codexState.available === false, onClick: startCodexLogin,
+            }, codexBusy === "login" ? t("settings.openaiOAuthWaiting") : t("settings.openaiOAuthLogin")),
+            codexState.connected && React.createElement("button", { className: "wb-btn muted", disabled: !!codexBusy, onClick: logoutCodex }, t("settings.openaiOAuthLogout")),
+          ),
+          codexState.connected && React.createElement("div", { className: "wb-codex-model-picker" },
+            React.createElement("label", null,
+              React.createElement("small", null, t("settings.openaiOAuthModel")),
+              React.createElement("select", {
+                className: "wb-select mono", value: codexModel,
+                onChange: function (e) {
+                  var value = e.target.value;
+                  var selected = (codexState.models || []).find(function (item) { return codexModelId(item) === value; });
+                  var effort = String(selected && (selected.defaultReasoningEffort || selected.default_reasoning_effort) || "");
+                  setCodexModel(value);
+                  setCodexEffort(effort);
+                  setCodexPrimaryCandidate(value, effort);
+                },
+              }, (codexState.models || []).map(function (item) {
+                var id = codexModelId(item);
+                return React.createElement("option", { key: id, value: id }, item.displayName || item.display_name || id);
+              })),
+            ),
+            React.createElement("label", null,
+              React.createElement("small", null, t("settings.reasoningEffort")),
+              React.createElement("select", {
+                className: "wb-select", value: codexEffort,
+                onChange: function (e) {
+                  var value = e.target.value;
+                  setCodexEffort(value);
+                  setModels(models.map(function (model, index) {
+                    return index === 0 && model.provider === "codex_oauth"
+                      ? { ...model, reasoning_effort: value }
+                      : model;
+                  }));
+                },
+              }, ((codexState.models || []).find(function (item) { return codexModelId(item) === codexModel; }) || {}).supportedReasoningEfforts?.map(function (option) {
+                var effort = String(option.reasoningEffort || option.reasoning_effort || "");
+                return React.createElement("option", { key: effort, value: effort }, t("settings.reasoningEffortValue." + effort));
+              }) || []),
+            ),
+          ),
+          codexNotice && React.createElement("p", { className: "wb-hint" }, codexNotice),
+        ),
+      ],
+    }),
 
     // Fallback candidates
-    SectionBlock(t("settings.fallbackCandidates"), React.createElement("button", { className: "wb-btn", onClick: addModel }, t("settings.addFallbackCandidate")),
+    ModelSettingsSection({
+      title: t("settings.fallbackCandidates"),
+      status: fallbackCount
+        ? t("settings.modelStatusCount", { count: fallbackCount })
+        : t("settings.modelStatusNone"),
+      collapsible: true,
+      children: [
       models.slice(1).map(function (m) {
         return ModelCard([
           React.createElement("div", { className: "wb-model-actions" },
@@ -1523,15 +1803,20 @@ function ModelsPanel(p) {
               )
             ),
           ),
-          ModelField(t("settings.modelIdentifierLabel"), React.createElement("input", { className: "wb-input mono", value: m.model, onChange: function (e) { updateModel(m.id, "model", e.target.value); }, placeholder: t("settings.placeholderModelIdentifier") })),
-          ModelField(t("settings.apiKey"), React.createElement("input", { className: "wb-input mono", type: "password", value: m.api_key, onChange: function (e) { updateModel(m.id, "api_key", e.target.value); }, placeholder: "sk-..." })),
-          ModelField(t("settings.baseUrlLabel"), React.createElement("input", { className: "wb-input mono", value: m.base_url, onChange: function (e) { updateModel(m.id, "base_url", e.target.value); }, placeholder: DEFAULT_MODEL_BASE_URL })),
+          ...modelCredentialFields(m, function (field, value) { updateModel(m.id, field, value); }, t),
         ], m.id);
       }),
-    ),
-    modelDraftField(draftModel, setDraftModel, addModel, t),
+      !fallbackCount && React.createElement("p", { className: "wb-model-empty" }, t("settings.modelFallbackEmpty")),
+      modelDraftField(draftModel, setDraftModel, addModel, t),
+      ],
+    }),
 
-    SectionBlock(t("settings.secondaryModelSlot"), t("settings.secondaryModelHint"),
+    ModelSettingsSection({
+      title: t("settings.secondaryModelSlot"),
+      status: secondaryConfigured ? t("settings.modelStatusConfigured") : t("settings.modelStatusNotConfigured"),
+      description: t("settings.secondaryModelHint"),
+      collapsible: true,
+      children: [
       secondaryModel && ModelCard([
         ModelField(t("settings.modelIdentifierLabel"), React.createElement("input", { className: "wb-input mono", value: secondaryModel.model, onChange: function (e) { updateSecondary("model", e.target.value); }, placeholder: t("settings.placeholderModelIdentifier") })),
         ModelField(t("settings.apiKey"), React.createElement("input", { className: "wb-input mono", type: "password", value: secondaryModel.api_key, onChange: function (e) { updateSecondary("api_key", e.target.value); }, placeholder: "sk-..." })),
@@ -1541,10 +1826,17 @@ function ModelsPanel(p) {
           React.createElement("div", null, React.createElement("small", null, t("settings.secondaryModelConcurrency")), React.createElement("input", { className: "wb-input mono small", type: "number", min: "0", value: secondaryModel.max_concurrency, onChange: function (e) { updateSecondary("max_concurrency", e.target.value); }, placeholder: "0" })),
         ),
       ]),
-    ),
+      ],
+    }),
 
     // Vision model
-    SectionBlock(t("settings.visionModelSlot"), null,
+    ModelSettingsSection({
+      title: t("settings.visionModelSlot"),
+      status: visionConfigured
+        ? t("settings.modelStatusConfiguredWithCount", { count: visionFallbackCount })
+        : t("settings.modelStatusNotConfigured"),
+      collapsible: true,
+      children: [
       visionModels[0] && ModelCard([
         ModelField(t("settings.modelIdentifierLabel"), React.createElement("input", { className: "wb-input mono", value: visionModels[0].model, onChange: function (e) { updateVisionModel(visionModels[0].id, "model", e.target.value); }, placeholder: t("settings.placeholderModelIdentifier") })),
         ModelField(t("settings.apiKey"), React.createElement("input", { className: "wb-input mono", type: "password", value: visionModels[0].api_key, onChange: function (e) { updateVisionModel(visionModels[0].id, "api_key", e.target.value); }, placeholder: "sk-..." })),
@@ -1577,22 +1869,65 @@ function ModelsPanel(p) {
           ModelField(t("settings.baseUrlLabel"), React.createElement("input", { className: "wb-input mono", value: m.base_url, onChange: function (e) { updateVisionModel(m.id, "base_url", e.target.value); }, placeholder: DEFAULT_MODEL_BASE_URL })),
         ], m.id);
       }),
-    ),
-    modelDraftField(draftVision, setDraftVision, addVisionModel, t),
+      modelDraftField(draftVision, setDraftVision, addVisionModel, t),
+      ],
+    }),
 
     React.createElement("div", { className: "wb-save-actions" },
-      React.createElement("button", { className: "wb-btn primary", onClick: saveModels }, t("settings.saveApply")),
-      modelsSaved && React.createElement("span", { className: "wb-hint saved" }, modelsSaved),
+      modelsSaved && React.createElement("span", {
+        className: "wb-hint saved" + (modelsSaving ? " is-saving" : ""),
+        role: "status",
+        "aria-live": "polite",
+      },
+        modelsSaving && React.createElement("span", { className: "wb-spinner", "aria-hidden": "true" }),
+        React.createElement("span", null, modelsSaved),
+      ),
+      React.createElement("button", { className: "wb-btn primary", onClick: saveModels, disabled: modelsSaving }, t("settings.saveApply")),
     ),
   );
 }
 
 function modelDraftField(draft, setDraft, onAdd, t) {
   return React.createElement("div", { className: "wb-model-draft" },
-    React.createElement("input", { className: "wb-input mono", value: draft.model, onChange: function (e) { setDraft({ ...draft, model: e.target.value, name: e.target.value }); }, placeholder: t("settings.placeholderModelIdentifier") }),
-    React.createElement("input", { className: "wb-input mono", type: "password", value: draft.api_key, onChange: function (e) { setDraft({ ...draft, api_key: e.target.value }); }, placeholder: "sk-..." }),
-    React.createElement("input", { className: "wb-input mono", value: draft.base_url, onChange: function (e) { setDraft({ ...draft, base_url: e.target.value }); }, placeholder: DEFAULT_MODEL_BASE_URL }),
+    React.createElement("label", null,
+      React.createElement("small", null, t("settings.modelIdentifierLabel")),
+      React.createElement("input", { className: "wb-input mono", value: draft.model, onChange: function (e) { setDraft({ ...draft, model: e.target.value, name: e.target.value }); }, placeholder: t("settings.placeholderModelIdentifier") }),
+    ),
+    React.createElement("label", null,
+      React.createElement("small", null, t("settings.apiKey")),
+      React.createElement("input", { className: "wb-input mono", type: "password", value: draft.api_key, onChange: function (e) { setDraft({ ...draft, api_key: e.target.value }); }, placeholder: "sk-..." }),
+    ),
+    React.createElement("label", null,
+      React.createElement("small", null, t("settings.baseUrlLabel")),
+      React.createElement("input", { className: "wb-input mono", value: draft.base_url, onChange: function (e) { setDraft({ ...draft, base_url: e.target.value }); }, placeholder: DEFAULT_MODEL_BASE_URL }),
+    ),
     React.createElement("button", { className: "wb-btn", onClick: onAdd }, t("settings.add")),
+  );
+}
+
+function ModelSettingsSection(options) {
+  var body = React.createElement("div", { className: "wb-model-section-body" }, ...(options.children || []));
+  var headerContent = [
+    React.createElement("div", { className: "wb-model-section-title", key: "title" },
+      React.createElement("b", null, options.title),
+      options.description && React.createElement("small", null, options.description),
+    ),
+    options.status && React.createElement("span", { className: "wb-model-status", key: "status" }, options.status),
+    options.headerAction && React.createElement("div", { className: "wb-model-header-action", key: "action" }, options.headerAction),
+  ];
+  if (options.collapsible) {
+    return React.createElement("details", {
+      className: "wb-model-section" + (options.className ? " " + options.className : ""),
+    },
+      React.createElement("summary", { className: "wb-model-section-head" }, ...headerContent),
+      body,
+    );
+  }
+  return React.createElement("section", {
+    className: "wb-model-section" + (options.className ? " " + options.className : ""),
+  },
+    React.createElement("div", { className: "wb-model-section-head" }, ...headerContent),
+    body,
   );
 }
 
@@ -3251,6 +3586,8 @@ function BudgetPanel(p) {
   var [budgetMode, setBudgetMode] = useStateSt(config.budget_mode || "normal");
   var [budgetStartDay, setBudgetStartDay] = useStateSt(String(config.budget_start_day != null ? config.budget_start_day : 1));
   var [budgetSaved, setBudgetSaved] = useStateSt("");
+  var [codexQuotaEnabled, setCodexQuotaEnabled] = useStateSt(config.codex_budget_enabled !== false);
+  var [codexQuota, setCodexQuota] = useStateSt({ connected: false, limits: {} });
 
   var BUDGET_KEY = "cyrene-budget";
 
@@ -3300,6 +3637,25 @@ function BudgetPanel(p) {
     saveBudgetConfig({ budget_enabled: next });
   }
 
+  function toggleCodexQuota() {
+    var next = !codexQuotaEnabled;
+    setCodexQuotaEnabled(next);
+    fetch("/api/settings/config", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ codex_budget_enabled: next }),
+    }).catch(function () {});
+  }
+
+  function fetchCodexQuota() {
+    fetch("/api/settings/openai-oauth/limits")
+      .then(readSettingsResponse)
+      .then(function (data) {
+        setCodexQuota(data);
+        setCodexQuotaEnabled(data.quota_enabled !== false);
+      })
+      .catch(function () {});
+  }
+
   function saveBudget() {
     saveBudgetConfig({
       budget_monthly: Number(budgetMonthly) || 0,
@@ -3331,6 +3687,7 @@ function BudgetPanel(p) {
 
   useEffectSt(function () {
     fetchStats();
+    fetchCodexQuota();
     return function () {
       if (budgetSaveTimer.current) clearTimeout(budgetSaveTimer.current);
     };
@@ -3339,6 +3696,9 @@ function BudgetPanel(p) {
   var budgetNum = Number(budgetMonthly) || 0;
   var budgetRatio = budgetNum > 0 ? Math.min(totalCost / budgetNum, 1) : 0;
   var currencySymbol = budgetCurrency === "CNY" ? "¥" : "$";
+  var codexWindows = window.CyreneUI.require("model").codexQuotaWindows(
+    codexQuota.limits
+  );
 
   function formatCost(val) {
     return currencySymbol + val.toFixed(2);
@@ -3353,6 +3713,40 @@ function BudgetPanel(p) {
 
   return React.createElement("div", { className: "settings-panel" },
     SectionTitle(t("settings.budget"), t("settings.budgetSubtitle")),
+
+    codexQuota.connected && SectionBlock(t("settings.codexQuota"), null,
+      FieldRow(t("settings.codexQuotaLimit"), t("settings.codexQuotaLimitHint"),
+        Toggle(codexQuotaEnabled, toggleCodexQuota),
+      ),
+      !codexWindows.length && React.createElement("p", { className: "wb-hint wb-codex-quota-empty" },
+        t("settings.codexQuotaUnavailable")
+      ),
+      codexWindows.length > 0 && React.createElement("div", { className: "wb-codex-quota" },
+          React.createElement("div", { className: "wb-codex-quota-head" },
+            React.createElement("strong", null, "Codex"),
+            React.createElement("span", null, t("settings.codexQuotaIndependent")),
+          ),
+          codexWindows.map(function (windowData) {
+            var used = windowData.usedPercent;
+            var reset = windowData.resetsAt
+              ? new Date(windowData.resetsAt * 1000).toLocaleString()
+              : "—";
+            return React.createElement("div", { className: "wb-codex-quota-window", key: windowData.kind + "-" + windowData.durationMins },
+              React.createElement("div", { className: "wb-codex-quota-label" },
+                React.createElement("span", null, windowData.label || t("settings.codexQuotaWindow")),
+                React.createElement("span", null, t("settings.codexQuotaRemaining", { pct: windowData.remainingPercent })),
+              ),
+              React.createElement("div", { className: "wb-budget-progress-bar" },
+                React.createElement("div", {
+                  className: "wb-budget-progress-fill" + (used >= 100 ? " over" : used >= 80 ? " high" : ""),
+                  style: { width: Math.round(used) + "%" },
+                }),
+              ),
+              React.createElement("small", null, t("settings.codexQuotaResets", { time: reset })),
+            );
+          }),
+        ),
+    ),
 
     // ── Overview section ──
     SectionBlock(t("settings.budgetOverview"), null,

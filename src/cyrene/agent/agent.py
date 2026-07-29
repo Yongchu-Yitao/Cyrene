@@ -451,6 +451,7 @@ async def _run_main_agent_impl(
     persist_user_message: bool = True,
     public_user_message: str | None = None,
     public_attachments: list[dict[str, Any]] | None = None,
+    llm_user_content: Any | None = None,
     lang: str = "",
     system_context: list[dict[str, Any]] | None = None,
     ephemeral_system: str = "",
@@ -568,7 +569,9 @@ async def _run_main_agent_impl(
         )
     )
     llm_user_entry = dict(user_entry)
-    llm_user_entry["content"] = user_message
+    llm_user_entry["content"] = (
+        llm_user_content if llm_user_content is not None else user_message
+    )
     system_blocks = list(system_context or [
         context_block(
             "main.system.effective",
@@ -1404,6 +1407,7 @@ async def _run_main_agent(
     persist_user_message: bool = True,
     public_user_message: str | None = None,
     public_attachments: list[dict[str, Any]] | None = None,
+    llm_user_content: Any | None = None,
     lang: str = "",
     system_context: list[dict[str, Any]] | None = None,
     ephemeral_system: str = "",
@@ -1428,6 +1432,7 @@ async def _run_main_agent(
             persist_user_message=persist_user_message,
             public_user_message=public_user_message,
             public_attachments=public_attachments,
+            llm_user_content=llm_user_content,
             lang=lang,
             system_context=system_context,
             ephemeral_system=ephemeral_system,

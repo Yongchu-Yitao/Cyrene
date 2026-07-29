@@ -16,6 +16,8 @@
 // Registers the Workbench welcome page with the UI service registry.
 (function () {
   var useState = React.useState;
+  var useEffect = React.useEffect;
+  var useRef = React.useRef;
 
   function T(key, params, fallback) {
     return window.CyreneUI.require("i18n").t(key, params, fallback);
@@ -294,6 +296,17 @@
     var [apiKey, setApiKey] = useState("");
     var [baseUrl, setBaseUrl] = useState(llm.baseUrl || "");
     var [model, setModel] = useState(llm.model || "");
+    var [llmSource, setLlmSource] = useState(llm.provider === "codex_oauth" ? "codex" : "custom");
+    var [codexState, setCodexState] = useState({
+      available: true,
+      connected: false,
+      checking: true,
+      models: [],
+    });
+    var [codexModel, setCodexModel] = useState(llm.provider === "codex_oauth" ? (llm.model || "") : "");
+    var [codexEffort, setCodexEffort] = useState(llm.reasoningEffort || "");
+    var [codexBusy, setCodexBusy] = useState("");
+    var codexPoll = useRef(null);
     var [mode, setMode] = useState(persona.mode || "name");
     var [pName, setPName] = useState(persona.label || "");
     var [soul, setSoul] = useState(persona.currentContent || "");
@@ -323,11 +336,93 @@
       });
     }
 
+    function codexModelId(item) {
+      return String(item && (item.model || item.id) || "");
+    }
+
+    function loadCodexState() {
+      return fetch("/api/settings/openai-oauth")
+        .then(function (r) {
+          return r.json().catch(function () { return {}; }).then(function (p) {
+            if (!r.ok) throw new Error(p.error || p.detail || ("HTTP " + r.status));
+            return p;
+          });
+        })
+        .then(function (data) {
+          var options = data.models || [];
+          setCodexState({ ...data, checking: false });
+          setCodexModel(function (current) {
+            var validCurrent = options.some(function (item) { return codexModelId(item) === current; });
+            var preferred = options.find(function (item) { return item.isDefault || item.is_default; }) || options[0];
+            var next = validCurrent ? current : (preferred ? codexModelId(preferred) : "");
+            var selected = options.find(function (item) { return codexModelId(item) === next; });
+            if (selected) {
+              setCodexEffort(function (currentEffort) {
+                return currentEffort || String(selected.defaultReasoningEffort || selected.default_reasoning_effort || "");
+              });
+            }
+            return next;
+          });
+          return data;
+        })
+        .catch(function (e) {
+          setCodexState(function (previous) {
+            return { ...previous, checking: false, available: false, error: e.message };
+          });
+          return null;
+        });
+    }
+
+    useEffect(function () {
+      if (step === "llm") loadCodexState();
+      return function () {
+        if (codexPoll.current) clearInterval(codexPoll.current);
+      };
+    }, [step]);
+
+    function startCodexLogin() {
+      setCodexBusy("login"); setError(""); setNotice("");
+      post("/api/settings/openai-oauth/login", {})
+        .then(function (data) {
+          var authUrl = data.authUrl || data.auth_url || data.url;
+          if (authUrl) window.open(authUrl, "_blank", "noopener,noreferrer");
+          if (codexPoll.current) clearInterval(codexPoll.current);
+          codexPoll.current = setInterval(function () {
+            loadCodexState().then(function (state) {
+              if (state && state.connected) {
+                clearInterval(codexPoll.current);
+                codexPoll.current = null;
+                setCodexBusy("");
+                setNotice(T("welcome.setup.llm.oauthConnected", null, "OpenAI account connected"));
+              }
+            });
+          }, 1500);
+        })
+        .catch(function (e) {
+          setCodexBusy("");
+          setError(e.message || String(e));
+        });
+    }
+
     function saveLlm() {
       setBusy(true); setError(""); setNotice("");
       post("/api/onboarding/llm", { api_key: apiKey, base_url: baseUrl, model: model })
         .then(function (p) {
           setNotice(T("welcome.setup.llm.verified", null, "Connection verified") + (p.preview ? "：" + p.preview : ""));
+          return applyResponse(p);
+        })
+        .catch(function (e) { setError(e.message || String(e)); })
+        .finally(function () { setBusy(false); });
+    }
+
+    function saveCodexLlm() {
+      setBusy(true); setError(""); setNotice("");
+      post("/api/onboarding/openai-oauth", {
+        model: codexModel,
+        reasoning_effort: codexEffort,
+      })
+        .then(function (p) {
+          setNotice(T("welcome.setup.llm.oauthSaved", null, "Codex model saved"));
           return applyResponse(p);
         })
         .catch(function (e) { setError(e.message || String(e)); })
@@ -381,24 +476,90 @@
             {step === "llm" ? (
               <div className="wb-ob-section">
                 <h2>{T("welcome.setup.llm.title", null, "Connect your model")}</h2>
-                <p className="wb-ob-sub">{T("welcome.setup.llm.subtitle", null, "An OpenAI-compatible endpoint powers every agent run.")}</p>
-                <label className="wb-ob-field">
-                  <span className="wb-ob-label">{T("welcome.setup.llm.apiKey", null, "API key")}<small>{T("welcome.setup.llm.apiKeyHint", null, "Stored locally, never uploaded")}</small></span>
-                  <input className="wb-ob-input" type="password" value={apiKey} placeholder="sk-..." onChange={function (e) { setApiKey(e.target.value); }} />
-                </label>
-                <label className="wb-ob-field">
-                  <span className="wb-ob-label">{T("welcome.setup.llm.endpoint", null, "Endpoint")}<small>{T("welcome.setup.llm.endpointHint", null, "Base URL, e.g. https://api.openai.com/v1")}</small></span>
-                  <input className="wb-ob-input mono" value={baseUrl} placeholder="https://api.openai.com/v1" onChange={function (e) { setBaseUrl(e.target.value); }} />
-                </label>
-                <label className="wb-ob-field">
-                  <span className="wb-ob-label">{T("welcome.setup.llm.model", null, "Model")}<small>{T("welcome.setup.llm.modelHint", null, "Model identifier")}</small></span>
-                  <input className="wb-ob-input mono" value={model} placeholder="gpt-4o" onChange={function (e) { setModel(e.target.value); }} />
-                </label>
-                <div className="wb-ob-actions">
-                  <button type="button" className="wb-btn primary" disabled={busy || !model.trim() || !baseUrl.trim()} onClick={saveLlm}>
-                    {busy ? T("welcome.setup.llm.testing", null, "Testing...") : T("welcome.setup.llm.save", null, "Save & test")}
+                <p className="wb-ob-sub">{T("welcome.setup.llm.subtitle", null, "Choose a custom endpoint or use the models included with your OpenAI account.")}</p>
+                <div className="wb-ob-seg wb-ob-source-seg">
+                  <button type="button" className={"wb-ob-seg-btn" + (llmSource === "custom" ? " active" : "")} onClick={function () { setLlmSource("custom"); setError(""); setNotice(""); }}>
+                    {T("welcome.setup.llm.customSource", null, "Custom model")}
+                  </button>
+                  <button type="button" className={"wb-ob-seg-btn" + (llmSource === "codex" ? " active" : "")} onClick={function () { setLlmSource("codex"); setError(""); setNotice(""); }}>
+                    OpenAI OAuth
                   </button>
                 </div>
+                {llmSource === "custom" ? (
+                  <React.Fragment>
+                    <label className="wb-ob-field">
+                      <span className="wb-ob-label">{T("welcome.setup.llm.apiKey", null, "API key")}<small>{T("welcome.setup.llm.apiKeyHint", null, "Stored locally, never uploaded")}</small></span>
+                      <input className="wb-ob-input" type="password" value={apiKey} placeholder="sk-..." onChange={function (e) { setApiKey(e.target.value); }} />
+                    </label>
+                    <label className="wb-ob-field">
+                      <span className="wb-ob-label">{T("welcome.setup.llm.endpoint", null, "Endpoint")}<small>{T("welcome.setup.llm.endpointHint", null, "Base URL, e.g. https://api.openai.com/v1")}</small></span>
+                      <input className="wb-ob-input mono" value={baseUrl} placeholder="https://api.openai.com/v1" onChange={function (e) { setBaseUrl(e.target.value); }} />
+                    </label>
+                    <label className="wb-ob-field">
+                      <span className="wb-ob-label">{T("welcome.setup.llm.model", null, "Model")}<small>{T("welcome.setup.llm.modelHint", null, "Model identifier")}</small></span>
+                      <input className="wb-ob-input mono" value={model} placeholder="gpt-4o" onChange={function (e) { setModel(e.target.value); }} />
+                    </label>
+                    <div className="wb-ob-actions">
+                      <button type="button" className="wb-btn primary" disabled={busy || !model.trim() || !baseUrl.trim()} onClick={saveLlm}>
+                        {busy ? T("welcome.setup.llm.testing", null, "Testing...") : T("welcome.setup.llm.save", null, "Save & test")}
+                      </button>
+                    </div>
+                  </React.Fragment>
+                ) : (
+                  <div className="wb-ob-oauth">
+                    <div className="wb-ob-oauth-head">
+                      <div className="wb-ob-oauth-copy">
+                        <strong>{codexState.connected
+                          ? String(codexState.account && (codexState.account.email || codexState.account.planType || codexState.account.plan_type) || "OpenAI")
+                          : T("welcome.setup.llm.oauthTitle", null, "Use models from your OpenAI account")}</strong>
+                        <span>{codexState.checking
+                          ? T("welcome.setup.llm.oauthChecking", null, "Checking login status…")
+                          : (codexState.connected
+                            ? T("welcome.setup.llm.oauthHintConnected", null, "Choose a Codex model and thinking effort.")
+                            : T("welcome.setup.llm.oauthHint", null, "Sign in through Codex. Cyrene does not store your OAuth token."))}</span>
+                      </div>
+                      {!codexState.connected ? (
+                        <button type="button" className="wb-btn primary" disabled={!!codexBusy || codexState.checking || codexState.available === false} onClick={startCodexLogin}>
+                          {codexBusy === "login" ? T("welcome.setup.llm.oauthWaiting", null, "Waiting for login…") : T("welcome.setup.llm.oauthLogin", null, "Sign in with OpenAI")}
+                        </button>
+                      ) : null}
+                    </div>
+                    {codexState.connected ? (
+                      <div className="wb-ob-oauth-grid">
+                        <label className="wb-ob-field">
+                          <span className="wb-ob-label">{T("welcome.setup.llm.oauthModel", null, "Codex model")}</span>
+                          <select className="wb-ob-input mono" value={codexModel} onChange={function (e) {
+                            var value = e.target.value;
+                            var selected = (codexState.models || []).find(function (item) { return codexModelId(item) === value; });
+                            setCodexModel(value);
+                            setCodexEffort(String(selected && (selected.defaultReasoningEffort || selected.default_reasoning_effort) || ""));
+                          }}>
+                            {(codexState.models || []).map(function (item) {
+                              var id = codexModelId(item);
+                              return <option key={id} value={id}>{item.displayName || item.display_name || id}</option>;
+                            })}
+                          </select>
+                        </label>
+                        <label className="wb-ob-field">
+                          <span className="wb-ob-label">{T("welcome.setup.llm.oauthEffort", null, "Thinking effort")}</span>
+                          <select className="wb-ob-input" value={codexEffort} onChange={function (e) { setCodexEffort(e.target.value); }}>
+                            {(((codexState.models || []).find(function (item) { return codexModelId(item) === codexModel; }) || {}).supportedReasoningEfforts || []).map(function (option) {
+                              var effort = String(option.reasoningEffort || option.reasoning_effort || option);
+                              return <option key={effort} value={effort}>{T("settings.reasoningEffortValue." + effort, null, effort)}</option>;
+                            })}
+                          </select>
+                        </label>
+                      </div>
+                    ) : null}
+                    {codexState.connected ? (
+                      <div className="wb-ob-actions">
+                        <button type="button" className="wb-btn primary" disabled={busy || !codexModel} onClick={saveCodexLlm}>
+                          {busy ? T("welcome.setup.llm.oauthSaving", null, "Saving…") : T("welcome.setup.llm.oauthSave", null, "Use this model")}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="wb-ob-section">

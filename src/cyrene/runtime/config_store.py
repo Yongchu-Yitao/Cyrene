@@ -108,6 +108,8 @@ _DEFAULT_SETTINGS: dict = {
     "agent_proactive": True,
     "app_language": "",
     "max_tool_rounds": 15,
+    # Independent from the currency-based API budget and enforced by default.
+    "codex_budget_enabled": True,
     # Execution workers are completion-driven. These are wide lease/safety
     # controls, not the main agent's normal tool-round budget.
     "subagent_execution_max_tool_calls": 200,

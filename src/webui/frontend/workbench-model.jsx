@@ -43,6 +43,56 @@ function wbIsPermissionQuestionKind(kind) {
     return window.CyreneUI.require("api").json(url, { toast: false, timeout: 0, ...(options || {}) });
   }
 
+  function codexLimitBuckets(limits) {
+    var raw = limits && limits.rateLimitsByLimitId;
+    if (raw && typeof raw === "object") {
+      return Object.keys(raw).map(function (id) {
+        return { id: id, ...raw[id] };
+      });
+    }
+    return limits && limits.rateLimits
+      ? [{ id: "codex", ...limits.rateLimits }]
+      : [];
+  }
+
+  function codexWindowLabel(windowData) {
+    if (!windowData) return "";
+    var minutes = Number(windowData.windowDurationMins || 0);
+    if (minutes >= 10080) return "7d";
+    if (minutes >= 1440) return Math.round(minutes / 1440) + "d";
+    if (minutes >= 60) return Math.round(minutes / 60) + "h";
+    return minutes ? minutes + "m" : "";
+  }
+
+  function codexQuotaWindows(limits) {
+    var buckets = codexLimitBuckets(limits);
+    var bucket = buckets.find(function (item) { return item.id === "codex"; }) || buckets[0];
+    if (!bucket) return [];
+    return [bucket.primary, bucket.secondary]
+      .filter(Boolean)
+      .map(function (windowData) {
+        var durationMins = Number(windowData.windowDurationMins || 0);
+        var usedPercent = Math.max(0, Math.min(100, Number(windowData.usedPercent || 0)));
+        return {
+          durationMins: durationMins,
+          kind: durationMins === 300
+            ? "five_hour"
+            : durationMins >= 10080
+              ? "weekly"
+              : "other",
+          label: codexWindowLabel(windowData),
+          usedPercent: usedPercent,
+          remainingPercent: Math.max(0, Math.round(100 - usedPercent)),
+          resetsAt: Number(windowData.resetsAt || 0),
+          raw: windowData,
+        };
+      })
+      .sort(function (a, b) {
+        return (a.durationMins || Number.MAX_SAFE_INTEGER)
+          - (b.durationMins || Number.MAX_SAFE_INTEGER);
+      });
+  }
+
   function normalizeStore(payload) {
     var store = payload && typeof payload === "object" ? payload : {};
     var projects = Array.isArray(store.projects) ? store.projects : [];
@@ -887,6 +937,9 @@ function wbIsPermissionQuestionKind(kind) {
     ensureArtifacts: ensureArtifacts,
     looksOutOfScope: looksOutOfScope,
     isPermissionQuestionKind: wbIsPermissionQuestionKind,
+    codexLimitBuckets: codexLimitBuckets,
+    codexWindowLabel: codexWindowLabel,
+    codexQuotaWindows: codexQuotaWindows,
   };
 
   window.CyreneUI.model = window.CyreneUI.register("model", service);

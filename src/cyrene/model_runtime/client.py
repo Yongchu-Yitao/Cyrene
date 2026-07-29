@@ -81,6 +81,8 @@ async def shutdown_background_tasks() -> None:
         )
     await drain_or_cancel(_pending_token_tasks, grace_seconds=2.0)
     _pending_token_tasks.clear()
+    from cyrene.model_runtime.codex_provider import get_codex_provider
+    await get_codex_provider().close()
 
 
 def _get_http_client(timeout: float) -> tuple[httpx.AsyncClient, str, bool]:
@@ -306,12 +308,21 @@ def _normalized_llm_endpoints(base_url: str) -> list[str]:
 
 
 def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: str, active_base_url: str, active_api_key: str) -> dict[str, Any]:
+    from cyrene.model_runtime.codex_provider import CODEX_BASE_URL, CODEX_PROVIDER
+
     model = str(raw.get("model") or raw.get("name") or raw.get("id") or "").strip()
     if not model:
         model = active_model
-    base_url = str(raw.get("base_url") or active_base_url or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL
+    provider = str(raw.get("provider") or "openai_compatible").strip()
+    base_url = (
+        CODEX_BASE_URL
+        if provider == CODEX_PROVIDER
+        else str(raw.get("base_url") or active_base_url or DEFAULT_OPENAI_BASE_URL).strip() or DEFAULT_OPENAI_BASE_URL
+    )
     raw_api_key = strip_wrapping_quotes(str(raw.get("api_key") or "").strip())
-    if raw_api_key:
+    if provider == CODEX_PROVIDER:
+        api_key = ""
+    elif raw_api_key:
         api_key = raw_api_key
     elif base_url.rstrip("/") == (active_base_url or DEFAULT_OPENAI_BASE_URL).rstrip("/"):
         api_key = active_api_key
@@ -320,10 +331,40 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
     return {
         "id": str(raw.get("id") or f"candidate-{index + 1}").strip() or f"candidate-{index + 1}",
         "model": model,
+        "provider": provider,
+        "reasoning_effort": str(raw.get("reasoning_effort") or "").strip(),
+        "vision_capable": (
+            raw.get("vision_capable")
+            if isinstance(raw.get("vision_capable"), bool)
+            else None
+        ),
         "base_url": base_url,
         "api_key": api_key,
-        "endpoints": _normalized_llm_endpoints(base_url),
+        "endpoints": (
+            [CODEX_BASE_URL]
+            if provider == CODEX_PROVIDER
+            else _normalized_llm_endpoints(base_url)
+        ),
     }
+
+
+def primary_candidate_supports_vision(session_id: str = "") -> bool:
+    """Whether the candidate that would start this conversation supports images."""
+    candidates = _prioritize_last_success(
+        _resolve_llm_candidates(),
+        "primary",
+        session_id,
+    )
+    available = [
+        candidate
+        for candidate in candidates
+        if not _candidate_cooling(_candidate_key(candidate, session_id))
+    ]
+    candidate = (available or candidates or [{}])[0]
+    return (
+        candidate.get("provider") != "codex_oauth"
+        and candidate.get("vision_capable") is True
+    )
 
 
 def _base_root(url: str) -> str:
@@ -360,10 +401,16 @@ def _resolve_llm_candidates() -> list[dict[str, Any]]:
     active_api_key = strip_wrapping_quotes(str(os.environ.get("OPENAI_API_KEY", "") or "").strip())
 
     candidates: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
     for index, raw in enumerate(get_models() or []):
         candidate = _normalized_candidate(raw, index, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
-        key = (candidate["model"], candidate["base_url"], candidate["api_key"])
+        # OAuth credentials are owned by the Codex app-server and the product
+        # exposes this provider only as an explicit primary-model choice. A
+        # stale or hand-edited settings record must never make it a fallback
+        # after a custom model fails.
+        if index > 0 and candidate["provider"] == "codex_oauth":
+            continue
+        key = (candidate["provider"], candidate["model"], candidate["base_url"], candidate["api_key"])
         if key in seen:
             continue
         seen.add(key)
@@ -413,17 +460,27 @@ def _resolve_vision_candidates() -> list[dict[str, Any]]:
     active_api_key = strip_wrapping_quotes(str(os.environ.get("OPENAI_API_KEY", "") or "").strip())
 
     candidates: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
 
     for index, raw in enumerate(get_vision_models() or []):
         candidate = _normalized_candidate(raw, index, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
-        key = (candidate["model"], candidate["base_url"], candidate["api_key"])
+        if (
+            candidate.get("provider") == "codex_oauth"
+            or candidate.get("vision_capable") is False
+        ):
+            continue
+        key = (candidate["provider"], candidate["model"], candidate["base_url"], candidate["api_key"])
         if key not in seen:
             seen.add(key)
             candidates.append(candidate)
 
     for candidate in _resolve_llm_candidates():
-        key = (candidate["model"], candidate["base_url"], candidate["api_key"])
+        if (
+            candidate.get("provider") == "codex_oauth"
+            or candidate.get("vision_capable") is False
+        ):
+            continue
+        key = (candidate["provider"], candidate["model"], candidate["base_url"], candidate["api_key"])
         if key not in seen:
             seen.add(key)
             candidates.append(candidate)
@@ -1163,6 +1220,7 @@ async def call_llm(
                 if is_secondary and max_conc > 0:
                     _secondary_in_flight += 1
                 model = str(candidate.get("model") or "").strip()
+                provider = str(candidate.get("provider") or "openai_compatible")
                 payload = _build_payload(messages, tools, max_tokens, stream, model, thinking, response_format)
 
                 headers = {"Content-Type": "application/json"}
@@ -1195,7 +1253,30 @@ async def call_llm(
                                     await stream_callback(event)
 
                             try:
-                                if stream:
+                                if provider == "codex_oauth":
+                                    from cyrene.model_runtime.codex_provider import (
+                                        get_codex_provider,
+                                    )
+
+                                    codex = get_codex_provider()
+                                    if bool(get_setting("codex_budget_enabled", True)):
+                                        if not await codex.quota_available():
+                                            raise RuntimeError(
+                                                "Codex quota is exhausted; wait for the quota window to reset"
+                                            )
+                                    msg = await codex.complete(
+                                        messages=messages,
+                                        tools=tools,
+                                        model=model,
+                                        reasoning_effort=str(
+                                            candidate.get("reasoning_effort") or ""
+                                        ),
+                                        timeout=timeout,
+                                        stream_callback=(
+                                            _tracked_stream_callback if stream else None
+                                        ),
+                                    )
+                                elif stream:
                                     msg = await _handle_stream(
                                         client,
                                         endpoint,
