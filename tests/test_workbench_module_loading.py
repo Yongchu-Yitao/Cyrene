@@ -11,7 +11,7 @@ def test_workbench_project_modules_restore_project_scoped_cache_before_refresh()
     schedule = (ROOT / "src/webui/frontend/workbench-schedule.jsx").read_text(
         encoding="utf-8"
     )
-    knowledge = (ROOT / "src/webui/frontend/workbench-knowledge.jsx").read_text(
+    library = (ROOT / "src/webui/frontend/workbench-library.jsx").read_text(
         encoding="utf-8"
     )
 
@@ -23,11 +23,11 @@ def test_workbench_project_modules_restore_project_scoped_cache_before_refresh()
     assert "setRawEvents(cached.value)" in schedule
     assert "if (!active) return;" in schedule
 
-    assert "knowledgePageCache.lists[workspace]" in knowledge
-    assert "setDocuments(cached ? cached.documents : [])" in knowledge
-    assert "if (!active) return;" in knowledge
+    assert "function WorkbenchLibraryPage(props)" in library
+    assert "props.active !== false" in library
+    assert not (ROOT / "src/webui/frontend/workbench-knowledge.jsx").exists()
 
-    for source in (memory, schedule, knowledge):
+    for source in (memory, schedule):
         assert "CACHE_TTL_MS" not in source
         assert 'window.addEventListener("focus", refreshSoon)' in source
         assert 'window.CyreneUI.require("events").subscribe(onRuntimeEvent)' in source

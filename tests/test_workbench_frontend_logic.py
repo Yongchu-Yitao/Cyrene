@@ -34,6 +34,64 @@ def test_new_workbench_chat_reuses_create_response_without_refetching():
     assert "handleCreateChat();" in source
 
 
+def test_chat_sidebar_card_order_helpers_normalize_and_move_cards():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helper_source = "function wbcNormalizeSideCardOrder(" + source.split(
+        "function wbcNormalizeSideCardOrder(", 1
+    )[1].split("function wbcLoadSideCardOrder", 1)[0]
+    helper_source += "function wbcMoveSideCard(" + source.split(
+        "function wbcMoveSideCard(", 1
+    )[1].split("function WbcSortableCardStack", 1)[0]
+    script = f"""
+eval({json.dumps(helper_source)});
+const defaults = ["summary", "session", "context", "actions"];
+const result = {{
+  normalized: wbcNormalizeSideCardOrder(defaults, ["context", "missing", "context", "summary"]),
+  before: wbcMoveSideCard(defaults, "actions", "session", "before"),
+  after: wbcMoveSideCard(defaults, "summary", "context", "after"),
+  unchanged: wbcMoveSideCard(defaults, "summary", "summary", "before")
+}};
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+
+    assert result["normalized"] == ["context", "summary", "session", "actions"]
+    assert result["before"] == ["summary", "actions", "session", "context"]
+    assert result["after"] == ["session", "context", "summary", "actions"]
+    assert result["unchanged"] == ["summary", "session", "context", "actions"]
+
+
+def test_chat_sidebar_overview_and_context_cards_are_sortable_and_persistent():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'tabId="overview"' in source
+    assert 'tabId="context"' in source
+    assert 'draggable="true"' in source
+    assert "WBC_SIDE_CARD_ORDER_PREFIX" in source
+    assert "localStorage.setItem(WBC_SIDE_CARD_ORDER_PREFIX + tabId" in source
+    assert 'className="wbc-card-drag-handle"' in source
+    assert "event.dataTransfer.setDragImage(" in source
+    assert "setOrder(nextOrder)" in source
+    assert ".wbc-sortable-card.dragging > .workbench-side-section" in styles
+    drag_handle_css = styles.split(".wbc-card-drag-handle {", 1)[1].split("}", 1)[0]
+    assert "left: 0;" in drag_handle_css
+    assert "top: 14px;" in drag_handle_css
+    assert "height: calc(16px * var(--wb-ui-font-scale, 1));" in drag_handle_css
+    assert ".wbc-sortable-card:hover .wbc-card-drag-handle" not in styles
+    drag_handle_icon_css = styles.split(".wbc-card-drag-handle > span {", 1)[1].split("}", 1)[0]
+    assert "transform: translateY(4px);" in drag_handle_icon_css
+
+
 def test_notification_items_navigate_to_their_precise_context():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
@@ -522,7 +580,7 @@ def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
     root = Path(__file__).resolve().parent.parent
     shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
     chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    knowledge = (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    library = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(encoding="utf-8")
 
     assert "mountedPages" in shell
     assert "var WorkbenchStableSurface = React.memo(" in shell
@@ -536,8 +594,8 @@ def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
     assert "var taskDropEnabled = !!(active && project && session && session.kind !== \"init\")" in shell
     assert "function WorkbenchChatPage({ active, project" in chat
     assert "!!(isActive && project)" in chat
-    assert "var active = !props || props.active !== false" in knowledge
-    assert "!!(active && project)" in knowledge
+    assert "function WorkbenchLibraryPage(props)" in library
+    assert "props.active !== false" in library
 
 
 def test_workbench_task_controller_uses_current_session_from_returned_store():
@@ -1558,6 +1616,42 @@ def test_workbench_chat_card_menu_can_rename_the_target_chat():
     assert "prev && prev.id === chat.id" in source
 
 
+def test_workbench_chat_card_menu_can_pin_and_sort_conversations():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    rail = source.split("function WbcRail(", 1)[1].split(
+        "// Conversation main (column 3)", 1
+    )[0]
+
+    assert "function wbcOrderChatsByPinned(chats, pinnedChatIds)" in source
+    assert "return leftPinned ? -1 : 1" in source
+    assert "pinnedChatIds={pinnedChatIds}" in source
+    assert "onTogglePinned={onTogglePinnedChat}" in source
+    assert 'wbcT("workbenchChat.pin", "Pin chat")' in rail
+    assert 'wbcT("workbenchChat.unpin", "Unpin chat")' in rail
+    assert 'className="wbc-chat-card-pin"' in rail
+    assert "onTogglePinnedChat: function (chat, pinned)" in shell
+    assert 'togglePinnedSession({ id: chat.id, kind: "chat" }, pinned)' in shell
+
+
+def test_workbench_chat_rename_dialog_uses_compact_vertical_spacing():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    body = styles.split(".wbc-rename-body {", 1)[1].split("}", 1)[0]
+    foot = styles.rsplit(".wbc-rename-foot {", 1)[1].split("}", 1)[0]
+
+    assert "gap: 8px;" in body
+    assert "padding: 16px 18px 8px;" in body
+    assert "padding: 12px 18px;" in foot
+
+
 def test_workbench_branch_tree_uses_compact_git_history_layout():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
@@ -1798,8 +1892,13 @@ def test_workbench_context_tab_has_live_session_inbox_card():
     assert "[chatId, retryRevision, activeHint]" in live_hook
     assert "chat.updatedAt" not in live_hook
     assert 'workbenchChat.inbox.queue' in inbox_card
+    assert 'workbenchChat.inbox.queueEmpty' in inbox_card
     assert 'className={"wbc-inbox-queue-count"' in inbox_card
+    assert "queueDepth === 0 ? (" in inbox_card
     assert 'queueDepth === null ? "—" : queueDepth' in inbox_card
+    inbox_head_css = css.split("\n.wbc-inbox-head {", 1)[1].split("}", 1)[0]
+    assert "justify-content: flex-start;" in inbox_head_css
+    assert "align-items: baseline;" in inbox_head_css
     assert 'className="wbc-side-empty"' in inbox_card
     assert 'className="wbc-inbox-summary"' not in inbox_card
     assert "liveView.error ? (" in inbox_card
@@ -2083,7 +2182,7 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     )[1].split("function WbcUserMessage(", 1)[0]
     assert "onError={function () { setImageFailed(true); }}" in message_attachment
     assert source.count("<WbcMessageAttachment key=") == 2
-    assert 'window.CyreneUI.require("knowledge").FileVisual' in source
+    assert 'window.CyreneUI.require("library").FileVisual' in source
     assert 'className="wbc-attach-file"' in message_attachment
     assert 'wbcT("workbenchChat.openPreview", "Open preview")' in message_attachment
     assert 'className={"wbc-msg-attachments" + (msg.content ? " after-copy" : "")}' in source
@@ -2156,20 +2255,19 @@ def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading(
     assert 'wbcT("workbenchChat.error.messageBody"' in source
 
 
-def test_workbench_knowledge_related_tab_loads_and_navigates_conversations():
+def test_workbench_uses_the_library_as_the_only_knowledge_page():
     root = Path(__file__).resolve().parent.parent
-    knowledge = (
-        root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx"
-    ).read_text(encoding="utf-8")
     shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
         encoding="utf-8"
     )
+    index = (root / "src" / "webui" / "frontend" / "index.html").read_text(
+        encoding="utf-8"
+    )
 
-    assert '"/related?" + withWs()' in knowledge
-    assert 'detailTab !== "related"' in knowledge
-    assert '{ type: "task", projectId: item.project_id, sessionId: item.session_id' in knowledge
-    assert '{ type: "chat", projectId: item.project_id, chatId: item.chat_id }' in knowledge
-    assert "onNavigate: navigateFromSearch" in shell
+    assert 'window.CyreneUI.require("library").Page' in shell
+    assert 'window.CyreneUI.require("knowledge").Page' not in shell
+    assert "compiled/workbench-knowledge.js" not in index
+    assert not (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").exists()
 
 
 def test_workbench_chat_plan_tab_uses_durable_plan_and_live_step_events():
@@ -2293,6 +2391,38 @@ def test_codex_reasoning_effort_updates_the_primary_candidate_without_stale_stat
     assert "setModels(function (currentModels)" in settings
     assert "selectedEffort != null ? selectedEffort : codexEffort" in settings
     assert "setCodexPrimaryCandidate(codexModel, value);" in settings
+
+
+def test_workbench_deepseek_reasoning_effort_matches_provider_capabilities():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'if (!efforts.length && wbcIsDeepSeekModel(model)) efforts = ["high", "max"];' in chat
+    assert 'else if (["xhigh", "max"].indexOf(effort) >= 0) effort = "max";' in chat
+    assert "setReasoningEffort(wbcReasoningEffortForModel(" in chat
+    model_menu_css = styles.split(".wbc-model-menu {", 1)[1].split("}", 1)[0]
+    assert "width: min(260px, calc(100vw - 32px));" in model_menu_css
+    model_row_css = styles.split(
+        ".wbc-popmenu > .wbc-model-menu-row {", 1
+    )[1].split("}", 1)[0]
+    assert "grid-template-columns: max-content minmax(0, 1fr) 18px;" in model_row_css
+    model_name_css = styles.split(".wbc-model-button-name {", 1)[1].split("}", 1)[0]
+    assert "font-size: 11px;" in model_name_css
+    model_effort_css = styles.split(".wbc-model-button-effort {", 1)[1].split("}", 1)[0]
+    assert "font-size: 11px;" in model_effort_css
+    assert 'className="wbc-model-menu-value wbc-model-menu-model-name"' in chat
+    menu_model_name_css = styles.split(
+        ".wbc-model-menu-model-name {", 1
+    )[1].split("}", 1)[0]
+    assert "font-size: 11px;" in menu_model_name_css
+    assert "white-space: nowrap;" in menu_model_name_css
+    assert "overflow-wrap:" not in menu_model_name_css
+    assert "text-overflow: clip;" in menu_model_name_css
 
 
 def test_workbench_chat_context_and_browser_trace_have_dynamic_i18n_labels():
@@ -2903,7 +3033,7 @@ def test_workbench_context_picker_contains_long_workspace_paths():
 
     assert "position: relative;" in chip_row_rule
     assert "position: static;" in picker_anchor_rule
-    assert "width: min(360px, 100%);" in picker_rule
+    assert "width: min(300px, 100%);" in picker_rule
     assert "max-width: 100%;" in picker_rule
     assert "min-width: min(220px, 100%);" in styles
     assert "overflow-x: hidden;" in picker_rule
@@ -3094,7 +3224,7 @@ def test_workbench_chat_quick_actions_include_manual_context_compaction():
     assert '"/compact"' in source
     assert 'wbcT(compactBusy ? "workbenchChat.compactBusy" : "workbenchChat.compact"' in source
     assert "activeRunning || compactBusy" not in source
-    assert "disabled={compactBusy} onClick={onCompact}" in source
+    assert "disabled={compactBusy} onClick={run(onCompact)}" in source
     assert 'payload.reason === "running"' in source
     assert 'payload.reason === "awaiting_user"' in source
     assert 'payload.reason === "no_tool_activity"' in source
@@ -3344,11 +3474,42 @@ def test_workbench_task_composer_includes_model_and_reasoning_picker():
     )
 
 
+def test_workbench_model_picker_compacts_without_overlapping_send_button():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    composer_rule = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
+    anchor_rule = styles.split(".wbc-model-anchor {", 1)[1].split("}", 1)[0]
+    button_rule = styles.split(".wbc-model-button {", 1)[1].split("}", 1)[0]
+    compact_rule = styles.split(
+        "@container wbc-composer (max-width: 420px) {", 1
+    )[1].split(".wbc-pop-anchor", 1)[0]
+
+    assert "container-name: wbc-composer;" in composer_rule
+    assert "container-type: inline-size;" in composer_rule
+    assert "flex: 0 1 auto;" in anchor_rule
+    assert "min-width: 0;" in anchor_rule
+    assert "max-width: 100%;" in button_rule
+    assert 'className="wbc-model-button-icon" aria-hidden="true"' in (
+        root / "src" / "webui" / "frontend" / "workbench-chat.jsx"
+    ).read_text(encoding="utf-8")
+    assert 'className="wbc-model-button-icon" aria-hidden="true"' in (
+        root / "src" / "webui" / "frontend" / "workbench.jsx"
+    ).read_text(encoding="utf-8")
+    assert ".wbc-model-button-icon" in compact_rule
+    assert "display: inline-flex;" in compact_rule
+    assert ".wbc-model-button-name" in compact_rule
+    assert ".wbc-model-button-effort" in compact_rule
+    assert "display: none;" in compact_rule
+
+
 def test_workbench_file_drop_routes_files_to_task_chat_and_knowledge():
     root = Path(__file__).resolve().parent.parent
     workbench = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
     chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(encoding="utf-8")
-    knowledge = (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    library = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(encoding="utf-8")
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(encoding="utf-8")
 
     # The shared document-level target prevents Chromium's default file
@@ -3371,10 +3532,10 @@ def test_workbench_file_drop_routes_files_to_task_chat_and_knowledge():
     assert 'window.addEventListener("cyrene:add-chat-attachments"' in chat
     assert "model.uploadFiles(files)" in chat
 
-    # Knowledge drops reuse the existing ingestion path rather than chat uploads.
-    assert "knowledgeFileDropActive = useWorkbenchFileDrop" in knowledge
-    assert "handleFiles(files)" in knowledge
-    assert "client.upload(files)" in knowledge
+    # The canonical library page keeps file ingestion on its existing upload path.
+    assert "function handleFiles(files)" in library
+    assert 'type: "file", multiple: true' in library
+    assert "client.upload(files)" in library
     assert ".wb-file-drop-overlay" in styles
 
 
@@ -3757,57 +3918,47 @@ def test_workbench_memory_related_uses_tag_and_content_matching_not_category_onl
     assert "score += 3" in related_block  # shared tag adds 3
 
 
-def test_workbench_knowledge_folders_group_by_kind_not_source():
+def test_workbench_library_groups_items_with_collections_and_tags():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(encoding="utf-8")
 
-    # The old source-based grouping is gone from the folders tab.
-    folders_block = source.split('if (activeTab === "folders")', 1)[1].split('if (activeTab === "tags")', 1)[0]
-    assert "bySource" not in folders_block
-    assert "d.source" not in folders_block
-    # The new grouping uses visualKind.
-    assert "visualKind" in folders_block
-    assert "byKind" in folders_block
-    assert "FOLDER_LABELS" in source
+    assert "library.myCollections" in source
+    assert "library.tagCloud" in source
+    assert 'scope.type === "collection"' in source
+    assert 'scope.type === "tag"' in source
 
 
-def test_workbench_knowledge_tags_are_editable_inline():
+def test_workbench_library_tags_are_editable_inline():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(encoding="utf-8")
 
-    assert "function KbTagEditor" in source
-    assert "wb-kb-tag-input" in source
-    assert "wb-kb-tag-edit-btn" in source
-    assert "onSaveTags" in source
-    assert "handleSaveTags" in source
-    # The PATCH API is used for saving tags.
-    assert "client.update" in source
+    assert "function TagsWorkspace" in source
+    assert "wb-lib-tag-editor" in source
+    assert "props.onUpdate({ tags: next })" in source
+    assert "client.update(selectedId, value)" in source
 
 
-def test_workbench_knowledge_content_tab_renders_markdown_chunks():
+def test_workbench_library_content_tab_renders_markdown():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(encoding="utf-8")
     renderer = (root / "src" / "webui" / "frontend" / "shared" / "markdown" / "renderer.jsx").read_text(encoding="utf-8")
 
-    assert "renderChunkHtml" in source
+    assert "renderMarkdownHtml" in source
     assert 'window.CyreneUI.require("markdown").render' in source
     assert "root.marked.parse(source)" in renderer
     assert "root.DOMPurify.sanitize" in renderer
     assert "dangerouslySetInnerHTML" in source
-    assert "wb-kb-chunk-md" in source
-    assert "wb-kb-chunk-text" in source
+    assert "wb-lib-markdown" in source
 
 
-def test_workbench_knowledge_list_does_not_silently_truncate():
+def test_workbench_library_list_uses_explicit_pagination():
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src" / "webui" / "frontend" / "workbench-knowledge.jsx").read_text(encoding="utf-8")
+    source = (root / "src" / "webui" / "frontend" / "workbench-library.jsx").read_text(encoding="utf-8")
 
-    # The old silent limit:500 is gone.
-    assert "limit: 500" not in source
-    # The total count from the backend is used to show truncation awareness.
-    assert "_total" in source
-    assert "totalDocs" in source
-    assert "显示前" in source
+    assert "var PAGE_SIZE = 120" in source
+    assert "function loadMore()" in source
+    assert "data.items.length < data.total" in source
+    assert "library.loadMore" in source
 
 
 def test_packaged_electron_preserves_explicit_runtime_path_overrides():

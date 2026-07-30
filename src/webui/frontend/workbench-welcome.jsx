@@ -65,22 +65,15 @@
     importDoc: <Svg><path d="M6 3.5h7l5 5V20a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 20Z" /><path d="M13 3.5V8a1 1 0 0 0 1 1h4" /><path d="M12 11v6m0 0 2.5-2.5M12 17l-2.5-2.5" /></Svg>,
     importTask: <Svg><rect x="4" y="4" width="16" height="16" rx="2.5" /><path d="m8 12 2.5 2.5L16 9" /></Svg>,
     importKb: <Svg><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H20v15H7.5A2.5 2.5 0 0 0 5 19.5Z" /><path d="M5 19.5A2.5 2.5 0 0 0 7.5 22H20" /></Svg>,
-    importMore: <Svg fill="currentColor"><circle cx="6" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="18" cy="12" r="1.7" /></Svg>,
   };
 
-  // Resolve a friendly "(UTC±HH:MM) <IANA tz>" label from the browser, so the
-  // preference row reflects the real machine timezone rather than a constant.
+  function selectedTimezone() {
+    try { return localStorage.getItem("cyrene-timezone") || "Asia/Shanghai"; }
+    catch (e) { return "Asia/Shanghai"; }
+  }
+
   function timezoneLabel() {
-    try {
-      var tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || "";
-      var off = -new Date().getTimezoneOffset();
-      var sign = off >= 0 ? "+" : "-";
-      var abs = Math.abs(off);
-      var pad = function (n) { return (n < 10 ? "0" : "") + n; };
-      return "(UTC" + sign + pad(Math.floor(abs / 60)) + ":" + pad(abs % 60) + ")" + (tz ? " " + tz : "");
-    } catch (e) {
-      return "UTC";
-    }
+    return selectedTimezone();
   }
 
   function themeValue(theme, actualTheme) {
@@ -252,7 +245,6 @@
       { id: "docs", tone: "blue", icon: ICON.importDoc, title: T("welcome.import.docs", null, "Import documents"), desc: T("welcome.import.docsDesc", null, "PDF, MD, TXT supported"), action: function () { props.onOpenPage("knowledge"); } },
       { id: "tasks", tone: "green", icon: ICON.importTask, title: T("welcome.import.tasks", null, "Import tasks"), desc: T("welcome.import.tasksDesc", null, "From other tools"), action: function () { props.onNewProject(); } },
       { id: "knowledge", tone: "violet", icon: ICON.importKb, title: T("welcome.import.knowledge", null, "Import knowledge"), desc: T("welcome.import.knowledgeDesc", null, "Existing knowledge base"), action: function () { props.onOpenPage("knowledge"); } },
-      { id: "other", tone: "slate", icon: ICON.importMore, title: T("welcome.import.other", null, "Other ways"), desc: T("welcome.import.otherDesc", null, "More options"), action: function () { props.onSettings(); } },
     ];
     return (
       <section className="wb-wel-panel">
@@ -260,7 +252,7 @@
           <h3>{T("welcome.import.title", null, "Import data")}</h3>
           <p>{T("welcome.import.subtitle", null, "Migrate your existing data into Cyrene")}</p>
         </div>
-        <div className="wb-wel-tiles">
+        <div className="wb-wel-tiles wb-wel-import-tiles">
           {tiles.map(function (tile) {
             return (
               <button key={tile.id} type="button" className="wb-wel-tile" onClick={tile.action}>

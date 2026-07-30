@@ -4106,6 +4106,16 @@ if (!gotSingleInstanceLock) {
       const icon = getNotificationIconPath();
       new Notification({ title, body, ...(icon ? { icon } : {}) }).show();
     });
+    ipcMain.handle('shell:show-item-in-folder', (_event, info) => {
+      const target = String(info && info.path || '').trim();
+      if (!target) return { ok: false, error: 'File path is required.' };
+      const resolved = path.resolve(target);
+      if (!fs.existsSync(resolved)) {
+        return { ok: false, error: 'File no longer exists.' };
+      }
+      shell.showItemInFolder(resolved);
+      return { ok: true };
+    });
     ipcMain.handle('dialog:pick-directory', async (event) => {
       if (!isLinux) {
         return { path: '', error: 'Native directory picker is only enabled on Linux' };

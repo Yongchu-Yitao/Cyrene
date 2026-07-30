@@ -10,11 +10,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 from uuid import uuid4
 
+from cyrene.model_runtime.messages import parse_tool_arguments
 from cyrene.agent.context import (
     active_workspace_dir,
     current_session_id,
@@ -164,7 +164,9 @@ async def generate_plan(
         if str(tc.get("function", {}).get("name") or "").strip() != "submit_plan":
             continue
         try:
-            args = json.loads(tc.get("function", {}).get("arguments") or "{}")
+            args = parse_tool_arguments(
+                tc.get("function", {}).get("arguments")
+            )
         except Exception:
             args = {}
         plan = _normalize_plan(args)

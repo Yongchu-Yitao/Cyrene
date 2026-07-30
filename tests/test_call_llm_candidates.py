@@ -41,6 +41,33 @@ def test_deepseek_legacy_disabled_request_keeps_thinking_enabled():
     )
 
     assert payload["thinking"] == {"type": "enabled"}
+    assert payload["reasoning_effort"] == "high"
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        ("", "high"),
+        ("low", "high"),
+        ("medium", "high"),
+        ("high", "high"),
+        ("xhigh", "max"),
+        ("max", "max"),
+    ],
+)
+def test_deepseek_reasoning_effort_uses_supported_api_values(requested, expected):
+    payload = cl._build_payload(
+        [{"role": "user", "content": "ping"}],
+        tools=None,
+        max_tokens=24,
+        stream=False,
+        model="deepseek-v4-pro",
+        thinking="auto",
+        reasoning_effort=requested,
+    )
+
+    assert payload["thinking"] == {"type": "enabled"}
+    assert payload["reasoning_effort"] == expected
 
 
 def test_generic_model_does_not_receive_deepseek_thinking_extension():
@@ -54,6 +81,7 @@ def test_generic_model_does_not_receive_deepseek_thinking_extension():
     )
 
     assert "thinking" not in payload
+    assert "reasoning_effort" not in payload
 
 
 class _CountingHandler(BaseHTTPRequestHandler):

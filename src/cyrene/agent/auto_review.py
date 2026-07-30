@@ -8,8 +8,9 @@ workspace 之外、命令替换等无法静态验证的 shell）→ 拒绝并给
 
 from __future__ import annotations
 
-import json
 import logging
+
+from cyrene.model_runtime.messages import parse_tool_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,9 @@ async def review_elevation(
         if str(tc.get("function", {}).get("name") or "").strip() != "decide":
             continue
         try:
-            args = json.loads(tc.get("function", {}).get("arguments") or "{}")
+            args = parse_tool_arguments(
+                tc.get("function", {}).get("arguments")
+            )
         except Exception:
             args = {}
         if (

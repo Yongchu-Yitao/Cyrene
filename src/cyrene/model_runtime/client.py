@@ -19,6 +19,10 @@ from typing import Any, Callable, Awaitable
 import httpx
 
 from cyrene.model_runtime.errors import format_httpx_error as _format_httpx_error
+from cyrene.model_runtime.messages import (
+    canonical_tool_arguments,
+    parse_tool_arguments,
+)
 from cyrene.config import (
     DB_PATH,
     DEFAULT_OPENAI_BASE_URL,
@@ -770,6 +774,7 @@ def _build_payload(
     model: str,
     thinking: str,
     response_format: dict[str, Any] | None = None,
+    reasoning_effort: str = "",
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -789,8 +794,9 @@ def _build_payload(
         payload["stream"] = True
         payload["stream_options"] = {"include_usage": True}
 
+    is_deepseek = "deepseek" in model.lower()
     if thinking == "auto":
-        if "deepseek" in model.lower():
+        if is_deepseek:
             payload["thinking"] = {"type": "enabled"}
     elif thinking == "enabled":
         payload["thinking"] = {"type": "enabled"}
@@ -798,8 +804,18 @@ def _build_payload(
         # Keep DeepSeek thinking enabled even for callers that request the
         # legacy "disabled" mode. Other OpenAI-compatible providers may reject
         # this extension, so keep it provider/model-specific.
-        if "deepseek" in model.lower():
+        if is_deepseek:
             payload["thinking"] = {"type": "enabled"}
+    if is_deepseek and payload.get("thinking", {}).get("type") == "enabled":
+        effort = str(reasoning_effort or "").strip().lower()
+        if effort in {"low", "medium", "high"}:
+            effort = "high"
+        elif effort in {"xhigh", "max"}:
+            effort = "max"
+        else:
+            # DeepSeek defaults ordinary thinking-mode requests to high.
+            effort = "high"
+        payload["reasoning_effort"] = effort
     return payload
 
 
@@ -906,6 +922,232 @@ def _normalize_dsml_tool_calls(message: dict[str, Any], tools: list | None) -> d
     normalized["content"] = _DSML_TOOL_BLOCK_RE.sub("", content).strip()
     normalized["tool_calls"] = tool_calls
     return normalized
+
+
+_TEXT_TOOL_CALL_BLOCK_RE = re.compile(
+    r"<tool_call\b[^>]*>(?P<body>.*?)</tool_call>",
+    re.IGNORECASE | re.DOTALL,
+)
+_TEXT_FUNCTION_RE = re.compile(
+    r"<function\s*=\s*(?P<quote>[\"']?)(?P<name>[^>\"']+)(?P=quote)\s*>"
+    r"(?P<body>.*?)</function>",
+    re.IGNORECASE | re.DOTALL,
+)
+_TEXT_PARAMETER_RE = re.compile(
+    r"<parameter\s*=\s*(?P<quote>[\"']?)(?P<name>[^>\"']+)(?P=quote)\s*>"
+    r"(?P<value>.*?)</parameter>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _tool_name_lookup(tools: list | None) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        name = str((tool.get("function") or {}).get("name") or "").strip()
+        if name:
+            lookup.setdefault(name.casefold(), name)
+    return lookup
+
+
+def _canonical_provider_tool_call(
+    raw: Any,
+    *,
+    index: int,
+    tools: list | None,
+    require_allowed: bool,
+) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    function = raw.get("function")
+    if isinstance(function, dict):
+        name = str(function.get("name") or raw.get("name") or "").strip()
+        arguments = function.get(
+            "arguments",
+            function.get("arguments_json", function.get("parameters", {})),
+        )
+    else:
+        name = str(raw.get("name") or function or "").strip()
+        arguments = raw.get(
+            "arguments",
+            raw.get("arguments_json", raw.get("parameters", {})),
+        )
+    if not name:
+        return None
+
+    lookup = _tool_name_lookup(tools)
+    canonical_name = lookup.get(name.casefold())
+    if require_allowed and canonical_name is None:
+        return None
+    name = canonical_name or name
+
+    try:
+        arguments_text = canonical_tool_arguments(arguments)
+    except ValueError:
+        # Preserve an irreparable string so the execution loop can return a
+        # precise invalid-arguments result instead of silently changing it.
+        arguments_text = (
+            arguments
+            if isinstance(arguments, str)
+            else json.dumps(arguments, ensure_ascii=False, default=str)
+        )
+    call_id = str(
+        raw.get("id")
+        or raw.get("tool_call_id")
+        or f"call_compat_{uuid.uuid4().hex[:16]}"
+    )
+    return {
+        "index": index,
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": arguments_text,
+        },
+    }
+
+
+def _text_parameter_value(value: str) -> Any:
+    source = html.unescape(str(value or "").strip())
+    try:
+        return json.loads(source)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return source
+
+
+def _tool_calls_from_text_block(
+    body: str,
+    tools: list | None,
+) -> list[dict[str, Any]]:
+    source = html.unescape(str(body or "").strip())
+    if source.startswith("```") and source.endswith("```"):
+        source = re.sub(r"^\s*```(?:json|javascript|js)?\s*", "", source, flags=re.IGNORECASE)
+        source = re.sub(r"\s*```\s*$", "", source)
+
+    decoded: Any = None
+    try:
+        decoded = json.loads(source)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        try:
+            decoded = parse_tool_arguments(source)
+        except ValueError:
+            decoded = None
+    raw_calls: list[Any] = []
+    if isinstance(decoded, list):
+        raw_calls = decoded
+    elif isinstance(decoded, dict):
+        nested_calls = decoded.get("tool_calls")
+        raw_calls = nested_calls if isinstance(nested_calls, list) else [decoded]
+
+    calls: list[dict[str, Any]] = []
+    for raw in raw_calls:
+        call = _canonical_provider_tool_call(
+            raw,
+            index=len(calls),
+            tools=tools,
+            require_allowed=True,
+        )
+        if call is not None:
+            calls.append(call)
+    if calls:
+        return calls
+
+    # Compatibility with older Qwen/Hermes XML-like templates:
+    # <tool_call><function=Read><parameter=path>...</parameter></function></tool_call>
+    for function_match in _TEXT_FUNCTION_RE.finditer(source):
+        arguments: dict[str, Any] = {}
+        for parameter in _TEXT_PARAMETER_RE.finditer(function_match.group("body")):
+            name = html.unescape(parameter.group("name")).strip()
+            if name:
+                arguments[name] = _text_parameter_value(parameter.group("value"))
+        call = _canonical_provider_tool_call(
+            {
+                "name": html.unescape(function_match.group("name")).strip(),
+                "arguments": arguments,
+            },
+            index=len(calls),
+            tools=tools,
+            require_allowed=True,
+        )
+        if call is not None:
+            calls.append(call)
+    return calls
+
+
+def _normalize_provider_tool_calls(
+    message: dict[str, Any],
+    tools: list | None,
+) -> dict[str, Any]:
+    """Normalize OpenAI, legacy, Qwen, and Hermes tool-call representations."""
+    if not tools:
+        return message
+    normalized = dict(message)
+    calls: list[dict[str, Any]] = []
+
+    raw_calls = normalized.get("tool_calls")
+    if isinstance(raw_calls, dict):
+        raw_calls = [raw_calls]
+    if isinstance(raw_calls, list):
+        for raw in raw_calls:
+            call = _canonical_provider_tool_call(
+                raw,
+                index=len(calls),
+                tools=tools,
+                require_allowed=False,
+            )
+            if call is not None:
+                calls.append(call)
+
+    if not calls:
+        legacy = normalized.get("function_call") or normalized.get("tool_call")
+        call = _canonical_provider_tool_call(
+            legacy,
+            index=0,
+            tools=tools,
+            require_allowed=False,
+        )
+        if call is not None:
+            calls.append(call)
+
+    content = normalized.get("content")
+    if not calls and isinstance(content, str):
+        kept: list[str] = []
+        cursor = 0
+        for match in _TEXT_TOOL_CALL_BLOCK_RE.finditer(content):
+            parsed = _tool_calls_from_text_block(match.group("body"), tools)
+            if not parsed:
+                continue
+            kept.append(content[cursor:match.start()])
+            cursor = match.end()
+            for parsed_call in parsed:
+                parsed_call["index"] = len(calls)
+                calls.append(parsed_call)
+        if calls:
+            kept.append(content[cursor:])
+            normalized["content"] = "".join(kept).strip()
+        else:
+            # Some local templates emit a bare JSON action without markers.
+            parsed = _tool_calls_from_text_block(content, tools)
+            if parsed:
+                calls = parsed
+                normalized["content"] = ""
+
+    normalized.pop("function_call", None)
+    normalized.pop("tool_call", None)
+    if calls:
+        normalized["tool_calls"] = calls
+    elif "tool_calls" in normalized:
+        normalized.pop("tool_calls", None)
+    return normalized
+
+
+def _normalize_tool_call_protocol(
+    message: dict[str, Any],
+    tools: list | None,
+) -> dict[str, Any]:
+    normalized = _normalize_dsml_tool_calls(message, tools)
+    return _normalize_provider_tool_calls(normalized, tools)
 
 
 def _normalized_usage(usage: Any, messages: list[dict[str, Any]], response_message: dict[str, Any]) -> dict[str, int]:
@@ -1393,7 +1635,16 @@ async def call_llm(
                 if is_secondary and max_conc > 0:
                     _secondary_in_flight += 1
                 model = str(candidate.get("model") or "").strip()
-                payload = _build_payload(messages, tools, max_tokens, stream, model, thinking, response_format)
+                payload = _build_payload(
+                    messages,
+                    tools,
+                    max_tokens,
+                    stream,
+                    model,
+                    thinking,
+                    response_format,
+                    reasoning_effort=str(candidate.get("reasoning_effort") or ""),
+                )
 
                 headers = {"Content-Type": "application/json"}
                 api_key = str(candidate.get("api_key") or "").strip()
@@ -1596,7 +1847,7 @@ async def call_llm(
                                 )
                                 await asyncio.sleep(delay)
 
-                        msg = _normalize_dsml_tool_calls(msg, tools)
+                        msg = _normalize_tool_call_protocol(msg, tools)
                         msg.setdefault("role", "assistant")
                         msg.setdefault("content", "")
                         if msg.get("usage"):
@@ -1881,6 +2132,8 @@ def _accumulate_tool_call_deltas(
     deltas: Any, fragments: dict[int, dict[str, Any]]
 ) -> None:
     """Merge OpenAI streamed ``delta.tool_calls`` fragments by index."""
+    if isinstance(deltas, dict):
+        deltas = [deltas]
     if not isinstance(deltas, list):
         return
     for delta in deltas:
@@ -1902,6 +2155,12 @@ def _accumulate_tool_call_deltas(
                 fragment["name"] = function["name"]
             if isinstance(function.get("arguments"), str):
                 fragment["arguments"] += function["arguments"]
+            elif isinstance(function.get("arguments"), dict):
+                fragment["arguments"] += json.dumps(
+                    function["arguments"],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
 
 
 def _finalize_tool_call_fragments(
@@ -1985,7 +2244,29 @@ async def _handle_stream(
                     reasoning_parts.append(rc)
                     if stream_callback:
                         await stream_callback({"type": "reasoning_delta", "delta": rc})
-                _accumulate_tool_call_deltas(delta.get("tool_calls"), tool_call_fragments)
+                delta_calls = delta.get("tool_calls")
+                if delta_calls is None:
+                    legacy_function = delta.get("function_call")
+                    singular_call = delta.get("tool_call")
+                    if isinstance(legacy_function, dict):
+                        delta_calls = {
+                            "index": 0,
+                            "function": legacy_function,
+                        }
+                    elif isinstance(singular_call, dict):
+                        delta_calls = (
+                            singular_call
+                            if isinstance(singular_call.get("function"), dict)
+                            else {
+                                "index": singular_call.get("index", 0),
+                                "id": singular_call.get("id"),
+                                "function": singular_call,
+                            }
+                        )
+                _accumulate_tool_call_deltas(
+                    delta_calls,
+                    tool_call_fragments,
+                )
                 text = _extract_stream_delta_text(delta)
                 if not text:
                     continue

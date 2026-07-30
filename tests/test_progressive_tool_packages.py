@@ -385,6 +385,102 @@ async def test_gateway_repairs_nested_invoke_capability_id(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gateway_repairs_double_nested_invoke_arguments(monkeypatch):
+    """Regression for local models that wrap the whole invoke envelope."""
+    from cyrene.tooling import execute_wire_tool
+    from cyrene.tooling import executor as tool_executor
+
+    concrete = AsyncMock(return_value="opened")
+    monkeypatch.setattr(tool_executor, "_execute_tool", concrete)
+
+    invoked = json.loads(await execute_wire_tool(
+        "browser_tools",
+        {
+            "operation": "invoke",
+            "arguments": {
+                "capability_id": "browser.navigate",
+                "arguments": {
+                    "url": "https://www.bilibili.com",
+                    "reason": "starting_page",
+                },
+            },
+        },
+        None, 0, "", None,
+    ))
+
+    assert invoked["status"] == "success"
+    concrete.assert_awaited_once_with(
+        "browser_navigate",
+        {
+            "url": "https://www.bilibili.com",
+            "reason": "starting_page",
+        },
+        None, 0, "", None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_repairs_fully_nested_invoke_envelope(monkeypatch):
+    from cyrene.tooling import execute_wire_tool
+    from cyrene.tooling import executor as tool_executor
+
+    concrete = AsyncMock(return_value="opened")
+    monkeypatch.setattr(tool_executor, "_execute_tool", concrete)
+
+    invoked = json.loads(await execute_wire_tool(
+        "browser_tools",
+        {
+            "arguments": {
+                "operation": "invoke",
+                "capability_id": "browser.navigate",
+                "arguments": {
+                    "url": "https://www.bilibili.com",
+                    "reason": "starting_page",
+                },
+            },
+        },
+        None, 0, "", None,
+    ))
+
+    assert invoked["status"] == "success"
+    concrete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_gateway_projects_required_arguments_across_wrapper_levels(monkeypatch):
+    from cyrene.tooling import execute_wire_tool
+    from cyrene.tooling import executor as tool_executor
+
+    concrete = AsyncMock(return_value="opened")
+    monkeypatch.setattr(tool_executor, "_execute_tool", concrete)
+
+    invoked = json.loads(await execute_wire_tool(
+        "browser_tools",
+        {
+            "operation": "invoke",
+            "capability_id": "browser.navigate",
+            "arguments": {
+                "url": "https://www.bilibili.com",
+                "arguments": {
+                    "reason": "starting_page",
+                },
+            },
+        },
+        None, 0, "", None,
+    ))
+
+    assert invoked["status"] == "success"
+    concrete.assert_awaited_once_with(
+        "browser_navigate",
+        {
+            "url": "https://www.bilibili.com",
+            "reason": "starting_page",
+        },
+        None, 0, "", None,
+    )
+
+
+@pytest.mark.asyncio
 async def test_gateway_repairs_nested_describe_capability_ids():
     from cyrene.tooling import execute_wire_tool
 
@@ -420,6 +516,62 @@ async def test_gateway_invalid_arguments_include_expected_call():
             "capability_id": "<capability_id>",
             "arguments": {},
         },
+    }
+
+
+@pytest.mark.asyncio
+async def test_gateway_expected_call_is_rebuilt_from_capability_schema():
+    from cyrene.tooling import execute_wire_tool
+
+    result = json.loads(await execute_wire_tool(
+        "browser_tools",
+        {
+            "operation": "invoke",
+            "capability_id": "browser.navigate",
+            "arguments": {
+                "arguments": {
+                    "reason": "starting_page",
+                },
+            },
+        },
+        None, 0, "", None,
+    ))
+
+    assert result["status"] == "error"
+    assert result["error"]["type"] == "invalid_arguments"
+    assert result["error"]["expected_call"] == {
+        "tool": "browser_tools",
+        "arguments": {
+            "operation": "invoke",
+            "capability_id": "browser.navigate",
+            "arguments": {
+                "url": "<url>",
+                "reason": "starting_page",
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_gateway_expected_call_replaces_invalid_values_from_schema():
+    from cyrene.tooling import execute_wire_tool
+
+    result = json.loads(await execute_wire_tool(
+        "browser_tools",
+        {
+            "operation": "invoke",
+            "capability_id": "browser.navigate",
+            "arguments": {
+                "url": 123,
+                "reason": "not_a_reason",
+            },
+        },
+        None, 0, "", None,
+    ))
+
+    assert result["error"]["expected_call"]["arguments"]["arguments"] == {
+        "url": "<url>",
+        "reason": "starting_page",
     }
 
 

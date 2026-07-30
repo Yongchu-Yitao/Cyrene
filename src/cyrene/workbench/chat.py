@@ -705,13 +705,43 @@ def _chat_first_message(chat: dict[str, Any]) -> str:
     return ""
 
 
+def _side_agent_parent_transcript(chat: dict[str, Any] | None) -> str:
+    """Serialize the complete public parent conversation for a side agent."""
+    if not isinstance(chat, dict):
+        return ""
+    sections: list[str] = []
+    for index, message in enumerate(chat.get("messages") or [], start=1):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "message").strip() or "message"
+        content = str(
+            message.get("content")
+            or message.get("body")
+            or message.get("reasoning")
+            or ""
+        ).strip()
+        attachment_names = [
+            str(item.get("name") or item.get("title") or "").strip()
+            for item in (message.get("attachments") or [])
+            if isinstance(item, dict)
+            and str(item.get("name") or item.get("title") or "").strip()
+        ]
+        if attachment_names:
+            attachment_line = "Attachments: " + ", ".join(attachment_names)
+            content = f"{content}\n{attachment_line}".strip()
+        if not content:
+            continue
+        sections.append(f"[{index}. {role}]\n{content}")
+    return "\n\n".join(sections)
+
+
 def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
     """Listing payload — transcript omitted to keep the rail cheap."""
     usage = _aggregate_usage(chat.get("messages") or [])
     payload = {
         "id": chat.get("id"),
         "projectId": chat.get("projectId"),
-        "kind": "chat",
+        "kind": str(chat.get("kind") or "chat"),
         "title": chat.get("title"),
         "status": chat.get("status") or "idle",
         "model": chat.get("model") or "",
@@ -726,6 +756,10 @@ def _public_chat_light(chat: dict[str, Any]) -> dict[str, Any]:
         "usage": usage,
         "pendingQuestion": chat.get("pendingQuestion") or None,
     }
+    if chat.get("parentChatId"):
+        payload["parentChatId"] = str(chat.get("parentChatId") or "")
+    if chat.get("sourceQuote"):
+        payload["sourceQuote"] = str(chat.get("sourceQuote") or "")
     active_plan = chat.get("activePlan")
     if isinstance(active_plan, dict) and str(active_plan.get("status") or "") in _VISIBLE_PLAN_STATUSES:
         payload["activePlan"] = active_plan

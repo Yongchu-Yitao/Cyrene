@@ -71,6 +71,38 @@ process.stdout.write(JSON.stringify(wbRecentSessionTabs(projects, chats, opened,
     assert items[0]["pinned"] is True
 
 
+def test_pinned_sessions_are_not_dropped_by_the_recent_tab_limit():
+    source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
+    helper = source.split("function wbRecentSessionTabs", 1)[1].split(
+        "\nfunction WorkbenchSessionMenuFileName", 1
+    )[0]
+    script = (
+        "function wbRecentSessionTabs"
+        + helper
+        + """
+const projects = [{id: "p1", sessions: []}];
+const chats = {p1: [
+  {id: "c1", title: "One"}, {id: "c2", title: "Two"},
+  {id: "c3", title: "Three"}, {id: "c4", title: "Four"}
+]};
+process.stdout.write(JSON.stringify(wbRecentSessionTabs(
+  projects, chats, [], ["chat:c1", "chat:c2", "chat:c3", "chat:c4"], [], 3
+)));
+"""
+    )
+    result = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    items = json.loads(result.stdout)
+
+    assert [item["id"] for item in items] == ["c1", "c2", "c3", "c4"]
+    assert all(item["pinned"] is True for item in items)
+
+
 def test_existing_topbar_session_keeps_order_until_an_unshown_session_is_opened():
     source = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
     helper = source.split("function wbRememberOpenedSessionKey", 1)[1].split(

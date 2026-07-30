@@ -1124,6 +1124,21 @@ function RemotePeerCard(p) {
 // ── General Panel ──
 function GeneralPanel(p) {
   var { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved } = p;
+  var timezoneOptions = [
+    "Pacific/Honolulu", "America/Los_Angeles", "America/Denver",
+    "America/Chicago", "America/New_York", "America/Sao_Paulo",
+    "UTC", "Europe/London", "Europe/Paris", "Africa/Cairo",
+    "Asia/Dubai", "Asia/Kolkata", "Asia/Bangkok", "Asia/Shanghai",
+    "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland",
+  ];
+  var [selectedTimezone, setSelectedTimezone] = useStateSt(function () {
+    try {
+      var stored = localStorage.getItem("cyrene-timezone") || "";
+      return timezoneOptions.indexOf(stored) >= 0 ? stored : "Asia/Shanghai";
+    } catch (e) {
+      return "Asia/Shanghai";
+    }
+  });
 
   // Desktop-only (Electron) toggles. Quick chat depends on background residency,
   // so its toggle is gated on runInBackground.
@@ -1186,6 +1201,27 @@ function GeneralPanel(p) {
     }).catch(function () {
       setDesktopNotice(t("settings.error"));
     }).finally(function () { setDesktopBusy(false); });
+  }
+
+  function timezoneOptionLabel(timezone) {
+    try {
+      var part = new Intl.DateTimeFormat("en", {
+        timeZone: timezone,
+        timeZoneName: "longOffset",
+      }).formatToParts(new Date()).find(function (item) { return item.type === "timeZoneName"; });
+      var offset = part && part.value ? part.value.replace("GMT", "UTC") : "UTC";
+      return "(" + offset + ") " + timezone;
+    } catch (e) {
+      return timezone;
+    }
+  }
+
+  function changeTimezone(event) {
+    var nextTimezone = event.target.value;
+    if (timezoneOptions.indexOf(nextTimezone) < 0) return;
+    setSelectedTimezone(nextTimezone);
+    try { localStorage.setItem("cyrene-timezone", nextTimezone); } catch (e) {}
+    try { window.CyreneUI.require("data").reload(); } catch (e) {}
   }
 
   function saveAmapKey() {
@@ -1312,6 +1348,18 @@ function GeneralPanel(p) {
       React.createElement("div", { className: "wb-seg" },
         React.createElement("button", { className: "wb-seg-btn" + (lang === "en" ? " active" : ""), onClick: function () { setLang("en"); } }, "English"),
         React.createElement("button", { className: "wb-seg-btn" + (lang === "zh" ? " active" : ""), onClick: function () { setLang("zh"); } }, "中文"),
+      ),
+    ),
+    FieldRow(t("settings.timezone"), t("settings.timezoneHint"),
+      React.createElement("select", {
+        className: "wb-select",
+        value: selectedTimezone,
+        "aria-label": t("settings.timezone"),
+        onChange: changeTimezone,
+      },
+        timezoneOptions.map(function (timezone) {
+          return React.createElement("option", { key: timezone, value: timezone }, timezoneOptionLabel(timezone));
+        }),
       ),
     ),
     FieldRow(t("settings.desktopNotifications"), t("settings.desktopNotificationsHint"),

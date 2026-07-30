@@ -181,6 +181,7 @@ function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedK
     seen[normalizedKey] = true;
     ordered.push(Object.assign({}, item, { pinned: true }));
   });
+  var visiblePinnedCount = ordered.length;
   (Array.isArray(recentOpenedKeys) ? recentOpenedKeys : []).forEach(function (key) {
     var normalizedKey = String(key || "");
     var item = byKey[normalizedKey];
@@ -199,7 +200,9 @@ function wbRecentSessionTabs(projects, chatsByProject, recentOpenedKeys, pinnedK
     seen[key] = true;
     ordered.push(item);
   });
-  return ordered.slice(0, Math.max(0, Number(limit) || 0));
+  // A pinned session is a fixed topbar tab, so it must not disappear merely
+  // because the ordinary recent-tab quota has already been filled.
+  return ordered.slice(0, Math.max(visiblePinnedCount, Math.max(0, Number(limit) || 0)));
 }
 
 function wbRememberOpenedSessionKey(recentOpenedKeys, visibleSessionKeys, key, limit) {
@@ -994,19 +997,32 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     });
   }
 
-  function togglePinnedSession(item) {
+  function togglePinnedSession(item, forcePinned) {
     if (!item || !item.id) return;
     var key = item.kind + ":" + item.id;
+    var shouldPin = typeof forcePinned === "boolean"
+      ? forcePinned
+      : pinnedSessionKeys.indexOf(key) < 0;
     setPinnedSessionKeys(function (prev) {
       var list = Array.isArray(prev) ? prev : [];
-      var next = list.indexOf(key) >= 0
-        ? list.filter(function (entry) { return entry !== key; })
-        : [key].concat(list).slice(0, 20);
+      var next = shouldPin
+        ? [key].concat(list.filter(function (entry) { return entry !== key; })).slice(0, 20)
+        : list.filter(function (entry) { return entry !== key; });
       try {
         localStorage.setItem("wb-pinned-sessions", JSON.stringify(next));
       } catch (e) {}
       return next;
     });
+    if (shouldPin) {
+      setHiddenSessionKeys(function (prev) {
+        if (!Array.isArray(prev) || prev.indexOf(key) < 0) return prev;
+        var next = prev.filter(function (entry) { return entry !== key; });
+        try {
+          localStorage.setItem("wb-hidden-session-tabs", JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
+    }
   }
 
   function removeSessionTab(item) {
@@ -2088,12 +2104,21 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
                     return Object.assign({}, prev, { [projectId]: chats });
                   });
                 },
+                pinnedChatIds: pinnedSessionKeys.filter(function (key) {
+                  return String(key || "").indexOf("chat:") === 0;
+                }).map(function (key) {
+                  return String(key).slice(5);
+                }),
+                onTogglePinnedChat: function (chat, pinned) {
+                  if (!chat || !chat.id) return;
+                  togglePinnedSession({ id: chat.id, kind: "chat" }, pinned);
+                },
               })}
             </WorkbenchStableSurface>
           )}
           {showKnowledgePage && (
             <WorkbenchStableSurface active={isKnowledge}>
-              {React.createElement(window.CyreneUI.require("library").Page || window.CyreneUI.require("knowledge").Page || function () { return <div className="workbench-empty">{t("workbench.knowledgeLoading")}</div>; }, {
+              {React.createElement(window.CyreneUI.require("library").Page || function () { return <div className="workbench-empty">{t("workbench.knowledgeLoading")}</div>; }, {
                 active: isKnowledge,
                 project: store.activeProject,
                 onBack: function () { setFullPage(null); },
@@ -3868,6 +3893,7 @@ var ICONS = {
   x: <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/></svg>,
   attach: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>,
   slash: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 9.5 2.5 2.5-2.5 2.5"/><path d="M12.5 15h4"/></svg>,
+  model: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="3"/><circle cx="12" cy="12" r="2.5"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>,
   send: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>,
   stop: <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" stroke="none"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>,
   modeDefault: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3 5 6v5c0 4.2 2.8 7.7 7 9 4.2-1.3 7-4.8 7-9V6Z"/></svg>,
@@ -6637,6 +6663,8 @@ function TaskComposer({
   var effortLabel = reasoningEffort
     ? wbT("settings.reasoningEffortValue." + reasoningEffort, reasoningEffort)
     : "";
+  var modelButtonLabel = wbT("workbenchChat.chooseModel", "Choose model")
+    + ": " + modelName + (effortLabel ? " · " + effortLabel : "");
   var supportedReasoningEfforts = wbSupportedReasoningEfforts(selectedModel);
   var sendDisabled = running ? false : (disabled || (!draft.trim() && attachments.length === 0));
 
@@ -6729,7 +6757,8 @@ function TaskComposer({
               <button
                 type="button"
                 className={"wbc-model-button" + (modelOpen ? " active" : "")}
-                title={wbT("workbenchChat.chooseModel", "Choose model")}
+                title={modelButtonLabel}
+                aria-label={modelButtonLabel}
                 aria-haspopup="menu"
                 aria-expanded={modelOpen}
                 disabled={running}
@@ -6739,6 +6768,7 @@ function TaskComposer({
                   setModeOpen(false);
                 }}
               >
+                <span className="wbc-model-button-icon" aria-hidden="true">{ICONS.model}</span>
                 <span className="wbc-model-button-name">{modelName}</span>
                 {effortLabel ? <span className="wbc-model-button-effort">{effortLabel}</span> : null}
                 <span className="wbc-model-button-chevron">{ICONS.chevronDown}</span>
@@ -6749,7 +6779,7 @@ function TaskComposer({
                     <>
                       <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("models"); }}>
                         <span className="wbc-model-menu-key">{wbT("workbenchChat.model", "Model")}</span>
-                        <span className="wbc-model-menu-value">{modelName}</span>
+                        <span className="wbc-model-menu-value wbc-model-menu-model-name">{modelName}</span>
                         <span className="wbc-model-menu-chevron">{ICONS.chevronRight}</span>
                       </button>
                       {supportedReasoningEfforts.length > 0 && (

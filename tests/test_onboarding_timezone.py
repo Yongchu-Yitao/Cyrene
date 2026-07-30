@@ -32,10 +32,34 @@ def test_ui_timezone_resolver_accepts_browser_iana_timezone():
     assert datetime(2026, 6, 18, tzinfo=new_york).utcoffset().total_seconds() == -4 * 3600
 
 
-def test_ui_bootstrap_passes_browser_timezone_to_backend():
+def test_ui_bootstrap_passes_saved_supported_timezone_to_backend():
     source = (ROOT / "src" / "webui" / "frontend" / "platform" / "data-store.jsx").read_text(
         encoding="utf-8"
     )
 
-    assert "Intl.DateTimeFormat().resolvedOptions().timeZone" in source
+    assert 'let tz = "Asia/Shanghai"' in source
+    assert 'localStorage.getItem("cyrene-timezone")' in source
+    assert "supportedTimezones.includes(storedTimezone)" in source
     assert 'fetch("/api/ui-data?tz=" + encodeURIComponent(tz))' in source
+
+
+def test_onboarding_timezone_opens_general_timezone_setting():
+    welcome = (ROOT / "src" / "webui" / "frontend" / "workbench-welcome.jsx").read_text(
+        encoding="utf-8"
+    )
+    settings = (ROOT / "src" / "webui" / "frontend" / "settings-overlay.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'localStorage.getItem("cyrene-timezone")' in welcome
+    assert "return selectedTimezone();" in welcome
+    assert 'timeZoneName: "longOffset"' not in welcome
+    assert 'props.onSettings("general")' in welcome
+    assert '{ id: "timezone", labelKey: "settings.timezone" }' not in settings
+    assert 'FieldRow(t("settings.timezone"), t("settings.timezoneHint")' in settings
+    assert 'value: selectedTimezone' in settings
+    assert '"America/New_York"' in settings
+    assert '"Europe/London"' in settings
+    assert '"Asia/Tokyo"' in settings
+    assert '"Australia/Sydney"' in settings
+    assert 'localStorage.setItem("cyrene-timezone", nextTimezone)' in settings

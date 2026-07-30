@@ -6962,6 +6962,8 @@ async def _search_workbench_items(query: str, types: set[str], per_type_limit: i
                 found: list[dict[str, Any]] = []
                 chats_payload = read_chats_store()
                 for chat in chats_payload.get("chats", []):
+                    if str(chat.get("kind") or "chat") != "chat":
+                        continue
                     chat_id = str(chat.get("id") or "")
                     pid = str(chat.get("projectId") or "")
                     title = str(chat.get("title") or "")

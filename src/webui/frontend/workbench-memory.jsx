@@ -893,6 +893,7 @@
     var selState = useState(""); var selectedId = selState[0]; var setSelectedId = selState[1];
     var panelState = useState(""); var activePanel = panelState[0]; var setActivePanel = panelState[1];
     var menuState = useState(""); var menu = menuState[0]; var setMenu = menuState[1]; // "type" | "source" | "sort"
+    var contextState = useState(null); var contextMenu = contextState[0]; var setContextMenu = contextState[1];
     var modalState = useState(null); var modal = modalState[0]; var setModal = modalState[1];
     var busyState = useState(false); var busy = busyState[0]; var setBusy = busyState[1];
     var learningDataState = useState(null); var learningData = learningDataState[0]; var setLearningData = learningDataState[1];
@@ -908,6 +909,20 @@
     var learningProjectRef = useRef(learningProject); learningProjectRef.current = learningProject;
 
     var client = useMemo(function () { return api(workspace); }, [workspace]);
+
+    useEffect(function () {
+      if (!contextMenu) return undefined;
+      function close() { setContextMenu(null); }
+      function onKeyDown(event) { if (event.key === "Escape") close(); }
+      window.addEventListener("resize", close);
+      window.addEventListener("scroll", close, true);
+      document.addEventListener("keydown", onKeyDown);
+      return function () {
+        window.removeEventListener("resize", close);
+        window.removeEventListener("scroll", close, true);
+        document.removeEventListener("keydown", onKeyDown);
+      };
+    }, [!!contextMenu]);
 
     function load(options) {
       var opts = options || {};
@@ -1241,6 +1256,19 @@
         .catch(function (e) { setError(e.message || String(e)); })
         .finally(function () { setBusy(false); });
     }
+    function openEdit(m) {
+      setModal({ mode: "edit", id: m.id, draft: { content: m.content, category: m.category, source: m.source, confidence: m.confidence, tags: m.tags } });
+    }
+    function openMemoryContextMenu(m, event) {
+      event.preventDefault();
+      event.stopPropagation();
+      setMenu("");
+      setContextMenu({
+        memory: m,
+        left: Math.max(8, Math.min(event.clientX, window.innerWidth - 220 - 8)),
+        top: Math.max(8, Math.min(event.clientY, window.innerHeight - 140 - 8)),
+      });
+    }
 
     if (!project) {
       return h("section", { className: "wb-mem-page" },
@@ -1300,7 +1328,13 @@
     // ── memory card list ──
     function card(m) {
       var meta = catMeta(m.category, t);
-      return h("button", { key: m.id, type: "button", className: "wb-mem-item" + (!activePanel && selectedId === m.id ? " active" : "") + (m.stale ? " stale" : ""), onClick: function () { setActivePanel(""); setSelectedId(m.id); } },
+      return h("button", {
+        key: m.id,
+        type: "button",
+        className: "wb-mem-item" + (!activePanel && selectedId === m.id ? " active" : "") + (m.stale ? " stale" : ""),
+        onClick: function () { setActivePanel(""); setSelectedId(m.id); },
+        onContextMenu: function (event) { openMemoryContextMenu(m, event); },
+      },
         h("span", { className: "wb-mem-ico " + meta.tone }, catIcon(m.category, 17)),
         h("div", { className: "wb-mem-item-body" },
           h("div", { className: "wb-mem-item-top" },
@@ -1372,11 +1406,28 @@
         memory: selected, related: related, busy: busy,
         t: t,
         onSelect: setSelectedId,
-        onEdit: function (m) { setModal({ mode: "edit", id: m.id, draft: { content: m.content, category: m.category, source: m.source, confidence: m.confidence, tags: m.tags } }); },
+        onEdit: openEdit,
         onDelete: handleDelete,
         onToggleStale: handleToggleStale,
       }),
       menu && h("div", { className: "wb-mem-scrim", onClick: function () { setMenu(""); } }),
+      contextMenu && h("div", { className: "wb-item-context-layer" },
+        h("div", { className: "wb-item-context-scrim", onPointerDown: function () { setContextMenu(null); } }),
+        h("div", {
+          className: "wb-item-context-menu",
+          role: "menu",
+          "aria-label": contextMenu.memory.content,
+          style: { left: contextMenu.left + "px", top: contextMenu.top + "px" },
+          onContextMenu: function (event) { event.preventDefault(); },
+        },
+          h("button", { type: "button", role: "menuitem", onClick: function () { var m = contextMenu.memory; setContextMenu(null); openEdit(m); } },
+            svg({ width: 15, height: 15 }, h("path", { d: "m4 16 1-4 8.5-8.5a2.1 2.1 0 0 1 3 3L8 15l-4 1Z" })), t("memory.edit", "Edit memory")),
+          h("button", { type: "button", role: "menuitem", onClick: function () { var m = contextMenu.memory; setContextMenu(null); handleToggleStale(m); } },
+            svg({ width: 15, height: 15 }, h("path", { d: "M20 12a8 8 0 1 1-2.3-5.7M20 4v6h-6" })), contextMenu.memory.stale ? t("memory.restore", "Restore") : t("memory.markStale", "Mark outdated")),
+          h("div", { className: "wb-item-context-separator" }),
+          h("button", { type: "button", role: "menuitem", className: "danger", onClick: function () { var m = contextMenu.memory; setContextMenu(null); handleDelete(m); } },
+            svg({ width: 15, height: 15 }, h("path", { d: "M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" })), t("memory.delete", "Delete memory"))
+        )),
       modal && h(MemoryModal, {
         mode: modal.mode, draft: modal.draft, busy: busy, t: t,
         onClose: function () { setModal(null); },

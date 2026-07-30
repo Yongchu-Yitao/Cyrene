@@ -191,6 +191,11 @@ class ChatCreateBody(APIBody):
     title: str | None = Field(default=None, max_length=160)
 
 
+class SideAgentCreateBody(APIBody):
+    quote: str = Field(min_length=1, max_length=12_000)
+    title: str | None = Field(default=None, max_length=160)
+
+
 class ChatUpdateBody(APIBody):
     title: str | None = Field(default=None, max_length=160)
 

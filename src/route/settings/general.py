@@ -298,6 +298,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 else:
                     model_api_key = ""
                 user_price = str(model.get("price") or "").strip()
+                is_deepseek = "deepseek" in model_identifier.lower()
                 normalized_items.append(
                     {
                         "id": str(model.get("id") or f"candidate-{index + 1}").strip() or f"candidate-{index + 1}",
@@ -305,6 +306,8 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                         "model": model_identifier,
                         "provider": provider,
                         "reasoning_effort": str(model.get("reasoning_effort") or "").strip().lower(),
+                        "supported_reasoning_efforts": ["high", "max"] if is_deepseek else [],
+                        "default_reasoning_effort": "high" if is_deepseek else "",
                         "desc": str(model.get("desc") or "").strip(),
                         "ctx": str(model.get("ctx") or "").strip(),
                         "price": user_price,

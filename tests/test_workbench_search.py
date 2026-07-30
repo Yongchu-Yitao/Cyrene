@@ -175,6 +175,82 @@ def client(search_env):
     return TestClient(app)
 
 
+def test_side_agents_are_multiple_persistent_sessions_hidden_from_main_chat_list(
+    client, search_env,
+):
+    first = client.post(
+        "/api/workbench/chats/chat_1/side-agents",
+        json={"quote": "First selected passage"},
+    )
+    second = client.post(
+        "/api/workbench/chats/chat_1/side-agents",
+        json={"quote": "Second selected passage"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_agent = first.json()["agent"]
+    second_agent = second.json()["agent"]
+    assert first_agent["id"] != second_agent["id"]
+    assert first_agent["kind"] == "side-agent"
+    assert first_agent["parentChatId"] == "chat_1"
+    assert first_agent["sourceQuote"] == "First selected passage"
+
+    agents = client.get("/api/workbench/chats/chat_1/side-agents").json()["agents"]
+    assert [item["id"] for item in agents] == [
+        first_agent["id"],
+        second_agent["id"],
+    ]
+
+    visible_chats = client.get(
+        "/api/workbench/chats",
+        params={"project": "project_1"},
+    ).json()["chats"]
+    assert [item["id"] for item in visible_chats] == ["chat_1"]
+
+    stored = json.loads(
+        (search_env["data_dir"] / "workbench_chats.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert len(stored["chats"]) == 3
+
+
+def test_side_agent_receives_selected_quote_without_polluting_public_question(
+    client, monkeypatch,
+):
+    from cyrene import agent
+
+    captured = {}
+
+    async def fake_run_agent(**kwargs):
+        captured.update(kwargs)
+        return "Side answer"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    created = client.post(
+        "/api/workbench/chats/chat_1/side-agents",
+        json={"quote": "The selected source text"},
+    ).json()["agent"]
+
+    response = client.post(
+        f"/api/workbench/chats/{created['id']}/messages",
+        json={"message": "What does this mean?"},
+    )
+
+    assert response.status_code == 200
+    assert "<selected_quote>\nThe selected source text\n</selected_quote>" in captured[
+        "user_message"
+    ]
+    assert "<main_conversation>" in captured["user_message"]
+    assert "[1. user]\nhello there" in captured["user_message"]
+    assert "What does this mean?" in captured["user_message"]
+    assert captured["public_user_message"] == "What does this mean?"
+    detail = client.get(f"/api/workbench/chats/{created['id']}").json()["chat"]
+    assert detail["messages"][0]["content"] == "What does this mean?"
+    assert detail["messages"][-1]["content"] == "Side answer"
+
+
 def test_rename_workbench_chat_persists_trimmed_title(client, search_env):
     response = client.patch(
         "/api/workbench/chats/chat_1",

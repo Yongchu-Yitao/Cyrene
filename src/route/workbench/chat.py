@@ -204,7 +204,8 @@ def register_workbench_chat_routes(
         chats = [
             _public_chat_light(chat)
             for chat in payload.get("chats", [])
-            if not project or str(chat.get("projectId") or "") == project
+            if str(chat.get("kind") or "chat") == "chat"
+            and (not project or str(chat.get("projectId") or "") == project)
         ]
         if project and data_key == "default":
             legacy = await asyncio.to_thread(_legacy_chats, project)
@@ -247,6 +248,8 @@ def register_workbench_chat_routes(
         payload = await asyncio.to_thread(_read_chats_store)
         targets: list[dict[str, Any]] = []
         for chat in payload.get("chats", []):
+            if str(chat.get("kind") or "chat") != "chat":
+                continue
             chat_id = str(chat.get("id") or "")
             if not chat_id:
                 continue
@@ -321,6 +324,61 @@ def register_workbench_chat_routes(
                 elapsed_ms,
             )
         return {"ok": True, "chat": _public_chat_full(chat)}
+
+    @router.get("/api/workbench/chats/{chat_id}/side-agents")
+    async def api_workbench_list_side_agents(chat_id: str):
+        if chat_id.startswith("legacy:"):
+            return {"agents": []}
+        payload = await asyncio.to_thread(_read_chats_store)
+        parent = _find_chat(payload, chat_id)
+        if not parent:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        agents = [
+            _public_chat_full(item)
+            for item in payload.get("chats", [])
+            if str(item.get("kind") or "") == "side-agent"
+            and str(item.get("parentChatId") or "") == chat_id
+        ]
+        agents.sort(key=lambda item: str(item.get("createdAt") or ""))
+        return {"agents": agents}
+
+    @router.post("/api/workbench/chats/{chat_id}/side-agents")
+    async def api_workbench_create_side_agent(
+        chat_id: str, body_model: api_models.SideAgentCreateBody
+    ):
+        if chat_id.startswith("legacy:"):
+            return JSONResponse(
+                {"error": "legacy chats cannot create side agents"},
+                status_code=403,
+            )
+        body = api_models.body_dict(body_model)
+        quote = str(body.get("quote") or "").strip()
+        if not quote:
+            return JSONResponse({"error": "quote is required"}, status_code=400)
+
+        def create_and_persist() -> dict[str, Any] | None:
+            payload = _read_chats_store()
+            parent = _find_chat(payload, chat_id)
+            if not parent:
+                return None
+            compact_quote = re.sub(r"\s+", " ", quote)
+            title = str(body.get("title") or "").strip() or compact_quote[:28]
+            agent = _new_chat(
+                str(parent.get("projectId") or ""),
+                title or "侧边提问",
+                str(parent.get("model") or ""),
+            )
+            agent["kind"] = "side-agent"
+            agent["parentChatId"] = chat_id
+            agent["sourceQuote"] = quote[:12_000]
+            payload.setdefault("chats", []).insert(0, agent)
+            _write_chats_store(payload)
+            return agent
+
+        agent = await asyncio.to_thread(create_and_persist)
+        if not agent:
+            return JSONResponse({"error": "chat not found"}, status_code=404)
+        return {"ok": True, "agent": _public_chat_full(agent)}
 
     @router.get("/api/workbench/chats/{chat_id}")
     async def api_workbench_get_chat(chat_id: str):
@@ -756,32 +814,60 @@ def register_workbench_chat_routes(
             return {"ok": True}
         payload = await asyncio.to_thread(_read_chats_store)
         chats = payload.get("chats", [])
-        next_chats = [chat for chat in chats if str(chat.get("id") or "") != chat_id]
-        if len(next_chats) == len(chats):
+        if not any(str(chat.get("id") or "") == chat_id for chat in chats):
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        removed_chat_ids = {
+            chat_id,
+            *[
+                str(chat.get("id") or "")
+                for chat in chats
+                if str(chat.get("kind") or "") == "side-agent"
+                and str(chat.get("parentChatId") or "") == chat_id
+            ],
+        }
+        next_chats = [
+            chat
+            for chat in chats
+            if str(chat.get("id") or "") not in removed_chat_ids
+        ]
         for chat in next_chats:
             if str(chat.get("forkedFromChatId") or "") == chat_id:
                 _clear_fork_metadata(chat)
         payload["chats"] = next_chats
         await asyncio.to_thread(_write_chats_store, payload)
-        try:
-            await asyncio.to_thread(
-                delete_chat_change_sets, _service._STORE_DB_PATH, chat_id
-            )
-        except Exception:
-            logger.exception("Failed to delete workspace change history for chat %s", chat_id)
-        try:
-            _CHAT_RUN_MANAGER.interrupt(chat_id)
-            interrupt_active_run(session_id=chat_id)
-            await clear_session_id(session_id=chat_id)
-        except Exception:
-            logger.exception("Failed to clear agent state for chat %s", chat_id)
-        try:
-            from cyrene.browser import close_electron_browser_session
+        for removed_chat_id in removed_chat_ids:
+            try:
+                await asyncio.to_thread(
+                    delete_chat_change_sets,
+                    _service._STORE_DB_PATH,
+                    removed_chat_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to delete workspace change history for chat %s",
+                    removed_chat_id,
+                )
+            try:
+                _CHAT_RUN_MANAGER.interrupt(removed_chat_id)
+                interrupt_active_run(session_id=removed_chat_id)
+                await clear_session_id(session_id=removed_chat_id)
+            except Exception:
+                logger.exception(
+                    "Failed to clear agent state for chat %s",
+                    removed_chat_id,
+                )
+            try:
+                from cyrene.browser import close_electron_browser_session
 
-            await close_electron_browser_session(chat_id)
-        except Exception:
-            logger.exception("Failed to close Electron browser for chat %s", chat_id)
+                if removed_chat_id == chat_id:
+                    await close_electron_browser_session(chat_id)
+                else:
+                    await close_electron_browser_session(removed_chat_id)
+            except Exception:
+                logger.exception(
+                    "Failed to close Electron browser for chat %s",
+                    removed_chat_id,
+                )
         return {"ok": True}
 
     async def _workbench_chat_send_impl(
@@ -836,6 +922,13 @@ def register_workbench_chat_routes(
         chat = _find_chat(payload, chat_id)
         if not chat:
             return JSONResponse({"error": "chat not found"}, status_code=404)
+        is_side_agent = str(chat.get("kind") or "") == "side-agent"
+        parent_chat = (
+            _find_chat(payload, str(chat.get("parentChatId") or ""))
+            if is_side_agent
+            else None
+        )
+        parent_transcript = _side_agent_parent_transcript(parent_chat)
         stored_mode = str(chat.get("permissionMode") or "").strip().lower()
         if requested_mode:
             mode = requested_mode if requested_mode in PERMISSION_MODES else "default"
@@ -960,8 +1053,21 @@ def register_workbench_chat_routes(
         await asyncio.to_thread(_write_chats_store, payload)
 
         agent_message = message
+        if is_side_agent:
+            source_quote = str(chat.get("sourceQuote") or "").strip()
+            agent_message = (
+                "你是主对话旁的独立 Side Agent。以下 main_conversation 是提问"
+                "发生时主对话的完整公开内容；结合全部对话理解问题，并把"
+                " selected_quote 作为用户当前关注的重点。不要假装上下文中未提供"
+                "的事实。\n\n<main_conversation>\n"
+                + (parent_transcript or "(empty)")
+                + "\n</main_conversation>\n\n<selected_quote>\n"
+                + (source_quote or "(none)")
+                + "\n</selected_quote>\n\n用户问题：\n"
+                + message
+            )
         if normalized:
-            agent_message = (message or "[Attachment upload]") + R._attachment_prompt_block(normalized)
+            agent_message = (agent_message or "[Attachment upload]") + R._attachment_prompt_block(normalized)
             # Auto-allow uploaded files for tool read guards (same as /api/chat).
             att_map: dict[str, str] = {}
             for item in normalized:
@@ -1048,7 +1154,7 @@ def register_workbench_chat_routes(
                 )
             except Exception:
                 logger.exception("Failed to archive workbench conversation %s", chat_id)
-            if not command and not retry:
+            if not command and not retry and not is_side_agent:
                 append_notification(
                     title="Agent 回复完成",
                     body=f"Agent 在「{fresh_chat.get('title') or '新对话'}」中回复了你。",
@@ -1066,7 +1172,7 @@ def register_workbench_chat_routes(
 
         async def _finalize_async(reply_text: str) -> dict[str, Any]:
             finalized = await asyncio.to_thread(_finalize, reply_text)
-            if finalized and not command and not retry:
+            if finalized and not command and not retry and not is_side_agent:
                 # schedule_capture needs the running event loop, unlike the
                 # storage/archive work intentionally performed above in a thread.
                 from cyrene.workbench.memory import build_verified_tool_evidence

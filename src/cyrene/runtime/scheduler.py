@@ -305,6 +305,8 @@ def _latest_workbench_user_activity() -> dict[str, object] | None:
     for chat in data["chats"]:
         if not isinstance(chat, dict):
             continue
+        if str(chat.get("kind") or "chat") != "chat":
+            continue
         activity_times = [
             value
             for value in [_parse_activity_timestamp(chat.get("lastUserMessageAt"))]

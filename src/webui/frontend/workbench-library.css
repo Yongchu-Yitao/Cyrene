@@ -343,6 +343,38 @@
 .wb-lib-dropdown button small { color: var(--wb-muted); font-size: calc(10.5px * var(--wb-ui-font-scale, 1)); }
 .wb-lib-dropdown.sort button { justify-content: space-between; }
 .wb-lib-dropdown.sort button.selected { color: var(--wb-accent); font-weight: 680; }
+.wb-lib-context-layer { position: fixed; inset: 0; z-index: 720; color: var(--wb-text, #1f252d); font-family: var(--wb-font, Manrope, Inter, system-ui, sans-serif); pointer-events: none; }
+.wb-lib-context-layer *, .wb-lib-context-layer *::before, .wb-lib-context-layer *::after { box-sizing: border-box; }
+.wb-lib-context-scrim { position: absolute; inset: 0; pointer-events: auto; }
+.wb-lib-context-menu {
+  position: fixed;
+  z-index: 721;
+  width: 220px;
+  padding: 6px;
+  border: 1px solid var(--wb-line-2, var(--wb-line));
+  border-radius: 10px;
+  background: var(--wb-card-bg, var(--wb-surface, #fff));
+  box-shadow: 0 18px 54px rgba(0, 0, 0, .24);
+  pointer-events: auto;
+}
+.wb-lib-context-menu button {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+}
+.wb-lib-context-menu button:hover { background: var(--wb-row-hover-bg); }
+.wb-lib-context-menu button.danger { color: var(--wb-red, #dc4c4c); }
+.wb-lib-context-menu svg { flex: 0 0 auto; }
+.wb-lib-context-separator { height: 1px; margin: 5px 3px; background: var(--wb-line); }
 .wb-lib-dropdown.filter { width: 260px; padding: 12px; }
 .wb-lib-dropdown.filter label { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; color: var(--wb-muted); font-size: calc(11px * var(--wb-ui-font-scale, 1)); }
 .wb-lib-dropdown.filter select, .wb-lib-dropdown.filter input { width: 100%; height: 34px; padding: 0 8px; border: 1px solid var(--wb-line); border-radius: 7px; background: var(--wb-control-bg); color: var(--wb-text); outline: 0; }
@@ -405,6 +437,7 @@
 .wb-lib-table { width: 100%; min-width: 0; min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; border: 1px solid var(--wb-line); border-radius: 6px; overflow: hidden; background: color-mix(in srgb, var(--wb-card-bg) 45%, transparent); }
 .wb-lib-table-grid { width: 100%; min-width: 0; display: grid; grid-template-columns: 36px minmax(0, 2.1fr) minmax(0, 1fr) 62px minmax(0, .9fr) 94px minmax(0, 1.2fr); align-items: center; }
 .wb-lib-table-head { flex: 0 0 40px; min-height: 40px; padding: 0 14px; border-bottom: 1px solid var(--wb-line); color: var(--wb-muted); background: color-mix(in srgb, var(--wb-panel-2) 66%, transparent); font-size: calc(12.5px * var(--wb-ui-font-scale, 1)); font-weight: 700; }
+.wb-lib-title-head { min-width: 0; padding-left: 64px; }
 .wb-lib-table-body { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--wb-line) transparent; }
 .wb-lib-table-body::-webkit-scrollbar, .wb-lib-card-grid::-webkit-scrollbar { width: 7px; }
 .wb-lib-table-body::-webkit-scrollbar-track, .wb-lib-card-grid::-webkit-scrollbar-track { background: transparent; }
@@ -444,7 +477,7 @@
 .wb-lib-check input:checked + span { border-color: var(--wb-accent); background: var(--wb-accent); box-shadow: inset 0 0 0 3px var(--wb-surface); }
 .wb-lib-title-cell { min-width: 0; display: flex; align-items: center; gap: 8px; padding-right: 12px; }
 .wb-lib-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 560; }
-.wb-lib-star { width: 20px; height: 24px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 0; background: transparent; color: var(--wb-faint); cursor: pointer; }
+.wb-lib-star { width: 24px; height: 24px; flex: 0 0 24px; display: grid; place-items: center; padding: 0; border: 0; background: transparent; color: var(--wb-faint); cursor: pointer; }
 .wb-lib-star:hover, .wb-lib-star.active { color: #f5b800; }
 .wb-lib-star.active svg { fill: currentColor; }
 .wb-lib-filemark { width: 24px; height: 27px; flex: 0 0 auto; position: relative; display: grid; place-items: center; border-radius: 5px; background: color-mix(in srgb, #7656f5 17%, transparent); color: #845ff6; }
@@ -479,7 +512,7 @@
 .wb-lib-card-body { min-width: 0; min-height: 112px; flex: 1 1 auto; display: flex; flex-direction: column; gap: 7px; }
 .wb-lib-card-title-row { min-width: 0; display: flex; align-items: flex-start; gap: 7px; }
 .wb-lib-card h3 { min-width: 0; flex: 1 1 auto; display: -webkit-box; margin: 1px 0 0; overflow: hidden; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; color: var(--wb-text); font-size: calc(13px * var(--wb-ui-font-scale, 1)); line-height: 1.42; }
-.wb-lib-card-check { flex: 0 0 17px; margin-top: 2px; }
+.wb-lib-card-check { width: 24px; height: 24px; flex: 0 0 24px; display: grid; place-items: center; margin-top: 0; }
 .wb-lib-card-description { min-height: 31px; display: -webkit-box; margin: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; color: var(--wb-muted); font-size: calc(11px * var(--wb-ui-font-scale, 1)); line-height: 1.45; }
 .wb-lib-card .wb-lib-row-tags { min-height: 22px; }
 .wb-lib-card .wb-lib-row-tags > span { max-width: 90px; font-size: calc(10.5px * var(--wb-ui-font-scale, 1)); }

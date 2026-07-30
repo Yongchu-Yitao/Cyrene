@@ -377,9 +377,98 @@ def _describe_ids(arguments: dict[str, Any]) -> list[str]:
     return [single] if single else []
 
 
+def _nested_argument_objects(value: Any) -> list[dict[str, Any]]:
+    """Return the gateway payload and any nested ``arguments`` wrappers."""
+    objects: list[dict[str, Any]] = []
+    current = value
+    for _ in range(8):
+        if not isinstance(current, dict):
+            break
+        objects.append(dict(current))
+        nested = current.get("arguments")
+        if not isinstance(nested, dict):
+            break
+        current = nested
+    return objects
+
+
+def _schema_accepts(value: Any, schema: dict[str, Any]) -> bool:
+    try:
+        validate_schema(value, schema)
+    except WireToolError:
+        return False
+    return True
+
+
+def _unique_nested_value(
+    objects: list[dict[str, Any]],
+    field: str,
+) -> tuple[bool, Any]:
+    values = [item[field] for item in objects if field in item]
+    if not values:
+        return False, None
+    first = values[0]
+    if any(value != first for value in values[1:]):
+        return False, None
+    return True, first
+
+
+def _repair_concrete_arguments(
+    arguments: dict[str, Any],
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Select or reconstruct an unambiguous payload that satisfies ``schema``.
+
+    Local models frequently add one or more gateway-shaped ``arguments``
+    wrappers. Prefer an existing nested object that validates as-is. If no
+    level validates, project uniquely present schema fields from those wrapper
+    levels and accept the result only when strict schema validation succeeds.
+    """
+    candidates = _nested_argument_objects(arguments)
+    for candidate in reversed(candidates):
+        if _schema_accepts(candidate, schema):
+            return candidate
+
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return arguments
+    projected: dict[str, Any] = {}
+    for field in properties:
+        found, value = _unique_nested_value(candidates, str(field))
+        if found:
+            projected[str(field)] = value
+    if _schema_accepts(projected, schema):
+        return projected
+    return arguments
+
+
+def _capability_for_normalization(
+    capability_id: str,
+    *,
+    actor: str,
+    catalog_snapshot: ToolCatalogSnapshot | None,
+) -> ToolSpec | None:
+    selected = _effective_snapshot(actor, catalog_snapshot)
+    if selected is not None:
+        return _snapshot_spec(
+            capability_id,
+            actor=actor,
+            snapshot=selected,
+            include_disabled=True,
+        )
+    return get_capability(
+        capability_id,
+        actor=actor,
+        include_disabled=True,
+    )
+
+
 def _normalize_module_arguments(
     wire_name: str,
     arguments: dict[str, Any] | None,
+    *,
+    actor: str = "main",
+    catalog_snapshot: ToolCatalogSnapshot | None = None,
 ) -> dict[str, Any]:
     """Repair common, unambiguous gateway nesting mistakes.
 
@@ -390,38 +479,116 @@ def _normalize_module_arguments(
     if wire_name not in module_wire_names():
         return normalized
 
-    operation = str(normalized.get("operation") or "").strip()
-    nested = normalized.get("arguments")
-    if not isinstance(nested, dict):
-        return normalized
+    # Lift misplaced gateway-envelope fields through multiple pure
+    # ``arguments`` wrappers. This is deliberately bounded and never guesses
+    # between conflicting duplicate values.
+    for _ in range(8):
+        nested = normalized.get("arguments")
+        if not isinstance(nested, dict):
+            break
+        nested_copy = dict(nested)
+        changed = False
 
-    nested_copy = dict(nested)
-    changed = False
-    if operation == "invoke" and not str(
-        normalized.get("capability_id") or ""
-    ).strip():
-        nested_capability_id = nested_copy.get("capability_id")
-        if isinstance(nested_capability_id, str) and nested_capability_id.strip():
-            normalized["capability_id"] = nested_capability_id.strip()
-            nested_copy.pop("capability_id", None)
-            changed = True
-    elif operation == "describe":
-        for field in ("capability_id", "capability_ids"):
-            if field not in normalized and field in nested_copy:
-                normalized[field] = nested_copy.pop(field)
+        operation = str(normalized.get("operation") or "").strip()
+        if not operation:
+            nested_operation = nested_copy.get("operation")
+            if isinstance(nested_operation, str) and nested_operation.strip():
+                normalized["operation"] = nested_operation.strip()
+                nested_copy.pop("operation", None)
+                operation = nested_operation.strip()
                 changed = True
 
-    if changed:
+        lift_fields = {
+            "discover": ("query", "limit"),
+            "describe": ("capability_id", "capability_ids"),
+            "invoke": ("capability_id",),
+        }.get(operation, ())
+        for field in lift_fields:
+            if field in normalized or field not in nested_copy:
+                continue
+            normalized[field] = nested_copy.pop(field)
+            changed = True
+
+        if not changed:
+            break
         if nested_copy:
             normalized["arguments"] = nested_copy
         else:
             normalized.pop("arguments", None)
+
+    if str(normalized.get("operation") or "").strip() == "invoke":
+        capability_id = str(normalized.get("capability_id") or "").strip()
+        concrete_arguments = normalized.get("arguments")
+        capability = _capability_for_normalization(
+            capability_id,
+            actor=actor,
+            catalog_snapshot=catalog_snapshot,
+        )
+        if capability is not None and isinstance(concrete_arguments, dict):
+            normalized["arguments"] = _repair_concrete_arguments(
+                concrete_arguments,
+                capability.input_schema,
+            )
     return normalized
+
+
+def _schema_placeholder(schema: dict[str, Any], field: str) -> Any:
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum:
+        return enum[0]
+    expected = schema.get("type")
+    if expected == "string":
+        return f"<{field}>"
+    if expected == "integer":
+        return int(schema.get("minimum") or 0)
+    if expected == "number":
+        return schema.get("minimum") or 0
+    if expected == "boolean":
+        return False
+    if expected == "array":
+        return []
+    if expected == "object":
+        properties = schema.get("properties") or {}
+        return {
+            name: _schema_placeholder(properties.get(name) or {}, str(name))
+            for name in schema.get("required") or ()
+        }
+    return f"<{field}>"
+
+
+def _schema_argument_example(
+    schema: dict[str, Any],
+    source: Any,
+) -> dict[str, Any]:
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return {}
+    candidates = _nested_argument_objects(source)
+    example: dict[str, Any] = {}
+    required = set(schema.get("required") or ())
+    for field, field_schema in properties.items():
+        found, value = _unique_nested_value(candidates, str(field))
+        valid_source_value = (
+            found
+            and isinstance(field_schema, dict)
+            and _schema_accepts(value, field_schema)
+        )
+        if valid_source_value:
+            example[str(field)] = value
+        elif field in required:
+            example[str(field)] = _schema_placeholder(
+                field_schema if isinstance(field_schema, dict) else {},
+                str(field),
+            )
+    return example
 
 
 def _invalid_argument_example(
     wire_name: str,
     arguments: dict[str, Any] | None,
+    *,
+    actor: str = "main",
+    catalog_snapshot: ToolCatalogSnapshot | None = None,
 ) -> dict[str, Any] | None:
     """Return a concrete gateway-call shape for an invalid argument response."""
     if wire_name not in module_wire_names():
@@ -447,11 +614,29 @@ def _invalid_argument_example(
         }
     if operation == "invoke":
         nested = args.get("arguments")
-        concrete_arguments = dict(nested) if isinstance(nested, dict) else {}
-        nested_capability_id = concrete_arguments.pop("capability_id", "")
+        nested_objects = _nested_argument_objects(nested)
+        nested_capability_id = next(
+            (
+                item.get("capability_id")
+                for item in nested_objects
+                if isinstance(item.get("capability_id"), str)
+                and str(item.get("capability_id") or "").strip()
+            ),
+            "",
+        )
         capability_id = str(
             args.get("capability_id") or nested_capability_id or "<capability_id>"
         ).strip()
+        capability = _capability_for_normalization(
+            capability_id,
+            actor=actor,
+            catalog_snapshot=catalog_snapshot,
+        )
+        concrete_arguments = (
+            _schema_argument_example(capability.input_schema, nested)
+            if capability is not None
+            else {}
+        )
         return {
             "tool": wire_name,
             "arguments": {
@@ -473,6 +658,9 @@ def _serialize_wire_error(
     error: WireToolError,
     wire_name: str,
     arguments: dict[str, Any] | None,
+    *,
+    actor: str = "main",
+    catalog_snapshot: ToolCatalogSnapshot | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "status": "error",
@@ -482,7 +670,12 @@ def _serialize_wire_error(
         },
     }
     if error.code == "invalid_arguments":
-        example = _invalid_argument_example(wire_name, arguments)
+        example = _invalid_argument_example(
+            wire_name,
+            arguments,
+            actor=actor,
+            catalog_snapshot=catalog_snapshot,
+        )
         if example is not None:
             payload["error"]["expected_call"] = example
     return json.dumps(payload, ensure_ascii=False)
@@ -509,7 +702,12 @@ async def execute_wire_tool(
     actor: str = "main",
     catalog_snapshot: ToolCatalogSnapshot | None = None,
 ) -> str:
-    args = _normalize_module_arguments(wire_name, arguments)
+    args = _normalize_module_arguments(
+        wire_name,
+        arguments,
+        actor=actor,
+        catalog_snapshot=catalog_snapshot,
+    )
     try:
         selected_snapshot = _effective_snapshot(actor, catalog_snapshot)
         resolution = resolve_wire_call(
@@ -666,7 +864,13 @@ async def execute_wire_tool(
             )
         return str(result)
     except WireToolError as error:
-        return _serialize_wire_error(error, wire_name, args)
+        return _serialize_wire_error(
+            error,
+            wire_name,
+            args,
+            actor=actor,
+            catalog_snapshot=catalog_snapshot,
+        )
 
 
 async def execute_wire_tool_in_context(
@@ -740,7 +944,12 @@ def get_wire_tool_execution_metadata(
     catalog_snapshot: ToolCatalogSnapshot | None = None,
 ) -> dict[str, Any]:
     """Resolve scheduler metadata from the concrete capability when possible."""
-    args = _normalize_module_arguments(wire_name, arguments)
+    args = _normalize_module_arguments(
+        wire_name,
+        arguments,
+        actor=actor,
+        catalog_snapshot=catalog_snapshot,
+    )
     try:
         resolution = resolve_wire_call(
             wire_name,

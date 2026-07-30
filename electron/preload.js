@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('cyrene', {
     clipboard.writeText(String(text == null ? '' : text));
     return true;
   },
+  showItemInFolder: (filePath) => ipcRenderer.invoke('shell:show-item-in-folder', {
+    path: String(filePath == null ? '' : filePath),
+  }),
   pickDirectory: () => {
     if (process.platform !== 'linux') return Promise.resolve(null);
     return ipcRenderer.invoke('dialog:pick-directory');

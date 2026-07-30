@@ -140,7 +140,7 @@
   function attachmentPreviewType(item) {
     var attachment = primaryAttachment(item);
     var contentType = String(attachment && attachment.content_type || item && item.content_type || "").toLowerCase().split(";")[0];
-    var filename = String(attachment && (attachment.filename || attachment.name) || item && (item.filename || item.attachment_name) || "").toLowerCase();
+    var filename = String(attachment && (attachment.filename || attachment.name) || item && (item.filename || item.attachment_name || item.name) || "").toLowerCase();
     if (contentType.indexOf("image/") === 0 || /\.(avif|bmp|gif|jpe?g|png|webp)$/i.test(filename)) return "image";
     if (contentType.indexOf("video/") === 0 || /\.(m4v|mov|mp4|ogv|webm)$/i.test(filename)) return "video";
     if (contentType.indexOf("audio/") === 0 || /\.(aac|flac|m4a|mp3|oga|ogg|wav|weba)$/i.test(filename)) return "audio";
@@ -152,7 +152,7 @@
   function itemFileType(item) {
     var attachment = primaryAttachment(item);
     var contentType = String(attachment && attachment.content_type || item && item.content_type || "").toLowerCase().split(";")[0];
-    var filename = String(attachment && (attachment.filename || attachment.name) || item && (item.filename || item.attachment_name) || "").toLowerCase();
+    var filename = String(attachment && (attachment.filename || attachment.name) || item && (item.filename || item.attachment_name || item.name) || "").toLowerCase();
     if (contentType === "application/pdf" || /\.pdf$/i.test(filename)) return "pdf";
     if (contentType.indexOf("image/") === 0 || /\.(avif|bmp|gif|jpe?g|png|webp)$/i.test(filename)) return "image";
     if (contentType.indexOf("audio/") === 0 || /\.(aac|flac|m4a|mp3|oga|ogg|wav|weba)$/i.test(filename)) return "audio";
@@ -174,6 +174,27 @@
     var raw = itemFileType(item);
     return L("library.fileType." + raw, FILE_TYPE_LABELS[raw] || "文件");
   }
+
+  var LibraryFileVisual = {
+    visualKind: function (item) {
+      return {
+        document: "doc",
+        spreadsheet: "sheet",
+        presentation: "slide",
+        other: "file",
+      }[itemFileType(item)] || itemFileType(item);
+    },
+    tone: function (item) {
+      return {
+        pdf: "red", doc: "blue", sheet: "green", slide: "orange",
+        image: "purple", link: "cyan", audio: "amber", video: "red",
+      }[LibraryFileVisual.visualKind(item)] || "slate";
+    },
+    icon: function (item) {
+      var kind = LibraryFileVisual.visualKind(item);
+      return icon({ doc: "file", sheet: "sheet", slide: "slide" }[kind] || kind, 20);
+    },
+  };
 
   function cardDescription(item) {
     var abstract = String(item && item.abstract || "").trim();
@@ -404,7 +425,7 @@
   function TableHead(props) {
     return h("div", { className: "wb-lib-table-head wb-lib-table-grid", role: "row" },
       h("label", { className: "wb-lib-check" }, h("input", { type: "checkbox", checked: props.allSelected, onChange: props.onToggleAll, "aria-label": L("library.selectAll", "Select all knowledge") }), h("span")),
-      h("span", null, L("library.column.title", "Title")), h("span", null, L("library.column.author", "Author")), h("span", null, L("library.column.year", "Year")), h("span", null, L("library.column.source", "Source")), h("span", null, L("library.column.added", "Added")), h("span", null, L("library.column.tags", "Tags")));
+      h("span", { className: "wb-lib-title-head" }, L("library.column.title", "Title")), h("span", null, L("library.column.author", "Author")), h("span", null, L("library.column.year", "Year")), h("span", null, L("library.column.source", "Source")), h("span", null, L("library.column.added", "Added")), h("span", null, L("library.column.tags", "Tags")));
   }
 
   function LibraryRow(props) {
@@ -417,6 +438,11 @@
       onDragStart: function (event) { if (props.onDragStart) props.onDragStart(event, item); },
       onDragEnd: props.onDragEnd,
       onClick: function () { props.onSelect(item.id); },
+      onContextMenu: function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        props.onContextMenu(item, event);
+      },
       onKeyDown: function (event) { if (event.key === "Enter") props.onSelect(item.id); },
     },
       h(StopClick, null, h("label", { className: "wb-lib-check" }, h("input", { type: "checkbox", checked: props.checked, onChange: function () { props.onToggle(item.id); }, "aria-label": L("library.selectItem", "Select {name}", { name: itemTitle(item) }) }), h("span"))),
@@ -441,6 +467,11 @@
       onDragStart: function (event) { if (props.onDragStart) props.onDragStart(event, item); },
       onDragEnd: props.onDragEnd,
       onClick: function () { props.onSelect(item.id); },
+      onContextMenu: function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        props.onContextMenu(item, event);
+      },
       onKeyDown: function (event) { if (event.key === "Enter") props.onSelect(item.id); },
       tabIndex: 0,
     },
@@ -448,6 +479,12 @@
       h("div", { className: "wb-lib-card-body" },
         h("div", { className: "wb-lib-card-title-row" },
           h("h3", { title: itemTitle(item) }, itemTitle(item)),
+          h("button", {
+            type: "button",
+            className: "wb-lib-star" + (item.starred ? " active" : ""),
+            onClick: function (event) { event.stopPropagation(); props.onStar(item); },
+            title: item.starred ? L("library.removeStar", "Remove star") : L("library.addStar", "Add star"),
+          }, icon("star", 17)),
           h(StopClick, null, h("label", { className: "wb-lib-check wb-lib-card-check" },
             h("input", {
               type: "checkbox",
@@ -455,13 +492,7 @@
               onChange: function () { props.onToggle(item.id); },
               "aria-label": L("library.selectItem", "Select {name}", { name: itemTitle(item) }),
             }),
-            h("span"))),
-          h("button", {
-            type: "button",
-            className: "wb-lib-star" + (item.starred ? " active" : ""),
-            onClick: function (event) { event.stopPropagation(); props.onStar(item); },
-        title: item.starred ? L("library.removeStar", "Remove star") : L("library.addStar", "Add star"),
-          }, icon("star", 17))),
+            h("span")))),
         h("p", { className: "wb-lib-card-description" }, cardDescription(item)),
         tags.length > 0 && h("div", { className: "wb-lib-row-tags" },
           tags.slice(0, 4).map(function (tag) { return h("span", { key: tag }, tag); }),
@@ -1120,6 +1151,7 @@
     var checkedState = useState([]); var checked = checkedState[0]; var setChecked = checkedState[1];
     var batchDeletingState = useState(false); var batchDeleting = batchDeletingState[0]; var setBatchDeleting = batchDeletingState[1];
     var menuState = useState(""); var menu = menuState[0]; var setMenu = menuState[1];
+    var contextMenuState = useState(null); var contextMenu = contextMenuState[0]; var setContextMenu = contextMenuState[1];
     var workTabState = useState("info"); var workTab = workTabState[0]; var setWorkTab = workTabState[1];
     var rightTabState = useState("detail"); var rightTab = rightTabState[0]; var setRightTab = rightTabState[1];
     var rightOpenState = useState(true); var rightOpen = rightOpenState[0]; var setRightOpen = rightOpenState[1];
@@ -1134,6 +1166,19 @@
     var readMarksRef = useRef({});
 
     useEffect(function () { var timer = setTimeout(function () { setDebouncedQuery(query.trim()); }, 240); return function () { clearTimeout(timer); }; }, [query]);
+    useEffect(function () {
+      if (!contextMenu) return undefined;
+      function closeContextMenu() { setContextMenu(null); }
+      function closeContextMenuOnEscape(event) { if (event.key === "Escape") closeContextMenu(); }
+      window.addEventListener("resize", closeContextMenu);
+      window.addEventListener("scroll", closeContextMenu, true);
+      document.addEventListener("keydown", closeContextMenuOnEscape);
+      return function () {
+        window.removeEventListener("resize", closeContextMenu);
+        window.removeEventListener("scroll", closeContextMenu, true);
+        document.removeEventListener("keydown", closeContextMenuOnEscape);
+      };
+    }, [!!contextMenu]);
 
     function listParams() {
       var params = { q: debouncedQuery, sort: sort, order: order, limit: PAGE_SIZE, offset: 0 };
@@ -1263,12 +1308,88 @@
     }, [rightOpen, rightTab, selectedId]);
     function toggleStar(item) { client.update(item.id, { starred: !item.starred }).then(function (payload) { replaceItem(payload.item || payload); }, function (err) { Toast(String(err.message || err), "error"); }); }
     function addNote(value) { return client.addNote(selectedId, value).then(function () { Toast("笔记已添加"); return client.detail(selectedId).then(function (payload) { setDetail(payload.item || payload); }); }); }
+    function removeItem(item) {
+      if (!item || !item.id) return;
+      var run = function () {
+        client.remove(item.id).then(function () {
+          Toast("文献已移至回收站");
+          if (String(selectedId) === String(item.id)) { setSelectedId(""); setDetail(null); }
+          reload();
+        });
+      };
+      var confirmModal = window.CyreneUI.require("feedback").confirmModal;
+      if (confirmModal) {
+        confirmModal({ title: "移至回收站？", body: "文献会保留在当前项目的回收站中。", confirmLabel: "移至回收站", danger: true })
+          .then(function (ok) { if (ok) run(); });
+      } else {
+        run();
+      }
+    }
     function removeSelected() {
       if (!selectedId) return;
-      var run = function () { client.remove(selectedId).then(function () { Toast("文献已移至回收站"); setSelectedId(""); setDetail(null); reload(); }); };
-      if (window.CyreneUI.require("feedback").confirmModal) window.CyreneUI.require("feedback").confirmModal({ title: "移至回收站？", body: "文献会保留在当前项目的回收站中。", confirmLabel: "移至回收站", danger: true }).then(function (ok) { if (ok) run(); }); else run();
+      removeItem(selectedItem || { id: selectedId });
     }
     function restore(item) { client.restore(item.id).then(function () { Toast("文献已恢复"); reload(); }); }
+    function permanentlyDeleteItem(item) {
+      if (!item || !item.id) return;
+      var run = function () {
+        client.removeMany([String(item.id)], true).then(function () {
+          Toast("已永久删除 1 项知识");
+          if (String(selectedId) === String(item.id)) { setSelectedId(""); setDetail(null); }
+          reload();
+        }).catch(function (err) { Toast(String(err.message || err), "error"); });
+      };
+      var confirmModal = window.CyreneUI.require("feedback").confirmModal;
+      if (confirmModal) {
+        confirmModal({ title: "永久删除此知识？", body: "此操作不可撤销。", confirmLabel: "永久删除", danger: true })
+          .then(function (ok) { if (ok) run(); });
+      } else {
+        run();
+      }
+    }
+    function openItemContextMenu(item, event) {
+      var menuWidth = 220;
+      var menuHeight = scope.type === "trash" ? 128 : 250;
+      var portalTheme = {};
+      var themeSource = document.querySelector(".workbench-shell");
+      if (themeSource && typeof getComputedStyle === "function") {
+        var computedTheme = getComputedStyle(themeSource);
+        [
+          "--wb-card-bg", "--wb-surface", "--wb-line", "--wb-line-2",
+          "--wb-text", "--wb-muted", "--wb-row-hover-bg", "--wb-red",
+          "--wb-ui-font-scale",
+        ].forEach(function (name) {
+          portalTheme[name] = computedTheme.getPropertyValue(name);
+        });
+        portalTheme.fontFamily = computedTheme.fontFamily;
+        portalTheme.colorScheme = computedTheme.colorScheme;
+      }
+      setMenu("");
+      setContextMenu({
+        item: item,
+        left: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
+        top: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+        portalTheme: portalTheme,
+      });
+    }
+    function showLibraryItemInFolder(item) {
+      setContextMenu(null);
+      if (!client || !item || !item.id) return;
+      client.detail(item.id).then(function (payload) {
+        var fullItem = payload.item || payload || {};
+        var attachment = primaryAttachment(fullItem);
+        var filePath = String(attachment && attachment.path || "").trim();
+        var desktopBridge = window.cyrene;
+        if (!filePath || !desktopBridge || typeof desktopBridge.showItemInFolder !== "function") {
+          throw new Error(L("library.showInFolderUnavailable", "This file cannot be shown in a folder here."));
+        }
+        return desktopBridge.showItemInFolder(filePath);
+      }).then(function (result) {
+        if (!result || result.ok !== true) {
+          throw new Error(result && result.error || L("library.showInFolderFailed", "Could not show the file in its folder."));
+        }
+      }).catch(function (err) { Toast(String(err.message || err), "error"); });
+    }
     function removeChecked() {
       if (!client || !checked.length || batchDeleting) return;
       var ids = checked.slice();
@@ -1356,6 +1477,28 @@
     var scopeTitle = scope.type === "all" ? L("library.title", "Knowledge base") : scope.type === "unclassified" ? L("library.unclassified", "Untagged") : scope.type === "recent_added" ? L("library.recentAdded", "Recently added") : scope.type === "recent_read" ? L("library.recentRead", "Recently read") : scope.type === "starred" ? L("library.starredKnowledge", "Starred knowledge") : scope.type === "trash" ? L("library.trash", "Trash") : (scope.label || L("library.title", "Knowledge base"));
     var activeFilters = [filters.file_type, filters.item_type, filters.status, filters.year].filter(Boolean).length;
     var citationProps = { style: citation.style, citation: citation.text, bibtex: citation.bibtex, citekey: citation.citekey, loading: citation.loading, error: citation.error, onStyle: loadCitation, onCopy: copyCitation, onRetry: function () { loadCitation(citation.style); } };
+    var contextMenuPortal = contextMenu && typeof ReactDOM !== "undefined"
+      ? ReactDOM.createPortal(h("div", { className: "wb-lib-context-layer", style: contextMenu.portalTheme },
+        h("div", { className: "wb-lib-context-scrim", onPointerDown: function () { setContextMenu(null); } }),
+        h("div", {
+          className: "wb-lib-context-menu",
+          role: "menu",
+          "aria-label": itemTitle(contextMenu.item),
+          style: { left: contextMenu.left + "px", top: contextMenu.top + "px" },
+          onContextMenu: function (event) { event.preventDefault(); },
+        },
+          h("button", { type: "button", role: "menuitem", onClick: function () { var item = contextMenu.item; setContextMenu(null); select(item.id); } }, icon("panel", 15), L("library.openDetails", "Open details")),
+          scope.type !== "trash" && h("button", { type: "button", role: "menuitem", onClick: function () { var item = contextMenu.item; setContextMenu(null); toggleStar(item); } }, icon("star", 15), contextMenu.item.starred ? L("library.removeStar", "Remove star") : L("library.addStar", "Add star")),
+          Number(contextMenu.item.attachment_count || 0) > 0 && h("button", { type: "button", role: "menuitem", onClick: function () { var item = contextMenu.item; setContextMenu(null); window.open(client.rawUrl(item.id), "_blank"); } }, icon("eye", 15), L("library.openOriginal", "Open original file")),
+          Number(contextMenu.item.attachment_count || 0) > 0 && h("button", { type: "button", role: "menuitem", onClick: function () { showLibraryItemInFolder(contextMenu.item); } }, icon("folder", 15), L("library.showInFolder", "Show in folder")),
+          h("div", { className: "wb-lib-context-separator" }),
+          scope.type === "trash"
+            ? h(React.Fragment, null,
+              h("button", { type: "button", role: "menuitem", onClick: function () { var item = contextMenu.item; setContextMenu(null); restore(item); } }, icon("restore", 15), L("library.restore", "Restore")),
+              h("button", { type: "button", role: "menuitem", className: "danger", onClick: function () { var item = contextMenu.item; setContextMenu(null); permanentlyDeleteItem(item); } }, icon("trash", 15), L("library.permanentDelete", "Delete permanently")))
+            : h("button", { type: "button", role: "menuitem", className: "danger", onClick: function () { var item = contextMenu.item; setContextMenu(null); removeItem(item); } }, icon("trash", 15), L("library.moveToTrash", "Move to trash"))
+        )), document.body)
+      : null;
 
     if (!workspace) return h("section", { className: "wb-lib-page no-project" }, h(StatePanel, { title: L("library.selectProject", "Select a project first"), body: L("library.projectIsolation", "Each project has an isolated knowledge base.") }));
 
@@ -1392,12 +1535,13 @@
         error && h("div", { className: "wb-lib-error" }, h("span", null, error), h("button", { type: "button", onClick: function () { reload(); } }, icon("restore", 14), " ", L("library.retry", "Retry"))),
         h("section", { className: "wb-lib-results" + (selectedItem ? " with-workspace" : "") },
           loading && !data.items.length ? h(StatePanel, { loading: true, title: L("library.loading", "Loading knowledge base…") }) : !data.items.length ? h(StatePanel, { title: query || activeFilters || scope.type !== "all" ? L("library.noMatch", "No matching knowledge") : L("library.noItems", "This project has no knowledge items yet"), body: query || activeFilters || scope.type !== "all" ? L("library.emptyHint", "Try adjusting your search, categories or filters.") : L("library.importHint", "Upload documents, images, audio or video, or import RIS, BibTeX and Zotero references."), action: query || activeFilters || scope.type !== "all" ? function () { setQuery(""); setFilters({ file_type: "", item_type: "", status: "", year: "" }); setScope({ type: "all" }); } : function () { fileRef.current && fileRef.current.click(); }, actionLabel: query || activeFilters || scope.type !== "all" ? L("library.clearConditions", "Clear conditions") : L("library.importFirstItem", "Import the first item"), actionIcon: query || activeFilters || scope.type !== "all" ? "restore" : "upload" }) :
-            view === "table" ? h("div", { className: "wb-lib-table", role: "table" }, h(TableHead, { allSelected: data.items.length > 0 && checked.length === data.items.length, onToggleAll: toggleAll }), h("div", { className: "wb-lib-table-body" }, data.items.map(function (item) { return h(LibraryRow, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, trash: scope.type === "trash", onSelect: select, onToggle: toggleChecked, onStar: toggleStar, onRestore: restore, onDragStart: scope.type === "trash" ? null : startLibraryItemDrag, onDragEnd: endLibraryItemDrag }); }))) :
-              h("div", { className: "wb-lib-card-grid" }, data.items.map(function (item) { return h(LibraryCard, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, onSelect: select, onToggle: toggleChecked, onStar: toggleStar, onDragStart: scope.type === "trash" ? null : startLibraryItemDrag, onDragEnd: endLibraryItemDrag }); })),
+            view === "table" ? h("div", { className: "wb-lib-table", role: "table" }, h(TableHead, { allSelected: data.items.length > 0 && checked.length === data.items.length, onToggleAll: toggleAll }), h("div", { className: "wb-lib-table-body" }, data.items.map(function (item) { return h(LibraryRow, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, trash: scope.type === "trash", onSelect: select, onContextMenu: openItemContextMenu, onToggle: toggleChecked, onStar: toggleStar, onRestore: restore, onDragStart: scope.type === "trash" ? null : startLibraryItemDrag, onDragEnd: endLibraryItemDrag }); }))) :
+              h("div", { className: "wb-lib-card-grid" }, data.items.map(function (item) { return h(LibraryCard, { key: item.id, item: item, active: String(item.id) === String(selectedId), checked: checked.indexOf(String(item.id)) >= 0, onSelect: select, onContextMenu: openItemContextMenu, onToggle: toggleChecked, onStar: toggleStar, onDragStart: scope.type === "trash" ? null : startLibraryItemDrag, onDragEnd: endLibraryItemDrag }); })),
           data.items.length < data.total && h("button", { type: "button", className: "wb-lib-load-more", disabled: loadingMore, onClick: loadMore }, loadingMore ? h(Spinner) : null, loadingMore ? L("library.loadingMore", "Loading…") : L("library.loadMore", "Load more ({shown} / {total})", { shown: data.items.length, total: data.total })),
           loading && data.items.length > 0 && h("div", { className: "wb-lib-loading-bar" }, h(Spinner), " ", L("library.updating", "Updating…"))),
         selectedItem && h(ItemWorkspace, { item: selectedItem, loading: detailLoading, tab: workTab, onTab: setWorkTab, onUpdate: updateSelected, onAddNote: addNote, rawUrl: client.rawUrl(selectedId), citationProps: citationProps })),
       h(RightPanel, { item: selectedItem, open: rightOpen, onClose: function () { setRightOpen(false); }, tab: rightTab, onTab: setRightTab, onContentViewed: function () { markSelectedRead(selectedId); }, rawUrl: selectedId ? client.rawUrl(selectedId) : "", collections: data.collections, onCollectionsUpdate: updateSelectedCollections, citation: citation.text, bibtex: citation.bibtex, citationLoading: citation.loading, onCopyCitation: copyCitation, onUpdate: updateSelected, onDelete: scope.type !== "trash" ? removeSelected : null }),
+      contextMenuPortal,
       manualOpen && h(ManualItemModal, { onClose: function () { setManualOpen(false); }, onSave: createItem }),
       collectionModalOpen && h(CollectionModal, { onClose: function () { setCollectionModalOpen(false); }, onSave: createCollection }));
   }
@@ -1405,5 +1549,6 @@
   window.CyreneUI.library = window.CyreneUI.register("library", {
     Page: WorkbenchLibraryPage,
     createApi: libraryApi,
+    FileVisual: LibraryFileVisual,
   });
 })();

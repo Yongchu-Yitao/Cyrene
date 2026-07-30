@@ -118,6 +118,28 @@ var WorkbenchChatModel = (function () {
     }).then(function (payload) { return payload.chat; });
   }
 
+  function listSideAgents(chatId) {
+    if (!chatId || String(chatId).indexOf("legacy:") === 0) {
+      return Promise.resolve([]);
+    }
+    return apiJson(
+      "/api/workbench/chats/" + encodeURIComponent(chatId) + "/side-agents"
+    ).then(function (payload) {
+      return Array.isArray(payload.agents) ? payload.agents : [];
+    });
+  }
+
+  function createSideAgent(chatId, quote) {
+    return apiJson(
+      "/api/workbench/chats/" + encodeURIComponent(chatId) + "/side-agents",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quote: String(quote || "") }),
+      }
+    ).then(function (payload) { return payload.agent; });
+  }
+
   function getChat(chatId, options) {
     return apiJson("/api/workbench/chats/" + encodeURIComponent(chatId), options)
       .then(function (payload) { return payload.chat; });
@@ -340,6 +362,8 @@ var WorkbenchChatModel = (function () {
   var service = {
     listChats: listChats,
     createChat: createChat,
+    listSideAgents: listSideAgents,
+    createSideAgent: createSideAgent,
     getChat: getChat,
     getSubagents: getSubagents,
     getChanges: getChanges,
@@ -797,6 +821,84 @@ function wbcNotifyBrowserWindowInteraction(active, kind, sessionId) {
   }));
 }
 
+function wbcRectsOverlap(a, b) {
+  return !!(
+    a && b
+    && a.left < b.right
+    && a.right > b.left
+    && a.top < b.bottom
+    && a.bottom > b.top
+  );
+}
+
+function wbcPageContextMenuPlacement(clientX, clientY, avoidRect) {
+  var margin = 8;
+  var gap = 8;
+  var width = 220;
+  var height = 166;
+  var viewportWidth = Math.max(width + (margin * 2), Number(window.innerWidth) || 0);
+  var viewportHeight = Math.max(height + (margin * 2), Number(window.innerHeight) || 0);
+  function clamp(left, top) {
+    var x = Math.max(margin, Math.min(Number(left) || 0, viewportWidth - width - margin));
+    var y = Math.max(margin, Math.min(Number(top) || 0, viewportHeight - height - margin));
+    return {
+      left: x,
+      top: y,
+      right: x + width,
+      bottom: y + height,
+    };
+  }
+  var base = clamp(clientX, clientY);
+  if (!avoidRect || !wbcRectsOverlap(base, avoidRect)) {
+    return { left: base.left, top: base.top, overlapsBrowser: false };
+  }
+  var candidates = [
+    clamp(avoidRect.left - width - gap, clientY),
+    clamp(avoidRect.right + gap, clientY),
+    clamp(clientX, avoidRect.top - height - gap),
+    clamp(clientX, avoidRect.bottom + gap),
+  ].filter(function (candidate) { return !wbcRectsOverlap(candidate, avoidRect); });
+  if (candidates.length) {
+    candidates.sort(function (a, b) {
+      var adx = a.left - base.left;
+      var ady = a.top - base.top;
+      var bdx = b.left - base.left;
+      var bdy = b.top - base.top;
+      return ((adx * adx) + (ady * ady)) - ((bdx * bdx) + (bdy * bdy));
+    });
+    return { left: candidates[0].left, top: candidates[0].top, overlapsBrowser: false };
+  }
+  return { left: base.left, top: base.top, overlapsBrowser: true };
+}
+
+function wbcCanOpenPageContextMenu(event) {
+  var target = event && event.target;
+  if (!target || !target.closest) return false;
+  var selection = window.getSelection && window.getSelection();
+  if (selection && !selection.isCollapsed && String(selection).trim()) return false;
+  return !target.closest([
+    "button",
+    "a",
+    "input",
+    "textarea",
+    "select",
+    "label",
+    "[contenteditable='true']",
+    "[role='button']",
+    "[role='link']",
+    "[role='menu']",
+    "[role='dialog']",
+    ".wbc-composer",
+    ".wbc-header",
+    ".wbc-browser-window",
+    ".wbc-selection-menu",
+    ".wbc-conversation-nav",
+    ".wbc-chat-card",
+    ".workbench-right-tabs",
+    ".workbench-confirm-modal",
+  ].join(","));
+}
+
 function wbcPointInsideResourceShelf(clientX, clientY) {
   var shelf = document.querySelector(".workbench-resource-shelf");
   if (!shelf) return false;
@@ -860,12 +962,14 @@ var WBC_ICONS = {
   search: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>,
   alert: <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M10.3 4 2.5 18a1.5 1.5 0 0 0 1.3 2.3h16.4a1.5 1.5 0 0 0 1.3-2.3L13.7 4a1.5 1.5 0 0 0-3.4 0Z"/><path d="M12 9v4.5M12 17h.01"/></svg>,
   edit: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>,
+  pin: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 17v5"/><path d="M5 17h14"/><path d="M17 3a1 1 0 0 1 1 1v4.6a2 2 0 0 0 .6 1.4l1.7 1.7A1 1 0 0 1 19.6 13H4.4a1 1 0 0 1-.7-1.7l1.7-1.7A2 2 0 0 0 6 8.2V4a1 1 0 0 1 1-1Z"/></svg>,
   dots: <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>,
   play: <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M7 4.8c0-1 1.1-1.6 2-1.1l11 6.3c.9.5.9 1.8 0 2.3L9 18.6c-.9.5-2-.1-2-1.1Z"/></svg>,
   send: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>,
   stop: <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>,
   attach: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>,
   slash: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 9.5 2.5 2.5-2.5 2.5"/><path d="M12.5 15h4"/></svg>,
+  model: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="3"/><circle cx="12" cy="12" r="2.5"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>,
   bolt: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg>,
   copy: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>,
   retry: <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 2.6-6.3"/><path d="M3 4v4h4"/></svg>,
@@ -913,6 +1017,11 @@ var WBC_MODES = [
 ];
 var WBC_REASONING_EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
+function wbcIsDeepSeekModel(model) {
+  return String(model && (model.model || model.name || model.id) || "")
+    .trim().toLowerCase().indexOf("deepseek") >= 0;
+}
+
 function wbcSupportedReasoningEfforts(model) {
   var raw = model && (
     model.supportedReasoningEfforts
@@ -927,10 +1036,32 @@ function wbcSupportedReasoningEfforts(model) {
   }).filter(function (effort) {
     return WBC_REASONING_EFFORT_ORDER.indexOf(effort) >= 0;
   });
-  if (!efforts.length && model) efforts = ["low", "medium", "high"];
+  if (!efforts.length && wbcIsDeepSeekModel(model)) efforts = ["high", "max"];
   return Array.from(new Set(efforts)).sort(function (a, b) {
     return WBC_REASONING_EFFORT_ORDER.indexOf(a) - WBC_REASONING_EFFORT_ORDER.indexOf(b);
   });
+}
+
+function wbcReasoningEffortForModel(model, preferred) {
+  var effort = String(
+    preferred
+    || model && (model.reasoning_effort || model.defaultReasoningEffort || model.default_reasoning_effort)
+    || ""
+  ).trim().toLowerCase();
+  if (wbcIsDeepSeekModel(model)) {
+    if (["low", "medium", "high"].indexOf(effort) >= 0) effort = "high";
+    else if (["xhigh", "max"].indexOf(effort) >= 0) effort = "max";
+    else effort = "high";
+  }
+  var supported = wbcSupportedReasoningEfforts(model);
+  if (supported.length && supported.indexOf(effort) < 0) {
+    effort = String(
+      model && (model.defaultReasoningEffort || model.default_reasoning_effort)
+      || supported[0]
+      || ""
+    ).trim().toLowerCase();
+  }
+  return effort;
 }
 
 function wbcFriendlyModelName(model, fallback) {
@@ -984,13 +1115,13 @@ function wbcFileViewKind(file) {
 }
 
 function wbcAttachmentVisualKind(file) {
-  var shared = window.CyreneUI.require("knowledge").FileVisual;
+  var shared = window.CyreneUI.require("library").FileVisual;
   if (shared && typeof shared.visualKind === "function") return shared.visualKind(file);
   return wbcFileViewKind(file) === "image" ? "image" : (wbcFileViewKind(file) || "file");
 }
 
 function wbcAttachmentVisual(file) {
-  var shared = window.CyreneUI.require("knowledge").FileVisual;
+  var shared = window.CyreneUI.require("library").FileVisual;
   if (shared && typeof shared.icon === "function") {
     return {
       kind: wbcAttachmentVisualKind(file),
@@ -1893,7 +2024,7 @@ var WorkbenchChatRuntimes = (function () {
 // Page
 // ---------------------------------------------------------------------------
 
-function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onActiveChatChange, onActiveChatIdChange, onChatsChange }) {
+function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onActiveChatChange, onActiveChatIdChange, onChatsChange, pinnedChatIds, onTogglePinnedChat }) {
   window.CyreneUI.require("i18n").use();
   window.CyreneUI.require("data").useVersion();
   var isActive = active !== false;
@@ -1952,6 +2083,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var [errorKind, setErrorKind] = useWbcState("load");
   var [sideTab, setSideTab] = useWbcState("overview");
   var [sideVisible, setSideVisible] = useWbcState(true);
+  var [sideAgents, setSideAgents] = useWbcState([]);
+  var [sideAgentsLoading, setSideAgentsLoading] = useWbcState(false);
+  var [sideAgentCreating, setSideAgentCreating] = useWbcState(false);
+  var [activeSideAgentByChat, setActiveSideAgentByChat] = useWbcState({});
   var [browserActiveByChat, setBrowserActiveByChat] = useWbcState({});
   // The side-panel Browser tab and the floating browser are two presentations
   // of the same session. Keep only the floating presentation state here so the
@@ -1966,6 +2101,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   // True while the backend reads the whole conversation and synthesizes a task.
   var [toTaskBusy, setToTaskBusy] = useWbcState(false);
   var [compactBusy, setCompactBusy] = useWbcState(false);
+  var [pageContextMenu, setPageContextMenu] = useWbcState(null);
+  var pageContextMenuRef = useWbcRef(null);
+  var pendingPageContextMenuRef = useWbcRef(null);
+  var pageContextPreviewTimerRef = useWbcRef(null);
+  var [quickRenameChat, setQuickRenameChat] = useWbcState(null);
   // Streaming runtimes live in the module-level engine so a run survives this
   // page unmounting when the user switches modules mid-reply. We mirror its
   // snapshot into local state only to drive re-renders.
@@ -1975,6 +2115,35 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     setRuntimes(runtimeEngine.snapshot());
     return runtimeEngine.subscribe(function (snap) { setRuntimes(snap); });
   }, []);
+
+  useWbcEffect(function () {
+    var chatId = String(activeChatId || "");
+    var cancelled = false;
+    if (!chatId || chatId.indexOf("legacy:") === 0) {
+      setSideAgents([]);
+      setSideAgentsLoading(false);
+      return undefined;
+    }
+    setSideAgentsLoading(true);
+    model.listSideAgents(chatId).then(function (agents) {
+      if (!cancelled && activeChatIdRef.current === chatId) {
+        setSideAgents(agents);
+        if (agents.length) {
+          setActiveSideAgentByChat(function (current) {
+            if (agents.some(function (agent) { return agent.id === current[chatId]; })) {
+              return current;
+            }
+            return Object.assign({}, current, { [chatId]: agents[agents.length - 1].id });
+          });
+        }
+      }
+    }).catch(function () {
+      if (!cancelled && activeChatIdRef.current === chatId) setSideAgents([]);
+    }).finally(function () {
+      if (!cancelled && activeChatIdRef.current === chatId) setSideAgentsLoading(false);
+    });
+    return function () { cancelled = true; };
+  }, [activeChatId]);
   // Tracks the durable plan id we've already auto-revealed, so we
   // switch to the 计划 tab once per plan rather than fighting manual tab changes.
   var revealedPlanQidRef = useWbcRef("");
@@ -2661,6 +2830,76 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     });
   }
 
+  function handleAskSelection(text) {
+    var quote = String(text || "").trim().slice(0, 12000);
+    var parentChatId = String(activeChatIdRef.current || "");
+    if (!quote || !parentChatId || parentChatId.indexOf("legacy:") === 0 || sideAgentCreating) {
+      return Promise.resolve(null);
+    }
+    setSideAgentCreating(true);
+    setSideVisible(true);
+    return model.createSideAgent(parentChatId, quote).then(function (agent) {
+      if (activeChatIdRef.current !== parentChatId) return agent;
+      setSideAgents(function (current) {
+        return current.some(function (item) { return item.id === agent.id; })
+          ? current
+          : current.concat([agent]);
+      });
+      setActiveSideAgentByChat(function (current) {
+        return Object.assign({}, current, { [parentChatId]: agent.id });
+      });
+      setSideTab("side-agents");
+      return agent;
+    }).catch(function (err) {
+      setErrorKind("message");
+      setError(wbcErrorText(err));
+      throw err;
+    }).finally(function () {
+      setSideAgentCreating(false);
+    });
+  }
+
+  function updateSideAgent(nextAgent) {
+    if (!nextAgent || !nextAgent.id) return;
+    setSideAgents(function (current) {
+      return current.map(function (item) {
+        return item.id === nextAgent.id ? nextAgent : item;
+      });
+    });
+  }
+
+  function deleteSideAgent(agentId) {
+    var id = String(agentId || "");
+    if (!id) return Promise.resolve();
+    return model.deleteChat(id).then(function () {
+      setSideAgents(function (current) {
+        var next = current.filter(function (item) { return item.id !== id; });
+        var parentChatId = String(activeChatIdRef.current || "");
+        setActiveSideAgentByChat(function (selection) {
+          if (selection[parentChatId] !== id) return selection;
+          var updated = Object.assign({}, selection);
+          if (next.length) updated[parentChatId] = next[next.length - 1].id;
+          else delete updated[parentChatId];
+          return updated;
+        });
+        if (!next.length) setSideTab("overview");
+        return next;
+      });
+    }).catch(function (err) {
+      setErrorKind("message");
+      setError(wbcErrorText(err));
+    });
+  }
+
+  function selectSideAgent(agentId) {
+    var chatId = String(activeChatIdRef.current || "");
+    var id = String(agentId || "");
+    if (!chatId || !id) return;
+    setActiveSideAgentByChat(function (current) {
+      return Object.assign({}, current, { [chatId]: id });
+    });
+  }
+
   function handleInterrupt() {
     runtimeEngine.interrupt(activeChatIdRef.current, model);
   }
@@ -2838,6 +3077,66 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     return handleRenameChat(activeChat.id, title);
   }
 
+  function openQuickRename() {
+    if (!activeChat || activeChat.legacy) return;
+    closePageContextMenu();
+    setQuickRenameChat(activeChat);
+  }
+
+  function setOpenPageContextMenu(menu) {
+    pageContextMenuRef.current = menu;
+    setPageContextMenu(menu);
+  }
+
+  function clearPendingPageContextMenu() {
+    pendingPageContextMenuRef.current = null;
+    if (pageContextPreviewTimerRef.current) {
+      clearTimeout(pageContextPreviewTimerRef.current);
+      pageContextPreviewTimerRef.current = null;
+    }
+  }
+
+  function closePageContextMenu() {
+    var current = pageContextMenuRef.current;
+    var pending = pendingPageContextMenuRef.current;
+    clearPendingPageContextMenu();
+    setOpenPageContextMenu(null);
+    if ((current && current.browserPreview) || pending) {
+      wbcNotifyBrowserWindowInteraction(false, "context-menu", (current && current.browserSessionId) || (pending && pending.browserSessionId) || activeChatIdRef.current);
+    }
+  }
+
+  function openPageContextMenu(event) {
+    if (!activeChat || activeChat.legacy || !wbcCanOpenPageContextMenu(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closePageContextMenu();
+    var nativeHost = document.querySelector(".wbc-browser-window .browser-native-host");
+    var nativeRect = nativeHost && nativeHost.getBoundingClientRect();
+    var placement = wbcPageContextMenuPlacement(event.clientX, event.clientY, nativeRect);
+    var menu = {
+      left: placement.left,
+      top: placement.top,
+      browserPreview: false,
+      browserSessionId: String(activeChat.id || ""),
+    };
+    if (!placement.overlapsBrowser) {
+      setOpenPageContextMenu(menu);
+      return;
+    }
+    pendingPageContextMenuRef.current = menu;
+    wbcNotifyBrowserWindowInteraction(true, "context-menu", menu.browserSessionId);
+    pageContextPreviewTimerRef.current = setTimeout(function () {
+      if (pendingPageContextMenuRef.current !== menu) return;
+      clearPendingPageContextMenu();
+      wbcNotifyBrowserWindowInteraction(false, "context-menu", menu.browserSessionId);
+      window.CyreneUI.require("feedback").showToast(
+        wbcT("workbenchChat.contextMenuUnavailable", "Could not open the chat menu over the browser window."),
+        "warning"
+      );
+    }, 900);
+  }
+
   function handleDelete() {
     if (!activeChat) return;
     handleDeleteChat(activeChat.id);
@@ -2968,6 +3267,35 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
 
   function onToggleSide() { setSideVisible(function (v) { return !v; }); }
 
+  useWbcEffect(function () {
+    function onBrowserPreviewReady(event) {
+      var pending = pendingPageContextMenuRef.current;
+      if (!pending) return;
+      var detail = event && event.detail || {};
+      if (String(detail.sessionId || "") !== String(pending.browserSessionId || "")) return;
+      clearPendingPageContextMenu();
+      if (detail.fallback) {
+        wbcNotifyBrowserWindowInteraction(false, "context-menu", pending.browserSessionId);
+        window.CyreneUI.require("feedback").showToast(
+          wbcT("workbenchChat.contextMenuUnavailable", "Could not open the chat menu over the browser window."),
+          "warning"
+        );
+        return;
+      }
+      setOpenPageContextMenu({ ...pending, browserPreview: true });
+    }
+    window.addEventListener("workbench:browser-window-preview-ready", onBrowserPreviewReady);
+    return function () {
+      window.removeEventListener("workbench:browser-window-preview-ready", onBrowserPreviewReady);
+      closePageContextMenu();
+    };
+  }, []);
+
+  useWbcEffect(function () {
+    closePageContextMenu();
+    setQuickRenameChat(null);
+  }, [activeChatId]);
+
   // The open conversation only renders and controls its own runtime. Other
   // conversations continue streaming in the background.
   var activeRuntime = runtimes[activeChatId] || null;
@@ -3010,6 +3338,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       {chatFileDropActive && <WorkbenchFileDropOverlay label={wbcT("workbenchChat.dropToAttach", "Release to add files to the message input")} />}
       <WbcRail
         chats={chats}
+        pinnedChatIds={pinnedChatIds}
         activeChatId={activeChatId}
         loading={loading}
         runningChatIds={runtimes}
@@ -3017,6 +3346,7 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onCreate={handleCreateChat}
         onRename={handleRenameChat}
         onDelete={handleDeleteChat}
+        onTogglePinned={onTogglePinnedChat}
       />
       <WbcMain
         project={project}
@@ -3034,6 +3364,9 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onAnswer={handleAnswer}
         onRetryMessage={handleRetryMessage}
         onEditMessage={handleEditMessage}
+        onAskSelection={handleAskSelection}
+        sideAgentCreating={sideAgentCreating}
+        onConversationContextMenu={openPageContextMenu}
         onRename={handleRename}
         onDelete={handleDelete}
         onToTask={handleToTask}
@@ -3059,6 +3392,35 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
           return Promise.resolve();
         }}
       />
+      {pageContextMenu && visibleChat && (
+        <div className="wb-item-context-layer wbc-page-context-layer">
+          <div className="wb-item-context-scrim" onPointerDown={closePageContextMenu} />
+          <div
+            className="wb-item-context-menu wbc-page-context-menu"
+            role="menu"
+            aria-label={wbcT("workbenchChat.quickActions", "Quick actions")}
+            style={{ left: pageContextMenu.left + "px", top: pageContextMenu.top + "px" }}
+            onContextMenu={function (event) { event.preventDefault(); }}
+          >
+            <WbcQuickActionItems
+              chat={visibleChat}
+              menu={true}
+              onBeforeAction={closePageContextMenu}
+              onRename={openQuickRename}
+              onDelete={handleDelete}
+              onToTask={handleToTask}
+              toTaskBusy={toTaskBusy}
+              onCompact={handleCompact}
+              compactBusy={compactBusy}
+            />
+          </div>
+        </div>
+      )}
+      <WbcRenameDialog
+        chat={quickRenameChat}
+        onClose={function () { setQuickRenameChat(null); }}
+        onRename={handleRenameChat}
+      />
       <WbcSide
         project={project}
         chat={visibleChat || selectedChatSummary}
@@ -3076,12 +3438,18 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         viewerFile={viewerFile}
         onOpenFile={openViewer}
         onViewerViewed={markViewerFileRead}
-        onRename={handleRename}
+        onRename={openQuickRename}
         onDelete={handleDelete}
         onToTask={handleToTask}
         toTaskBusy={toTaskBusy}
         onCompact={handleCompact}
         compactBusy={compactBusy}
+        sideAgents={sideAgents}
+        sideAgentsLoading={sideAgentsLoading}
+        activeSideAgentId={activeSideAgentByChat[activeChatId] || ""}
+        onSelectSideAgent={selectSideAgent}
+        onUpdateSideAgent={updateSideAgent}
+        onDeleteSideAgent={deleteSideAgent}
         onToggleSide={onToggleSide}
         onBrowserTakeoverComplete={function (payload) {
           var pending = activeChat && activeChat.pendingQuestion;
@@ -3204,18 +3572,41 @@ function WbcRenameDialog({ chat, onClose, onRename }) {
   );
 }
 
-function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCreate, onRename, onDelete }) {
+function wbcOrderChatsByPinned(chats, pinnedChatIds) {
+  var list = Array.isArray(chats) ? chats : [];
+  var pinnedOrder = {};
+  (Array.isArray(pinnedChatIds) ? pinnedChatIds : []).forEach(function (id, index) {
+    pinnedOrder[String(id || "")] = index;
+  });
+  return list.map(function (chat, index) {
+    return { chat: chat, index: index };
+  }).sort(function (left, right) {
+    var leftId = String(left.chat && left.chat.id || "");
+    var rightId = String(right.chat && right.chat.id || "");
+    var leftPinned = Object.prototype.hasOwnProperty.call(pinnedOrder, leftId);
+    var rightPinned = Object.prototype.hasOwnProperty.call(pinnedOrder, rightId);
+    if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
+    if (leftPinned && pinnedOrder[leftId] !== pinnedOrder[rightId]) {
+      return pinnedOrder[leftId] - pinnedOrder[rightId];
+    }
+    return left.index - right.index;
+  }).map(function (entry) {
+    return entry.chat;
+  });
+}
+
+function WbcRail({ chats, pinnedChatIds, activeChatId, loading, runningChatIds, onSelect, onCreate, onRename, onDelete, onTogglePinned }) {
   var [query, setQuery] = useWbcState("");
   var [menuId, setMenuId] = useWbcState("");
   var [renameChat, setRenameChat] = useWbcState(null);
   var filtered = useWbcMemo(function () {
     var q = query.trim().toLowerCase();
-    if (!q) return chats;
-    return chats.filter(function (chat) {
+    var matching = !q ? chats : chats.filter(function (chat) {
       return String(chat.title || "").toLowerCase().indexOf(q) !== -1
         || String(chat.preview || "").toLowerCase().indexOf(q) !== -1;
     });
-  }, [chats, query]);
+    return wbcOrderChatsByPinned(matching, pinnedChatIds);
+  }, [chats, query, pinnedChatIds]);
 
   return (
     <aside className="wbc-rail">
@@ -3248,6 +3639,9 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
           var active = chat.id === activeChatId;
           var chatRunning = !!(runningChatIds && runningChatIds[chat.id]) || chat.status === "running";
           var isMenuOpen = menuId === chat.id;
+          var isPinned = (Array.isArray(pinnedChatIds) ? pinnedChatIds : []).some(function (id) {
+            return String(id || "") === String(chat.id || "");
+          });
           return (
             <div
               key={chat.id}
@@ -3265,6 +3659,11 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
               <span className="wbc-chat-card-top">
                 <span className="wbc-chat-card-title">
                   <b>{chat.title || wbcT("workbenchChat.newChat", "New chat")}</b>
+                  {isPinned ? (
+                    <span className="wbc-chat-card-pin" title={wbcT("workbenchChat.pinned", "Pinned")} aria-label={wbcT("workbenchChat.pinned", "Pinned")}>
+                      {WBC_ICONS.pin}
+                    </span>
+                  ) : null}
                   {chat.forkedFromChatId && (
                     <span
                       className="wbc-fork-marker"
@@ -3288,15 +3687,25 @@ function WbcRail({ chats, activeChatId, loading, runningChatIds, onSelect, onCre
                       {WBC_ICONS.dots}
                     </button>
                     {isMenuOpen && (
-                      <div className="wb-card-menu">
+                      <div className="wb-card-menu" role="menu">
+                        <button type="button" role="menuitem" className="wbc-chat-pin-action" onClick={function (e) {
+                          e.stopPropagation();
+                          setMenuId("");
+                          if (onTogglePinned) onTogglePinned(chat, !isPinned);
+                        }}>
+                          <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.pin}</span>
+                          <span>{isPinned
+                            ? wbcT("workbenchChat.unpin", "Unpin chat")
+                            : wbcT("workbenchChat.pin", "Pin chat")}</span>
+                        </button>
                         {!chat.legacy && (
-                          <button type="button" onClick={function (e) {
+                          <button type="button" role="menuitem" onClick={function (e) {
                             e.stopPropagation();
                             setMenuId("");
                             setRenameChat(chat);
                           }}>{wbcT("workbenchChat.rename", "Rename chat")}</button>
                         )}
-                        <button type="button" className="danger" onClick={function (e) {
+                        <button type="button" role="menuitem" className="danger" onClick={function (e) {
                           e.stopPropagation();
                           setMenuId("");
                           onDelete && onDelete(chat.id);
@@ -4338,11 +4747,13 @@ function WbcConversationNavigator({ threadRef, chatId }) {
   );
 }
 
-function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, sideVisible, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMinimize, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete }) {
+function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, sideVisible, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMinimize, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete }) {
   var stageRef = useWbcRef(null);
   var scrollRef = useWbcRef(null);
+  var selectionMenuRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var [showScrollToBottom, setShowScrollToBottom] = useWbcState(false);
+  var [selectionMenu, setSelectionMenu] = useWbcState(null);
   var avoidanceRafRef = useWbcRef(0);
   var stickyRestoreRafRef = useWbcRef(0);
   var avoidanceScrollingRef = useWbcRef(false);
@@ -4609,6 +5020,94 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     scheduleBrowserAvoidance();
   }, [messages.length, runtime && runtime.text, runtime && runtime.progress && runtime.progress.length, runtime && runtime.activities && runtime.activities.length, browserVisible, browserWindowMode, sideVisible]);
 
+  useWbcEffect(function () {
+    var thread = scrollRef.current;
+    if (!thread || !onAskSelection || isLegacy) {
+      setSelectionMenu(null);
+      return undefined;
+    }
+
+    function readSelection() {
+      var selection = window.getSelection && window.getSelection();
+      if (!selection || selection.isCollapsed || !selection.rangeCount) {
+        setSelectionMenu(null);
+        return;
+      }
+      if (
+        !selection.anchorNode
+        || !selection.focusNode
+        || !thread.contains(selection.anchorNode)
+        || !thread.contains(selection.focusNode)
+      ) {
+        setSelectionMenu(null);
+        return;
+      }
+      var text = String(selection.toString() || "").trim().slice(0, 12000);
+      if (!text) {
+        setSelectionMenu(null);
+        return;
+      }
+      var range = selection.getRangeAt(0);
+      var rect = range.getBoundingClientRect();
+      if (!rect || (!rect.width && !rect.height)) {
+        var rects = range.getClientRects();
+        rect = rects && rects.length ? rects[rects.length - 1] : null;
+      }
+      if (!rect) {
+        setSelectionMenu(null);
+        return;
+      }
+      var placeBelow = rect.top < 64;
+      setSelectionMenu({
+        text: text,
+        left: Math.max(92, Math.min(window.innerWidth - 92, rect.left + rect.width / 2)),
+        top: placeBelow ? Math.min(window.innerHeight - 12, rect.bottom + 10) : Math.max(12, rect.top - 10),
+        placement: placeBelow ? "below" : "above",
+      });
+    }
+
+    function handlePointerUp(event) {
+      if (selectionMenuRef.current && selectionMenuRef.current.contains(event.target)) return;
+      window.setTimeout(readSelection, 0);
+    }
+    function handleKeyUp(event) {
+      if (event.key === "Escape") {
+        setSelectionMenu(null);
+        return;
+      }
+      if (event.shiftKey || event.key.indexOf("Arrow") >= 0) {
+        window.setTimeout(readSelection, 0);
+      }
+    }
+    function closeOutside(event) {
+      if (selectionMenuRef.current && selectionMenuRef.current.contains(event.target)) return;
+      setSelectionMenu(null);
+    }
+    function closeMenu() { setSelectionMenu(null); }
+
+    thread.addEventListener("pointerup", handlePointerUp);
+    thread.addEventListener("keyup", handleKeyUp);
+    thread.addEventListener("scroll", closeMenu, { passive: true });
+    document.addEventListener("pointerdown", closeOutside, true);
+    window.addEventListener("resize", closeMenu);
+    return function () {
+      thread.removeEventListener("pointerup", handlePointerUp);
+      thread.removeEventListener("keyup", handleKeyUp);
+      thread.removeEventListener("scroll", closeMenu);
+      document.removeEventListener("pointerdown", closeOutside, true);
+      window.removeEventListener("resize", closeMenu);
+    };
+  }, [chat && chat.id, onAskSelection, isLegacy]);
+
+  function askAboutSelection() {
+    if (!selectionMenu || sideAgentCreating) return;
+    var selectedText = selectionMenu.text;
+    setSelectionMenu(null);
+    var selection = window.getSelection && window.getSelection();
+    if (selection) selection.removeAllRanges();
+    onAskSelection(selectedText);
+  }
+
   function scrollToConversationBottom() {
     var el = scrollRef.current;
     if (!el) return;
@@ -4655,7 +5154,12 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
       )}
       {error && <WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} />}
       <div className="wbc-thread-stage" ref={stageRef}>
-      <div className="wbc-thread" ref={scrollRef} onScroll={onScroll}>
+      <div
+        className="wbc-thread"
+        ref={scrollRef}
+        onScroll={onScroll}
+        onContextMenu={onConversationContextMenu}
+      >
         {loading && !chat && (
           <div className="wbc-empty-thread wbc-loading-thread" role="status">
             <span className="wbc-spinner" aria-hidden="true"></span>
@@ -4725,6 +5229,27 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
         )}
       </div>
       <WbcConversationNavigator threadRef={scrollRef} chatId={chat && chat.id} />
+      {selectionMenu && (
+        <div
+          ref={selectionMenuRef}
+          className={"wbc-selection-menu " + selectionMenu.placement}
+          style={{ left: selectionMenu.left + "px", top: selectionMenu.top + "px" }}
+          role="toolbar"
+          aria-label={wbcT("workbenchChat.selection.actions", "Selection actions")}
+        >
+          <button
+            type="button"
+            onMouseDown={function (event) { event.preventDefault(); }}
+            onClick={askAboutSelection}
+            disabled={sideAgentCreating}
+          >
+            <span aria-hidden="true">{WBC_ICONS.chat}</span>
+            <span>{sideAgentCreating
+              ? wbcT("workbenchChat.sideAgent.creating", "Creating…")
+              : wbcT("workbenchChat.selection.askInSidebar", "Ask in sidebar")}</span>
+          </button>
+        </div>
+      )}
       {showScrollToBottom && (
         <button
           type="button"
@@ -5534,7 +6059,7 @@ function wbcSaveWorkspaceOverride(key, path, ns) {
   } catch (e) {}
 }
 
-function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind }) {
+function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onInterrupt, draftNamespace, autoFocus, clearOnSend, error, errorKind, compact, placeholder }) {
   var model = WorkbenchChatModel;
   var chatId = chat ? chat.id : "";
   var projectId = (project && project.id) || "";
@@ -5571,6 +6096,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var [ctxPickerOpen, setCtxPickerOpen] = useWbcState(false);
   var taRef = useWbcRef(null);
   var fileRef = useWbcRef(null);
+  var slashPickerRef = useWbcRef(null);
+  var modePickerRef = useWbcRef(null);
   var ctxPickerRef = useWbcRef(null);
   var modelPickerRef = useWbcRef(null);
   var uploadCountRef = useWbcRef(0);
@@ -5624,6 +6151,28 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }, []);
 
   useWbcEffect(function () {
+    if (!slashOpen && !modeOpen) return undefined;
+    function closeComposerMenu(event) {
+      if (
+        slashOpen
+        && slashPickerRef.current
+        && !slashPickerRef.current.contains(event.target)
+      ) {
+        setSlashOpen(false);
+      }
+      if (
+        modeOpen
+        && modePickerRef.current
+        && !modePickerRef.current.contains(event.target)
+      ) {
+        setModeOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", closeComposerMenu);
+    return function () { document.removeEventListener("pointerdown", closeComposerMenu); };
+  }, [slashOpen, modeOpen]);
+
+  useWbcEffect(function () {
     if (!ctxPickerOpen) return undefined;
     function closeContextPicker(event) {
       if (ctxPickerRef.current && !ctxPickerRef.current.contains(event.target)) {
@@ -5668,6 +6217,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
             });
             return match ? Object.assign({}, item, {
               supportedReasoningEfforts: match.supportedReasoningEfforts || match.supported_reasoning_efforts || [],
+              defaultReasoningEffort: match.defaultReasoningEffort || match.default_reasoning_effort || "",
             }) : item;
           });
           setConfiguredModels(options);
@@ -5685,13 +6235,10 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
         }) || options[0];
         if (selected) {
           setSelectedModelId(String(selected.id || selected.model || ""));
-          setReasoningEffort(
-            String(
-              chat && chat.reasoningEffort
-              || selected.reasoning_effort
-              || ""
-            ).trim().toLowerCase()
-          );
+          setReasoningEffort(wbcReasoningEffortForModel(
+            selected,
+            chat && chat.reasoningEffort
+          ));
         }
         });
       })
@@ -5962,6 +6509,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   var effortLabel = reasoningEffort
     ? wbcT("settings.reasoningEffortValue." + reasoningEffort, reasoningEffort)
     : "";
+  var modelButtonLabel = wbcT("workbenchChat.chooseModel", "Choose model")
+    + ": " + modelName + (effortLabel ? " · " + effortLabel : "");
   var supportedReasoningEfforts = wbcSupportedReasoningEfforts(selectedModel);
 
   function wbcTogglePersona() {
@@ -6072,7 +6621,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
 
   if (isLegacy) {
     return (
-      <div className="wbc-composer">
+      <div className={"wbc-composer" + (compact ? " compact" : "")}>
         <div className="wbc-composer-box wbc-composer-readonly">
           {wbcT("workbenchChat.legacyReadonly", "This is an archived legacy session — read-only. Start a new chat to continue the topic.")}
         </div>
@@ -6081,7 +6630,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
   }
 
   return (
-    <div className="wbc-composer">
+    <div className={"wbc-composer" + (compact ? " compact" : "")}>
       {activeCommand && (
         <div className="wbc-command-row">
           <span className="wbc-command-chip">
@@ -6125,12 +6674,15 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           ref={taRef}
           value={draft}
           rows={2}
+          disabled={compact && running}
           onChange={function (e) { setDraft(e.target.value); syncHeight(); }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
-          placeholder={running ? wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent...") : wbcT("workbenchChat.placeholder", "Message Cyrene... (Enter to send, Shift+Enter for a new line)")}
+          placeholder={running
+            ? wbcT("workbenchChat.placeholderRunning", "Send guidance to the running agent...")
+            : (placeholder || wbcT("workbenchChat.placeholder", "Message Cyrene... (Enter to send, Shift+Enter for a new line)"))}
         />
-        <div className="wbc-context-chips">
+        {!compact && <div className="wbc-context-chips">
           {personaOn && (
             <span className="wbc-ctx-chip on">
               {WBC_ICONS.spark}
@@ -6177,13 +6729,14 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
               )}
             </span>
           )}
-        </div>
+        </div>}
         <div className="wbc-composer-actions">
           <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onFilePick} />
           <button type="button" className="wbc-composer-icon" title={uploading ? wbcT("workbenchChat.uploading", "Uploading...") : wbcT("workbenchChat.addAttachment", "Add attachment")} disabled={uploading || running} onClick={pickFiles}>
             {uploading ? <span className="wb-spinner small" /> : WBC_ICONS.attach}
           </button>
-          <span className="wbc-pop-anchor">
+          {!compact && <>
+            <span className="wbc-pop-anchor" ref={slashPickerRef}>
             <button type="button" className={"wbc-composer-icon" + (showSlash || command ? " active" : "")} title={wbcT("workbenchChat.commands", "Commands")} disabled={running} onClick={function () { setSlashOpen(!slashOpen); setModeOpen(false); }}>
               {WBC_ICONS.slash}
             </button>
@@ -6207,8 +6760,8 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                 })}
               </div>
             )}
-          </span>
-          <span className="wbc-pop-anchor">
+            </span>
+            <span className="wbc-pop-anchor" ref={modePickerRef}>
             <button type="button" className={"wbc-composer-icon mode" + (modeOpen ? " active" : "")} title={wbcT("workbenchChat.permissionMode", "Permission mode")} onClick={function () { setModeOpen(!modeOpen); setSlashOpen(false); }}>
               {WBC_ICONS.bolt}
               <span>{currentMode.label}</span>
@@ -6228,14 +6781,16 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                 })}
               </div>
             )}
-          </span>
+            </span>
+          </>}
           <span className="wbc-composer-spacer" />
-          {modelName ? (
+          {!compact && modelName ? (
             <span className="wbc-pop-anchor wbc-model-anchor" ref={modelPickerRef}>
               <button
                 type="button"
                 className={"wbc-model-button" + (modelOpen ? " active" : "")}
-                title={wbcT("workbenchChat.chooseModel", "Choose model")}
+                title={modelButtonLabel}
+                aria-label={modelButtonLabel}
                 aria-haspopup="menu"
                 aria-expanded={modelOpen}
                 disabled={running}
@@ -6246,6 +6801,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                   setModeOpen(false);
                 }}
               >
+                <span className="wbc-model-button-icon" aria-hidden="true">{WBC_ICONS.model}</span>
                 <span className="wbc-model-button-name">{modelName}</span>
                 {effortLabel ? <span className="wbc-model-button-effort">{effortLabel}</span> : null}
                 <span className="wbc-model-button-chevron">{WBC_ICONS.chevronDown}</span>
@@ -6256,7 +6812,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                     <>
                       <button type="button" className="wbc-model-menu-row" onClick={function () { setModelPanel("models"); }}>
                         <span className="wbc-model-menu-key">{wbcT("workbenchChat.model", "Model")}</span>
-                        <span className="wbc-model-menu-value">{modelName}</span>
+                        <span className="wbc-model-menu-value wbc-model-menu-model-name">{modelName}</span>
                         <span className="wbc-model-menu-chevron">{WBC_ICONS.chevronRight}</span>
                       </button>
                       {supportedReasoningEfforts.length > 0 && (
@@ -6280,7 +6836,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
                         return (
                           <button key={id} type="button" className={active ? "active" : ""} onClick={function () {
                             setSelectedModelId(id);
-                            setReasoningEffort(String(item.reasoning_effort || "").trim().toLowerCase());
+                            setReasoningEffort(wbcReasoningEffortForModel(item, ""));
                             setModelPanel("root");
                           }}>
                             <span className="wbc-popmenu-label">{item.name || item.model}</span>
@@ -6331,7 +6887,7 @@ function WbcComposer({ chat, project, runtime, running, onSend, onGuidance, onIn
           </button>
         </div>
       </div>
-      <div className="wb-composer-disclaimer">{wbcT("workbench.composerDisclaimer", "Cyrene is AI and can make mistakes. Please verify responses.")}</div>
+      {!compact && <div className="wb-composer-disclaimer">{wbcT("workbench.composerDisclaimer", "Cyrene is AI and can make mistakes. Please verify responses.")}</div>}
     </div>
   );
 }
@@ -6605,6 +7161,328 @@ function wbcChatArtifactFiles(chat) {
   return files;
 }
 
+function WbcSideAgentTab({ agent, project, onOpenFile, onUpdate }) {
+  var agentRef = useWbcRef(agent);
+  var scrollRef = useWbcRef(null);
+  var mountedRef = useWbcRef(true);
+  var streamAttachedRef = useWbcRef(false);
+  var runStartedAtRef = useWbcRef(Date.now());
+  var [running, setRunning] = useWbcState(!!(agent && agent.status === "running"));
+  var [streamText, setStreamText] = useWbcState("");
+  var [error, setError] = useWbcState("");
+
+  useWbcEffect(function () {
+    agentRef.current = agent;
+    setRunning(!!(agent && agent.status === "running"));
+  }, [agent]);
+
+  useWbcEffect(function () {
+    mountedRef.current = true;
+    return function () { mountedRef.current = false; };
+  }, []);
+
+  useWbcEffect(function () {
+    var el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [agent && agent.messages && agent.messages.length, streamText, running]);
+
+  function refreshAgent() {
+    return WorkbenchChatModel.getChat(agentRef.current.id).then(function (fresh) {
+      agentRef.current = fresh;
+      onUpdate(fresh);
+      if (mountedRef.current) setRunning(fresh.status === "running");
+      return fresh;
+    });
+  }
+
+  function streamHandlers() {
+    return {
+      onReplyStart: function () {
+        if (mountedRef.current) setStreamText("");
+      },
+      onReplyDelta: function (delta) {
+        if (mountedRef.current) setStreamText(function (current) { return current + delta; });
+      },
+      onReplyDone: function (text) {
+        if (mountedRef.current) setStreamText(String(text || ""));
+      },
+      onSaved: function () {
+        refreshAgent().finally(function () {
+          streamAttachedRef.current = false;
+          if (mountedRef.current) {
+            setStreamText("");
+            setRunning(false);
+          }
+        });
+      },
+      onAwaitingUser: function () {
+        refreshAgent().finally(function () {
+          streamAttachedRef.current = false;
+          if (mountedRef.current) {
+            setStreamText("");
+            setRunning(false);
+          }
+        });
+      },
+      onError: function (err) {
+        if (mountedRef.current) setError(wbcErrorText(err));
+      },
+    };
+  }
+
+  function ownStream(promise) {
+    streamAttachedRef.current = true;
+    promise.catch(function (err) {
+      if (mountedRef.current && !(err && err.name === "AbortError")) {
+        setError(wbcErrorText(err));
+      }
+    }).finally(function () {
+      if (!streamAttachedRef.current) return;
+      streamAttachedRef.current = false;
+      refreshAgent().catch(function () {}).finally(function () {
+        if (mountedRef.current) {
+          setStreamText("");
+          setRunning(false);
+        }
+      });
+    });
+  }
+
+  useWbcEffect(function () {
+    if (!agent || agent.status !== "running" || streamAttachedRef.current) return undefined;
+    runStartedAtRef.current = Date.now();
+    setRunning(true);
+    ownStream(WorkbenchChatModel.reconnectRun(agent.id, streamHandlers()));
+    return undefined;
+  }, [agent && agent.id, agent && agent.status]);
+
+  function submit(payload) {
+    var question = String(payload && payload.message || "").trim();
+    var attachments = payload && Array.isArray(payload.attachments) ? payload.attachments : [];
+    var current = agentRef.current;
+    if ((!question && !attachments.length) || running || !current || !current.id) return;
+    var optimistic = {
+      id: "side_user_pending_" + Date.now(),
+      role: "user",
+      content: question,
+      attachments: attachments,
+      createdAt: new Date().toISOString(),
+      optimistic: true,
+    };
+    var next = {
+      ...current,
+      status: "running",
+      messages: (current.messages || []).concat([optimistic]),
+    };
+    agentRef.current = next;
+    onUpdate(next);
+    setError("");
+    setStreamText("");
+    runStartedAtRef.current = Date.now();
+    setRunning(true);
+    ownStream(WorkbenchChatModel.sendMessage(
+      current.id,
+      {
+        message: question,
+        attachments: attachments,
+        mode: current.permissionMode || payload.mode || "default",
+        model: current.modelSelectionId || payload.model || "",
+        reasoningEffort: current.reasoningEffort || payload.reasoningEffort || "",
+      },
+      streamHandlers()
+    ));
+  }
+
+  function stop() {
+    if (!running) return;
+    WorkbenchChatModel.interrupt(agentRef.current.id).catch(function (err) {
+      if (mountedRef.current) setError(wbcErrorText(err));
+    });
+  }
+
+  var messages = agent && Array.isArray(agent.messages) ? agent.messages : [];
+  var hasAsked = messages.some(function (message) { return message.role === "user"; });
+  return (
+    <section className="wbc-side-agent">
+      {!hasAsked && <blockquote className="wbc-side-agent-quote">
+        <span>{wbcT("workbenchChat.sideAgent.quote", "Selected text")}</span>
+        <p>{agent && agent.sourceQuote}</p>
+      </blockquote>}
+      <div className="wbc-side-agent-thread wbc-thread" ref={scrollRef}>
+        {!messages.length && !running && (
+          <div className="wbc-side-agent-empty">
+            <b>{wbcT("workbenchChat.sideAgent.askTitle", "Ask about this text")}</b>
+            <p>{wbcT("workbenchChat.sideAgent.askHint", "This agent has its own context and will not interrupt the main conversation.")}</p>
+          </div>
+        )}
+        {messages.map(function (message) {
+          return (
+            <WbcThreadItem key={message.id || message.createdAt}>
+              {message.role === "user"
+                ? <WbcUserMessage msg={message} onOpenFile={onOpenFile} />
+                : <WbcAssistantMessage msg={message} onOpenFile={onOpenFile} />}
+            </WbcThreadItem>
+          );
+        })}
+        {running && !streamText && (
+          <WbcThreadItem>
+            <WbcHeartbeat startedAt={runStartedAtRef.current} />
+          </WbcThreadItem>
+        )}
+        {running && streamText && (
+          <WbcThreadItem>
+            <WbcLiveMessage runtime={{ text: streamText }} onOpenFile={onOpenFile} />
+          </WbcThreadItem>
+        )}
+      </div>
+      {error && <div className="wbc-side-agent-error" role="alert">{error}</div>}
+      <div className="wbc-side-agent-composer-host">
+        <WbcComposer
+          chat={agent}
+          project={project}
+          runtime={streamText ? { text: streamText } : null}
+          running={running}
+          onSend={submit}
+          onInterrupt={stop}
+          draftNamespace="side-agent:"
+          autoFocus={true}
+          clearOnSend={true}
+          error={error}
+          errorKind="message"
+          compact={true}
+          placeholder={wbcT("workbenchChat.sideAgent.placeholder", "Ask a question about the selected text…")}
+        />
+      </div>
+    </section>
+  );
+}
+
+function WbcSideAgentsPanel({
+  agents,
+  project,
+  onOpenFile,
+  activeAgentId,
+  loading,
+  onSelect,
+  onDelete,
+  onUpdate,
+}) {
+  var items = Array.isArray(agents) ? agents : [];
+  var pickerRef = useWbcRef(null);
+  var [pickerOpen, setPickerOpen] = useWbcState(false);
+  var activeAgent = items.find(function (agent) {
+    return agent.id === activeAgentId;
+  }) || items[items.length - 1] || null;
+
+  useWbcEffect(function () {
+    if (!pickerOpen) return undefined;
+    function closePicker(event) {
+      if (pickerRef.current && !pickerRef.current.contains(event.target)) {
+        setPickerOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", closePicker);
+    return function () { document.removeEventListener("pointerdown", closePicker); };
+  }, [pickerOpen]);
+
+  if (loading && !items.length) {
+    return (
+      <div className="wbc-side-agent-panel-state" role="status">
+        <span className="wbc-spinner" aria-hidden="true" />
+        <span>{wbcT("workbenchChat.sideAgent.loading", "Loading side agents…")}</span>
+      </div>
+    );
+  }
+
+  if (!activeAgent) {
+    return (
+      <div className="wbc-side-agent-panel-state">
+        <b>{wbcT("workbenchChat.sideAgent.empty", "No side questions")}</b>
+        <span>{wbcT("workbenchChat.sideAgent.emptyHint", "Select text in the conversation to start one.")}</span>
+      </div>
+    );
+  }
+
+  var activeIndex = items.findIndex(function (agent) { return agent.id === activeAgent.id; });
+  var activePreview = String(activeAgent.sourceQuote || activeAgent.title || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  var activeRunning = activeAgent.status === "running";
+
+  return (
+    <div className="wbc-side-agents-panel">
+      <div className="wbc-side-agent-picker" ref={pickerRef}>
+        <button
+          type="button"
+          className="wbc-side-agent-picker-trigger"
+          onClick={function () { setPickerOpen(!pickerOpen); }}
+          aria-haspopup="listbox"
+          aria-expanded={pickerOpen}
+        >
+          <span className="wbc-side-agent-index-number">{String(activeIndex + 1).padStart(2, "0")}</span>
+          <span className="wbc-side-agent-index-copy">
+            <b>{activePreview || wbcT("workbenchChat.sideAgent.untitled", "Side question")}</b>
+            <small>{activeRunning
+              ? wbcT("workbenchChat.sideAgent.thinking", "Thinking…")
+              : wbcT("workbenchChat.sideAgent.ready", "Ready")}</small>
+          </span>
+          <span className="wbc-side-agent-picker-chevron" aria-hidden="true">{WBC_ICONS.chevronDown}</span>
+        </button>
+        {pickerOpen && <div className="wbc-side-agent-picker-menu" role="listbox" aria-label={wbcT("workbenchChat.sideAgent.list", "Side questions")}>
+          {items.map(function (agent, index) {
+            var selected = agent.id === activeAgent.id;
+            var preview = String(agent.sourceQuote || agent.title || "")
+              .replace(/\s+/g, " ")
+              .trim();
+            var running = agent.status === "running";
+            return (
+              <div key={agent.id} className={"wbc-side-agent-index-row" + (selected ? " active" : "")}>
+                <button
+                  type="button"
+                  className="wbc-side-agent-index-select"
+                  onClick={function () {
+                    onSelect(agent.id);
+                    setPickerOpen(false);
+                  }}
+                  role="option"
+                  aria-selected={selected}
+                  aria-current={selected ? "true" : undefined}
+                  title={preview}
+                >
+                  <span className="wbc-side-agent-index-number">{String(index + 1).padStart(2, "0")}</span>
+                  <span className="wbc-side-agent-index-copy">
+                    <b>{preview || wbcT("workbenchChat.sideAgent.untitled", "Side question")}</b>
+                    <small>{running
+                      ? wbcT("workbenchChat.sideAgent.thinking", "Thinking…")
+                      : wbcT("workbenchChat.sideAgent.ready", "Ready")}</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="wbc-side-agent-index-close"
+                  onClick={function () {
+                    onDelete(agent.id);
+                    if (items.length <= 1) setPickerOpen(false);
+                  }}
+                  title={wbcT("workbenchChat.sideAgent.close", "Close side agent")}
+                  aria-label={wbcT("workbenchChat.sideAgent.close", "Close side agent")}
+                >×</button>
+              </div>
+            );
+          })}
+        </div>}
+      </div>
+      <WbcSideAgentTab
+        key={activeAgent.id}
+        agent={activeAgent}
+        project={project}
+        onOpenFile={onOpenFile}
+        onUpdate={onUpdate}
+      />
+    </div>
+  );
+}
+
 function WbcSide({
   project,
   chat,
@@ -6628,6 +7506,12 @@ function WbcSide({
   toTaskBusy,
   onCompact,
   compactBusy,
+  sideAgents,
+  sideAgentsLoading,
+  activeSideAgentId,
+  onSelectSideAgent,
+  onUpdateSideAgent,
+  onDeleteSideAgent,
   onBrowserTakeoverComplete,
   browserActiveByChat,
   browserSuppressed,
@@ -6710,8 +7594,14 @@ function WbcSide({
   if (viewerFile) tabs.push({ id: "viewer", label: wbcT("workbenchChat.viewer", "Viewer") });
   if (hasMap) tabs.push({ id: "map", label: wbcT("chat.side.map", "Map") });
   if (hasBrowser) tabs.push({ id: "browser", label: wbcT("chat.side.browser", "Browser") });
+  if ((sideAgents && sideAgents.length) || sideAgentsLoading) {
+    tabs.push({
+      id: "side-agents",
+      label: wbcT("workbenchChat.sideAgent.tab", "Side questions"),
+    });
+  }
   var activeTab = tabs.some(function (item) { return item.id === tab; }) ? tab : "overview";
-  var flush = activeTab === "viewer" || activeTab === "map" || activeTab === "browser" || activeTab === "changes";
+  var flush = activeTab === "viewer" || activeTab === "map" || activeTab === "browser" || activeTab === "changes" || activeTab === "side-agents";
   return (
     <aside className="wbc-side">
       {React.createElement(window.CyreneUI.require("shell").ColResizer)}
@@ -6753,6 +7643,18 @@ function WbcSide({
                 onTakeoverComplete: onBrowserTakeoverComplete,
               })
             : <p className="workbench-muted">{wbcT("chat.side.browserUnavailable", "Browser view is unavailable.")}</p>
+        )}
+        {activeTab === "side-agents" && (
+          <WbcSideAgentsPanel
+            agents={sideAgents}
+            project={project}
+            onOpenFile={onOpenFile}
+            activeAgentId={activeSideAgentId}
+            loading={sideAgentsLoading}
+            onSelect={onSelectSideAgent}
+            onDelete={onDeleteSideAgent}
+            onUpdate={onUpdateSideAgent}
+          />
         )}
       </div>
     </aside>
@@ -7941,6 +8843,210 @@ function WbcContextUsage({ data }) {
   );
 }
 
+function WbcQuickActionItems({ chat, menu, onBeforeAction, onRename, onDelete, onToTask, toTaskBusy, onCompact, compactBusy }) {
+  function run(action) {
+    return function () {
+      if (onBeforeAction) onBeforeAction();
+      if (action) action();
+    };
+  }
+  var role = menu ? "menuitem" : undefined;
+  return (
+    <>
+      <button type="button" role={role} onClick={run(onRename)}>{WBC_ICONS.edit}<span>{wbcT("workbenchChat.rename", "Rename chat")}</span></button>
+      <button type="button" role={role} disabled={toTaskBusy} onClick={run(onToTask)}>{WBC_ICONS.task}<span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span></button>
+      {!chat.legacy && onCompact && (
+        <button type="button" role={role} disabled={compactBusy} onClick={run(onCompact)}>
+          {compactBusy ? <span className="wbc-spinner" aria-hidden="true"></span> : WBC_ICONS.compact}
+          <span>{wbcT(compactBusy ? "workbenchChat.compactBusy" : "workbenchChat.compact", compactBusy ? "Compressing…" : "Compress chat")}</span>
+        </button>
+      )}
+      <button type="button" role={role} className="danger" onClick={run(onDelete)}>{WBC_ICONS.trash}<span>{wbcT("workbenchChat.delete", "Delete chat")}</span></button>
+    </>
+  );
+}
+
+var WBC_SIDE_CARD_ORDER_PREFIX = "cyrene-workbench-side-card-order-v1:";
+
+function wbcNormalizeSideCardOrder(defaultOrder, savedOrder) {
+  var valid = Array.isArray(defaultOrder) ? defaultOrder.map(String) : [];
+  var allowed = new Set(valid);
+  var seen = new Set();
+  var normalized = [];
+  (Array.isArray(savedOrder) ? savedOrder : []).forEach(function (id) {
+    id = String(id);
+    if (!allowed.has(id) || seen.has(id)) return;
+    seen.add(id);
+    normalized.push(id);
+  });
+  valid.forEach(function (id) {
+    if (!seen.has(id)) normalized.push(id);
+  });
+  return normalized;
+}
+
+function wbcLoadSideCardOrder(tabId, defaultOrder) {
+  try {
+    var saved = JSON.parse(localStorage.getItem(WBC_SIDE_CARD_ORDER_PREFIX + tabId) || "[]");
+    return wbcNormalizeSideCardOrder(defaultOrder, saved);
+  } catch (e) {
+    return wbcNormalizeSideCardOrder(defaultOrder, []);
+  }
+}
+
+function wbcMoveSideCard(order, movingId, targetId, edge) {
+  var current = Array.isArray(order) ? order.slice() : [];
+  if (movingId === targetId || current.indexOf(movingId) < 0 || current.indexOf(targetId) < 0) {
+    return current;
+  }
+  var next = current.filter(function (id) { return id !== movingId; });
+  var targetIndex = next.indexOf(targetId);
+  next.splice(targetIndex + (edge === "after" ? 1 : 0), 0, movingId);
+  return next;
+}
+
+function WbcSortableCardStack({ tabId, defaultOrder, cards }) {
+  var cardList = Array.isArray(cards) ? cards : [];
+  var cardMap = new Map(cardList.map(function (card) { return [card.id, card]; }));
+  var dragOriginOrderRef = useWbcRef([]);
+  var dropCommittedRef = useWbcRef(false);
+  var [order, setOrder] = useWbcState(function () {
+    return wbcLoadSideCardOrder(tabId, defaultOrder);
+  });
+  var [dragState, setDragState] = useWbcState(null);
+  var [announcement, setAnnouncement] = useWbcState("");
+
+  useWbcEffect(function () {
+    setOrder(function (current) {
+      return wbcNormalizeSideCardOrder(defaultOrder, current);
+    });
+    setDragState(null);
+  }, [tabId, defaultOrder.join("|")]);
+
+  function commit(nextOrder, movedId) {
+    var normalized = wbcNormalizeSideCardOrder(defaultOrder, nextOrder);
+    setOrder(normalized);
+    try {
+      localStorage.setItem(WBC_SIDE_CARD_ORDER_PREFIX + tabId, JSON.stringify(normalized));
+    } catch (e) {}
+    var movedCard = cardMap.get(movedId);
+    if (movedCard) {
+      var visibleOrder = normalized.filter(function (id) { return cardMap.has(id); });
+      setAnnouncement(wbcT(
+        "workbenchChat.cardMoved",
+        "{title} moved to position {position} of {total}.",
+        {
+          title: movedCard.title,
+          position: visibleOrder.indexOf(movedId) + 1,
+          total: visibleOrder.length,
+        }
+      ));
+    }
+  }
+
+  function moveByKeyboard(event, id) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    var visibleOrder = order.filter(function (cardId) { return cardMap.has(cardId); });
+    var index = visibleOrder.indexOf(id);
+    var nextIndex = event.key === "ArrowUp" ? index - 1 : index + 1;
+    if (index < 0 || nextIndex < 0 || nextIndex >= visibleOrder.length) return;
+    event.preventDefault();
+    var targetId = visibleOrder[nextIndex];
+    commit(wbcMoveSideCard(
+      order,
+      id,
+      targetId,
+      event.key === "ArrowUp" ? "before" : "after"
+    ), id);
+  }
+
+  return (
+    <div
+      className="wbc-sortable-card-stack"
+      onDragOver={function (event) {
+        if (dragState) event.preventDefault();
+      }}
+      onDrop={function (event) {
+        if (!dragState) return;
+        event.preventDefault();
+        dropCommittedRef.current = true;
+        commit(order, dragState.movingId);
+        setDragState(null);
+      }}
+    >
+      {order.map(function (id) {
+        var card = cardMap.get(id);
+        if (!card) return null;
+        return (
+          <div
+            className={"wbc-sortable-card" + (dragState && dragState.movingId === id ? " dragging" : "")}
+            data-card-id={id}
+            key={id}
+            onDragOver={function (event) {
+              if (!dragState || dragState.movingId === id) return;
+              event.preventDefault();
+              if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+              var rect = event.currentTarget.getBoundingClientRect();
+              var edge = event.clientY < rect.top + (rect.height / 2) ? "before" : "after";
+              var nextOrder = wbcMoveSideCard(order, dragState.movingId, id, edge);
+              if (nextOrder.join("|") !== order.join("|")) setOrder(nextOrder);
+              setDragState({ movingId: dragState.movingId, targetId: id, edge: edge });
+            }}
+            onDrop={function (event) {
+              event.preventDefault();
+              event.stopPropagation();
+              if (!dragState) return;
+              var nextOrder = dragState.movingId === id
+                ? order
+                : wbcMoveSideCard(order, dragState.movingId, id, dragState.edge);
+              dropCommittedRef.current = true;
+              commit(nextOrder, dragState.movingId);
+              setDragState(null);
+            }}
+          >
+            <button
+              type="button"
+              className="wbc-card-drag-handle"
+              draggable="true"
+              title={wbcT("workbenchChat.reorderCard", "Drag to reorder {title}. Use arrow keys to move.", { title: card.title })}
+              aria-label={wbcT("workbenchChat.reorderCard", "Drag to reorder {title}. Use arrow keys to move.", { title: card.title })}
+              aria-pressed={dragState && dragState.movingId === id ? "true" : "false"}
+              onKeyDown={function (event) { moveByKeyboard(event, id); }}
+              onDragStart={function (event) {
+                dragOriginOrderRef.current = order.slice();
+                dropCommittedRef.current = false;
+                if (event.dataTransfer) {
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", id);
+                  var cardNode = event.currentTarget.closest(".wbc-sortable-card");
+                  if (cardNode) {
+                    var cardRect = cardNode.getBoundingClientRect();
+                    event.dataTransfer.setDragImage(
+                      cardNode,
+                      Math.max(0, Math.min(cardRect.width, event.clientX - cardRect.left)),
+                      Math.max(0, Math.min(cardRect.height, event.clientY - cardRect.top))
+                    );
+                  }
+                }
+                setDragState({ movingId: id, targetId: "", edge: "before" });
+              }}
+              onDragEnd={function () {
+                if (!dropCommittedRef.current) setOrder(dragOriginOrderRef.current);
+                dropCommittedRef.current = false;
+                setDragState(null);
+              }}
+            >
+              <span aria-hidden="true">{WBC_ICONS.dots}</span>
+            </button>
+            {card.content}
+          </div>
+        );
+      })}
+      <span className="wbc-sr-only" aria-live="polite">{announcement}</span>
+    </div>
+  );
+}
+
 function WbcOverviewTab({ chat, loading, detailed, runtime, onRename, onDelete, onToTask, toTaskBusy, onCompact, compactBusy }) {
   var liveData = useWbcLiveChatMetrics(chat, !!runtime);
   if (!chat) {
@@ -7951,45 +9057,75 @@ function WbcOverviewTab({ chat, loading, detailed, runtime, onRename, onDelete, 
   var usage = (liveData && liveData.usage) || chat.usage || {};
   var currentModel = wbcCurrentModel(chat, null, runtime, liveData);
   var convertedTitle = chat.convertedSessionId ? String(chat.convertedTaskTitle || "").trim() : "";
+  var cards = [
+    {
+      id: "run-summary",
+      title: wbcT("chat.runSummary", "Run summary"),
+      content: (
+        <section className="workbench-side-section">
+          <h3>{wbcT("chat.runSummary", "Run summary")}</h3>
+          <WbcUsageRing usage={usage} />
+        </section>
+      ),
+    },
+    {
+      id: "session-info",
+      title: wbcT("workbenchChat.sessionInfo", "Session info"),
+      content: (
+        <section className="workbench-side-section">
+          <h3>{wbcT("workbenchChat.sessionInfo", "Session info")}</h3>
+          <div className="wb-kv"><span>{wbcT("workbenchChat.statusLabel", "Status")}</span><b>{runtime ? wbcT("workbenchChat.status.replying", "Replying") : wbcT("workbenchChat.status.idle", "Idle")}</b></div>
+          <div className="wb-kv"><span>{wbcT("workbenchChat.messageCount", "Messages")}</span><b>{chat.messageCount != null ? chat.messageCount : (chat.messages || []).length}</b></div>
+          <div className="wb-kv"><span>{wbcT("workbenchChat.model", "Model")}</span><b className="wbc-kv-mono">{currentModel || "—"}</b></div>
+          <div className="wb-kv"><span>{wbcT("chat.runId", "Session ID")}</span><b className="wbc-kv-mono">{chat.id}</b></div>
+          <div className="wb-kv"><span>{wbcT("workbenchChat.createdAt", "Created")}</span><b>{wbcFormatTime(chat.createdAt) || "—"}</b></div>
+        </section>
+      ),
+    },
+  ];
+  if (detailed && liveData) {
+    cards.push({
+      id: "context-usage",
+      title: wbcT("workbenchChat.ctx.title", "Context window"),
+      content: <WbcContextUsage data={liveData} />,
+    });
+  }
+  if (detailed) {
+    cards.push({
+      id: "quick-actions",
+      title: wbcT("workbenchChat.quickActions", "Quick actions"),
+      content: (
+        <section className="workbench-side-section">
+          <h3>{wbcT("workbenchChat.quickActions", "Quick actions")}</h3>
+          <div className="wbc-quick-actions">
+            <WbcQuickActionItems
+              chat={chat}
+              onRename={onRename}
+              onDelete={onDelete}
+              onToTask={onToTask}
+              toTaskBusy={toTaskBusy}
+              onCompact={onCompact}
+              compactBusy={compactBusy}
+            />
+          </div>
+          {convertedTitle && (
+            <p className="wbc-converted-note">{wbcT("workbenchChat.convertedNote", "Converted to task")}：<b>{convertedTitle}</b></p>
+          )}
+        </section>
+      ),
+    });
+  }
   return (
     <div className="workbench-side-stack">
       {loading && <p className="workbench-muted wbc-side-loading" role="status">
         <span className="wbc-spinner" aria-hidden="true"></span>
         {wbcT("workbenchChat.loadingConversation", "Loading conversation…")}
       </p>}
-      <section className="workbench-side-section">
-        <h3>{wbcT("chat.runSummary", "Run summary")}</h3>
-        <WbcUsageRing usage={usage} />
-      </section>
-      <section className="workbench-side-section">
-        <h3>{wbcT("workbenchChat.sessionInfo", "Session info")}</h3>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.statusLabel", "Status")}</span><b>{runtime ? wbcT("workbenchChat.status.replying", "Replying") : wbcT("workbenchChat.status.idle", "Idle")}</b></div>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.messageCount", "Messages")}</span><b>{chat.messageCount != null ? chat.messageCount : (chat.messages || []).length}</b></div>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.model", "Model")}</span><b className="wbc-kv-mono">{currentModel || "—"}</b></div>
-        <div className="wb-kv"><span>{wbcT("chat.runId", "Session ID")}</span><b className="wbc-kv-mono">{chat.id}</b></div>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.createdAt", "Created")}</span><b>{wbcFormatTime(chat.createdAt) || "—"}</b></div>
-      </section>
-      {detailed && <WbcContextUsage data={liveData} />}
-      {detailed && <section className="workbench-side-section">
-        <h3>{wbcT("workbenchChat.quickActions", "Quick actions")}</h3>
-        <div className="wbc-quick-actions">
-          <button type="button" onClick={function () {
-            var next = window.prompt(wbcT("workbenchChat.titleLabel", "Chat title"), chat.title || "");
-            if (next != null) onRename(String(next).trim() || chat.title);
-          }}>{WBC_ICONS.edit}<span>{wbcT("workbenchChat.rename", "Rename chat")}</span></button>
-          <button type="button" disabled={toTaskBusy} onClick={onToTask}>{WBC_ICONS.task}<span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span></button>
-          {!chat.legacy && (
-            <button type="button" disabled={compactBusy} onClick={onCompact}>
-              {compactBusy ? <span className="wbc-spinner" aria-hidden="true"></span> : WBC_ICONS.compact}
-              <span>{wbcT(compactBusy ? "workbenchChat.compactBusy" : "workbenchChat.compact", compactBusy ? "Compressing…" : "Compress chat")}</span>
-            </button>
-          )}
-          <button type="button" className="danger" onClick={onDelete}>{WBC_ICONS.trash}<span>{wbcT("workbenchChat.delete", "Delete chat")}</span></button>
-        </div>
-        {convertedTitle && (
-          <p className="wbc-converted-note">{wbcT("workbenchChat.convertedNote", "Converted to task")}：<b>{convertedTitle}</b></p>
-        )}
-      </section>}
+      <WbcSortableCardStack
+        tabId="overview"
+        defaultOrder={["run-summary", "session-info", "context-usage", "quick-actions"]}
+        cards={cards}
+      />
     </div>
   );
 }
@@ -8362,8 +9498,14 @@ function WbcInboxCard({ chat, running }) {
       <div className="wbc-inbox-head">
         <h3 id="wbc-inbox-title">{wbcT("workbenchChat.inbox.title", "Session inbox")}</h3>
         <span className={"wbc-inbox-queue-count" + (queueDepth !== null && queueDepth > 0 ? " active" : "")} aria-live="polite">
-          <span>{wbcT("workbenchChat.inbox.queue", "In queue")}</span>
-          <b>{queueDepth === null ? "—" : queueDepth}</b>
+          {queueDepth === 0 ? (
+            <span>{wbcT("workbenchChat.inbox.queueEmpty", "Queue empty")}</span>
+          ) : (
+            <React.Fragment>
+              <span>{wbcT("workbenchChat.inbox.queue", "In queue")}</span>
+              <b>{queueDepth === null ? "—" : queueDepth}</b>
+            </React.Fragment>
+          )}
         </span>
       </div>
 
@@ -8456,34 +9598,62 @@ function wbcUsedToolPackages(chat, runtime) {
 
 function WbcContextTab({ project, chat, runtime }) {
   var usedToolPackages = wbcUsedToolPackages(chat, runtime);
+  var conversationTitle = wbcT("workbenchChat.conversationContext", "Conversation context");
+  var inboxTitle = wbcT("workbenchChat.inbox.title", "Session inbox");
   return (
-    <div className="workbench-side-stack">
-      <section className="workbench-side-section">
-        <h3>{wbcT("workbenchChat.conversationContext", "Conversation context")}</h3>
-        <WbcContextBlockList chat={chat} running={!!runtime} />
-      </section>
-      <WbcInboxCard chat={chat} running={!!runtime} />
-      <section className="workbench-side-section">
-        <h3>{wbcT("workbenchChat.usedToolPackages", "Used tool packages")}</h3>
-        {usedToolPackages.length === 0 ? (
-          <div className="wbc-side-empty">
-            <p>{wbcT("workbenchChat.noUsedToolPackages", "The agent has not used a tool package in this chat.")}</p>
-          </div>
-        ) : usedToolPackages.map(function (wireName) {
-          return (
-            <div className="workbench-check wbc-tool-pack-row" key={wireName}>
-              <span className="workbench-status-dot green" aria-hidden="true"></span>
-              <span>{wbcT("toolName." + wireName, wireName)}</span>
-            </div>
-          );
-        })}
-      </section>
-      <section className="workbench-side-section">
-        <h3>{wbcT("workbenchChat.stats", "Chat stats")}</h3>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.messageCount", "Messages")}</span><b>{chat ? (chat.messages || []).length : 0}</b></div>
-        <div className="wb-kv"><span>{wbcT("workbenchChat.updatedAt", "Last updated")}</span><b>{chat ? (wbcFormatTime(chat.updatedAt) || "—") : "—"}</b></div>
-      </section>
-    </div>
+    <WbcSortableCardStack
+      tabId="context"
+      defaultOrder={["conversation-context", "session-inbox", "tool-packages", "chat-stats"]}
+      cards={[
+        {
+          id: "conversation-context",
+          title: conversationTitle,
+          content: (
+            <section className="workbench-side-section">
+              <h3>{conversationTitle}</h3>
+              <WbcContextBlockList chat={chat} running={!!runtime} />
+            </section>
+          ),
+        },
+        {
+          id: "session-inbox",
+          title: inboxTitle,
+          content: <WbcInboxCard chat={chat} running={!!runtime} />,
+        },
+        {
+          id: "tool-packages",
+          title: wbcT("workbenchChat.usedToolPackages", "Used tool packages"),
+          content: (
+            <section className="workbench-side-section">
+              <h3>{wbcT("workbenchChat.usedToolPackages", "Used tool packages")}</h3>
+              {usedToolPackages.length === 0 ? (
+                <div className="wbc-side-empty">
+                  <p>{wbcT("workbenchChat.noUsedToolPackages", "The agent has not used a tool package in this chat.")}</p>
+                </div>
+              ) : usedToolPackages.map(function (wireName) {
+                return (
+                  <div className="workbench-check wbc-tool-pack-row" key={wireName}>
+                    <span className="workbench-status-dot green" aria-hidden="true"></span>
+                    <span>{wbcT("toolName." + wireName, wireName)}</span>
+                  </div>
+                );
+              })}
+            </section>
+          ),
+        },
+        {
+          id: "chat-stats",
+          title: wbcT("workbenchChat.stats", "Chat stats"),
+          content: (
+            <section className="workbench-side-section">
+              <h3>{wbcT("workbenchChat.stats", "Chat stats")}</h3>
+              <div className="wb-kv"><span>{wbcT("workbenchChat.messageCount", "Messages")}</span><b>{chat ? (chat.messages || []).length : 0}</b></div>
+              <div className="wb-kv"><span>{wbcT("workbenchChat.updatedAt", "Last updated")}</span><b>{chat ? (wbcFormatTime(chat.updatedAt) || "—") : "—"}</b></div>
+            </section>
+          ),
+        },
+      ]}
+    />
   );
 }
 

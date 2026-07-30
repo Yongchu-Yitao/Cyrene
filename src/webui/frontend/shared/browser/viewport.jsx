@@ -53,11 +53,14 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   const windowInteractionRef = React.useRef(false);
   const interactionPreviewTokenRef = React.useRef(0);
   const interactionPreviewMountedRef = React.useRef(false);
+  const tabMenuPreviewTokenRef = React.useRef(0);
   const [state, setState] = React.useState({ tabs: [], activeTabId: "", activeTab: null });
   const [address, setAddress] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const [interactionPreview, setInteractionPreview] = React.useState(null);
+  const [tabMenuPreview, setTabMenuPreview] = React.useState(null);
+  const [tabContextMenu, setTabContextMenu] = React.useState(null);
 
   const active = state.activeTab || null;
   const tabs = Array.isArray(state.tabs) ? state.tabs : [];
@@ -78,6 +81,21 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       if (next && next.ok !== false && String(next.sessionId || "") === electronSessionId) setState(next);
     });
   }, [electronSessionId]);
+
+  React.useEffect(function () {
+    if (!tabContextMenu && !tabMenuPreview) return undefined;
+    function close() { closeTabContextMenu(); }
+    function onKeyDown(event) { if (event.key === "Escape") close(); }
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    document.addEventListener("keydown", onKeyDown);
+    return function () {
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+      document.removeEventListener("keydown", onKeyDown);
+      scheduleBounds();
+    };
+  }, [!!tabContextMenu || !!tabMenuPreview]);
 
   React.useEffect(function () {
     if (!bridge || typeof bridge.setContext !== "function") return undefined;
@@ -250,6 +268,38 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     publishInteractionPreviewFallback(previewToken);
   }
 
+  function closeTabContextMenu() {
+    tabMenuPreviewTokenRef.current += 1;
+    setTabContextMenu(null);
+    setTabMenuPreview(null);
+  }
+
+  function onTabMenuPreviewLoad(event) {
+    var preview = tabMenuPreview;
+    if (!preview) return;
+    var previewToken = preview.token;
+    var imageNode = event && event.currentTarget;
+    var decoded = imageNode && typeof imageNode.decode === "function"
+      ? imageNode.decode().catch(function () {})
+      : Promise.resolve();
+    Promise.resolve(decoded).then(function () {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          if (!tabMenuPreview || tabMenuPreviewTokenRef.current !== previewToken) return;
+          Promise.resolve(sendBounds(false)).then(function (hidden) {
+            if (!hidden || tabMenuPreviewTokenRef.current !== previewToken) return;
+            setTabContextMenu(preview.menu);
+          });
+        });
+      });
+    });
+  }
+
+  function onTabMenuPreviewError() {
+    closeTabContextMenu();
+    setError(browserLabel("browser.context.previewFailed", "Could not open the tab menu."));
+  }
+
   React.useEffect(function () {
     scheduleBounds();
     const node = hostRef.current;
@@ -413,12 +463,57 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     }
   }
 
+  function openTabContextMenu(tab, event) {
+    event.preventDefault();
+    event.stopPropagation();
+    var token = tabMenuPreviewTokenRef.current + 1;
+    tabMenuPreviewTokenRef.current = token;
+    var menu = {
+      tab: tab,
+      left: Math.max(8, Math.min(event.clientX, window.innerWidth - 210 - 8)),
+      top: Math.max(8, Math.min(event.clientY, window.innerHeight - 116 - 8)),
+    };
+    setError("");
+    setTabContextMenu(null);
+    if (!bridge || typeof bridge.screenshot !== "function") {
+      setError(browserLabel("browser.context.previewFailed", "Could not open the tab menu."));
+      return;
+    }
+    bridge.screenshot({ sessionId: electronSessionId, tabId: state.activeTabId || "" }).then(function (result) {
+      if (tabMenuPreviewTokenRef.current !== token) return;
+      if (!result || result.ok === false || !result.pngBase64) throw new Error(result && result.error || "capture failed");
+      setTabMenuPreview({
+        token: token,
+        src: "data:image/png;base64," + result.pngBase64,
+        menu: menu,
+      });
+    }).catch(function () {
+      if (tabMenuPreviewTokenRef.current !== token) return;
+      closeTabContextMenu();
+      setError(browserLabel("browser.context.previewFailed", "Could not open the tab menu."));
+    });
+  }
+
+  function runForTab(tab, action) {
+    closeTabContextMenu();
+    return run(function () {
+      var activate = tab.id === state.activeTabId
+        ? Promise.resolve()
+        : bridge.activateTab({ sessionId: electronSessionId, tabId: tab.id });
+      return activate.then(action);
+    });
+  }
+
+  function browserLabel(key, fallback) {
+    try { return window.CyreneUI.require("i18n").t(key, null, fallback); } catch (e) { return fallback; }
+  }
+
   return (
     <div className="browser-view native">
       <div className="browser-tabs-strip">
         {tabs.map(function (tab) {
           return (
-            <button key={tab.id} type="button" className={"browser-tab" + (tab.id === state.activeTabId ? " active" : "")} onClick={function () { run(function () { return bridge.activateTab({ sessionId: electronSessionId, tabId: tab.id }); }); }} title={(tab.title || tab.url || "Browser") + (tab.audible ? " · audible" : "")}>
+            <button key={tab.id} type="button" className={"browser-tab" + (tab.id === state.activeTabId ? " active" : "")} onClick={function () { run(function () { return bridge.activateTab({ sessionId: electronSessionId, tabId: tab.id }); }); }} onContextMenu={function (event) { openTabContextMenu(tab, event); }} title={(tab.title || tab.url || "Browser") + (tab.audible ? " · audible" : "")}>
               <span className="browser-tab-title">{tab.title || tab.url || "New tab"}</span>
               {tab.audible && <span className="browser-tab-audio" aria-hidden="true"><BrowserIcon name="volume" size={13} /></span>}
               <span
@@ -434,6 +529,29 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
         <button type="button" className="browser-icon-btn" onClick={function () { createTab("about:blank"); }} title="New tab"><BrowserIcon name="plus" /></button>
         {onClose && <button type="button" className="browser-icon-btn" onClick={onClose} title="Close panel"><BrowserIcon name="close" /></button>}
       </div>
+      {tabContextMenu && (
+        <div className="wb-item-context-layer">
+          <div className="wb-item-context-scrim" onPointerDown={closeTabContextMenu} />
+          <div
+            className="wb-item-context-menu browser-tab-context-menu"
+            role="menu"
+            aria-label={tabContextMenu.tab.title || tabContextMenu.tab.url || "Browser"}
+            style={{ left: tabContextMenu.left + "px", top: tabContextMenu.top + "px" }}
+            onContextMenu={function (event) { event.preventDefault(); }}
+          >
+            <button type="button" role="menuitem" onClick={function () { var tab = tabContextMenu.tab; runForTab(tab, function () { return bridge.reload(electronSessionId); }); }}>
+              <BrowserIcon name="reload" size={15} />{browserLabel("browser.context.reload", "Reload")}
+            </button>
+            <button type="button" role="menuitem" onClick={function () { var tab = tabContextMenu.tab; runForTab(tab, function () { return bridge.setMuted({ sessionId: electronSessionId, muted: !tab.muted }); }); }}>
+              <BrowserIcon name={tabContextMenu.tab.muted ? "volume" : "muted"} size={15} />{tabContextMenu.tab.muted ? browserLabel("browser.context.unmute", "Unmute") : browserLabel("browser.context.mute", "Mute")}
+            </button>
+            <div className="wb-item-context-separator" />
+            <button type="button" role="menuitem" className="danger" onClick={function () { var tab = tabContextMenu.tab; closeTabContextMenu(); run(function () { return bridge.closeTab({ sessionId: electronSessionId, tabId: tab.id }); }); }}>
+              <BrowserIcon name="close" size={15} />{browserLabel("browser.context.close", "Close tab")}
+            </button>
+          </div>
+        </div>
+      )}
       <div className="browser-nav-bar">
         <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoBack || busy} onClick={function () { run(function () { return bridge.goBack(electronSessionId); }); }} title="Back"><BrowserIcon name="back" /></button>
         <button type="button" className="browser-icon-btn" disabled={!active || !active.canGoForward || busy} onClick={function () { run(function () { return bridge.goForward(electronSessionId); }); }} title="Forward"><BrowserIcon name="forward" /></button>
@@ -445,7 +563,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
         </button>
       </div>
       {error && <div className="browser-error">{error}</div>}
-      <div ref={hostRef} className={"browser-native-host" + (interactionPreview ? " is-previewing" : "")}>
+      <div ref={hostRef} className={"browser-native-host" + (interactionPreview || tabMenuPreview ? " is-previewing" : "")}>
         <div ref={surfaceRef} className="browser-native-surface">
           {interactionPreview && (
             <img
@@ -453,6 +571,16 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
               src={interactionPreview.src}
               onLoad={onInteractionPreviewLoad}
               onError={onInteractionPreviewError}
+              alt=""
+              aria-hidden="true"
+            />
+          )}
+          {tabMenuPreview && (
+            <img
+              className="browser-native-preview"
+              src={tabMenuPreview.src}
+              onLoad={onTabMenuPreviewLoad}
+              onError={onTabMenuPreviewError}
               alt=""
               aria-hidden="true"
             />

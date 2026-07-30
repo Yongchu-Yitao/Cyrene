@@ -56,7 +56,11 @@ from cyrene.agent.state import (
     _ui_round_assistant_meta,
     _ui_round_hide_initial_detail,
 )
-from cyrene.model_runtime.messages import assistant_text, truncate
+from cyrene.model_runtime.messages import (
+    assistant_text,
+    parse_tool_arguments,
+    truncate,
+)
 from cyrene.observability.context_trace import attach_context, context_block
 from cyrene.runtime.secret_redaction import redact_value
 from cyrene.tooling import (
@@ -723,7 +727,9 @@ async def _run_main_agent_impl(
 
     if ask_user_call:
         try:
-            args = json.loads(ask_user_call["function"].get("arguments") or "{}")
+            args = parse_tool_arguments(
+                ask_user_call["function"].get("arguments")
+            )
             result = await execute_wire_tool(
                 "ask_user", args, bot, chat_id, db_path, None, actor="main"
             )
@@ -888,10 +894,10 @@ async def _run_main_agent_impl(
                     if system_initiated and pending_name == "ask_user":
                         continue
                     try:
-                        pending_args = json.loads(
-                            pending_call["function"].get("arguments") or "{}"
+                        pending_args = parse_tool_arguments(
+                            pending_call["function"].get("arguments")
                         )
-                    except (KeyError, TypeError, json.JSONDecodeError):
+                    except (KeyError, TypeError, ValueError):
                         continue
                     inbox_batch_args[pending_call["id"]] = pending_args
                     inbox_start_events.append((
@@ -966,7 +972,9 @@ async def _run_main_agent_impl(
                 try:
                     args = inbox_batch_args.get(t["id"])
                     if args is None:
-                        args = json.loads(t["function"].get("arguments") or "{}")
+                        args = parse_tool_arguments(
+                            t["function"].get("arguments")
+                        )
                     capability_id = _resolved_capability_id(str(tool_name or ""), args)
                     if system_initiated and tool_name == "ask_user":
                         result = (
@@ -1281,7 +1289,9 @@ async def _run_main_agent_impl(
                 break
         if ask_user_call:
             try:
-                args = json.loads(ask_user_call["function"].get("arguments") or "{}")
+                args = parse_tool_arguments(
+                    ask_user_call["function"].get("arguments")
+                )
                 result = await execute_wire_tool(
                     "ask_user", args, bot, chat_id, db_path, None, actor="main"
                 )

@@ -143,7 +143,18 @@ function updateBrowserForChat(chatId, apply) {
 
 async function bootstrapData() {
   try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    const supportedTimezones = [
+      "Pacific/Honolulu", "America/Los_Angeles", "America/Denver",
+      "America/Chicago", "America/New_York", "America/Sao_Paulo",
+      "UTC", "Europe/London", "Europe/Paris", "Africa/Cairo",
+      "Asia/Dubai", "Asia/Kolkata", "Asia/Bangkok", "Asia/Shanghai",
+      "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland",
+    ];
+    let tz = "Asia/Shanghai";
+    try {
+      const storedTimezone = localStorage.getItem("cyrene-timezone") || "";
+      if (supportedTimezones.includes(storedTimezone)) tz = storedTimezone;
+    } catch (error) {}
     const r = await fetch("/api/ui-data?tz=" + encodeURIComponent(tz));
     if (!r.ok) throw new Error("ui-data fetch failed: " + r.status);
     const fresh = await r.json();

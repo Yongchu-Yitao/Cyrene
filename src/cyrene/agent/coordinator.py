@@ -7,7 +7,6 @@ loop).
 """
 
 import asyncio
-import json
 import logging
 from datetime import datetime
 from typing import Any, Awaitable, Callable
@@ -70,7 +69,11 @@ from cyrene.agent.state import (
 )
 from cyrene.observability.context_trace import context_block
 from cyrene.config import PATTERN_DETECTION_INTERVAL
-from cyrene.model_runtime.messages import assistant_text, truncate
+from cyrene.model_runtime.messages import (
+    assistant_text,
+    parse_tool_arguments,
+    truncate,
+)
 from cyrene.memory import get_memory_context
 from cyrene.runtime.memory.short_term import get_context
 from cyrene.learning.skills import build_skill_prompt_block
@@ -228,7 +231,7 @@ async def _run_execution_agent_locked(task: str, bot: Any, chat_id: int, db_path
             fn = tc["function"]
             name = fn["name"]
             try:
-                args = json.loads(fn.get("arguments") or "{}")
+                args = parse_tool_arguments(fn.get("arguments"))
                 result = await execute_wire_tool(
                     name,
                     args,

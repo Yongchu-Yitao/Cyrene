@@ -25,6 +25,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
+from cyrene.model_runtime.messages import parse_tool_arguments
 from cyrene.observability import debug
 from cyrene.config import DATA_DIR
 
@@ -1274,8 +1275,8 @@ async def build_group_chat_messages(round_id: str) -> dict[str, Any]:
                     continue
                 name = str(fn.get("name", "") or "").strip()
                 try:
-                    args = json.loads(fn.get("arguments", "{}"))
-                except (json.JSONDecodeError, TypeError):
+                    args = parse_tool_arguments(fn.get("arguments"))
+                except (TypeError, ValueError):
                     continue
                 try:
                     from cyrene.tooling import resolve_wire_call
@@ -1794,8 +1795,10 @@ def _quit_arguments(response: dict[str, Any]) -> dict[str, Any]:
         if str((call.get("function") or {}).get("name") or "") != "quit":
             continue
         try:
-            arguments = json.loads((call.get("function") or {}).get("arguments") or "{}")
-        except (TypeError, ValueError, json.JSONDecodeError):
+            arguments = parse_tool_arguments(
+                (call.get("function") or {}).get("arguments")
+            )
+        except (TypeError, ValueError):
             return {}
         return arguments if isinstance(arguments, dict) else {}
     return {}
@@ -2671,7 +2674,9 @@ You are a **participant** in this discussion. Rules:
                     })
                     continue
                 try:
-                    args = json.loads(tc["function"].get("arguments") or "{}")
+                    args = parse_tool_arguments(
+                        tc["function"].get("arguments")
+                    )
                     capability_id, concrete_args = _resolved_subagent_call(name, args)
                     is_communication = capability_id in {
                         "subagent.send_message",

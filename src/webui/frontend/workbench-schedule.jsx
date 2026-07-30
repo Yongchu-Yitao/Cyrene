@@ -368,7 +368,10 @@
       "button", {
         type: "button",
         className: "wb-sched-block cat-" + ev.category + (compact ? " compact" : "") + (ev.status === "paused" ? " paused" : "") + (props.active ? " active" : ""),
-        style: style, onClick: function (e) { e.stopPropagation(); props.onSelect(ev); }, title: ev.title,
+        style: style,
+        onClick: function (e) { e.stopPropagation(); props.onSelect(ev); },
+        onContextMenu: function (e) { props.onContextMenu(ev, e); },
+        title: ev.title,
       },
       React.createElement("span", { className: "wb-sched-block-time" }, clockHM(ev._start) + " – " + clockHM(ev._end)),
       React.createElement("span", { className: "wb-sched-block-title" }, ev.title)
@@ -410,7 +413,7 @@
     useEffect(function () { if (scrollRef.current) scrollRef.current.scrollTop = 7 * HOUR_PX; }, []);
     return React.createElement(
       "div", { className: "wb-sched-dayview" },
-      React.createElement(AllDayRow, { items: allDay, cols: 1, activeId: props.activeId, onSelect: props.onSelect }),
+      React.createElement(AllDayRow, { items: allDay, cols: 1, activeId: props.activeId, onSelect: props.onSelect, onContextMenu: props.onContextMenu }),
       React.createElement(
         "div", { className: "wb-sched-scroll", ref: scrollRef },
         React.createElement(
@@ -421,7 +424,7 @@
             React.createElement(HourLines),
             React.createElement(NowLine, { show: isSameDay(day, new Date()) }),
             timed.map(function (ev) {
-              return React.createElement(TimedBlock, { key: ev.id, ev: ev, active: ev.id === props.activeId, onSelect: props.onSelect });
+              return React.createElement(TimedBlock, { key: ev.id, ev: ev, active: ev.id === props.activeId, onSelect: props.onSelect, onContextMenu: props.onContextMenu });
             })
           )
         )
@@ -441,7 +444,9 @@
             "button", {
               key: ev.id, type: "button",
               className: "wb-sched-allday-chip cat-" + ev.category + (ev.id === props.activeId ? " active" : ""),
-              onClick: function () { props.onSelect(ev); }, title: ev.title,
+              onClick: function () { props.onSelect(ev); },
+              onContextMenu: function (e) { props.onContextMenu(ev, e); },
+              title: ev.title,
             },
             React.createElement(Dot, { cat: ev.category }),
             React.createElement("span", null, ev.title)
@@ -498,7 +503,9 @@
                 return React.createElement("button", {
                   key: ev.id, type: "button",
                   className: "wb-sched-allday-chip cat-" + ev.category + (ev.id === props.activeId ? " active" : ""),
-                  onClick: function () { props.onSelect(ev); }, title: ev.title,
+                  onClick: function () { props.onSelect(ev); },
+                  onContextMenu: function (e) { props.onContextMenu(ev, e); },
+                  title: ev.title,
                 }, React.createElement(Dot, { cat: ev.category }), React.createElement("span", null, ev.title));
               }));
           })
@@ -517,7 +524,7 @@
                 React.createElement(HourLines),
                 isSameDay(d, today) && React.createElement(NowLine, { show: true }),
                 timedByCol[i].map(function (ev) {
-                  return React.createElement(TimedBlock, { key: ev.id, ev: ev, active: ev.id === props.activeId, onSelect: props.onSelect });
+                  return React.createElement(TimedBlock, { key: ev.id, ev: ev, active: ev.id === props.activeId, onSelect: props.onSelect, onContextMenu: props.onContextMenu });
                 })
               );
             })
@@ -573,7 +580,9 @@
                   "button", {
                     key: ev.id, type: "button",
                     className: "wb-sched-month-chip cat-" + ev.category + (ev.id === props.activeId ? " active" : ""),
-                    onClick: function () { props.onSelect(ev); }, title: ev.title,
+                    onClick: function () { props.onSelect(ev); },
+                    onContextMenu: function (e) { props.onContextMenu(ev, e); },
+                    title: ev.title,
                   },
                   !ev.all_day && React.createElement("small", null, clockHM(ev._start)),
                   React.createElement("span", null, ev.title)
@@ -927,9 +936,24 @@
     var runsLoadState = useState(false); var runsLoading = runsLoadState[0], setRunsLoading = runsLoadState[1];
     var entityDetailState = useState(null); var entityDetail = entityDetailState[0], setEntityDetail = entityDetailState[1];
     var formState = useState(null); var formMode = formState[0], setFormMode = formState[1]; // null | {task?, defaultDate?}
+    var contextState = useState(null); var contextMenu = contextState[0], setContextMenu = contextState[1];
     var pendingTaskIdRef = useRef("");
     var pendingEntityIdRef = useRef("");
     var pendingDateAppliedRef = useRef(false);
+
+    useEffect(function () {
+      if (!contextMenu) return undefined;
+      function close() { setContextMenu(null); }
+      function onKeyDown(event) { if (event.key === "Escape") close(); }
+      window.addEventListener("resize", close);
+      window.addEventListener("scroll", close, true);
+      document.addEventListener("keydown", onKeyDown);
+      return function () {
+        window.removeEventListener("resize", close);
+        window.removeEventListener("scroll", close, true);
+        document.removeEventListener("keydown", onKeyDown);
+      };
+    }, [!!contextMenu]);
 
     // Visible window for the occurrences query (a touch wider than the view).
     var windowRange = useMemo(function () {
@@ -1161,6 +1185,16 @@
       }
       API.getEntity(ev.entity_id).then(function (ent) { setFormMode({ entity: ent }); }).catch(function (e) { setError(e.message || String(e)); });
     }
+    function openScheduleContextMenu(ev, event) {
+      event.preventDefault();
+      event.stopPropagation();
+      var menuHeight = ev.source === "task" ? 140 : 102;
+      setContextMenu({
+        event: ev,
+        left: Math.max(8, Math.min(event.clientX, window.innerWidth - 220 - 8)),
+        top: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+      });
+    }
 
     var headingText = viewMode === "day" ? dayHeading(anchorDate) : viewMode === "week" ? weekHeading(anchorDate) : monthHeading(anchorDate);
 
@@ -1209,9 +1243,9 @@
           "div", { className: "wb-sched-viewport" },
           loading
             ? React.createElement("div", { className: "wb-sched-loading" }, T("workbench.scheduleLoading"))
-            : viewMode === "day" ? React.createElement(DayView, { anchorDate: anchorDate, events: events, activeId: selectedId, onSelect: selectEvent })
-              : viewMode === "week" ? React.createElement(WeekView, { anchorDate: anchorDate, events: events, activeId: selectedId, onSelect: selectEvent, onPickDay: pickDay })
-                : React.createElement(MonthView, { anchorDate: anchorDate, events: events, activeId: selectedId, onSelect: selectEvent, onPickDay: pickDay })
+            : viewMode === "day" ? React.createElement(DayView, { anchorDate: anchorDate, events: events, activeId: selectedId, onSelect: selectEvent, onContextMenu: openScheduleContextMenu })
+              : viewMode === "week" ? React.createElement(WeekView, { anchorDate: anchorDate, events: events, activeId: selectedId, onSelect: selectEvent, onContextMenu: openScheduleContextMenu, onPickDay: pickDay })
+                : React.createElement(MonthView, { anchorDate: anchorDate, events: events, activeId: selectedId, onSelect: selectEvent, onContextMenu: openScheduleContextMenu, onPickDay: pickDay })
         )
       ),
       selectedEvent
@@ -1230,6 +1264,26 @@
             React.createElement("p", null, T("schedule.selectEvent"))
           )
         ),
+      contextMenu && React.createElement(
+        "div", { className: "wb-item-context-layer" },
+        React.createElement("div", { className: "wb-item-context-scrim", onPointerDown: function () { setContextMenu(null); } }),
+        React.createElement(
+          "div", {
+            className: "wb-item-context-menu",
+            role: "menu",
+            "aria-label": contextMenu.event.title,
+            style: { left: contextMenu.left + "px", top: contextMenu.top + "px" },
+            onContextMenu: function (event) { event.preventDefault(); },
+          },
+          React.createElement("button", { type: "button", role: "menuitem", onClick: function () { var ev = contextMenu.event; setContextMenu(null); openEdit(ev); } },
+            svg(["m4 16 1-4 8.5-8.5a2.1 2.1 0 0 1 3 3L8 15l-4 1Z"], { width: 15, height: 15 }), T("schedule.edit")),
+          contextMenu.event.source === "task" && React.createElement("button", { type: "button", role: "menuitem", onClick: function () { var ev = contextMenu.event; setContextMenu(null); toggleStatus(ev); } },
+            svg(["M20 12a8 8 0 1 1-2.3-5.7M20 4v6h-6"], { width: 15, height: 15 }), contextMenu.event.status === "paused" ? T("schedule.enable") : T("schedule.pause")),
+          React.createElement("div", { className: "wb-item-context-separator" }),
+          React.createElement("button", { type: "button", role: "menuitem", className: "danger", onClick: function () { var ev = contextMenu.event; setContextMenu(null); return ev.source === "task" ? removeTask(ev) : removeEntity(ev); } },
+            svg(["M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"], { width: 15, height: 15 }), T("schedule.delete"))
+        )
+      ),
       formMode && React.createElement(ScheduleForm, {
         api: API,
         task: formMode.task, defaultDate: formMode.defaultDate,
