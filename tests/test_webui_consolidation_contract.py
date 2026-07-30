@@ -24,7 +24,7 @@ OPENAPI_OPERATION_COUNT = 305
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
 OPENAPI_SHA256 = "698d86de0030aa4edd559eba23c267938b073ab44c282a7b6e25582e2f81a066"
-TOOL_REGISTRY_SHA256 = "5c1cc354f8d78d8f2a2f8f06050fc701c364b8c7fa0217d08e6f61f7e9d80b5b"
+TOOL_REGISTRY_SHA256 = "864e91a255ca645539958e4c7defe3a3f531d54e199c934b357f35023140cc75"
 MAIN_WIRE_SHA256 = "e748ec66ad5cbd23900f62cd9d444c09b7edf023af2964c53285753e8c0eb443"
 SUBAGENT_WIRE_SHA256 = "4d2f207b6508c148e5756826b435c4ca95830b3b8441198e2066cc7529ae27ad"
 
@@ -153,44 +153,44 @@ def test_workbench_runtime_dependencies_keep_their_relative_script_order():
         "katex/katex.min.js",
         "purify.min.js",
         "highlight.min.js",
-        "compiled/platform/runtime.js?v=0.7.0b8",
-        "compiled/shared/markdown/math.js?v=0.7.0b8",
-        "compiled/shared/markdown/highlight.js?v=0.7.0b8",
+        "compiled/platform/runtime.js?v=0.7.0b9",
+        "compiled/shared/markdown/math.js?v=0.7.0b9",
+        "compiled/shared/markdown/highlight.js?v=0.7.0b9",
         "leaflet.js",
-        "pdfjs/pdf.min.js?v=0.7.0b8",
-        "pdfjs/pdf_viewer.js?v=0.7.0b8",
-        "compiled/platform/readiness.js?v=0.7.0b8",
-        "compiled/platform/events.js?v=0.7.0b8",
-        "compiled/platform/navigation.js?v=0.7.0b8",
-        "compiled/workbench-i18n.js?v=0.7.0b8",
-        "compiled/shared/i18n/format.js?v=0.7.0b8",
-        "compiled/shared/i18n/translations.js?v=0.7.0b8",
-        "compiled/shared/pdf/bridge.js?v=0.7.0b8",
-        "compiled/shared/feedback/service.js?v=0.7.0b8",
-        "compiled/shared/markdown/renderer.js?v=0.7.0b8",
-        "compiled/platform/data-store.js?v=0.7.0b8",
-        "compiled/shared/browser/viewport.js?v=0.7.0b8",
-        "compiled/shared/search/overlay.js?v=0.7.0b8",
-        "compiled/shared/markdown/actions.js?v=0.7.0b8",
-        "compiled/shared/diff/viewer.js?v=0.7.0b8",
-        "compiled/platform/api.js?v=0.7.0b8",
-        "compiled/workbench-chat.js?v=0.7.0b8",
-        "compiled/workbench-quick-chat.js?v=0.7.0b8",
-        "compiled/workbench.js?v=0.7.0b8",
-        "compiled/settings-overlay.js?v=0.7.0b8",
-        "compiled/entry/bootstrap.js?v=0.7.0b8",
+        "pdfjs/pdf.min.js?v=0.7.0b9",
+        "pdfjs/pdf_viewer.js?v=0.7.0b9",
+        "compiled/platform/readiness.js?v=0.7.0b9",
+        "compiled/platform/events.js?v=0.7.0b9",
+        "compiled/platform/navigation.js?v=0.7.0b9",
+        "compiled/workbench-i18n.js?v=0.7.0b9",
+        "compiled/shared/i18n/format.js?v=0.7.0b9",
+        "compiled/shared/i18n/translations.js?v=0.7.0b9",
+        "compiled/shared/pdf/bridge.js?v=0.7.0b9",
+        "compiled/shared/feedback/service.js?v=0.7.0b9",
+        "compiled/shared/markdown/renderer.js?v=0.7.0b9",
+        "compiled/platform/data-store.js?v=0.7.0b9",
+        "compiled/shared/browser/viewport.js?v=0.7.0b9",
+        "compiled/shared/search/overlay.js?v=0.7.0b9",
+        "compiled/shared/markdown/actions.js?v=0.7.0b9",
+        "compiled/shared/diff/viewer.js?v=0.7.0b9",
+        "compiled/platform/api.js?v=0.7.0b9",
+        "compiled/workbench-chat.js?v=0.7.0b9",
+        "compiled/workbench-quick-chat.js?v=0.7.0b9",
+        "compiled/workbench.js?v=0.7.0b9",
+        "compiled/settings-overlay.js?v=0.7.0b9",
+        "compiled/entry/bootstrap.js?v=0.7.0b9",
     ]
 
     positions = [scripts.index(script) for script in required_in_order]
     assert positions == sorted(positions)
     assert not {
-        "compiled/app.js?v=0.7.0b8",
-        "compiled/chat.js?v=0.7.0b8",
-        "compiled/dashboard.js?v=0.7.0b8",
-        "compiled/knowledge.js?v=0.7.0b8",
-        "compiled/memory.js?v=0.7.0b8",
-        "compiled/tasks.js?v=0.7.0b8",
-        "compiled/settings.js?v=0.7.0b8",
+        "compiled/app.js?v=0.7.0b9",
+        "compiled/chat.js?v=0.7.0b9",
+        "compiled/dashboard.js?v=0.7.0b9",
+        "compiled/knowledge.js?v=0.7.0b9",
+        "compiled/memory.js?v=0.7.0b9",
+        "compiled/tasks.js?v=0.7.0b9",
+        "compiled/settings.js?v=0.7.0b9",
     }.intersection(scripts)
 
 

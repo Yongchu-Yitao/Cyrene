@@ -5805,10 +5805,73 @@ html[data-theme="light"] .wb-tool-list .mono {
   line-height: 1.4;
 }
 
+.remote-pairing-settings {
+  overflow: hidden;
+  border: 1px solid var(--wb-line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-muted) 4%, var(--wb-card-bg));
+}
+
+.remote-pairing-settings summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  list-style: none;
+  padding: 11px 12px;
+  color: var(--wb-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.remote-pairing-settings summary::-webkit-details-marker {
+  display: none;
+}
+
+.remote-pairing-settings-chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--wb-muted) 82%, var(--wb-text));
+  transition: transform 140ms ease;
+}
+
+.remote-pairing-settings-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.remote-pairing-settings[open] .remote-pairing-settings-chevron {
+  transform: rotate(90deg);
+}
+
+.remote-pairing-settings-title {
+  flex: 0 0 auto;
+}
+
+.remote-pairing-settings summary:hover,
+.remote-pairing-settings summary:focus-visible {
+  background: color-mix(in srgb, var(--wb-text) 5%, var(--wb-card-bg));
+}
+
+.remote-pairing-settings summary:focus {
+  outline: none;
+}
+
+.remote-pairing-settings summary small {
+  color: var(--wb-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.remote-pairing-settings[open] summary {
+  border-bottom: 1px solid var(--wb-line);
+}
+
 .remote-pairing-share-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(180px, 0.8fr);
   gap: 10px;
+  padding: 10px;
 }
 
 .remote-pairing-group {
@@ -12754,6 +12817,8 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-page {
+  --wbc-top-glass-height: calc(94px * var(--wb-ui-font-scale, 1));
+  --wbc-side-column-width: var(--wb-right-w, 350px);
   --wbc-control-shadow:
     0 1px 2px rgba(15, 23, 42, 0.028),
     0 5px 14px rgba(15, 23, 42, 0.02);
@@ -12761,14 +12826,37 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   /* Right column shares --wb-right-w (inherited from .workbench-grid) so the
      conversation viewer/map panel resizes with the same drag handle. */
   grid-template-columns: 270px minmax(320px, 1fr) var(--wb-right-w, 350px);
+  position: relative;
   min-width: 0;
   height: 100%;
   overflow: hidden;
 }
 
+.wbc-top-glass {
+  position: absolute;
+  z-index: 19;
+  inset: 0 var(--wbc-side-column-width) auto 0;
+  height: var(--wbc-top-glass-height);
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--wb-main-bg) 66%, transparent) 0%,
+    color-mix(in srgb, var(--wb-main-bg) 56%, transparent) 68%,
+    color-mix(in srgb, var(--wb-main-bg) 32%, transparent) 86%,
+    transparent 100%
+  );
+  -webkit-backdrop-filter: blur(46px) saturate(165%) contrast(103%);
+  backdrop-filter: blur(46px) saturate(165%) contrast(103%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
+}
+
 /* Collapse the right panel when hidden via the × / show button toggle. */
 .wbc-page.wbc-side-hidden {
   grid-template-columns: 270px minmax(0, 1fr);
+}
+.wbc-page.wbc-side-hidden .wbc-top-glass {
+  right: 0;
 }
 .wbc-page.wbc-side-hidden .wbc-side {
   display: none;
@@ -12777,14 +12865,14 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* ---- conversation rail ---- */
 
 .wbc-rail {
-  --wbc-rail-overlay-height: 124px;
-  --wbc-rail-content-inset: 132px;
+  --wbc-rail-overlay-height: var(--wbc-top-glass-height);
+  --wbc-rail-content-inset: calc(var(--wbc-top-glass-height) + 8px);
   position: relative;
   display: flex;
   flex-direction: column;
   gap: 0;
   padding: 0 12px 14px;
-  border-right: 1px solid var(--wb-line);
+  border-right: 0;
   background: var(--wb-task-rail-bg);
   overflow: hidden;
 }
@@ -12798,27 +12886,17 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   isolation: isolate;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 12px 12px;
+  gap: 6px;
+  padding: 8px 12px;
+}
+
+.wbc-rail-glass .workbench-rail-head {
+  height: 40px;
+  padding: 0;
 }
 
 .wbc-rail-glass::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(
-    to bottom,
-    color-mix(in srgb, var(--wb-task-rail-bg) 66%, transparent) 0%,
-    color-mix(in srgb, var(--wb-task-rail-bg) 56%, transparent) 68%,
-    color-mix(in srgb, var(--wb-task-rail-bg) 32%, transparent) 86%,
-    transparent 100%
-  );
-  -webkit-backdrop-filter: blur(46px) saturate(165%) contrast(103%);
-  backdrop-filter: blur(46px) saturate(165%) contrast(103%);
-  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
+  content: none;
 }
 
 .wbc-search {
@@ -12837,7 +12915,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 .wbc-search input {
   width: 100%;
-  height: 34px;
+  height: 32px;
   border: 0;
   border-radius: 9px;
   background: var(--wb-card-bg);
@@ -12892,10 +12970,19 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   color: var(--wb-text);
   padding: 11px 12px;
   text-align: left;
-  cursor: pointer;
+  cursor: grab;
   box-shadow: var(--wbc-control-shadow);
-  transition: background .12s ease;
+  transition: background .12s ease, opacity .14s ease, transform .14s ease;
   position: relative;
+}
+
+.wbc-chat-card:active {
+  cursor: grabbing;
+}
+
+.wbc-chat-card.dragging {
+  opacity: .22;
+  transform: scale(.985);
 }
 
 .wbc-chat-card:hover {
@@ -12998,13 +13085,47 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* ---- main column ---- */
 
 .wbc-main {
-  --wbc-header-overlay-height: calc(94px * var(--wb-ui-font-scale, 1));
+  --wbc-header-overlay-height: var(--wbc-top-glass-height);
   position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
   background: var(--wb-main-bg);
   overflow: hidden;
+}
+
+.wbc-main.chat-drop-active {
+  box-shadow: none;
+}
+
+.wbc-main.chat-drop-active::after {
+  content: "";
+  position: absolute;
+  z-index: 65;
+  inset: 0;
+  box-sizing: border-box;
+  border: 2px solid color-mix(in srgb, var(--wb-accent) 72%, transparent);
+  pointer-events: none;
+}
+
+.wbc-chat-open-drop-hint {
+  position: absolute;
+  z-index: 70;
+  top: 50%;
+  left: 50%;
+  max-width: min(360px, calc(100% - 48px));
+  transform: translate(-50%, -50%);
+  padding: 10px 16px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 52%, var(--wb-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-card-bg-strong) 92%, transparent);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.2);
+  color: var(--wb-text);
+  font-size: calc(13px * var(--wb-ui-font-scale, 1));
+  font-weight: 680;
+  text-align: center;
+  pointer-events: none;
+  backdrop-filter: blur(18px);
 }
 
 .wbc-header {
@@ -13024,22 +13145,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-header::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(
-    to bottom,
-    color-mix(in srgb, var(--wb-main-bg) 66%, transparent) 0%,
-    color-mix(in srgb, var(--wb-main-bg) 56%, transparent) 68%,
-    color-mix(in srgb, var(--wb-main-bg) 32%, transparent) 86%,
-    transparent 100%
-  );
-  -webkit-backdrop-filter: blur(46px) saturate(165%) contrast(103%);
-  backdrop-filter: blur(46px) saturate(165%) contrast(103%);
-  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
+  content: none;
 }
 
 .wbc-header-info {
@@ -13308,7 +13414,8 @@ html[data-theme="dark"] .wbc-selection-menu {
   position: absolute;
   z-index: 20;
   top: 50%;
-  left: 4px;
+  right: 4px;
+  left: auto;
   width: 20px;
   height: 38px;
   transform: translateY(-50%);
@@ -13366,7 +13473,8 @@ html[data-theme="dark"] .wbc-selection-menu {
 .wbc-conversation-nav-panel {
   position: absolute;
   top: 50%;
-  left: 0;
+  right: 0;
+  left: auto;
   width: min(280px, calc(100vw - 96px));
   max-height: min(420px, calc(100vh - 180px));
   display: flex;
@@ -13378,8 +13486,8 @@ html[data-theme="dark"] .wbc-selection-menu {
   box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.08);
   backdrop-filter: blur(16px);
   opacity: 0;
-  transform: translateY(-50%) translateX(-4px) scale(0.97);
-  transform-origin: left center;
+  transform: translateY(-50%) translateX(4px) scale(0.97);
+  transform-origin: right center;
   pointer-events: none;
   visibility: hidden;
   transition: opacity 120ms ease, transform 160ms cubic-bezier(.2, .8, .2, 1), visibility 0s linear 160ms;
@@ -14177,13 +14285,6 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   padding-top: 10px;
 }
 
-.wbc-msg-attachments img {
-  max-width: 220px;
-  max-height: 160px;
-  border-radius: 8px;
-  display: block;
-}
-
 .wbc-attach-file {
   appearance: none;
   flex: 1 1 100%;
@@ -14209,6 +14310,124 @@ button.wbc-attach-file:hover {
   background: color-mix(in srgb, var(--wb-red) 2.5%, var(--wb-card-bg));
 }
 button.wbc-attach-file:focus-visible {
+  outline: 2px solid var(--wb-active-border);
+  outline-offset: 2px;
+}
+
+.wbc-inline-image {
+  width: min(280px, 100%);
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  cursor: grab;
+}
+
+.wbc-inline-image:active {
+  cursor: grabbing;
+}
+
+.wbc-inline-image-preview {
+  appearance: none;
+  width: 100%;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--wb-blue) 28%, var(--wb-line));
+  border-radius: 12px;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: zoom-in;
+}
+
+.wbc-inline-image-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 11px;
+  object-fit: cover;
+}
+
+.wbc-inline-image-preview:hover img {
+  filter: brightness(.97);
+}
+
+.wbc-inline-image-preview:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--wb-active-border);
+  outline-offset: -2px;
+}
+
+.wbc-inline-image-footer {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+  padding: 2px 4px 2px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--wb-card-bg);
+  box-shadow: var(--wbc-control-shadow);
+}
+
+.wbc-inline-image-footer > b {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbc-inline-image-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.wbc-inline-image-actions .wbc-inline-image-action {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px;
+  min-height: 28px;
+  max-width: 28px;
+  max-height: 28px;
+  box-sizing: border-box;
+  flex: 0 0 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 !important;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 0;
+  line-height: 0;
+  vertical-align: middle;
+  text-decoration: none;
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.wbc-inline-image-actions .wbc-inline-image-action svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wbc-inline-image-actions .wbc-inline-image-action:hover {
+  background: var(--wb-control-hover-bg);
+  color: var(--wb-text);
+}
+
+.wbc-inline-image-actions .wbc-inline-image-action:focus-visible {
   outline: 2px solid var(--wb-active-border);
   outline-offset: 2px;
 }
@@ -17219,6 +17438,7 @@ html[data-theme="dark"] .wbc-model-menu > button:hover {
 
 @media (max-width: 1320px) {
   .wbc-page {
+    --wbc-side-column-width: var(--wb-right-w, 310px);
     grid-template-columns: 230px minmax(300px, 1fr) var(--wb-right-w, 310px);
   }
   .wbc-page.wbc-side-hidden {
@@ -17237,6 +17457,9 @@ html[data-theme="dark"] .wbc-model-menu > button:hover {
   }
   .wbc-side {
     display: none;
+  }
+  .wbc-top-glass {
+    right: 0;
   }
 }
 

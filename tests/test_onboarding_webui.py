@@ -146,6 +146,8 @@ async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp
         "provider": "openai_compatible",
     }])
     monkeypatch.setattr(settings_store, "save_models", lambda models: saved.setdefault("models", models))
+    monkeypatch.setattr(settings_store, "save_codex_model", lambda model: saved.setdefault("codex_model", model))
+    monkeypatch.setattr(settings_store, "save_model_source", lambda source: saved.setdefault("model_source", source))
     monkeypatch.setattr(onboarding, "write_env_keys", lambda updates: env_updates.update(updates))
 
     payload = await onboarding.save_codex_oauth_setup(
@@ -163,7 +165,9 @@ async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp
     assert saved["models"][0]["reasoning_effort"] == "high"
     assert saved["models"][0]["vision_capable"] is True
     assert saved["models"][0]["vision_check_error"] == ""
-    assert saved["models"][1]["model"] == "deepseek-chat"
+    assert len(saved["models"]) == 1
+    assert saved["codex_model"]["model"] == "gpt-5.6-terra"
+    assert saved["model_source"] == "codex"
     assert env_updates == {"OPENAI_MODEL": "gpt-5.6-terra"}
 
 
@@ -223,6 +227,8 @@ def test_settings_model_save_persists_vision_probe_result(monkeypatch, tmp_path)
     monkeypatch.setattr(onboarding, "_test_llm_connection", fake_text_probe)
     monkeypatch.setattr(onboarding, "_test_llm_vision_capability", fake_vision_probe)
     monkeypatch.setattr(settings_store, "save_models", lambda models: saved.setdefault("models", models))
+    monkeypatch.setattr(settings_store, "save_custom_models", lambda models: saved.setdefault("custom_models", models))
+    monkeypatch.setattr(settings_store, "save_model_source", lambda source: saved.setdefault("model_source", source))
     monkeypatch.setattr(settings_store, "save_vision_models", lambda models: saved.setdefault("vision_models", models))
     monkeypatch.setattr(settings_store, "save_secondary_model", lambda model: None)
     monkeypatch.setattr(settings_store, "get_secondary_model", lambda: {})
@@ -269,6 +275,97 @@ def test_settings_rejects_codex_oauth_as_fallback(tmp_path):
     assert response.json()["error"] == (
         "Codex OAuth can only be used as the primary model"
     )
+
+
+def test_settings_requires_separate_codex_model_for_oauth_source(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    custom_model = {
+        "id": "custom-primary",
+        "model": "deepseek-chat",
+        "provider": "openai_compatible",
+        "api_key": "sk-test",
+        "base_url": "https://example.test/v1",
+    }
+    app = FastAPI()
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    response = TestClient(app).put("/api/settings/models", json={
+        "primary_source": "codex",
+        "models": [custom_model],
+        "custom_models": [custom_model],
+        "codex_model": None,
+    })
+
+    assert response.status_code == 400
+    assert response.json()["error"] == (
+        "Codex model is required when OpenAI OAuth is active"
+    )
+
+
+def test_settings_keeps_custom_and_codex_models_in_parallel(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from cyrene import config
+    from cyrene.runtime import onboarding, settings_store
+
+    saved = {}
+
+    async def fake_text_probe(api_key, base_url, model):
+        return "OK"
+
+    async def fake_vision_probe(api_key, base_url, model):
+        return {
+            "vision_capable": False,
+            "vision_checked_at": "2026-07-30T00:00:00+00:00",
+            "vision_check_error": "unsupported",
+        }
+
+    monkeypatch.setattr(onboarding, "_test_llm_connection", fake_text_probe)
+    monkeypatch.setattr(onboarding, "_test_llm_vision_capability", fake_vision_probe)
+    monkeypatch.setattr(settings_store, "save_models", lambda models: saved.__setitem__("models", models))
+    monkeypatch.setattr(settings_store, "save_custom_models", lambda models: saved.__setitem__("custom_models", models))
+    monkeypatch.setattr(settings_store, "save_codex_model", lambda model: saved.__setitem__("codex_model", model))
+    monkeypatch.setattr(settings_store, "save_model_source", lambda source: saved.__setitem__("model_source", source))
+    monkeypatch.setattr(settings_store, "save_vision_models", lambda models: None)
+    monkeypatch.setattr(settings_store, "save_secondary_model", lambda model: None)
+    monkeypatch.setattr(settings_store, "get_secondary_model", lambda: {})
+    monkeypatch.setattr(config, "write_env_keys", lambda values: None)
+
+    custom_model = {
+        "id": "custom-primary",
+        "model": "deepseek-chat",
+        "provider": "openai_compatible",
+        "api_key": "sk-test",
+        "base_url": "https://example.test/v1",
+    }
+    app = FastAPI()
+    register_routes(app, bot=None, db_path=str(tmp_path / "test.db"))
+    response = TestClient(app).put("/api/settings/models", json={
+        "primary_source": "custom",
+        "models": [custom_model],
+        "custom_models": [custom_model],
+        "codex_model": {
+            "id": "codex-gpt",
+            "model": "gpt-5.6-sol",
+            "provider": "codex_oauth",
+        },
+        "vision_models": [{
+            "id": "vision",
+            "model": "deepseek-chat",
+            "api_key": "sk-test",
+            "base_url": "https://example.test/v1",
+        }],
+    })
+
+    assert response.status_code == 200
+    assert saved["model_source"] == "custom"
+    assert [model["model"] for model in saved["models"]] == ["deepseek-chat"]
+    assert [model["model"] for model in saved["custom_models"]] == ["deepseek-chat"]
+    assert saved["codex_model"]["model"] == "gpt-5.6-sol"
+    assert response.json()["primary_source"] == "custom"
+    assert response.json()["codex_model"]["model"] == "gpt-5.6-sol"
 
 
 async def test_save_personality_setup_marks_setup_done(monkeypatch, tmp_path):

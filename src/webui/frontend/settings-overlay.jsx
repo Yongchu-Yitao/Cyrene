@@ -185,6 +185,8 @@ function SettingsOverlay({
 
   // ── Models state ──
   var [models, setModels] = useStateSt(function () { return [createEmptyModel()]; });
+  var [modelSource, setModelSource] = useStateSt("custom");
+  var [codexCandidate, setCodexCandidate] = useStateSt(null);
   var [draftModel, setDraftModel] = useStateSt(createEmptyModel());
   var [visionModels, setVisionModels] = useStateSt(function () { return [createEmptyModel()]; });
   var [draftVision, setDraftVision] = useStateSt(createEmptyModel());
@@ -308,11 +310,15 @@ function SettingsOverlay({
     fetch("/api/settings/models").then(readSettingsResponse).then(function (p) {
       var fb = p.base_url || DEFAULT_MODEL_BASE_URL;
       var norm = function (raw, i) { return normalizeModel(raw, i, fb, ""); };
-      var ms = (p.models || p.primary_candidates || []).map(norm);
+      var ms = (p.custom_models || p.models || p.primary_candidates || [])
+        .filter(function (model) { return model.provider !== "codex_oauth"; })
+        .map(norm);
       var vs = (p.vision_models || p.vision_candidates || []).map(norm);
       if (!ms.length) ms = [norm({}, 0)];
       if (!vs.length) vs = [norm({}, 0)];
       setModels(ms);
+      setModelSource(p.primary_source === "codex" ? "codex" : "custom");
+      setCodexCandidate(p.codex_model ? norm(p.codex_model, 0) : null);
       setVisionModels(vs);
       setSecondaryModel({
         id: "secondary", model: (p.secondary_model && p.secondary_model.model) || "",
@@ -350,15 +356,23 @@ function SettingsOverlay({
 
   function saveModels() {
     var norm = models.map(function (m, i) { return normalizeModel(m, i, config.base_url || DEFAULT_MODEL_BASE_URL, ""); }).filter(function (m) { return m.model; });
+    var normalizedCodex = codexCandidate && codexCandidate.model
+      ? normalizeModel(codexCandidate, 0, "", "")
+      : null;
     var vNorm = visionModels.map(function (m, i) { return normalizeModel(m, i, config.base_url || DEFAULT_MODEL_BASE_URL, ""); }).filter(function (m) { return m.model; });
     if (!norm.length || !vNorm.length) { setModelsSaved(t("settings.modelCandidateRequired")); return; }
+    if (modelSource === "codex" && !normalizedCodex) { setModelsSaved(t("settings.openaiOAuthModelRequired")); return; }
     if (modelsSaving) return;
     setModelsSaving(true);
     setModelsSaved(t("settings.saving"));
     fetch("/api/settings/models", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        models: norm, vision_models: vNorm,
+        models: modelSource === "codex" ? [normalizedCodex] : norm,
+        custom_models: norm,
+        codex_model: normalizedCodex,
+        primary_source: modelSource,
+        vision_models: vNorm,
         secondary_model: secondaryModel ? {
           model: secondaryModel.model, name: secondaryModel.name,
           api_key: secondaryModel.api_key, base_url: secondaryModel.base_url,
@@ -368,7 +382,9 @@ function SettingsOverlay({
       }),
     }).then(readSettingsResponse).then(function (p) {
       var fb = p.base_url || config.base_url || DEFAULT_MODEL_BASE_URL;
-      setModels(((p.models || p.primary_candidates || norm)).map(function (m, i) { return normalizeModel(m, i, fb, ""); }));
+      setModels(((p.custom_models || norm)).map(function (m, i) { return normalizeModel(m, i, fb, ""); }));
+      setModelSource(p.primary_source === "codex" ? "codex" : "custom");
+      setCodexCandidate(p.codex_model ? normalizeModel(p.codex_model, 0, "", "") : null);
       setVisionModels(((p.vision_models || p.vision_candidates || vNorm)).map(function (m, i) { return normalizeModel(m, i, fb, ""); }));
       setSecondaryModel({
         id: "secondary", model: (p.secondary_model && p.secondary_model.model) || "",
@@ -517,7 +533,7 @@ function SettingsOverlay({
         // Content area
         React.createElement("div", { className: "settings-overlay-content" },
           tab === "general" && React.createElement(GeneralPanel, { t, lang, setLang, desktopNotifications, toggleDesktopNotifications, mapProvider, setMapProvider, amapKey, setAmapKey, amapKeySaved, setAmapKeySaved, project }),
-          tab === "models" && React.createElement(ModelsPanel, { t, models, setModels, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config }),
+          tab === "models" && React.createElement(ModelsPanel, { t, models, setModels, modelSource, setModelSource, codexCandidate, setCodexCandidate, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config }),
           tab === "channels" && ChannelsPanel({ t, telegramToken, setTelegramToken, telegramSaved, setTelegramSaved, notifyTelegram, setNotifyTelegram, notifyWechat, setNotifyWechat }),
           tab === "remote" && React.createElement(RemotePanel, { t }),
           tab === "agents" && AgentsPanel({ t, config, setConfig, configLoading, soulDraft, setSoulDraft, soulStatus, saveSoul, agentProactive, setAgentProactive, saveAgents }),
@@ -615,6 +631,7 @@ function RemotePanel(p) {
   var remoteSaveVersionRef = useRefSt(0);
   var remoteDraftRef = useRefSt(null);
   var inviteToolPacksRef = useRefSt([]);
+  var inviteDefaultsInitializedRef = useRefSt(false);
 
   function showRemoteNotice(message, type) {
     var feedback = window.CyreneUI && window.CyreneUI.require
@@ -632,11 +649,18 @@ function RemotePanel(p) {
     return fetch("/api/remote/settings").then(readSettingsResponse).then(function (payload) {
       setRemote(payload);
       remoteDraftRef.current = payload;
-      setInviteToolPacks(function (current) {
-        var next = current.length ? current : (payload.default_tool_packs || []);
-        inviteToolPacksRef.current = next;
-        return next;
-      });
+      if (!inviteDefaultsInitializedRef.current) {
+        var defaultToolPacks = (payload.remote_tool_packages || []).map(function (item) {
+          return item.wire_name;
+        });
+        var defaultProjects = (payload.projects || []).map(function (project) {
+          return project.id;
+        });
+        inviteDefaultsInitializedRef.current = true;
+        inviteToolPacksRef.current = defaultToolPacks;
+        setInviteToolPacks(defaultToolPacks);
+        setInviteProjects(defaultProjects);
+      }
       setLoading(false);
       return payload;
     }).catch(function (error) {
@@ -901,39 +925,46 @@ function RemotePanel(p) {
                 React.createElement("b", null, t("settings.remoteAllowController")),
                 React.createElement("small", null, t("settings.remoteAllowControllerHint")),
               ),
-              React.createElement("div", { className: "remote-pairing-share-grid" },
-                React.createElement("div", { className: "remote-pairing-group" },
-                  React.createElement("span", { className: "remote-pairing-group-title" }, t("settings.remoteDirectToolPackages")),
-                  React.createElement("small", { className: "remote-required-capabilities" }, t("settings.remoteCompatibilityAlwaysOn")),
-                  React.createElement("div", { className: "remote-option-list remote-tool-package-options" },
-                    (remote.remote_tool_packages || []).map(function (item) {
-                      var enabled = inviteToolPacks.indexOf(item.wire_name) >= 0;
-                      var name = t("toolName." + item.wire_name);
-                      return React.createElement("label", {
-                        key: item.wire_name,
-                        className: "remote-option",
-                        title: t("toolPackageDesc." + item.wire_name),
-                      },
-                        React.createElement("input", {
-                          type: "checkbox",
-                          checked: enabled,
-                          onChange: function () { toggleInviteToolPack(item.wire_name); },
-                          "aria-label": t("settings.remotePackageToggleLabel", { name: name }),
-                        }),
-                        React.createElement("span", null, name),
-                      );
-                    }),
-                  ),
+              React.createElement("details", { className: "remote-pairing-settings" },
+                React.createElement("summary", null,
+                  React.createElement("span", { className: "remote-pairing-settings-chevron", "aria-hidden": "true" }, ExternalChevron()),
+                  React.createElement("span", { className: "remote-pairing-settings-title" }, t("settings.remoteShareSettings")),
+                  React.createElement("small", null, t("settings.remoteShareSettingsHint")),
                 ),
-                React.createElement("div", { className: "remote-pairing-group" },
-                  React.createElement("span", { className: "remote-pairing-group-title" }, t("settings.remoteSharedProjects")),
-                  React.createElement("div", { className: "remote-project-choices" },
-                    (remote.projects || []).map(function (project) {
-                      return React.createElement("label", { key: project.id, className: "remote-option" },
-                        React.createElement("input", { type: "checkbox", checked: inviteProjects.indexOf(project.id) >= 0, onChange: function () { toggleList(project.id, setInviteProjects); } }),
-                        React.createElement("span", null, project.name || project.id),
-                      );
-                    }),
+                React.createElement("div", { className: "remote-pairing-share-grid" },
+                  React.createElement("div", { className: "remote-pairing-group" },
+                    React.createElement("span", { className: "remote-pairing-group-title" }, t("settings.remoteDirectToolPackages")),
+                    React.createElement("small", { className: "remote-required-capabilities" }, t("settings.remoteCompatibilityAlwaysOn")),
+                    React.createElement("div", { className: "remote-option-list remote-tool-package-options" },
+                      (remote.remote_tool_packages || []).map(function (item) {
+                        var enabled = inviteToolPacks.indexOf(item.wire_name) >= 0;
+                        var name = t("toolName." + item.wire_name);
+                        return React.createElement("label", {
+                          key: item.wire_name,
+                          className: "remote-option",
+                          title: t("toolPackageDesc." + item.wire_name),
+                        },
+                          React.createElement("input", {
+                            type: "checkbox",
+                            checked: enabled,
+                            onChange: function () { toggleInviteToolPack(item.wire_name); },
+                            "aria-label": t("settings.remotePackageToggleLabel", { name: name }),
+                          }),
+                          React.createElement("span", null, name),
+                        );
+                      }),
+                    ),
+                  ),
+                  React.createElement("div", { className: "remote-pairing-group" },
+                    React.createElement("span", { className: "remote-pairing-group-title" }, t("settings.remoteSharedProjects")),
+                    React.createElement("div", { className: "remote-project-choices" },
+                      (remote.projects || []).map(function (project) {
+                        return React.createElement("label", { key: project.id, className: "remote-option" },
+                          React.createElement("input", { type: "checkbox", checked: inviteProjects.indexOf(project.id) >= 0, onChange: function () { toggleList(project.id, setInviteProjects); } }),
+                          React.createElement("span", null, project.name || project.id),
+                        );
+                      }),
+                    ),
                   ),
                 ),
               ),
@@ -1163,6 +1194,23 @@ function GeneralPanel(p) {
 
   useEffectSt(function () {
     var cancelled = false;
+    fetch("/api/settings/config").then(readSettingsResponse).then(function (payload) {
+      if (cancelled) return;
+      var savedTimezone = String(payload.timezone || "");
+      if (timezoneOptions.indexOf(savedTimezone) < 0) return;
+      var previousTimezone = "";
+      try { previousTimezone = localStorage.getItem("cyrene-timezone") || ""; } catch (e) {}
+      setSelectedTimezone(savedTimezone);
+      try { localStorage.setItem("cyrene-timezone", savedTimezone); } catch (e) {}
+      if (previousTimezone && previousTimezone !== savedTimezone) {
+        try { window.CyreneUI.require("data").reload(); } catch (e) {}
+      }
+    }).catch(function () {});
+    return function () { cancelled = true; };
+  }, []);
+
+  useEffectSt(function () {
+    var cancelled = false;
     fetch("/api/settings/integrations").then(readSettingsResponse).then(function (payload) {
       if (cancelled) return;
       if (payload.zotero) setZoteroSettings(payload.zotero);
@@ -1218,9 +1266,19 @@ function GeneralPanel(p) {
   function changeTimezone(event) {
     var nextTimezone = event.target.value;
     if (timezoneOptions.indexOf(nextTimezone) < 0) return;
+    var previousTimezone = selectedTimezone;
     setSelectedTimezone(nextTimezone);
     try { localStorage.setItem("cyrene-timezone", nextTimezone); } catch (e) {}
     try { window.CyreneUI.require("data").reload(); } catch (e) {}
+    fetch("/api/settings/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ timezone: nextTimezone }),
+    }).catch(function () {
+      setSelectedTimezone(previousTimezone);
+      try { localStorage.setItem("cyrene-timezone", previousTimezone); } catch (e) {}
+      try { window.CyreneUI.require("data").reload(); } catch (e) {}
+    });
   }
 
   function saveAmapKey() {
@@ -1522,10 +1580,8 @@ function modelCredentialFields(model, update, t) {
 }
 
 function ModelsPanel(p) {
-  var { t, models, setModels, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config } = p;
-  var savedCodexCandidate = models[0] && models[0].provider === "codex_oauth"
-    ? models[0]
-    : null;
+  var { t, models, setModels, modelSource, setModelSource, codexCandidate, setCodexCandidate, draftModel, setDraftModel, visionModels, setVisionModels, draftVision, setDraftVision, secondaryModel, setSecondaryModel, modelsSaved, modelsSaving, saveModels, config } = p;
+  var savedCodexCandidate = codexCandidate;
   var [codexState, setCodexState] = useStateSt({
     available: true,
     connected: !!savedCodexCandidate,
@@ -1540,9 +1596,8 @@ function ModelsPanel(p) {
   var [codexNotice, setCodexNotice] = useStateSt("");
   var [primaryMenuOpen, setPrimaryMenuOpen] = useStateSt(false);
   var [hoveredPrimarySource, setHoveredPrimarySource] = useStateSt("");
-  var [primarySource, setPrimarySource] = useStateSt(
-    models[0] && models[0].provider === "codex_oauth" ? "codex" : "custom"
-  );
+  var primarySource = modelSource;
+  var setPrimarySource = setModelSource;
   var codexPoll = useRefSt(null);
   var primarySourceRef = useRefSt(null);
 
@@ -1569,19 +1624,14 @@ function ModelsPanel(p) {
   }, [primaryMenuOpen]);
 
   useEffectSt(function () {
-    var saved = models[0] && models[0].provider === "codex_oauth"
-      ? models[0]
-      : null;
+    var saved = codexCandidate;
     if (!saved) return;
     setCodexModel(saved.model || "");
     setCodexEffort(saved.reasoning_effort || "");
-    if (models[0] && models[0].provider === "codex_oauth") {
-      setPrimarySource("codex");
-      setCodexState(function (previous) {
-        return { ...previous, connected: true };
-      });
-    }
-  }, [models]);
+    setCodexState(function (previous) {
+      return { ...previous, connected: true };
+    });
+  }, [codexCandidate]);
 
   function loadCodexState() {
     return fetch("/api/settings/openai-oauth")
@@ -1589,9 +1639,7 @@ function ModelsPanel(p) {
       .then(function (data) {
         setCodexState({ ...data, checking: false });
         var options = data.models || [];
-        var saved = models[0] && models[0].provider === "codex_oauth"
-          ? models[0]
-          : null;
+        var saved = codexCandidate;
         var savedModel = saved && saved.model || "";
         var selected = options.find(function (item) { return codexModelId(item) === savedModel; });
         var preferred = selected || options.find(function (item) { return item.isDefault || item.is_default; }) || options[0];
@@ -1645,35 +1693,21 @@ function ModelsPanel(p) {
     var targetModel = selectedModel || codexModel;
     var targetEffort = selectedEffort != null ? selectedEffort : codexEffort;
     if (!targetModel) return;
-    setModels(function (currentModels) {
-      var candidate = normalizeModel({
-        id: "codex-" + targetModel,
-        model: targetModel,
-        desc: "OpenAI OAuth",
-        price: t("settings.codexQuota"),
-        provider: "codex_oauth",
-        reasoning_effort: targetEffort,
-        api_key: "",
-        base_url: "codex://oauth",
-      }, currentModels.length, "", "");
-      var rest = currentModels.filter(function (m) {
-        return m.provider !== "codex_oauth";
-      });
-      return [candidate].concat(rest);
-    });
+    setCodexCandidate(normalizeModel({
+      id: "codex-" + targetModel,
+      model: targetModel,
+      desc: "OpenAI OAuth",
+      price: t("settings.codexQuota"),
+      provider: "codex_oauth",
+      reasoning_effort: targetEffort,
+      api_key: "",
+      base_url: "codex://oauth",
+    }, 0, "", ""));
     setCodexNotice(t("settings.openaiOAuthPrimaryReady"));
   }
 
   function selectCustomPrimary() {
     setPrimaryMenuOpen(false); setPrimarySource("custom");
-    if (models[0] && models[0].provider === "codex_oauth") {
-      var custom = models.find(function (m) { return m.provider !== "codex_oauth"; });
-      if (custom) {
-        setModels([custom].concat(models.filter(function (m) { return m.id !== custom.id; })));
-      } else {
-        setModels([createEmptyModel()].concat(models));
-      }
-    }
   }
 
   function selectCodexPrimary() {

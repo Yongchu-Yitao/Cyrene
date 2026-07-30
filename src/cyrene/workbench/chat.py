@@ -1356,6 +1356,14 @@ def _chat_context_payload(
     }
 
 
+# Stable public helpers for runtime integrations. Keep the underscored aliases
+# above for compatibility with older callers while avoiding new private-module
+# dependencies across package boundaries.
+workbench_subagent_payload = _workbench_subagent_payload
+context_segment_tokens = _context_segment_tokens
+chat_context_payload = _chat_context_payload
+
+
 def _tool_args_preview(raw_arguments: str) -> str:
     try:
         args = json.loads(raw_arguments or "{}")

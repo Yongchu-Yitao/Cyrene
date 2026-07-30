@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import signal
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from cyrene.config import WORKSPACE_DIR
 from cyrene.tooling.backends.shell_registry import (
     external_shells as _external_shells,
 )
-from cyrene.tooling.backends.shell_runtime import interactive_argv
+from cyrene.tooling.backends.shell_runtime import interactive_argv, resolve_shell
 
 _shells: dict[str, dict[str, Any]] = {}
 _shell_lock = asyncio.Lock()
@@ -21,14 +22,21 @@ _shell_counter = 0
 # Historical no-op lock retained for callers that imported or inspected it.
 _ext_lock = asyncio.Lock()
 
-def _resolve_cwd(path_str: str) -> Path:
+def _resolve_cwd(
+    path_str: str,
+    workspace_root: str | Path | None = None,
+) -> tuple[Path, Path]:
+    root = (
+        Path(workspace_root).expanduser().resolve()
+        if workspace_root
+        else WORKSPACE_DIR.resolve()
+    )
     candidate = Path(path_str or ".")
-    path = candidate if candidate.is_absolute() else WORKSPACE_DIR / candidate
+    path = candidate if candidate.is_absolute() else root / candidate
     resolved = path.resolve()
-    workspace = WORKSPACE_DIR.resolve()
-    if resolved != workspace and workspace not in resolved.parents:
+    if resolved != root and root not in resolved.parents:
         raise ValueError(f"Path escapes workspace: {path_str}")
-    return resolved
+    return resolved, root
 
 
 def _short_time(value: str | None) -> str:
@@ -72,7 +80,14 @@ async def _append_lines(shell_id: str, kind: str, text: str) -> None:
         if shell is None:
             return
         for raw_line in text.splitlines():
-            shell["lines"].append({"kind": kind, "text": raw_line})
+            shell["line_seq"] += 1
+            shell["lines"].append(
+                {
+                    "seq": shell["line_seq"],
+                    "kind": kind,
+                    "text": raw_line,
+                }
+            )
         shell["updated_at"] = datetime.now(timezone.utc).isoformat()
     await _publish_shell_update(shell_id)
 
@@ -138,12 +153,35 @@ async def start_shell(
     wake_on_exit: bool = False,
     wake_chat_id: str = "",
     wake_note: str = "",
+    workspace_root: str | Path | None = None,
+    interactive: bool = True,
+    survive_interrupt: bool = False,
 ) -> dict[str, Any]:
     """Start an independent persistent shell session."""
     global _shell_counter
-    shell_kind, shell_argv = interactive_argv()
-    resolved_cwd = _resolve_cwd(cwd)
+    if interactive:
+        shell_kind, shell_argv = interactive_argv()
+    else:
+        shell_kind, executable = resolve_shell(unix_fallback="/bin/bash")
+        if shell_kind == "bash":
+            shell_argv = [executable]
+        elif shell_kind == "powershell":
+            shell_argv = [
+                executable,
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "-",
+            ]
+        else:
+            shell_argv = [executable, "/d", "/q"]
+    resolved_cwd, confined_root = _resolve_cwd(cwd, workspace_root)
     env = dict(os.environ)
+    # npm injects this into Electron development launches; nvm treats it as an
+    # incompatible user override and prints a warning in every child shell.
+    env.pop("npm_config_prefix", None)
+    env.pop("NPM_CONFIG_PREFIX", None)
     env["PS1"] = ""
     env.setdefault("TERM", "dumb")
     proc = await asyncio.create_subprocess_exec(
@@ -155,6 +193,17 @@ async def start_shell(
         stderr=asyncio.subprocess.PIPE,
         **({"start_new_session": True} if os.name != "nt" else {}),
     )
+    if (
+        survive_interrupt
+        and os.name != "nt"
+        and shell_kind == "bash"
+        and proc.stdin is not None
+    ):
+        # A non-interactive shell normally exits when its process group gets
+        # SIGINT. Keep the shell alive while child commands retain the default
+        # disposition, matching the useful part of an interactive Ctrl+C.
+        proc.stdin.write(b"trap ':' INT\n")
+        await proc.stdin.drain()
 
     _shell_counter += 1
     shell_id = f"shell_{int(time.time() * 1000)}_{_shell_counter}"
@@ -180,7 +229,11 @@ async def start_shell(
         _shells[shell_id] = {
             "id": shell_id,
             "title": title.strip() or "independent shell",
-            "cwd": str(resolved_cwd.relative_to(WORKSPACE_DIR.resolve())) if resolved_cwd != WORKSPACE_DIR.resolve() else ".",
+            "cwd": (
+                str(resolved_cwd.relative_to(confined_root))
+                if resolved_cwd != confined_root
+                else "."
+            ),
             "pid": proc.pid,
             "status": "running",
             "round_id": round_id,
@@ -189,6 +242,7 @@ async def start_shell(
             "exit_code": None,
             "proc": proc,
             "lines": deque(maxlen=240),
+            "line_seq": 0,
             "wake_on_exit": want_wake,
             "wake_chat_id": chat_id if want_wake else "",
             "wake_note": note if want_wake else "",
@@ -224,7 +278,14 @@ async def send_shell(shell_id: str, command: str, wait_ms: int = 700) -> dict[st
             raise ValueError(f"Shell {shell_id} is not running")
         proc.stdin.write((command.rstrip("\n") + "\n").encode("utf-8"))
         await proc.stdin.drain()
-        shell["lines"].append({"kind": "prompt", "text": f"$ {command}"})
+        shell["line_seq"] += 1
+        shell["lines"].append(
+            {
+                "seq": shell["line_seq"],
+                "kind": "prompt",
+                "text": f"$ {command}",
+            }
+        )
         shell["updated_at"] = datetime.now(timezone.utc).isoformat()
     await _publish_shell_update(shell_id)
     await asyncio.sleep(max(0, wait_ms) / 1000)
@@ -240,6 +301,28 @@ async def close_shell(shell_id: str) -> dict[str, Any]:
         proc = shell.get("proc")
         if proc and proc.returncode is None:
             proc.terminate()
+    await asyncio.sleep(0.1)
+    return get_shell_snapshot(shell_id) or {}
+
+
+async def interrupt_shell(shell_id: str) -> dict[str, Any]:
+    """Interrupt the active command without intentionally closing its shell."""
+    async with _shell_lock:
+        shell = _shells.get(shell_id)
+        if shell is None:
+            raise ValueError(f"Unknown shell: {shell_id}")
+        proc = shell.get("proc")
+        if proc is None or proc.returncode is not None:
+            raise ValueError(f"Shell {shell_id} is not running")
+        pid = int(proc.pid)
+        if os.name == "nt":
+            proc.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            # Shells are created in their own session. Signalling the process
+            # group reaches both the shell and its currently running child.
+            os.killpg(pid, signal.SIGINT)
+        shell["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await _append_lines(shell_id, "meta", "^C")
     await asyncio.sleep(0.1)
     return get_shell_snapshot(shell_id) or {}
 
@@ -268,6 +351,7 @@ def get_shell_snapshot(shell_id: str) -> dict[str, Any] | None:
         "updatedAt": _short_time(shell.get("updated_at")),
         "elapsed": elapsed,
         "lines": list(shell.get("lines", [])),
+        "nextCursor": int(shell.get("line_seq") or 0),
         "wakeOnExit": bool(shell.get("wake_on_exit")),
         "wakeChatId": shell.get("wake_chat_id", ""),
         "wakeId": shell.get("wake_id", ""),

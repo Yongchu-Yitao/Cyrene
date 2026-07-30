@@ -272,3 +272,39 @@ def test_unknown_context_preserves_zero_without_known_candidates():
     from cyrene.runtime import config_store
 
     assert config_store.effective_ctx_limit_for_model("custom", []) == 0
+
+
+def test_parallel_model_settings_migrate_from_legacy_candidate_order(
+    isolated_config_store,
+):
+    custom = {
+        "id": "custom-primary",
+        "model": "deepseek-chat",
+        "provider": "openai_compatible",
+    }
+    codex = {
+        "id": "codex-primary",
+        "model": "gpt-5.6-sol",
+        "provider": "codex_oauth",
+    }
+    isolated_config_store._cache = {
+        "env": {},
+        "settings": {"models": [codex, custom]},
+    }
+
+    assert isolated_config_store.get_model_source() == "codex"
+    assert isolated_config_store.get_codex_model() == codex
+    assert isolated_config_store.get_custom_models() == [custom]
+
+
+def test_parallel_model_settings_are_saved_independently(isolated_config_store):
+    custom = [{"model": "deepseek-chat", "provider": "openai_compatible"}]
+    codex = {"model": "gpt-5.6-sol", "provider": "codex_oauth"}
+
+    isolated_config_store.save_custom_models(custom)
+    isolated_config_store.save_codex_model(codex)
+    isolated_config_store.save_model_source("codex")
+
+    assert isolated_config_store.get_custom_models() == custom
+    assert isolated_config_store.get_codex_model() == codex
+    assert isolated_config_store.get_model_source() == "codex"

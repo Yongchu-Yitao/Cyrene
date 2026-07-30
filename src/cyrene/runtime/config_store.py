@@ -99,6 +99,9 @@ _DEFAULT_SETTINGS: dict = {
     "heartbeat_interval": 1800,
     "write_permission_mode": "workspace_only",
     "models": _DEFAULT_MODELS,
+    "custom_models": _DEFAULT_MODELS,
+    "codex_model": {},
+    "model_source": "",
     "vision_models": _DEFAULT_VISION_MODELS,
     "secondary_model": {"model": "", "name": "", "api_key": "", "base_url": "", "ctx_limit": 0, "max_concurrency": 0},
     "enabled_tools": _DEFAULT_ENABLED_TOOLS,
@@ -108,6 +111,7 @@ _DEFAULT_SETTINGS: dict = {
     "soul_active": True,
     "agent_proactive": True,
     "app_language": "",
+    "timezone": "Asia/Shanghai",
     # Independent from the currency-based API budget and enforced by default.
     "codex_budget_enabled": True,
     # Execution workers are completion-driven. These are wide lease/safety
@@ -629,6 +633,58 @@ def get_models() -> list[dict]:
 
 def save_models(models: list[dict]) -> None:
     set_setting("models", list(models))
+
+
+def get_custom_models() -> list[dict]:
+    saved = get_setting("custom_models", None)
+    if isinstance(saved, list) and saved:
+        return saved
+    return [
+        model
+        for model in (get_models() or [])
+        if str(model.get("provider") or "openai_compatible") != "codex_oauth"
+    ]
+
+
+def save_custom_models(models: list[dict]) -> None:
+    set_setting("custom_models", list(models))
+
+
+def get_codex_model() -> dict:
+    saved = get_setting("codex_model", None)
+    if isinstance(saved, dict) and saved:
+        return saved
+    return next(
+        (
+            model
+            for model in (get_models() or [])
+            if str(model.get("provider") or "") == "codex_oauth"
+        ),
+        {},
+    )
+
+
+def save_codex_model(model: dict) -> None:
+    set_setting("codex_model", dict(model))
+
+
+def get_model_source() -> str:
+    saved = str(get_setting("model_source", "") or "").strip().lower()
+    if saved in {"custom", "codex"}:
+        return saved
+    models = get_models() or []
+    return (
+        "codex"
+        if models and str(models[0].get("provider") or "") == "codex_oauth"
+        else "custom"
+    )
+
+
+def save_model_source(source: str) -> None:
+    normalized = str(source or "").strip().lower()
+    if normalized not in {"custom", "codex"}:
+        raise ValueError("model source must be custom or codex")
+    set_setting("model_source", normalized)
 
 
 def get_vision_models() -> list[dict]:

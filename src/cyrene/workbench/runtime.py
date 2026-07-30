@@ -8847,6 +8847,7 @@ def _build_config() -> dict:
         "heartbeat_interval": settings.get("heartbeat_interval", 1800),
         "agent_proactive": settings.get("agent_proactive", True),
         "app_language": settings.get("app_language", ""),
+        "timezone": settings.get("timezone", "Asia/Shanghai"),
         "subagent_execution_max_tool_calls": settings.get("subagent_execution_max_tool_calls", 200),
         "subagent_execution_max_wall_seconds": settings.get("subagent_execution_max_wall_seconds", 1800),
         "subagent_execution_no_progress_turns": settings.get("subagent_execution_no_progress_turns", 3),

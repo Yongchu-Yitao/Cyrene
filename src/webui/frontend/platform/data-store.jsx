@@ -155,6 +155,17 @@ async function bootstrapData() {
       const storedTimezone = localStorage.getItem("cyrene-timezone") || "";
       if (supportedTimezones.includes(storedTimezone)) tz = storedTimezone;
     } catch (error) {}
+    try {
+      const settingsResponse = await fetch("/api/settings/config");
+      if (settingsResponse.ok) {
+        const settings = await settingsResponse.json();
+        const savedTimezone = String(settings.timezone || "");
+        if (supportedTimezones.includes(savedTimezone)) {
+          tz = savedTimezone;
+          try { localStorage.setItem("cyrene-timezone", savedTimezone); } catch (error) {}
+        }
+      }
+    } catch (error) {}
     const r = await fetch("/api/ui-data?tz=" + encodeURIComponent(tz));
     if (!r.ok) throw new Error("ui-data fetch failed: " + r.status);
     const fresh = await r.json();

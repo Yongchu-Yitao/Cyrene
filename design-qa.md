@@ -240,3 +240,111 @@ Status: **Passed**
 - Runtime verification: passed.
 - Automated checks: `180 passed`.
 - final result: passed
+
+---
+
+# Remote sharing settings QA
+
+- Detailed report: `design-qa-remote-sharing.md`
+- Runtime verification: passed.
+- Frontend build and targeted frontend logic test: passed.
+- final result: passed
+
+---
+
+# Conversation top glass alignment QA
+
+- source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-911eace5-5c37-44bd-9283-18be5f0dd31f.png`
+- implementation screenshot: `/Users/syw/Documents/playground/Cyrene/design-qa-chat-glass-final.png`
+- full-view and focused comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-chat-glass-comparison.png`
+- viewport: 1200 × 720 CSS px, device pixel ratio 2; browser output normalized to 1200 × 720 px
+- comparison normalization: source resized from 1722 × 290 px to 1200 × 202 px; implementation cropped to the same 1200 × 202 px region
+- state: dark theme, conversation rail and transcript header visible
+
+## Findings
+
+- No remaining P0/P1/P2 findings.
+- The rail and transcript now share one `.wbc-top-glass` layer spanning both columns.
+- The two former pseudo-element glass backgrounds are disabled, so there is only one backdrop-filter surface.
+- The vertical rail divider is removed entirely; runtime reports a `0px` border and no `::after` content.
+- Runtime geometry reports identical 101.52 px shared-glass and rail-header overlay heights at the active UI scale.
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing Cyrene font family, weights, scale, truncation, and hierarchy remain unchanged.
+- Spacing and layout rhythm: the left title row, search field, and inset were compacted to fit the same top-glass height as the transcript header.
+- Colors and visual tokens: the unified glass derives from `--wb-main-bg`; the existing gradient, blur, saturation, contrast, and mask are preserved.
+- Image quality and assets: no production image or icon assets changed.
+- Copy and content: unchanged.
+
+## Comparison history
+
+1. The initial implementation only matched the two overlay heights; separate rail and header pseudo-elements still rendered two glass surfaces (P2).
+2. Replaced both surfaces with one page-level glass layer and initially moved the rail divider below it.
+3. User requested a fully borderless join, so the remaining divider was removed from the rail structure.
+4. Post-fix combined comparison shows a continuous surface with no vertical seam above or below the glass.
+
+## Verification
+
+- Frontend build: passed.
+- `uv run pytest tests/test_workbench_frontend_logic.py -q`: 156 passed.
+- `git diff --check`: passed.
+- Search input focus/value interaction: passed.
+- Console errors checked: none.
+- final result: passed
+
+---
+
+# Inline conversation image QA
+
+- source visual truth:
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-1ef71bbf-1b09-4b72-ad4d-0bc482a7aebc.png`
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-4f5d09b0-48ce-42bd-87c9-ff5624da3066.png`
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-dcb0ba95-2830-41cb-b1c8-119c87dbc71b.png`
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-39f1523b-d003-47b9-be64-983b5172ba32.png`
+  - `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-0fafb035-b4d7-4784-90fd-6559206eac08.png`
+- implementation screenshot: `/Users/syw/Documents/playground/Cyrene/design-qa-inline-image-final.png`
+- full-view comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-inline-image-comparison.png`
+- focused action comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-inline-image-focused-comparison.png`
+- viewport: 1280 × 720 CSS px
+- source pixels: 1192 × 1082; implementation pixels: 1280 × 720
+- density normalization: source full view normalized to 720 px height; focused button comparison normalized to 98 px height
+- state: dark theme, generated-image conversation open, image card visible
+
+## Findings
+
+- No remaining P0/P1/P2 findings.
+- Generated images now render directly in the transcript as a compact 280 px card.
+- The image fills a square fully rounded preview with `object-fit: cover`, removing the previous side bars.
+- The compact, borderless footer uses the same `--wb-card-bg` surface and control shadow as the message input, and shows the filename plus exactly two actions.
+- Both action icons use the same 24 px view box, 1.8 px stroke, round caps/joins, button size, and color treatment.
+- The complete card remains draggable and keeps the existing Cyrene resource drag payload.
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing Cyrene type family and message hierarchy are unchanged; the filename uses the existing attachment weight and truncation behavior.
+- Spacing and layout rhythm: the final card is 280 px wide with a 34 px footer, 12 px image corner radii, 28 px action buttons, and consistent 7 px action spacing.
+- Colors and visual tokens: the footer matches the composer through `--wb-card-bg` and `--wbc-control-shadow`; actions are borderless with the composer hover color.
+- Image quality and asset fidelity: the original generated image URL is displayed directly; cover cropping removes side bars without introducing a replacement asset.
+- Copy and content: the filename is preserved; action labels remain localized through existing translation keys.
+
+## Comparison history
+
+1. Initial implementation rendered the image at 532 px wide and retained a dark preview background (P2: too large and visually heavy).
+2. Reduced the card to 380 px, added square rounded cover cropping, and replaced the text arrow with a matching stroke icon.
+3. User requested a further size reduction; the final implementation is 280 px wide.
+4. User requested a shorter, borderless lower area; removed the enclosing card border and gave the image four fully rounded corners.
+5. Matched the footer to the composer surface and reduced it to 34 px with 28 px actions.
+6. Cleared inherited button padding, line-height, gap, and sizing so the download SVG is strictly centered.
+7. Final full-view and focused comparisons show a compact rounded image, no side bars, a composer-matched footer, and centered matched action icons.
+
+## Verification
+
+- Frontend build: passed.
+- `uv run pytest tests/test_workbench_frontend_logic.py tests/test_workbench_artifact_download.py -q`: 164 passed.
+- `git diff --check`: passed.
+- Clicking the image opens the right-side viewer: passed.
+- Draggable card contract (`draggable="true"`): passed.
+- Both footer actions present with matching icon geometry: passed.
+- Console errors checked: none.
+- final result: passed

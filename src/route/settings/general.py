@@ -265,7 +265,14 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.get("/api/settings/models")
     async def api_get_models():
-        from cyrene.runtime.settings_store import get_models, get_vision_models, get_secondary_model
+        from cyrene.runtime.settings_store import (
+            get_codex_model,
+            get_custom_models,
+            get_model_source,
+            get_models,
+            get_secondary_model,
+            get_vision_models,
+        )
         from cyrene.config import OPENAI_API_KEY, DEFAULT_OPENAI_BASE_URL, read_env_file
         from cyrene.model_runtime.pricing import price_hint as _price_hint
 
@@ -322,12 +329,26 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             return normalized_items
 
         raw_models = get_models()
+        raw_custom_models = get_custom_models()
+        raw_codex_model = get_codex_model()
+        model_source = get_model_source()
         raw_vision_models = get_vision_models()
         raw_secondary = get_secondary_model()
         active_model_name, base_url = _live_llm_config()
         env_keys = read_env_file()
         active_api_key = strip_wrapping_quotes(str(env_keys.get("OPENAI_API_KEY") or OPENAI_API_KEY or "").strip())
         normalized = _normalize_candidates(raw_models, active_api_key, base_url)
+        normalized_custom = _normalize_candidates(
+            raw_custom_models, active_api_key, base_url
+        )
+        normalized_codex_items = _normalize_candidates(
+            [raw_codex_model] if raw_codex_model else [],
+            active_api_key,
+            base_url,
+        )
+        normalized_codex = (
+            normalized_codex_items[0] if normalized_codex_items else None
+        )
         normalized_vision = _normalize_candidates(raw_vision_models, active_api_key, base_url)
 
         # Normalize secondary model (single item)
@@ -384,6 +405,17 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                     "base_url": base_url or DEFAULT_OPENAI_BASE_URL,
                 }
             ]
+        if not normalized_custom:
+            normalized_custom = [
+                model
+                for model in normalized
+                if model.get("provider") != "codex_oauth"
+            ]
+        if model_source == "codex" and normalized_codex:
+            normalized = [normalized_codex]
+        elif normalized_custom:
+            model_source = "custom"
+            normalized = normalized_custom
         if not normalized_vision:
             normalized_vision = [
                 {
@@ -412,6 +444,9 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         return {
             "models": normalized,
             "primary_candidates": normalized,
+            "custom_models": normalized_custom,
+            "codex_model": normalized_codex,
+            "primary_source": model_source,
             "vision_models": normalized_vision,
             "vision_candidates": normalized_vision,
             "secondary_model": normalized_secondary,
@@ -422,16 +457,42 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
 
     @router.put("/api/settings/models")
     async def api_update_models(request: Request):
-        from cyrene.runtime.settings_store import save_models, save_vision_models, save_secondary_model, get_secondary_model
+        from cyrene.runtime.settings_store import (
+            get_secondary_model,
+            save_codex_model,
+            save_custom_models,
+            save_model_source,
+            save_models,
+            save_secondary_model,
+            save_vision_models,
+        )
         from cyrene.config import DEFAULT_OPENAI_BASE_URL, write_env_keys
         from cyrene.model_runtime.pricing import price_hint as _price_hint
         from cyrene.runtime.onboarding import _test_llm_connection, _test_llm_vision_capability
         body = await request.json()
         raw_models = body.get("models")
+        raw_custom_models = body.get("custom_models")
+        raw_codex_model = body.get("codex_model")
+        uses_parallel_model_settings = (
+            "custom_models" in body
+            or "codex_model" in body
+            or "primary_source" in body
+        )
         raw_vision_models = body.get("vision_models")
         raw_secondary = body.get("secondary_model")
         if not isinstance(raw_models, list) or len(raw_models) == 0:
             return JSONResponse({"error": "models must be a non-empty list"}, status_code=400)
+        if (
+            not uses_parallel_model_settings
+            and any(
+                str(candidate.get("provider") or "") == "codex_oauth"
+                for candidate in raw_models[1:]
+            )
+        ):
+            return JSONResponse(
+                {"error": "Codex OAuth can only be used as the primary model"},
+                status_code=400,
+            )
         if raw_vision_models is not None and (not isinstance(raw_vision_models, list) or len(raw_vision_models) == 0):
             return JSONResponse({"error": "vision_models must be a non-empty list"}, status_code=400)
 
@@ -473,21 +534,69 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 )
             return normalized_items
 
-        normalized = _normalize_candidates(raw_models)
+        primary_source = str(body.get("primary_source") or "").strip().lower()
+        if primary_source not in {"custom", "codex"}:
+            primary_source = (
+                "codex"
+                if raw_models
+                and str(raw_models[0].get("provider") or "") == "codex_oauth"
+                else "custom"
+            )
+        if not isinstance(raw_custom_models, list):
+            raw_custom_models = [
+                candidate
+                for candidate in raw_models
+                if str(candidate.get("provider") or "") != "codex_oauth"
+            ]
+        if not isinstance(raw_codex_model, dict):
+            raw_codex_model = next(
+                (
+                    candidate
+                    for candidate in raw_models
+                    if str(candidate.get("provider") or "") == "codex_oauth"
+                ),
+                None,
+            )
+
+        normalized_custom = _normalize_candidates(raw_custom_models)
+        normalized_codex_items = _normalize_candidates(
+            [raw_codex_model] if raw_codex_model else []
+        )
+        normalized_codex = (
+            normalized_codex_items[0] if normalized_codex_items else None
+        )
+        if primary_source == "codex" and not normalized_codex:
+            return JSONResponse(
+                {"error": "Codex model is required when OpenAI OAuth is active"},
+                status_code=400,
+            )
+        normalized = (
+            [normalized_codex]
+            if primary_source == "codex" and normalized_codex
+            else normalized_custom
+        )
         normalized_vision = _normalize_candidates(raw_vision_models if isinstance(raw_vision_models, list) else [])
 
         if not normalized:
             return JSONResponse({"error": "models must contain at least one valid model"}, status_code=400)
-        if raw_vision_models is not None and not normalized_vision:
-            return JSONResponse({"error": "vision_models must contain at least one valid model"}, status_code=400)
         if any(
             candidate.get("provider") == "codex_oauth"
-            for candidate in normalized[1:]
+            for candidate in normalized_custom
         ):
             return JSONResponse(
-                {"error": "Codex OAuth can only be used as the primary model"},
+                {"error": "Custom model candidates cannot use Codex OAuth"},
                 status_code=400,
             )
+        if (
+            normalized_codex
+            and normalized_codex.get("provider") != "codex_oauth"
+        ):
+            return JSONResponse(
+                {"error": "Codex model must use OpenAI OAuth"},
+                status_code=400,
+            )
+        if raw_vision_models is not None and not normalized_vision:
+            return JSONResponse({"error": "vision_models must contain at least one valid model"}, status_code=400)
         if any(
             candidate.get("provider") == "codex_oauth"
             for candidate in normalized_vision
@@ -554,7 +663,7 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
         # Check every model being saved, but de-duplicate identical endpoint
         # configurations so the default primary/vision mirror costs one probe.
         vision_checks: dict[tuple[str, str, str], dict[str, Any]] = {}
-        for candidate in [*normalized, *normalized_vision]:
+        for candidate in [*normalized_custom, *normalized_vision]:
             if candidate.get("provider") == "codex_oauth":
                 candidate.update(
                     {
@@ -582,6 +691,10 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 vision_checks[check_key] = capability
             candidate.update(capability)
 
+        save_custom_models(normalized_custom)
+        if normalized_codex:
+            save_codex_model(normalized_codex)
+        save_model_source(primary_source)
         save_models(normalized)
         if raw_vision_models is not None:
             save_vision_models(normalized_vision)
@@ -641,11 +754,20 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
             ]
 
         response_models = _with_price_hints(normalized)
+        response_custom_models = _with_price_hints(normalized_custom)
+        response_codex_model = (
+            _with_price_hints([normalized_codex])[0]
+            if normalized_codex
+            else None
+        )
         response_vision_models = _with_price_hints(normalized_vision)
         return {
             "ok": True,
             "models": response_models,
             "primary_candidates": response_models,
+            "custom_models": response_custom_models,
+            "codex_model": response_codex_model,
+            "primary_source": primary_source,
             "vision_models": response_vision_models if raw_vision_models is not None else None,
             "vision_candidates": response_vision_models if raw_vision_models is not None else None,
             "secondary_model": normalized_secondary,
@@ -893,6 +1015,19 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 return JSONResponse({"error": "invalid app_language"}, status_code=400)
             set_setting("app_language", value)
             changed.append("app_language")
+        if "timezone" in body:
+            value = str(body.get("timezone") or "").strip()
+            supported_timezones = {
+                "Pacific/Honolulu", "America/Los_Angeles", "America/Denver",
+                "America/Chicago", "America/New_York", "America/Sao_Paulo",
+                "UTC", "Europe/London", "Europe/Paris", "Africa/Cairo",
+                "Asia/Dubai", "Asia/Kolkata", "Asia/Bangkok", "Asia/Shanghai",
+                "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland",
+            }
+            if value not in supported_timezones:
+                return JSONResponse({"error": "invalid timezone"}, status_code=400)
+            set_setting("timezone", value)
+            changed.append("timezone")
         subagent_integer_settings = {
             "subagent_execution_max_tool_calls": (1, 5000),
             "subagent_execution_max_wall_seconds": (30, 86400),

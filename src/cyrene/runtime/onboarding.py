@@ -362,9 +362,14 @@ async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> di
         "OPENAI_MODEL": clean_model,
     })
 
-    from cyrene.runtime.settings_store import get_models, save_models
+    from cyrene.runtime.settings_store import (
+        get_custom_models,
+        save_custom_models,
+        save_model_source,
+        save_models,
+    )
 
-    current_models = get_models()
+    current_models = get_custom_models()
     model_names = {
         str(m.get("model") or m.get("name") or m.get("id") or "").strip()
         for m in (current_models or [])
@@ -381,13 +386,15 @@ async def save_and_test_llm_setup(api_key: str, base_url: str, model: str) -> di
             "base_url": clean_base_url,
             **vision_capability,
         }
-        save_models([new_entry] + list(current_models or []))
+        custom_models = [new_entry] + list(current_models or [])
     else:
-        refreshed_models = []
+        custom_models = []
         for entry in current_models or []:
             entry_model = str(entry.get("model") or entry.get("name") or entry.get("id") or "").strip()
-            refreshed_models.append({**entry, **vision_capability} if entry_model == clean_model else entry)
-        save_models(refreshed_models)
+            custom_models.append({**entry, **vision_capability} if entry_model == clean_model else entry)
+    save_custom_models(custom_models)
+    save_model_source("custom")
+    save_models(custom_models)
 
     state = load_onboarding_state()
     state["llm"] = {
@@ -416,7 +423,11 @@ async def save_codex_oauth_setup(
         CODEX_PROVIDER,
         get_codex_provider,
     )
-    from cyrene.runtime.settings_store import get_models, save_models
+    from cyrene.runtime.settings_store import (
+        save_codex_model,
+        save_model_source,
+        save_models,
+    )
 
     clean_model = model.strip()
     clean_effort = reasoning_effort.strip().lower()
@@ -478,12 +489,9 @@ async def save_codex_oauth_setup(
         "vision_checked_at": _now_iso(),
         "vision_check_error": "",
     }
-    other_candidates = [
-        item
-        for item in (get_models() or [])
-        if str(item.get("provider") or "") != CODEX_PROVIDER
-    ]
-    save_models([candidate, *other_candidates])
+    save_codex_model(candidate)
+    save_model_source("codex")
+    save_models([candidate])
     write_env_keys({"OPENAI_MODEL": clean_model})
 
     state = load_onboarding_state()

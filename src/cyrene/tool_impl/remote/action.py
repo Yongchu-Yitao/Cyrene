@@ -33,6 +33,8 @@ TOOL_DEF = {
                     "type": "string",
                     "enum": [
                         "chats.create",
+                        "chats.update",
+                        "chats.delete",
                         "chats.send",
                         "runs.guide",
                         "runs.interrupt",
@@ -53,7 +55,8 @@ TOOL_DEF = {
                 "payload": {
                     "type": "object",
                     "description": (
-                        "Command payload: chats.create {title?}; chats.send "
+                        "Command payload: chats.create {title?}; chats.update "
+                        "{chat_id,title}; chats.delete {chat_id}; chats.send "
                         "{chat_id,message,permission_mode?:auto|default|plan,language?}; "
                         "runs.guide {chat_id,message,request_id?}; runs.interrupt "
                         "{chat_id}; tasks.create {title?,goal,priority?}; tasks.dispatch "

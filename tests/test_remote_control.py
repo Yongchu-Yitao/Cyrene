@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import importlib
 import json
 import sqlite3
+import sys
+from io import BytesIO
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
+
 
 from cyrene.runtime.remote_control import (
     DEFAULT_REMOTE_CAPABILITIES,
@@ -457,6 +463,106 @@ async def test_ip_and_short_key_pairing_completes_both_sides(monkeypatch, tmp_pa
         f"127.0.0.1:{controller_port}"
     )
     assert persisted_target_peer["granted_project_scopes"] == ["project_1"]
+
+
+@pytest.mark.asyncio
+async def test_mobile_request_response_transport_needs_no_controller_listener(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("CYRENE_REMOTE_KEYRING", "0")
+    target = RemoteControlStore(str(tmp_path / "mobile-target.sqlite3"))
+    controller = RemoteControlStore(
+        str(tmp_path / "mobile-controller.sqlite3")
+    )
+    for store, name in ((target, "Desktop"), (controller, "Android")):
+        store.update_settings(
+            enabled=True,
+            relay_url="ws://127.0.0.1:9876",
+            device_name=name,
+        )
+    offer = target.create_short_pairing_invitation(
+        capabilities=["projects:list_shared"],
+        project_scopes=["project_mobile"],
+    )
+    server = DirectPairingServer(target, host="127.0.0.1", port=0)
+
+    async def handler(peer_id, command, payload, project_id):
+        assert peer_id == controller.identity.device_id
+        assert command == "projects.list"
+        assert payload == {}
+        assert project_id == ""
+        return {
+            "ok": True,
+            "projects": [{"id": "project_mobile", "name": "Mobile"}],
+        }
+
+    gateway = RemoteGateway(target, server, handler)
+    await server.start()
+    await gateway.start()
+    port = server._server.sockets[0].getsockname()[1]
+    try:
+        async with httpx.AsyncClient(trust_env=False) as client:
+            claim = await client.post(
+                f"http://127.0.0.1:{port}/v1/pairing/claim",
+                json={"pairing_key": offer["pairing_key"]},
+            )
+            accepted = controller.accept_pairing_invitation(
+                claim.json()["invitation"]
+            )
+            completed = await client.post(
+                f"http://127.0.0.1:{port}/v1/pairing/complete",
+                json={
+                    "response": accepted["response"],
+                    "transport_mode": "request_response",
+                    "client_features": ["inline_response_v1"],
+                },
+            )
+            assert completed.status_code == 200
+            assert completed.json()["transport_mode"] == "request_response"
+            assert (
+                target.get_peer(controller.identity.device_id)["lan_address"]
+                == ""
+            )
+
+            peer = controller.get_peer(target.identity.device_id)
+            request_id = "request_mobile_inline_1"
+            envelope = RemoteEnvelopeCodec.encode(
+                identity=controller.identity,
+                peer=peer,
+                kind="command",
+                payload={
+                    "request_id": request_id,
+                    "command": "projects.list",
+                    "project_id": "",
+                    "idempotency_key": "",
+                    "payload": {},
+                },
+            )
+            response = await client.post(
+                f"http://127.0.0.1:{port}/v1/control/request",
+                json={"envelope": envelope},
+            )
+            assert response.status_code == 200
+            body = response.json()
+            assert body["accepted"] is True
+            kind, payload = RemoteEnvelopeCodec.decode(
+                identity=controller.identity,
+                peer=peer,
+                envelope=body["envelope"],
+                mark_nonce=controller.mark_nonce,
+            )
+            assert kind == "response"
+            assert payload["request_id"] == request_id
+            assert payload["result"] == {
+                "ok": True,
+                "projects": [
+                    {"id": "project_mobile", "name": "Mobile"}
+                ],
+            }
+    finally:
+        await gateway.stop()
+        await server.stop()
 
 
 @pytest.mark.asyncio
@@ -1050,6 +1156,148 @@ def test_remote_harness_filters_by_granted_tool_pack_and_uses_bound_context(
     asyncio.run(scenario())
 
 
+def test_remote_shell_is_direct_project_scoped_and_device_owned(
+    paired_stores,
+    monkeypatch,
+    tmp_path,
+):
+    async def scenario():
+        target = paired_stores["target"]
+        controller = paired_stores["controller"]
+        target.update_peer_grant(
+            controller.identity.device_id,
+            capabilities=["toolpack:code_tools"],
+            project_scopes=["project_1"],
+        )
+        monkeypatch.setattr(
+            "cyrene.runtime.remote_commands.workbench_runtime._workbench_find_project_lightweight",
+            lambda project_id: {
+                "id": project_id,
+                "name": "Authorized project",
+                "workspacePath": str(tmp_path),
+            },
+        )
+        monkeypatch.setattr(
+            "cyrene.runtime.remote_commands.workbench_runtime._workbench_resolve_workspace_dir",
+            lambda _project: str(tmp_path),
+        )
+        snapshots = {}
+        observed = {}
+
+        async def start_direct_shell(**kwargs):
+            observed["start"] = kwargs
+            snapshot = {
+                "id": "shell_mobile_1",
+                "status": "running",
+                "cwd": ".",
+                "exitCode": None,
+                "nextCursor": 1,
+                "lines": [
+                    {
+                        "seq": 1,
+                        "kind": "meta",
+                        "text": "[shell started]",
+                    }
+                ],
+            }
+            snapshots["shell_mobile_1"] = snapshot
+            return snapshot
+
+        async def send_direct_shell(shell_id, command, wait_ms=0):
+            observed["send"] = (shell_id, command, wait_ms)
+            snapshot = dict(snapshots[shell_id])
+            snapshot["nextCursor"] = 3
+            snapshot["lines"] = snapshot["lines"] + [
+                {"seq": 2, "kind": "prompt", "text": f"$ {command}"},
+                {"seq": 3, "kind": "out", "text": str(tmp_path)},
+            ]
+            snapshots[shell_id] = snapshot
+            return snapshot
+
+        async def close_direct_shell(shell_id):
+            snapshot = dict(snapshots[shell_id])
+            snapshot["status"] = "done"
+            snapshots[shell_id] = snapshot
+            return snapshot
+
+        async def interrupt_direct_shell(shell_id):
+            observed["interrupt"] = shell_id
+            return dict(snapshots[shell_id])
+
+        monkeypatch.setattr(
+            "cyrene.runtime.remote_commands.start_shell",
+            start_direct_shell,
+        )
+        monkeypatch.setattr(
+            "cyrene.runtime.remote_commands.send_shell",
+            send_direct_shell,
+        )
+        monkeypatch.setattr(
+            "cyrene.runtime.remote_commands.close_shell",
+            close_direct_shell,
+        )
+        monkeypatch.setattr(
+            "cyrene.runtime.remote_commands.interrupt_shell",
+            interrupt_direct_shell,
+        )
+        monkeypatch.setattr(
+            "cyrene.runtime.remote_commands.get_shell_snapshot",
+            lambda shell_id: snapshots.get(shell_id),
+        )
+        executor = RemoteCommandExecutor(
+            store=target,
+            db_path=target.db_path,
+            chat_adapter={},
+            project_adapter={},
+            task_adapter={},
+        )
+
+        opened = await executor(
+            controller.identity.device_id,
+            "shell.open",
+            {},
+            "project_1",
+        )
+        written = await executor(
+            controller.identity.device_id,
+            "shell.write",
+            {
+                "shell_id": opened["shell_id"],
+                "input": "pwd",
+                "cursor": opened["next_cursor"],
+            },
+            "project_1",
+        )
+
+        assert observed["start"]["cwd"] == str(tmp_path)
+        assert observed["start"]["workspace_root"] == str(tmp_path)
+        assert observed["send"][0:2] == ("shell_mobile_1", "pwd")
+        assert [line["text"] for line in written["lines"]] == [
+            "$ pwd",
+            str(tmp_path),
+        ]
+        interrupted = await executor(
+            controller.identity.device_id,
+            "shell.interrupt",
+            {
+                "shell_id": opened["shell_id"],
+                "cursor": written["next_cursor"],
+            },
+            "project_1",
+        )
+        assert interrupted["status"] == "running"
+        assert observed["interrupt"] == "shell_mobile_1"
+        with pytest.raises(ValueError, match="unavailable"):
+            await executor(
+                "another_phone",
+                "shell.read",
+                {"shell_id": opened["shell_id"]},
+                "project_1",
+            )
+
+    asyncio.run(scenario())
+
+
 def test_remote_harness_approves_invoke_locally_but_not_discovery(monkeypatch):
     async def scenario():
         device = {
@@ -1130,8 +1378,47 @@ def test_remote_command_reads_only_attachment_referenced_by_shared_chat(
     tmp_path,
 ):
     async def scenario():
+        from cyrene import config as cyrene_config
         from cyrene.runtime import attachments as managed_attachments
+        from cyrene.runtime import remote_commands as remote_commands_module
 
+        # Several legacy test modules install PIL stubs during collection.
+        # Reuse the real modules captured by test_app_use (or import them
+        # normally when this file runs alone), then re-register the codecs
+        # needed by this integration test.
+        holder = next(
+            (
+                module
+                for module in tuple(sys.modules.values())
+                if isinstance(module, ModuleType)
+                and "_REAL_PIL" in vars(module)
+                and "_REAL_PIL_IMAGE" in vars(module)
+            ),
+            None,
+        )
+        if holder is None:
+            real_pil = importlib.import_module("PIL")
+            real_image = importlib.import_module("PIL.Image")
+        else:
+            real_pil = holder._REAL_PIL
+            real_image = holder._REAL_PIL_IMAGE
+        monkeypatch.setitem(sys.modules, "PIL", real_pil)
+        monkeypatch.setitem(sys.modules, "PIL.Image", real_image)
+        monkeypatch.setattr(real_pil, "Image", real_image)
+        real_image_ops = importlib.reload(
+            importlib.import_module("PIL.ImageOps")
+        )
+        for plugin_name in ("PIL.PngImagePlugin", "PIL.WebPImagePlugin"):
+            importlib.reload(importlib.import_module(plugin_name))
+        real_image.init()
+        monkeypatch.setattr(remote_commands_module, "Image", real_image)
+        monkeypatch.setattr(
+            remote_commands_module,
+            "ImageOps",
+            real_image_ops,
+        )
+
+        data_dir = tmp_path / "data"
         exports = tmp_path / "exports"
         uploads = tmp_path / "uploads"
         exports.mkdir()
@@ -1140,6 +1427,13 @@ def test_remote_command_reads_only_attachment_referenced_by_shared_chat(
         monkeypatch.setattr(managed_attachments, "UPLOADS_DIR", uploads)
         screenshot = exports / "desktop.png"
         screenshot.write_bytes(b"remote-screenshot")
+        preview = exports / "preview.png"
+        real_image.new(
+            "RGB",
+            (2400, 1200),
+            (72, 118, 180),
+        ).save(preview)
+        monkeypatch.setattr(cyrene_config, "DATA_DIR", data_dir)
         external = tmp_path / "outside-managed-roots.bin"
         external.write_bytes(b"x" * (10 * 1024 * 1024 + 17))
 
@@ -1161,6 +1455,16 @@ def test_remote_command_reads_only_attachment_referenced_by_shared_chat(
                                     "kind": "image",
                                     "size": len(b"remote-screenshot"),
                                     "url": "/api/chat/export/desktop.png",
+                                },
+                                {
+                                    "id": "preview.png",
+                                    "name": "Generated preview",
+                                    "content_type": "image/png",
+                                    "kind": "image",
+                                    "size": preview.stat().st_size,
+                                    "width": 2400,
+                                    "height": 1200,
+                                    "url": "/api/chat/export/preview.png",
                                 },
                                 {
                                     "id": "large-result",
@@ -1200,6 +1504,16 @@ def test_remote_command_reads_only_attachment_referenced_by_shared_chat(
             },
             "project_1",
         )
+        thumbnail = await executor(
+            paired_stores["controller"].identity.device_id,
+            "attachments.read",
+            {
+                "chat_id": "chat_1",
+                "attachment_id": "preview.png",
+                "variant": "thumbnail",
+            },
+            "project_1",
+        )
         large_first = await executor(
             paired_stores["controller"].identity.device_id,
             "attachments.read",
@@ -1228,6 +1542,16 @@ def test_remote_command_reads_only_attachment_referenced_by_shared_chat(
         assert result["attachment"]["kind"] == "image"
         assert result["content_base64"] == "cmVtb3RlLXNjcmVlbnNob3Q="
         assert missing["code"] == "attachment_not_found"
+        assert thumbnail["variant"] == "thumbnail"
+        assert thumbnail["media_type"] == "image/webp"
+        assert thumbnail["original_size"] == preview.stat().st_size
+        assert thumbnail["width"] == 960
+        assert thumbnail["height"] == 480
+        with real_image.open(
+            BytesIO(base64.b64decode(thumbnail["content_base64"]))
+        ) as image:
+            assert image.format == "WEBP"
+            assert image.size == (960, 480)
         assert large_first["chunk_size"] == 1024 * 1024
         assert large_first["eof"] is False
         assert large_last["chunk_size"] == 17

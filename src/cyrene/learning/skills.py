@@ -455,6 +455,19 @@ def toggle_skill(skill_id: str) -> bool:
     return found
 
 
+def set_skill_enabled(skill_id: str, enabled: bool) -> bool:
+    records = skill_settings_records()
+    found = False
+    for record in records:
+        if record.get("id") == skill_id:
+            record["enabled"] = bool(enabled)
+            found = True
+            break
+    if found:
+        save_skill_settings_records(records)
+    return found
+
+
 def build_skill_prompt_block(max_chars: int = 12000) -> str:
     active_skills = [skill for skill in build_skills() if skill.get("enabled", True)]
     if not active_skills:

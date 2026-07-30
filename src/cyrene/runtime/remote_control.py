@@ -67,6 +67,8 @@ REMOTE_CAPABILITIES = frozenset(
         "approval:clarification",
         "approval:respond",
         "artifact:read",
+        "settings:read",
+        "settings:update",
     }
 )
 DEFAULT_REMOTE_CAPABILITIES = (
@@ -83,6 +85,8 @@ DEFAULT_REMOTE_CAPABILITIES = (
     "approval:clarification",
     "approval:respond",
     "artifact:read",
+    "settings:read",
+    "settings:update",
 )
 REMOTE_TOOL_PACK_PREFIX = "toolpack:"
 REMOTE_TOOL_PACK_WIRE_NAMES = (
@@ -112,7 +116,10 @@ _COMMAND_CAPABILITIES = {
     "projects.list": "projects:list_shared",
     "chats.list": "chat:read",
     "chats.create": "chat:create",
+    "chats.update": "chat:create",
+    "chats.delete": "chat:create",
     "chats.read": "chat:read",
+    "changes.read": "chat:read",
     "chats.send": "chat:send",
     "runs.read": "chat:read",
     "runs.events": "chat:read",
@@ -132,6 +139,13 @@ _COMMAND_CAPABILITIES = {
     "artifacts.list": "artifact:read",
     "artifacts.read": "artifact:read",
     "attachments.read": "artifact:read",
+    "settings.read": "settings:read",
+    "settings.update": "settings:update",
+    "shell.open": "toolpack:code_tools",
+    "shell.read": "toolpack:code_tools",
+    "shell.write": "toolpack:code_tools",
+    "shell.interrupt": "toolpack:code_tools",
+    "shell.close": "toolpack:code_tools",
     "harness.discover": "",
     "harness.describe": "",
     "harness.invoke": "",
@@ -139,11 +153,18 @@ _COMMAND_CAPABILITIES = {
 _PROJECT_SCOPED_COMMANDS = frozenset(
     command
     for command in _COMMAND_CAPABILITIES
-    if command not in {"capabilities.read", "projects.list"}
+    if command not in {
+        "capabilities.read",
+        "projects.list",
+        "settings.read",
+        "settings.update",
+    }
 )
 _SIDE_EFFECT_COMMANDS = frozenset(
     {
         "chats.create",
+        "chats.update",
+        "chats.delete",
         "chats.send",
         "runs.guide",
         "runs.interrupt",
@@ -155,6 +176,11 @@ _SIDE_EFFECT_COMMANDS = frozenset(
         "tasks.resume",
         "tasks.cancel",
         "approvals.respond",
+        "settings.update",
+        "shell.open",
+        "shell.write",
+        "shell.interrupt",
+        "shell.close",
         "harness.invoke",
     }
 )
@@ -2054,6 +2080,13 @@ class RemoteGateway:
         if callable(set_identity):
             set_identity(self.store.identity)
         await self.relay.register(self.device_id, self._receive)
+        set_inline_receiver = getattr(
+            self.relay,
+            "set_inline_request_receiver",
+            None,
+        )
+        if callable(set_inline_receiver):
+            set_inline_receiver(self.handle_inline_request)
         self._started = True
         self._grant_sync_task = asyncio.create_task(
             self._grant_sync_loop(),
@@ -2064,6 +2097,13 @@ class RemoteGateway:
     async def stop(self) -> None:
         if not self._started:
             return
+        set_inline_receiver = getattr(
+            self.relay,
+            "set_inline_request_receiver",
+            None,
+        )
+        if callable(set_inline_receiver):
+            set_inline_receiver(None)
         await self.relay.unregister(self.device_id)
         self._started = False
         sync_task, self._grant_sync_task = self._grant_sync_task, None
@@ -2287,14 +2327,52 @@ class RemoteGateway:
                 outcome="unsupported_kind",
             )
             return
-        await self._handle_command(sender, peer, payload)
+        await self._handle_command(sender, peer, payload, deliver=True)
+
+    async def handle_inline_request(
+        self,
+        envelope: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Execute one trusted command and return its E2EE response inline."""
+        sender = str(envelope.get("sender_device_id") or "")
+        peer = self.store.get_peer(sender)
+        if peer is None:
+            raise PermissionError("peer_not_trusted")
+        try:
+            kind, payload = RemoteEnvelopeCodec.decode(
+                identity=self.store.identity,
+                peer=peer,
+                envelope=envelope,
+                mark_nonce=self.store.mark_nonce,
+            )
+        except Exception as exc:
+            self.store.audit(
+                "remote_envelope_rejected",
+                peer_device_id=sender,
+                outcome="invalid_envelope",
+                detail={"error": str(exc)},
+            )
+            raise ValueError("invalid remote envelope") from exc
+        if kind != "command":
+            raise ValueError(
+                "inline endpoint accepts command envelopes only"
+            )
+        self.store.touch_peer(sender)
+        return await self._handle_command(
+            sender,
+            peer,
+            payload,
+            deliver=False,
+        )
 
     async def _handle_command(
         self,
         sender: str,
         peer: dict[str, Any],
         request: dict[str, Any],
-    ) -> None:
+        *,
+        deliver: bool,
+    ) -> dict[str, Any]:
         request_id = str(request.get("request_id") or "")
         command = str(request.get("command") or "")
         project_id = str(request.get("project_id") or "")
@@ -2395,7 +2473,9 @@ class RemoteGateway:
                 },
             },
         )
-        await self.relay.send(response)
+        if deliver:
+            await self.relay.send(response)
+        return response
 
 
 __all__ = [

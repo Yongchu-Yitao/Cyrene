@@ -19,6 +19,9 @@ _TAILSCALE_IPV4_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 _FALLBACK_PORT_FIRST = DIRECT_PAIRING_PORT
 _FALLBACK_PORT_LAST = DIRECT_PAIRING_PORT + 99
 RemoteReceiver = Callable[[dict[str, Any]], Awaitable[None]]
+InlineRequestReceiver = Callable[
+    [dict[str, Any]], Awaitable[dict[str, Any]]
+]
 
 
 def _delivery_addresses(address: str) -> list[str]:
@@ -115,6 +118,7 @@ class DirectPairingServer:
         self._server: asyncio.AbstractServer | None = None
         self._device_id = ""
         self._receiver: RemoteReceiver | None = None
+        self._inline_request_receiver: InlineRequestReceiver | None = None
         self._delivery_tasks: set[asyncio.Task[Any]] = set()
 
     @property
@@ -188,6 +192,13 @@ class DirectPairingServer:
             self._device_id = ""
             self._receiver = None
 
+    def set_inline_request_receiver(
+        self,
+        receiver: InlineRequestReceiver | None,
+    ) -> None:
+        """Register the mobile controller request/response adapter."""
+        self._inline_request_receiver = receiver
+
     async def send(self, envelope: dict[str, Any]) -> None:
         recipient = str(envelope.get("recipient_device_id") or "")
         peer = await asyncio.to_thread(self.store.get_peer, recipient)
@@ -258,7 +269,10 @@ class DirectPairingServer:
                 status, payload = 405, {"error": "method not allowed"}
             elif content_length < 2 or content_length > (
                 _MAX_ENVELOPE_BYTES
-                if path == "/v1/control/envelope"
+                if path in {
+                    "/v1/control/envelope",
+                    "/v1/control/request",
+                }
                 else _MAX_REQUEST_BYTES
             ):
                 status, payload = 400, {"error": "invalid request size"}
@@ -275,18 +289,64 @@ class DirectPairingServer:
                     )
                     status = 200
                 elif path == "/v1/pairing/complete":
-                    listener_port = int(
-                        request.get("listener_port") or DIRECT_PAIRING_PORT
+                    transport_mode = str(
+                        request.get("transport_mode") or "reverse_delivery"
                     )
-                    source_address = normalize_pairing_address(
-                        f"{source}:{listener_port}"
-                    )
+                    if transport_mode not in {
+                        "reverse_delivery",
+                        "request_response",
+                    }:
+                        raise ValueError("unsupported transport mode")
+                    source_address = ""
+                    if transport_mode == "reverse_delivery":
+                        listener_port = int(
+                            request.get("listener_port")
+                            or DIRECT_PAIRING_PORT
+                        )
+                        source_address = normalize_pairing_address(
+                            f"{source}:{listener_port}"
+                        )
                     trusted = self.store.complete_short_pairing_response(
                         str(request.get("response") or ""),
                         source=source,
                         lan_address=source_address,
                     )
-                    payload, status = {"peer": trusted}, 200
+                    payload, status = {
+                        "peer": trusted,
+                        "transport_mode": transport_mode,
+                        "server_features": [
+                            "inline_response_v1",
+                            "durable_run_events",
+                            "chunked_files",
+                        ],
+                    }, 200
+                elif path == "/v1/control/request":
+                    envelope = request.get("envelope")
+                    if not isinstance(envelope, dict):
+                        raise ValueError("encrypted envelope is required")
+                    if (
+                        str(envelope.get("recipient_device_id") or "")
+                        != self.store.identity.device_id
+                    ):
+                        raise ValueError("envelope recipient does not match")
+                    sender = str(envelope.get("sender_device_id") or "")
+                    if self.store.get_peer(sender) is None:
+                        status, payload = 403, {
+                            "error": "peer is not trusted"
+                        }
+                    elif self._inline_request_receiver is None:
+                        status, payload = 503, {
+                            "error": "control gateway is offline"
+                        }
+                    else:
+                        response_envelope = await asyncio.wait_for(
+                            self._inline_request_receiver(dict(envelope)),
+                            timeout=60,
+                        )
+                        status, payload = 200, {
+                            "accepted": True,
+                            "envelope": response_envelope,
+                        }
                 elif path == "/v1/control/envelope":
                     envelope = request.get("envelope")
                     if not isinstance(envelope, dict):

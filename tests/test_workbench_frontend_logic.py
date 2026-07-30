@@ -65,6 +65,37 @@ process.stdout.write(JSON.stringify(result));
     assert result["unchanged"] == ["summary", "session", "context", "actions"]
 
 
+def test_chat_rail_order_helpers_keep_new_chats_first_and_move_existing_chats():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    helper_source = "function wbcNormalizeChatOrder(" + source.split(
+        "function wbcNormalizeChatOrder(", 1
+    )[1].split("function wbcLoadChatOrder", 1)[0]
+    helper_source += "function wbcMoveChatOrder(" + source.split(
+        "function wbcMoveChatOrder(", 1
+    )[1].split("function WbcRail", 1)[0]
+    script = f"""
+eval({json.dumps(helper_source)});
+const defaults = ["new", "alpha", "beta", "gamma"];
+const result = {{
+  normalized: wbcNormalizeChatOrder(defaults, ["beta", "missing", "beta", "alpha"]),
+  before: wbcMoveChatOrder(defaults, "gamma", "alpha", "before"),
+  after: wbcMoveChatOrder(defaults, "new", "beta", "after"),
+  unchanged: wbcMoveChatOrder(defaults, "beta", "beta", "before")
+}};
+process.stdout.write(JSON.stringify(result));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+
+    assert result["normalized"] == ["new", "gamma", "beta", "alpha"]
+    assert result["before"] == ["new", "gamma", "alpha", "beta"]
+    assert result["after"] == ["alpha", "beta", "new", "gamma"]
+    assert result["unchanged"] == ["new", "alpha", "beta", "gamma"]
+
+
 def test_chat_sidebar_overview_and_context_cards_are_sortable_and_persistent():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
@@ -174,23 +205,30 @@ def test_workbench_header_uses_a_fading_frosted_glass_overlay():
         encoding="utf-8"
     )
 
+    page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
+    shared_glass_css = styles.split(".wbc-top-glass {", 1)[1].split("}", 1)[0]
     main_css = styles.split(".wbc-main {", 1)[1].split("}", 1)[0]
     header_css = styles.split(".wbc-header {", 1)[1].split("}", 1)[0]
     glass_css = styles.split(".wbc-header::before {", 1)[1].split("}", 1)[0]
     thread_stage_css = styles.split(".wbc-thread-stage {", 1)[1].split("}", 1)[0]
 
-    assert "--wbc-header-overlay-height: calc(94px * var(--wb-ui-font-scale, 1));" in main_css
+    assert "--wbc-top-glass-height: calc(94px * var(--wb-ui-font-scale, 1));" in page_css
+    assert "--wbc-side-column-width: var(--wb-right-w, 350px);" in page_css
+    assert "position: relative;" in page_css
+    assert "--wbc-header-overlay-height: var(--wbc-top-glass-height);" in main_css
     assert "position: relative;" in main_css
     assert "position: absolute;" in header_css
     assert "z-index: 20;" in header_css
     assert "border-bottom: 0;" in header_css
-    assert "var(--wb-main-bg) 66%" in glass_css
-    assert "var(--wb-main-bg) 56%" in glass_css
-    assert "var(--wb-main-bg) 32%" in glass_css
-    assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in glass_css
-    assert "mask-image: linear-gradient(" in glass_css
-    assert "#000 78%" in glass_css
-    assert "transparent 100%" in glass_css
+    assert "content: none;" in glass_css
+    assert "var(--wb-main-bg) 66%" in shared_glass_css
+    assert "var(--wb-main-bg) 56%" in shared_glass_css
+    assert "var(--wb-main-bg) 32%" in shared_glass_css
+    assert "inset: 0 var(--wbc-side-column-width) auto 0;" in shared_glass_css
+    assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in shared_glass_css
+    assert "mask-image: linear-gradient(" in shared_glass_css
+    assert "#000 78%" in shared_glass_css
+    assert "transparent 100%" in shared_glass_css
     assert "--wbc-thread-inset-top: calc(var(--wbc-header-overlay-height) + 18px);" in thread_stage_css
 
 
@@ -204,17 +242,25 @@ def test_workbench_chat_rail_uses_the_same_frosted_glass_overlay():
     )
 
     rail_css = styles.split(".wbc-rail {", 1)[1].split("}", 1)[0]
+    rail_glass_css = styles.split(".wbc-rail-glass {", 1)[1].split("}", 1)[0]
+    rail_head_css = styles.split(
+        ".wbc-rail-glass .workbench-rail-head {", 1
+    )[1].split("}", 1)[0]
     glass_css = styles.split(".wbc-rail-glass::before {", 1)[1].split("}", 1)[0]
+    search_input_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
     chat_list_css = styles.split(".wbc-chat-list {", 1)[1].split("}", 1)[0]
 
     assert 'className="wbc-rail-glass"' in source
-    assert "--wbc-rail-overlay-height: 124px;" in rail_css
-    assert "--wbc-rail-content-inset: 132px;" in rail_css
-    assert "var(--wb-task-rail-bg) 66%" in glass_css
-    assert "var(--wb-task-rail-bg) 56%" in glass_css
-    assert "var(--wb-task-rail-bg) 32%" in glass_css
-    assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in glass_css
-    assert "mask-image: linear-gradient(" in glass_css
+    assert 'className="wbc-top-glass"' in source
+    assert "--wbc-rail-overlay-height: var(--wbc-top-glass-height);" in rail_css
+    assert "--wbc-rail-content-inset: calc(var(--wbc-top-glass-height) + 8px);" in rail_css
+    assert "gap: 6px;" in rail_glass_css
+    assert "padding: 8px 12px;" in rail_glass_css
+    assert "height: 40px;" in rail_head_css
+    assert "height: 32px;" in search_input_css
+    assert "content: none;" in glass_css
+    assert "border-right: 0;" in rail_css
+    assert ".wbc-rail::after {" not in styles
     assert "padding: var(--wbc-rail-content-inset) 0 8px;" in chat_list_css
 
 
@@ -404,6 +450,13 @@ def test_workbench_chat_has_long_conversation_navigation_and_bottom_return():
     assert ".wbc-conversation-nav:hover .wbc-conversation-nav-panel" in styles
     assert ".wbc-conversation-nav-list" in styles
     assert ".wbc-scroll-to-bottom" in styles
+    nav_css = styles.split(".wbc-conversation-nav {", 1)[1].split("}", 1)[0]
+    panel_css = styles.split(".wbc-conversation-nav-panel {", 1)[1].split("}", 1)[0]
+    assert "right: 4px;" in nav_css
+    assert "left: auto;" in nav_css
+    assert "right: 0;" in panel_css
+    assert "left: auto;" in panel_css
+    assert "transform-origin: right center;" in panel_css
 
 
 def test_maximized_browser_has_compact_agent_chat_with_transient_status():
@@ -1862,6 +1915,49 @@ def test_workbench_chat_card_menu_can_pin_and_sort_conversations():
     assert 'togglePinnedSession({ id: chat.id, kind: "chat" }, pinned)' in shell
 
 
+def test_workbench_chat_cards_reorder_and_open_when_dropped_on_conversation():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+    rail = source.split("function WbcRail(", 1)[1].split(
+        "// Conversation main (column 3)", 1
+    )[0]
+    main = source.split("function WbcMain(", 1)[1].split(
+        "function WbcAgentMessage", 1
+    )[0]
+
+    assert 'var WBC_CHAT_DRAG_MIME = "application/x-cyrene-chat+json";' in source
+    assert "function wbcSetChatDrag(event, chat)" in source
+    assert "function wbcReadChatDrag(event)" in source
+    assert "WBC_CHAT_ORDER_PREFIX" in rail
+    assert "localStorage.setItem(WBC_CHAT_ORDER_PREFIX" in rail
+    assert 'draggable="true"' in rail
+    assert "wbcMoveChatOrder(order, dragState.movingId" in rail
+    assert "event.dataTransfer.setDragImage(" in rail
+    assert "event.altKey" in rail
+    assert "onOpenDroppedChat={function (chatId)" in source
+    assert "onDrop={handleChatDrop}" in main
+    assert 'className="wbc-chat-open-drop-hint"' in main
+    assert ".wbc-chat-card.dragging" in styles
+    assert ".wbc-main.chat-drop-active" in styles
+    drop_border_css = styles.split(
+        ".wbc-main.chat-drop-active::after {", 1
+    )[1].split("}", 1)[0]
+    assert "inset: 0;" in drop_border_css
+    assert "z-index: 65;" in drop_border_css
+    assert "border: 2px solid" in drop_border_css
+    assert i18n.count('"workbenchChat.dragChat"') == 2
+    assert i18n.count('"workbenchChat.chatMoved"') == 2
+    assert i18n.count('"workbenchChat.dropToOpen"') == 2
+
+
 def test_workbench_chat_rename_dialog_uses_compact_vertical_spacing():
     root = Path(__file__).resolve().parent.parent
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
@@ -1926,8 +2022,8 @@ def test_workbench_chat_switches_stop_to_guidance_while_running():
     assert "输入内容以引导正在运行的 Agent" in (
         root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
     ).read_text(encoding="utf-8")
-    assert "workbench-chat.js?v=0.7.0b8" in index
-    assert "workbench-i18n.js?v=0.7.0b8" in index
+    assert "workbench-chat.js?v=0.7.0b9" in index
+    assert "workbench-i18n.js?v=0.7.0b9" in index
 
 
 def test_workbench_guidance_is_optimistic_and_completed_tools_do_not_spin():
@@ -2404,16 +2500,66 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
         "function WbcMessageAttachment({ file, onOpenFile })", 1
     )[1].split("function WbcUserMessage(", 1)[0]
     assert "onError={function () { setImageFailed(true); }}" in message_attachment
-    assert source.count("<WbcMessageAttachment key=") == 2
+    assert 'className="wbc-inline-image"' in message_attachment
+    assert 'className="wbc-inline-image-preview"' in message_attachment
+    assert 'className="wbc-inline-image-footer"' in message_attachment
+    assert 'className="wbc-inline-image-actions"' in message_attachment
+    assert 'draggable="true"' in message_attachment
+    assert "wbcStartFileDrag(event, file)" in message_attachment
+    assert 'draggable="false"' in message_attachment
+    assert "wbcCanOpenExternally(file)" in message_attachment
+    assert "WBC_ICONS.openExternal" in message_attachment
+    assert 'className: "wbc-inline-image-action"' in message_attachment
+    assert source.count("<WbcMessageAttachment key=") == 3
     assert 'window.CyreneUI.require("library").FileVisual' in source
     assert 'className="wbc-attach-file"' in message_attachment
     assert 'wbcT("workbenchChat.openPreview", "Open preview")' in message_attachment
     assert 'className={"wbc-msg-attachments" + (msg.content ? " after-copy" : "")}' in source
     assert 'className={"wbc-attach-card" + (showImagePreview ? " image" : " file")}' in source
     assert ".wbc-attach-file-open" in styles
+    assert ".wbc-inline-image-preview img" in styles
+    assert ".wbc-inline-image-footer" in styles
+    assert ".wbc-inline-image-actions .wbc-inline-image-action" in styles
+    inline_image_rule = styles.split(".wbc-inline-image {", 1)[1].split("}", 1)[0]
+    assert "width: min(280px, 100%);" in inline_image_rule
+    preview_rule = styles.split(".wbc-inline-image-preview {", 1)[1].split("}", 1)[0]
+    assert "aspect-ratio: 1;" in preview_rule
+    preview_image_rule = styles.split(".wbc-inline-image-preview img {", 1)[1].split("}", 1)[0]
+    assert "object-fit: cover;" in preview_image_rule
+    assert "border-radius: 11px;" in preview_image_rule
+    footer_rule = styles.split(".wbc-inline-image-footer {", 1)[1].split("}", 1)[0]
+    assert "min-height: 34px;" in footer_rule
+    assert "background: var(--wb-card-bg);" in footer_rule
+    assert "box-shadow: var(--wbc-control-shadow);" in footer_rule
+    assert "border: 0;" in inline_image_rule
+    assert "background: transparent;" in inline_image_rule
+    action_rule = styles.split(
+        ".wbc-inline-image-actions .wbc-inline-image-action {", 1
+    )[1].split("}", 1)[0]
+    assert "display: inline-flex;" in action_rule
+    assert "align-items: center;" in action_rule
+    assert "justify-content: center;" in action_rule
+    assert "box-sizing: border-box;" in action_rule
+    assert "width: 28px !important;" in action_rule
+    assert "height: 28px !important;" in action_rule
+    assert "padding: 0 !important;" in action_rule
     assert ".wbc-attach-card.file" in styles
     image_rule = styles.split(".wbc-attach-card.image {", 1)[1].split("}", 1)[0]
     assert "overflow: hidden;" in image_rule
+
+
+def test_workbench_agent_images_render_inline_with_viewer_and_file_actions():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    agent_files = source.split("function WbcAgentFiles(", 1)[1].split(
+        "function WbcTraceCard(", 1
+    )[0]
+    assert 'wbcFileViewKind(file) === "image" && file.url' in agent_files
+    assert "<WbcMessageAttachment" in agent_files
+    assert "wbcStartFileDrag(event, file)" in agent_files
 
 
 def test_workbench_execution_card_restores_green_surface():
@@ -2630,9 +2776,10 @@ def test_codex_reasoning_effort_updates_the_primary_candidate_without_stale_stat
         root / "src" / "webui" / "frontend" / "settings-overlay.jsx"
     ).read_text(encoding="utf-8")
 
-    assert "setModels(function (currentModels)" in settings
+    assert "setCodexCandidate(normalizeModel({" in settings
     assert "selectedEffort != null ? selectedEffort : codexEffort" in settings
     assert "setCodexPrimaryCandidate(codexModel, value);" in settings
+    assert "return [candidate].concat(rest);" not in settings
 
 
 def test_workbench_deepseek_reasoning_effort_matches_provider_capabilities():
@@ -2960,7 +3107,7 @@ def test_workbench_right_tabs_do_not_shrink_for_long_run_logs():
     assert "padding-inline: 8px;" in compact_tabs[0]
     assert "padding-inline: 2px;" in compact_tabs[1]
     assert "font-size: calc(12px * var(--wb-ui-font-scale, 1));" in compact_tabs[1]
-    assert "workbench.css?v=0.7.0b8" in index
+    assert "workbench.css?v=0.7.0b9" in index
 
 
 def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
@@ -2982,7 +3129,7 @@ def test_workbench_collapsed_rail_keeps_labels_horizontal_during_expansion():
     assert "height: 63px;" in account_rule
     assert "grid-template-rows: 36px;" in account_rule
     assert "height: 36px;" in account_meta_rule
-    assert "workbench.css?v=0.7.0b8" in index
+    assert "workbench.css?v=0.7.0b9" in index
 
 
 def test_workbench_collapsed_rail_icons_stay_left_anchored_while_closing():
@@ -3055,7 +3202,7 @@ def test_workbench_wechat_channel_uses_qr_login_instead_of_token_input():
     assert "WECHAT_BOT_TOKEN" not in settings
     assert '"settings.wechatScanConnect": "扫描二维码连接"' in translations
     assert ".wb-wechat-qr-overlay" in styles
-    assert "settings-overlay.js?v=0.7.0b8" in index
+    assert "settings-overlay.js?v=0.7.0b9" in index
 
 
 def test_linux_desktop_uses_native_frame_and_directory_picker():
@@ -3283,7 +3430,7 @@ def test_workbench_context_picker_contains_long_workspace_paths():
     assert "text-overflow: ellipsis;" in text_rule
     assert "white-space: nowrap;" in text_rule
     assert 'className="wbc-popmenu-desc" title={p}' in chat
-    assert "workbench-chat.js?v=0.7.0b8" in index
+    assert "workbench-chat.js?v=0.7.0b9" in index
 
 
 def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
@@ -3299,8 +3446,8 @@ def test_workbench_follow_up_uses_context_endpoint_without_native_prompt():
     assert '"/api/task-sessions/{session_id}/follow-up"' in routes
     assert 'session["parentSessionId"] = session_id' in routes
     assert "followUpContext" in routes
-    assert "workbench-model.js?v=0.7.0b8" in index
-    assert "workbench.js?v=0.7.0b8" in index
+    assert "workbench-model.js?v=0.7.0b9" in index
+    assert "workbench.js?v=0.7.0b9" in index
 
 
 def test_workbench_regenerate_plan_failure_preserves_current_plan():
@@ -3426,9 +3573,9 @@ def test_workbench_model_settings_preserve_form_on_failed_response():
     assert "if (!response.ok)" in source
     assert "fetch(\"/api/settings/models\").then(readSettingsResponse)" in source
     assert "}).then(readSettingsResponse).then(function (p)" in save_block
-    assert "p.models || p.primary_candidates || norm" in save_block
+    assert "p.custom_models || norm" in save_block
     assert "p.vision_models || p.vision_candidates || vNorm" in save_block
-    assert "settings-overlay.js?v=0.7.0b8" in index
+    assert "settings-overlay.js?v=0.7.0b9" in index
 
 
 def test_workbench_chat_subagent_page_is_independent_and_localized():
@@ -3889,7 +4036,7 @@ def test_workbench_settings_overlay_has_shortcuts_tab_and_panel():
     assert ".wb-shortcut-row" in styles
     assert ".wb-shortcut-capture" in styles
     # The new module is loaded before the panels that consume it
-    assert "compiled/workbench-shortcuts.js?v=0.7.0b8" in index
+    assert "compiled/workbench-shortcuts.js?v=0.7.0b9" in index
 
 
 def test_workbench_about_related_actions_only_click_right_button():
@@ -3958,6 +4105,17 @@ def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes(
     assert i18n.count('"settings.remoteTransportAlternatePort"') == 2
     assert 'var [pairingMode, setPairingMode] = useStateSt("share")' in remote_panel
     assert 'className: "wb-seg remote-pairing-tabs"' in remote_panel
+    assert "inviteDefaultsInitializedRef.current = true" in remote_panel
+    assert "payload.remote_tool_packages || []" in remote_panel
+    assert "payload.projects || []" in remote_panel
+    assert 'React.createElement("details", { className: "remote-pairing-settings" }' in remote_panel
+    assert 'React.createElement("summary", null' in remote_panel
+    assert 'className: "remote-pairing-settings-chevron"' in remote_panel
+    assert "ExternalChevron()" in remote_panel
+    assert ".remote-pairing-settings[open] summary" in styles
+    assert ".remote-pairing-settings[open] .remote-pairing-settings-chevron" in styles
+    assert ".remote-pairing-settings summary:focus {" in styles
+    assert ".remote-pairing-settings summary:focus-visible {" in styles
     assert 'className: "remote-pairing-columns"' not in remote_panel
     assert 'className: "remote-pairing-card"' not in remote_panel
     assert ".remote-pairing-columns" not in styles
@@ -3965,6 +4123,10 @@ def test_remote_settings_keeps_compatibility_on_and_persists_package_checkboxes(
     assert i18n.count('"settings.remotePairModeShare"') == 2
     assert i18n.count('"settings.remotePairModeControl"') == 2
     assert i18n.count('"settings.remotePairCapabilities"') == 2
+    assert i18n.count('"settings.remoteShareSettings"') == 2
+    assert i18n.count('"settings.remoteShareSettingsHint"') == 2
+    assert '"settings.remoteAllowController": "允许其他设备控制 Cyrene"' in i18n
+    assert '"settings.remoteAllowControllerHint": "在共享设置中修改允许远程调用的工具或项目。"' in i18n
     assert 'fetch("/api/remote/pairing/short-key"' in remote_panel
     assert 'fetch("/api/remote/pairing/connect"' in remote_panel
     assert 'error.code === "remote_pairing_peer_update_required"' in remote_panel

@@ -17,6 +17,43 @@ function wbcWorkspaceDisplayName(path) {
 }
 
 var WBC_RESOURCE_DRAG_MIME = "application/x-cyrene-work-resource+json";
+var WBC_CHAT_DRAG_MIME = "application/x-cyrene-chat+json";
+
+function wbcSetChatDrag(event, chat) {
+  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
+  if (!transfer || !chat || !chat.id) return;
+  try {
+    transfer.effectAllowed = "move";
+    transfer.setData(WBC_CHAT_DRAG_MIME, JSON.stringify({
+      kind: "chat",
+      id: String(chat.id),
+      projectId: String(chat.projectId || ""),
+      title: String(chat.title || ""),
+    }));
+    transfer.setData("text/plain", String(chat.id));
+  } catch (e) {}
+}
+
+function wbcHasChatDrag(event) {
+  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
+  if (!transfer) return false;
+  try {
+    return Array.prototype.slice.call(transfer.types || []).indexOf(WBC_CHAT_DRAG_MIME) >= 0;
+  } catch (e) {
+    return false;
+  }
+}
+
+function wbcReadChatDrag(event) {
+  var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
+  if (!transfer) return null;
+  try {
+    var payload = JSON.parse(transfer.getData(WBC_CHAT_DRAG_MIME) || "null");
+    return payload && payload.kind === "chat" && payload.id ? payload : null;
+  } catch (e) {
+    return null;
+  }
+}
 
 function wbcSetResourceDrag(event, payload) {
   var transfer = event && (event.dataTransfer || (event.nativeEvent && event.nativeEvent.dataTransfer));
@@ -989,6 +1026,7 @@ var WBC_ICONS = {
   chevronDown: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>,
   chevronLeft: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>,
   chevronsRight: <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m13 7 5 5-5 5M6 7l5 5-5 5"/></svg>,
+  openExternal: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17 17 7M8 7h9v9"/></svg>,
   download: <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>,
   sidebar: <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m9 10-2 2 2 2"/></svg>,
   windowMaximize: <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5"/></svg>,
@@ -1160,6 +1198,15 @@ function wbcCanOpenExternally(file) {
   // it the authenticated local-backend session. Keep HTML inside the sandboxed
   // srcDoc viewer; source mode remains available beside it.
   return !!(file && file.url && wbcFileViewKind(file) !== "html");
+}
+
+function wbcStartFileDrag(event, file) {
+  var page = event.currentTarget && event.currentTarget.closest(".wbc-page");
+  wbcSetResourceDrag(event, wbcFileDragPayload(
+    file,
+    page && page.getAttribute("data-active-chat-id"),
+    page && page.getAttribute("data-project-id")
+  ));
 }
 
 function wbcDownloadLink(file, overrides) {
@@ -3335,8 +3382,10 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       data-active-chat-id={activeChatId || ""}
       data-project-id={projectId || ""}
     >
+      <div className="wbc-top-glass" aria-hidden="true" />
       {chatFileDropActive && <WorkbenchFileDropOverlay label={wbcT("workbenchChat.dropToAttach", "Release to add files to the message input")} />}
       <WbcRail
+        projectId={projectId}
         chats={chats}
         pinnedChatIds={pinnedChatIds}
         activeChatId={activeChatId}
@@ -3372,6 +3421,11 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onToTask={handleToTask}
         toTaskBusy={toTaskBusy}
         onOpenFile={openViewer}
+        onOpenDroppedChat={function (chatId) {
+          if ((chatsRef.current || []).some(function (item) {
+            return String(item && item.id || "") === String(chatId || "");
+          })) setActiveChatId(chatId);
+        }}
         sideVisible={sideVisible}
         onToggleSide={onToggleSide}
         browserState={activeBrowserState}
@@ -3595,18 +3649,119 @@ function wbcOrderChatsByPinned(chats, pinnedChatIds) {
   });
 }
 
-function WbcRail({ chats, pinnedChatIds, activeChatId, loading, runningChatIds, onSelect, onCreate, onRename, onDelete, onTogglePinned }) {
+var WBC_CHAT_ORDER_PREFIX = "cyrene-workbench-chat-order-v1:";
+
+function wbcNormalizeChatOrder(defaultOrder, savedOrder) {
+  var valid = Array.isArray(defaultOrder) ? defaultOrder.map(String) : [];
+  var allowed = new Set(valid);
+  var seen = new Set();
+  var saved = [];
+  (Array.isArray(savedOrder) ? savedOrder : []).forEach(function (id) {
+    id = String(id);
+    if (!allowed.has(id) || seen.has(id)) return;
+    seen.add(id);
+    saved.push(id);
+  });
+  var missing = valid.filter(function (id) { return !seen.has(id); });
+  return missing.concat(saved);
+}
+
+function wbcLoadChatOrder(projectId, defaultOrder) {
+  try {
+    var saved = JSON.parse(localStorage.getItem(WBC_CHAT_ORDER_PREFIX + String(projectId || "")) || "null");
+    return wbcNormalizeChatOrder(defaultOrder, saved);
+  } catch (e) {
+    return wbcNormalizeChatOrder(defaultOrder, null);
+  }
+}
+
+function wbcMoveChatOrder(order, movingId, targetId, edge) {
+  var current = Array.isArray(order) ? order.slice() : [];
+  movingId = String(movingId || "");
+  targetId = String(targetId || "");
+  if (!movingId || movingId === targetId || current.indexOf(movingId) < 0 || current.indexOf(targetId) < 0) {
+    return current;
+  }
+  var next = current.filter(function (id) { return id !== movingId; });
+  var targetIndex = next.indexOf(targetId);
+  next.splice(targetIndex + (edge === "after" ? 1 : 0), 0, movingId);
+  return next;
+}
+
+function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runningChatIds, onSelect, onCreate, onRename, onDelete, onTogglePinned }) {
   var [query, setQuery] = useWbcState("");
   var [menuId, setMenuId] = useWbcState("");
   var [renameChat, setRenameChat] = useWbcState(null);
+  var defaultChats = useWbcMemo(function () {
+    return wbcOrderChatsByPinned(chats, pinnedChatIds);
+  }, [chats, pinnedChatIds]);
+  var defaultOrder = defaultChats.map(function (chat) { return String(chat.id); });
+  var defaultOrderKey = defaultOrder.join("|");
+  var [order, setOrder] = useWbcState(function () {
+    return wbcLoadChatOrder(projectId, defaultOrder);
+  });
+  var [dragState, setDragState] = useWbcState(null);
+  var [announcement, setAnnouncement] = useWbcState("");
+  var dragOriginOrderRef = useWbcRef([]);
+  var dropCommittedRef = useWbcRef(false);
+  var suppressClickRef = useWbcRef("");
+  var chatMap = new Map((Array.isArray(chats) ? chats : []).map(function (chat) {
+    return [String(chat.id), chat];
+  }));
+
+  useWbcEffect(function () {
+    setOrder(wbcLoadChatOrder(projectId, defaultOrder));
+    setDragState(null);
+  }, [projectId, defaultOrderKey]);
+
+  var orderedChats = wbcNormalizeChatOrder(defaultOrder, order).map(function (id) {
+    return chatMap.get(id);
+  }).filter(Boolean);
   var filtered = useWbcMemo(function () {
     var q = query.trim().toLowerCase();
-    var matching = !q ? chats : chats.filter(function (chat) {
+    return !q ? orderedChats : orderedChats.filter(function (chat) {
       return String(chat.title || "").toLowerCase().indexOf(q) !== -1
         || String(chat.preview || "").toLowerCase().indexOf(q) !== -1;
     });
-    return wbcOrderChatsByPinned(matching, pinnedChatIds);
-  }, [chats, query, pinnedChatIds]);
+  }, [orderedChats, query]);
+
+  function commitOrder(nextOrder, movedId) {
+    var normalized = wbcNormalizeChatOrder(defaultOrder, nextOrder);
+    setOrder(normalized);
+    try {
+      localStorage.setItem(WBC_CHAT_ORDER_PREFIX + String(projectId || ""), JSON.stringify(normalized));
+    } catch (e) {}
+    var movedChat = chatMap.get(String(movedId || ""));
+    if (movedChat) {
+      setAnnouncement(wbcT(
+        "workbenchChat.chatMoved",
+        "{title} moved to position {position} of {total}.",
+        {
+          title: movedChat.title || wbcT("workbenchChat.newChat", "New chat"),
+          position: normalized.indexOf(String(movedId)) + 1,
+          total: normalized.length,
+        }
+      ));
+    }
+  }
+
+  function moveChatByKeyboard(event, id) {
+    if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return false;
+    var visibleOrder = filtered.map(function (chat) { return String(chat.id); });
+    var index = visibleOrder.indexOf(String(id));
+    var nextIndex = event.key === "ArrowUp" ? index - 1 : index + 1;
+    if (index < 0 || nextIndex < 0 || nextIndex >= visibleOrder.length) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    var targetId = visibleOrder[nextIndex];
+    commitOrder(wbcMoveChatOrder(
+      order,
+      String(id),
+      targetId,
+      event.key === "ArrowUp" ? "before" : "after"
+    ), id);
+    return true;
+  }
 
   return (
     <aside className="wbc-rail">
@@ -3628,7 +3783,21 @@ function WbcRail({ chats, pinnedChatIds, activeChatId, loading, runningChatIds, 
         </div>
       </div>
       {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
-      <div className={"wbc-chat-list" + (loading ? " is-loading" : "")}>
+      <div
+        className={"wbc-chat-list" + (loading ? " is-loading" : "")}
+        onDragOver={function (event) {
+          if (!dragState || !wbcHasChatDrag(event)) return;
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+        }}
+        onDrop={function (event) {
+          if (!dragState || !wbcHasChatDrag(event)) return;
+          event.preventDefault();
+          dropCommittedRef.current = true;
+          commitOrder(order, dragState.movingId);
+          setDragState(null);
+        }}
+      >
         {loading && (
           <div className="workbench-muted wbc-rail-loading" role="status">
             {wbcT("workbenchChat.loading", "Loading chats...")}
@@ -3649,14 +3818,79 @@ function WbcRail({ chats, pinnedChatIds, activeChatId, loading, runningChatIds, 
               key={chat.id}
               role="button"
               tabIndex={0}
-              className={"wbc-chat-card" + (active ? " active" : "") + (isMenuOpen ? " menu-open" : "")}
-              onClick={function () { setMenuId(""); onSelect(chat.id); }}
+              draggable="true"
+              className={"wbc-chat-card" + (active ? " active" : "") + (isMenuOpen ? " menu-open" : "") + (dragState && dragState.movingId === String(chat.id) ? " dragging" : "")}
+              title={wbcT("workbenchChat.dragChat", "Drag to reorder or drop in the conversation area to open {title}.", {
+                title: chat.title || wbcT("workbenchChat.newChat", "New chat"),
+              })}
+              onClick={function () {
+                if (suppressClickRef.current === String(chat.id)) return;
+                setMenuId("");
+                onSelect(chat.id);
+              }}
               onContextMenu={function (event) {
                 event.preventDefault();
                 event.stopPropagation();
                 setMenuId(chat.id);
               }}
-              onKeyDown={function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(chat.id); } }}
+              onKeyDown={function (e) {
+                if (moveChatByKeyboard(e, chat.id)) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect(chat.id);
+                }
+              }}
+              onDragStart={function (event) {
+                if (event.target && event.target.closest && event.target.closest("button")) {
+                  event.preventDefault();
+                  return;
+                }
+                var id = String(chat.id);
+                dragOriginOrderRef.current = order.slice();
+                dropCommittedRef.current = false;
+                suppressClickRef.current = id;
+                setMenuId("");
+                wbcSetChatDrag(event, chat);
+                var cardRect = event.currentTarget.getBoundingClientRect();
+                if (event.dataTransfer) {
+                  event.dataTransfer.setDragImage(
+                    event.currentTarget,
+                    Math.max(0, Math.min(cardRect.width, event.clientX - cardRect.left)),
+                    Math.max(0, Math.min(cardRect.height, event.clientY - cardRect.top))
+                  );
+                }
+                setDragState({ movingId: id, targetId: "", edge: "before" });
+              }}
+              onDragOver={function (event) {
+                if (!dragState || dragState.movingId === String(chat.id) || !wbcHasChatDrag(event)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+                var rect = event.currentTarget.getBoundingClientRect();
+                var edge = event.clientY < rect.top + (rect.height / 2) ? "before" : "after";
+                var nextOrder = wbcMoveChatOrder(order, dragState.movingId, String(chat.id), edge);
+                if (nextOrder.join("|") !== order.join("|")) setOrder(nextOrder);
+                setDragState({ movingId: dragState.movingId, targetId: String(chat.id), edge: edge });
+              }}
+              onDrop={function (event) {
+                if (!dragState || !wbcHasChatDrag(event)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                var nextOrder = dragState.movingId === String(chat.id)
+                  ? order
+                  : wbcMoveChatOrder(order, dragState.movingId, String(chat.id), dragState.edge);
+                dropCommittedRef.current = true;
+                commitOrder(nextOrder, dragState.movingId);
+                setDragState(null);
+              }}
+              onDragEnd={function () {
+                if (!dropCommittedRef.current) setOrder(dragOriginOrderRef.current);
+                dropCommittedRef.current = false;
+                setDragState(null);
+                window.setTimeout(function () {
+                  if (suppressClickRef.current === String(chat.id)) suppressClickRef.current = "";
+                }, 0);
+              }}
             >
               <span className="wbc-chat-card-top">
                 <span className="wbc-chat-card-title">
@@ -3724,6 +3958,7 @@ function WbcRail({ chats, pinnedChatIds, activeChatId, loading, runningChatIds, 
             </div>
           );
         })}
+        <span className="wbc-sr-only" aria-live="polite">{announcement}</span>
       </div>
       <WbcRenameDialog
         chat={renameChat}
@@ -4749,13 +4984,14 @@ function WbcConversationNavigator({ threadRef, chatId }) {
   );
 }
 
-function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, sideVisible, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMinimize, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete }) {
+function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKind, onRetry, running, onSend, onGuidance, onInterrupt, onAnswer, onRetryMessage, onEditMessage, onAskSelection, sideAgentCreating, onConversationContextMenu, onRename, onDelete, onToTask, toTaskBusy, onOpenFile, onOpenDroppedChat, sideVisible, onToggleSide, browserState, browserSessionId, browserVisible, browserWindowMode, onBrowserMinimize, onBrowserMaximize, onBrowserRestore, onBrowserTakeoverComplete }) {
   var stageRef = useWbcRef(null);
   var scrollRef = useWbcRef(null);
   var selectionMenuRef = useWbcRef(null);
   var stickRef = useWbcRef(true);
   var [showScrollToBottom, setShowScrollToBottom] = useWbcState(false);
   var [selectionMenu, setSelectionMenu] = useWbcState(null);
+  var [chatDropActive, setChatDropActive] = useWbcState(false);
   var avoidanceRafRef = useWbcRef(0);
   var stickyRestoreRafRef = useWbcRef(0);
   var avoidanceScrollingRef = useWbcRef(false);
@@ -5120,12 +5356,50 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
     scheduleStickyViewportRestore();
   }
 
+  function handleChatDragEnter(event) {
+    if (!wbcHasChatDrag(event)) return;
+    event.preventDefault();
+    setChatDropActive(true);
+  }
+
+  function handleChatDragOver(event) {
+    if (!wbcHasChatDrag(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    setChatDropActive(true);
+  }
+
+  function handleChatDragLeave(event) {
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    setChatDropActive(false);
+  }
+
+  function handleChatDrop(event) {
+    if (!wbcHasChatDrag(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setChatDropActive(false);
+    var payload = wbcReadChatDrag(event);
+    if (payload && onOpenDroppedChat) onOpenDroppedChat(payload.id);
+  }
+
   if (!project) {
     return <main className="wbc-main"><div className="workbench-empty">{wbcT("workbenchChat.noProject", "Select a project first.")}</div></main>;
   }
 
   return (
-    <main className="wbc-main">
+    <main
+      className={"wbc-main" + (chatDropActive ? " chat-drop-active" : "")}
+      onDragEnter={handleChatDragEnter}
+      onDragOver={handleChatDragOver}
+      onDragLeave={handleChatDragLeave}
+      onDrop={handleChatDrop}
+    >
+      {chatDropActive && (
+        <div className="wbc-chat-open-drop-hint" role="status">
+          {wbcT("workbenchChat.dropToOpen", "Release to open this conversation")}
+        </div>
+      )}
       {(chat || chatSummary) ? (
         <WbcHeader
           project={project}
@@ -5499,32 +5773,51 @@ function WbcMessageAttachment({ file, onOpenFile }) {
 
   if (isImg && file.url && !imageFailed) {
     return (
-      <img
-        src={file.url}
-        alt=""
+      <div
+        className="wbc-inline-image"
         draggable="true"
-        onDragStart={function (event) {
-          var page = event.currentTarget && event.currentTarget.closest(".wbc-page");
-          wbcSetResourceDrag(event, wbcFileDragPayload(
-            file,
-            page && page.getAttribute("data-active-chat-id"),
-            page && page.getAttribute("data-project-id")
-          ));
-        }}
-        onClick={open}
-        onError={function () { setImageFailed(true); }}
-        style={{ cursor: "zoom-in" }}
-      />
+        onDragStart={function (event) { wbcStartFileDrag(event, file); }}
+      >
+        <button
+          type="button"
+          className="wbc-inline-image-preview"
+          onClick={open}
+          title={wbcT("workbenchChat.viewInSide", "View on the right")}
+        >
+          <img
+            src={file.url}
+            alt={file.name || wbcT("workbenchChat.attachmentType.image", "Image")}
+            draggable="false"
+            onError={function () { setImageFailed(true); }}
+          />
+        </button>
+        <div className="wbc-inline-image-footer">
+          <b title={file.name}>{file.name || "image"}</b>
+          <span className="wbc-inline-image-actions">
+            {wbcCanOpenExternally(file) ? (
+              <a
+                className="wbc-inline-image-action"
+                href={file.url}
+                target="_blank"
+                rel="noreferrer"
+                draggable="false"
+                title={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}
+                aria-label={wbcT("workbenchChat.viewerOpenExternal", "Open in a new window")}
+              >{WBC_ICONS.openExternal}</a>
+            ) : null}
+            {wbcDownloadLink(file, {
+              className: "wbc-inline-image-action",
+              draggable: "false",
+              "aria-label": wbcT("workbenchChat.download", "Download"),
+            })}
+          </span>
+        </div>
+      </div>
     );
   }
   var canOpen = !!(onOpenFile && file.url);
   function startFileDrag(event) {
-    var page = event.currentTarget && event.currentTarget.closest(".wbc-page");
-    wbcSetResourceDrag(event, wbcFileDragPayload(
-      file,
-      page && page.getAttribute("data-active-chat-id"),
-      page && page.getAttribute("data-project-id")
-    ));
+    wbcStartFileDrag(event, file);
   }
   var content = (
     <>
@@ -5662,19 +5955,15 @@ function WbcAgentFiles({ files, onOpenFile }) {
   return (
     <div className="wbc-agent-files">
       {files.map(function (file, i) {
+        if (wbcFileViewKind(file) === "image" && file.url) {
+          return <WbcMessageAttachment key={file.id || file.url || i} file={file} onOpenFile={onOpenFile} />;
+        }
         return (
           <div
             className="wbc-agent-file"
             key={file.id || file.url || i}
             draggable="true"
-            onDragStart={function (event) {
-              var page = event.currentTarget && event.currentTarget.closest(".wbc-page");
-              wbcSetResourceDrag(event, wbcFileDragPayload(
-                file,
-                page && page.getAttribute("data-active-chat-id"),
-                page && page.getAttribute("data-project-id")
-              ));
-            }}
+            onDragStart={function (event) { wbcStartFileDrag(event, file); }}
           >
             <span className="wbc-file-icon">{WBC_ICONS.file}</span>
             <span className="wbc-file-meta">

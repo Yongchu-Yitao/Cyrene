@@ -2079,6 +2079,8 @@ def register_workbench_chat_routes(
     return {
         "list_chats": api_workbench_list_chats,
         "create_chat": api_workbench_create_chat,
+        "update_chat": api_workbench_update_chat,
+        "delete_chat": api_workbench_delete_chat,
         "get_chat": api_workbench_get_chat,
         "send_chat_detached": _workbench_chat_send_impl,
         "guide_chat": api_workbench_chat_guidance,
