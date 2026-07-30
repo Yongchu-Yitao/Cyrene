@@ -2417,7 +2417,7 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     assert "overflow: hidden;" in image_rule
 
 
-def test_workbench_conversation_cards_share_borderless_control_surface():
+def test_workbench_conversation_cards_share_control_surface():
     root = Path(__file__).resolve().parent.parent
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
@@ -2427,7 +2427,6 @@ def test_workbench_conversation_cards_share_borderless_control_surface():
         ".wbc-bubble {",
         ".wbc-attach-file {",
         ".wbc-branch-card {",
-        ".wbc-trace {",
         ".wbc-question {",
         ".wbc-attach-card {",
         ".wbc-agent-file {",
@@ -2451,8 +2450,13 @@ def test_workbench_conversation_cards_share_borderless_control_surface():
     dark_trace_rule = styles.split(
         'html[data-theme="dark"] .wbc-trace {', 1
     )[1].split("}", 1)[0]
-    assert "var(--wb-green) 8%" in trace_rule
-    assert "var(--wb-green) 12%" in dark_trace_rule
+    assert "var(--wb-green) 6%" in trace_rule
+    assert "var(--wb-green) 10%" in dark_trace_rule
+    assert (
+        "border: 1px solid color-mix(in srgb, var(--wb-green) 26%, transparent);"
+        in trace_rule
+    )
+    assert "box-shadow: var(--wbc-control-shadow);" in trace_rule
 
 
 def test_workbench_chat_splits_live_tools_around_intermediate_messages():
