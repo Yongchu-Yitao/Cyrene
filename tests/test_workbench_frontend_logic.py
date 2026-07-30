@@ -176,6 +176,9 @@ def test_workbench_header_uses_a_fading_frosted_glass_overlay():
     assert "position: absolute;" in header_css
     assert "z-index: 20;" in header_css
     assert "border-bottom: 0;" in header_css
+    assert "var(--wb-main-bg) 66%" in glass_css
+    assert "var(--wb-main-bg) 56%" in glass_css
+    assert "var(--wb-main-bg) 32%" in glass_css
     assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in glass_css
     assert "mask-image: linear-gradient(" in glass_css
     assert "#000 78%" in glass_css

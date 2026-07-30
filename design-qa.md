@@ -3,17 +3,22 @@
 - final result: passed
 - source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-f64e83c5-cd38-463b-9db7-58552a8ad5df.png`
 - readability feedback: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-67ad243e-c438-4fbd-b075-acb0629e101d.png`
+- transparency feedback: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-842ce0dc-4018-4478-ace7-8d2c01468775.png`
 - implementation screenshot: `/Users/syw/Documents/playground/Cyrene/design-qa-frosted-header-final.png`
 - focused comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-frosted-header-comparison.png`
+- more-transparent implementation: `/Users/syw/Documents/playground/Cyrene/design-qa-frosted-header-more-transparent.png`
+- transparency comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-frosted-header-transparency-comparison.png`
 - viewport: 1280 × 720 CSS px; browser screenshot normalized to 1280 × 720 px
-- state: light theme, `介绍自己` selected, transcript scrolled 420 px beneath the header
+- transparency comparison normalization: 1252 × 210 source crop resized to 676 × 113; implementation cropped to the same 676 × 113 pixel region
+- state: light theme, `介绍自己` selected, long transcript scrolled beneath the header
 
 ## Findings
 
 - No remaining P0/P1/P2 findings.
 - The header is an absolute overlay, so transcript content can move underneath it.
-- The glass is visibly translucent at the top while strongly diffusing underlying text into soft tonal shapes.
+- The glass is visibly more translucent at the top and middle while still diffusing underlying text into soft tonal shapes.
 - Frosting uses a 46 px Gaussian blur with 165% saturation, slight contrast lift, and a late bottom-edge transparency fade.
+- Surface coverage now progresses from 66% at the top to 56% through the middle and 32% near the lower fade.
 - At large UI text size, the transcript begins 14.8 px below the header in its initial scroll position.
 
 ## Required fidelity surfaces
@@ -30,13 +35,16 @@
 2. A 32 px blur with 98%/96% upper opacity restored readability but made the top feel too opaque and less glass-like (P2).
 3. Reduced upper opacity to 88%/82%, increased Gaussian blur to 46 px, and raised saturation to 165% so content remains perceptible without readable ghost text.
 4. Post-fix focused comparison shows clear title and metadata text, a more translucent top, and a smooth dissolve into the moving transcript.
+5. User requested more transparency; reduced the three surface stops to 78%/70%/46% while preserving the 46 px blur.
+6. Post-fix comparison shows more of the moving transcript through the glass without reducing title, metadata, or action readability.
+7. User requested another transparency step; reduced the three surface stops to 66%/56%/32%, again preserving the blur and mask.
 
 ## Verification
 
 - Frontend build: passed.
 - `uv run pytest -q tests/test_workbench_frontend_logic.py`: 150 passed.
 - `git diff --check`: passed.
-- Runtime checks: overlay positioning, computed gradient, blur, mask, scaled top inset, scroll-under behavior, and header control visibility.
+- Runtime checks: computed 66%/56%/32% gradient, 46 px blur, mask, scroll-under behavior, and header control visibility.
 - Console errors checked: none.
 
 ---

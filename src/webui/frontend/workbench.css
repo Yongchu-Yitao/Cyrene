@@ -12916,9 +12916,9 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   pointer-events: none;
   background: linear-gradient(
     to bottom,
-    color-mix(in srgb, var(--wb-main-bg) 88%, transparent) 0%,
-    color-mix(in srgb, var(--wb-main-bg) 82%, transparent) 68%,
-    color-mix(in srgb, var(--wb-main-bg) 60%, transparent) 86%,
+    color-mix(in srgb, var(--wb-main-bg) 66%, transparent) 0%,
+    color-mix(in srgb, var(--wb-main-bg) 56%, transparent) 68%,
+    color-mix(in srgb, var(--wb-main-bg) 32%, transparent) 86%,
     transparent 100%
   );
   -webkit-backdrop-filter: blur(46px) saturate(165%) contrast(103%);
