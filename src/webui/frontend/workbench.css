@@ -10590,14 +10590,19 @@ details.wb-model-section > .wb-model-section-head::marker {
 
 /* ── main (toolbar + list) ── */
 .wb-mem-main {
+  --wb-mem-toolbar-overlay-height: 66px;
+  position: relative;
   flex: 1 1 auto; min-width: 0; min-height: 0;
   display: flex; flex-direction: column;
   border-right: 1px solid var(--wb-line);
 }
 .wb-mem-toolbar {
-  position: relative;
+  position: absolute;
+  z-index: 20;
+  inset: 0 0 auto;
   isolation: isolate;
-  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-height: var(--wb-mem-toolbar-overlay-height);
   display: flex; align-items: center; gap: 12px;
   padding: 16px 22px 12px;
 }
@@ -10663,9 +10668,22 @@ details.wb-model-section > .wb-model-section-head::marker {
   background: var(--wb-error-bg); color: var(--wb-error-text); font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
 }
 .wb-mem-error.inline { margin: 0; }
+.wb-mem-main > .wb-mem-error {
+  flex: 0 0 auto;
+  margin-top: var(--wb-mem-toolbar-overlay-height);
+}
 
 .wb-mem-list-col { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.wb-mem-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 22px 14px; }
+.wb-mem-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: calc(var(--wb-mem-toolbar-overlay-height) + 4px) 22px 14px;
+}
+.wb-mem-main > .wb-mem-error + .wb-mem-list-col .wb-mem-scroll {
+  padding-top: 4px;
+}
 .wb-mem-list { display: flex; flex-direction: column; gap: 10px; }
 .wb-mem-count {
   flex: 0 0 auto; text-align: center; color: var(--wb-faint);
@@ -11739,6 +11757,8 @@ details.wb-model-section > .wb-model-section-head::marker {
 
 /* ── detail panel ── */
 .wb-mem-detail {
+  --wb-mem-detail-tabs-overlay-height: 42px;
+  position: relative;
   flex: 0 0 350px; width: 350px; min-width: 0; min-height: 0;
   display: flex; flex-direction: column;
   background: var(--wb-surface);
@@ -11747,9 +11767,12 @@ details.wb-model-section > .wb-model-section-head::marker {
 .wb-mem-detail.empty { align-items: center; justify-content: center; }
 .wb-mem-detail-ph { display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--wb-faint); font-size: calc(13px * var(--wb-ui-font-scale, 1)); }
 .wb-mem-detail-tabs {
-  position: relative;
+  position: absolute;
+  z-index: 20;
+  inset: 0 0 auto;
   isolation: isolate;
-  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-height: var(--wb-mem-detail-tabs-overlay-height);
   display: flex; align-items: stretch; gap: 2px;
   min-width: 0;
   padding: 8px 12px 0;
@@ -11788,7 +11811,9 @@ details.wb-model-section > .wb-model-section-head::marker {
   flex: 1 1 auto; min-width: 0; min-height: 0;
   overflow-x: hidden; overflow-y: auto;
   overscroll-behavior-x: none;
-  padding: 16px; display: flex; flex-direction: column; gap: 16px;
+  box-sizing: border-box;
+  padding: calc(var(--wb-mem-detail-tabs-overlay-height) + 16px) 16px 16px;
+  display: flex; flex-direction: column; gap: 16px;
 }
 .wb-mem-detail-scroll > * { min-width: 0; max-width: 100%; }
 .wb-mem-detail-scroll::-webkit-scrollbar-corner { background: transparent; }

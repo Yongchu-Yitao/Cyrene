@@ -251,24 +251,38 @@ def test_memory_toolbars_use_the_same_frosted_glass_without_overlay_spacing():
         encoding="utf-8"
     )
 
+    main_css = styles.split(".wb-mem-main {", 1)[1].split("}", 1)[0]
     toolbar_css = styles.split(".wb-mem-toolbar {", 1)[1].split("}", 1)[0]
     toolbar_glass_css = styles.split(
         ".wb-mem-toolbar::before {", 1
     )[1].split("}", 1)[0]
-    tabs_css = styles.split(".wb-mem-detail-tabs {", 1)[1].split("}", 1)[0]
-    tabs_glass_css = styles.split(
+    scroll_css = styles.split(".wb-mem-scroll {", 1)[1].split("}", 1)[0]
+    detail_styles = styles.split("/* ── detail panel ── */", 1)[1]
+    detail_css = detail_styles.split(".wb-mem-detail {", 1)[1].split("}", 1)[0]
+    tabs_css = detail_styles.split(".wb-mem-detail-tabs {", 1)[1].split("}", 1)[0]
+    tabs_glass_css = detail_styles.split(
         ".wb-mem-detail-tabs::before {", 1
     )[1].split("}", 1)[0]
+    detail_scroll_css = detail_styles.split(
+        ".wb-mem-detail-scroll {", 1
+    )[1].split("}", 1)[0]
 
-    assert "position: relative;" in toolbar_css
+    assert "--wb-mem-toolbar-overlay-height: 66px;" in main_css
+    assert "position: relative;" in main_css
+    assert "position: absolute;" in toolbar_css
+    assert "z-index: 20;" in toolbar_css
     assert "isolation: isolate;" in toolbar_css
     assert "var(--wb-main-bg, var(--wb-surface)) 66%" in toolbar_glass_css
     assert "var(--wb-main-bg, var(--wb-surface)) 56%" in toolbar_glass_css
     assert "var(--wb-main-bg, var(--wb-surface)) 32%" in toolbar_glass_css
     assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in toolbar_glass_css
     assert "mask-image: linear-gradient(" in toolbar_glass_css
+    assert "padding: calc(var(--wb-mem-toolbar-overlay-height) + 4px) 22px 14px;" in scroll_css
 
-    assert "position: relative;" in tabs_css
+    assert "--wb-mem-detail-tabs-overlay-height: 42px;" in detail_css
+    assert "position: relative;" in detail_css
+    assert "position: absolute;" in tabs_css
+    assert "z-index: 20;" in tabs_css
     assert "isolation: isolate;" in tabs_css
     assert "border-bottom: 0;" in tabs_css
     assert "var(--wb-surface) 66%" in tabs_glass_css
@@ -276,6 +290,7 @@ def test_memory_toolbars_use_the_same_frosted_glass_without_overlay_spacing():
     assert "var(--wb-surface) 32%" in tabs_glass_css
     assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in tabs_glass_css
     assert "mask-image: linear-gradient(" in tabs_glass_css
+    assert "padding: calc(var(--wb-mem-detail-tabs-overlay-height) + 16px) 16px 16px;" in detail_scroll_css
 
 
 def test_notification_items_navigate_to_their_precise_context():

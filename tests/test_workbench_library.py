@@ -21,10 +21,15 @@ def test_library_table_header_uses_the_shared_frosted_glass_treatment():
         root / "src" / "webui" / "frontend" / "workbench-library.css"
     ).read_text(encoding="utf-8")
 
+    table_css = styles.split(".wb-lib-table {", 1)[1].split("}", 1)[0]
     header_css = styles.split(".wb-lib-table-head {", 1)[1].split("}", 1)[0]
     glass_css = styles.split(".wb-lib-table-head::before {", 1)[1].split("}", 1)[0]
+    body_css = styles.split(".wb-lib-table-body {", 1)[1].split("}", 1)[0]
 
-    assert "position: relative;" in header_css
+    assert "--wb-lib-table-head-overlay-height: 40px;" in table_css
+    assert "position: relative;" in table_css
+    assert "position: absolute;" in header_css
+    assert "z-index: 20;" in header_css
     assert "isolation: isolate;" in header_css
     assert "border-bottom: 0;" in header_css
     assert "background: transparent;" in header_css
@@ -33,6 +38,7 @@ def test_library_table_header_uses_the_shared_frosted_glass_treatment():
     assert "var(--wb-main-bg, var(--wb-surface)) 32%" in glass_css
     assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in glass_css
     assert "mask-image: linear-gradient(" in glass_css
+    assert "padding-top: var(--wb-lib-table-head-overlay-height);" in body_css
 
 
 @pytest.fixture
@@ -691,10 +697,11 @@ def test_library_frontend_uses_project_api_and_clears_filtered_selection():
     assert (
         "border-color: color-mix(in srgb, var(--wb-accent) 36%, var(--wb-line));"
     ) in styles
-    assert (
-        ".wb-lib-table-body { min-height: 0; flex: 1 1 auto; "
-        "overflow-y: auto; overscroll-behavior: contain;"
-    ) in styles
+    table_body_css = styles.split(".wb-lib-table-body {", 1)[1].split("}", 1)[0]
+    assert "min-height: 0;" in table_body_css
+    assert "flex: 1 1 auto;" in table_body_css
+    assert "overflow-y: auto;" in table_body_css
+    assert "overscroll-behavior: contain;" in table_body_css
     assert (
         ".wb-lib-row { min-height: 41px; padding: 0 14px; "
         "border: 0; border-radius: 0;"

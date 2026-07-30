@@ -434,13 +434,28 @@
 .wb-lib-load-more:hover { color: var(--wb-text); background: var(--wb-control-hover-bg); }
 .wb-lib-load-more:disabled { opacity: .55; cursor: wait; }
 
-.wb-lib-table { width: 100%; min-width: 0; min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; border: 1px solid var(--wb-line); border-radius: 6px; overflow: hidden; background: color-mix(in srgb, var(--wb-card-bg) 45%, transparent); }
+.wb-lib-table {
+  --wb-lib-table-head-overlay-height: 40px;
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--wb-line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--wb-card-bg) 45%, transparent);
+}
 .wb-lib-table-grid { width: 100%; min-width: 0; display: grid; grid-template-columns: 36px minmax(0, 2.1fr) minmax(0, 1fr) 62px minmax(0, .9fr) 94px minmax(0, 1.2fr); align-items: center; }
 .wb-lib-table-head {
-  position: relative;
+  position: absolute;
+  z-index: 20;
+  inset: 0 0 auto;
   isolation: isolate;
-  flex: 0 0 40px;
-  min-height: 40px;
+  box-sizing: border-box;
+  min-height: var(--wb-lib-table-head-overlay-height);
   padding: 0 14px;
   border-bottom: 0;
   color: var(--wb-muted);
@@ -467,7 +482,16 @@
   mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
 }
 .wb-lib-title-head { min-width: 0; padding-left: 64px; }
-.wb-lib-table-body { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--wb-line) transparent; }
+.wb-lib-table-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  padding-top: var(--wb-lib-table-head-overlay-height);
+  scrollbar-width: thin;
+  scrollbar-color: var(--wb-line) transparent;
+}
 .wb-lib-table-body::-webkit-scrollbar, .wb-lib-card-grid::-webkit-scrollbar { width: 7px; }
 .wb-lib-table-body::-webkit-scrollbar-track, .wb-lib-card-grid::-webkit-scrollbar-track { background: transparent; }
 .wb-lib-table-body::-webkit-scrollbar-thumb, .wb-lib-card-grid::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: var(--wb-line); background-clip: padding-box; }
