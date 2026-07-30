@@ -2451,8 +2451,8 @@ def test_workbench_conversation_cards_share_borderless_control_surface():
     dark_trace_rule = styles.split(
         'html[data-theme="dark"] .wbc-trace {', 1
     )[1].split("}", 1)[0]
-    assert "var(--wb-green) 6%" in trace_rule
-    assert "var(--wb-green) 10%" in dark_trace_rule
+    assert "var(--wb-green) 8%" in trace_rule
+    assert "var(--wb-green) 12%" in dark_trace_rule
 
 
 def test_workbench_chat_splits_live_tools_around_intermediate_messages():
