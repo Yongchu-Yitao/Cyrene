@@ -15,6 +15,26 @@ from cyrene.knowledge import bibliography, library, store, zotero
 from route.workbench import library as library_routes
 
 
+def test_library_table_header_uses_the_shared_frosted_glass_treatment():
+    root = Path(__file__).resolve().parent.parent
+    styles = (
+        root / "src" / "webui" / "frontend" / "workbench-library.css"
+    ).read_text(encoding="utf-8")
+
+    header_css = styles.split(".wb-lib-table-head {", 1)[1].split("}", 1)[0]
+    glass_css = styles.split(".wb-lib-table-head::before {", 1)[1].split("}", 1)[0]
+
+    assert "position: relative;" in header_css
+    assert "isolation: isolate;" in header_css
+    assert "border-bottom: 0;" in header_css
+    assert "background: transparent;" in header_css
+    assert "var(--wb-main-bg, var(--wb-surface)) 66%" in glass_css
+    assert "var(--wb-main-bg, var(--wb-surface)) 56%" in glass_css
+    assert "var(--wb-main-bg, var(--wb-surface)) 32%" in glass_css
+    assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in glass_css
+    assert "mask-image: linear-gradient(" in glass_css
+
+
 @pytest.fixture
 async def library_db(tmp_path):
     path = str(tmp_path / "kb_project_one.db")

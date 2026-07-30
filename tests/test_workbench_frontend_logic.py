@@ -245,6 +245,39 @@ def test_workbench_overview_header_uses_the_same_frosted_glass_overlay():
     assert "padding: var(--wbc-side-content-inset) 0 0;" in flush_css
 
 
+def test_memory_toolbars_use_the_same_frosted_glass_without_overlay_spacing():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    toolbar_css = styles.split(".wb-mem-toolbar {", 1)[1].split("}", 1)[0]
+    toolbar_glass_css = styles.split(
+        ".wb-mem-toolbar::before {", 1
+    )[1].split("}", 1)[0]
+    tabs_css = styles.split(".wb-mem-detail-tabs {", 1)[1].split("}", 1)[0]
+    tabs_glass_css = styles.split(
+        ".wb-mem-detail-tabs::before {", 1
+    )[1].split("}", 1)[0]
+
+    assert "position: relative;" in toolbar_css
+    assert "isolation: isolate;" in toolbar_css
+    assert "var(--wb-main-bg, var(--wb-surface)) 66%" in toolbar_glass_css
+    assert "var(--wb-main-bg, var(--wb-surface)) 56%" in toolbar_glass_css
+    assert "var(--wb-main-bg, var(--wb-surface)) 32%" in toolbar_glass_css
+    assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in toolbar_glass_css
+    assert "mask-image: linear-gradient(" in toolbar_glass_css
+
+    assert "position: relative;" in tabs_css
+    assert "isolation: isolate;" in tabs_css
+    assert "border-bottom: 0;" in tabs_css
+    assert "var(--wb-surface) 66%" in tabs_glass_css
+    assert "var(--wb-surface) 56%" in tabs_glass_css
+    assert "var(--wb-surface) 32%" in tabs_glass_css
+    assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in tabs_glass_css
+    assert "mask-image: linear-gradient(" in tabs_glass_css
+
+
 def test_notification_items_navigate_to_their_precise_context():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(

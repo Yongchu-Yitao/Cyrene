@@ -436,7 +436,36 @@
 
 .wb-lib-table { width: 100%; min-width: 0; min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; border: 1px solid var(--wb-line); border-radius: 6px; overflow: hidden; background: color-mix(in srgb, var(--wb-card-bg) 45%, transparent); }
 .wb-lib-table-grid { width: 100%; min-width: 0; display: grid; grid-template-columns: 36px minmax(0, 2.1fr) minmax(0, 1fr) 62px minmax(0, .9fr) 94px minmax(0, 1.2fr); align-items: center; }
-.wb-lib-table-head { flex: 0 0 40px; min-height: 40px; padding: 0 14px; border-bottom: 1px solid var(--wb-line); color: var(--wb-muted); background: color-mix(in srgb, var(--wb-panel-2) 66%, transparent); font-size: calc(12.5px * var(--wb-ui-font-scale, 1)); font-weight: 700; }
+.wb-lib-table-head {
+  position: relative;
+  isolation: isolate;
+  flex: 0 0 40px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-bottom: 0;
+  color: var(--wb-muted);
+  background: transparent;
+  font-size: calc(12.5px * var(--wb-ui-font-scale, 1));
+  font-weight: 700;
+}
+.wb-lib-table-head::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 66%, transparent) 0%,
+    color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 56%, transparent) 68%,
+    color-mix(in srgb, var(--wb-main-bg, var(--wb-surface)) 32%, transparent) 86%,
+    transparent 100%
+  );
+  -webkit-backdrop-filter: blur(46px) saturate(165%) contrast(103%);
+  backdrop-filter: blur(46px) saturate(165%) contrast(103%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
+}
 .wb-lib-title-head { min-width: 0; padding-left: 64px; }
 .wb-lib-table-body { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--wb-line) transparent; }
 .wb-lib-table-body::-webkit-scrollbar, .wb-lib-card-grid::-webkit-scrollbar { width: 7px; }
