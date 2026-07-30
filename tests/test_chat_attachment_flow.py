@@ -108,6 +108,7 @@ async def test_workbench_attachment_only_turn_preserves_empty_public_message(
     monkeypatch,
     tmp_path,
 ):
+    from cyrene.model_runtime import client as model_client
     from cyrene.workbench import runtime as routes
 
     captured = {}
@@ -123,6 +124,11 @@ async def test_workbench_attachment_only_turn_preserves_empty_public_message(
 
     monkeypatch.setattr(routes, "_check_budget_gate", fake_check_budget_gate)
     monkeypatch.setattr(routes, "run_agent", fake_run_agent)
+    monkeypatch.setattr(
+        model_client,
+        "primary_candidate_supports_vision",
+        lambda _session_id="": True,
+    )
 
     result = await routes._workbench_agent_reply(
         "",
