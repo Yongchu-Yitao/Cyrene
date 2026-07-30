@@ -2,6 +2,184 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.7.0b8] - 2026-07-30
+
+这是 `0.7.0` 的第八个测试版，包含 `v0.7.0-beta.7` 之后的全部改动。本版重点
+完善长时间运行的 Agent 与多种 OpenAI-compatible 工具调用格式，重新组织
+Workbench 资料库、右键菜单、侧边 Agent 和卡片布局，并为 **OpenAI Codex OAuth**
+模型新增隔离的图片生成能力。图片生成不需要额外 API Key，且严格限定在 OAuth
+路径；现有自定义 OpenAI API / OpenAI-compatible Endpoint 的请求契约、工具目录
+和鉴权方式保持不变。
+
+### 功能更新
+
+- **OpenAI OAuth 可以直接生成图片**：当主模型使用 `codex_oauth` 时，Agent
+  可以调用新的 `GenerateImage` 工具，通过当前已登录的 OpenAI/Codex 账户生成
+  图片并作为附件发送，无需配置第二把 API Key。
+- **自定义 OpenAI API 完全隔离**：图片工具不会进入自定义 OpenAI-compatible
+  模型的工具目录或模型请求；即使手动伪造调用，也会在任何网络请求发生前被拒绝。
+- **高质量图片不再撞上固定 180 秒限制**：High 质量生成拥有 300 秒内部等待和
+  420 秒工具总超时；Medium、Low、Auto 与所有其他工具仍保持原来的 180 秒上限，
+  也不会因超时自动重复生成并消耗额度。
+- **Agent 可以持续工作到真正完成**：移除固定工具轮数上限，长任务会继续执行，
+  直到模型给出明确完成信号、用户取消或发生不可恢复错误，而不是在中途因轮数
+  耗尽停止。
+- **更多本地模型能可靠调用工具**：兼容结构化参数、旧式
+  `function_call`、Hermes/Qwen XML、流式对象参数、代码块 JSON、尾逗号和安全的
+  Bare JSON Action，并自动修复缺失调用 ID 与常见 Gateway 包装错误。
+- **Workbench 资料库成为统一知识入口**：资料库支持分组、集合、标签、行内标签
+  编辑、Markdown 内容视图、显式分页、收藏与选择控件；旧的重复知识页面已移除。
+- **侧边 Agent 支持多个持久标签页**：选中文本可以开启独立侧边 Agent，引用只
+  进入该次上下文而不污染公开问题；各标签页保留消息、输入、实时状态和删除操作。
+- **右键操作覆盖更多工作区内容**：Composer 菜单可在外部点击时关闭；聊天空白
+  区复用快捷操作；资料、记忆、日程和原生浏览器标签都提供与场景一致的右键动作。
+- **Workbench 视觉层级全面统一**：对话、资料库、记忆、聊天栏和 Overview
+  使用更轻的无边框卡片、克制阴影和可滚动的磨砂玻璃顶栏；滚动条隐藏但滚动能力
+  保留。
+- **标签页术语统一**：快捷键设置中的英文统一使用 “tab”，中文统一使用
+  “标签页”，不再混用 “Session / Session Tab”。
+- **发布与前端依赖更可复现**：CI 和打包统一使用 Node.js 22.12，Electron、
+  electron-builder、esbuild、React 与 Ruff 均锁定兼容版本，WebUI 构建会根据
+  Python 包版本自动更新全部静态资源缓存键。
+
+### 详细变更与兼容性说明
+
+#### OpenAI Codex OAuth 图片生成与安全隔离
+
+- **仅为 OAuth 主模型注册工具** — `GenerateImage` 只在当前 Primary Candidate
+  的 Provider 为 `codex_oauth` 时进入 Agent Catalog 和 Wire Tool Definition；
+  自定义 OpenAI-compatible Candidate、API Key、Base URL、Fallback、Secondary
+  与 Vision 配置不会因此改变。
+- **执行前再次验证 Provider** — 工具执行层不依赖模型是否“看见”工具，而会
+  重新读取当前模型来源。非 OAuth 请求在启动 SDK Client、读取图片能力或发起
+  网络连接前直接失败，防止伪造 Tool Call 绕过目录隔离。
+- **复用现有 OpenAI 登录** — 图片生成由 Codex SDK/App Server 使用当前 OAuth
+  会话执行；Cyrene 不要求额外图片 API Key，也不读取或持久化 Access Token、
+  Refresh Token。
+- **独立、最小权限的图片 Client** — 每次生成使用隔离的临时 Client，启用
+  `features.image_generation=true`，同时禁用 Plugin、App、Shell、Unified Exec、
+  Browser、Computer Use、Multi-agent、Web、View Image 与宿主技能；Sandbox
+  为只读、Approval 为 `never`，不会把 Cyrene 的宿主工具暴露给图片会话。
+- **能力在调用时确认** — 通过 `modelProvider/capabilities/read` 读取当前
+  Provider 的图片能力；额度不足、登录失效、模型不可用或能力缺失会转换为清楚、
+  可操作的错误，而不是静默等待或误走自定义 API。
+- **完整收集生成结果** — 同时兼容 `imageGeneration` 与
+  `image_generation_call` 事件，保留修订后的 Prompt、Base64 数据和 SDK 保存
+  路径，并统一转换为 Cyrene 附件。
+- **严格校验输入与输出** — 校验 Prompt、Size、Quality、Output Format、最大
+  30MB 和真实图片数据；无效或非图片响应不会作为附件发送。
+- **临时文件生命周期明确** — 结果先写入受控临时文件，再通过已注册的
+  `send_file` 通道发送；发送完成或失败后都清理临时文件，避免图片残留在工作区。
+- **高质量请求使用分层超时** — High 质量允许 SDK 内部生成最长 300 秒，并为
+  工具封装保留到 420 秒；其他图片质量和所有非图片工具继续使用 180 秒。超时不
+  自动重试，避免同一 Prompt 重复扣额度或产生两张意外图片。
+- **OAuth 原生图片输入保持可用** — Codex Provider 继续把上传图片转换为原生
+  Image Turn Input；本次新增的是输出生成能力，不改变既有 Vision 输入或
+  OpenAI-compatible 图片输入逻辑。
+
+#### Agent 工具协议、Gateway 与持续执行
+
+- **移除固定 Tool Round Ceiling** — Runtime 不再读取或执行
+  `MAX_TOOL_ROUNDS`。配置迁移会清除旧值，备份恢复会丢弃该字段，设置接口也拒绝
+  重新写入，确保旧配置不会意外恢复中途停止行为。
+- **以明确完成信号结束运行** — Agent Loop 会持续处理 Tool Result、Guidance
+  和下一轮模型调用，直到正常 Final Reply/`quit`、用户取消或不可恢复错误；工具
+  多、步骤长的任务不再由任意轮数决定完成度。
+- **结构化工具参数可直接接收对象** — OpenAI-compatible Provider 同时接受
+  JSON 字符串和已解析对象；缺少 Tool Call ID 时生成稳定 ID，避免本地推理服务
+  返回合法意图却无法进入执行。
+- **兼容旧式 `function_call`** — 非流式与流式旧协议都会提升为标准
+  `tool_calls`，并正确组装分片 Name、Arguments 与 ID。
+- **解析常见本地模型格式** — 支持 Hermes `<tool_call>` JSON、Qwen XML
+  Function/Parameter、Markdown Fenced JSON 和尾逗号；Bare JSON Action 仅在
+  Action 名确实对应当前可用工具时解析，普通 JSON 正文不会被误执行。
+- **流式参数组装更稳健** — 对字符串分片、对象分片和单个完整对象分别处理，
+  避免把对象强制拼接成无效文本或重复覆盖已经接收的参数。
+- **Gateway 别名保持隐藏** — Deferred Capability ID 可直接执行，但不会膨胀为
+  模型 Wire Definition；Schema 和 Package Guard 继续生效，发现结果会说明
+  Capability ID 与 Gateway 调用关系。
+- **自动修复嵌套调用 Envelope** — 兼容双层、完整多层和常见错误包装，按目标
+  Schema 将必填参数投影到正确层级，并在字段类型无效时从可验证数据重建调用。
+- **DeepSeek 推理强度规范化** — UI/会话偏好会转换为 Provider 实际支持的 API
+  值，避免展示档位与发送参数不一致。
+- **纯附件消息保持语义** — 只有图片附件、没有文字的 Turn 会保留空的公开消息，
+  同时把原生图片内容交给模型，不再制造多余的可见占位文本。
+- **首次设置时区写入统一配置** — Onboarding 仅保存支持的时区，并复用正式
+  General Timezone 设置路径；欢迎页导入面板严格保留三个受支持入口。
+
+#### Workbench 资料库、侧边 Agent 与上下文操作
+
+- **资料库取代重复知识页面** — Workbench Library 成为唯一知识管理界面，旧
+  `workbench-knowledge` 入口和重复实现被移除，避免两套页面状态与操作分叉。
+- **分组与筛选能力补齐** — 支持 Group、Collection、Tag、行内标签编辑、收藏、
+  对齐的选择控件和显式 Pagination；标题、空状态和操作均提供中英文文本。
+- **内容阅读更完整** — Content Tab 使用统一 Markdown Renderer 展示正文，
+  列表与详情保持稳定选择关系，收藏图标位于选择控件之前。
+- **侧边 Agent 独立持久化** — 可同时维护多个 Side-agent Session；它们不会
+  出现在主聊天列表，切换 Workbench 后仍可恢复各自标签、消息和运行状态。
+- **引用上下文不污染问题** — 选中文本作为隐藏上下文传入 Side Agent，公开的
+  User Message 只保留用户实际输入；从选择文本创建的每个 Agent 都拥有独立
+  Composer、Live State 与删除确认。
+- **卡片顺序由用户决定** — 右栏 Chat/Overview 卡片支持排序并持久化；Pinned
+  Session 不受“最近三个”限制，刷新或重新打开后顺序保持。
+- **Composer 在窄布局下稳定** — Model Picker 会压缩但不覆盖 Send Button，
+  菜单在外部 Pointer Down、Escape 或切换场景时正确关闭。
+- **聊天空白区复用快捷菜单** — Quick Action 使用现有命令与权限入口；Quick
+  Rename 调用统一对话框而不是浏览器原生 `prompt`。
+- **资料和记忆操作复用既有能力** — Knowledge Item 支持 Reveal in Folder；
+  Memory Item 继续提供原有动作，不引入重复或不一致菜单。
+- **日历视图操作一致** — Schedule Context Action 可从各日历视图访问，不再只
+  在单一列表布局出现。
+- **原生浏览器标签菜单补齐** — 提供 Reload、Mute、Close；显示上下文菜单前先
+  保存 Snapshot 并隐藏原生内容层，菜单关闭后恢复，避免浏览器窗口盖住浮层。
+- **快捷键用词一致** — Open/Next/Previous/Remove 等标签页操作在英文中只使用
+  “tab”，中文只使用“标签页”，说明文字也同步更新。
+
+#### Workbench 视觉与交互打磨
+
+- **卡片表面改为无边框层级** — Conversation 与 Overview Card 移除硬边框和
+  Focus Outline，Active 状态使用轻微底色；搜索框、Composer、Share 与卡片采用
+  克制的双层阴影。
+- **Focus 不再改变整块底色** — Search 和 Composer 保持稳定 Surface，只通过
+  控件自身状态表达焦点，减少输入时的视觉跳变。
+- **对话顶栏成为真实磨砂覆盖层** — Header 绝对定位在滚动内容之上，正文可从
+  下方经过；使用 46px Blur、165% Saturation 和分段渐变，在浅色与深色主题中
+  都由 `--wb-main-bg` 派生。
+- **聊天栏和 Overview 使用同一玻璃语言** — Rail Header 与 Overview Header
+  采用一致的 Blur、Fade 和控件可读性处理，避免各区域像来自不同界面。
+- **资料库与记忆顶栏实际参与滚动** — Frosted Overlay 不再只是静态装饰；多余
+  顶部占位被移除，Sidebar Overlay 高度缩短，内容经过时能看到正确的玻璃效果。
+- **隐藏滚动条而不禁止滚动** — Conversation Transcript、Rail、Overview、
+  Library 和 Memory 在鼠标、触控板与键盘下仍可滚动，但不再显示破坏整体表面的
+  Scrollbar。
+- **设计回归资料随代码保存** — `design-qa.md` 与对应截图记录浅色、深色、滚动
+  和遮罩迭代，便于后续验证视觉契约。
+
+#### 构建、依赖、质量与发布
+
+- **Node.js 基线升级到 22.12** — CI、Release Workflow 和源码构建文档使用同一
+  最低版本，避免开发、测试与打包环境漂移。
+- **桌面工具链锁定** — Electron 固定为 `43.2.0`，electron-builder 固定为
+  `26.15.7`，并配置受信任构建脚本；Electron 43 的 `console-message` Details
+  API 已同步适配主进程和 Smoke Test。
+- **WebUI 使用生产 React 资源** — React/ReactDOM 固定为 `18.3.1` 并在构建时
+  复制 Production Bundle；旧开发资源被移除，避免发布包携带开发警告和额外体积。
+- **前端编译器可复现** — esbuild 固定为 `0.28.1`；构建脚本从
+  `pyproject.toml` 读取版本，统一重写 CSS、JS、PDF.js 和 Worker 的缓存键。
+- **动态路由不再携带旧版本** — PDF Route 使用运行时 `get_version()` 生成资源
+  URL，消除历史硬编码版本造成的缓存错配。
+- **Ruff 成为 CI 契约** — Dev Dependency 固定在 `>=0.15,<1`，CI 使用锁文件
+  执行 `ruff check src tests`；兼容门面和测试延迟导入拥有明确、最小范围豁免。
+- **发布安装命令更安全** — Workflow 中带版本范围的 Pip Specifier 全部正确
+  引号包裹，防止 Shell 把比较符误解释为重定向。
+- **发行包排除运行期数据库** — Wheel 与 Git 忽略 SQLite 主文件、SHM 和 WAL，
+  防止本地状态进入源码或安装包。
+- **契约与打包测试同步扩展** — 更新 OpenAPI、Route、WebUI Asset、Electron
+  Runtime、OAuth 图片隔离、工具协议、超时和快捷键本地化测试；本版版本同步为
+  Python `0.7.0b8`、Electron/Git Tag `0.7.0-beta.8`。
+
+---
+
 ## [0.7.0b7] - 2026-07-29
 
 这是 `0.7.0` 的第七个测试版，包含 `v0.7.0-beta.6` 之后的全部改动。本版将

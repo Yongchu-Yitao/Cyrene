@@ -5,6 +5,229 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0b8] - 2026-07-30
+
+This is the eighth `0.7.0` beta and contains every change since
+`v0.7.0-beta.7`. It focuses on long-running Agent execution and broad
+OpenAI-compatible tool-call interoperability, reorganizes the Workbench
+Library, context actions, side agents, and card layout, and adds isolated image
+generation for **OpenAI Codex OAuth** models. Image generation uses the current
+OAuth account without another API key. Existing custom OpenAI API and
+OpenAI-compatible endpoint authentication, tool catalogs, and wire contracts
+remain unchanged.
+
+### Feature highlights
+
+- **Generate images directly with OpenAI OAuth** — when the primary model uses
+  `codex_oauth`, the Agent can call `GenerateImage` through the signed-in
+  OpenAI/Codex account and deliver the result as an attachment, with no second
+  API key.
+- **Custom OpenAI APIs remain strictly isolated** — the image tool is absent
+  from custom OpenAI-compatible catalogs and model requests. A forged call is
+  rejected before any network operation.
+- **High-quality generation no longer hits the fixed 180-second limit** — High
+  gets a 300-second internal generation window and a 420-second tool envelope.
+  Medium, Low, Auto, and every unrelated tool keep the existing 180-second
+  limit, with no automatic retry that could consume quota twice.
+- **Agents continue until the task is actually complete** — the fixed tool
+  round ceiling is removed. Long jobs continue until explicit completion,
+  cancellation, or an unrecoverable failure.
+- **More local models can call tools reliably** — Cyrene accepts structured
+  arguments, legacy `function_call`, Hermes and Qwen XML, streamed object
+  arguments, fenced JSON, trailing commas, and safe bare-JSON actions, while
+  repairing missing call IDs and common gateway envelopes.
+- **Library is the single knowledge workspace** — groups, collections, tags,
+  inline tag editing, Markdown content, explicit pagination, starring, and
+  aligned selection replace the duplicated legacy Knowledge page.
+- **Side agents support multiple persistent tabs** — selected text can start an
+  independent side agent without leaking the hidden quote into the public
+  question. Every tab preserves messages, composer, live state, and deletion.
+- **Context actions cover more of the workspace** — composer menus close on
+  outside interaction, chat blank space reuses quick actions, and knowledge,
+  memory, schedules, and native browser tabs expose relevant context menus.
+- **Workbench surfaces share one visual hierarchy** — borderless cards,
+  restrained shadows, functional frosted headers, and hidden-but-scrollable
+  rails now cover Chat, Overview, Library, and Memory.
+- **Tab terminology is consistent** — English shortcut labels use “tab” and
+  Chinese labels use “标签页,” replacing mixed “Session / Session Tab” wording.
+- **Releases and frontend builds are more reproducible** — Node.js 22.12,
+  Electron, electron-builder, esbuild, React, and Ruff use pinned compatible
+  baselines, and WebUI builds derive every asset cache key from the Python
+  package version.
+
+### Detailed changes and compatibility notes
+
+#### OpenAI Codex OAuth image generation and isolation
+
+- **The tool is registered only for the OAuth primary model** —
+  `GenerateImage` enters the Agent catalog and wire definitions only when the
+  current primary candidate provider is `codex_oauth`. Custom
+  OpenAI-compatible candidates, API keys, base URLs, fallback, secondary, and
+  vision settings are not changed.
+- **The provider is checked again at execution time** — the tool layer reads
+  the active source instead of trusting model visibility. Non-OAuth calls fail
+  before an SDK client, capability read, or network connection can start, so a
+  forged tool call cannot bypass catalog isolation.
+- **The existing OpenAI sign-in is reused** — Codex SDK/App Server performs the
+  request with the current OAuth session. Cyrene asks for no image API key and
+  does not read or persist access or refresh tokens.
+- **A dedicated least-privilege image client is used** — each generation runs
+  in an isolated ephemeral client with `features.image_generation=true` while
+  plugins, apps, shell, unified exec, browser, computer use, multi-agent, web,
+  view-image, and host skills are disabled. The sandbox is read-only and
+  approval policy is `never`.
+- **Capability is verified at call time** —
+  `modelProvider/capabilities/read` confirms image support. Exhausted quota,
+  expired authentication, model unavailability, and missing capability become
+  actionable errors instead of falling through to a custom endpoint.
+- **All supported result events are collected** — both `imageGeneration` and
+  `image_generation_call` are handled, including revised prompt, Base64 image
+  data, and SDK-saved paths, then normalized into a Cyrene attachment.
+- **Inputs and outputs are validated** — prompt, size, quality, output format,
+  maximum 30 MB size, and actual image bytes are checked before delivery.
+- **Temporary files have a bounded lifecycle** — output is written to a
+  controlled temporary path, delivered through the registered `send_file`
+  channel, and removed after either success or failure.
+- **High quality uses layered timeouts** — High allows up to 300 seconds inside
+  the SDK and 420 seconds around the tool. Other image qualities and all
+  non-image tools stay at 180 seconds. Timeout does not trigger an automatic
+  duplicate generation.
+- **Native OAuth image input remains available** — uploaded images still become
+  native Codex image turn input. This release adds image output without
+  changing existing vision input or OpenAI-compatible image-input behavior.
+
+#### Agent tool protocols, gateway repair, and continuous execution
+
+- **The fixed tool-round ceiling is gone** — runtime no longer reads or applies
+  `MAX_TOOL_ROUNDS`. Migration purges old values, restore drops the field, and
+  settings reject attempts to reintroduce it.
+- **Runs end on explicit outcomes** — the Agent loop keeps processing tool
+  results, guidance, and model turns until a normal final reply/`quit`, user
+  cancellation, or an unrecoverable error, rather than an arbitrary counter.
+- **Structured argument objects are accepted** — OpenAI-compatible providers
+  handle JSON strings and already-parsed objects. Stable IDs are synthesized
+  when a provider omits the tool-call ID.
+- **Legacy `function_call` works in both modes** — non-streaming and streaming
+  responses are promoted to standard `tool_calls`, including fragmented names,
+  arguments, and IDs.
+- **Common local-model formats are parsed** — Hermes `<tool_call>` JSON, Qwen
+  XML functions and parameters, fenced JSON, and trailing commas are
+  supported. A bare JSON action is executable only when its action name is an
+  available tool, so ordinary JSON prose is not misclassified.
+- **Streaming argument assembly is safer** — string fragments, object fragments,
+  and single complete objects follow separate paths, preventing invalid string
+  concatenation or overwriting received data.
+- **Gateway aliases remain hidden** — deferred capability IDs can execute
+  directly without expanding into model wire definitions. Schemas and package
+  guards remain enforced, and discovery explains capability IDs and gateway
+  invocation.
+- **Nested invocation envelopes are repaired** — double-nested, fully nested,
+  and commonly malformed wrappers are normalized. Required fields are
+  projected through wrapper layers and invalid values can be reconstructed
+  from schema-valid inputs.
+- **DeepSeek reasoning effort is normalized** — UI and session values map to
+  provider-supported API values rather than sending presentation labels.
+- **Attachment-only turns preserve their meaning** — a turn containing only an
+  image keeps an empty public message while the native image content reaches
+  the model, avoiding invented visible placeholder text.
+- **Onboarding uses canonical settings** — only supported time zones are saved
+  through the general time-zone path, and the welcome import panel exposes
+  exactly the three supported choices.
+
+#### Workbench Library, side agents, and context actions
+
+- **Library replaces the duplicated Knowledge page** — Workbench Library is the
+  sole knowledge-management surface and the old `workbench-knowledge`
+  implementation is removed.
+- **Grouping and filtering are complete** — groups, collections, tags, inline
+  tag editing, starring, aligned selection controls, and explicit pagination
+  are available with localized labels and empty states.
+- **Content reading uses the shared Markdown renderer** — the Content tab
+  renders complete document bodies while list/detail selection remains stable,
+  and the star control precedes the aligned selector.
+- **Side-agent sessions persist independently** — multiple side agents can be
+  maintained without appearing in the main chat list; their tabs, messages,
+  running state, and composer survive workspace switches.
+- **Quoted context does not pollute the public question** — selected text is
+  supplied as hidden context, while the visible user message contains only the
+  user's actual prompt. Each selected-text agent owns its own composer, live
+  state, and delete confirmation.
+- **Users control right-column card order** — Chat and Overview cards are
+  sortable and persisted. Pinned sessions are not removed by the three-recent
+  limit.
+- **The composer remains stable at narrow widths** — the model picker compacts
+  without covering Send, and menus close correctly on outside pointer-down,
+  Escape, and scene changes.
+- **Chat blank-space actions are reused** — quick actions share existing
+  command and permission entry points, while Quick Rename uses the standard
+  dialog instead of native browser `prompt`.
+- **Knowledge and Memory reuse established operations** — knowledge items can
+  Reveal in Folder and memory items keep their existing actions without a
+  second inconsistent menu.
+- **Schedule actions work across calendar views** — context operations are no
+  longer limited to one list presentation.
+- **Native browser tab actions are complete** — Reload, Mute, and Close are
+  available. Cyrene snapshots and hides the native content surface before the
+  menu appears, then restores it, preventing browser content from covering the
+  overlay.
+- **Shortcut wording is consistent** — Open, Next, Previous, and Remove tab
+  actions use “tab” in English and “标签页” in Chinese throughout labels and
+  descriptions.
+
+#### Workbench visual and interaction polish
+
+- **Cards use a borderless surface hierarchy** — conversation and Overview
+  cards drop hard borders and focus outlines; active state uses a subtle tint.
+  Search, composer, share, and card surfaces use restrained two-layer shadows.
+- **Focus no longer recolors the whole surface** — search and composer
+  backgrounds remain stable, avoiding visual jumps during typing.
+- **The conversation header is a functional frosted overlay** — it is
+  positioned above scrolling content, using 46 px blur, 165% saturation, and a
+  staged gradient derived from `--wb-main-bg` in light and dark themes.
+- **Chat rail and Overview share the same glass language** — blur, fade, and
+  control readability are consistent instead of being tuned as unrelated
+  regions.
+- **Library and Memory overlays participate in scrolling** — redundant top
+  spacing is removed, sidebar overlays are shorter, and content visibly passes
+  under the glass treatment.
+- **Scrollbars are hidden without disabling scroll** — conversation transcript,
+  rail, Overview, Library, and Memory continue to support mouse, trackpad, and
+  keyboard scrolling without visually heavy scrollbars.
+- **Design regression evidence is checked in** — `design-qa.md` and screenshots
+  record light, dark, scroll, and overlay iterations for later verification.
+
+#### Build, dependency, quality, and release changes
+
+- **Node.js 22.12 is the shared baseline** — CI, release workflows, and source
+  build documentation now require the same minimum version.
+- **The desktop toolchain is pinned** — Electron is `43.2.0` and
+  electron-builder is `26.15.7`, with trusted build scripts configured. The
+  Electron 43 `console-message` details API is reflected in the main process
+  and smoke tests.
+- **WebUI ships production React assets** — React and ReactDOM are pinned to
+  `18.3.1` and production bundles are copied during build; obsolete development
+  assets are removed.
+- **Frontend compilation is reproducible** — esbuild is pinned to `0.28.1`.
+  The build reads `pyproject.toml` and rewrites cache keys for CSS, JavaScript,
+  PDF.js, and its worker from one version source.
+- **Dynamic routes do not carry stale versions** — PDF asset routes use runtime
+  `get_version()` instead of a historical hard-coded cache key.
+- **Ruff is an explicit CI contract** — the development dependency is bounded
+  to `>=0.15,<1`, CI runs locked `ruff check src tests`, and only compatibility
+  facades and deliberate test-time imports receive narrow exceptions.
+- **Release installation commands are shell-safe** — pip specifiers containing
+  version comparisons are quoted so shells cannot interpret them as
+  redirections.
+- **Runtime databases are excluded from distributions** — wheels and Git ignore
+  SQLite database, SHM, and WAL files to keep local state out of source and
+  packages.
+- **Contracts and packaging tests cover the new behavior** — OpenAPI, routes,
+  WebUI assets, Electron runtime, OAuth image isolation, tool protocols,
+  timeouts, and localized shortcut wording are updated. This release is
+  versioned as Python `0.7.0b8` and Electron/Git `0.7.0-beta.8`.
+
+---
+
 ## [0.7.0b7] - 2026-07-29
 
 This is the seventh `0.7.0` beta and contains every change since
