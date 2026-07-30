@@ -7607,17 +7607,19 @@ function WbcSide({
   return (
     <aside className="wbc-side">
       {React.createElement(window.CyreneUI.require("shell").ColResizer)}
-      <div className="workbench-right-tabs">
-        {tabs.map(function (item) {
-          return (
-            <button key={item.id} type="button" className={activeTab === item.id ? "active" : ""} onClick={function () { onTabChange(item.id); }}>
-              {item.label}
-            </button>
-          );
-        })}
-        <button type="button" className="wbc-side-hide-btn" onClick={onToggleSide} title={wbcT("workbenchChat.hideSidebar", "Hide side panel")}>
-          {WBC_ICONS.chevronsRight}
-        </button>
+      <div className="wbc-side-glass">
+        <div className="workbench-right-tabs">
+          {tabs.map(function (item) {
+            return (
+              <button key={item.id} type="button" className={activeTab === item.id ? "active" : ""} onClick={function () { onTabChange(item.id); }}>
+                {item.label}
+              </button>
+            );
+          })}
+          <button type="button" className="wbc-side-hide-btn" onClick={onToggleSide} title={wbcT("workbenchChat.hideSidebar", "Hide side panel")}>
+            {WBC_ICONS.chevronsRight}
+          </button>
+        </div>
       </div>
       <div className={"wbc-side-body" + (flush ? " flush" : "")}>
         {activeTab === "overview" && <WbcOverviewTab chat={chat} loading={chatLoading} detailed={chatDetailed} runtime={runtime} onRename={onRename} onDelete={onDelete} onToTask={onToTask} toTaskBusy={toTaskBusy} onCompact={onCompact} compactBusy={compactBusy} />}

@@ -217,6 +217,32 @@ def test_workbench_chat_rail_uses_the_same_frosted_glass_overlay():
     assert "padding: calc(var(--wbc-rail-overlay-height) + 8px) 0 8px;" in chat_list_css
 
 
+def test_workbench_overview_header_uses_the_same_frosted_glass_overlay():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    right_panel_styles = styles.split("/* ---- right panel ---- */", 1)[1]
+    side_css = right_panel_styles.split(".wbc-side {", 1)[1].split("}", 1)[0]
+    glass_css = styles.split(".wbc-side-glass::before {", 1)[1].split("}", 1)[0]
+    side_body_css = styles.split(".wbc-side-body {", 1)[1].split("}", 1)[0]
+    flush_css = styles.split(".wbc-side-body.flush {", 1)[1].split("}", 1)[0]
+
+    assert 'className="wbc-side-glass"' in source
+    assert "--wbc-side-overlay-height:" in side_css
+    assert "var(--wb-right-bg) 66%" in glass_css
+    assert "var(--wb-right-bg) 56%" in glass_css
+    assert "var(--wb-right-bg) 32%" in glass_css
+    assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in glass_css
+    assert "mask-image: linear-gradient(" in glass_css
+    assert "padding: calc(var(--wbc-side-overlay-height) + 14px) 14px 14px;" in side_body_css
+    assert "padding: var(--wbc-side-overlay-height) 0 0;" in flush_css
+
+
 def test_notification_items_navigate_to_their_precise_context():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
