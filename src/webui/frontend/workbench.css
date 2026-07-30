@@ -14150,11 +14150,10 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
 }
 
 .wbc-bubble {
-  background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-card-bg));
-  border: 0;
+  background: color-mix(in srgb, var(--wb-accent) 13%, var(--wb-card-bg));
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 22%, transparent);
   border-radius: 13px 13px 4px 13px;
   padding: 9px 13px;
-  box-shadow: var(--wbc-control-shadow);
   font-size: calc(13.5px * var(--wb-ui-font-scale, 1));
   line-height: 1.65;
   word-break: break-word;
@@ -14173,7 +14172,7 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
 }
 
 .wbc-msg-attachments.after-copy {
-  border-top: 0;
+  border-top: 1px solid color-mix(in srgb, var(--wb-text) 10%, transparent);
   margin-top: 10px;
   padding-top: 10px;
 }
@@ -14194,20 +14193,20 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   align-items: center;
   gap: 11px;
   background: var(--wb-card-bg);
-  border: 0;
+  border: 1px solid var(--wb-line);
   border-radius: 11px;
   padding: 9px 12px;
-  box-shadow: var(--wbc-control-shadow);
   color: var(--wb-text);
   font: inherit;
   text-align: left;
   min-width: 0;
-  transition: background 150ms ease, box-shadow 150ms ease;
+  transition: border-color 150ms ease, background 150ms ease;
 }
 
 button.wbc-attach-file { cursor: pointer; }
 button.wbc-attach-file:hover {
-  background: var(--wb-row-hover-bg);
+  border-color: color-mix(in srgb, var(--wb-red) 34%, var(--wb-line));
+  background: color-mix(in srgb, var(--wb-red) 2.5%, var(--wb-card-bg));
 }
 button.wbc-attach-file:focus-visible {
   outline: 2px solid var(--wb-active-border);
@@ -14278,7 +14277,7 @@ button.wbc-attach-file:focus-visible {
   gap: 3px;
   margin-left: 6px;
   padding-left: 13px;
-  border-left: 0;
+  border-left: 1px solid var(--wb-line);
   color: #e0454f;
   font-size: calc(12px * var(--wb-ui-font-scale, 1));
   font-weight: 600;
@@ -14405,7 +14404,7 @@ button.wbc-attach-file:focus-visible {
   max-width: 100%;
   box-sizing: border-box;
   border-radius: 14px;
-  border: 0;
+  border-color: color-mix(in srgb, var(--wb-accent) 32%, transparent);
   background: var(--wb-card-bg);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
   padding: 12px;
@@ -14604,15 +14603,15 @@ button.wbc-attach-file:focus-visible {
   min-width: 0;
   margin-left: var(--wbc-branch-rail, 32px);
   padding: 0 12px;
-  border: 0;
+  border: 1px solid color-mix(in srgb, var(--wb-border) 78%, transparent);
   border-radius: 8px;
-  background: var(--wb-card-bg);
-  box-shadow: var(--wbc-control-shadow);
-  transition: background 120ms ease, box-shadow 120ms ease;
+  background: color-mix(in srgb, var(--wb-card-bg) 42%, transparent);
+  transition: border-color 120ms ease, background 120ms ease;
 }
 
 .wbc-branch-button:hover .wbc-branch-card {
-  background: var(--wb-row-hover-bg);
+  border-color: color-mix(in srgb, var(--wb-accent) 38%, var(--wb-border));
+  background: color-mix(in srgb, var(--wb-accent) 6%, var(--wb-card-bg));
 }
 
 .wbc-branch-button:focus-visible {
@@ -14621,8 +14620,8 @@ button.wbc-attach-file:focus-visible {
 }
 
 .wbc-branch-button:focus-visible .wbc-branch-card {
-  outline: 2px solid color-mix(in srgb, var(--wb-accent) 42%, transparent);
-  outline-offset: 1px;
+  border-color: color-mix(in srgb, var(--wb-accent) 74%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 12%, transparent);
 }
 
 .wbc-branch-kind {
@@ -14670,7 +14669,6 @@ button.wbc-attach-file:focus-visible {
   border-radius: 11px;
   padding: 10px 13px;
   max-width: 720px;
-  box-shadow: var(--wbc-control-shadow);
 }
 
 .wbc-live-activities {
@@ -14682,12 +14680,13 @@ button.wbc-attach-file:focus-visible {
 .wbc-trace.live.wbc-trace-interactive {
   box-sizing: border-box;
   cursor: pointer;
-  transition: background-color 0.14s ease, box-shadow 0.14s ease;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
 }
 
 .wbc-trace.live.wbc-trace-interactive:hover,
 .wbc-trace.live.wbc-trace-interactive:focus-visible {
-  background: var(--wb-row-hover-bg);
+  border-color: color-mix(in srgb, var(--wb-green) 48%, transparent);
+  background: color-mix(in srgb, var(--wb-green) 9%, var(--wb-card-bg));
 }
 
 .wbc-trace.live.wbc-trace-interactive:focus-visible {
@@ -14937,10 +14936,10 @@ button.wbc-attach-file:focus-visible {
 }
 .wbc-question {
   padding: 14px 16px;
-  background: var(--wb-card-bg);
-  border: 0;
+  background: var(--wb-main-bg, #fff);
+  border: 1px solid var(--wb-line);
   border-radius: 12px;
-  box-shadow: var(--wbc-control-shadow);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 .wbc-question-head {
   display: flex;
@@ -14994,13 +14993,12 @@ button.wbc-attach-file:focus-visible {
   padding: 8px 11px;
   font-size: calc(13px * var(--wb-ui-font-scale, 1));
   color: var(--wb-text, inherit);
-  background: var(--wb-card-bg);
-  border: 0;
+  background: var(--wb-surface, #f5f6f8);
+  border: 1px solid var(--wb-line);
   border-radius: 8px;
-  box-shadow: var(--wbc-control-shadow);
   outline: none;
 }
-.wbc-question-custom input:focus { background: var(--wb-row-hover-bg); }
+.wbc-question-custom input:focus { border-color: var(--wb-accent); }
 .wbc-question-send {
   display: inline-flex;
   align-items: center;
@@ -15083,12 +15081,11 @@ button.wbc-attach-file:focus-visible {
   position: relative;
   display: inline-flex;
   align-items: center;
-  border: 0;
+  border: 1px solid var(--wb-line);
   border-radius: 9px;
-  background: var(--wb-card-bg);
+  background: var(--wb-panel-2);
   padding: 5px 26px 5px 9px;
   max-width: 220px;
-  box-shadow: var(--wbc-control-shadow);
 }
 
 .wbc-attach-card.file {
@@ -17253,12 +17250,14 @@ html[data-theme="dark"] .wbc-quick-actions button {
   box-shadow: none;
 }
 html[data-theme="dark"] .wbc-bubble {
-  background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-card-bg));
+  background: color-mix(in srgb, var(--wb-accent) 20%, var(--wb-panel));
+  border-color: color-mix(in srgb, var(--wb-accent) 30%, transparent);
 }
 /* Edit bubble reads as a neutral editor panel even in dark mode (not accent-tinted
    like a normal user bubble), so it wins over the generic dark bubble rule above. */
 html[data-theme="dark"] .wbc-edit-bubble {
   background: var(--wb-card-bg);
+  border-color: color-mix(in srgb, var(--wb-accent) 34%, transparent);
 }
 html[data-theme="dark"] .wbc-trace {
   background: color-mix(in srgb, var(--wb-green) 10%, var(--wb-panel));
@@ -18186,11 +18185,10 @@ html[data-theme="dark"] .wbc-trace {
   display: flex;
   align-items: center;
   gap: 10px;
-  border: 0;
-  background: var(--wb-card-bg);
+  border: 1px solid color-mix(in srgb, var(--wb-blue) 25%, transparent);
+  background: color-mix(in srgb, var(--wb-blue) 6%, var(--wb-card-bg));
   border-radius: 11px;
   padding: 9px 12px;
-  box-shadow: var(--wbc-control-shadow);
 }
 
 .wbc-agent-file .wbc-file-meta { flex: 1; }
@@ -18203,9 +18201,7 @@ html[data-theme="dark"] .wbc-trace {
 }
 
 .wbc-agent-file-actions .wb-btn {
-  border: 0;
   padding: 4px 10px;
-  box-shadow: none;
   font-size: calc(12px * var(--wb-ui-font-scale, 1));
   text-decoration: none;
 }
