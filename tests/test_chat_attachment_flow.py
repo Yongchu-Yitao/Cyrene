@@ -104,10 +104,15 @@ def test_attachment_prompt_forbids_device_scan_after_missing_upload():
 
 
 @pytest.mark.asyncio
-async def test_workbench_attachment_only_turn_preserves_empty_public_message(monkeypatch):
+async def test_workbench_attachment_only_turn_preserves_empty_public_message(
+    monkeypatch,
+    tmp_path,
+):
     from cyrene.workbench import runtime as routes
 
     captured = {}
+    image_path = tmp_path / "energy.png"
+    image_path.write_bytes(b"test image")
 
     async def fake_run_agent(**kwargs):
         captured.update(kwargs)
@@ -126,7 +131,7 @@ async def test_workbench_attachment_only_turn_preserves_empty_public_message(mon
         attachments=[{
             "id": "upload_1",
             "name": "energy.png",
-            "path": "/tmp/energy.png",
+            "path": str(image_path),
             "content_type": "image/png",
             "kind": "image",
         }],
@@ -134,7 +139,12 @@ async def test_workbench_attachment_only_turn_preserves_empty_public_message(mon
 
     assert result == "done"
     assert captured["public_user_message"] == ""
-    assert "[Uploaded attachments]" in captured["user_message"]
+    assert captured["user_message"] == ""
+    assert captured["llm_user_content"][0]["type"] == "text"
+    assert captured["llm_user_content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,dGVzdCBpbWFnZQ=="},
+    }
 
 
 @pytest.mark.asyncio

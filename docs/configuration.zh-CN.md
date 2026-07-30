@@ -53,7 +53,6 @@ Portable Backup ZIP 不由 Cyrene 加密。为了让 Restore 能用目标 Instal
 | 变量 | 说明 | 默认 |
 |---|---|---|
 | `ASSISTANT_NAME` | 显示名称 | `Cyrene` |
-| `MAX_TOOL_ROUNDS` | 每条消息最大 Tool Round | `15` |
 | `MAX_HISTORY_MESSAGES` | Context Window 保留消息数 | `40` |
 | `MAX_TOOL_OUTPUT_CHARS` | 发送给 LLM 的 Tool Result 字符上限 | `12000` |
 

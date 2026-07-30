@@ -12,7 +12,7 @@ from cyrene.model_runtime.image_generation import (
     GeneratedImage,
     ImageGenerationError,
 )
-from cyrene.tooling import catalog, wire
+from cyrene.tooling import catalog, executor, wire
 from cyrene.tool_impl.image import generate_image as generate_image_tool
 
 
@@ -130,6 +130,77 @@ async def test_codex_oauth_image_generation_needs_no_api_key(
     assert generated.provider == "codex_oauth"
     assert generated.model == "gpt-5.6-sol"
     assert generated.path.read_bytes() == _png_bytes()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("quality", "expected_timeout"),
+    [
+        ("high", 300.0),
+        ("medium", 180.0),
+        ("low", 180.0),
+        ("auto", 180.0),
+    ],
+)
+async def test_codex_oauth_image_generation_timeout_depends_on_quality(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    quality: str,
+    expected_timeout: float,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    async def fake_generate_with_codex(
+        candidate: dict[str, Any],
+        **kwargs: Any,
+    ) -> tuple[bytes, str, str]:
+        seen.update(candidate=candidate, **kwargs)
+        return _png_bytes(), "gpt-5.6-sol", ""
+
+    monkeypatch.setattr(
+        image_generation,
+        "_generate_with_codex",
+        fake_generate_with_codex,
+    )
+    monkeypatch.setattr(
+        image_generation,
+        "_validated_image_format",
+        lambda _image_bytes: "png",
+    )
+    monkeypatch.setattr(image_generation, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        image_generation,
+        "_primary_candidate",
+        lambda: {
+            "provider": "codex_oauth",
+            "model": "gpt-5.6-sol",
+            "base_url": "codex://oauth",
+            "api_key": "",
+        },
+    )
+
+    generated = await image_generation.generate_image(
+        prompt="Draw an otter",
+        quality=quality,
+    )
+
+    assert seen["candidate"]["provider"] == "codex_oauth"
+    assert seen["timeout"] == expected_timeout
+    generated.path.unlink()
+
+
+def test_only_high_quality_generate_image_gets_extended_tool_timeout() -> None:
+    assert executor._tool_timeout_seconds(
+        "GenerateImage", {"quality": "high"}
+    ) == 420.0
+    assert executor._tool_timeout_seconds(
+        "GenerateImage", {"quality": " HIGH "}
+    ) == 420.0
+    assert executor._tool_timeout_seconds(
+        "GenerateImage", {"quality": "medium"}
+    ) == 180.0
+    assert executor._tool_timeout_seconds("GenerateImage", {}) == 180.0
+    assert executor._tool_timeout_seconds("WebSearch", {}) == 180.0
 
 
 @pytest.mark.asyncio

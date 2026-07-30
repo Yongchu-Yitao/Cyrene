@@ -54,7 +54,6 @@ The following variables are read at startup. Most can also be edited at runtime 
 | Variable | Description | Default |
 |---|---|---|
 | `ASSISTANT_NAME` | Agent display name | `Cyrene` |
-| `MAX_TOOL_ROUNDS` | Maximum tool-use rounds per user message | `15` |
 | `MAX_HISTORY_MESSAGES` | Messages kept in the context window | `40` |
 | `MAX_TOOL_OUTPUT_CHARS` | Character cap for tool results sent to the LLM | `12000` |
 

@@ -232,6 +232,7 @@ _BROWSER_TOOL_NAMES = {
 }
 
 _DEFAULT_TOOL_TIMEOUT_SECONDS = 180.0
+_HIGH_QUALITY_IMAGE_TOOL_TIMEOUT_SECONDS = 420.0
 _TOOL_TIMEOUT_SECONDS = {
     "Read": 30.0,
     "Write": 30.0,
@@ -255,6 +256,13 @@ def _tool_timeout_seconds(name: str, arguments: dict[str, Any]) -> float:
         return min(requested + 10.0, 310.0)
     if name == "browser_request_takeover":
         return 900.0
+    if name == "GenerateImage":
+        quality = str(arguments.get("quality") or "medium").strip().lower()
+        if quality == "high":
+            # The OAuth/Codex image runtime needs room around the provider's
+            # generation budget for startup, capability checks, cancellation,
+            # image validation, and attachment delivery.
+            return _HIGH_QUALITY_IMAGE_TOOL_TIMEOUT_SECONDS
     return _TOOL_TIMEOUT_SECONDS.get(name, _DEFAULT_TOOL_TIMEOUT_SECONDS)
 
 

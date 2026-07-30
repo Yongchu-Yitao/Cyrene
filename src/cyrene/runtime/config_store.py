@@ -53,7 +53,6 @@ _DEFAULT_ENV: dict[str, str] = {
     "EMBEDDING_API_KEY": "",
     "EMBEDDING_MODEL": "",
     "ASSISTANT_NAME": "Cyrene",
-    "MAX_TOOL_ROUNDS": "15",
     "MAX_HISTORY_MESSAGES": "40",
     "MAX_TOOL_OUTPUT_CHARS": "12000",
     "HEARTBEAT_INTERVAL": "300",
@@ -72,6 +71,8 @@ _DEFAULT_ENV: dict[str, str] = {
     "PATTERN_DETECTION_INTERVAL": "600",
     "WEB_PORT": "4242",
 }
+
+_REMOVED_ENV_KEYS = frozenset({"MAX_TOOL_ROUNDS"})
 
 _DEFAULT_MODELS: list[dict[str, str]] = []
 
@@ -401,8 +402,15 @@ def _apply_settings_migrations(config: dict) -> dict:
     if _SETTINGS_MIGRATIONS_DONE:
         return config
 
+    env = config.setdefault("env", {})
     settings = config.setdefault("settings", {})
     changed = False
+
+    for key in _REMOVED_ENV_KEYS:
+        if key in env:
+            env.pop(key)
+            os.environ.pop(key, None)
+            changed = True
 
     # v1 → v2: wechat_notify_scheduled merged into notify_wechat
     if "wechat_notify_scheduled" in settings and "notify_wechat" not in settings:
@@ -476,7 +484,12 @@ def _normalize_restored_snapshot(snapshot: dict) -> dict:
         raise ValueError("configuration snapshot must contain env and settings objects")
     if not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
         raise ValueError("configuration env values must be strings")
-    return {"env": deepcopy(env), "settings": deepcopy(settings)}
+    normalized_env = {
+        key: value
+        for key, value in env.items()
+        if key not in _REMOVED_ENV_KEYS
+    }
+    return {"env": normalized_env, "settings": deepcopy(settings)}
 
 
 def prepare_restored_snapshot(snapshot: dict) -> tuple[dict, bytes]:
@@ -515,6 +528,8 @@ def get_env(key: str, default: str = "") -> str:
 
 
 def set_env(key: str, value: str) -> None:
+    if key in _REMOVED_ENV_KEYS:
+        raise ValueError(f"Environment setting `{key}` has been removed.")
     config = _ensure_loaded()
     config.setdefault("env", {})[key] = str(value)
     _persist(config)
@@ -522,6 +537,11 @@ def set_env(key: str, value: str) -> None:
 
 
 def set_env_many(updates: dict[str, str]) -> None:
+    removed = sorted(set(updates) & _REMOVED_ENV_KEYS)
+    if removed:
+        raise ValueError(
+            "Environment setting(s) have been removed: " + ", ".join(removed)
+        )
     config = _ensure_loaded()
     for key, value in updates.items():
         config.setdefault("env", {})[key] = str(value)

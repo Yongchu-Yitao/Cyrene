@@ -151,6 +151,40 @@ def test_migration_fixes_incomplete_model_entries(isolated_config_store):
     assert vision[0]["api_key"] == "sk-env"
 
 
+def test_removed_tool_round_setting_is_purged_and_rejected(
+    isolated_config_store,
+):
+    config = {
+        "env": {
+            "OPENAI_MODEL": "example-model",
+            "MAX_TOOL_ROUNDS": "15",
+        },
+        "settings": {},
+    }
+    _write_encrypted(isolated_config_store, config)
+
+    loaded = isolated_config_store._ensure_loaded()
+
+    assert "MAX_TOOL_ROUNDS" not in loaded["env"]
+    assert "MAX_TOOL_ROUNDS" not in isolated_config_store.export_snapshot()["env"]
+    with pytest.raises(ValueError, match="has been removed"):
+        isolated_config_store.set_env("MAX_TOOL_ROUNDS", "15")
+    with pytest.raises(ValueError, match="have been removed"):
+        isolated_config_store.set_env_many({"MAX_TOOL_ROUNDS": "15"})
+
+
+def test_restore_drops_removed_tool_round_setting(isolated_config_store):
+    normalized, _encrypted = isolated_config_store.prepare_restored_snapshot({
+        "env": {
+            "OPENAI_MODEL": "example-model",
+            "MAX_TOOL_ROUNDS": "15",
+        },
+        "settings": {},
+    })
+
+    assert normalized["env"] == {"OPENAI_MODEL": "example-model"}
+
+
 def test_activate_workspace_updates_active_state_and_history_in_one_write(
     isolated_config_store, monkeypatch,
 ):

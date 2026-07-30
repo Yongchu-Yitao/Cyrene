@@ -5,7 +5,7 @@
 ## 两阶段 Agent Loop
 
 Cyrene 使用两阶段决策循环：保持模型面对的 Wire Schema 稳定，同时只在需要
-时启用具体能力。Tool Round 上限可配置，默认 15。
+时启用具体能力。
 
 ```text
 用户消息

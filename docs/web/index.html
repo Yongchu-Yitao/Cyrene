@@ -535,7 +535,6 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
             <thead><tr><th>变量</th><th>说明</th><th>默认值</th></tr></thead>
             <tbody>
               <tr><td><code>ASSISTANT_NAME</code></td><td>代理显示名称</td><td><code>Cyrene</code></td></tr>
-              <tr><td><code>MAX_TOOL_ROUNDS</code></td><td>每次用户消息的最大工具轮次</td><td><code>15</code></td></tr>
               <tr><td><code>MAX_HISTORY_MESSAGES</code></td><td>上下文窗口保留的消息条数</td><td><code>40</code></td></tr>
               <tr><td><code>MAX_TOOL_OUTPUT_CHARS</code></td><td>工具结果发送给 LLM 的字符上限</td><td><code>12000</code></td></tr>
             </tbody>
@@ -680,7 +679,6 @@ cd src/webui && npm install && node build-jsx.mjs && cd ../..</code></pre></div>
           <thead><tr><th>Variable</th><th>Description</th><th>Default</th></tr></thead>
           <tbody>
             <tr><td><code>ASSISTANT_NAME</code></td><td>Agent display name</td><td><code>Cyrene</code></td></tr>
-            <tr><td><code>MAX_TOOL_ROUNDS</code></td><td>Max tool rounds per message</td><td><code>15</code></td></tr>
             <tr><td><code>MAX_HISTORY_MESSAGES</code></td><td>Context window size</td><td><code>40</code></td></tr>
             <tr><td><code>MAX_TOOL_OUTPUT_CHARS</code></td><td>Tool output char limit</td><td><code>12000</code></td></tr>
           </tbody>
@@ -1009,7 +1007,7 @@ cyrene stop</code></pre></div>
           <span class="tool-tag">Claude Code</span>
         </div>
         <p>设置 → 能力按完整工具包提供开关，不再提供单工具开关。关闭工具包后，其网关 schema、包级说明和专用 prompt 信息都不会传给模型，运行时也会拒绝历史消息中的过期调用。AnalyzeAttachment 等直接工具不受工具包开关影响。</p>
-        <p>代理在多轮之间保持状态，直到调用 <code>quit</code> 结束交互。最大轮次由 <code>MAX_TOOL_ROUNDS</code> 控制（默认 15）。</p>
+        <p>代理在多轮之间保持状态，直到调用 <code>quit</code> 结束交互。</p>
       </section>
 
       <section>

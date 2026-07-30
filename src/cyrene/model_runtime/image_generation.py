@@ -19,6 +19,8 @@ _MAX_IMAGE_BYTES = 30 * 1024 * 1024
 _OUTPUT_FORMATS = {"png", "jpeg", "webp"}
 _POPULAR_SIZES = {"1024x1024", "1536x1024", "1024x1536"}
 _QUALITY_VALUES = {"low", "medium", "high", "auto"}
+_DEFAULT_GENERATION_TIMEOUT_SECONDS = 180.0
+_HIGH_QUALITY_GENERATION_TIMEOUT_SECONDS = 300.0
 
 
 class ImageGenerationError(RuntimeError):
@@ -157,7 +159,7 @@ async def generate_image(
     size: str = "1024x1024",
     quality: str = "medium",
     output_format: str = "png",
-    timeout: float = 180.0,
+    timeout: float | None = None,
 ) -> GeneratedImage:
     clean_prompt = str(prompt or "").strip()
     if not clean_prompt:
@@ -170,6 +172,17 @@ async def generate_image(
     clean_quality = str(quality or "medium").strip().lower()
     if clean_quality not in _QUALITY_VALUES:
         raise ImageGenerationError(f"Unsupported image quality: {clean_quality}.")
+    generation_timeout = (
+        float(timeout)
+        if timeout is not None
+        else (
+            _HIGH_QUALITY_GENERATION_TIMEOUT_SECONDS
+            if clean_quality == "high"
+            else _DEFAULT_GENERATION_TIMEOUT_SECONDS
+        )
+    )
+    if generation_timeout <= 0:
+        raise ImageGenerationError("Image generation timeout must be positive.")
     clean_format = str(output_format or "png").strip().lower()
     if clean_format == "jpg":
         clean_format = "jpeg"
@@ -189,7 +202,7 @@ async def generate_image(
         size=clean_size,
         quality=clean_quality,
         output_format=clean_format,
-        timeout=timeout,
+        timeout=generation_timeout,
     )
 
     detected_format = _validated_image_format(image_bytes)

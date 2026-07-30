@@ -97,9 +97,15 @@ def test_openapi_contract_matches_locked_generator_baseline():
     assert _sha256_json(schema) == OPENAPI_SHA256
 
 
-def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged():
+def test_tool_registry_wire_and_actor_policy_contracts_are_unchanged(monkeypatch):
+    from cyrene.runtime import settings_store
     from cyrene.tooling import catalog, wire
 
+    monkeypatch.setattr(
+        settings_store,
+        "get_models",
+        lambda: [{"provider": "openai_compatible", "model": "custom-model"}],
+    )
     assert len(catalog.TOOL_DEFS) == 100
     assert len(catalog.TOOL_HANDLERS) == 100
     assert len(catalog._MAIN_ONLY_TOOLS) == 39

@@ -9,9 +9,15 @@ def _names(defs):
     return [item["function"]["name"] for item in defs]
 
 
-def test_main_wire_bundle_is_the_fixed_29_tool_contract():
+def test_main_wire_bundle_is_the_fixed_29_tool_contract(monkeypatch):
+    from cyrene.runtime import settings_store
     from cyrene.tooling import get_main_wire_tool_defs
 
+    monkeypatch.setattr(
+        settings_store,
+        "get_models",
+        lambda: [{"provider": "openai_compatible", "model": "custom-model"}],
+    )
     defs = get_main_wire_tool_defs()
     assert _names(defs) == [
         "use_tools", "send_message", "ask_user", "quit", "enter_plan_mode",

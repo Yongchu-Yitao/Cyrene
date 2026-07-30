@@ -5,8 +5,7 @@
 ## Two-Phase Agent Loop
 
 Cyrene uses a two-phase decision loop that keeps the model-facing wire schema
-stable while enabling concrete capabilities only when needed. The maximum
-number of tool rounds is configurable (default 15).
+stable while enabling concrete capabilities only when needed.
 
 ```
 User Message

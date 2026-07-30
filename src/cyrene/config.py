@@ -74,7 +74,6 @@ EMBEDDING_MODEL = _strip_wrapping_quotes(_store.get_env("EMBEDDING_MODEL", ""))
 
 # === Agent 配置 ===
 ASSISTANT_NAME = _store.get_env("ASSISTANT_NAME", "Cyrene")
-MAX_TOOL_ROUNDS = int(_store.get_env("MAX_TOOL_ROUNDS", "15"))
 MAX_HISTORY_MESSAGES = int(_store.get_env("MAX_HISTORY_MESSAGES", "40"))
 MAX_TOOL_OUTPUT_CHARS = int(_store.get_env("MAX_TOOL_OUTPUT_CHARS", "12000"))
 
