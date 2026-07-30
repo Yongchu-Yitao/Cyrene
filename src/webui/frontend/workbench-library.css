@@ -896,3 +896,16 @@
   .wb-lib-sidebar { transition: none; }
   .wb-lib-spinner { animation-duration: 1.4s; }
 }
+
+/* Keep every library surface scrollable without exposing scrollbar chrome. */
+.wb-lib-page,
+.wb-lib-page * {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.wb-lib-page::-webkit-scrollbar,
+.wb-lib-page *::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}

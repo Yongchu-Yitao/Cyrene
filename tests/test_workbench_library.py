@@ -41,6 +41,27 @@ def test_library_table_header_uses_the_shared_frosted_glass_treatment():
     assert "padding-top: var(--wb-lib-table-head-overlay-height);" in body_css
 
 
+def test_library_page_hides_all_scrollbars_without_disabling_scroll():
+    root = Path(__file__).resolve().parent.parent
+    styles = (
+        root / "src" / "webui" / "frontend" / "workbench-library.css"
+    ).read_text(encoding="utf-8")
+
+    scrollbar_scope = styles.split(
+        "/* Keep every library surface scrollable without exposing scrollbar chrome. */",
+        1,
+    )[1]
+
+    assert ".wb-lib-page * {" in scrollbar_scope
+    assert "scrollbar-width: none;" in scrollbar_scope
+    assert "-ms-overflow-style: none;" in scrollbar_scope
+    assert ".wb-lib-page *::-webkit-scrollbar {" in scrollbar_scope
+    assert "display: none;" in scrollbar_scope
+    assert "width: 0;" in scrollbar_scope
+    assert "height: 0;" in scrollbar_scope
+    assert "overflow-y: auto;" in styles
+
+
 @pytest.fixture
 async def library_db(tmp_path):
     path = str(tmp_path / "kb_project_one.db")

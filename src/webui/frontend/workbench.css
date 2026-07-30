@@ -12294,6 +12294,19 @@ details.wb-model-section > .wb-model-section-head::marker {
   .wb-learning-chain-list { max-height: 220px; }
 }
 
+/* Keep every memory surface scrollable without exposing scrollbar chrome. */
+.wb-mem-page,
+.wb-mem-page * {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.wb-mem-page::-webkit-scrollbar,
+.wb-mem-page *::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 /* ===================================================================
    Create flows (新建项目 / 新建任务) + project initialization (初始化项目)
    Workbench-only; theme via --wb-* tokens.

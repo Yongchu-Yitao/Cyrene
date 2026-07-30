@@ -293,6 +293,28 @@ def test_memory_toolbars_use_the_same_frosted_glass_without_overlay_spacing():
     assert "padding: calc(var(--wb-mem-detail-tabs-overlay-height) + 16px) 16px 16px;" in detail_scroll_css
 
 
+def test_memory_page_hides_all_scrollbars_without_disabling_scroll():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    scrollbar_scope = styles.split(
+        "/* Keep every memory surface scrollable without exposing scrollbar chrome. */",
+        1,
+    )[1]
+
+    assert ".wb-mem-page * {" in scrollbar_scope
+    assert "scrollbar-width: none;" in scrollbar_scope
+    assert "-ms-overflow-style: none;" in scrollbar_scope
+    assert ".wb-mem-page *::-webkit-scrollbar {" in scrollbar_scope
+    assert "display: none;" in scrollbar_scope
+    assert "width: 0;" in scrollbar_scope
+    assert "height: 0;" in scrollbar_scope
+    assert ".wb-mem-scroll {" in styles
+    assert "overflow-y: auto;" in styles
+
+
 def test_notification_items_navigate_to_their_precise_context():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
