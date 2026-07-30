@@ -1,3 +1,57 @@
+# Design QA — Borderless Workbench Cards
+
+- final result: passed
+- source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-2dcb2a3a-204f-4e3d-8712-4f2e77371b8b.png`
+- implementation screenshot: `/Users/syw/Documents/playground/Cyrene/design-qa-borderless-cards-final.png`
+- full-view comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-borderless-cards-comparison.png`
+- hidden-scrollbar interaction screenshot: `/Users/syw/Documents/playground/Cyrene/design-qa-hidden-scrollbars-final.png`
+- state: light theme, `介绍自己` conversation selected and focused, Overview panel visible
+- viewport: 1200 × 800 CSS px at device scale factor 1
+- source pixels: 2400 × 1600; normalized to 1200 × 800 for comparison
+- implementation pixels: 1200 × 800
+
+## Findings
+
+- No remaining P0/P1/P2 findings.
+- Conversation cards have no border, shadow, or focus outline. The active card remains identifiable through its tinted background.
+- Overview cards have no border or shadow; spacing and white surface fill preserve grouping.
+- Search and composer fields have no border or shadow. Their white surface, placeholder text, and focus background preserve editability.
+- The conversation list and Overview panel retain native scrolling while hiding their scrollbar tracks and thumbs.
+
+## Required fidelity surfaces
+
+- Fonts and typography: unchanged from the existing Cyrene design system.
+- Spacing and layout rhythm: card padding, radius, list gap, columns, and panel widths remain unchanged; only card borders and shadows were removed.
+- Colors and visual tokens: existing theme tokens remain in use. Active, hover, and focus states are background-only.
+- Image quality and assets: no image or icon assets changed.
+- Copy and content: unchanged.
+
+## Focused evidence
+
+- A separate crop was unnecessary because the full-view comparison keeps the left conversation rail and right overview cards readable.
+- Runtime computed styles for the focused active conversation card: `border: 0`, `box-shadow: none`, `outline: 0`.
+- Runtime computed styles for the first four overview cards: `border: 0`, `box-shadow: none`.
+- Search and composer controls both report `border: 0`; the composer also reports `box-shadow: none`.
+- Both scroll containers report `scrollbar-width: none` and a `0px` WebKit scrollbar width.
+
+## Comparison history
+
+1. The first borderless pass removed card borders and shadows, but browser focus still produced a yellow 1 px outline on the selected conversation card (P2).
+2. Added explicit focus styling that removes the outline and uses the existing hover/active background tokens.
+3. Removed search and composer borders and replaced their focus border with the existing hover background token.
+4. Hid the left conversation-list and right Overview-panel scrollbars without changing `overflow-y: auto`.
+5. Post-fix browser capture confirms no yellow outline, no card or input borders, no visible scrollbars, and no console errors.
+
+## Verification
+
+- Frontend build: passed.
+- `uv run pytest -q tests/test_workbench_frontend_logic.py`: 149 passed.
+- `git diff --check`: passed.
+- Primary interactions tested: selecting the `介绍自己` conversation, focusing both inputs, and independently scrolling the left and right panels.
+- Console errors checked: none.
+
+---
+
 # Design QA — Settings / Theme Color
 
 - final result: passed

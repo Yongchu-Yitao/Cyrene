@@ -92,6 +92,74 @@ def test_chat_sidebar_overview_and_context_cards_are_sortable_and_persistent():
     assert "transform: translateY(4px);" in drag_handle_icon_css
 
 
+def test_workbench_chat_and_overview_cards_are_borderless():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    chat_card_css = styles.split(".wbc-chat-card {", 1)[1].split("}", 1)[0]
+    side_card_css = styles.rsplit(".workbench-side-section {", 1)[1].split("}", 1)[0]
+    active_chat_css = styles.split(
+        ".wbc-chat-card.active,\n.wbc-chat-card.menu-open,", 1
+    )[1].split("}", 1)[0]
+    focus_chat_css = styles.split(
+        ".wbc-chat-card:focus,\n.wbc-chat-card:focus-visible {", 1
+    )[1].split("}", 1)[0]
+
+    assert "border: 0;" in chat_card_css
+    assert "box-shadow: none;" in chat_card_css
+    assert "border: 0;" in side_card_css
+    assert "box-shadow: none;" in side_card_css
+    assert "border-color:" not in active_chat_css
+    assert "outline: 0;" in focus_chat_css
+
+
+def test_workbench_chat_inputs_are_borderless():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    search_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
+    search_focus_css = styles.split(".wbc-search input:focus {", 1)[1].split("}", 1)[0]
+    composer_css = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
+    composer_focus_css = styles.split(
+        ".wbc-composer-box:focus-within {", 1
+    )[1].split("}", 1)[0]
+
+    assert "border: 0;" in search_css
+    assert "border-color:" not in search_focus_css
+    assert "border: 0;" in composer_css
+    assert "box-shadow: none;" in composer_css
+    assert "border-color:" not in composer_focus_css
+
+
+def test_workbench_chat_rails_use_hidden_scrollbars():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    chat_list_css = styles.split(".wbc-chat-list {", 1)[1].split("}", 1)[0]
+    chat_scrollbar_css = styles.split(
+        ".wbc-chat-list::-webkit-scrollbar {", 1
+    )[1].split("}", 1)[0]
+    side_body_css = styles.split(".wbc-side-body {", 1)[1].split("}", 1)[0]
+    side_scrollbar_css = styles.split(
+        ".wbc-side-body::-webkit-scrollbar {", 1
+    )[1].split("}", 1)[0]
+
+    assert "overflow-y: auto;" in chat_list_css
+    assert "scrollbar-width: none;" in chat_list_css
+    assert "width: 0;" in chat_scrollbar_css
+    assert "height: 0;" in chat_scrollbar_css
+    assert "overflow-y: auto;" in side_body_css
+    assert "scrollbar-width: none;" in side_body_css
+    assert "width: 0;" in side_scrollbar_css
+    assert "height: 0;" in side_scrollbar_css
+
+
 def test_notification_items_navigate_to_their_precise_context():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(

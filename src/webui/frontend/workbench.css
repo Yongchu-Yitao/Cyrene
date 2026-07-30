@@ -3933,8 +3933,10 @@ body.wb-col-resizing {
 }
 
 .workbench-side-section {
+  border: 0;
   padding: 12px;
   background: var(--wb-card-bg);
+  box-shadow: none;
 }
 
 .workbench-side-section h3 {
@@ -12719,7 +12721,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 .wbc-search input {
   width: 100%;
   height: 34px;
-  border: 1px solid var(--wb-line);
+  border: 0;
   border-radius: 9px;
   background: var(--wb-card-bg);
   color: var(--wb-text);
@@ -12731,17 +12733,23 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-search input:focus {
-  border-color: var(--wb-active-border);
+  background: var(--wb-row-hover-bg);
 }
 
 .wbc-chat-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-width: none;
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding-bottom: 8px;
+}
+
+.wbc-chat-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .wbc-chat-list.is-loading {
@@ -12759,14 +12767,15 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   flex-direction: column;
   gap: 6px;
   width: 100%;
-  border: 1px solid var(--wb-line);
+  border: 0;
   border-radius: 11px;
   background: var(--wb-card-bg);
   color: var(--wb-text);
   padding: 11px 12px;
   text-align: left;
   cursor: pointer;
-  transition: border-color .12s ease, background .12s ease;
+  box-shadow: none;
+  transition: background .12s ease;
   position: relative;
 }
 
@@ -12774,10 +12783,17 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   background: var(--wb-row-hover-bg);
 }
 
+.wbc-chat-card:focus,
+.wbc-chat-card:focus-visible {
+  outline: 0;
+  background: var(--wb-row-hover-bg);
+}
+
 .wbc-chat-card.active,
-.wbc-chat-card.menu-open {
+.wbc-chat-card.menu-open,
+.wbc-chat-card.active:focus,
+.wbc-chat-card.active:focus-visible {
   background: var(--wb-active-bg);
-  border-color: var(--wb-active-border);
 }
 
 .wbc-chat-card-top {
@@ -14877,15 +14893,15 @@ button.wbc-attach-file:focus-visible {
 .wbc-composer-box {
   container-name: wbc-composer;
   container-type: inline-size;
-  border: 1px solid var(--wb-line);
+  border: 0;
   border-radius: 14px;
   background: var(--wb-card-bg);
   padding: 10px 12px 8px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-shadow: none;
 }
 
 .wbc-composer-box:focus-within {
-  border-color: var(--wb-active-border);
+  background: var(--wb-row-hover-bg);
 }
 
 .wbc-composer-box textarea {
@@ -15469,10 +15485,16 @@ html[data-theme="dark"] .wbc-model-menu > button:hover {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-width: none;
   /* long unbreakable strings (paths, ids) wrap instead of spilling out when
      the panel is dragged narrow */
   overflow-wrap: anywhere;
   padding: 14px;
+}
+
+.wbc-side-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .wbc-changes-tab {
