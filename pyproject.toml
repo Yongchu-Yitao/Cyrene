@@ -65,6 +65,11 @@ exclude = [
 [tool.ruff]
 line-length = 180
 
+[tool.ruff.lint]
+# Keep the lint baseline explicit so Ruff upgrades cannot silently enable new
+# rule families across the existing codebase.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.ruff.lint.per-file-ignores]
 # This module is the intentional compatibility facade for the split agent
 # implementation. Its imports are the public surface consumed by integrations
