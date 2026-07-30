@@ -50,7 +50,7 @@ Download an artifact from
 
 ### From source
 
-Requires Python 3.12+, `uv`, and Node.js 20+.
+Requires Python 3.12+, `uv`, and Node.js 22.12+.
 
 ```bash
 uv sync

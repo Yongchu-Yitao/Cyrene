@@ -8,7 +8,7 @@ import math
 import os
 from array import array
 
-from cyrene.knowledge.embedding_client import embed_texts_with_config, httpx
+from cyrene.knowledge.embedding_client import embed_texts_with_config
 
 
 def _persisted() -> dict:

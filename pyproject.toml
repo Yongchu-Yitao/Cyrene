@@ -47,6 +47,7 @@ dev = [
     "pytest>=8.2,<9",
     "pytest-asyncio>=0.24,<1",
     "pytest-timeout>=2.3,<3",
+    "ruff>=0.15,<1",
 ]
 
 [build-system]
@@ -55,6 +56,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cyrene", "src/webui", "src/route"]
+exclude = [
+    "**/*.sqlite3",
+    "**/*.sqlite3-shm",
+    "**/*.sqlite3-wal",
+]
 
 [tool.ruff]
 line-length = 180
@@ -64,6 +70,10 @@ line-length = 180
 # implementation. Its imports are the public surface consumed by integrations
 # and historical monkeypatch points.
 "src/cyrene/agent/__init__.py" = ["F401"]
+# These aliases remain part of the lazy agent compatibility facade even when
+# their defining modules do not call them directly.
+"src/cyrene/agent/message.py" = ["F401"]
+"src/cyrene/agent/replies.py" = ["F401"]
 # Several tests install dependency stubs in sys.modules before importing the
 # modules under test. Moving those imports to the top would defeat the fixture.
 "tests/**/*.py" = ["E402"]

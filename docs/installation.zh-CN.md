@@ -7,7 +7,7 @@
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)（推荐）、Conda 或 `venv`
 - Git
-- 构建 Web UI/Electron 时需要 Node.js 20+
+- 构建 Web UI/Electron 时需要 Node.js 22.12+
 
 ## Linux / macOS
 

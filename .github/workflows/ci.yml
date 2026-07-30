@@ -42,7 +42,7 @@ jobs:
       - name: Set up Node.js for generated WebUI fixtures
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22.12"
           cache: npm
           cache-dependency-path: src/webui/package-lock.json
 
@@ -54,6 +54,9 @@ jobs:
 
       - name: Compile Python sources
         run: uv run --locked python -m compileall -q src
+
+      - name: Lint Python sources
+        run: uv run --locked ruff check src tests
 
       - name: Run full Python suite
         run: >-
@@ -72,7 +75,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22.12"
           cache: npm
           cache-dependency-path: src/webui/package-lock.json
 

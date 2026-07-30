@@ -68,22 +68,11 @@ from cyrene.agent import clear_session_id, run_agent
 from cyrene.agent.commands import DEEP_REFLECT_COMMAND_ID, parse_deep_reflect_command
 from cyrene.config import (
     ASSISTANT_NAME,
-    DATA_DIR,
     DB_PATH,
-    INBOX_DIR,
-    SEARXNG_AUTO_START,
-    SEARXNG_HOST,
-    SEARXNG_PORT,
-    STORE_DIR,
     WEB_PORT,
-    WORKSPACE_DIR,
 )
 from cyrene.runtime.application import ApplicationLifecycle
 from cyrene.runtime.bootstrap import create_runtime_context
-from cyrene.runtime.database import init_db
-from cyrene.runtime.inbox import ensure_inbox
-from cyrene.runtime.memory.short_term import init_short_term
-from cyrene.runtime.memory.soul import ensure_soul
 
 logger = logging.getLogger(__name__)
 

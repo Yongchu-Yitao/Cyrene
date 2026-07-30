@@ -13,8 +13,10 @@ async function main() {
     show: false,
     webPreferences: { contextIsolation: true, sandbox: true },
   });
-  win.webContents.on('console-message', (_event, level, message) => {
-    if (level >= 2) console.error(`[renderer] ${message}`);
+  win.webContents.on('console-message', (details) => {
+    if (details.level === 'warning' || details.level === 'error') {
+      console.error(`[renderer] ${details.message}`);
+    }
   });
   const execute = async (label, source) => {
     try {
@@ -24,8 +26,8 @@ async function main() {
     }
   };
   const reactRoot = path.join(__dirname, '..', 'src', 'webui', 'static', 'app');
-  const reactSource = fs.readFileSync(path.join(reactRoot, 'react.development.js'), 'utf8');
-  const reactDomSource = fs.readFileSync(path.join(reactRoot, 'react-dom.development.js'), 'utf8');
+  const reactSource = fs.readFileSync(path.join(reactRoot, 'react.production.min.js'), 'utf8');
+  const reactDomSource = fs.readFileSync(path.join(reactRoot, 'react-dom.production.min.js'), 'utf8');
 
   await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(
     '<div id="root"></div><div id="rich-editor" contenteditable="true">old editor text</div>'

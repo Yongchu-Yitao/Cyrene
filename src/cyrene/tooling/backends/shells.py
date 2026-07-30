@@ -12,9 +12,6 @@ from cyrene.observability import debug
 from cyrene.config import WORKSPACE_DIR
 from cyrene.tooling.backends.shell_registry import (
     external_shells as _external_shells,
-    register_external_shell,
-    set_external_shell_status,
-    unregister_external_shell,
 )
 from cyrene.tooling.backends.shell_runtime import interactive_argv
 

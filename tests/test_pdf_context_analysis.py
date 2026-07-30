@@ -185,9 +185,9 @@ def test_both_pdf_viewers_submit_automatic_context():
     assert "context: context" in workbench
     assert "pdfBridge.buildAnalysisInventory(container, viewer, currentPage)" in routes
     assert "pdfBridge.extractAnalysisContext(viewer, plan.page_numbers" in routes
-    assert 'src="/static/app/compiled/platform/runtime.js?v=0.7.0b7"' in routes
-    assert 'src="/static/app/compiled/shared/pdf/bridge.js?v=0.7.4"' in routes
-    assert 'src="/static/app/pdfjs/pdf-setup.js?v=0.7.4"' not in routes
+    assert 'src="/static/app/compiled/platform/runtime.js?v={asset_version}"' in routes
+    assert 'src="/static/app/compiled/shared/pdf/bridge.js?v={asset_version}"' in routes
+    assert "pdfjs/pdf-setup.js" not in routes
     assert "fetch('/api/pdf/context-plan'" in routes
     assert "lang: language" in routes
     assert "context: context" in routes

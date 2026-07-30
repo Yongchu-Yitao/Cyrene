@@ -8,6 +8,8 @@ import re
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from cyrene.runtime.version import get_version
+
 logger = logging.getLogger(__name__)
 
 _MAX_SELECTED_TEXT_CHARS = 12_000
@@ -385,6 +387,7 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
     js_name = json.dumps(pdf_name_raw)
     js_language = json.dumps(language)
     js_labels = json.dumps(labels, ensure_ascii=False)
+    asset_version = html.escape(get_version(), quote=True)
     return f"""<!DOCTYPE html>
 <html lang="{language}">
 <head>
@@ -464,10 +467,10 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
   <div id="resultBody"></div>
 </div>
 
-<script src="/static/app/pdfjs/pdf.min.js?v=0.7.4"></script>
-<script src="/static/app/pdfjs/pdf_viewer.js?v=0.7.4"></script>
-<script src="/static/app/compiled/platform/runtime.js?v=0.7.0b7"></script>
-<script src="/static/app/compiled/shared/pdf/bridge.js?v=0.7.4"></script>
+<script src="/static/app/pdfjs/pdf.min.js?v={asset_version}"></script>
+<script src="/static/app/pdfjs/pdf_viewer.js?v={asset_version}"></script>
+<script src="/static/app/compiled/platform/runtime.js?v={asset_version}"></script>
+<script src="/static/app/compiled/shared/pdf/bridge.js?v={asset_version}"></script>
 <script>
 (function() {{
   var pdfUrl = {js_url};
@@ -475,7 +478,7 @@ def _PDF_VIEWER_HTML(pdf_url: str, pdf_name_raw: str, language: str = "en") -> s
   var labels = {js_labels};
   if (!pdfUrl) return;
 
-  pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/app/pdfjs/pdf.worker.min.js?v=0.7.4';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/app/pdfjs/pdf.worker.min.js?v={asset_version}';
 
   var container = document.getElementById('viewerContainer');
   var pdfBridge = window.CyreneUI.require('pdf');

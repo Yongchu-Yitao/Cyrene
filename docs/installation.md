@@ -7,7 +7,7 @@
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) (recommended), Conda, or `venv`
 - Git
-- Node.js 20+ when building Web UI assets or running Electron from source
+- Node.js 22.12+ when building Web UI assets or running Electron from source
 
 ## Linux / macOS
 

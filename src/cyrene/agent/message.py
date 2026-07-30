@@ -4,12 +4,10 @@ Depends on ``state`` (for ContextVars) but not on ``session``, ``guidance``,
 or ``coordinator``.
 """
 
-import json
 import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
-from uuid import uuid4
 
 from cyrene.agent.context import (
     append_pending_intermediate_reply,

@@ -940,8 +940,8 @@ class BrowserTabManager {
       this.applyPageFrameStyle(view, undefined, true);
       this.installUserEventCapture(view).catch(() => {});
     });
-    wc.on('console-message', (_event, _level, message) => {
-      this.handleCapturedUserEvent(view, message);
+    wc.on('console-message', (details) => {
+      this.handleCapturedUserEvent(view, String(details && details.message || ''));
     });
     wc.debugger.on('message', (_event, method, params) => {
       if (method !== 'Page.fileChooserOpened') return;

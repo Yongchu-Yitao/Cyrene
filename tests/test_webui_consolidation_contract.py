@@ -20,10 +20,10 @@ WEBUI_ROOT = ROOT / "src" / "webui"
 WORKBENCH_ROOT = WEBUI_ROOT / "frontend"
 INDEX = WORKBENCH_ROOT / "index.html"
 
-OPENAPI_OPERATION_COUNT = 303
+OPENAPI_OPERATION_COUNT = 305
 OPENAPI_BASELINE_FASTAPI = "0.136.1"
 OPENAPI_BASELINE_PYDANTIC = "2.13.4"
-OPENAPI_SHA256 = "5f6fd995ceceeae9cb301c53bfbcf32647cd916a9673caf6fb4d0b458b1df1b2"
+OPENAPI_SHA256 = "698d86de0030aa4edd559eba23c267938b073ab44c282a7b6e25582e2f81a066"
 TOOL_REGISTRY_SHA256 = "e34fa38740e57b8a74c03c098267606a717399817afd036a360adf587366bd2f"
 MAIN_WIRE_SHA256 = "e748ec66ad5cbd23900f62cd9d444c09b7edf023af2964c53285753e8c0eb443"
 SUBAGENT_WIRE_SHA256 = "4d2f207b6508c148e5756826b435c4ca95830b3b8441198e2066cc7529ae27ad"
@@ -141,8 +141,8 @@ def test_workbench_runtime_dependencies_keep_their_relative_script_order():
     index = INDEX.read_text(encoding="utf-8")
     scripts = re.findall(r'<script[^>]+src="([^"]+)"', index)
     required_in_order = [
-        "react.development.js",
-        "react-dom.development.js",
+        "react.production.min.js",
+        "react-dom.production.min.js",
         "marked.min.js",
         "katex/katex.min.js",
         "purify.min.js",
@@ -151,15 +151,15 @@ def test_workbench_runtime_dependencies_keep_their_relative_script_order():
         "compiled/shared/markdown/math.js?v=0.7.0b7",
         "compiled/shared/markdown/highlight.js?v=0.7.0b7",
         "leaflet.js",
-        "pdfjs/pdf.min.js?v=0.7.4",
-        "pdfjs/pdf_viewer.js?v=0.7.4",
+        "pdfjs/pdf.min.js?v=0.7.0b7",
+        "pdfjs/pdf_viewer.js?v=0.7.0b7",
         "compiled/platform/readiness.js?v=0.7.0b7",
         "compiled/platform/events.js?v=0.7.0b7",
         "compiled/platform/navigation.js?v=0.7.0b7",
         "compiled/workbench-i18n.js?v=0.7.0b7",
         "compiled/shared/i18n/format.js?v=0.7.0b7",
         "compiled/shared/i18n/translations.js?v=0.7.0b7",
-        "compiled/shared/pdf/bridge.js?v=0.7.4",
+        "compiled/shared/pdf/bridge.js?v=0.7.0b7",
         "compiled/shared/feedback/service.js?v=0.7.0b7",
         "compiled/shared/markdown/renderer.js?v=0.7.0b7",
         "compiled/platform/data-store.js?v=0.7.0b7",
@@ -196,7 +196,13 @@ def test_single_webui_source_build_and_entrypoint_shape():
     assert (WEBUI_ROOT / "static" / "app").is_dir()
 
     package = json.loads((WEBUI_ROOT / "package.json").read_text(encoding="utf-8"))
-    assert set(package["dependencies"]) == {"esbuild", "katex", "pdfjs-dist"}
+    assert set(package["dependencies"]) == {
+        "esbuild",
+        "katex",
+        "pdfjs-dist",
+        "react",
+        "react-dom",
+    }
 
     server_source = (WEBUI_ROOT / "server.py").read_text(encoding="utf-8")
     index_source = INDEX.read_text(encoding="utf-8")

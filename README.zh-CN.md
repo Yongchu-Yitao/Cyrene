@@ -50,7 +50,7 @@
 
 ### 从源码运行
 
-需要 Python 3.12+、`uv` 和 Node.js 20+。
+需要 Python 3.12+、`uv` 和 Node.js 22.12+。
 
 ```bash
 uv sync

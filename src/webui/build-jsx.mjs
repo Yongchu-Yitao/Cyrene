@@ -8,6 +8,14 @@ const APP_DIR = resolve(__dirname, 'static/app')
 const OUT_DIR = resolve(APP_DIR, 'compiled')
 const WORKBENCH_DIR = resolve(__dirname, 'frontend')
 const INDEX_SOURCE = resolve(WORKBENCH_DIR, 'index.html')
+const PROJECT_FILE = resolve(__dirname, '../../pyproject.toml')
+
+function projectVersion() {
+  const source = readFileSync(PROJECT_FILE, 'utf8')
+  const match = source.match(/^\s*version\s*=\s*"([^"]+)"/m)
+  if (!match) throw new Error(`Unable to read project version from ${PROJECT_FILE}`)
+  return match[1]
+}
 
 function collect(dir) {
   const files = []
@@ -77,8 +85,22 @@ async function build() {
   const total = files.length
   console.log(`\nDone. ${total} JSX file${total > 1 ? 's' : ''} compiled to ${OUT_DIR}`)
 
-  copyFileSync(INDEX_SOURCE, join(APP_DIR, 'index.html'))
+  const indexHtml = readFileSync(INDEX_SOURCE, 'utf8').replace(
+    /(\?v=)[A-Za-z0-9.+-]+/g,
+    `$1${projectVersion()}`,
+  )
+  writeFileSync(INDEX_SOURCE, indexHtml)
+  writeFileSync(join(APP_DIR, 'index.html'), indexHtml)
   console.log('✓ index.html')
+
+  const reactAssets = [
+    ['node_modules/react/umd/react.production.min.js', 'react.production.min.js'],
+    ['node_modules/react-dom/umd/react-dom.production.min.js', 'react-dom.production.min.js'],
+  ]
+  for (const [source, target] of reactAssets) {
+    copyFileSync(resolve(__dirname, source), join(APP_DIR, target))
+    console.log(`✓ ${target}`)
+  }
 
   // CSS is maintained beside its owning source and copied to the one static
   // output namespace with the same relative path.
@@ -96,10 +118,9 @@ async function build() {
   if (existsSync(PDFJS_SRC)) {
     mkdirSync(join(PDFJS_DST, 'images'), { recursive: true })
 
-    // Electron 35 / Chromium 134 does not implement all APIs used by the
-    // pdfjs-dist 6 modern bundles (notably Map/WeakMap#getOrInsertComputed and
-    // Uint8Array#toHex). Keep the core, worker, and viewer on PDF.js's official
-    // legacy build so all three execution contexts receive the same polyfills.
+    // Keep the core, worker, and viewer on PDF.js's official legacy build so
+    // packaged desktop runtimes and supported source-mode browsers all receive
+    // the same polyfills and execute the same asset set.
     const files = [
       ['legacy/build/pdf.min.mjs', 'pdf.min.js'],
       ['legacy/build/pdf.worker.min.mjs', 'pdf.worker.min.js'],
