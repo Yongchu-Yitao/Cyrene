@@ -13,7 +13,7 @@ def test_search_overlay_styles_are_owned_and_loaded_by_shared_search():
         encoding="utf-8"
     )
 
-    assert 'href="shared/search/overlay.css?v=0.7.0b8"' in index
+    assert 'href="shared/search/overlay.css?v=0.7.0b9"' in index
     for selector in (
         ".search-overlay {",
         ".search-overlay-panel {",

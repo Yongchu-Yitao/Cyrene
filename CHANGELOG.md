@@ -2,6 +2,190 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.7.0b9] - 2026-07-31
+
+这是 `0.7.0` 的第九个测试版，包含 `v0.7.0-beta.8` 之后的全部改动。本版重点
+扩展远程与移动端控制协议，使手机控制器可以直接管理会话、设置、模型、附件和
+项目 Shell；重构模型来源与时区配置的持久化；并继续打磨 Workbench 对话体验，
+包括聊天排序、统一磨砂顶栏和可直接查看、拖动、下载的内嵌图片。
+
+### 功能更新
+
+- **远程控制覆盖完整工作流**：受信任控制器现在可以读取和更新非敏感设置、管理
+  模型来源与 Skill、创建和操作项目 Shell、查看工作区变更，并获得更完整的聊天、
+  上下文、附件、地图和运行状态。
+- **手机直连不再要求回调服务器**：新增端到端加密的 Request/Response 传输模式，
+  控制器只需向 Cyrene 发起一次请求即可取得响应，同时继续保留兼容旧客户端的
+  Reverse Delivery 模式。
+- **模型配置按来源独立保存**：自定义 OpenAI-compatible 候选与 Codex OAuth
+  候选不再互相覆盖；切换模型来源时会保留另一侧配置，之后切回即可继续使用。
+- **远程 Shell 可持续且可恢复读取**：Shell 绑定项目与控制设备，支持打开、增量
+  读取、写入、Interrupt 和关闭；输出带单调 Cursor，命令被中断后 Shell 会话仍
+  可继续使用。
+- **对话图片直接显示**：Agent 生成或发送的图片不再只显示为普通文件条目，而是
+  以紧凑圆角缩略图展示；点击进入右侧查看器，整张卡片仍可拖动，底部保留文件名、
+  外部打开和下载两个操作。
+- **聊天列表可自由排序**：聊天卡片支持拖拽和键盘排序，顺序按项目保存；聊天也可
+  拖到对话区直接打开，并提供明确的放置反馈和无障碍播报。
+- **Workbench 顶部视觉统一**：聊天栏与对话标题合并为连续的磨砂玻璃表面，
+  消除重复遮罩和分隔线；长对话导航移动到右侧，整体高度、间距和响应式行为同步
+  收紧。
+- **时区成为正式持久设置**：首次设置、General Settings、页面启动和运行时配置
+  使用同一后端值；保存失败会恢复本地状态，避免界面与任务调度时区不一致。
+
+### 详细变更与兼容性说明
+
+#### 远程与移动端控制协议
+
+- **新增 `settings.read` 与 `settings.update`** — 远程端可读取 Agent、Context、
+  Execution、Discussion、Channels、Updates、Budget、Models、Skills 和工具包
+  设置；响应使用稳定分组、双语标签、说明、类型、枚举与范围元数据，便于移动端
+  构建原生设置界面。
+- **敏感信息默认不外泄** — API Key 永远不出现在远程设置响应中，模型候选只暴露
+  `api_key_configured`；更新请求未包含密钥时会保留已有值，不会因远程编辑其他
+  字段意外清空认证信息。
+- **设置写入严格校验** — 布尔、数值、枚举、模型数量、Reasoning Effort、Base
+  URL、工具包和 Skill ID 均在服务端校验；无效输入返回明确错误，不会部分落盘。
+- **模型设置支持完整远程管理** — 可分别更新自定义主模型候选、Codex OAuth
+  模型、Vision 候选、Secondary Model 与当前来源；限制 Codex 只能作为主模型，
+  并对自定义 Endpoint 执行安全 URL 校验。
+- **Skill 可远程启停** — Learning Skill Registry 新增统一启用/禁用入口，远程
+  设置与本地设置复用同一持久状态，避免两套开关产生漂移。
+- **新增项目 Shell 命令族** — `shell.open`、`shell.read`、`shell.write`、
+  `shell.interrupt`、`shell.close` 由 `toolpack:code_tools` 能力控制，只允许在
+  已共享项目中使用，并按 Pairing Device 隔离会话所有权。
+- **Shell 输出支持增量同步** — 每一行输出和 Prompt 都带单调递增的 `seq`，
+  Snapshot 返回 `nextCursor`；移动端可只拉取新增内容，不需反复下载完整终端历史。
+- **新增 `changes.read`** — 控制器可以查看当前项目的工作区改动，并与聊天详情中
+  的 Workspace Changes 摘要配合使用。
+- **聊天详情更完整** — `chats.read` 与列表摘要新增 Parent/Fork、模型、权限模式、
+  Token Usage、Context Metrics/Blocks、Inbox Snapshot、已用工具包、工作区改动、
+  地图 Pins/Routes 等字段。
+- **远程聊天可重命名与删除** — `chats.update` 允许在共享项目中修改聊天标题，
+  `chats.delete` 复用正式 Workbench 删除链路；能力清单、远程工具 Schema 和审计
+  侧效应标记同步更新。
+- **远程附件发送进入正式消息链路** — 创建聊天或发送消息最多可附带 5 个 Base64
+  文件，总计不超过 8MB；文件按普通 Chat Upload 持久化，失败时会清理已经写入的
+  部分文件。
+- **附件读取支持原图与缩略图** — 图片可请求受尺寸约束的 Thumbnail Variant，
+  生成结果保存在受控数据目录；不支持的媒体类型、缺失原件或缩略图失败会返回明确
+  状态，而不是无效二进制响应。
+- **使用量与模型信息可回溯** — 当聊天元数据不完整时，会根据消息与运行记录推断
+  Model、Token Usage 和 Context 状态，提升旧会话在移动端的可读性。
+- **命令权限重新归类** — Settings 是设备级能力而非项目级能力；Shell 和
+  Changes 保持项目范围，Shell 写入、中断和关闭等操作明确标记为 Side Effect。
+
+#### 直连传输、配对与安全
+
+- **新增 `/v1/control/request`** — Direct Pairing Server 可以在一次 HTTP 请求
+  内接收加密 Envelope、交给 Remote Gateway 执行并返回加密响应；手机端不再需要
+  启动可被桌面反向访问的 Listener。
+- **两种传输模式并存** — 新客户端使用 `request_response`，现有客户端继续使用
+  `reverse_delivery`；Pairing 元数据明确记录模式，升级不会破坏已有配对。
+- **保持端到端安全契约** — Inline 请求继续执行 Device Trust、Capability、
+  Project Scope、Nonce Replay、Envelope Size 和 Audit 校验，不因省去回调连接而
+  降低授权边界。
+- **请求接收器可显式注册** — DirectPairingServer 与 RemoteGateway 通过受控
+  Callback 连接，启动、关闭和异常返回路径均有确定生命周期。
+- **扩大合法响应包支持范围** — Envelope 限制适配附件、缩略图、上下文和设置
+  Schema 等更丰富响应，同时仍在解密和解析前拒绝异常大请求。
+
+#### 持久 Shell 与运行时隔离
+
+- **工作目录严格限制在项目内** — Shell 接收显式 `workspace_root`，相对路径只在
+  该根目录解析；越界路径和跨项目复用会被拒绝。
+- **支持交互与非交互启动** — 后端会解析平台可用 Shell，并按调用场景选择启动
+  方式；移除继承的 `npm_config_prefix`，避免 nvm 环境产生误导警告。
+- **Interrupt 不再等同于销毁会话** — Unix 向进程组发送 SIGINT，Windows 使用
+  CTRL_BREAK；远程持久 Shell 安装安全的中断处理后，子命令停止但 Shell 本身可
+  继续接收下一条命令。
+- **输出顺序具备稳定协议** — Runtime 为 Prompt、stdout 和 stderr 分配统一
+  Sequence，快照和 Cursor 读取不会因并发输出重复或漏行。
+
+#### 模型来源、设置与时区
+
+- **自定义模型与 Codex 模型分库存储** — 配置新增 `custom_models`、
+  `codex_model` 和 `model_source`；不再用同一个主模型数组承载两种认证来源。
+- **旧配置自动迁移** — 首次读取会从历史模型顺序安全推断来源和候选，并写入新
+  结构；已有 API Key、Base URL、Vision 和 Secondary 配置保持兼容。
+- **Onboarding 只更新当前来源** — 自定义 OpenAI 设置只更新 Custom Candidates
+  并激活 `custom`；Codex 登录只更新独立 OAuth Candidate 并激活 `codex`，不会
+  删除另一来源。
+- **模型设置 API 双向兼容** — `/api/settings/models` 返回
+  `custom_models`、`codex_model`、`primary_source` 和当前活动模型；写入时同时
+  支持新结构与经过验证的现有字段。
+- **来源约束更明确** — Codex OAuth 仅可作为 Primary，Custom/Vision Candidate
+  不可伪装为 OAuth；选择 Codex 来源时必须存在有效 Codex Candidate。
+- **设置界面切换不丢数据** — Custom 和 Codex 表单状态独立保留，用户切换来源
+  后仍能看到另一侧的既有配置；必填模型和来源错误会在提交前提示。
+- **时区保存到统一配置** — Config Store 新增 Timezone 默认值和读取路径，
+  Settings Route 只接受支持的时区；Workbench Runtime 将最终值提供给前端和任务
+  执行。
+- **启动时先同步后端时区** — WebUI Bootstrap 在请求 `/api/ui-data` 前读取保存
+  值并同步 Local Storage；设置提交失败时回滚本地修改，防止刷新前后显示漂移。
+
+#### Workbench 对话、拖拽与导航
+
+- **聊天卡片支持持久排序** — 使用专用
+  `application/x-cyrene-chat+json` Drag Payload；Drop 后更新每个项目独立的
+  Local Storage 顺序，新建聊天自动归一化为 Newest First。
+- **键盘与读屏操作补齐** — 聚焦聊天卡片后可用 `Alt+ArrowUp/ArrowDown` 调整
+  顺序，完成后通过 Live Region 播报新位置。
+- **聊天可拖入对话区打开** — Transcript 接受聊天 Payload，拖入时显示边框和
+ 提示，放下后切换到目标聊天；原有 Current Card 和资源拖动行为保持不变。
+- **统一连续磨砂顶栏** — `.wbc-top-glass` 横跨 Chat Rail 与 Transcript Header，
+  不覆盖右侧区域；移除各自重复的伪元素、竖向分隔线和不一致阴影。
+- **顶栏尺寸响应式收紧** — Rail Header 和 Chat Header 使用同一高度与间距，
+  Side Width 随布局变化，窄屏下不会挤压标题和主操作。
+- **长对话导航移动到右侧** — Navigator 从左侧起点改为右侧面板位置，避免遮挡
+  Chat Rail 和消息正文，并与右侧查看器形成一致方向。
+
+#### 内嵌图片与附件体验
+
+- **Agent 图片直接进入对话流** — 可识别的图片附件使用专用 Inline Image Card，
+  不再显示成只有 MIME 类型的通用 Artifact Row；普通文件继续使用原有卡片。
+- **紧凑、无黑边的圆角预览** — 图片区域最大宽度 280px，使用方形 Cover Crop，
+  全尺寸圆角裁切，避免超大预览和宽高比不同产生的左右黑边。
+- **点击进入右侧查看器** — 点击缩略图调用现有 Viewer，在 Workbench 内查看原图；
+  Footer 的外部打开按钮仍可交给系统默认应用。
+- **保留完整拖动能力** — 整张图片卡复用既有 Resource Drag Payload，图片直接
+  展示不会牺牲拖入 Composer、资料或其他支持区域的能力。
+- **Footer 与输入框使用同一表面** — 文件名和操作区采用 Composer 相同的
+  `--wb-card-bg` 与控件阴影，移除底部硬边框；高度压缩到 34px，减少视觉占用。
+- **两个动作尺寸和笔画统一** — 外部打开与下载按钮均为 28×28，使用一致的
+  24px ViewBox、1.8 Stroke 和居中规则；下载链接的浏览器默认尺寸被显式覆盖，
+  修复图标偏下和按钮不等大的问题。
+- **加载失败安全降级** — 图片资源加载失败时恢复为通用文件附件，用户仍可打开或
+  下载文件，不会留下空白卡片。
+- **纯附件 Vision 路由有回归保护** — 仅发送图片且没有文字的消息仍会走原生
+  Vision 输入，同时保持公开消息为空，不会因新的展示组件改变模型语义。
+
+#### 远程共享设置与界面可用性
+
+- **共享设置改为可折叠区域** — Pairing 页面的 Sharing Settings 使用
+  `<details>`，包含 Chevron、Focus、Hover 和 Open 状态，减少默认页面高度。
+- **共享范围说明更清楚** — 明确展示 Compatibility、Direct Tool Packages 和
+  Shared Projects，补充控制器权限提示并完善中英文文案。
+- **默认值只初始化一次** — Invite 首次打开时从保存的
+  `remote_tool_packages` 与 Projects 填充，之后的用户选择不会被重新渲染覆盖。
+- **直接工具包说明补齐** — Browser、Code、Delivery、Desktop、Entity、
+  Integration、Knowledge、Map、Memory、Remote、Skill、Subagent 和 Task 包均有
+  可用于移动端的名称和说明。
+
+#### 测试、设计 QA 与发布
+
+- **远程协议测试扩展** — 覆盖无 Controller Listener 的直连模式、信任与重放
+  校验、项目和设备 Shell 所有权、设置与模型验证、附件限制、缩略图和错误清理。
+- **配置迁移与前端契约扩展** — 覆盖 Custom/Codex 独立持久化、Legacy Migration、
+  Timezone 同步、模型来源切换、聊天排序、内嵌图片结构与操作按钮。
+- **设计回归材料随源码提交** — `design-qa.md`、远程共享专项记录及聊天玻璃层、
+  内嵌图片多个阶段的对比与最终截图一并保存，便于后续视觉回归。
+- **版本号完整同步** — Python 包、UV Lock、Electron Manifest/Lock、README
+  Badge、Web 文档、Wechat Client、WebUI Cache Key 和相关契约测试统一更新为
+  Python `0.7.0b9`、Electron/Git Tag `0.7.0-beta.9`。
+
+---
+
 ## [0.7.0b8] - 2026-07-30
 
 这是 `0.7.0` 的第八个测试版，包含 `v0.7.0-beta.7` 之后的全部改动。本版重点

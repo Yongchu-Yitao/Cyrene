@@ -5,6 +5,208 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0b9] - 2026-07-31
+
+This is the ninth `0.7.0` beta and includes every change since
+`v0.7.0-beta.8`. It substantially expands remote and mobile control so a
+paired device can manage chats, settings, models, attachments, workspace
+changes, and project shells. It also separates custom and Codex model
+configuration, makes timezone persistence authoritative, and refines the
+Workbench with reorderable chats, one continuous glass header, and compact
+inline image cards that retain viewing, dragging, opening, and downloading.
+
+### Feature highlights
+
+- **Remote control now covers the full workflow** — trusted controllers can
+  inspect and update non-secret settings, manage models and skills, operate
+  project-scoped shells, read workspace changes, and retrieve richer chat,
+  context, attachment, map, and runtime state.
+- **Mobile direct requests need no callback server** — a new end-to-end
+  encrypted request/response transport returns the result on the original
+  connection while retaining reverse delivery for existing clients.
+- **Model sources are stored independently** — custom OpenAI-compatible
+  candidates and the Codex OAuth candidate no longer overwrite each other.
+  Switching sources preserves the inactive configuration.
+- **Remote shells are persistent and incrementally readable** — shells are
+  bound to a shared project and paired device and support open, cursor-based
+  read, write, interrupt, and close. Interrupting a command keeps the shell
+  available for subsequent commands.
+- **Images render directly in conversations** — agent images use compact,
+  rounded previews rather than generic file rows. Click opens the right-side
+  viewer, the full card remains draggable, and the footer contains the
+  filename plus exactly Open Externally and Download.
+- **Chats can be reordered** — drag-and-drop and keyboard ordering persist per
+  project. A chat can also be dropped into the conversation area to open it,
+  with visible drop feedback and screen-reader announcements.
+- **The Workbench header is one continuous glass surface** — chat rail and
+  transcript headers share one overlay with tighter dimensions and no
+  duplicate masks or divider. Long-conversation navigation now originates
+  from the right.
+- **Timezone is an authoritative persisted setting** — onboarding, General
+  Settings, frontend bootstrap, and runtime configuration share the backend
+  value, with local rollback if saving fails.
+
+### Detailed changes and compatibility notes
+
+#### Remote and mobile control protocol
+
+- Added `settings.read` and `settings.update` with stable groups for Agent,
+  Context, Execution, Discussion, Channels, Updates, Budget, Models, Skills,
+  and tool packages. Responses include bilingual labels, descriptions, types,
+  ranges, and enum metadata for native mobile settings UIs.
+- API keys are never returned. Model candidates expose only
+  `api_key_configured`, and an omitted key preserves the stored credential
+  when another field is edited remotely.
+- Server-side validation covers booleans, numeric ranges, enums, reasoning
+  effort, model counts, base URLs, tool package IDs, and skill IDs. Invalid
+  writes fail without partially persisting state.
+- Remote model management now handles custom primary candidates, the Codex
+  OAuth candidate, vision candidates, the secondary model, and active source.
+  Codex remains primary-only, and custom endpoints receive safe URL checks.
+- Added a shared `set_skill_enabled` registry path so local and remote skill
+  toggles use one persistent state.
+- Added `shell.open`, `shell.read`, `shell.write`, `shell.interrupt`, and
+  `shell.close`, gated by `toolpack:code_tools`, restricted to shared projects,
+  and isolated by pairing-device ownership.
+- Every shell output and prompt record has a monotonic `seq`; snapshots return
+  `nextCursor` so clients can fetch only new terminal data.
+- Added `changes.read` for project workspace changes.
+- Enriched chat lists and `chats.read` with parent/fork metadata, model,
+  permission mode, token usage, context metrics and blocks, inbox snapshots,
+  used tool packages, workspace changes, and map pins/routes.
+- Added `chats.update` for renaming a chat inside its shared project and
+  `chats.delete` through the canonical Workbench deletion path, with matching
+  capability declarations, remote tool schema, auditing, and side-effect flags.
+- Remote chat creation and sending accept up to five Base64 attachments with
+  an 8 MB aggregate limit. They enter the regular chat-upload lifecycle, and
+  partial files are removed if a request fails.
+- Attachment reads support original and bounded thumbnail variants. Generated
+  thumbnails remain inside the managed data directory, with explicit errors
+  for unsupported media, missing originals, or failed generation.
+- Model, usage, and context information can be recovered from messages and run
+  records when older chat metadata is incomplete.
+- Settings capabilities are device-scoped rather than project-scoped. Shell
+  and change operations remain project-scoped, and mutating shell operations
+  are explicitly marked as side effects.
+
+#### Direct transport, pairing, and security
+
+- Added `/v1/control/request`, which accepts an encrypted envelope, dispatches
+  through the Remote Gateway, and returns the encrypted response in the same
+  HTTP request. A mobile controller no longer needs an inbound listener.
+- Pairing metadata distinguishes `request_response` and legacy
+  `reverse_delivery`, preserving compatibility with already paired clients.
+- Inline requests retain device trust, capability, project-scope, nonce replay,
+  envelope-size, and audit checks; removing the callback hop does not weaken
+  authorization boundaries.
+- DirectPairingServer now has an explicit inline request receiver lifecycle
+  connected to RemoteGateway, including deterministic startup, shutdown, and
+  error response behavior.
+- Envelope validation accommodates richer attachment, thumbnail, context, and
+  settings payloads while rejecting oversized input before decryption/parsing.
+
+#### Persistent shells and runtime isolation
+
+- Shell startup accepts an explicit `workspace_root`; relative paths resolve
+  only beneath that root, and traversal or cross-project reuse is rejected.
+- Interactive and non-interactive launches resolve a supported platform shell.
+  Inherited `npm_config_prefix` is removed to prevent misleading nvm warnings.
+- Interrupt sends SIGINT to the process group on Unix and CTRL_BREAK on
+  Windows. Persistent remote shells install a safe interrupt path so the child
+  command stops while the shell remains usable.
+- Prompt, stdout, and stderr share one sequence stream, preventing duplicate or
+  missing lines during concurrent cursor-based reads.
+
+#### Model sources, settings, and timezone
+
+- Added `custom_models`, `codex_model`, and `model_source` storage instead of
+  forcing both authentication sources through one primary-candidate list.
+- Legacy configurations migrate by safely inferring source and candidates from
+  the prior ordering while preserving API keys, base URLs, vision, and
+  secondary model settings.
+- Custom OpenAI onboarding updates only custom candidates and activates
+  `custom`; Codex OAuth onboarding updates only the independent Codex candidate
+  and activates `codex`.
+- `/api/settings/models` now returns `custom_models`, `codex_model`,
+  `primary_source`, and active candidates, while accepting the validated new
+  structure alongside compatible existing fields.
+- Codex OAuth is constrained to Primary. Custom and Vision candidates cannot
+  masquerade as OAuth, and selecting Codex requires a valid Codex candidate.
+- The settings overlay keeps Custom and Codex form state independently, so
+  switching source does not discard inactive values. Required-model and source
+  errors are reported before submission.
+- Timezone has a Config Store default and validated Settings route, and the
+  Workbench Runtime exposes the resulting value to frontend and task execution.
+- Frontend bootstrap fetches the saved timezone before `/api/ui-data` and
+  synchronizes local storage. A failed settings write restores the prior local
+  value.
+
+#### Workbench chat ordering and navigation
+
+- Chat cards use the dedicated `application/x-cyrene-chat+json` drag payload.
+  Dropped ordering is persisted per project, and new chats normalize to
+  newest-first.
+- Focused cards support `Alt+ArrowUp` and `Alt+ArrowDown`; a live region
+  announces the resulting position.
+- The transcript accepts chat payloads, shows a clear drop state, and opens the
+  dropped chat. Existing current-card and resource drag behavior is preserved.
+- `.wbc-top-glass` spans the chat rail and transcript header but excludes the
+  right panel. Duplicate pseudo-glass layers, the vertical divider, and
+  inconsistent shadows are removed.
+- Rail and chat headers now share compact height and spacing with responsive
+  side width, preventing narrow layouts from crowding title and primary action.
+- The long-conversation navigator moved from the left origin to the right-side
+  panel, avoiding overlap with the rail and message content.
+
+#### Inline images and attachment experience
+
+- Recognized agent image attachments render as dedicated inline image cards;
+  non-image artifacts retain the established generic file card.
+- Preview width is capped at 280 px with a square cover crop and fully rounded
+  clipping, eliminating oversized media and letterbox side bars.
+- Clicking the preview opens the existing right-side viewer, while the footer
+  action can still open the original in the system application.
+- The entire image card reuses the existing resource drag payload, retaining
+  drag-to-composer, library, and other supported workflows.
+- The filename/action footer uses the same `--wb-card-bg` and control shadow as
+  the composer, removes the hard bottom border, and compresses to 34 px.
+- Open and Download are both 28×28 controls with the same 24 px viewBox,
+  1.8 stroke, and centering rules. Explicit link normalization fixes the
+  download icon's previous vertical and size mismatch.
+- Image load failure falls back to the generic attachment card, preserving open
+  and download access instead of leaving an empty preview.
+- Regression coverage ensures an attachment-only turn still reaches native
+  vision input with no artificial public placeholder text.
+
+#### Remote sharing settings and usability
+
+- Pairing Sharing Settings now use a collapsible `<details>` section with
+  chevron, focus, hover, and open states to reduce default page height.
+- Labels and hints clearly distinguish compatibility, direct tool packages, and
+  shared projects, with complete English and Chinese controller guidance.
+- Invite defaults initialize once from saved `remote_tool_packages` and
+  projects; rerenders no longer overwrite user selections.
+- Browser, Code, Delivery, Desktop, Entity, Integration, Knowledge, Map,
+  Memory, Remote, Skill, Subagent, and Task packages now have mobile-facing
+  names and descriptions.
+
+#### Testing, design QA, and release
+
+- Remote protocol tests cover no-listener direct transport, trust and replay
+  enforcement, project/device shell ownership, settings and model validation,
+  attachment limits, thumbnails, and failure cleanup.
+- Config migration and frontend contract tests cover Custom/Codex independent
+  persistence, legacy migration, timezone synchronization, source switching,
+  chat ordering, inline image structure, and both image actions.
+- `design-qa.md`, a dedicated remote-sharing QA record, and comparison/final
+  captures for unified chat glass and inline images are committed with the
+  implementation for future visual regression review.
+- Python package, UV lock, Electron manifest/lock, README badges, web docs,
+  WeChat client, WebUI cache keys, and contract tests are synchronized to
+  Python `0.7.0b9` and Electron/Git tag `0.7.0-beta.9`.
+
+---
+
 ## [0.7.0b8] - 2026-07-30
 
 This is the eighth `0.7.0` beta and contains every change since
