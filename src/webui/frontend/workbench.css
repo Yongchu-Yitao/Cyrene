@@ -3936,7 +3936,7 @@ body.wb-col-resizing {
   border: 0;
   padding: 12px;
   background: var(--wb-card-bg);
-  box-shadow: none;
+  box-shadow: var(--wbc-control-shadow);
 }
 
 .workbench-side-section h3 {
@@ -5093,7 +5093,7 @@ html[data-theme="dark"] .wb-composer-disclaimer {
 }
 
 .wbc-error-card {
-  margin: 0 22px;
+  margin: var(--wbc-header-overlay-height) 22px 0;
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
@@ -12675,6 +12675,9 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-page {
+  --wbc-control-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.028),
+    0 5px 14px rgba(15, 23, 42, 0.02);
   display: grid;
   /* Right column shares --wb-right-w (inherited from .workbench-grid) so the
      conversation viewer/map panel resizes with the same drag handle. */
@@ -12730,6 +12733,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   font-size: calc(13px * var(--wb-ui-font-scale, 1));
   outline: none;
   box-sizing: border-box;
+  box-shadow: var(--wbc-control-shadow);
 }
 
 .wbc-search input:focus {
@@ -12774,7 +12778,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   padding: 11px 12px;
   text-align: left;
   cursor: pointer;
-  box-shadow: none;
+  box-shadow: var(--wbc-control-shadow);
   transition: background .12s ease;
   position: relative;
 }
@@ -12879,6 +12883,8 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* ---- main column ---- */
 
 .wbc-main {
+  --wbc-header-overlay-height: calc(94px * var(--wb-ui-font-scale, 1));
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -12887,12 +12893,38 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-header {
+  position: absolute;
+  z-index: 20;
+  inset: 0 0 auto;
+  min-height: var(--wbc-header-overlay-height);
+  box-sizing: border-box;
+  isolation: isolate;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
-  padding: 16px 22px 12px;
-  border-bottom: 1px solid var(--wb-line);
+  padding: 16px 22px 28px;
+  border-bottom: 0;
+  background: transparent;
+}
+
+.wbc-header::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--wb-main-bg) 88%, transparent) 0%,
+    color-mix(in srgb, var(--wb-main-bg) 82%, transparent) 68%,
+    color-mix(in srgb, var(--wb-main-bg) 60%, transparent) 86%,
+    transparent 100%
+  );
+  -webkit-backdrop-filter: blur(46px) saturate(165%) contrast(103%);
+  backdrop-filter: blur(46px) saturate(165%) contrast(103%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
 }
 
 .wbc-header-info {
@@ -13063,7 +13095,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* ---- thread ---- */
 
 .wbc-thread-stage {
-  --wbc-thread-inset-top: 18px;
+  --wbc-thread-inset-top: calc(var(--wbc-header-overlay-height) + 18px);
   --wbc-thread-inset-inline: 28px;
   --wbc-thread-inset-bottom: 8px;
   position: relative;
@@ -14897,11 +14929,7 @@ button.wbc-attach-file:focus-visible {
   border-radius: 14px;
   background: var(--wb-card-bg);
   padding: 10px 12px 8px;
-  box-shadow: none;
-}
-
-.wbc-composer-box:focus-within {
-  background: var(--wb-row-hover-bg);
+  box-shadow: var(--wbc-control-shadow);
 }
 
 .wbc-composer-box textarea {
@@ -17057,8 +17085,11 @@ html[data-theme="dark"] .wbc-model-menu > button:hover {
 }
 
 /* dark theme tweaks */
-html[data-theme="dark"] .wbc-composer-box,
-html[data-theme="dark"] .wbc-chat-card,
+html[data-theme="dark"] .wbc-page {
+  --wbc-control-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.14),
+    0 5px 14px rgba(0, 0, 0, 0.09);
+}
 html[data-theme="dark"] .wbc-quick-actions button {
   box-shadow: none;
 }

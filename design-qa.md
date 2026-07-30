@@ -1,7 +1,51 @@
-# Design QA — Borderless Workbench Cards
+# Design QA — Fading Frosted Conversation Header
+
+- final result: passed
+- source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-f64e83c5-cd38-463b-9db7-58552a8ad5df.png`
+- readability feedback: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-67ad243e-c438-4fbd-b075-acb0629e101d.png`
+- implementation screenshot: `/Users/syw/Documents/playground/Cyrene/design-qa-frosted-header-final.png`
+- focused comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-frosted-header-comparison.png`
+- viewport: 1280 × 720 CSS px; browser screenshot normalized to 1280 × 720 px
+- state: light theme, `介绍自己` selected, transcript scrolled 420 px beneath the header
+
+## Findings
+
+- No remaining P0/P1/P2 findings.
+- The header is an absolute overlay, so transcript content can move underneath it.
+- The glass is visibly translucent at the top while strongly diffusing underlying text into soft tonal shapes.
+- Frosting uses a 46 px Gaussian blur with 165% saturation, slight contrast lift, and a late bottom-edge transparency fade.
+- At large UI text size, the transcript begins 14.8 px below the header in its initial scroll position.
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing Cyrene font family, scale, weights, truncation, and hierarchy are unchanged.
+- Spacing and layout rhythm: header controls retain their original alignment; scroll content owns a responsive top inset matching the scaled overlay height.
+- Colors and visual tokens: the glass derives from `--wb-main-bg`, preserving light and dark theme compatibility.
+- Image quality and assets: no assets changed.
+- Copy and content: unchanged.
+
+## Comparison history
+
+1. The initial 18 px blur faded across the whole header too early, allowing underlying text to create a readability-reducing ghost image (P2).
+2. A 32 px blur with 98%/96% upper opacity restored readability but made the top feel too opaque and less glass-like (P2).
+3. Reduced upper opacity to 88%/82%, increased Gaussian blur to 46 px, and raised saturation to 165% so content remains perceptible without readable ghost text.
+4. Post-fix focused comparison shows clear title and metadata text, a more translucent top, and a smooth dissolve into the moving transcript.
+
+## Verification
+
+- Frontend build: passed.
+- `uv run pytest -q tests/test_workbench_frontend_logic.py`: 150 passed.
+- `git diff --check`: passed.
+- Runtime checks: overlay positioning, computed gradient, blur, mask, scaled top inset, scroll-under behavior, and header control visibility.
+- Console errors checked: none.
+
+---
+
+# Design QA — Borderless Workbench Surfaces
 
 - final result: passed
 - source visual truth: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-2dcb2a3a-204f-4e3d-8712-4f2e77371b8b.png`
+- composer focus feedback: `/var/folders/zm/qgh_rgw903j0b9t01yg2l0mc0000gn/T/codex-clipboard-94fdfcbb-8d79-45af-ab32-ea4da3b75d18.png`
 - implementation screenshot: `/Users/syw/Documents/playground/Cyrene/design-qa-borderless-cards-final.png`
 - full-view comparison: `/Users/syw/Documents/playground/Cyrene/design-qa-borderless-cards-comparison.png`
 - hidden-scrollbar interaction screenshot: `/Users/syw/Documents/playground/Cyrene/design-qa-hidden-scrollbars-final.png`
@@ -13,25 +57,25 @@
 ## Findings
 
 - No remaining P0/P1/P2 findings.
-- Conversation cards have no border, shadow, or focus outline. The active card remains identifiable through its tinted background.
-- Overview cards have no border or shadow; spacing and white surface fill preserve grouping.
-- Search and composer fields have no border or shadow. Their white surface, placeholder text, and focus background preserve editability.
+- Conversation cards have no border or focus outline. The active card remains identifiable through its tinted background.
+- Conversation cards, Overview cards, search, and composer fields share one restrained two-layer shadow token.
+- Search and composer fields remain borderless. Focusing the composer no longer changes the whole container background.
 - The conversation list and Overview panel retain native scrolling while hiding their scrollbar tracks and thumbs.
 
 ## Required fidelity surfaces
 
 - Fonts and typography: unchanged from the existing Cyrene design system.
-- Spacing and layout rhythm: card padding, radius, list gap, columns, and panel widths remain unchanged; only card borders and shadows were removed.
-- Colors and visual tokens: existing theme tokens remain in use. Active, hover, and focus states are background-only.
+- Spacing and layout rhythm: card padding, radius, list gap, columns, and panel widths remain unchanged.
+- Colors and visual tokens: existing theme tokens remain in use; all four surface types share `--wbc-control-shadow`.
 - Image quality and assets: no image or icon assets changed.
 - Copy and content: unchanged.
 
 ## Focused evidence
 
 - A separate crop was unnecessary because the full-view comparison keeps the left conversation rail and right overview cards readable.
-- Runtime computed styles for the focused active conversation card: `border: 0`, `box-shadow: none`, `outline: 0`.
-- Runtime computed styles for the first four overview cards: `border: 0`, `box-shadow: none`.
-- Search and composer controls both report `border: 0`; the composer also reports `box-shadow: none`.
+- Conversation cards, Overview cards, search, and composer controls all declare `border: 0`.
+- The shared light-theme shadow is `0 1px 2px rgba(15, 23, 42, 0.028), 0 5px 14px rgba(15, 23, 42, 0.02)`.
+- The composer has no `:focus-within` background override, so clicking it does not recolor the container.
 - Both scroll containers report `scrollbar-width: none` and a `0px` WebKit scrollbar width.
 
 ## Comparison history
@@ -40,12 +84,13 @@
 2. Added explicit focus styling that removes the outline and uses the existing hover/active background tokens.
 3. Removed search and composer borders and replaced their focus border with the existing hover background token.
 4. Hid the left conversation-list and right Overview-panel scrollbars without changing `overflow-y: auto`.
-5. Post-fix browser capture confirms no yellow outline, no card or input borders, no visible scrollbars, and no console errors.
+5. Added one shared, very low-opacity shadow to conversation cards, Overview cards, search, and composer surfaces.
+6. Removed the composer focus background change after user review.
 
 ## Verification
 
 - Frontend build: passed.
-- `uv run pytest -q tests/test_workbench_frontend_logic.py`: 149 passed.
+- `uv run pytest -q tests/test_workbench_frontend_logic.py`: 150 passed.
 - `git diff --check`: passed.
 - Primary interactions tested: selecting the `介绍自己` conversation, focusing both inputs, and independently scrolling the left and right panels.
 - Console errors checked: none.

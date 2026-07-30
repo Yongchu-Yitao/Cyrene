@@ -106,11 +106,14 @@ def test_workbench_chat_and_overview_cards_are_borderless():
     focus_chat_css = styles.split(
         ".wbc-chat-card:focus,\n.wbc-chat-card:focus-visible {", 1
     )[1].split("}", 1)[0]
+    page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
 
     assert "border: 0;" in chat_card_css
-    assert "box-shadow: none;" in chat_card_css
+    assert "box-shadow: var(--wbc-control-shadow);" in chat_card_css
     assert "border: 0;" in side_card_css
-    assert "box-shadow: none;" in side_card_css
+    assert "box-shadow: var(--wbc-control-shadow);" in side_card_css
+    assert "0 1px 2px rgba(15, 23, 42, 0.028)" in page_css
+    assert "0 5px 14px rgba(15, 23, 42, 0.02)" in page_css
     assert "border-color:" not in active_chat_css
     assert "outline: 0;" in focus_chat_css
 
@@ -124,15 +127,12 @@ def test_workbench_chat_inputs_are_borderless():
     search_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
     search_focus_css = styles.split(".wbc-search input:focus {", 1)[1].split("}", 1)[0]
     composer_css = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
-    composer_focus_css = styles.split(
-        ".wbc-composer-box:focus-within {", 1
-    )[1].split("}", 1)[0]
-
     assert "border: 0;" in search_css
+    assert "box-shadow: var(--wbc-control-shadow);" in search_css
     assert "border-color:" not in search_focus_css
     assert "border: 0;" in composer_css
-    assert "box-shadow: none;" in composer_css
-    assert "border-color:" not in composer_focus_css
+    assert "box-shadow: var(--wbc-control-shadow);" in composer_css
+    assert ".wbc-composer-box:focus-within {" not in styles
 
 
 def test_workbench_chat_rails_use_hidden_scrollbars():
@@ -158,6 +158,29 @@ def test_workbench_chat_rails_use_hidden_scrollbars():
     assert "scrollbar-width: none;" in side_body_css
     assert "width: 0;" in side_scrollbar_css
     assert "height: 0;" in side_scrollbar_css
+
+
+def test_workbench_header_uses_a_fading_frosted_glass_overlay():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    main_css = styles.split(".wbc-main {", 1)[1].split("}", 1)[0]
+    header_css = styles.split(".wbc-header {", 1)[1].split("}", 1)[0]
+    glass_css = styles.split(".wbc-header::before {", 1)[1].split("}", 1)[0]
+    thread_stage_css = styles.split(".wbc-thread-stage {", 1)[1].split("}", 1)[0]
+
+    assert "--wbc-header-overlay-height: calc(94px * var(--wb-ui-font-scale, 1));" in main_css
+    assert "position: relative;" in main_css
+    assert "position: absolute;" in header_css
+    assert "z-index: 20;" in header_css
+    assert "border-bottom: 0;" in header_css
+    assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in glass_css
+    assert "mask-image: linear-gradient(" in glass_css
+    assert "#000 78%" in glass_css
+    assert "transparent 100%" in glass_css
+    assert "--wbc-thread-inset-top: calc(var(--wbc-header-overlay-height) + 18px);" in thread_stage_css
 
 
 def test_notification_items_navigate_to_their_precise_context():
