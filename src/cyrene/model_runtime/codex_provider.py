@@ -19,7 +19,10 @@ from typing import Any, Awaitable, Callable
 
 from openai_codex import CodexConfig
 from openai_codex.async_client import AsyncCodexClient
-from openai_codex.generated.v2_all import GetAccountRateLimitsResponse
+from openai_codex.generated.v2_all import (
+    GetAccountRateLimitsResponse,
+    ModelProviderCapabilitiesReadResponse,
+)
 from pydantic import BaseModel
 
 from cyrene.tooling.results import ToolProtocolError
@@ -322,6 +325,43 @@ def _codex_sdk_config() -> CodexConfig:
     )
 
 
+def _codex_image_sdk_config() -> CodexConfig:
+    """Return an isolated SDK runtime that may use only image generation."""
+    isolation_root = _codex_isolation_workspace()
+    overrides = [
+        "features.respect_system_proxy=true",
+        "features.plugins=false",
+        "features.apps=false",
+        "features.shell_tool=false",
+        "features.unified_exec=false",
+        "features.browser_use=false",
+        "features.computer_use=false",
+        "features.image_generation=true",
+        "features.multi_agent=false",
+        "tools.view_image=false",
+        "tools.web_search=false",
+        "include_permissions_instructions=false",
+        "include_apps_instructions=false",
+        "include_collaboration_mode_instructions=false",
+        "include_environment_context=false",
+        (
+            "model_instructions_file="
+            + json.dumps(str(isolation_root / "CYRENE_PROVIDER.md"))
+        ),
+    ]
+    skills_override = _disabled_host_skills_override()
+    if skills_override:
+        overrides.append(skills_override)
+    return CodexConfig(
+        config_overrides=tuple(overrides),
+        cwd=str(isolation_root),
+        client_name="cyrene-image-generation",
+        client_title="Cyrene Image Generation",
+        client_version="1",
+        experimental_api=True,
+    )
+
+
 class CodexAppServer:
     """Async facade over OpenAI's official pinned Codex Python SDK."""
 
@@ -329,6 +369,9 @@ class CodexAppServer:
         self._client: AsyncCodexClient | None = None
         self._client_loop: asyncio.AbstractEventLoop | None = None
         self._start_lock = asyncio.Lock()
+        self._image_client: AsyncCodexClient | None = None
+        self._image_client_loop: asyncio.AbstractEventLoop | None = None
+        self._image_start_lock = asyncio.Lock()
         self._limits_cache: tuple[float, dict[str, Any]] | None = None
         self._limits_refresh_task: asyncio.Task[dict[str, Any]] | None = None
 
@@ -360,6 +403,50 @@ class CodexAppServer:
         if self._client is None:
             raise RuntimeError("Codex SDK client is unavailable")
         return self._client
+
+    async def _ensure_image_started(self) -> None:
+        current_loop = asyncio.get_running_loop()
+        if (
+            self._image_client is not None
+            and self._image_client_loop is current_loop
+        ):
+            return
+        if self._image_client is not None:
+            await self._close_image_client()
+        async with self._image_start_lock:
+            if (
+                self._image_client is not None
+                and self._image_client_loop is current_loop
+            ):
+                return
+            client = AsyncCodexClient(_codex_image_sdk_config())
+            try:
+                await asyncio.wait_for(client.start(), timeout=15)
+                await asyncio.wait_for(client.initialize(), timeout=15)
+            except BaseException:
+                await client.close()
+                raise
+            self._image_client = client
+            self._image_client_loop = current_loop
+            logger.info("Codex image-generation SDK runtime started")
+
+    async def _ready_image_client(self) -> AsyncCodexClient:
+        await self._ensure_image_started()
+        if self._image_client is None:
+            raise RuntimeError("Codex image-generation SDK client is unavailable")
+        return self._image_client
+
+    async def _close_image_client(self) -> None:
+        client = self._image_client
+        self._image_client = None
+        self._image_client_loop = None
+        if client is not None:
+            try:
+                await client.close()
+            except RuntimeError:
+                logger.debug(
+                    "Codex image-generation SDK client close crossed event loops"
+                )
 
     async def account(self, *, refresh: bool = False) -> dict[str, Any]:
         client = await self._ready_client()
@@ -400,6 +487,227 @@ class CodexAppServer:
             for item in payload.get("data") or []
             if isinstance(item, dict) and not item.get("hidden")
         ]
+
+    async def image_generation_capability(self) -> bool:
+        """Whether the connected account/provider exposes image generation."""
+        client = await self._ready_image_client()
+        result = await asyncio.wait_for(
+            client.request(
+                "modelProvider/capabilities/read",
+                {},
+                response_model=ModelProviderCapabilitiesReadResponse,
+            ),
+            timeout=30,
+        )
+        return bool(
+            _model_dump(result).get("imageGeneration")
+            or getattr(result, "image_generation", False)
+        )
+
+    async def generate_image(
+        self,
+        *,
+        prompt: str,
+        model: str,
+        size: str = "1024x1024",
+        quality: str = "medium",
+        output_format: str = "png",
+        timeout: float = 180,
+    ) -> dict[str, Any]:
+        """Run one isolated Codex turn that may only generate an image."""
+        client = await self._ready_image_client()
+        thread_result = await asyncio.wait_for(
+            client.thread_start(
+                {
+                    "model": model,
+                    "baseInstructions": (
+                        "Generate exactly one image that satisfies the user's "
+                        "request. Use the image-generation capability. Do not "
+                        "run shell commands, browse, use plugins, or perform "
+                        "any unrelated action."
+                    ),
+                    "developerInstructions": (
+                        "This thread is an isolated Cyrene image-generation "
+                        "backend. The only permitted hosted action is image "
+                        "generation."
+                    ),
+                    "ephemeral": True,
+                    "approvalPolicy": "never",
+                    "sandbox": "read-only",
+                    "cwd": str(_codex_isolation_workspace()),
+                }
+            ),
+            timeout=min(timeout, 30),
+        )
+        thread = _model_dump(thread_result).get("thread") or {}
+        thread_id = str(thread.get("id") or "")
+        if not thread_id:
+            raise RuntimeError("Codex did not create an image-generation thread")
+
+        request_text = (
+            f"{prompt}\n\n"
+            "Output requirements:\n"
+            f"- size: {size}\n"
+            f"- quality: {quality}\n"
+            f"- format: {output_format}\n"
+            "- generate exactly one image"
+        )
+        turn_id = ""
+        notification_task: asyncio.Task[Any] | None = None
+
+        async def interrupt_turn() -> None:
+            if not turn_id:
+                return
+            try:
+                await asyncio.wait_for(
+                    client.turn_interrupt(thread_id, turn_id),
+                    timeout=5,
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to interrupt Codex image-generation turn %s",
+                    turn_id,
+                    exc_info=True,
+                )
+
+        async def settle_notification_wait() -> None:
+            nonlocal notification_task
+            task = notification_task
+            notification_task = None
+            if task is None:
+                return
+            if not task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=3)
+                except TimeoutError:
+                    if isinstance(client, AsyncCodexClient):
+                        if self._image_client is client:
+                            self._image_client = None
+                            self._image_client_loop = None
+                        try:
+                            await client.close()
+                        except Exception:
+                            logger.debug(
+                                "Failed to retire a stalled Codex image client",
+                                exc_info=True,
+                            )
+                    else:
+                        task.cancel()
+                except BaseException:
+                    pass
+            if task.done():
+                try:
+                    task.result()
+                except BaseException:
+                    pass
+
+        try:
+            turn_result = await asyncio.wait_for(
+                client.turn_start(
+                    thread_id,
+                    [{"type": "text", "text": request_text}],
+                    {
+                        "threadId": thread_id,
+                        "input": [{"type": "text", "text": request_text}],
+                        "model": model,
+                        "summary": "none",
+                    },
+                ),
+                timeout=min(timeout, 30),
+            )
+            turn = _model_dump(turn_result).get("turn") or {}
+            turn_id = str(turn.get("id") or "")
+            if not turn_id:
+                raise RuntimeError(
+                    "Codex did not start an image-generation turn"
+                )
+
+            generated: dict[str, Any] | None = None
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    await interrupt_turn()
+                    raise TimeoutError("Codex image generation timed out")
+                notification_task = asyncio.create_task(
+                    client.next_turn_notification(turn_id)
+                )
+                completed, _ = await asyncio.wait(
+                    {notification_task},
+                    timeout=remaining,
+                )
+                if not completed:
+                    await interrupt_turn()
+                    await settle_notification_wait()
+                    raise TimeoutError("Codex image generation timed out")
+                notification = notification_task.result()
+                notification_task = None
+
+                method = str(notification.method or "")
+                params = _model_dump(notification.payload)
+                if method == "error":
+                    error = params.get("error") or {}
+                    message = str(
+                        (error if isinstance(error, dict) else {}).get("message")
+                        or "Codex image generation failed"
+                    )
+                    availability_error = codex_availability_error(
+                        error if isinstance(error, dict) else {},
+                        message=message,
+                    )
+                    if availability_error is not None:
+                        raise availability_error
+                    if not params.get("willRetry"):
+                        raise RuntimeError(message)
+                elif method == "item/completed":
+                    item = params.get("item") or {}
+                    if isinstance(item, dict) and item.get("type") in {
+                        "imageGeneration",
+                        "image_generation_call",
+                    }:
+                        generated = dict(item)
+                elif method == "turn/completed":
+                    completed_turn = params.get("turn") or {}
+                    if str(completed_turn.get("id") or "") != turn_id:
+                        continue
+                    if completed_turn.get("status") == "failed":
+                        error = completed_turn.get("error") or {}
+                        message = str(
+                            (error if isinstance(error, dict) else {}).get(
+                                "message"
+                            )
+                            or "Codex image generation failed"
+                        )
+                        raise RuntimeError(message)
+                    for item in completed_turn.get("items") or []:
+                        if (
+                            isinstance(item, dict)
+                            and item.get("type")
+                            in {"imageGeneration", "image_generation_call"}
+                        ):
+                            generated = dict(item)
+                    break
+            if not generated:
+                raise RuntimeError(
+                    "Codex completed without an image-generation result"
+                )
+            if str(generated.get("status") or "completed") not in {
+                "completed",
+                "success",
+            }:
+                raise RuntimeError(
+                    "Codex returned an incomplete image-generation result"
+                )
+            return generated
+        except asyncio.CancelledError:
+            await interrupt_turn()
+            await settle_notification_wait()
+            raise
+        finally:
+            await settle_notification_wait()
+            if turn_id:
+                client.unregister_turn_notifications(turn_id)
 
     async def rate_limits(self) -> dict[str, Any]:
         client = await self._ready_client()
@@ -710,10 +1018,10 @@ class CodexAppServer:
                 pass
 
         try:
-            user_input = _provider_input(messages)
+            turn_input = _provider_turn_input(messages)
             turn_params: dict[str, Any] = {
                 "threadId": thread_id,
-                "input": [{"type": "text", "text": user_input}],
+                "input": turn_input,
                 "model": model,
                 # Ask only for the provider-supported summary. Raw private
                 # reasoning text is deliberately not exposed to Cyrene.
@@ -731,7 +1039,7 @@ class CodexAppServer:
             turn_result = await asyncio.wait_for(
                 client.turn_start(
                     thread_id,
-                    [{"type": "text", "text": user_input}],
+                    turn_input,
                     turn_params,
                 ),
                 timeout=min(timeout, 30),
@@ -953,6 +1261,7 @@ class CodexAppServer:
                 client.unregister_turn_notifications(turn_id)
 
     async def close(self) -> None:
+        await self._close_image_client()
         client = self._client
         self._client = None
         self._client_loop = None
@@ -1159,16 +1468,68 @@ def _normalize_provider_action(
     }
 
 
+def _provider_replay_and_images(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Convert OpenAI-style multimodal messages to Codex app-server inputs."""
+    replay: list[dict[str, Any]] = []
+    images: list[dict[str, str]] = []
+    for message in messages:
+        if message.get("role") in {"system", "developer"}:
+            continue
+        replay_message = dict(message)
+        content = message.get("content")
+        if isinstance(content, list):
+            replay_content: list[Any] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    replay_content.append(item)
+                    continue
+                item_type = str(item.get("type") or "")
+                image_url = item.get("image_url")
+                if item_type in {"image_url", "input_image"}:
+                    if isinstance(image_url, dict):
+                        image_url = image_url.get("url")
+                    url = str(image_url or item.get("url") or "").strip()
+                    if url:
+                        image_number = len(images) + 1
+                        images.append({"type": "image", "url": url})
+                        replay_content.append({
+                            "type": "text",
+                            "text": f"[Image {image_number} is attached to this turn.]",
+                        })
+                        continue
+                if item_type in {"localImage", "local_image"}:
+                    path = str(item.get("path") or "").strip()
+                    if path:
+                        image_number = len(images) + 1
+                        images.append({"type": "localImage", "path": path})
+                        replay_content.append({
+                            "type": "text",
+                            "text": f"[Image {image_number} is attached to this turn.]",
+                        })
+                        continue
+                replay_content.append(dict(item))
+            replay_message["content"] = replay_content
+        replay.append(replay_message)
+    return replay, images
+
+
 def _provider_input(messages: list[dict[str, Any]]) -> str:
-    replay = [
-        message
-        for message in messages
-        if message.get("role") not in {"system", "developer"}
-    ]
+    replay, _ = _provider_replay_and_images(messages)
     return (
         "Continue this conversation and produce only the next assistant message.\n"
         + json.dumps(replay, ensure_ascii=False, default=str)
     )
+
+
+def _provider_turn_input(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    replay, images = _provider_replay_and_images(messages)
+    user_input = (
+        "Continue this conversation and produce only the next assistant message.\n"
+        + json.dumps(replay, ensure_ascii=False, default=str)
+    )
+    return [{"type": "text", "text": user_input}, *images]
 
 
 _client = CodexAppServer()

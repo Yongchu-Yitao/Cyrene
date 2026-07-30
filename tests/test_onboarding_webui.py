@@ -161,6 +161,8 @@ async def test_save_codex_oauth_setup_persists_model_and_effort(monkeypatch, tmp
     assert saved["models"][0]["provider"] == "codex_oauth"
     assert saved["models"][0]["model"] == "gpt-5.6-terra"
     assert saved["models"][0]["reasoning_effort"] == "high"
+    assert saved["models"][0]["vision_capable"] is True
+    assert saved["models"][0]["vision_check_error"] == ""
     assert saved["models"][1]["model"] == "deepseek-chat"
     assert env_updates == {"OPENAI_MODEL": "gpt-5.6-terra"}
 

@@ -140,7 +140,7 @@ Most settings can be edited at runtime through the Web UI **Settings** page with
 - **Tool packages** — Enable or disable complete progressive-disclosure
   packages; direct control/filesystem/web tools remain part of the stable wire
   contract
-- **Agents** — Keep `max_tool_rounds` for the main agent only; configure execution subagent lease checkpoints, no-progress detection, wide tool/time/cost/context safety fuses, and separate discussion round/message/information-gain limits
+- **Agents** — Main-agent execution is completion-driven with no tool-round limit; configure execution subagent lease checkpoints, no-progress detection, wide tool/time/cost/context safety fuses, and separate discussion round/message/information-gain limits
 - **Search** — Built-in SimpleXNG only
 - **MCP Servers** — Add, remove, and restart MCP server connections
 - **SOUL.md** — Edit the personality document directly

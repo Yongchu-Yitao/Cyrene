@@ -474,11 +474,9 @@ async def save_codex_oauth_setup(
         "price": "Codex quota",
         "api_key": "",
         "base_url": CODEX_BASE_URL,
-        "vision_capable": False,
-        "vision_checked_at": "",
-        "vision_check_error": (
-            "Codex OAuth image input is not supported by this adapter"
-        ),
+        "vision_capable": True,
+        "vision_checked_at": _now_iso(),
+        "vision_check_error": "",
     }
     other_candidates = [
         item

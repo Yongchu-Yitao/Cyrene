@@ -424,10 +424,17 @@ def _normalized_candidate(raw: dict[str, Any], index: int = 0, *, active_model: 
         "model": model,
         "provider": provider,
         "reasoning_effort": str(raw.get("reasoning_effort") or "").strip().lower(),
+        # Codex app-server accepts image and localImage turn inputs. Treat the
+        # provider capability as authoritative so candidates saved by older
+        # Cyrene versions (which persisted False) are upgraded in memory.
         "vision_capable": (
-            raw.get("vision_capable")
-            if isinstance(raw.get("vision_capable"), bool)
-            else None
+            True
+            if provider == CODEX_PROVIDER
+            else (
+                raw.get("vision_capable")
+                if isinstance(raw.get("vision_capable"), bool)
+                else None
+            )
         ),
         "base_url": base_url,
         "api_key": api_key,
@@ -452,10 +459,7 @@ def primary_candidate_supports_vision(session_id: str = "") -> bool:
         if not _candidate_cooling(_candidate_key(candidate, session_id))
     ]
     candidate = (available or candidates or [{}])[0]
-    return (
-        candidate.get("provider") != "codex_oauth"
-        and candidate.get("vision_capable") is True
-    )
+    return candidate.get("vision_capable") is True
 
 
 def _base_root(url: str) -> str:
@@ -555,10 +559,7 @@ def _resolve_vision_candidates() -> list[dict[str, Any]]:
 
     for index, raw in enumerate(get_vision_models() or []):
         candidate = _normalized_candidate(raw, index, active_model=active_model, active_base_url=active_base_url, active_api_key=active_api_key)
-        if (
-            candidate.get("provider") == "codex_oauth"
-            or candidate.get("vision_capable") is False
-        ):
+        if candidate.get("vision_capable") is False:
             continue
         key = (candidate["provider"], candidate["model"], candidate["base_url"], candidate["api_key"])
         if key not in seen:
@@ -566,10 +567,7 @@ def _resolve_vision_candidates() -> list[dict[str, Any]]:
             candidates.append(candidate)
 
     for candidate in _resolve_llm_candidates():
-        if (
-            candidate.get("provider") == "codex_oauth"
-            or candidate.get("vision_capable") is False
-        ):
+        if candidate.get("vision_capable") is False:
             continue
         key = (candidate["provider"], candidate["model"], candidate["base_url"], candidate["api_key"])
         if key not in seen:

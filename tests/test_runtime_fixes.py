@@ -364,7 +364,7 @@ def test_filesystem_tools_offload_blocking_io_and_bound_scans():
     assert "_MAX_FILE_BYTES" in grep_source
 
 
-async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkeypatch):
+async def test_tool_loop_continues_until_completion_and_persists_final_message(tmp_path, monkeypatch):
     from cyrene.agent import agent as _agent_core
     from cyrene.agent import state as _agent_state
 
@@ -372,8 +372,6 @@ async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkey
     state_file.write_text(json.dumps({"_session_epoch": _agent_state._session_epoch, "messages": []}), encoding="utf-8")
     _patch_state_file(monkeypatch, state_file)
     _patch_data_dir(monkeypatch, tmp_path)
-    monkeypatch.setattr(_agent_core, "_get_max_tool_rounds", lambda: 1)
-
     calls = []
 
     async def fake_call_llm(messages, tools=None, max_tokens=32000, **kwargs):
@@ -388,13 +386,15 @@ async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkey
                     "function": {"name": "use_tools", "arguments": "{\"task\":\"check\"}"},
                 }],
             }
-        return {
-            "content": "",
-            "tool_calls": [{
-                "id": "tool1",
-                "function": {"name": "WebSearch", "arguments": "{\"query\":\"x\"}"},
-            }],
-        }
+        if len(calls) <= 17:
+            return {
+                "content": "",
+                "tool_calls": [{
+                    "id": f"tool{len(calls)}",
+                    "function": {"name": "WebSearch", "arguments": "{\"query\":\"x\"}"},
+                }],
+            }
+        return {"content": "final answer from gathered tool results"}
 
     async def fake_execute_tool(*args, **kwargs):
         return "tool result"
@@ -416,6 +416,7 @@ async def test_tool_loop_limit_persists_final_assistant_message(tmp_path, monkey
     assert saved["messages"][-1]["role"] == "assistant"
     assert saved["messages"][-1]["content"] == result
     assert saved["messages"][-1]["client_request_id"] == "req_limit"
+    assert len(calls) == 18
 
 
 @pytest.mark.parametrize(
@@ -3413,7 +3414,6 @@ async def test_quit_wrap_up_never_reenters_tool_loop(tmp_path, monkeypatch):
     state_file.write_text(json.dumps({"_session_epoch": _agent_state._session_epoch, "messages": []}), encoding="utf-8")
     _patch_state_file(monkeypatch, state_file)
     _patch_data_dir(monkeypatch, tmp_path)
-    monkeypatch.setattr(_agent_core, "_get_max_tool_rounds", lambda: 5)
     monkeypatch.setattr(_agent_core, "_publish_runtime_event", AsyncMock())
 
     saved = {}

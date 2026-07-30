@@ -121,6 +121,17 @@ def _snapshot_specs_for_wire(
     ]
 
 
+def _wire_name_for_pack_id(pack_id: str) -> str:
+    return next(
+        (
+            wire_name
+            for wire_name, pack in PACK_BY_WIRE_NAME.items()
+            if pack.pack_id == str(pack_id or "").strip()
+        ),
+        "",
+    )
+
+
 def _gateway_resolution(
     wire_name: str,
     arguments: dict[str, Any],
@@ -254,9 +265,10 @@ def resolve_wire_call(
 ) -> WireCallResolution:
     """Resolve a wire call without executing it.
 
-    Hidden concrete names remain accepted for persisted conversations and
-    learned-skill replays. They are never included in the model-facing wire
-    definitions.
+    Capability IDs are accepted as hidden aliases for accidental direct calls.
+    Hidden concrete names also remain accepted for persisted conversations and
+    learned-skill replays. Neither kind of compatibility alias is included in
+    the model-facing wire definitions.
     """
     name = str(wire_name or "").strip()
     args = ensure_object(arguments, "arguments")
@@ -325,8 +337,60 @@ def resolve_wire_call(
             concrete_arguments=args,
         )
 
+    # Capability IDs are intentionally omitted from the model-facing function
+    # definitions: the advertised contract is discover -> describe -> invoke
+    # through the owning module gateway.  Models can nevertheless mistake an
+    # ID returned by discover (for example ``memory.recall``) for a callable
+    # function name.  Accept every registered capability ID as a hidden
+    # compatibility alias so that such a call has the same validation,
+    # settings, policy, and execution semantics as operation=invoke.
+    selected = _effective_snapshot(actor, catalog_snapshot)
+    capability_alias = (
+        _snapshot_spec(
+            name,
+            actor=actor,
+            snapshot=selected,
+            include_disabled=True,
+        )
+        if selected is not None
+        else get_capability(
+            name,
+            actor=actor,
+            include_disabled=True,
+        )
+    )
+    if capability_alias is not None:
+        alias_wire_name = (
+            _wire_name_for_pack_id(capability_alias.pack_id)
+            if selected is not None
+            else capability_alias.wire_name
+        )
+        if not alias_wire_name:
+            raise WireToolError(
+                "unknown_capability",
+                f"Capability `{capability_alias.capability_id}` has no owning module.",
+            )
+        enabled = (
+            capability_alias.capability_id in selected.enabled_capability_ids
+            if selected is not None
+            else is_tool_pack_enabled(alias_wire_name)
+        )
+        if not enabled:
+            raise WireToolError(
+                "permission_denied",
+                f"Capability `{capability_alias.capability_id}` is disabled in settings.",
+            )
+        validate_schema(args, capability_alias.input_schema)
+        return WireCallResolution(
+            wire_name=alias_wire_name,
+            operation="invoke",
+            capability_id=capability_alias.capability_id,
+            concrete_name=capability_alias.concrete_name,
+            concrete_arguments=args,
+            concrete_compat=True,
+        )
+
     if allow_concrete_compat:
-        selected = _effective_snapshot(actor, catalog_snapshot)
         capability = (
             next(
                 (
@@ -754,7 +818,30 @@ async def execute_wire_tool(
                     "status": "success",
                     "module": resolution.wire_name,
                     "capabilities": result,
-                    "next": "Describe selected capability IDs before invoking them.",
+                    "important": (
+                        "Capability IDs are identifiers, not model-visible function "
+                        f"names. The only advertised callable function for this module is "
+                        f"`{resolution.wire_name}`. Never emit a function call named "
+                        "after a capability ID."
+                    ),
+                    "next": (
+                        f"Call `{resolution.wire_name}` with operation=describe and "
+                        "the selected capability_ids. Then call the same "
+                        f"`{resolution.wire_name}` function with operation=invoke, "
+                        "one capability_id, and arguments matching the returned "
+                        "input_schema."
+                    ),
+                    "example_describe": {
+                        "tool": resolution.wire_name,
+                        "arguments": {
+                            "operation": "describe",
+                            "capability_ids": (
+                                [str(result[0].get("id") or "")]
+                                if result
+                                else ["<capability_id>"]
+                            ),
+                        },
+                    },
                 },
                 ensure_ascii=False,
             )

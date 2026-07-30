@@ -316,6 +316,118 @@ async def test_gateway_discover_describe_invoke_routes_to_concrete_handler(monke
     )
 
 
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_every_deferred_capability_id_is_a_hidden_compatibility_alias(actor):
+    from cyrene.tooling import gateway
+    from cyrene.tooling.snapshot import build_catalog_snapshot
+
+    frozen = build_catalog_snapshot(actor)
+    checked = set()
+    for capability_id in sorted(frozen.enabled_capability_ids):
+        spec = frozen.capabilities[capability_id]
+        wire_name = gateway._wire_name_for_pack_id(spec.pack_id)
+        if not wire_name:
+            continue
+        arguments = gateway._schema_argument_example(spec.input_schema, {})
+        resolution = gateway.resolve_wire_call(
+            capability_id,
+            arguments,
+            actor=actor,
+            catalog_snapshot=frozen,
+        )
+        assert resolution.wire_name == wire_name
+        assert resolution.operation == "invoke"
+        assert resolution.capability_id == capability_id
+        assert resolution.concrete_name == spec.concrete_name
+        assert resolution.concrete_arguments == arguments
+        assert resolution.concrete_compat is True
+        checked.add(capability_id)
+
+    assert "memory.recall" in checked
+    assert "knowledge.search" in checked
+    if actor == "main":
+        assert "browser.navigate" in checked
+
+
+@pytest.mark.asyncio
+async def test_direct_capability_id_call_executes_without_becoming_a_wire_definition(
+    monkeypatch,
+):
+    from cyrene.tooling import execute_wire_tool, get_main_wire_tool_defs
+    from cyrene.tooling import executor as tool_executor
+
+    assert "memory.recall" not in _names(get_main_wire_tool_defs())
+    concrete = AsyncMock(return_value="recent memory")
+    monkeypatch.setattr(tool_executor, "_execute_tool", concrete)
+
+    invoked = json.loads(await execute_wire_tool(
+        "memory.recall",
+        {"query": "communication preference"},
+        None, 0, "", None,
+    ))
+
+    assert invoked == {
+        "status": "success",
+        "capability_id": "memory.recall",
+        "result": "recent memory",
+    }
+    concrete.assert_awaited_once_with(
+        "RecallMemory",
+        {"query": "communication preference"},
+        None, 0, "", None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_direct_capability_id_compatibility_keeps_schema_and_pack_guards(
+    monkeypatch,
+):
+    from cyrene.tooling import execute_wire_tool
+    from cyrene.tooling import gateway
+
+    invalid = json.loads(await execute_wire_tool(
+        "knowledge.search",
+        {},
+        None, 0, "", None,
+    ))
+    assert invalid["status"] == "error"
+    assert invalid["error"]["type"] == "invalid_arguments"
+
+    monkeypatch.setattr(
+        gateway,
+        "is_tool_pack_enabled",
+        lambda wire_name: wire_name != "memory_tools",
+    )
+    disabled = json.loads(await execute_wire_tool(
+        "memory.recall",
+        {},
+        None, 0, "", None,
+    ))
+    assert disabled["status"] == "error"
+    assert disabled["error"]["type"] == "permission_denied"
+
+
+@pytest.mark.asyncio
+async def test_gateway_discover_explains_ids_and_shows_gateway_call():
+    from cyrene.tooling import execute_wire_tool
+
+    discovered = json.loads(await execute_wire_tool(
+        "memory_tools",
+        {"operation": "discover", "query": "recent memory"},
+        None, 0, "", None,
+    ))
+
+    assert discovered["status"] == "success"
+    assert "not model-visible function names" in discovered["important"]
+    assert "Never emit a function call named" in discovered["important"]
+    assert "`memory_tools`" in discovered["next"]
+    assert discovered["example_describe"]["tool"] == "memory_tools"
+    assert discovered["example_describe"]["arguments"]["operation"] == "describe"
+    assert discovered["example_describe"]["arguments"]["capability_ids"][0].startswith(
+        "memory."
+    )
+
+
 @pytest.mark.asyncio
 async def test_gateway_discovery_ranks_verbose_browser_intent_without_empty_result():
     from cyrene.tooling import execute_wire_tool

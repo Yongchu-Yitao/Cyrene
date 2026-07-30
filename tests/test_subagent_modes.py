@@ -18,8 +18,8 @@ def _tool_call(call_id: str, name: str, arguments: dict) -> dict:
 
 
 def _patch_runtime(monkeypatch, responses, *, tool_result="ok"):
-    from cyrene.agent import state as agent_state
     from cyrene import subagent
+    from cyrene.agent import state as agent_state
     import cyrene.tooling as tooling
 
     calls = []
@@ -62,7 +62,6 @@ def _patch_limits(monkeypatch, **overrides):
 @pytest.mark.asyncio
 async def test_execution_mode_is_not_bounded_by_main_agent_round_limit(monkeypatch):
     from cyrene import subagent
-    from cyrene.agent import state as agent_state
 
     responses = [
         {"content": "", "tool_calls": [_tool_call("r1", "Read", {"path": "a.txt"})]},
@@ -83,8 +82,6 @@ async def test_execution_mode_is_not_bounded_by_main_agent_round_limit(monkeypat
         responses,
         tool_result=lambda _name, args: f"contents:{args.get('path')}",
     )
-    monkeypatch.setattr(agent_state, "_get_max_tool_rounds", lambda: 1)
-
     await subagent.clear()
     await subagent.register(
         "worker",

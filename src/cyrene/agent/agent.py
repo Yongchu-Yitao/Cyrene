@@ -49,7 +49,6 @@ from cyrene.agent.state import (
     _emit_reply_stream_event,
     _ensure_session,
     _LIGHT_TOOL_DEFS,
-    _get_max_tool_rounds,
     _llm_phase_override,
     _publish_runtime_event,
     _streaming_reply_requested,
@@ -768,7 +767,7 @@ async def _run_main_agent_impl(
         await _publish_runtime_event(event)
         messages = [*run_prefix, dict(llm_user_entry), *phase1_runtime_guidance_entries]
 
-        for _ in range(_get_max_tool_rounds()):
+        while True:
             await _inject_runtime_guidance(messages)
             response = await _call_llm(_pin_tail(project_history_for_llm(messages)), tools=wire_tool_defs)
             entry: dict = {"role": "assistant", "content": response.get("content") or ""}
@@ -1243,24 +1242,6 @@ async def _run_main_agent_impl(
                 await _sub_clear(round_id=round_id)
                 await _save(_session_messages_to_save(messages))
                 return final_text
-
-        final_text = await _ensure_text_reply(
-            {"content": ""},
-            messages,
-            fallback=(
-                "I could not complete the full tool workflow before reaching the tool limit, "
-                "but I have summarized the available results above."
-            ),
-        )
-        final_entry: dict[str, Any] = _attach_final_usage({"role": "assistant", "content": final_text})
-        if client_request_id:
-            final_entry["client_request_id"] = client_request_id
-        if round_id:
-            final_entry["round_id"] = round_id
-        _ensure_message_identity([final_entry])
-        messages.append(_apply_assistant_meta(final_entry))
-        await _save(_session_messages_to_save(messages))
-        return final_text
 
     # Deep research first round: if LLM output text instead of calling ask_user, retry
     if _deep_research_first_round.get() and not ask_user_call and not use_tools_call:

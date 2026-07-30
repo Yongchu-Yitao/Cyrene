@@ -32,9 +32,10 @@ OAuth tokens, and Codex quota is presented separately from currency budgets.
 - **The task selector appears immediately** — the control renders as soon as
   configured models load and fills in detailed Codex capabilities afterward,
   instead of leaving a temporary empty space.
-- **Images still reach the right model** — when the current primary cannot see
-  images, Cyrene uses the configured vision model to analyze the attachment
-  before continuing, rather than sending an image to text-only Codex.
+- **Codex OAuth models understand images directly** — Workbench converts
+  uploads to native Codex App Server image turn inputs. Capability flags saved
+  as unsupported by older versions are upgraded at runtime without requiring
+  users to remove and re-add the model.
 - **Codex quota is visible where you need it** — Settings and the account menu
   show the five-hour or weekly windows actually provided by the account,
   including remaining percentage and reset time, separately from API spending.
@@ -97,14 +98,14 @@ OAuth tokens, and Codex quota is presented separately from currency budgets.
   OpenAI-compatible endpoint and OpenAI OAuth. Saving validates login, model
   availability, and reasoning effort before writing the canonical candidate
   and onboarding state.
-- **Codex is constrained to the primary text-model slot** — routes reject OAuth
-  candidates in fallback, secondary, and vision lists. The current adapter
-  does not claim image support until native image turn inputs are forwarded.
-- **Image attachments are not misrouted to text-only Codex** — a
-  vision-capable primary receives images directly. With Codex or another
-  text-only primary, Workbench uses the canonical attachment-analysis path and
-  configured vision model before providing usable extracted content to the
-  session.
+- **The Codex adapter forwards images natively** — OpenAI-compatible
+  `image_url` content is converted to Codex App Server `image` turn input,
+  while conversation replay keeps only a matching placeholder instead of
+  embedding Base64 image data as ordinary JSON text.
+- **OAuth capability flags are backward compatible** — Codex OAuth candidates
+  are consistently treated as vision-capable. Workbench and attachment
+  analysis use the active OAuth model even when an older configuration
+  persisted `vision_capable: false`.
 - **Custom and OAuth models coexist** — existing OpenAI-compatible candidates,
   endpoints, API keys, fallback, secondary, and vision flows remain intact,
   while candidates gain `provider` and `reasoning_effort` metadata.

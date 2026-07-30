@@ -19,6 +19,7 @@ from cyrene.model_runtime.codex_provider import (
     CodexAvailabilityError,
     CodexProtocolError,
     CodexTransportError,
+    _codex_image_sdk_config,
     _codex_sdk_config,
     _disabled_host_skills_override,
     _normalize_provider_action,
@@ -27,6 +28,7 @@ from cyrene.model_runtime.codex_provider import (
     _provider_action_tools,
     _provider_input,
     _provider_instructions,
+    _provider_turn_input,
     codex_availability_error,
     codex_error_should_cooldown,
 )
@@ -59,6 +61,127 @@ def test_codex_sdk_uses_its_pinned_runtime_and_system_proxy() -> None:
     )
     assert _normalized_effort("LOW") == "low"
     assert _normalized_effort("MAX") == "max"
+
+
+def test_codex_image_sdk_enables_only_image_generation() -> None:
+    config = _codex_image_sdk_config()
+
+    assert "features.image_generation=true" in config.config_overrides
+    assert {
+        "features.plugins=false",
+        "features.apps=false",
+        "features.shell_tool=false",
+        "features.unified_exec=false",
+        "features.browser_use=false",
+        "features.computer_use=false",
+        "features.multi_agent=false",
+        "tools.view_image=false",
+        "tools.web_search=false",
+    }.issubset(set(config.config_overrides))
+
+
+@pytest.mark.asyncio
+async def test_codex_image_capability_uses_provider_capability_rpc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+    seen: dict = {}
+
+    class FakeClient:
+        async def request(
+            self,
+            method: str,
+            params: dict,
+            *,
+            response_model,
+        ):
+            seen.update(
+                method=method,
+                params=params,
+                response_model=response_model,
+            )
+            return SimpleNamespace(image_generation=True)
+
+    async def ready_image_client():
+        return FakeClient()
+
+    monkeypatch.setattr(provider, "_ready_image_client", ready_image_client)
+
+    assert await provider.image_generation_capability() is True
+    assert seen["method"] == "modelProvider/capabilities/read"
+    assert seen["params"] == {}
+
+
+@pytest.mark.asyncio
+async def test_codex_generate_image_collects_image_generation_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = CodexAppServer()
+    queue: asyncio.Queue = asyncio.Queue()
+    seen: dict = {}
+
+    class FakeClient:
+        async def thread_start(self, params: dict) -> dict:
+            seen["thread"] = params
+            return {"thread": {"id": "thread-image"}}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            input_items: list[dict],
+            params: dict,
+        ) -> dict:
+            seen["turn_input"] = input_items
+            seen["turn_params"] = params
+            queue.put_nowait(
+                SimpleNamespace(
+                    method="item/completed",
+                    payload={
+                        "item": {
+                            "type": "imageGeneration",
+                            "status": "completed",
+                            "result": "aW1hZ2U=",
+                            "revisedPrompt": "A revised prompt",
+                        }
+                    },
+                )
+            )
+            queue.put_nowait(
+                SimpleNamespace(
+                    method="turn/completed",
+                    payload={
+                        "turn": {
+                            "id": "turn-image",
+                            "status": "completed",
+                            "items": [],
+                        }
+                    },
+                )
+            )
+            return {"turn": {"id": "turn-image"}}
+
+        async def next_turn_notification(self, _turn_id: str):
+            return await queue.get()
+
+        def unregister_turn_notifications(self, turn_id: str) -> None:
+            seen["unregistered"] = turn_id
+
+    async def ready_image_client():
+        return FakeClient()
+
+    monkeypatch.setattr(provider, "_ready_image_client", ready_image_client)
+
+    result = await provider.generate_image(
+        prompt="Draw an otter",
+        model="gpt-5.6-sol",
+        timeout=5,
+    )
+
+    assert result["type"] == "imageGeneration"
+    assert result["result"] == "aW1hZ2U="
+    assert seen["thread"]["ephemeral"] is True
+    assert "Draw an otter" in seen["turn_input"][0]["text"]
+    assert seen["unregistered"] == "turn-image"
 
 
 def test_codex_host_skills_are_disabled_by_folder_without_persistence(
@@ -185,7 +308,7 @@ def test_codex_candidate_never_inherits_api_credentials() -> None:
     assert candidate["base_url"] == CODEX_BASE_URL
     assert candidate["api_key"] == ""
     assert candidate["reasoning_effort"] == "high"
-    assert candidate["vision_capable"] is None
+    assert candidate["vision_capable"] is True
     assert candidate["endpoints"] == [CODEX_BASE_URL]
 
 
@@ -506,6 +629,7 @@ async def test_codex_completion_forwards_reasoning_summary_and_low_effort(
     provider = CodexAppServer()
     queue: asyncio.Queue = asyncio.Queue()
     seen_turn_params: dict = {}
+    seen_turn_input: list[dict] = []
 
     class FakeClient:
         async def thread_start(self, params: dict) -> dict:
@@ -518,6 +642,7 @@ async def test_codex_completion_forwards_reasoning_summary_and_low_effort(
             params: dict,
         ) -> dict:
             seen_turn_params.update(params)
+            seen_turn_input.extend(input_items)
             queue.put_nowait(SimpleNamespace(
                 method="item/reasoning/summaryTextDelta",
                 payload={"delta": "Checked the request."},
@@ -557,7 +682,18 @@ async def test_codex_completion_forwards_reasoning_summary_and_low_effort(
         events.append(event)
 
     response = await provider.complete(
-        messages=[{"role": "user", "content": "Say OK"}],
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Say OK"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,aW1hZ2U=",
+                    },
+                },
+            ],
+        }],
         tools=None,
         model="gpt-5.6-sol",
         reasoning_effort="LOW",
@@ -567,6 +703,10 @@ async def test_codex_completion_forwards_reasoning_summary_and_low_effort(
 
     assert seen_turn_params["effort"] == "low"
     assert seen_turn_params["summary"] == "auto"
+    assert seen_turn_input[1] == {
+        "type": "image",
+        "url": "data:image/png;base64,aW1hZ2U=",
+    }
     assert response["reasoning_content"] == "Checked the request."
     assert [event["type"] for event in events] == [
         "reply_start",
@@ -1012,3 +1152,23 @@ def test_codex_provider_replays_conversation_without_system_duplication() -> Non
     assert "Be concise." in instructions
     assert '"role": "system"' not in replay
     assert '"role": "user"' in replay
+
+
+def test_codex_provider_converts_openai_image_content_to_turn_input() -> None:
+    data_url = "data:image/png;base64,aW1hZ2U="
+    messages = [
+        {"role": "system", "content": "Inspect images carefully."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is shown?"},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        },
+    ]
+
+    turn_input = _provider_turn_input(messages)
+
+    assert turn_input[1] == {"type": "image", "url": data_url}
+    assert data_url not in turn_input[0]["text"]
+    assert "[Image 1 is attached to this turn.]" in turn_input[0]["text"]

@@ -107,7 +107,6 @@ _DEFAULT_SETTINGS: dict = {
     "soul_active": True,
     "agent_proactive": True,
     "app_language": "",
-    "max_tool_rounds": 15,
     # Independent from the currency-based API budget and enforced by default.
     "codex_budget_enabled": True,
     # Execution workers are completion-driven. These are wide lease/safety

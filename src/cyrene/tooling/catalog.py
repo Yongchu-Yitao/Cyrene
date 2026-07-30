@@ -59,6 +59,7 @@ _MAIN_ONLY_TOOLS = {
     "browser_scroll",
     "browser_user_events",
     "browser_request_takeover",
+    "GenerateImage",
     "RemoteCyreneAction",
     "RemoteHarness",
     "RunRemoteCyrene",
@@ -298,9 +299,23 @@ def get_active_tool_defs_for_actor(actor: str = "main") -> list[dict[str, Any]]:
     """Return tool defs filtered by actor and whole-package settings."""
 
     blocked = _tool_blocklist_for_actor(actor)
+    try:
+        from cyrene.runtime.settings_store import get_models
+
+        primary_models = get_models() or []
+        oauth_image_generation = bool(
+            primary_models
+            and str(primary_models[0].get("provider") or "") == "codex_oauth"
+        )
+    except Exception:
+        oauth_image_generation = False
     defs = [
         td for td in TOOL_DEFS
         if td["function"]["name"] not in blocked
+        and (
+            td["function"]["name"] != "GenerateImage"
+            or oauth_image_generation
+        )
         and (
             td["function"]["name"] not in WIRE_NAME_BY_CONCRETE_TOOL
             or is_tool_pack_enabled(

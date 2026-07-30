@@ -23,8 +23,9 @@ OpenAI Codex OAuth 正式接入模型配置、首次设置、Workbench 对话与
   没有能力信息时只提供 Low、Medium、High，避免出现看似可选但实际无效的档位。
 - **任务页的模型按钮立即出现**：进入任务后不再等待较慢的 Codex 能力查询；
   已配置模型加载完成就会显示按钮，详细推理档位随后自动补齐。
-- **图片仍会交给正确的模型处理**：如果当前主模型不能看图，Cyrene 会先调用已
-  配置的视觉模型分析附件，再继续当前对话，不会把图片直接发给纯文本 Codex。
+- **Codex OAuth 模型可以直接理解图片**：Workbench 会把上传图片转换为 Codex
+  App Server 的原生 Image Turn Input；旧版本保存的“不可看图”能力标记也会在
+  运行时自动升级，无需用户删除或重新添加模型。
 - **随时查看 Codex 剩余额度**：设置页和账户菜单会显示账户实际提供的 5 小时或
   每周额度、剩余比例与重置时间。缺少的窗口不会显示，Codex 额度也不会和 API
   金额预算混在一起。
@@ -73,12 +74,12 @@ OpenAI Codex OAuth 正式接入模型配置、首次设置、Workbench 对话与
 - **首次设置支持 OpenAI 登录** — Onboarding 可以在自定义 OpenAI-compatible
   Endpoint 与 OpenAI OAuth 之间选择；保存前校验登录状态、模型可用性和所选
   Reasoning Effort，完成后写入正式模型候选和 Onboarding State。
-- **Codex 只允许作为主文本模型** — Route 明确拒绝把 OAuth Candidate 放入
-  Fallback、Secondary 或 Vision 列表；当前 Adapter 不宣称图像能力，避免把
-  未转发的图片输入误报为可用。
-- **图片附件不会错误发给文本 Codex** — 主模型具备 Vision 能力时直接发送图片；
-  Codex 等纯文本主模型收到图片时，Workbench 先调用正式 Attachment Analysis
-  路径并使用已配置视觉模型提取内容，再把可用结果交给当前会话。
+- **Codex Adapter 原生转发图片** — OpenAI-compatible `image_url` 内容会转换为
+  Codex App Server 的 `image` Turn Input，同时对话重放中只保留对应占位，避免
+  把 Base64 图片误当成普通 JSON 文本发送。
+- **OAuth 能力标记向后兼容** — Codex OAuth Candidate 统一视为支持 Vision；
+  即使旧配置持久化了 `vision_capable: false`，Workbench 和 Attachment Analysis
+  也会直接使用当前 OAuth 模型处理图片。
 - **自定义模型与 OAuth 模型共存** — 模型设置保留现有 OpenAI-compatible
   Candidate、Endpoint、API Key、Fallback、Secondary 和 Vision 流程，同时为
   Candidate 增加 `provider` 与 `reasoning_effort` 元数据。

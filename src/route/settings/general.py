@@ -893,12 +893,6 @@ def register_settings_routes(router: APIRouter, bot: Any, db_path: str) -> None:
                 return JSONResponse({"error": "invalid app_language"}, status_code=400)
             set_setting("app_language", value)
             changed.append("app_language")
-        if "max_tool_rounds" in body:
-            value = int(body.get("max_tool_rounds") or 15)
-            if value < 5 or value > 200:
-                return JSONResponse({"error": "max_tool_rounds must be between 5 and 200"}, status_code=400)
-            set_setting("max_tool_rounds", value)
-            changed.append("max_tool_rounds")
         subagent_integer_settings = {
             "subagent_execution_max_tool_calls": (1, 5000),
             "subagent_execution_max_wall_seconds": (30, 86400),
