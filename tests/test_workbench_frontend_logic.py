@@ -208,13 +208,14 @@ def test_workbench_chat_rail_uses_the_same_frosted_glass_overlay():
     chat_list_css = styles.split(".wbc-chat-list {", 1)[1].split("}", 1)[0]
 
     assert 'className="wbc-rail-glass"' in source
-    assert "--wbc-rail-overlay-height:" in rail_css
+    assert "--wbc-rail-overlay-height: 140px;" in rail_css
+    assert "--wbc-rail-content-inset: 122px;" in rail_css
     assert "var(--wb-task-rail-bg) 66%" in glass_css
     assert "var(--wb-task-rail-bg) 56%" in glass_css
     assert "var(--wb-task-rail-bg) 32%" in glass_css
     assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in glass_css
     assert "mask-image: linear-gradient(" in glass_css
-    assert "padding: calc(var(--wbc-rail-overlay-height) + 8px) 0 8px;" in chat_list_css
+    assert "padding: var(--wbc-rail-content-inset) 0 8px;" in chat_list_css
 
 
 def test_workbench_overview_header_uses_the_same_frosted_glass_overlay():
@@ -233,14 +234,15 @@ def test_workbench_overview_header_uses_the_same_frosted_glass_overlay():
     flush_css = styles.split(".wbc-side-body.flush {", 1)[1].split("}", 1)[0]
 
     assert 'className="wbc-side-glass"' in source
-    assert "--wbc-side-overlay-height:" in side_css
+    assert "--wbc-side-overlay-height: 86px;" in side_css
+    assert "--wbc-side-content-inset: 48px;" in side_css
     assert "var(--wb-right-bg) 66%" in glass_css
     assert "var(--wb-right-bg) 56%" in glass_css
     assert "var(--wb-right-bg) 32%" in glass_css
     assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in glass_css
     assert "mask-image: linear-gradient(" in glass_css
-    assert "padding: calc(var(--wbc-side-overlay-height) + 14px) 14px 14px;" in side_body_css
-    assert "padding: var(--wbc-side-overlay-height) 0 0;" in flush_css
+    assert "padding: calc(var(--wbc-side-content-inset) + 14px) 14px 14px;" in side_body_css
+    assert "padding: var(--wbc-side-content-inset) 0 0;" in flush_css
 
 
 def test_notification_items_navigate_to_their_precise_context():

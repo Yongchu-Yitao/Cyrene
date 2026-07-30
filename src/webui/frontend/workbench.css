@@ -12698,7 +12698,8 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* ---- conversation rail ---- */
 
 .wbc-rail {
-  --wbc-rail-overlay-height: calc(136px * var(--wb-ui-font-scale, 1));
+  --wbc-rail-overlay-height: 140px;
+  --wbc-rail-content-inset: 122px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -12783,7 +12784,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   flex-direction: column;
   gap: 8px;
   box-sizing: border-box;
-  padding: calc(var(--wbc-rail-overlay-height) + 8px) 0 8px;
+  padding: var(--wbc-rail-content-inset) 0 8px;
 }
 
 .wbc-chat-list::-webkit-scrollbar {
@@ -15541,7 +15542,8 @@ html[data-theme="dark"] .wbc-model-menu > button:hover {
 /* ---- right panel ---- */
 
 .wbc-side {
-  --wbc-side-overlay-height: calc(86px * var(--wb-ui-font-scale, 1));
+  --wbc-side-overlay-height: 86px;
+  --wbc-side-content-inset: 48px;
   border-left: 1px solid var(--wb-line);
   background: var(--wb-right-bg);
   display: flex;
@@ -15592,7 +15594,7 @@ html[data-theme="dark"] .wbc-model-menu > button:hover {
      the panel is dragged narrow */
   overflow-wrap: anywhere;
   box-sizing: border-box;
-  padding: calc(var(--wbc-side-overlay-height) + 14px) 14px 14px;
+  padding: calc(var(--wbc-side-content-inset) + 14px) 14px 14px;
 }
 
 .wbc-side-body::-webkit-scrollbar {
@@ -17196,7 +17198,7 @@ html[data-theme="dark"] .wbc-trace {
 /* ---- side viewer & map ---- */
 
 .wbc-side-body.flush {
-  padding: var(--wbc-side-overlay-height) 0 0;
+  padding: var(--wbc-side-content-inset) 0 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
