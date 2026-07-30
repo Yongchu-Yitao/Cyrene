@@ -149,6 +149,10 @@ def test_workbench_chat_rails_use_hidden_scrollbars():
     side_scrollbar_css = styles.split(
         ".wbc-side-body::-webkit-scrollbar {", 1
     )[1].split("}", 1)[0]
+    thread_css = styles.split(".wbc-thread {", 1)[1].split("}", 1)[0]
+    thread_scrollbar_css = styles.split(
+        ".wbc-thread::-webkit-scrollbar {", 1
+    )[1].split("}", 1)[0]
 
     assert "overflow-y: auto;" in chat_list_css
     assert "scrollbar-width: none;" in chat_list_css
@@ -158,6 +162,10 @@ def test_workbench_chat_rails_use_hidden_scrollbars():
     assert "scrollbar-width: none;" in side_body_css
     assert "width: 0;" in side_scrollbar_css
     assert "height: 0;" in side_scrollbar_css
+    assert "overflow-y: auto;" in thread_css
+    assert "scrollbar-width: none;" in thread_css
+    assert "width: 0;" in thread_scrollbar_css
+    assert "height: 0;" in thread_scrollbar_css
 
 
 def test_workbench_header_uses_a_fading_frosted_glass_overlay():

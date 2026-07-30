@@ -13111,6 +13111,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-width: none;
   /* PiP avoidance preserves a deliberate message anchor in JS. Native scroll
      anchoring would apply a second, competing correction during the same
      reflow and can make the transcript bounce at its top boundary. */
@@ -13119,6 +13120,11 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.wbc-thread::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 /* Selection belongs to the transcript rather than the whole shell: controls,
