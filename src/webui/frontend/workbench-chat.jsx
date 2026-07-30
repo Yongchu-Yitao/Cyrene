@@ -3610,20 +3610,22 @@ function WbcRail({ chats, pinnedChatIds, activeChatId, loading, runningChatIds, 
 
   return (
     <aside className="wbc-rail">
-      <div className="workbench-rail-head">
-        <span>{wbcT("workbenchChat.railTitle", "Chats")}</span>
-        <button type="button" className="workbench-add-btn" onClick={onCreate}>
-          <span>{WBC_ICONS.plus}</span>
-          <span>{wbcT("workbenchChat.newChat", "New chat")}</span>
-        </button>
-      </div>
-      <div className="wbc-search">
-        <span className="wbc-search-icon">{WBC_ICONS.search}</span>
-        <input
-          value={query}
-          onChange={function (e) { setQuery(e.target.value); }}
-          placeholder={wbcT("workbenchChat.search", "Search chats...")}
-        />
+      <div className="wbc-rail-glass">
+        <div className="workbench-rail-head">
+          <span>{wbcT("workbenchChat.railTitle", "Chats")}</span>
+          <button type="button" className="workbench-add-btn" onClick={onCreate}>
+            <span>{WBC_ICONS.plus}</span>
+            <span>{wbcT("workbenchChat.newChat", "New chat")}</span>
+          </button>
+        </div>
+        <div className="wbc-search">
+          <span className="wbc-search-icon">{WBC_ICONS.search}</span>
+          <input
+            value={query}
+            onChange={function (e) { setQuery(e.target.value); }}
+            placeholder={wbcT("workbenchChat.search", "Search chats...")}
+          />
+        </div>
       </div>
       {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
       <div className={"wbc-chat-list" + (loading ? " is-loading" : "")}>

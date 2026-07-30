@@ -194,6 +194,29 @@ def test_workbench_header_uses_a_fading_frosted_glass_overlay():
     assert "--wbc-thread-inset-top: calc(var(--wbc-header-overlay-height) + 18px);" in thread_stage_css
 
 
+def test_workbench_chat_rail_uses_the_same_frosted_glass_overlay():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    rail_css = styles.split(".wbc-rail {", 1)[1].split("}", 1)[0]
+    glass_css = styles.split(".wbc-rail-glass::before {", 1)[1].split("}", 1)[0]
+    chat_list_css = styles.split(".wbc-chat-list {", 1)[1].split("}", 1)[0]
+
+    assert 'className="wbc-rail-glass"' in source
+    assert "--wbc-rail-overlay-height:" in rail_css
+    assert "var(--wb-task-rail-bg) 66%" in glass_css
+    assert "var(--wb-task-rail-bg) 56%" in glass_css
+    assert "var(--wb-task-rail-bg) 32%" in glass_css
+    assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in glass_css
+    assert "mask-image: linear-gradient(" in glass_css
+    assert "padding: calc(var(--wbc-rail-overlay-height) + 8px) 0 8px;" in chat_list_css
+
+
 def test_notification_items_navigate_to_their_precise_context():
     root = Path(__file__).resolve().parent.parent
     source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(

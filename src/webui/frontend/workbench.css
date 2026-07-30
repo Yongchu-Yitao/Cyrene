@@ -12698,13 +12698,47 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* ---- conversation rail ---- */
 
 .wbc-rail {
+  --wbc-rail-overlay-height: calc(136px * var(--wb-ui-font-scale, 1));
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 12px;
+  gap: 0;
+  padding: 0 12px 14px;
   border-right: 1px solid var(--wb-line);
   background: var(--wb-task-rail-bg);
   overflow: hidden;
+}
+
+.wbc-rail-glass {
+  position: absolute;
+  z-index: 20;
+  inset: 0 0 auto;
+  min-height: var(--wbc-rail-overlay-height);
+  box-sizing: border-box;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 12px 28px;
+}
+
+.wbc-rail-glass::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--wb-task-rail-bg) 66%, transparent) 0%,
+    color-mix(in srgb, var(--wb-task-rail-bg) 56%, transparent) 68%,
+    color-mix(in srgb, var(--wb-task-rail-bg) 32%, transparent) 86%,
+    transparent 100%
+  );
+  -webkit-backdrop-filter: blur(46px) saturate(165%) contrast(103%);
+  backdrop-filter: blur(46px) saturate(165%) contrast(103%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
 }
 
 .wbc-search {
@@ -12748,7 +12782,8 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding-bottom: 8px;
+  box-sizing: border-box;
+  padding: calc(var(--wbc-rail-overlay-height) + 8px) 0 8px;
 }
 
 .wbc-chat-list::-webkit-scrollbar {
