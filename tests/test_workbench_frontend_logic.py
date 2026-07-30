@@ -208,8 +208,8 @@ def test_workbench_chat_rail_uses_the_same_frosted_glass_overlay():
     chat_list_css = styles.split(".wbc-chat-list {", 1)[1].split("}", 1)[0]
 
     assert 'className="wbc-rail-glass"' in source
-    assert "--wbc-rail-overlay-height: 140px;" in rail_css
-    assert "--wbc-rail-content-inset: 122px;" in rail_css
+    assert "--wbc-rail-overlay-height: 124px;" in rail_css
+    assert "--wbc-rail-content-inset: 132px;" in rail_css
     assert "var(--wb-task-rail-bg) 66%" in glass_css
     assert "var(--wb-task-rail-bg) 56%" in glass_css
     assert "var(--wb-task-rail-bg) 32%" in glass_css
@@ -234,7 +234,7 @@ def test_workbench_overview_header_uses_the_same_frosted_glass_overlay():
     flush_css = styles.split(".wbc-side-body.flush {", 1)[1].split("}", 1)[0]
 
     assert 'className="wbc-side-glass"' in source
-    assert "--wbc-side-overlay-height: 86px;" in side_css
+    assert "--wbc-side-overlay-height: 62px;" in side_css
     assert "--wbc-side-content-inset: 48px;" in side_css
     assert "var(--wb-right-bg) 66%" in glass_css
     assert "var(--wb-right-bg) 56%" in glass_css

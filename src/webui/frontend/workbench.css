@@ -12698,8 +12698,8 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* ---- conversation rail ---- */
 
 .wbc-rail {
-  --wbc-rail-overlay-height: 140px;
-  --wbc-rail-content-inset: 122px;
+  --wbc-rail-overlay-height: 124px;
+  --wbc-rail-content-inset: 132px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -12720,7 +12720,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 12px 28px;
+  padding: 14px 12px 12px;
 }
 
 .wbc-rail-glass::before {
@@ -15542,7 +15542,7 @@ html[data-theme="dark"] .wbc-model-menu > button:hover {
 /* ---- right panel ---- */
 
 .wbc-side {
-  --wbc-side-overlay-height: 86px;
+  --wbc-side-overlay-height: 62px;
   --wbc-side-content-inset: 48px;
   border-left: 1px solid var(--wb-line);
   background: var(--wb-right-bg);
