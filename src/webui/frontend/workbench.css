@@ -14666,7 +14666,7 @@ button.wbc-attach-file:focus-visible {
 
 .wbc-trace {
   border: 0;
-  background: var(--wb-card-bg);
+  background: color-mix(in srgb, var(--wb-green) 6%, var(--wb-card-bg));
   border-radius: 11px;
   padding: 10px 13px;
   max-width: 720px;
@@ -17261,7 +17261,7 @@ html[data-theme="dark"] .wbc-edit-bubble {
   background: var(--wb-card-bg);
 }
 html[data-theme="dark"] .wbc-trace {
-  background: var(--wb-card-bg);
+  background: color-mix(in srgb, var(--wb-green) 10%, var(--wb-panel));
 }
 
 /* keep chat chips / buttons on one line even in tight layouts */
