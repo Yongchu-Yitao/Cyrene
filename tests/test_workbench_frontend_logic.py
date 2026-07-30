@@ -3599,6 +3599,37 @@ def test_workbench_shortcuts_module_exposes_actions_and_platform_aware_mod():
     assert "close-session-tab" in ids
 
 
+def test_workbench_shortcut_labels_use_tab_terminology_in_both_locales():
+    root = Path(__file__).resolve().parent.parent
+    translations = (
+        root / "src" / "webui" / "frontend" / "workbench-i18n.jsx"
+    ).read_text(encoding="utf-8")
+
+    for expected in (
+        '"shortcut.action.switchSession1": "Open topbar tab 1"',
+        '"shortcut.action.nextSession": "Next topbar tab"',
+        '"shortcut.action.previousSession": "Previous topbar tab"',
+        '"shortcut.action.closeSessionTab": "Remove current tab"',
+        '"shortcut.action.switchSession1": "打开顶栏标签页 1"',
+        '"shortcut.action.nextSession": "下一个顶栏标签页"',
+        '"shortcut.action.previousSession": "上一个顶栏标签页"',
+        '"shortcut.action.closeSessionTab": "移除当前标签页"',
+    ):
+        assert expected in translations
+
+    for removed in (
+        "Open topbar session",
+        "recent session tab",
+        "topbar session",
+        "current session tab",
+        "打开顶栏 Session",
+        "最近 Session Tab",
+        "顶栏 Session",
+        "当前 Session",
+    ):
+        assert removed not in translations
+
+
 def test_workbench_shortcuts_matches_mod_k_on_windows_user_agent():
     # The "mod" token resolves to Ctrl on Windows/Linux user agents. A Cmd+K
     # event (metaKey) on a Windows UA should also match search, because "mod"
