@@ -1894,7 +1894,8 @@ def test_workbench_branch_tree_uses_compact_git_history_layout():
     assert "height: 56px" in styles.split(".wbc-branch-button", 1)[1].split("}", 1)[0]
     card_styles = styles.split(".wbc-branch-card", 1)[1].split("}", 1)[0]
     assert "height: 44px" in card_styles
-    assert "border: 1px solid" in card_styles
+    assert "border: 0" in card_styles
+    assert "box-shadow: var(--wbc-control-shadow)" in card_styles
     assert ".wbc-branch-line.main-lane" in styles
     assert ".wbc-branch-line.fork-lane" in styles
     assert "border-top-right-radius: 14px 24px" in styles
@@ -2414,6 +2415,38 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     assert ".wbc-attach-card.file" in styles
     image_rule = styles.split(".wbc-attach-card.image {", 1)[1].split("}", 1)[0]
     assert "overflow: hidden;" in image_rule
+
+
+def test_workbench_conversation_cards_share_borderless_control_surface():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    for selector in (
+        ".wbc-bubble {",
+        ".wbc-attach-file {",
+        ".wbc-branch-card {",
+        ".wbc-trace {",
+        ".wbc-question {",
+        ".wbc-attach-card {",
+        ".wbc-agent-file {",
+    ):
+        rule = styles.split(selector, 1)[1].split("}", 1)[0]
+        assert "border: 0;" in rule
+        assert "box-shadow: var(--wbc-control-shadow);" in rule
+
+    attachment_group = styles.split(
+        ".wbc-msg-attachments.after-copy {", 1
+    )[1].split("}", 1)[0]
+    file_open = styles.split(".wbc-attach-file-open {", 1)[1].split("}", 1)[0]
+    agent_actions = styles.split(
+        ".wbc-agent-file-actions .wb-btn {", 1
+    )[1].split("}", 1)[0]
+
+    assert "border-top: 0;" in attachment_group
+    assert "border-left: 0;" in file_open
+    assert "border: 0;" in agent_actions
 
 
 def test_workbench_chat_splits_live_tools_around_intermediate_messages():
