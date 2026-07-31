@@ -13992,6 +13992,13 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   --browser-resize-gutter: 0px;
 }
 
+/* The sidebar-docked browser keeps the view full-width (no gutter bar).
+   The Electron layer shifts the view right when the pointer nears the left
+   edge so the .wb-col-resizer handle stays reachable. */
+.wbc-side-body .browser-view.native {
+  --browser-resize-gutter: 0px;
+}
+
 .wbc-browser-window.pip .browser-tabs-strip,
 .wbc-browser-window.pip .browser-nav-bar {
   display: none;

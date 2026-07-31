@@ -240,6 +240,7 @@ if (isDesktopSmokeTest) {
   app.setPath('userData', path.join(getCyreneTempDir(), 'electron-smoke-profile'));
 }
 const BROWSER_USER_EVENT_CONSOLE_PREFIX = '__CYRENE_BROWSER_USER_EVENT__';
+const BROWSER_LEFT_EDGE_PREFIX = '__CYRENE_LEFT_EDGE__';
 
 const DEFAULT_DESKTOP_SETTINGS = Object.freeze({
   launchAtLogin: false,
@@ -483,12 +484,31 @@ function browserPageSignal(url, title, text) {
   return { kind: 'normal', requiresUserTakeover: false, retryAllowed: true, message: '' };
 }
 
+// Embedded browser panes can be as narrow as ~270px; sites then serve
+// mobile layouts whose header covers the first feed items, so click
+// coordinates land on the header nav instead of the target. Scale the page
+// down so the CSS viewport always spans a desktop width: the page renders
+// the full desktop layout at full size and the pane displays it shrunk to
+// fit. (enableDeviceEmulation is avoided — it SIGSEGVs on Electron 35 +
+// macOS 26 with WebContentsView viewport changes, see createView.)
+// Click coordinates are CSS pixels while sendInputEvent uses DIP pixels, so
+// every input event converts them with the current zoom factor.
+const PAGE_CSS_TARGET_WIDTH = 1100;
+const PAGE_MIN_ZOOM = 0.1;
+
 const BROWSER_VISIBLE_ELEMENTS_SCRIPT = `
 (function(maxArg, textArg) {
   const maxElements = Math.max(1, Math.min(200, Number(maxArg) || 80));
   const textLimit = Math.max(20, Math.min(500, Number(textArg) || 160));
   const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
   const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+  // data-cyrene-ref is shared with text-links and visible_link_matches, which
+  // number independently. Clear every previous stamp so each snapshot's refs
+  // are unique; stale refs on off-viewport elements made click_ref resolve
+  // the wrong (document-order-first) element.
+  for (const el of document.querySelectorAll('[data-cyrene-ref]')) {
+    el.removeAttribute('data-cyrene-ref');
+  }
   const candidates = [
     ...Array.from(document.querySelectorAll('input,textarea,select,button,a[href],[contenteditable="true"],[role="textbox"],[role="searchbox"],[role="combobox"],[role="button"],[role="link"],[tabindex]')),
     ...Array.from(document.querySelectorAll('summary,label,[role],img,video,section,article,div,span')),
@@ -939,6 +959,14 @@ class BrowserTabManager {
     wc.on('did-finish-load', () => {
       this.applyPageFrameStyle(view, undefined, true);
       this.installUserEventCapture(view).catch(() => {});
+      // Navigation may reset the page zoom; re-converge on the desktop-width
+      // CSS viewport so snapshots and clicks stay in a stable coordinate space.
+      const tab = this._tabForView(view);
+      if (tab) {
+        let bounds = this.bounds;
+        try { bounds = tab.view.getBounds(); } catch (_) {}
+        this.applyPageZoom(view, bounds, this.zoomEnabled !== false).catch(() => {});
+      }
     });
     wc.on('console-message', (details) => {
       this.handleCapturedUserEvent(view, String(details && details.message || ''));
@@ -1261,6 +1289,27 @@ class BrowserTabManager {
             rootScrollY: Math.round(window.scrollY || 0),
           }, describe(scrollTarget));
         }, true);
+        // Sidebar-docked panes keep the view full-width (no gutter bar); when
+        // the pointer nears the pane's left edge, shift the view right so the
+        // .wb-col-resizer handle beneath it becomes reachable. The pointer
+        // sitting on the handle (outside the view) keeps the shift active;
+        // returning inside the view or leaving the window restores it.
+        const edgePrefix = ${JSON.stringify(BROWSER_LEFT_EDGE_PREFIX)};
+        const EDGE_GUTTER = 14;
+        let nearLeftEdge = false;
+        document.addEventListener("mousemove", (event) => {
+          const near = event.clientX < EDGE_GUTTER;
+          if (near !== nearLeftEdge) {
+            nearLeftEdge = near;
+            console.info(edgePrefix + (near ? "in" : "out"));
+          }
+        }, { passive: true });
+        document.addEventListener("mouseout", (event) => {
+          if (nearLeftEdge && !event.relatedTarget) {
+            nearLeftEdge = false;
+            console.info(edgePrefix + "out");
+          }
+        }, true);
         return true;
       })()
     `;
@@ -1269,6 +1318,14 @@ class BrowserTabManager {
 
   handleCapturedUserEvent(view, message) {
     const raw = String(message || '');
+    if (raw.startsWith(BROWSER_LEFT_EDGE_PREFIX)) {
+      const near = String(raw.slice(BROWSER_LEFT_EDGE_PREFIX.length)).trim() === 'in';
+      if (this._leftEdgeHovered !== near) {
+        this._leftEdgeHovered = near;
+        this.syncAttachedView();
+      }
+      return;
+    }
     if (!raw.startsWith(BROWSER_USER_EVENT_CONSOLE_PREFIX)) return;
     const tab = this._tabForView(view);
     if (this._shouldSuppressCapturedEvent(tab)) return;
@@ -1468,9 +1525,80 @@ class BrowserTabManager {
     };
   }
 
+  pageZoomForBounds(bounds = this.bounds) {
+    const width = Math.max(0, Math.round(Number(bounds && bounds.width) || 0));
+    if (width <= 0 || width >= PAGE_CSS_TARGET_WIDTH) return 1;
+    return Math.max(PAGE_MIN_ZOOM, width / PAGE_CSS_TARGET_WIDTH);
+  }
+
+  async applyPageZoom(view, bounds = this.bounds, zoomEnabled = true) {
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return 1;
+    const wc = view.webContents;
+    const dipWidth = Math.max(0, Math.round(Number(bounds && bounds.width) || 0));
+    if (!zoomEnabled || dipWidth <= 0 || dipWidth >= PAGE_CSS_TARGET_WIDTH) {
+      try { wc.setZoomFactor(1); } catch (_) {}
+      return 1;
+    }
+    // Chromium quantizes zoom requests (observed 0.247 -> 0.025) and
+    // getZoomFactor() reports the requested value, not the applied one, so
+    // converge on the target CSS viewport by re-reading innerWidth and
+    // correcting the request. The applied factor is derived from innerWidth
+    // everywhere else (pageZoomOf) to stay immune to quantization.
+    let request = dipWidth / PAGE_CSS_TARGET_WIDTH;
+    let actual = request;
+    const seen = new Set();
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        wc.setZoomFactor(request);
+        await new Promise((resolve) => setTimeout(resolve, 140));
+        const innerW = Number(await wc.executeJavaScript('window.innerWidth')) || 0;
+        if (innerW > 0) {
+          actual = dipWidth / innerW;
+          // Quantization snaps to discrete zoom steps (observed 0.25), so a
+          // viewport within ~12px of the target is converged (still well past
+          // desktop breakpoints).
+          if (Math.abs(innerW - PAGE_CSS_TARGET_WIDTH) <= 16) break;
+          if (seen.has(innerW)) break; // quantization is not monotonic; keep last
+          seen.add(innerW);
+          request = request * (PAGE_CSS_TARGET_WIDTH / innerW);
+        }
+      }
+    } catch (_) {}
+    return actual;
+  }
+
+  async pageZoomOf(wc, dipWidth = 0) {
+    try {
+      const width = dipWidth > 0
+        ? dipWidth
+        : Math.max(0, Math.round(Number(this.bounds.width) || 0));
+      const innerW = Number(await wc.executeJavaScript('window.innerWidth')) || 0;
+      if (innerW <= 0 || width <= 0) return 1;
+      return Math.max(0.001, Math.min(1, width / innerW));
+    } catch (_) {
+      return 1;
+    }
+  }
+
   async pageViewportMatches(view, bounds) {
     if (!view || !view.webContents || view.webContents.isDestroyed()) return false;
     const target = this.pageViewBounds(bounds);
+    // The page zoom scales the CSS viewport. For zoomed panes the width is
+    // pinned to the target desktop width; the height expectation follows
+    // from the applied zoom read back from innerWidth.
+    const zoom = this.pageZoomForBounds(target);
+    let expectedWidth = target.width;
+    let expectedHeight = target.height;
+    if (zoom < 1) {
+      expectedWidth = PAGE_CSS_TARGET_WIDTH;
+      try {
+        const innerW = Number(await view.webContents.executeJavaScript('window.innerWidth')) || 0;
+        const applied = innerW > 0 ? target.width / innerW : zoom;
+        expectedHeight = Math.round(target.height / applied);
+      } catch (_) {
+        expectedHeight = Math.round(target.height / zoom);
+      }
+    }
     try {
       const viewport = await Promise.race([
         view.webContents.executeJavaScript(
@@ -1480,8 +1608,8 @@ class BrowserTabManager {
         new Promise((resolve) => setTimeout(() => resolve(null), 80)),
       ]);
       return !!viewport
-        && Math.abs((Number(viewport.width) || 0) - target.width) <= 1
-        && Math.abs((Number(viewport.height) || 0) - target.height) <= 1;
+        && Math.abs((Number(viewport.width) || 0) - expectedWidth) <= 2
+        && Math.abs((Number(viewport.height) || 0) - expectedHeight) <= 2;
     } catch (_) {
       return false;
     }
@@ -1699,6 +1827,13 @@ class BrowserTabManager {
     }
     const targetCornerRadius = fullscreenActive ? 0 : this.pageCornerRadius;
     const targetBounds = fullscreenActive ? this.fullscreenBounds(win) : this.pageViewBounds(this.bounds);
+    // Sidebar-docked panes (zoom disabled) keep the view full-width so no
+    // gutter bar shows; when the pointer nears the left edge, shift the view
+    // right to expose the .wb-col-resizer handle beneath it. Translating only
+    // (no width change) avoids a page reflow.
+    if (!fullscreenActive && this.zoomEnabled === false && this._leftEdgeHovered) {
+      targetBounds.x += 12;
+    }
     if (!wasAttachedToTargetWindow) {
       this.detachView(active);
       try { active.view.setBorderRadius(targetCornerRadius); } catch (_) {}
@@ -1710,6 +1845,7 @@ class BrowserTabManager {
       try { active.view.setBorderRadius(targetCornerRadius); } catch (_) {}
       try { active.view.setBounds(targetBounds); } catch (_) {}
     }
+    this.applyPageZoom(active.view, targetBounds, this.zoomEnabled !== false).catch(() => {});
     this.applyPageFrameStyle(active.view, targetCornerRadius);
     try { active.view.setVisible(true); } catch (_) {}
     this.syncChatOverlay(win.contentView, !wasAttachedToTargetWindow);
@@ -1728,7 +1864,11 @@ class BrowserTabManager {
     }
     const targetCornerRadius = this.pageCornerRadius;
     const targetBounds = this.pageViewBounds(this.bounds);
+    if (this.zoomEnabled === false && this._leftEdgeHovered) {
+      targetBounds.x += 12;
+    }
     try { active.view.setBorderRadius(targetCornerRadius); } catch (_) {}
+    await this.applyPageZoom(active.view, targetBounds, this.zoomEnabled !== false);
     this.applyPageFrameStyle(active.view, targetCornerRadius);
     let viewportReady = await this.settlePageViewport(active.view, targetBounds);
     // capturePage waits for Chromium to produce a frame at the final size. Keep
@@ -1768,6 +1908,13 @@ class BrowserTabManager {
     };
     this.borderRadius = Math.max(0, Math.min(24, Math.round(Number(info.borderRadius) || 0)));
     this.pageCornerRadius = Math.max(0, Math.min(24, Math.round(Number(info.pageCornerRadius) || 0)));
+    // Sidebar-docked browser panes keep the native (unzoomed) page; only the
+    // floating agent browser converges on the desktop-width CSS viewport.
+    // Only update the flag when the payload carries it: hide/transition
+    // bounds (visible:false) must not reset the active surface's preference.
+    if (Object.prototype.hasOwnProperty.call(info, 'zoomEnabled')) {
+      this.zoomEnabled = info.zoomEnabled !== false;
+    }
     this.visible = info.visible === true && width > 8 && height > 8;
     // Preserve the in-app host geometry while a video owns the fullscreen
     // surface, but never let renderer layout churn resize the fullscreen View.
@@ -1824,6 +1971,9 @@ class BrowserTabManager {
       const pageData = await wc.executeJavaScript(
         `(() => {
           const clean = (value, limit = 200) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit);
+          for (const el of document.querySelectorAll('[data-cyrene-ref]')) {
+            el.removeAttribute('data-cyrene-ref');
+          }
           const seen = new Set();
           const links = [];
           for (const el of Array.from(document.querySelectorAll('a[href]'))) {
@@ -1900,6 +2050,14 @@ class BrowserTabManager {
           const clean = (value, limit = 200) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit);
           let normalizedTarget = '';
           try { normalizedTarget = new URL(target, location.href).href; } catch (_) { return { ok: false, error: 'Invalid target URL.', matches: [] }; }
+          // data-cyrene-ref is a shared namespace with browser_snapshot's
+          // inspect script, which numbers from 1 independently. Allocate past
+          // the current max so the two schemes never collide.
+          let nextRef = 1;
+          for (const el of document.querySelectorAll('[data-cyrene-ref]')) {
+            const n = Number(el.getAttribute('data-cyrene-ref') || 0);
+            if (Number.isInteger(n) && n >= nextRef) nextRef = n + 1;
+          }
           const matches = [];
           for (const el of Array.from(document.querySelectorAll('a[href]'))) {
             const style = window.getComputedStyle(el);
@@ -1913,7 +2071,8 @@ class BrowserTabManager {
             const text = clean(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || imageAlt);
             let refNumber = Number(el.getAttribute('data-cyrene-ref') || 0);
             if (!Number.isInteger(refNumber) || refNumber < 1) {
-              refNumber = document.querySelectorAll('[data-cyrene-ref]').length + matches.length + 1;
+              refNumber = nextRef;
+              nextRef += 1;
               el.setAttribute('data-cyrene-ref', String(refNumber));
             }
             matches.push({ ref: 'e' + refNumber, text, url: href });
@@ -2104,9 +2263,16 @@ class BrowserTabManager {
       tab.lastAgentFileChooser = null;
       const chooserPromise = new Promise((resolve) => { tab.agentFileChooserResolver = resolve; });
       this._markAgentInput(tab);
-      wc.sendInputEvent({ type: 'mouseMove', x: info.x, y: info.y });
-      wc.sendInputEvent({ type: 'mouseDown', x: info.x, y: info.y, button: 'left', clickCount: 1 });
-      wc.sendInputEvent({ type: 'mouseUp', x: info.x, y: info.y, button: 'left', clickCount: 1 });
+      // Target coordinates are CSS pixels (getBoundingClientRect); input
+      // events are delivered in DIP pixels, scaled by the page zoom.
+      let dipWidth = 0;
+      try { dipWidth = Math.max(0, Math.round(Number(tab.view.getBounds().width) || 0)); } catch (_) {}
+      const zoom = await this.pageZoomOf(wc, dipWidth);
+      const x = Math.round((Number(info.x) || 0) * zoom);
+      const y = Math.round((Number(info.y) || 0) * zoom);
+      wc.sendInputEvent({ type: 'mouseMove', x, y });
+      wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+      wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
       const outcome = await Promise.race([
         this._waitForClickOutcome(wc, before).then(() => ({ kind: 'page' })),
         chooserPromise.then((target) => ({ kind: 'file-chooser', target })),
@@ -2493,10 +2659,15 @@ class BrowserTabManager {
       py = info.y;
     }
     const bounds = tab.view.getBounds();
-    if (!Number.isFinite(px)) px = Math.floor(Math.max(1, bounds.width) / 2);
-    if (!Number.isFinite(py)) py = Math.floor(Math.max(1, bounds.height) / 2);
-    px = Math.max(0, Math.min(Math.max(0, bounds.width - 1), Math.round(px)));
-    py = Math.max(0, Math.min(Math.max(0, bounds.height - 1), Math.round(py)));
+    // Default/clamp bounds are DIP sizes; CSS viewport coordinates are
+    // DIP / zoom, so probe and click coordinates must use the CSS space.
+    const zoom = await this.pageZoomOf(wc, bounds.width);
+    const cssWidth = Math.max(1, bounds.width / zoom);
+    const cssHeight = Math.max(1, bounds.height / zoom);
+    if (!Number.isFinite(px)) px = Math.floor(cssWidth / 2);
+    if (!Number.isFinite(py)) py = Math.floor(cssHeight / 2);
+    px = Math.max(0, Math.min(Math.max(0, cssWidth - 1), Math.round(px)));
+    py = Math.max(0, Math.min(Math.max(0, cssHeight - 1), Math.round(py)));
 
     // Mark the nearest scrollable ancestor under the pointer so the result can
     // report whether Chromium actually moved it. The wheel event itself is sent
@@ -2544,11 +2715,15 @@ class BrowserTabManager {
     })()`, true).catch(() => ({ found: false, x: px, y: py }));
 
     this._markAgentInput(tab);
-    wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
+    // Probe coordinates above are CSS pixels; input events are delivered in
+    // DIP pixels, scaled by the page zoom.
+    const dipX = Math.round(px * zoom);
+    const dipY = Math.round(py * zoom);
+    wc.sendInputEvent({ type: 'mouseMove', x: dipX, y: dipY });
     wc.sendInputEvent({
       type: 'mouseWheel',
-      x: px,
-      y: py,
+      x: dipX,
+      y: dipY,
       // Electron follows native wheel direction (positive is left/up), while
       // browser_scroll and Playwright use positive deltas for right/down.
       deltaX: -dx,

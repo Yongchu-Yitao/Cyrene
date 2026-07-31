@@ -7934,6 +7934,7 @@ function WbcSide({
                 roundId: (browserPanelState && browserPanelState.roundId) || "",
                 onClose: function () { onTabChange("overview"); },
                 onTakeoverComplete: onBrowserTakeoverComplete,
+                zoomEnabled: false,
               })
             : <p className="workbench-muted">{wbcT("chat.side.browserUnavailable", "Browser view is unavailable.")}</p>
         )}

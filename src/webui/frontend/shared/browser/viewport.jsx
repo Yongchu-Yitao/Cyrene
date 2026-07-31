@@ -40,7 +40,7 @@ function BrowserIcon({ name, size }) {
   return null;
 }
 
-function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, browserState }) {
+function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, browserState, zoomEnabled = true }) {
   browserState = browserState || window.CyreneUI.require("data").state.browser;
   const bridge = window.cyrene && window.cyrene.browser;
   const electronSessionId = String(browserSessionId || (browserState && browserState.sessionId) || "").trim();
@@ -137,6 +137,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       height: Math.max(0, rect.height),
       borderRadius: borderRadius,
       pageCornerRadius: pageCornerRadius,
+      zoomEnabled: zoomEnabled !== false,
     };
     const signature = [
       electronSessionId,
@@ -198,6 +199,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       height: Math.max(0, rect.height),
       borderRadius: borderRadius,
       pageCornerRadius: pageCornerRadius,
+      zoomEnabled: zoomEnabled !== false,
     }).then(function () {
       if (interactionPreviewTokenRef.current !== token) return;
       lastBoundsRef.current = signature;
