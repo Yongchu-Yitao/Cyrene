@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -131,9 +132,46 @@ def _write_marker(path: Path, source_path: Path) -> None:
             raise sqlite3.DatabaseError("migrated database failed quick_check")
 
 
+def _unlink_retry(path: Path, *, attempts: int = 5, delay: float = 0.2) -> None:
+    """Unlink a file, tolerating transient Windows sharing violations.
+
+    Antivirus scanners and lingering processes can briefly hold a file open.
+    A leftover staging file is harmless, so clean-up failures must never
+    propagate and crash startup.
+    """
+    for attempt in range(attempts):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if attempt < attempts - 1:
+                time.sleep(delay)
+    logger.warning(
+        "Unable to remove %s (file is locked); leaving it for cleanup on next start",
+        path,
+    )
+
+
+def _replace_retry(staging: Path, target: Path, *, attempts: int = 5, delay: float = 0.2) -> None:
+    for attempt in range(attempts):
+        try:
+            staging.replace(target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
+def _cleanup_stale_staging(target: Path) -> None:
+    """Remove staging files left by a previously interrupted migration."""
+    for stale in target.parent.glob(f".{target.name}.migration-*.tmp"):
+        _unlink_retry(stale)
+
+
 def _remove_sqlite_sidecars(path: Path) -> None:
     for suffix in ("-wal", "-shm", "-journal"):
-        path.with_name(path.name + suffix).unlink(missing_ok=True)
+        _unlink_retry(path.with_name(path.name + suffix))
 
 
 def migrate_legacy_database(
@@ -191,6 +229,7 @@ def migrate_legacy_database(
         )
 
     target.parent.mkdir(parents=True, exist_ok=True)
+    _cleanup_stale_staging(target)
     staging = target.with_name(f".{target.name}.migration-{uuid.uuid4().hex}.tmp")
     try:
         with _connect_read_only(source) as old_connection:
@@ -205,7 +244,7 @@ def migrate_legacy_database(
 
         _write_marker(staging, source)
         _remove_sqlite_sidecars(target)
-        staging.replace(target)
+        _replace_retry(staging, target)
         logger.info("Migrated legacy database %s to %s", source, target)
         return DatabaseMigrationResult(
             "migrated",
@@ -223,7 +262,7 @@ def migrate_legacy_database(
             detail=str(exc),
         )
     finally:
-        staging.unlink(missing_ok=True)
+        _unlink_retry(staging)
         _remove_sqlite_sidecars(staging)
 
 

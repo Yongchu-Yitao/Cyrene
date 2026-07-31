@@ -79,7 +79,10 @@ _hidden += [
     "packaging", "pypdf", "reportlab", "PIL",
     # simplexng runtime deps (vendored searx pulls these in transitively;
     # listed explicitly so PyInstaller collects compiled extensions correctly)
-    "waitress", "flask", "brotli", "lxml", "msgspec", "fasttext_predict",
+    "waitress", "flask", "brotli", "lxml", "msgspec",
+    # fasttext-predict installs the module as `fasttext` (with the
+    # fasttext_pybind extension); the dist-info name is not importable.
+    "fasttext",
     # PIL C extensions — listed explicitly in case collect_all("PIL")
     # fails silently on some platforms
     "PIL._imaging",
@@ -153,7 +156,7 @@ for _package in (
     "brotli",
     "lxml",
     "msgspec",
-    "fasttext_predict",
+    "fasttext",
 ):
     _collect_package(_package)
 
@@ -165,6 +168,18 @@ if _BUNDLE_PLAYWRIGHT:
 
 if _IS_WIN:
     _collect_package("winloop")
+
+# The Codex OAuth runtime is required at startup of the model settings page;
+# a build environment missing it must fail the build, not ship a broken app.
+for _critical in ("openai_codex", "codex_cli_bin"):
+    if not any(
+        _mod == _critical or _mod.startswith(_critical + ".")
+        for _mod in _hidden
+    ):
+        raise SystemExit(
+            f"[fatal] PyInstaller could not collect required package {_critical!r}; "
+            "aborting build (is it installed in the build environment?)"
+        )
 
 _datas = list(dict.fromkeys(_datas))
 _binaries = list(dict.fromkeys(_binaries))

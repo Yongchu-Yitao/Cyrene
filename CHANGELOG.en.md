@@ -5,6 +5,145 @@
 This English edition preserves the release history of the Chinese changelog.
 The Chinese edition remains the most detailed record for older releases.
 
+## [0.7.0b10] - 2026-07-31
+
+This is the tenth `0.7.0` beta and includes every change since
+`v0.7.0-beta.8`. On top of the beta9 remote-control and Workbench work, this
+release fixes three Windows release defects: the legacy database migration
+crashed startup when its staging file was transiently locked; `openai_codex`
+and `codex_cli_bin` were missing from the Windows packages, breaking model
+settings and message sending with `ModuleNotFoundError`; and the
+uvloop→winloop compatibility patch for simplexng had never actually applied.
+CI now has multiple guard rails so a package with missing modules can no
+longer be published silently.
+
+### Feature highlights
+
+- **Remote control covers the full workflow** — trusted controllers can
+  inspect and update non-secret settings, manage models and skills, operate
+  project-scoped shells, read workspace changes, and retrieve richer chat,
+  context, attachment, map, and runtime state.
+- **Mobile direct requests need no callback server** — a new end-to-end
+  encrypted request/response transport returns the result on the original
+  connection while retaining reverse delivery for existing clients.
+- **Model sources are stored independently** — custom OpenAI-compatible
+  candidates and the Codex OAuth candidate no longer overwrite each other;
+  switching sources preserves the inactive configuration.
+- **Remote shells are persistent and incrementally readable** — shells are
+  bound to a shared project and paired device and support open, cursor-based
+  read, write, interrupt, and close. Interrupting a command keeps the shell
+  available.
+- **Images render directly in conversations** — agent images use compact,
+  rounded previews rather than generic file rows. Click opens the right-side
+  viewer, the card remains draggable, and the footer keeps the filename plus
+  Open Externally and Download.
+- **Chats can be reordered** — drag-and-drop and keyboard ordering persist per
+  project, and a chat can be dropped into the conversation area to open it,
+  with visible drop feedback and screen-reader announcements.
+- **The Workbench header is one continuous glass surface** — chat rail and
+  transcript headers share one overlay with no duplicate masks or dividers;
+  long-conversation navigation now originates from the right.
+- **Timezone is an authoritative persisted setting** — onboarding, General
+  Settings, page startup, and runtime configuration share one backend value,
+  and a failed save restores the local state.
+
+### Detailed changes and compatibility notes
+
+#### Fix: Windows startup crash after upgrade (locked database migration staging file)
+
+- **Symptom** — the app crashed on startup with
+  `PermissionError: [WinError 32] ... being used by another process` pointing
+  at `…\AppData\Roaming\cyrene\store\.cyrene.runtime.database.migration-*.tmp`.
+- **Root cause** — first startup runs a one-time migration from the legacy
+  `cyrene.db` to `cyrene.runtime.database`: the full SQLite snapshot
+  (including committed WAL data) is written to a random-suffix staging file,
+  atomically swapped over the target, and then deleted in a `finally` block.
+  On Windows the file can be transiently locked (a lingering previous process
+  or antivirus scanning the freshly written large file), so the `finally`
+  deletion raised `PermissionError`. An exception raised in `finally` overrides
+  the migration result and propagates straight into the startup path, crashing
+  the app — and every subsequent launch retried and crashed again.
+- **Fix** —
+  - Staging cleanup is now tolerant: it retries 5 times (200ms apart) and, if
+    still locked, only logs a warning instead of raising. A leftover staging
+    file with a random suffix cannot break later startups.
+  - Swapping the staging file over the target retries transient locks;
+    persistent locks (e.g. an old instance still running) fall through to the
+    normal migration-failure branch with a structured result instead of a
+    crash.
+  - Each migration first cleans up `migration-*.tmp` leftovers from a
+    previously interrupted run (locked files are naturally skipped).
+
+#### Fix: openai_codex missing from Windows packages (model settings 500 / ModuleNotFoundError)
+
+- **Symptom** — the app starts, but the model settings page returns an
+  internal server error and sending a message reports
+  `no module named 'openai_codex'`.
+- **Root cause** (five release-guard failures at once) —
+  1. simplexng declares an unconditional `uvloop` dependency, which has no
+     Windows wheel and whose source build rejects Windows outright; CI's
+     `pip install .` therefore failed on the Windows builder and
+     `openai-codex` / `openai-codex-cli-bin` were never installed.
+  2. GitHub Actions PowerShell steps do not abort on a non-zero exit code of
+     an external command, so the step still reported success.
+  3. PyInstaller's `collect_all("openai_codex")` could not find the package,
+     printed only a "not a package" warning, and continued; neither package
+     entered the bundle.
+  4. The build-environment import check did not include `openai_codex`.
+  5. The packaged smoke test had actually failed with
+     `No module named 'codex_cli_bin'`, but the PyInstaller bootloader
+     swallowed the unhandled exception's exit code, so CI stayed green.
+  - The incomplete package was released; macOS/Linux were unaffected (uvloop
+    has wheels there).
+- **Fix** —
+  - Both Windows build jobs now run `pip install . --no-deps` plus an
+    explicit `pip install openai-codex==0.144.4` (`openai-codex-cli-bin`
+    resolves automatically; Windows wheels exist).
+  - The smoke test now exits `SystemExit(1)` and writes a crash log on
+    failure, so the bootloader can no longer swallow the exit code.
+  - The build-environment import check on all three platforms now includes
+    `openai_codex` and `codex_cli_bin`.
+  - Both Windows jobs verify `_internal\openai_codex` and
+    `_internal\codex_cli_bin` in the packaged output.
+  - The PyInstaller spec aborts the build when the critical packages
+    `openai_codex` / `codex_cli_bin` were not collected.
+
+#### Fix: simplexng cross-platform packaging and Windows runtime
+
+- **searx vendored submodule collection warning** — PyInstaller's
+  `collect_submodules("simplexng._vendor.searx")` cannot import searx directly
+  (searx uses top-level absolute imports and relies on simplexng injecting
+  `_vendor` into `sys.path` first). The main analysis imports simplexng first,
+  so the injection works: all 306 searx source files and 15 data files
+  (including the fasttext language model `lid.176.ftz`) are confirmed inside
+  the bundle and the runtime import chain was verified.
+- **The Windows uvloop patch had never applied** — CI replaced
+  `import uvloop\nuvloop.install()`, but the actual searx source has
+  `from searx import logger` between the two lines, so the replacement was a
+  silent no-op and `searx.network.client` crashed on import on Windows.
+  The patch now matches the single import line and aborts the build if the
+  replacement did not take effect.
+- **fasttext-predict package name corrected** — the distribution installs
+  the module as `fasttext` (with the `fasttext_pybind` C extension); the
+  spec's incorrect `fasttext_predict` name was fixed, removing the bogus
+  "Hidden import not found" errors on all three platforms.
+- **Smoke test now verifies the searx runtime** — the packaged app imports
+  `searx.network.client` for real, so a missing Windows patch or data files
+  fails CI instead of shipping.
+
+#### Testing and release
+
+- **Full local build verification** — after the fixes, a complete PyInstaller
+  build was run on macOS; the smoke test covers the Codex runtime and the
+  searx import chain, and packaged modules and data files were checked
+  individually.
+- **Version numbers fully synchronized** — Python package, UV lock, Electron
+  manifest/lock, README badges, web docs, WeChat client, WebUI cache keys,
+  and the related contract tests all updated to Python `0.7.0b10` / Electron
+  and Git tag `0.7.0-beta.10`.
+
+---
+
 ## [0.7.0b9] - 2026-07-31
 
 This is the ninth `0.7.0` beta and includes every change since

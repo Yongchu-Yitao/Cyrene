@@ -2,6 +2,118 @@
 
 [中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## [0.7.0b10] - 2026-07-31
+
+这是 `0.7.0` 的第十个测试版，包含 `v0.7.0-beta.8` 以来的全部改动。在
+beta9 远程控制与 Workbench 功能的基础上，本版集中修复 Windows 平台的三个
+发布缺陷：数据库迁移的临时文件清理在 Windows 上抛文件占用异常导致应用无法
+启动；`openai_codex` 与 `codex_cli_bin` 未随 Windows 包发布，模型设置与
+消息发送报 `ModuleNotFoundError`；simplexng 的 uvloop→winloop 兼容补丁
+此前从未生效。同时为 CI 构建增加多层防线，确保缺包产物不再被静默发布。
+
+### 功能更新
+
+- **远程控制覆盖完整工作流** — 受信任控制器可读取与更新非敏感设置、管理
+  模型来源与 Skill、创建和操作项目 Shell、查看工作区变更，并获得更完整的
+  聊天、上下文、附件、地图与运行状态。
+- **手机直连不再要求回调服务器** — 新增端到端加密的 Request/Response
+  传输模式，控制器只需向 Cyrene 发起一次请求即可取得响应，同时保留兼容
+  旧客户端的 Reverse Delivery 模式。
+- **模型配置按来源独立保存** — 自定义 OpenAI-compatible 候选与 Codex
+  OAuth 候选互不覆盖，切换模型来源后保留另一侧配置，切回即可继续使用。
+- **远程 Shell 可持续且可恢复读取** — Shell 绑定项目与控制设备，支持打开、
+  增量读取（输出带单调 Cursor）、写入、Interrupt 与关闭，命令被中断后
+  Shell 会话仍可继续使用。
+- **对话图片直接显示** — Agent 生成或发送的图片以紧凑圆角缩略图展示，
+  点击进入右侧查看器，整张卡片可拖动，底部保留文件名、外部打开与下载。
+- **聊天列表可自由排序** — 聊天卡片支持拖拽与键盘排序，顺序按项目保存，
+  也可拖入对话区直接打开，带放置反馈与无障碍播报。
+- **Workbench 顶部视觉统一** — 聊天栏与对话标题合并为连续磨砂玻璃表面，
+  消除重复遮罩与分隔线，长对话导航移至右侧。
+- **时区成为正式持久设置** — 首次设置、General Settings、页面启动与
+  运行时配置共用同一后端值，保存失败会恢复本地状态。
+
+### 详细变更与兼容性说明
+
+#### 修复：Windows 升级后无法启动（数据库迁移临时文件被占用）
+
+- **症状** — 更新到新版本后启动即崩溃，报
+  `PermissionError: [WinError 32] 另一个程序正在使用此文件`，指向
+  `…\AppData\Roaming\cyrene\store\.cyrene.runtime.database.migration-*.tmp`。
+- **根因** — 首次启动会执行旧库 `cyrene.db` → 新库
+  `cyrene.runtime.database` 的一次性迁移：先用 SQLite backup API 把完整
+  快照（含 WAL 提交数据）写入带随机后缀的 staging 临时文件，原子替换目标
+  后再在 `finally` 中删除该临时文件。Windows 上该文件可能被短暂占用
+  （旧版本进程未完全退出、杀毒软件实时扫描刚写入的大文件等），`finally`
+  中的删除抛出 `PermissionError`；`finally` 中抛出的异常会覆盖迁移结果
+  直接冒泡到启动流程，整个应用崩溃，且每次启动都会重试并再次崩溃。
+- **修复** —
+  - 临时文件清理改为容错：重试 5 次（200ms 间隔），仍失败只记录警告、不再
+    抛异常；残留的随机后缀临时文件不影响后续启动。
+  - staging 替换目标遇瞬时占用自动重试；持续占用（如旧实例仍在运行）则走
+    迁移失败分支并返回结构化结果，不再以异常形式崩溃。
+  - 每次迁移前自动清理上一次中断遗留的 `migration-*.tmp` 残留（仍被占用的
+    文件自然跳过）。
+
+#### 修复：Windows 包缺失 openai_codex（模型设置 500 / 消息发送 ModuleNotFoundError）
+
+- **症状** — 应用可以启动，但模型设置页报 internal server error，发送
+  消息报 `no module named 'openai_codex'`。
+- **根因**（发布链路五处同时失守） —
+  1. simplexng 声明了无平台标记的 `uvloop` 依赖，而 uvloop 在 Windows 没有
+     wheel 且源码构建直接拒绝 Windows；CI 的 `pip install .` 因此在
+     Windows 构建机上失败，`openai-codex` 与 `openai-codex-cli-bin` 从未
+     被安装。
+  2. GitHub Actions 的 PowerShell 步骤默认不因外部命令非零退出码中止，该
+     步骤仍显示 success，后续构建继续执行。
+  3. PyInstaller 的 `collect_all("openai_codex")` 找不到包，仅打印
+     "not a package" 警告后继续，两个包未进入产物。
+  4. 构建环境的导入自检清单不含 `openai_codex`，检查通过。
+  5. 打包产物的 smoke test 实际已报 `No module named 'codex_cli_bin'`，
+     但 PyInstaller bootloader 吞掉了未捕获异常的退出码，CI 依旧全绿。
+  - 缺包产物随 Release 发布；macOS/Linux 不受影响（uvloop 有 wheel）。
+- **修复** —
+  - 两个 Windows 构建任务统一为 `pip install . --no-deps` 并显式安装
+    `openai-codex==0.144.4`（其依赖 `openai-codex-cli-bin` 自动解析，
+    Windows 有对应 wheel）。
+  - smoke test 失败时显式 `SystemExit(1)` 并写入崩溃日志，不再被
+    bootloader 吞掉退出码。
+  - 三个平台的构建环境导入自检加入 `openai_codex` 与 `codex_cli_bin`。
+  - 两个 Windows 任务的产物校验新增 `_internal\openai_codex` 与
+    `_internal\codex_cli_bin` 目录检查。
+  - PyInstaller spec 增加关键包收集守卫：未收集到 `openai_codex` /
+    `codex_cli_bin` 时直接中止构建。
+
+#### 修复：simplexng 跨平台打包与 Windows 运行时
+
+- **searx vendored 子模块收集告警** — PyInstaller 的
+  `collect_submodules("simplexng._vendor.searx")` 直接导入 searx 失败
+  （searx 使用顶层绝对导入，依赖 simplexng 运行时先注入 `_vendor` 到
+  `sys.path`）；主分析从 simplexng 模块出发时注入生效，searx 全部 306 个
+  源码文件与 15 个数据文件（含 fasttext 语言模型 `lid.176.ftz`）确认进入
+  产物，运行时导入链路实测通过。
+- **Windows uvloop 补丁此前静默失效** — CI 的 uvloop→winloop 替换匹配
+  `import uvloop\nuvloop.install()`，但 searx 实际源码中两行之间隔着
+  `from searx import logger`，替换从未生效；Windows 上
+  `searx.network.client` 导入即因缺少 uvloop 崩溃。现改为匹配单行并增加
+  "未生效即中止构建" 的断言。
+- **fasttext-predict 包名修正** — 该发行版的模块名是 `fasttext`（含
+  `fasttext_pybind` C 扩展），spec 中误写的 `fasttext_predict` 已修正，
+  消除三个平台构建时的 "Hidden import not found" 误报。
+- **smoke test 增加 searx 运行时验证** — 打包产物现在会真实导入
+  `searx.network.client`，Windows 补丁或数据缺失会直接导致 CI 失败。
+
+#### 测试与发布
+
+- **本地完整构建验证** — 修复后在 macOS 上执行完整 PyInstaller 构建，
+  smoke test 覆盖 codex 运行时、searx 导入链与打包产物模块、数据文件逐项
+  核对。
+- **版本号完整同步** — Python 包、UV Lock、Electron Manifest/Lock、
+  README Badge、Web 文档、Wechat Client、WebUI Cache Key 和相关契约测试
+  统一更新为 Python `0.7.0b10`、Electron/Git Tag `0.7.0-beta.10`。
+
+---
+
 ## [0.7.0b9] - 2026-07-31
 
 这是 `0.7.0` 的第九个测试版，包含 `v0.7.0-beta.8` 之后的全部改动。本版重点

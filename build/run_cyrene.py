@@ -13,6 +13,7 @@ import importlib
 import importlib.util
 import jinja2
 import multipart
+from pathlib import Path
 import subprocess
 import simplexng
 import sniffio
@@ -100,6 +101,19 @@ def _run_smoke_test() -> None:
     print(f"codex_runtime={codex_version}")
     print(f"codex_config={CodexConfig.__name__}")
 
+    # simplexng vendors SearXNG under its _vendor tree and injects that path at
+    # import time; verify the frozen copy is complete and importable.
+    try:
+        vendor_dir = Path(simplexng.__file__).parent / "_vendor"
+        if str(vendor_dir) not in sys.path:
+            sys.path.insert(0, str(vendor_dir))
+        import searx  # noqa: F401
+        import searx.network.client  # noqa: F401
+
+        print("searx_runtime=ok")
+    except Exception as exc:
+        print(f"searx_runtime=FAILED: {exc!r}")
+
     import os
 
     if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
@@ -162,7 +176,14 @@ if __name__ == "__main__":
     _setup_playwright_browsers_path()
 
     if "--smoke-test" in sys.argv:
-        _run_smoke_test()
+        try:
+            _run_smoke_test()
+        except Exception as _exc:
+            # A frozen app's unhandled exception must not pass CI silently;
+            # PyInstaller's bootloader can swallow the exit code.
+            _write_crash_log(_exc)
+            print(f"SMOKE TEST FAILED: {_exc!r}", file=sys.stderr)
+            raise SystemExit(1)
         raise SystemExit(0)
 
     # In a PyInstaller frozen build, sys.executable is the app binary itself.
