@@ -14,6 +14,7 @@ import aiosqlite
 import httpx
 
 from cyrene.knowledge import ingest, library, store
+from cyrene.runtime.attachments import UPLOADS_DIR
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:23119/api"
@@ -520,6 +521,21 @@ async def _apply_deleted(
                 await db.execute(
                     "DELETE FROM library_annotations WHERE attachment_id=?", (attachment_row[0],)
                 )
+            # Remember the corpus rows this item links before the attachment
+            # rows (which hold the link) are deleted below. The deleted-key
+            # list may carry the parent key alone or its child keys too, so
+            # match both the attachment's own key and its owning item.
+            cursor = await db.execute(
+                """SELECT DISTINCT a.kb_document_id FROM library_attachments a
+                   WHERE a.provider='zotero' AND a.provider_library_id=?
+                     AND (a.provider_key=? OR a.item_id IN (
+                       SELECT id FROM library_items
+                       WHERE provider='zotero' AND provider_library_id=? AND provider_item_key=?
+                     ))
+                     AND a.kb_document_id IS NOT NULL AND a.kb_document_id<>''""",
+                (library_id, key, library_id, key),
+            )
+            linked_doc_ids = [str(row[0]) for row in await cursor.fetchall()]
             for table in ("library_attachments", "library_notes", "library_annotations"):
                 cursor = await db.execute(
                     f"""DELETE FROM {table} WHERE provider='zotero'
@@ -527,6 +543,33 @@ async def _apply_deleted(
                     (library_id, key),
                 )
                 count += cursor.rowcount
+            # A paper deleted in Zotero must not resurface through the knowledge
+            # bridge, which re-imports kb_documents that have no attachment
+            # link. Drop corpus rows left orphaned by this deletion (chunks,
+            # FTS, relations, and the synced file) so the bridge cannot
+            # resurrect it as a fresh knowledge item.
+            for doc_id in linked_doc_ids:
+                cursor = await db.execute(
+                    "SELECT 1 FROM library_attachments WHERE kb_document_id=? LIMIT 1",
+                    (doc_id,),
+                )
+                if await cursor.fetchone():
+                    continue
+                cursor = await db.execute(
+                    "SELECT path FROM kb_documents WHERE id=?", (doc_id,)
+                )
+                doc_row = await cursor.fetchone()
+                if doc_row:
+                    await db.execute("DELETE FROM kb_chunks_fts WHERE document_id = ?", (doc_id,))
+                    await db.execute("DELETE FROM kb_chunks WHERE document_id = ?", (doc_id,))
+                    await db.execute(
+                        "DELETE FROM kb_relations WHERE src_id = ? OR dst_id = ?",
+                        (doc_id, doc_id),
+                    )
+                    await db.execute("DELETE FROM kb_documents WHERE id = ?", (doc_id,))
+                    path = str(doc_row[0] or "")
+                    if path and path.startswith(str(UPLOADS_DIR / "zotero")) and Path(path).is_file():
+                        Path(path).unlink(missing_ok=True)
             await db.execute(
                 """INSERT INTO library_sync_tombstones
                    (provider,provider_library_id,object_type,provider_key,version,deleted_at)

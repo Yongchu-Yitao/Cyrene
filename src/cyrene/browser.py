@@ -374,6 +374,13 @@ _BROWSER_INSPECT_JS = r"""
   const textLimit = Math.max(20, Math.min(500, Number(textArg) || 160));
   const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
   const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+  // data-cyrene-ref is shared with text-links and visible_link_matches, which
+  // number independently. Clear every previous stamp so each snapshot's refs
+  // are unique; stale refs on off-viewport elements made click_ref resolve
+  // the wrong (document-order-first) element.
+  for (const el of document.querySelectorAll('[data-cyrene-ref]')) {
+    el.removeAttribute('data-cyrene-ref');
+  }
   const candidates = [
     ...Array.from(document.querySelectorAll('input,textarea,select,button,a[href],[contenteditable="true"],[role="textbox"],[role="searchbox"],[role="combobox"],[role="button"],[role="link"],[tabindex]')),
     ...Array.from(document.querySelectorAll('summary,label,[role],img,video,section,article,div,span')),
@@ -516,6 +523,9 @@ _BROWSER_TEXT_LINKS_JS = r"""
   const maxLinks = Math.max(1, Math.min(200, Number(maxArg) || 120));
   const textLimit = Math.max(20, Math.min(500, Number(textArg) || 200));
   const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, textLimit);
+  for (const el of document.querySelectorAll('[data-cyrene-ref]')) {
+    el.removeAttribute('data-cyrene-ref');
+  }
   const seen = new Set();
   const links = [];
   for (const el of Array.from(document.querySelectorAll('a[href]'))) {
@@ -1087,6 +1097,14 @@ class _BrowserSession:
                     try { normalizedTarget = new URL(target, location.href).href; }
                     catch (_) { return {ok: false, error: 'Invalid target URL.', matches: []}; }
                     const clean = (value, limit = 200) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+                    // data-cyrene-ref is a shared namespace with browser_snapshot's
+                    // inspect script, which numbers from 1 independently. Allocate
+                    // past the current max so the two schemes never collide.
+                    let nextRef = 1;
+                    for (const el of document.querySelectorAll('[data-cyrene-ref]')) {
+                        const n = Number(el.getAttribute('data-cyrene-ref') || 0);
+                        if (Number.isInteger(n) && n >= nextRef) nextRef = n + 1;
+                    }
                     const matches = [];
                     for (const el of Array.from(document.querySelectorAll('a[href]'))) {
                         const style = window.getComputedStyle(el);
@@ -1100,7 +1118,8 @@ class _BrowserSession:
                         const text = clean(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || imageAlt);
                         let refNumber = Number(el.getAttribute('data-cyrene-ref') || 0);
                         if (!Number.isInteger(refNumber) || refNumber < 1) {
-                            refNumber = document.querySelectorAll('[data-cyrene-ref]').length + matches.length + 1;
+                            refNumber = nextRef;
+                            nextRef += 1;
                             el.setAttribute('data-cyrene-ref', String(refNumber));
                         }
                         matches.push({ref: 'e' + refNumber, text, url: href});

@@ -206,7 +206,7 @@ async def sync_knowledge_documents(db_path: str) -> int:
         # visit while still letting later knowledge uploads appear immediately.
         await db.execute("BEGIN IMMEDIATE")
         cursor = await db.execute(
-            """SELECT DISTINCT i.id,i.abstract,d.metadata
+            """SELECT DISTINCT i.id,i.abstract,d.metadata,d.summary
                FROM library_items i
                JOIN library_attachments a ON a.item_id=i.id
                JOIN kb_documents d ON d.id=a.kb_document_id
@@ -214,10 +214,23 @@ async def sync_knowledge_documents(db_path: str) -> int:
         )
         for linked in await cursor.fetchall():
             source_abstract = _source_abstract(_loads(linked["metadata"], {}))
-            if str(linked["abstract"] or "") != source_abstract:
+            current = str(linked["abstract"] or "")
+            # An abstract explicitly supplied by source metadata is
+            # authoritative and overrides the local value.
+            if source_abstract and current != source_abstract:
                 await db.execute(
                     "UPDATE library_items SET abstract=? WHERE id=?",
                     (source_abstract, linked["id"]),
+                )
+                await _refresh_fts(db, str(linked["id"]))
+            # Pre-bridge versions copied the generated indexing preview into
+            # abstract; that pollution is repaired to ''. A user/agent edit
+            # never equals the generated summary verbatim, so it is preserved
+            # when the source metadata has no abstract of its own.
+            elif not source_abstract and current and current == str(linked["summary"] or ""):
+                await db.execute(
+                    "UPDATE library_items SET abstract=? WHERE id=?",
+                    ("", linked["id"]),
                 )
                 await _refresh_fts(db, str(linked["id"]))
 
@@ -272,10 +285,11 @@ async def sync_knowledge_documents(db_path: str) -> int:
                 )
                 created += 1
             else:
-                await db.execute(
-                    "UPDATE library_items SET abstract=? WHERE id=?",
-                    (source_abstract, item_id),
-                )
+                if source_abstract:
+                    await db.execute(
+                        "UPDATE library_items SET abstract=? WHERE id=?",
+                        (source_abstract, item_id),
+                    )
             await db.execute(
                 """INSERT INTO library_attachments (
                     id,item_id,provider,provider_library_id,provider_key,provider_version,
@@ -1180,11 +1194,24 @@ async def upsert_zotero_item(
     )
     if not existing:
         return await create_item(db_path, payload), True
+    if existing.get("deleted_at"):
+        # The user trashed this item; a Zotero re-sync must not resurrect it.
+        return existing, False
     editable = {key: payload[key] for key in ITEM_FIELDS if key in payload}
     editable["creators"] = payload["creators"]
+    # An empty source value must not clobber a non-empty local value: abstract
+    # and tags (among others) may have been set by the user in the editor while
+    # Zotero reports them as empty. Non-empty source values stay authoritative.
+    for key, value in list(editable.items()):
+        if key == "creators":
+            empty = not value and bool(existing.get("creators"))
+        else:
+            empty = value in (None, "", [], {}) and str(existing.get(key) or "")
+        if empty:
+            del editable[key]
     async with aiosqlite.connect(db_path, timeout=30) as db:
         await db.execute(
-            """UPDATE library_items SET provider_version=?,raw_json=?,synced_at=?,deleted_at=NULL
+            """UPDATE library_items SET provider_version=?,raw_json=?,synced_at=?
                WHERE id=?""",
             (payload["provider_version"],_json(raw, {}),_now(),existing["id"]),
         )

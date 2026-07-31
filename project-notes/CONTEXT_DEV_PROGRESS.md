@@ -13,16 +13,14 @@ UI-consolidation worktree baseline: `17914e697af41c13a3c5da0092f69aa9906644af`
 
 Current audited HEAD: `c1dbc62f24460d123b5bac03dc42ce9411319fb1`
 
-This file records the current development checkpoint. Older Windows/context
-debugger command transcripts have been removed because they referenced modules
-that now live under the canonical domain packages.
+This file records the completed development checkpoints. Older
+Windows/context debugger command transcripts have been removed because they
+referenced modules that now live under the canonical domain packages.
 
 The completed refactor records are
 [the architecture handoff](COMPLETED-refactor-handoff.md),
 [the WebUI consolidation plan](COMPLETED-webui-workbench-consolidation-refactor-plan.en.md),
 and [the implementation log](COMPLETED-webui-consolidation-implementation-log.md).
-This progress file remains unprefixed because it is a living status index, not
-a closed refactor record.
 
 ## Current Outcome
 
@@ -78,8 +76,6 @@ targeted tests instead of being assumed complete.
 | Prevent loopback search traffic from using environment proxies | Implemented | `trust_env=False` plus merged `NO_PROXY/no_proxy` |
 | Generate and pass SimpleXNG settings | Implemented | `searxng_manager` writes the settings path and child environment |
 | Avoid `aiosqlite: Event loop is closed` during host shutdown | Fixed and regression-tested | shared application shutdown and `tests/test_runtime_host_shutdown.py` |
-| Improve weather-specific answer quality | **Not implemented** | there is no dedicated weather provider/tool; generic WebSearch remains |
-| Revalidate the historical Melbourne/Vancouver live LLM prompt | **Not re-run in this audit** | requires a live model/search integration and is not inferred from unit tests |
 
 Targeted verification for the implemented items:
 
@@ -198,32 +194,3 @@ the deleted physical file `src/cyrene/pattern.py`. The supported
    depend on route or Web UI modules.
 6. Preserve the tool wire schema and actor policy when moving implementations.
 7. Update the PyInstaller smoke test when adding a dynamic import boundary.
-
-## Remaining Work
-
-### Original Context/Search Scope
-
-- Add a dedicated weather provider or structured weather extraction if
-  day-level forecast quality becomes a product requirement.
-- Run a credentialed Melbourne/Vancouver integration test before making a
-  current claim about live model orchestration or result quality.
-
-### Broader Product/Architecture Work
-
-The directory migration is complete, but the following are independent future
-improvements:
-
-- replace remaining large dict-shaped Workbench models with explicit domain
-  models and repositories;
-- split the large browser and subagent orchestration modules into smaller state
-  machines/transports;
-- split behavior learning storage, candidate generation, versioning, and
-  execution services;
-- reduce import-time configuration mutation;
-- extend the pull-request CI beyond its current full pytest, WebUI-build, and
-  Electron App Use coverage with Ruff and packaged smoke checks where their
-  platform cost is justified;
-- implement the Research Workbench Experiments and Manuscripts phases described
-  in `research-workbench-roadmap.md`.
-
-These are not blockers for the current runtime or compatibility baseline.
