@@ -27,6 +27,7 @@ db.sqlite3-*
 /*.remote-control
 /*.remote-control-shm
 /*.remote-control-wal
+test.db
 
 # Environment
 .env

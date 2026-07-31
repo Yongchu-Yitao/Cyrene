@@ -13,6 +13,10 @@ developer guides remain under [`docs/`](../docs/).
 - [Completed WebUI / Workbench Consolidation Implementation Log](COMPLETED-webui-consolidation-implementation-log.md)
 - [Topbar Work Tabs and Pinned Resources Handoff (Chinese)](topbar-work-tabs-design.zh-CN.md)
 - [Design QA](design-qa.md)
+- [Design QA: Frosted Conversation Header](design-qa-frosted-header.md)
+- [Design QA: Model Picker](design-qa-model-picker.md)
+- [Design QA: Remote Sharing Settings](design-qa-remote-sharing.md)
+- [Design QA: Settings Nav Height](design-qa-settings-nav.md)
 - [Browser PiP Dynamic Avoidance Feasibility](browser-dynamic-layout-feasibility.en.md)
 
 Large/local screenshots used during design work are not part of the GitHub

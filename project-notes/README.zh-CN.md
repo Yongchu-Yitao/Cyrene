@@ -14,6 +14,10 @@
 - [已完成的 WebUI / Workbench UI 合并实施记录](COMPLETED-webui-consolidation-implementation-log.md)
 - [顶栏 Work Tabs 与固定资源 Handoff](topbar-work-tabs-design.zh-CN.md)
 - [设计 QA](design-qa.zh-CN.md)
+- [设计 QA:磨砂对话头部](design-qa-frosted-header.md)
+- [设计 QA:模型选择器](design-qa-model-picker.md)
+- [设计 QA:远程共享设置](design-qa-remote-sharing.md)
+- [设计 QA:设置导航高度](design-qa-settings-nav.md)
 - [浏览器浮窗动态避让可行性研究](browser-dynamic-layout-feasibility.md)
 
 大型/本地设计截图不属于 GitHub Repository。过时的本机
