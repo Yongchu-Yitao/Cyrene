@@ -181,6 +181,20 @@ def test_session_tabs_remain_interactive_inside_the_draggable_titlebar():
     assert "html[data-density=\"compact\"] .workbench-session-tab" in css
 
 
+def test_active_session_tab_stretches_with_an_accessible_transition():
+    css = (ROOT / "src/webui/frontend/workbench.css").read_text(encoding="utf-8")
+
+    tab = css.split(".workbench-session-tab {", 1)[1].split("}", 1)[0]
+    active = css.split(".workbench-session-tab.active {", 1)[1].split("}", 1)[0]
+    reduced_motion = css.split("@media (prefers-reduced-motion: reduce)", 1)[1]
+
+    assert "flex-basis 240ms cubic-bezier(0.22, 1, 0.36, 1)" in tab
+    assert "width: clamp(136px, 15vw, 220px)" in active
+    assert "flex-basis: 220px" in active
+    assert ".workbench-session-tab" in reduced_motion
+    assert "transition: none" in reduced_motion
+
+
 def test_session_tab_context_menu_supports_pinning_resources_and_removal():
     shell = (ROOT / "src/webui/frontend/workbench.jsx").read_text(encoding="utf-8")
     chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(

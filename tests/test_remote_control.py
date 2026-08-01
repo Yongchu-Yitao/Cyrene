@@ -897,6 +897,18 @@ def test_remote_executor_filters_projects_and_public_run_events(
                     "response": "public answer",
                     "debug": {"path": "/private/debug"},
                 },
+                {
+                    "_seq": 5,
+                    "runId": "run_shared",
+                    "type": "awaiting_user",
+                    "pendingQuestion": {
+                        "id": "question_1",
+                        "text": "Allow once?",
+                        "options": ["Allow", "Deny"],
+                        "allowCustom": False,
+                        "debug": {"path": "/private/debug"},
+                    },
+                },
             ],
         )
 
@@ -949,6 +961,7 @@ def test_remote_executor_filters_projects_and_public_run_events(
         assert [event["type"] for event in events["events"]] == [
             "ack",
             "reply_done",
+            "awaiting_user",
         ]
         assert events["events"][0] == {
             "type": "ack",
@@ -958,7 +971,13 @@ def test_remote_executor_filters_projects_and_public_run_events(
         }
         assert events["events"][1]["response"] == "public answer"
         assert "debug" not in events["events"][1]
-        assert events["next_cursor"] == 4
+        assert events["events"][2]["pending_question"] == {
+            "id": "question_1",
+            "text": "Allow once?",
+            "options": ["Allow", "Deny"],
+            "allowCustom": False,
+        }
+        assert events["next_cursor"] == 5
         assert wrong_project["code"] == "remote_project_mismatch"
 
     asyncio.run(scenario())
@@ -986,11 +1005,17 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
             ],
             "pendingQuestion": {
                 "id": "question_1",
-                "prompt": "Continue?",
+                "text": "Allow this operation?",
+                "options": [
+                    {"id": "allow_once", "label": "Allow once"},
+                    {"id": "deny", "label": "Deny"},
+                ],
+                "allowCustom": True,
                 "debug": {"path": "/private/debug"},
             },
         }
         calls = {"chat_send": 0, "task_dispatch": 0}
+        modes = {}
 
         async def list_tasks(_project_id):
             return {"sessions": [task]}
@@ -998,8 +1023,9 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
         async def get_task(_task_id):
             return {"session": task}
 
-        async def dispatch_task(_task_id, _body):
+        async def dispatch_task(_task_id, body):
             calls["task_dispatch"] += 1
+            modes["task"] = body.mode
             return {"session": task}
 
         async def get_chat(_chat_id):
@@ -1008,11 +1034,13 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
                     "id": "chat_1",
                     "projectId": "project_1",
                     "messages": [],
+                    "pendingQuestion": task["pendingQuestion"],
                 }
             }
 
-        async def send_chat_detached(*_args, **_kwargs):
+        async def send_chat_detached(_chat_id, body, **_kwargs):
             calls["chat_send"] += 1
+            modes["chat"] = body["mode"]
             return {"run_id": "run_1"}
 
         executor = RemoteCommandExecutor(
@@ -1043,8 +1071,20 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
         ]
         assert listed["tasks"][0]["pending_question"] == {
             "id": "question_1",
-            "prompt": "Continue?",
+            "text": "Allow this operation?",
+            "options": [
+                {"id": "allow_once", "label": "Allow once"},
+                {"id": "deny", "label": "Deny"},
+            ],
+            "allowCustom": True,
         }
+        chat_detail = await executor(
+            controller.identity.device_id,
+            "chats.read",
+            {"chat_id": "chat_1"},
+            "project_1",
+        )
+        assert chat_detail["chat"]["pending_question"] == listed["tasks"][0]["pending_question"]
 
         with pytest.raises(ValueError, match="permission_mode"):
             await executor(
@@ -1069,6 +1109,29 @@ def test_remote_command_sanitizes_task_data_and_rejects_elevated_modes(
                 "project_1",
             )
         assert calls == {"chat_send": 0, "task_dispatch": 0}
+
+        await executor(
+            controller.identity.device_id,
+            "chats.send",
+            {
+                "chat_id": "chat_1",
+                "message": "Review permissions automatically",
+                "permission_mode": "auto",
+            },
+            "project_1",
+        )
+        await executor(
+            controller.identity.device_id,
+            "tasks.dispatch",
+            {
+                "task_id": "task_1",
+                "message": "Review permissions automatically",
+                "permission_mode": "auto",
+            },
+            "project_1",
+        )
+        assert calls == {"chat_send": 1, "task_dispatch": 1}
+        assert modes == {"chat": "auto", "task": "auto"}
 
     asyncio.run(scenario())
 

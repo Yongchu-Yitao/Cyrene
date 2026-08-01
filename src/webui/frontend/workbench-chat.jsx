@@ -278,6 +278,8 @@ var WorkbenchChatModel = (function () {
       return response.json().catch(function () { return {}; }).then(function (payload) {
         var err = new Error(payload.error || payload.detail || ("HTTP " + response.status));
         err.code = payload.code || "";
+        err.detailKey = payload.detail_key || payload.detailKey || "";
+        err.detailParams = payload.detail_params || payload.detailParams || {};
         err.status = response.status;
         throw err;
       });
@@ -308,7 +310,14 @@ var WorkbenchChatModel = (function () {
         try { window.dispatchEvent(new CustomEvent("workbench:workspace-changes", { detail: event })); } catch (e) {}
       }
       else if (type === "interrupted" && handlers.onInterrupted) handlers.onInterrupted(event);
-      else if (type === "error" && handlers.onError) handlers.onError(new Error(event.message || wbcT("settings.failed", "Failed")));
+      else if (type === "error" && handlers.onError) {
+        var streamError = new Error(event.message || wbcT("settings.failed", "Failed"));
+        streamError.code = event.code || event.failure_kind || "";
+        streamError.detailKey = event.detail_key || event.detailKey || "";
+        streamError.detailParams = event.detail_params || event.detailParams || {};
+        streamError.errorType = event.error || "";
+        handlers.onError(streamError);
+      }
     }
 
     function pump() {
@@ -852,9 +861,12 @@ function wbcNotifyBrowserLayoutChanged() {
   window.dispatchEvent(new CustomEvent("workbench:browser-layout"));
 }
 
-function wbcNotifyBrowserWindowInteraction(active, kind, sessionId) {
+function wbcNotifyBrowserWindowInteraction(active, kind, sessionId, extra) {
   window.dispatchEvent(new CustomEvent("workbench:browser-window-interaction", {
-    detail: { active: active === true, kind: kind || "", sessionId: String(sessionId || "") },
+    detail: Object.assign(
+      { active: active === true, kind: kind || "", sessionId: String(sessionId || "") },
+      extra && typeof extra === "object" ? extra : {}
+    ),
   }));
 }
 
@@ -980,17 +992,49 @@ var WORKBENCH_BUDGET_CODES = {
   budget_5h_exhausted: "5h",
 };
 
+var WORKBENCH_ERROR_I18N_KEYS = {
+  quota_exhausted: "workbenchChat.error.quotaExhausted",
+  authentication_expired: "workbenchChat.error.authenticationExpired",
+  model_unavailable: "workbenchChat.error.modelUnavailable",
+  process_restarted: "workbenchChat.error.processRestarted",
+  chat_run_driver_failed: "workbenchChat.error.driverFailed",
+  chat_not_found: "workbenchChat.error.chatNotFound",
+  chat_run_not_found: "workbenchChat.error.chatRunNotFound",
+  chat_not_running: "workbenchChat.error.chatNotRunning",
+  chat_run_in_progress: "workbenchChat.error.chatRunInProgress",
+  guidance_persistence_failed: "workbenchChat.error.guidancePersistenceFailed",
+  answer_resume_failed: "workbenchChat.error.answerResumeFailed",
+};
+
 function wbcErrorText(err) {
   var raw = String((err && err.message) || err || "").trim();
   if (!raw || raw === "Load failed" || raw === "Failed to fetch" || raw === "NetworkError when attempting to fetch resource.") {
     return wbcT("workbenchChat.error.loadFailed", "Load failed");
   }
-  // Budget errors: translate via i18n key from the code field
   var code = (err && err.code) || "";
   if (code.startsWith("budget_")) {
     var i18nKey = "budget.error." + (WORKBENCH_BUDGET_CODES[code] || "5h");
     return wbcT(i18nKey, raw);
   }
+  var detailKey = (err && (err.detailKey || err.detail_key)) || WORKBENCH_ERROR_I18N_KEYS[code] || "";
+  if (detailKey) {
+    return wbcT(detailKey, raw, (err && (err.detailParams || err.detail_params)) || {});
+  }
+  // Keep older daemons compatible while they are being upgraded: known Codex
+  // availability messages can still be localized even without error metadata.
+  if (/^codex\s+quota\s+is\s+exhausted\b/i.test(raw)) {
+    return wbcT("workbenchChat.error.quotaExhausted", raw);
+  }
+  if (/^codex\s+authentication\s+has\s+expired\b/i.test(raw)) {
+    return wbcT("workbenchChat.error.authenticationExpired", raw);
+  }
+  if (/^codex(?:\s+model)?\b.*\bunavailable\b/i.test(raw)) {
+    return wbcT("workbenchChat.error.modelUnavailable", raw);
+  }
+  try {
+    var api = window.CyreneUI.require("api");
+    if (api && typeof api.errorText === "function") return api.errorText(err);
+  } catch (e) {}
   return raw;
 }
 
@@ -2143,6 +2187,22 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
   var [subagentData, setSubagentData] = useWbcState({ rounds: [], activeRoundId: "", agents: [], messages: [] });
   var [subagentLoading, setSubagentLoading] = useWbcState(false);
   var subagentRefreshTimerRef = useWbcRef(null);
+
+  useWbcEffect(function () {
+    function handleShowChatSide() {
+      if (isActive) setSideVisible(true);
+    }
+    window.addEventListener("workbench:show-chat-side", handleShowChatSide);
+    return function () {
+      window.removeEventListener("workbench:show-chat-side", handleShowChatSide);
+    };
+  }, [isActive]);
+
+  useWbcEffect(function () {
+    window.dispatchEvent(new CustomEvent("workbench:chat-side-visibility", {
+      detail: { active: isActive, hidden: isActive && !sideVisible },
+    }));
+  }, [isActive, sideVisible]);
   var remoteChatRefreshTimerRef = useWbcRef(null);
   var revealedSubagentRoundRef = useWbcRef("");
   // True while the backend reads the whole conversation and synthesizes a task.
@@ -3257,11 +3317,14 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
     });
   }
 
-  function handleToTask() {
-    if (!activeChat || toTaskBusy) return;
+  function handleToTask(chatId) {
+    var targetChatId = typeof chatId === "string"
+      ? chatId
+      : String(activeChat && activeChat.id || "");
+    if (!targetChatId || toTaskBusy) return;
     setToTaskBusy(true);
     setError("");
-    model.toTask(activeChat.id).then(function (payload) {
+    model.toTask(targetChatId).then(function (payload) {
       if (onOpenTask) onOpenTask(payload);
     }).catch(function (err) {
       setError(wbcErrorText(err));
@@ -3382,7 +3445,6 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
       data-active-chat-id={activeChatId || ""}
       data-project-id={projectId || ""}
     >
-      <div className="wbc-top-glass" aria-hidden="true" />
       {chatFileDropActive && <WorkbenchFileDropOverlay label={wbcT("workbenchChat.dropToAttach", "Release to add files to the message input")} />}
       <WbcRail
         projectId={projectId}
@@ -3395,6 +3457,8 @@ function WorkbenchChatPage({ active, project, newChatRequestId, onOpenTask, onAc
         onCreate={handleCreateChat}
         onRename={handleRenameChat}
         onDelete={handleDeleteChat}
+        onToTask={handleToTask}
+        toTaskBusy={toTaskBusy}
         onTogglePinned={onTogglePinnedChat}
       />
       <WbcMain
@@ -3688,7 +3752,7 @@ function wbcMoveChatOrder(order, movingId, targetId, edge) {
   return next;
 }
 
-function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runningChatIds, onSelect, onCreate, onRename, onDelete, onTogglePinned }) {
+function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runningChatIds, onSelect, onCreate, onRename, onDelete, onToTask, toTaskBusy, onTogglePinned }) {
   var [query, setQuery] = useWbcState("");
   var [menuId, setMenuId] = useWbcState("");
   var [renameChat, setRenameChat] = useWbcState(null);
@@ -3766,20 +3830,24 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
   return (
     <aside className="wbc-rail">
       <div className="wbc-rail-glass">
-        <div className="workbench-rail-head">
-          <span>{wbcT("workbenchChat.railTitle", "Chats")}</span>
-          <button type="button" className="workbench-add-btn" onClick={onCreate}>
-            <span>{WBC_ICONS.plus}</span>
-            <span>{wbcT("workbenchChat.newChat", "New chat")}</span>
+        <div className="wbc-rail-toolbar">
+          <div className="wbc-search">
+            <span className="wbc-search-icon">{WBC_ICONS.search}</span>
+            <input
+              value={query}
+              onChange={function (e) { setQuery(e.target.value); }}
+              placeholder={wbcT("workbenchChat.search", "Search chats...")}
+            />
+          </div>
+          <button
+            type="button"
+            className="workbench-icon-btn wbc-new-chat-btn"
+            onClick={onCreate}
+            title={wbcT("workbenchChat.newChat", "New chat")}
+            aria-label={wbcT("workbenchChat.newChat", "New chat")}
+          >
+            {WBC_ICONS.plus}
           </button>
-        </div>
-        <div className="wbc-search">
-          <span className="wbc-search-icon">{WBC_ICONS.search}</span>
-          <input
-            value={query}
-            onChange={function (e) { setQuery(e.target.value); }}
-            placeholder={wbcT("workbenchChat.search", "Search chats...")}
-          />
         </div>
       </div>
       {menuId && <div className="wb-card-menu-scrim" onClick={function () { setMenuId(""); }} />}
@@ -3935,17 +4003,31 @@ function WbcRail({ projectId, chats, pinnedChatIds, activeChatId, loading, runni
                             : wbcT("workbenchChat.pin", "Pin chat")}</span>
                         </button>
                         {!chat.legacy && (
-                          <button type="button" role="menuitem" onClick={function (e) {
+                          <button type="button" role="menuitem" className="wbc-chat-menu-action" onClick={function (e) {
                             e.stopPropagation();
                             setMenuId("");
                             setRenameChat(chat);
-                          }}>{wbcT("workbenchChat.rename", "Rename chat")}</button>
+                          }}>
+                            <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.edit}</span>
+                            <span>{wbcT("workbenchChat.rename", "Rename chat")}</span>
+                          </button>
                         )}
-                        <button type="button" role="menuitem" className="danger" onClick={function (e) {
+                        <button type="button" role="menuitem" className="wbc-chat-menu-action" disabled={toTaskBusy} onClick={function (e) {
+                          e.stopPropagation();
+                          setMenuId("");
+                          if (onToTask) onToTask(chat.id);
+                        }}>
+                          <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.task}</span>
+                          <span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span>
+                        </button>
+                        <button type="button" role="menuitem" className="wbc-chat-menu-action danger" onClick={function (e) {
                           e.stopPropagation();
                           setMenuId("");
                           onDelete && onDelete(chat.id);
-                        }}>{wbcT("workbenchChat.delete", "Delete chat")}</button>
+                        }}>
+                          <span className="wbc-chat-menu-icon" aria-hidden="true">{WBC_ICONS.trash}</span>
+                          <span>{wbcT("workbenchChat.delete", "Delete chat")}</span>
+                        </button>
                       </div>
                     )}
                   </span>
@@ -3983,6 +4065,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   var suppressMinimizedClickRef = useWbcRef(false);
   var modeTransitionRafRef = useWbcRef(0);
   var modeTransitionTimerRef = useWbcRef(null);
+  var modeTransitionReadyHandlerRef = useWbcRef(null);
   var [frame, setFrame] = useWbcState(null);
   var [minimizedFrame, setMinimizedFrame] = useWbcState(null);
   var [nativeBrowserState, setNativeBrowserState] = useWbcState(null);
@@ -4130,6 +4213,10 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
   }
 
   function cancelModeTransition() {
+    if (modeTransitionReadyHandlerRef.current) {
+      window.removeEventListener("workbench:browser-transition-target-ready", modeTransitionReadyHandlerRef.current);
+      modeTransitionReadyHandlerRef.current = null;
+    }
     if (modeTransitionRafRef.current) {
       cancelAnimationFrame(modeTransitionRafRef.current);
       modeTransitionRafRef.current = 0;
@@ -4140,24 +4227,93 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     }
   }
 
-  function runModeTransition(action) {
+  function measureBrowserSurfaceForMode(targetMode) {
+    var shell = shellRef.current;
+    var host = shell && shell.parentElement;
+    if (!shell || !host) return null;
+    var clone = shell.cloneNode(true);
+    clone.className = "wbc-browser-window " + targetMode;
+    clone.removeAttribute("style");
+    clone.setAttribute("aria-hidden", "true");
+    clone.style.visibility = "hidden";
+    clone.style.pointerEvents = "none";
+    clone.style.transition = "none";
+    if (targetMode === "pip" && frameRef.current) {
+      var saved = frameRef.current;
+      clone.style.left = saved.x + "px";
+      clone.style.top = saved.y + "px";
+      clone.style.width = saved.width + "px";
+      clone.style.height = saved.height + "px";
+      clone.style.right = "auto";
+      clone.style.bottom = "auto";
+    }
+    host.appendChild(clone);
+    var surface = clone.querySelector(".browser-native-surface");
+    var rect = surface && surface.getBoundingClientRect();
+    clone.remove();
+    if (!rect || rect.width <= 8 || rect.height <= 8) return null;
+    return {
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
+      borderRadius: 0,
+      pageCornerRadius: targetMode === "pip" ? 8 : 0,
+    };
+  }
+
+  function runModeTransition(action, targetMode) {
     if (!action) return;
     cancelModeTransition();
-    // Detach the native view before React changes the shell from a bounded PiP
-    // rectangle to a fixed full-window surface (or back). The bitmap proxy is
-    // kept for two committed frames, then the live view is attached once at the
-    // final bounds; this avoids Electron's white compositor surface.
-    wbcNotifyBrowserWindowInteraction(true, "mode", browserSessionId);
-    action();
-    modeTransitionRafRef.current = requestAnimationFrame(function () {
+    var started = false;
+    function applyModeAfterPreview() {
+      if (started) return;
+      started = true;
+      if (modeTransitionReadyHandlerRef.current) {
+        window.removeEventListener("workbench:browser-transition-target-ready", modeTransitionReadyHandlerRef.current);
+        modeTransitionReadyHandlerRef.current = null;
+      }
+      if (modeTransitionTimerRef.current) {
+        clearTimeout(modeTransitionTimerRef.current);
+        modeTransitionTimerRef.current = null;
+      }
+      var commitModeAndPreview = function () {
+        action();
+        window.dispatchEvent(new CustomEvent("workbench:browser-transition-commit-preview", {
+          detail: { sessionId: browserSessionId },
+        }));
+      };
+      // The target screenshot and the target shell must become visible in the
+      // same renderer commit. Without flushSync React may paint the target page
+      // inside the old PiP shell first, which looks like an extra zoom step.
+      if (window.ReactDOM && typeof window.ReactDOM.flushSync === "function") {
+        window.ReactDOM.flushSync(commitModeAndPreview);
+      } else {
+        commitModeAndPreview();
+      }
+      // Let React commit the target shell and the browser surface finish layout
+      // before asking Electron to attach at the new rectangle.
       modeTransitionRafRef.current = requestAnimationFrame(function () {
-        modeTransitionRafRef.current = 0;
-        modeTransitionTimerRef.current = setTimeout(function () {
-          modeTransitionTimerRef.current = null;
+        modeTransitionRafRef.current = requestAnimationFrame(function () {
+          modeTransitionRafRef.current = 0;
           wbcNotifyBrowserWindowInteraction(false, "mode", browserSessionId);
-        }, 48);
+        });
       });
+    }
+    modeTransitionReadyHandlerRef.current = function (event) {
+      var detail = event && event.detail || {};
+      if (String(detail.sessionId || "") !== String(browserSessionId || "")) return;
+      applyModeAfterPreview();
+    };
+    window.addEventListener("workbench:browser-transition-target-ready", modeTransitionReadyHandlerRef.current);
+    // Keep the current shell unchanged while Electron prepares a frame at the
+    // target rectangle. The target proxy and the React mode commit then land in
+    // one batch, so no stretched intermediate frame reaches the screen.
+    wbcNotifyBrowserWindowInteraction(true, "mode", browserSessionId, {
+      targetMode: targetMode || "",
+      targetBounds: measureBrowserSurfaceForMode(targetMode || ""),
     });
+    modeTransitionTimerRef.current = setTimeout(applyModeAfterPreview, 1800);
   }
 
   function measuredFloatingFrame(node) {
@@ -4316,6 +4472,15 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
     if (!interaction || !interaction.started) return;
     if (interaction.previewTimer) clearTimeout(interaction.previewTimer);
     interaction.previewTimer = null;
+    if (detail.fallback) {
+      // The native view was not replaced by a painted proxy. Keep the shell at
+      // its original position and cancel this gesture; moving it now would
+      // expose the still-visible native view as a second detached rectangle.
+      interaction.cancelled = true;
+      interaction.previewReady = true;
+      if (interaction.pointerReleased) finalizeInteraction(interaction);
+      return;
+    }
     interaction.previewReady = true;
     commitInteractionDelta(interaction, interaction.pendingDx, interaction.pendingDy);
     if (interaction.pointerReleased) finalizeInteraction(interaction);
@@ -4334,11 +4499,12 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       interaction.previewTimer = setTimeout(function () {
         wbcNotifyBrowserWindowInteraction(false, interaction.kind, browserSessionId);
         onBrowserWindowPreviewReady({ detail: { sessionId: browserSessionId, fallback: true } });
-      }, 250);
+      }, 750);
     }
     updateResourceShelfTarget(interaction, event.clientX, event.clientY);
     interaction.pendingDx = dx;
     interaction.pendingDy = dy;
+    if (interaction.cancelled) return;
     // Keep the native page and shell at their original coordinates until the
     // bitmap proxy is committed and Electron confirms the native view hidden.
     // This removes the single exposed background/old-position frame at start.
@@ -4368,6 +4534,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       pendingDx: 0,
       pendingDy: 0,
       pointerReleased: false,
+      cancelled: false,
       previewTimer: null,
       overShelf: false,
       targetChatId: "",
@@ -4726,7 +4893,7 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
       <div
         className="wbc-browser-window-bar"
         onPointerDown={function (event) { beginInteraction(event, "drag", ""); }}
-        onDoubleClick={function () { runModeTransition(effectiveMode === "pip" ? onMaximize : onRestore); }}
+        onDoubleClick={function () { runModeTransition(effectiveMode === "pip" ? onMaximize : onRestore, effectiveMode === "pip" ? "maximized" : "pip"); }}
       >
         <span
           className="wbc-browser-title-pill"
@@ -4735,9 +4902,9 @@ function WbcBrowserFloatingSurface({ browserState, browserSessionId, visible, mo
         {wbcBrowserPageTitle(displayBrowserState) && <strong title={wbcBrowserWindowTitle(displayBrowserState)}>{wbcBrowserPageTitle(displayBrowserState)}</strong>}
         <div className="wbc-browser-window-actions">
           {effectiveMode === "pip" ? (
-            <button type="button" onClick={function () { runModeTransition(onMaximize); }} title={wbcT("workbenchChat.browserMaximize", "Maximize")} aria-label={wbcT("workbenchChat.browserMaximize", "Maximize")}>{WBC_ICONS.windowMaximize}</button>
+            <button type="button" onClick={function () { runModeTransition(onMaximize, "maximized"); }} title={wbcT("workbenchChat.browserMaximize", "Maximize")} aria-label={wbcT("workbenchChat.browserMaximize", "Maximize")}>{WBC_ICONS.windowMaximize}</button>
           ) : (
-            <button type="button" onClick={function () { runModeTransition(onRestore); }} title={wbcT("workbenchChat.browserRestoreSize", "Restore")} aria-label={wbcT("workbenchChat.browserRestoreSize", "Restore")}><span className="wbc-material-icon close-fullscreen" aria-hidden="true" /></button>
+            <button type="button" onClick={function () { runModeTransition(onRestore, "pip"); }} title={wbcT("workbenchChat.browserRestoreSize", "Restore")} aria-label={wbcT("workbenchChat.browserRestoreSize", "Restore")}><span className="wbc-material-icon close-fullscreen" aria-hidden="true" /></button>
           )}
           <button type="button" onClick={onMinimize} title={wbcT("workbenchChat.browserMinimize", "Minimize")} aria-label={wbcT("workbenchChat.browserMinimize", "Minimize")}>{WBC_ICONS.windowMinimize}</button>
         </div>
@@ -5400,34 +5567,6 @@ function WbcMain({ project, chat, chatSummary, loading, runtime, error, errorKin
           {wbcT("workbenchChat.dropToOpen", "Release to open this conversation")}
         </div>
       )}
-      {(chat || chatSummary) ? (
-        <WbcHeader
-          project={project}
-          chat={chat || chatSummary}
-          running={running}
-          finalizing={!!(runtime && runtime.finalizing)}
-          onRename={onRename}
-          onDelete={onDelete}
-          onToTask={onToTask}
-          toTaskBusy={toTaskBusy}
-          sideVisible={sideVisible}
-          onToggleSide={onToggleSide}
-        />
-      ) : (
-        <div className="wbc-header">
-          <div className="wbc-header-info">
-            <h1>{wbcT("workbenchChat.newChat", "New chat")}</h1>
-            <div className="wbc-header-meta"><span>{project.name}</span></div>
-          </div>
-          <div className="wbc-header-actions">
-            {!sideVisible && (
-              <button type="button" className="wbc-icon-btn" onClick={onToggleSide} title={wbcT("workbenchChat.showSidebar", "Show side panel")}>
-                {WBC_ICONS.sidebar}
-              </button>
-            )}
-          </div>
-        </div>
-      )}
       {error && <WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} />}
       <div className="wbc-thread-stage" ref={stageRef}>
       <div
@@ -5666,7 +5805,7 @@ function WbcErrorNotice({ message, kind, onRetry }) {
   );
 }
 
-function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onToTask, toTaskBusy, sideVisible, onToggleSide }) {
+function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onToTask, toTaskBusy }) {
   var [editing, setEditing] = useWbcState(false);
   var [draft, setDraft] = useWbcState(chat.title || "");
   var [menuOpen, setMenuOpen] = useWbcState(false);
@@ -5732,11 +5871,6 @@ function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onT
         </div>
       </div>
       <div className="wbc-header-actions">
-        {!sideVisible && (
-          <button type="button" className="wbc-icon-btn" onClick={onToggleSide} title={wbcT("workbenchChat.showSidebar", "Show side panel")}>
-            {WBC_ICONS.sidebar}
-          </button>
-        )}
         {!isLegacy && (
           <button type="button" className={"wb-btn primary wbc-totask" + (toTaskBusy ? " is-busy" : "")} disabled={running || toTaskBusy} onClick={onToTask} title={wbcT("workbenchChat.toTaskTitle", "Create a task from this chat")}>
             {toTaskBusy
@@ -5753,9 +5887,9 @@ function WbcHeader({ project, chat, running, finalizing, onRename, onDelete, onT
               <>
                 <div className="wbc-menu-scrim" onClick={function () { setMenuOpen(false); }}></div>
                 <div className="wbc-menu">
-                  <button type="button" onClick={function () { setMenuOpen(false); setEditing(true); }}>{wbcT("workbenchChat.rename", "Rename chat")}</button>
-                  <button type="button" disabled={toTaskBusy} onClick={function () { setMenuOpen(false); onToTask(); }}>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</button>
-                  <button type="button" className="danger" onClick={function () { setMenuOpen(false); onDelete(); }}>{wbcT("workbenchChat.delete", "Delete chat")}</button>
+                  <button type="button" onClick={function () { setMenuOpen(false); setEditing(true); }}>{WBC_ICONS.edit}<span>{wbcT("workbenchChat.rename", "Rename chat")}</span></button>
+                  <button type="button" disabled={toTaskBusy} onClick={function () { setMenuOpen(false); onToTask(); }}>{WBC_ICONS.task}<span>{wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask", toTaskBusy ? "Analyzing chat…" : "Convert to task")}</span></button>
+                  <button type="button" className="danger" onClick={function () { setMenuOpen(false); onDelete(); }}>{WBC_ICONS.trash}<span>{wbcT("workbenchChat.delete", "Delete chat")}</span></button>
                 </div>
               </>
             )}

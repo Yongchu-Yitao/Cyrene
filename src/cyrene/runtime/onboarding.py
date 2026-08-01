@@ -176,7 +176,11 @@ def _has_existing_data() -> bool:
     return False
 
 
-def _is_absolute_fresh_start(soul_content: str) -> bool:
+def _is_absolute_fresh_start(
+    soul_content: str,
+    *,
+    existing_data: bool | None = None,
+) -> bool:
     """A pristine first run: no onboarding markers, no API key, default/empty
     SOUL.md, and no pre-existing user data of any kind."""
     return (
@@ -184,7 +188,7 @@ def _is_absolute_fresh_start(soul_content: str) -> bool:
         and not _setup_flag_path().exists()
         and not _api_key_present()
         and (not soul_content.strip() or _is_default_soul(soul_content))
-        and not _has_existing_data()
+        and not (_has_existing_data() if existing_data is None else existing_data)
     )
 
 
@@ -224,7 +228,11 @@ def get_onboarding_status() -> dict[str, Any]:
     personality_configured = bool(state["personality"]["completed_at"]) or _personality_inferred_configured(soul_content)
     both_configured = llm_configured and personality_configured
 
-    fresh_start = _is_absolute_fresh_start(soul_content)
+    existing_data = _has_existing_data()
+    fresh_start = _is_absolute_fresh_start(
+        soul_content,
+        existing_data=existing_data,
+    )
     # The wizard is mid-flow only when a step was completed *through the wizard*
     # (legacy inference tags its sources "legacy-*") and setup isn't finished —
     # e.g. a fresh user saved the model step but hasn't picked a personality.
@@ -246,6 +254,7 @@ def get_onboarding_status() -> dict[str, Any]:
     return {
         "needsOnboarding": needs_onboarding,
         "isAbsoluteFreshStart": fresh_start,
+        "hasExistingData": existing_data,
         "activeStep": active_step,
         "completedAt": state.get("completed_at", ""),
         "llm": {

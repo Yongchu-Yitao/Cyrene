@@ -27,6 +27,7 @@ import httpx
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import Application, in_terminal
 from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.filters import to_filter
 from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
@@ -1111,13 +1112,19 @@ class InteractiveChat:
             if not self._reasoning_overlay_open:
                 event.app.create_background_task(self._show_reasoning_overlay())
 
-        return PromptSession(
+        session = PromptSession(
             history=history,
             completer=WordCompleter(list(_COMMANDS), sentence=True),
             complete_while_typing=False,
             key_bindings=bindings,
             style=self._terminal_style(),
         )
+        # PromptSession's input window expands to consume the available terminal
+        # height by default, which pushes the bottom toolbar (our lower rule and
+        # status) to the bottom of the screen. Keep the window content-sized so
+        # the upper rule, prompt, and lower rule render on adjacent lines.
+        session.layout.current_window.dont_extend_height = to_filter(True)
+        return session
 
     @staticmethod
     def _accept_input(event: Any) -> None:

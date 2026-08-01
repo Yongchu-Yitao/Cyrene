@@ -117,6 +117,24 @@ def test_selection_menu_binds_arrow_keys_and_input_has_bottom_rule():
     assert "bottom_toolbar=self._input_bottom_toolbar" in run_source
 
 
+def test_prompt_input_does_not_expand_to_fill_terminal_height():
+    from prompt_toolkit.application import create_app_session
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    from cyrene.cli_chat import ChatOptions, InteractiveChat, JsonRenderer
+
+    app = InteractiveChat(
+        object(),
+        JsonRenderer(stream=io.StringIO()),
+        ChatOptions(),
+    )
+    with create_pipe_input() as pipe_input:
+        with create_app_session(input=pipe_input, output=DummyOutput()):
+            prompt = app._build_prompt_session()
+
+    assert prompt.layout.current_window.dont_extend_height()
+
+
 def test_empty_input_is_not_submitted():
     from cyrene.cli_chat import InteractiveChat
 

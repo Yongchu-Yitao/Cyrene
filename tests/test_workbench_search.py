@@ -793,6 +793,33 @@ def test_workbench_chat_network_failure_requests_resend(client, search_env, monk
     )
 
 
+def test_workbench_chat_codex_quota_error_includes_i18n_metadata(client, search_env, monkeypatch):
+    from cyrene import agent
+    from cyrene.model_runtime.codex_provider import (
+        CODEX_QUOTA_EXHAUSTED,
+        CodexAvailabilityError,
+    )
+
+    async def fake_run_agent(**_kwargs):
+        raise CodexAvailabilityError(
+            CODEX_QUOTA_EXHAUSTED,
+            "Codex quota is exhausted; wait for the quota window to reset",
+        )
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+
+    response = client.post(
+        "/api/workbench/chats/chat_1/messages",
+        json={"message": "inspect the project", "stream": True, "lang": "zh"},
+    )
+
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+    error = next(event for event in events if event.get("type") == "error")
+    assert error["code"] == CODEX_QUOTA_EXHAUSTED
+    assert error["detail_key"] == "workbenchChat.error.quotaExhausted"
+
+
 def test_workspace_scope_block_uses_runtime_workspace(tmp_path):
     from cyrene.agent.prompts import workspace_scope_block
 

@@ -15,6 +15,13 @@
   function T(key, params, fallback) {
     return window.CyreneUI.require("i18n").t(key, params, fallback);
   }
+  function createErrorText(err) {
+    try {
+      var api = window.CyreneUI.require("api");
+      if (api && typeof api.errorText === "function") return api.errorText(err);
+    } catch (e) {}
+    return String((err && err.message) || err || "");
+  }
 
   function Svg(props) {
     return React.createElement(
@@ -117,7 +124,7 @@
         template: template,
         workspacePath: workspacePath.trim() || undefined,
       })).catch(function (e) {
-        setError((e && e.message) || String(e));
+        setError(createErrorText(e));
         setBusy(false);
         setStep(0);
       });
@@ -148,7 +155,7 @@
           setError(data.error);
         }
       } catch (e) {
-        setError((e && e.message) || String(e));
+        setError(createErrorText(e));
       }
     }
 
@@ -318,7 +325,7 @@
       setBusy(true);
       setError("");
       Promise.resolve(props.onCreate({ title: trimmed, goal: goal.trim(), priority: priority }))
-        .catch(function (e) { setError((e && e.message) || String(e)); setBusy(false); });
+        .catch(function (e) { setError(createErrorText(e)); setBusy(false); });
     }
 
     return (

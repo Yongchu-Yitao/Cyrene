@@ -240,7 +240,7 @@ if (isDesktopSmokeTest) {
   app.setPath('userData', path.join(getCyreneTempDir(), 'electron-smoke-profile'));
 }
 const BROWSER_USER_EVENT_CONSOLE_PREFIX = '__CYRENE_BROWSER_USER_EVENT__';
-const BROWSER_LEFT_EDGE_PREFIX = '__CYRENE_LEFT_EDGE__';
+const BROWSER_RESIZE_EDGE_PREFIX = '__CYRENE_RESIZE_EDGE__';
 
 const DEFAULT_DESKTOP_SETTINGS = Object.freeze({
   launchAtLogin: false,
@@ -692,6 +692,7 @@ class BrowserTabManager {
     this.bounds = { x: 0, y: 0, width: 0, height: 0 };
     this.borderRadius = 0;
     this.pageCornerRadius = 0;
+    this.resizeEdgeHintColor = '#63b38f';
     this.chatOverlayView = null;
     this.chatOverlayParent = null;
     this.chatOverlayState = { visible: false, running: false, showStatus: false };
@@ -703,6 +704,7 @@ class BrowserTabManager {
     this._repaintTimer = null;
     this._boundsTransitionToken = 0;
     this._boundsTransitioning = false;
+    this._pageZoomTokenByContents = new Map();
     this.videoFullscreen = { active: false, external: false, tabId: '' };
     this.videoFullscreenWindow = null;
     this._videoFullscreenWindowClosing = false;
@@ -1201,6 +1203,55 @@ class BrowserTabManager {
         if (window.__cyreneBrowserUserCaptureInstalled) return true;
         window.__cyreneBrowserUserCaptureInstalled = true;
         const prefix = ${JSON.stringify(BROWSER_USER_EVENT_CONSOLE_PREFIX)};
+        const resizeEdgeHint = document.createElement("div");
+        resizeEdgeHint.setAttribute("data-cyrene-resize-edge-hint", "");
+        const resizeEdgeCursorStyle = document.createElement("style");
+        resizeEdgeCursorStyle.setAttribute("data-cyrene-resize-edge-cursor", "");
+        resizeEdgeCursorStyle.textContent =
+          'html[data-cyrene-resize-edge-active], ' +
+          'html[data-cyrene-resize-edge-active] * { cursor: col-resize !important; }';
+        document.documentElement.appendChild(resizeEdgeCursorStyle);
+        Object.assign(resizeEdgeHint.style, {
+          position: "fixed",
+          zIndex: "2147483647",
+          inset: "0 auto 0 0",
+          width: "2px",
+          pointerEvents: "none",
+          opacity: "0",
+          background: ${JSON.stringify(this.resizeEdgeHintColor)},
+          transition: "opacity 120ms ease",
+        });
+        document.documentElement.appendChild(resizeEdgeHint);
+        const resizeEdgePrefix = ${JSON.stringify(BROWSER_RESIZE_EDGE_PREFIX)};
+        let resizeEdgeHintEnabled = ${JSON.stringify(this.zoomEnabled === false)};
+        let resizeEdgeHintLocal = false;
+        let resizeEdgeHintExternal = false;
+        const renderResizeEdgeHint = () => {
+          const active = resizeEdgeHintEnabled && (resizeEdgeHintLocal || resizeEdgeHintExternal);
+          resizeEdgeHint.style.opacity = active ? "1" : "0";
+          document.documentElement.toggleAttribute("data-cyrene-resize-edge-active", active);
+        };
+        const showResizeEdgeHint = (show) => {
+          const next = resizeEdgeHintEnabled && show === true;
+          if (next === resizeEdgeHintLocal) return;
+          resizeEdgeHintLocal = next;
+          console.info(resizeEdgePrefix + (next ? "in" : "out"));
+          renderResizeEdgeHint();
+        };
+        window.__cyreneSetResizeEdgeHint = (enabled, color, externalActive) => {
+          resizeEdgeHintEnabled = enabled === true;
+          resizeEdgeHintExternal = externalActive === true;
+          if (color) resizeEdgeHint.style.background = String(color);
+          if (!resizeEdgeHintEnabled) showResizeEdgeHint(false);
+          else renderResizeEdgeHint();
+        };
+        document.addEventListener("mousemove", (event) => {
+          showResizeEdgeHint(event.clientX < 14);
+        }, { passive: true, capture: true });
+        document.addEventListener("mouseout", (event) => {
+          if (!event.relatedTarget) showResizeEdgeHint(false);
+        }, true);
+        window.addEventListener("blur", () => showResizeEdgeHint(false));
         const clean = (value, limit = 240) => String(value == null ? "" : value).replace(/\\s+/g, " ").trim().slice(0, limit);
         const stableSelector = (el) => {
           if (!el || !(el instanceof Element)) return "";
@@ -1289,40 +1340,33 @@ class BrowserTabManager {
             rootScrollY: Math.round(window.scrollY || 0),
           }, describe(scrollTarget));
         }, true);
-        // Sidebar-docked panes keep the view full-width (no gutter bar); when
-        // the pointer nears the pane's left edge, shift the view right so the
-        // .wb-col-resizer handle beneath it becomes reachable. The pointer
-        // sitting on the handle (outside the view) keeps the shift active;
-        // returning inside the view or leaving the window restores it.
-        const edgePrefix = ${JSON.stringify(BROWSER_LEFT_EDGE_PREFIX)};
-        const EDGE_GUTTER = 14;
-        let nearLeftEdge = false;
-        document.addEventListener("mousemove", (event) => {
-          const near = event.clientX < EDGE_GUTTER;
-          if (near !== nearLeftEdge) {
-            nearLeftEdge = near;
-            console.info(edgePrefix + (near ? "in" : "out"));
-          }
-        }, { passive: true });
-        document.addEventListener("mouseout", (event) => {
-          if (nearLeftEdge && !event.relatedTarget) {
-            nearLeftEdge = false;
-            console.info(edgePrefix + "out");
-          }
-        }, true);
         return true;
       })()
     `;
     await wc.executeJavaScript(script, true).catch(() => {});
   }
 
+  applyResizeEdgeHint(view) {
+    if (!view || !view.webContents || view.webContents.isDestroyed()) return;
+    const enabled = this.zoomEnabled === false;
+    const color = this.resizeEdgeHintColor;
+    const active = this.resizeEdgeHintActive === true;
+    view.webContents.executeJavaScript(
+      `window.__cyreneSetResizeEdgeHint && window.__cyreneSetResizeEdgeHint(${JSON.stringify(enabled)}, ${JSON.stringify(color)}, ${JSON.stringify(active)})`,
+      true
+    ).catch(() => {});
+  }
+
   handleCapturedUserEvent(view, message) {
     const raw = String(message || '');
-    if (raw.startsWith(BROWSER_LEFT_EDGE_PREFIX)) {
-      const near = String(raw.slice(BROWSER_LEFT_EDGE_PREFIX.length)).trim() === 'in';
-      if (this._leftEdgeHovered !== near) {
-        this._leftEdgeHovered = near;
-        this.syncAttachedView();
+    if (raw.startsWith(BROWSER_RESIZE_EDGE_PREFIX)) {
+      const active = String(raw.slice(BROWSER_RESIZE_EDGE_PREFIX.length)).trim() === 'in';
+      const win = this.ownerWindow();
+      if (win) {
+        win.webContents.executeJavaScript(
+          `document.body && document.body.classList.toggle("wb-col-resize-hover", ${JSON.stringify(active)})`,
+          true
+        ).catch(() => {});
       }
       return;
     }
@@ -1531,38 +1575,41 @@ class BrowserTabManager {
     return Math.max(PAGE_MIN_ZOOM, width / PAGE_CSS_TARGET_WIDTH);
   }
 
-  async applyPageZoom(view, bounds = this.bounds, zoomEnabled = true) {
+  async applyPageZoom(view, bounds = this.bounds, zoomEnabled = true, options = {}) {
     if (!view || !view.webContents || view.webContents.isDestroyed()) return 1;
     const wc = view.webContents;
+    const contentsId = Number(wc.id) || 0;
+    const zoomToken = (this._pageZoomTokenByContents.get(contentsId) || 0) + 1;
+    this._pageZoomTokenByContents.set(contentsId, zoomToken);
+    const isCurrent = () => (
+      !wc.isDestroyed()
+      && this._pageZoomTokenByContents.get(contentsId) === zoomToken
+    );
     const dipWidth = Math.max(0, Math.round(Number(bounds && bounds.width) || 0));
     if (!zoomEnabled || dipWidth <= 0 || dipWidth >= PAGE_CSS_TARGET_WIDTH) {
-      try { wc.setZoomFactor(1); } catch (_) {}
+      if (isCurrent()) {
+        try { wc.setZoomFactor(1); } catch (_) {}
+      }
       return 1;
     }
-    // Chromium quantizes zoom requests (observed 0.247 -> 0.025) and
-    // getZoomFactor() reports the requested value, not the applied one, so
-    // converge on the target CSS viewport by re-reading innerWidth and
-    // correcting the request. The applied factor is derived from innerWidth
-    // everywhere else (pageZoomOf) to stay immune to quantization.
-    let request = dipWidth / PAGE_CSS_TARGET_WIDTH;
+    // Chromium quantizes zoom requests to discrete levels. Never feed a
+    // transient innerWidth back into another zoom request: during a native
+    // bounds transition that viewport can briefly describe the clipped
+    // staging surface, causing each correction to amplify the previous one
+    // until the page reaches the maximum zoom. One deterministic request is
+    // stable; pageZoomOf derives the actual quantized factor afterwards.
+    const fast = options && options.fast === true;
+    const waitMs = fast ? 40 : 140;
+    const request = dipWidth / PAGE_CSS_TARGET_WIDTH;
     let actual = request;
-    const seen = new Set();
     try {
-      for (let i = 0; i < 5; i += 1) {
-        wc.setZoomFactor(request);
-        await new Promise((resolve) => setTimeout(resolve, 140));
-        const innerW = Number(await wc.executeJavaScript('window.innerWidth')) || 0;
-        if (innerW > 0) {
-          actual = dipWidth / innerW;
-          // Quantization snaps to discrete zoom steps (observed 0.25), so a
-          // viewport within ~12px of the target is converged (still well past
-          // desktop breakpoints).
-          if (Math.abs(innerW - PAGE_CSS_TARGET_WIDTH) <= 16) break;
-          if (seen.has(innerW)) break; // quantization is not monotonic; keep last
-          seen.add(innerW);
-          request = request * (PAGE_CSS_TARGET_WIDTH / innerW);
-        }
-      }
+      if (!isCurrent()) return actual;
+      wc.setZoomFactor(request);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      if (!isCurrent()) return actual;
+      const innerW = Number(await wc.executeJavaScript('window.innerWidth')) || 0;
+      if (!isCurrent()) return actual;
+      if (innerW > 0) actual = dipWidth / innerW;
     } catch (_) {}
     return actual;
   }
@@ -1589,8 +1636,13 @@ class BrowserTabManager {
     const zoom = this.pageZoomForBounds(target);
     let expectedWidth = target.width;
     let expectedHeight = target.height;
+    let widthTolerance = 2;
     if (zoom < 1) {
       expectedWidth = PAGE_CSS_TARGET_WIDTH;
+      // Chromium applies zoom in discrete steps; depending on the exact PiP
+      // width the nearest stable desktop viewport can differ by roughly 4%.
+      // Accept that quantization instead of trying to correct it recursively.
+      widthTolerance = Math.ceil(PAGE_CSS_TARGET_WIDTH * 0.05);
       try {
         const innerW = Number(await view.webContents.executeJavaScript('window.innerWidth')) || 0;
         const applied = innerW > 0 ? target.width / innerW : zoom;
@@ -1608,7 +1660,7 @@ class BrowserTabManager {
         new Promise((resolve) => setTimeout(() => resolve(null), 80)),
       ]);
       return !!viewport
-        && Math.abs((Number(viewport.width) || 0) - expectedWidth) <= 2
+        && Math.abs((Number(viewport.width) || 0) - expectedWidth) <= widthTolerance
         && Math.abs((Number(viewport.height) || 0) - expectedHeight) <= 2;
     } catch (_) {
       return false;
@@ -1626,12 +1678,12 @@ class BrowserTabManager {
     return false;
   }
 
-  async settlePageViewport(view, bounds) {
+  async settlePageViewport(view, bounds, forcePulse = false) {
     if (!view || !view.webContents || view.webContents.isDestroyed()) return false;
     const target = this.pageViewBounds(bounds);
     try { view.setBounds(target); } catch (_) {}
     try { view.webContents.invalidate(); } catch (_) {}
-    if (await this.waitForPageViewport(view, target, 3)) return true;
+    if (!forcePulse && await this.waitForPageViewport(view, target, 3)) return true;
 
     // Electron 35 on macOS can acknowledge the first hidden PiP -> maximized
     // setBounds call without delivering a resize to Chromium's layout viewport.
@@ -1827,13 +1879,6 @@ class BrowserTabManager {
     }
     const targetCornerRadius = fullscreenActive ? 0 : this.pageCornerRadius;
     const targetBounds = fullscreenActive ? this.fullscreenBounds(win) : this.pageViewBounds(this.bounds);
-    // Sidebar-docked panes (zoom disabled) keep the view full-width so no
-    // gutter bar shows; when the pointer nears the left edge, shift the view
-    // right to expose the .wb-col-resizer handle beneath it. Translating only
-    // (no width change) avoids a page reflow.
-    if (!fullscreenActive && this.zoomEnabled === false && this._leftEdgeHovered) {
-      targetBounds.x += 12;
-    }
     if (!wasAttachedToTargetWindow) {
       this.detachView(active);
       try { active.view.setBorderRadius(targetCornerRadius); } catch (_) {}
@@ -1852,7 +1897,7 @@ class BrowserTabManager {
     if (!wasAttached || !wasVisible) this.repaintView(active);
   }
 
-  async settleBoundsTransition() {
+  async prepareBoundsTransition() {
     const token = ++this._boundsTransitionToken;
     this._boundsTransitioning = true;
     if (this._syncTimer) { clearTimeout(this._syncTimer); this._syncTimer = null; }
@@ -1860,33 +1905,117 @@ class BrowserTabManager {
     const active = this.tabs.get(this.activeTabId);
     if (!active || active.view.webContents.isDestroyed()) {
       this._boundsTransitioning = false;
-      return this.state();
+      return { ...this.state(), ok: false, error: 'No active browser view.' };
     }
     const targetCornerRadius = this.pageCornerRadius;
     const targetBounds = this.pageViewBounds(this.bounds);
-    if (this.zoomEnabled === false && this._leftEdgeHovered) {
-      targetBounds.x += 12;
-    }
+    // A hidden WebContentsView keeps its last compositor surface on macOS even
+    // after setBounds updates window.innerWidth/innerHeight.  capturePage() then
+    // returns a bitmap at the *source* size, which makes the renderer stretch a
+    // PiP frame across the maximized shell (and vice versa) for one frame.
+    // Stage the target-sized view at the owner's bottom-right clipping edge
+    // while it is visible. macOS does not composite a completely offscreen
+    // child view, but a 1x1 visible intersection is enough to produce the full
+    // target surface without exposing resize/white-frame churn over the page.
+    const ownerBounds = this.ownerWindow()?.getContentBounds?.() || {};
+    const stagingBounds = {
+      ...targetBounds,
+      x: Math.max(0, Math.round(Number(ownerBounds.width) || 0) - 1),
+      y: Math.max(0, Math.round(Number(ownerBounds.height) || 0) - 1),
+    };
     try { active.view.setBorderRadius(targetCornerRadius); } catch (_) {}
-    await this.applyPageZoom(active.view, targetBounds, this.zoomEnabled !== false);
+    try { active.view.setBounds(stagingBounds); } catch (_) {}
+    try { active.view.setVisible(true); } catch (_) {}
+    await this.applyPageZoom(active.view, targetBounds, this.zoomEnabled !== false, { fast: true });
     this.applyPageFrameStyle(active.view, targetCornerRadius);
-    let viewportReady = await this.settlePageViewport(active.view, targetBounds);
-    // capturePage waits for Chromium to produce a frame at the final size. Keep
-    // the renderer's bitmap proxy visible until this promise resolves, so the
-    // native compositor never exposes its temporary white surface.
-    await Promise.race([
+    const viewportReady = await this.settlePageViewport(active.view, stagingBounds);
+    // The 1x1 edge intersection lets capturePage read the already-rasterized
+    // target surface quickly. Validate its physical pixel size because macOS
+    // can occasionally hand back the previous surface; use CDP only as the
+    // slower fallback in that case.
+    let targetPngBase64 = '';
+    const displayScale = (() => {
+      try {
+        return Math.max(1, Number(screen.getDisplayMatching(this.ownerWindow().getBounds()).scaleFactor) || 1);
+      } catch (_) {
+        return 1;
+      }
+    })();
+    const expectedPixelWidth = Math.round(targetBounds.width * displayScale);
+    const expectedPixelHeight = Math.round(targetBounds.height * displayScale);
+    const targetImage = await Promise.race([
       active.view.webContents.capturePage().catch(() => null),
-      new Promise((resolve) => setTimeout(resolve, 180)),
+      new Promise((resolve) => setTimeout(resolve, 120)),
     ]);
-    if (token !== this._boundsTransitionToken) return this.state();
+    if (targetImage) {
+      const imageSize = targetImage.getSize();
+      if (Math.abs(imageSize.width - expectedPixelWidth) <= 4
+        && Math.abs(imageSize.height - expectedPixelHeight) <= 4) {
+        targetPngBase64 = targetImage.toPNG().toString('base64');
+      }
+    }
+    try {
+      if (!targetPngBase64) {
+        const debug = await this._ensureDebugger(active);
+        const metrics = await debug.sendCommand('Page.getLayoutMetrics');
+        const viewport = metrics.cssVisualViewport || metrics.visualViewport || {};
+        const viewportWidth = Math.max(1, Number(viewport.clientWidth) || 1);
+        const viewportHeight = Math.max(1, Number(viewport.clientHeight) || 1);
+        const capture = await Promise.race([
+          debug.sendCommand('Page.captureScreenshot', {
+            format: 'png',
+            fromSurface: true,
+            captureBeyondViewport: false,
+            clip: {
+              x: Number(viewport.pageX) || 0,
+              y: Number(viewport.pageY) || 0,
+              width: viewportWidth,
+              height: viewportHeight,
+              scale: 1,
+            },
+          }),
+          new Promise((resolve) => setTimeout(() => resolve(null), 500)),
+        ]);
+        targetPngBase64 = String(capture && capture.data || '');
+      }
+    } catch (_) {}
+    // Leave the native view hidden at its final on-screen geometry. The target
+    // bitmap remains visible in the renderer until commitBoundsTransition()
+    // reveals this already-sized compositor surface.
+    try { active.view.setVisible(false); } catch (_) {}
+    try { active.view.setBounds(targetBounds); } catch (_) {}
+    if (token !== this._boundsTransitionToken) return { ...this.state(), ok: false, error: 'Browser transition was superseded.' };
+    return {
+      ...this.state(),
+      ok: !!targetPngBase64,
+      transitionPrepared: !!targetPngBase64,
+      viewportReady,
+      pngBase64: targetPngBase64,
+    };
+  }
+
+  async commitBoundsTransition() {
+    const token = this._boundsTransitionToken;
+    const active = this.tabs.get(this.activeTabId);
+    if (!active || active.view.webContents.isDestroyed()) {
+      this._boundsTransitioning = false;
+      return this.state();
+    }
+    const targetBounds = this.pageViewBounds(this.bounds);
+    let viewportReady = false;
     this._boundsTransitioning = false;
     this.syncAttachedView();
     await new Promise((resolve) => setTimeout(resolve, 34));
-    // A hidden WebContentsView can defer its first resize until it is visible.
-    // Recheck after attachment and pulse once more if the hidden pass did not
-    // update Chromium's layout viewport.
-    if (!viewportReady && token === this._boundsTransitionToken) {
-      viewportReady = await this.settlePageViewport(active.view, targetBounds);
+    // A hidden WebContentsView can report the right JS viewport while its
+    // visible compositor surface still holds the previous size. Always pulse
+    // once after reattachment, then wait for a visible frame before allowing
+    // the renderer to remove its bitmap proxy.
+    if (token === this._boundsTransitionToken) {
+      viewportReady = await this.settlePageViewport(active.view, targetBounds, true);
+      await Promise.race([
+        active.view.webContents.capturePage().catch(() => null),
+        new Promise((resolve) => setTimeout(resolve, 180)),
+      ]);
     }
     if (token === this._boundsTransitionToken) this.repaintView(active);
     if (!viewportReady && token === this._boundsTransitionToken) {
@@ -1895,6 +2024,12 @@ class BrowserTabManager {
       );
     }
     return this.state();
+  }
+
+  async settleBoundsTransition() {
+    const prepared = await this.prepareBoundsTransition();
+    if (!prepared || prepared.ok === false) return prepared || this.state();
+    return this.commitBoundsTransition();
   }
 
   setBounds(info = {}) {
@@ -1915,6 +2050,15 @@ class BrowserTabManager {
     if (Object.prototype.hasOwnProperty.call(info, 'zoomEnabled')) {
       this.zoomEnabled = info.zoomEnabled !== false;
     }
+    if (Object.prototype.hasOwnProperty.call(info, 'resizeEdgeHintColor')) {
+      const color = String(info.resizeEdgeHintColor || '').trim();
+      if (color) this.resizeEdgeHintColor = color.slice(0, 80);
+    }
+    if (Object.prototype.hasOwnProperty.call(info, 'resizeEdgeHintActive')) {
+      this.resizeEdgeHintActive = info.resizeEdgeHintActive === true;
+    }
+    const active = this.tabs.get(this.activeTabId);
+    if (active) this.applyResizeEdgeHint(active.view);
     this.visible = info.visible === true && width > 8 && height > 8;
     // Preserve the in-app host geometry while a video owns the fullscreen
     // surface, but never let renderer layout churn resize the fullscreen View.
@@ -1928,6 +2072,10 @@ class BrowserTabManager {
       this._boundsTransitioning = false;
       if (this._syncTimer) { clearTimeout(this._syncTimer); this._syncTimer = null; }
       this.syncAttachedView();
+    } else if (info.transition === 'prepare') {
+      return this.prepareBoundsTransition();
+    } else if (info.transition === 'commit') {
+      return this.commitBoundsTransition();
     } else if (info.transition === true) {
       return this.settleBoundsTransition();
     } else if (!this._syncTimer) {
@@ -2597,13 +2745,45 @@ class BrowserTabManager {
     return { ...(result || {}), tabId: tab.id };
   }
 
-  async screenshot({ tabId = '' } = {}) {
+  async screenshot({ tabId = '', highResolution = false, targetWidth = 0, targetHeight = 0 } = {}) {
     const tab = tabId ? this.tabs.get(String(tabId)) : this.tabs.get(this.activeTabId);
     if (!tab) return { ok: false, error: 'No browser tab is open.' };
-    const image = await tab.view.webContents.capturePage();
+    let pngBase64 = '';
+    if (highResolution === true) {
+      try {
+        const debug = await this._ensureDebugger(tab);
+        const metrics = await debug.sendCommand('Page.getLayoutMetrics');
+        const viewport = metrics.cssVisualViewport || metrics.visualViewport || {};
+        const width = Math.max(1, Number(viewport.clientWidth) || 1);
+        const height = Math.max(1, Number(viewport.clientHeight) || 1);
+        const desiredWidth = Math.max(0, Number(targetWidth) || 0);
+        const desiredHeight = Math.max(0, Number(targetHeight) || 0);
+        const scale = Math.max(1, Math.min(4, Math.max(
+          desiredWidth > 0 ? desiredWidth / width : 1,
+          desiredHeight > 0 ? desiredHeight / height : 1,
+        )));
+        const result = await debug.sendCommand('Page.captureScreenshot', {
+          format: 'png',
+          fromSurface: true,
+          captureBeyondViewport: false,
+          clip: {
+            x: Number(viewport.pageX) || 0,
+            y: Number(viewport.pageY) || 0,
+            width,
+            height,
+            scale,
+          },
+        });
+        pngBase64 = String(result && result.data || '');
+      } catch (_) {}
+    }
+    if (!pngBase64) {
+      const image = await tab.view.webContents.capturePage();
+      pngBase64 = image.toPNG().toString('base64');
+    }
     return {
       ok: true,
-      pngBase64: image.toPNG().toString('base64'),
+      pngBase64,
       title: tab.view.webContents.getTitle(),
       url: tab.view.webContents.getURL(),
       tabId: tab.id,

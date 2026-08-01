@@ -591,11 +591,14 @@ def _public_pending_question(value: Any) -> dict[str, Any] | None:
             "questionId",
             "kind",
             "questionKind",
+            "text",
             "prompt",
             "question",
             "title",
             "options",
             "choices",
+            "allowCustom",
+            "allow_custom",
         )
         if key in value
     }
@@ -637,7 +640,9 @@ def public_remote_event(event: dict[str, Any]) -> dict[str, Any] | None:
             if key in event:
                 result[key] = value
     if event_type == "awaiting_user":
-        question = _public_pending_question(event.get("pending_question"))
+        question = _public_pending_question(
+            event.get("pending_question") or event.get("pendingQuestion")
+        )
         if question is not None:
             result["pending_question"] = question
     if event_type == "intermediate_message":
@@ -890,7 +895,11 @@ def _chat_detail(chat: dict[str, Any]) -> dict[str, Any]:
                 "attachments": attachments,
             }
         )
-    return {**_chat_summary(chat), "messages": messages}
+    return {
+        **_chat_summary(chat),
+        "messages": messages,
+        "pending_question": _public_pending_question(chat.get("pendingQuestion")),
+    }
 
 
 _REMOTE_PROGRESSIVE_TOOL_PACKAGES = {
@@ -1355,6 +1364,12 @@ class RemoteCommandExecutor:
             return self._settings_read()
         if command == "settings.update":
             return self._settings_update(payload)
+        if command == "settings.openai_oauth.read":
+            return await self._settings_openai_oauth_read()
+        if command == "settings.openai_oauth.login":
+            return await self._settings_openai_oauth_login()
+        if command == "settings.openai_oauth.logout":
+            return await self._settings_openai_oauth_logout()
         if command.startswith("shell."):
             return await self._shell_command(
                 peer_device_id, command, project_id, payload
@@ -1670,6 +1685,53 @@ class RemoteCommandExecutor:
         result = self._settings_read()
         result["changed"] = (["models"] if model_payload is not None else []) + changed
         return result
+
+    @staticmethod
+    async def _settings_openai_oauth_read() -> dict[str, Any]:
+        """Expose the safe OAuth account/model snapshot to remote controllers."""
+        from cyrene.model_runtime.codex_provider import get_codex_provider
+        from cyrene.runtime.settings_store import get as get_setting
+
+        try:
+            snapshot = await get_codex_provider().snapshot(
+                include_limits=False,
+                include_models=True,
+            )
+            return {
+                "ok": True,
+                "available": snapshot.get("available", True),
+                "connected": snapshot.get("connected", False),
+                "account": snapshot.get("account"),
+                "models": snapshot.get("models") or [],
+                "quota_enabled": bool(get_setting("codex_budget_enabled", True)),
+                "error": snapshot.get("errors", {}).get("models", "")
+                if isinstance(snapshot.get("errors"), dict)
+                else "",
+            }
+        except (RuntimeError, OSError, TimeoutError) as exc:
+            return {
+                "ok": True,
+                "available": False,
+                "connected": False,
+                "account": None,
+                "models": [],
+                "quota_enabled": True,
+                "error": str(exc),
+            }
+
+    @staticmethod
+    async def _settings_openai_oauth_login() -> dict[str, Any]:
+        from cyrene.model_runtime.codex_provider import get_codex_provider
+
+        set_setting("codex_budget_enabled", True)
+        return await get_codex_provider().start_login()
+
+    @staticmethod
+    async def _settings_openai_oauth_logout() -> dict[str, Any]:
+        from cyrene.model_runtime.codex_provider import get_codex_provider
+
+        await get_codex_provider().logout()
+        return {"ok": True}
 
     async def _projects_list(self, peer_device_id: str) -> dict[str, Any]:
         store = workbench_runtime._read_workbench_store_lightweight()
@@ -2219,7 +2281,8 @@ class RemoteCommandExecutor:
                         attachments=attachments,
                         mode=_permission_mode(
                             payload,
-                            allowed=frozenset({"default"}),
+                            allowed=frozenset({"auto", "default"}),
+                            default="auto",
                         ),
                         command=str(payload.get("command") or ""),
                     ),
@@ -2325,7 +2388,8 @@ class RemoteCommandExecutor:
                     input=_require_text(payload, "message"),
                     mode=_permission_mode(
                         payload,
-                        allowed=frozenset({"default"}),
+                        allowed=frozenset({"auto", "default"}),
+                        default="auto",
                     ),
                     stepId=step_id,
                     stepTitle=str(step.get("title") or "")[:1000],
@@ -2463,7 +2527,7 @@ class RemoteCommandExecutor:
                         answer=_require_text(payload, "answer"),
                         mode=_permission_mode(
                             payload,
-                            allowed=frozenset({"default"}),
+                            allowed=frozenset({"auto", "default"}),
                         ),
                     ),
                 )
@@ -2490,7 +2554,7 @@ class RemoteCommandExecutor:
                     answer=_require_text(payload, "answer"),
                     mode=_permission_mode(
                         payload,
-                        allowed=frozenset({"default"}),
+                        allowed=frozenset({"auto", "default"}),
                     ),
                 ),
             )

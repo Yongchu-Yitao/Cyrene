@@ -28,6 +28,30 @@ var WorkbenchAPI = (function () {
     return fallback || key;
   }
 
+  var API_ERROR_I18N_KEYS = {
+    quota_exhausted: "workbenchChat.error.quotaExhausted",
+    authentication_expired: "workbenchChat.error.authenticationExpired",
+    model_unavailable: "workbenchChat.error.modelUnavailable",
+    process_restarted: "workbenchChat.error.processRestarted",
+    chat_run_driver_failed: "workbenchChat.error.driverFailed",
+    chat_not_found: "workbenchChat.error.chatNotFound",
+    chat_run_not_found: "workbenchChat.error.chatRunNotFound",
+    chat_not_running: "workbenchChat.error.chatNotRunning",
+    chat_run_in_progress: "workbenchChat.error.chatRunInProgress",
+    guidance_persistence_failed: "workbenchChat.error.guidancePersistenceFailed",
+    answer_resume_failed: "workbenchChat.error.answerResumeFailed",
+  };
+
+  var API_ERROR_MESSAGE_I18N_KEYS = {
+    "chat not found": "workbenchChat.error.chatNotFound",
+    "chat has no running reply": "workbenchChat.error.chatNotRunning",
+    "chat already has a running reply": "workbenchChat.error.chatRunInProgress",
+    "guidance could not be saved; please retry": "workbenchChat.error.guidancePersistenceFailed",
+    "answer resume failed": "workbenchChat.error.answerResumeFailed",
+    "the cyrene process restarted before this run completed.": "workbenchChat.error.processRestarted",
+    "the agent run stopped unexpectedly. please retry.": "workbenchChat.error.driverFailed",
+  };
+
   // Normalize any thrown value to a short, user-facing string.
   function errorText(err) {
     if (err && err.isTimeout) return err.message;
@@ -37,6 +61,19 @@ var WorkbenchAPI = (function () {
       || raw === "Failed to fetch"
       || raw === "NetworkError when attempting to fetch resource.") {
       return apiT("workbenchApi.error.network", "Network error — please retry");
+    }
+    var code = (err && err.code) || "";
+    var key = (err && (err.detailKey || err.detail_key)) || API_ERROR_I18N_KEYS[code] || "";
+    key = key || API_ERROR_MESSAGE_I18N_KEYS[raw.toLowerCase()] || "";
+    if (key) return apiT(key, raw, (err && (err.detailParams || err.detail_params)) || {});
+    if (/^codex\s+quota\s+is\s+exhausted\b/i.test(raw)) {
+      return apiT("workbenchChat.error.quotaExhausted", raw);
+    }
+    if (/^codex\s+authentication\s+has\s+expired\b/i.test(raw)) {
+      return apiT("workbenchChat.error.authenticationExpired", raw);
+    }
+    if (/^codex(?:\s+model)?\b.*\bunavailable\b/i.test(raw)) {
+      return apiT("workbenchChat.error.modelUnavailable", raw);
     }
     return raw;
   }
@@ -152,6 +189,8 @@ var WorkbenchAPI = (function () {
           var error = new Error((payload && (payload.error || payload.detail)) || ("HTTP " + response.status));
           error.status = response.status;
           error.code = (payload && payload.code) || "";
+          error.detailKey = (payload && (payload.detail_key || payload.detailKey)) || "";
+          error.detailParams = (payload && (payload.detail_params || payload.detailParams)) || {};
           error.payload = payload;
           throw error;
         }

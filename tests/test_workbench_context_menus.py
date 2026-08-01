@@ -129,6 +129,54 @@ def test_chat_quick_rename_uses_existing_dialog_instead_of_native_prompt():
     assert "window.prompt" not in overview
 
 
+def test_chat_card_menu_can_convert_the_selected_chat_to_a_task():
+    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    page = chat.split("function WorkbenchChatPage(", 1)[1].split(
+        "function WbcRenameDialog(", 1
+    )[0]
+    rail = chat.split("function WbcRail(", 1)[1].split(
+        "// Conversation main", 1
+    )[0]
+
+    assert "onToTask={handleToTask}" in page
+    assert "toTaskBusy={toTaskBusy}" in page
+    assert 'wbcT(toTaskBusy ? "workbenchChat.toTaskBusy" : "workbenchChat.toTask"' in rail
+    assert "if (onToTask) onToTask(chat.id);" in rail
+    assert 'typeof chatId === "string"' in page
+
+
+def test_all_chat_action_menu_items_have_icons():
+    chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    rail = chat.split("function WbcRail(", 1)[1].split(
+        "// Conversation main", 1
+    )[0]
+    card_menu = rail.split('className="wb-card-menu" role="menu"', 1)[1].split(
+        "</div>", 1
+    )[0]
+    for icon in ("pin", "edit", "task", "trash"):
+        assert f"WBC_ICONS.{icon}" in card_menu
+
+    header = chat.split("function WbcHeader(", 1)[1].split(
+        "// Conversation thread", 1
+    )[0]
+    overflow_menu = header.split('className="wbc-menu"', 1)[1].split(
+        "</div>", 1
+    )[0]
+    for icon in ("edit", "task", "trash"):
+        assert f"WBC_ICONS.{icon}" in overflow_menu
+
+    quick_actions = chat.split("function WbcQuickActionItems(", 1)[1].split(
+        "var WBC_SIDE_CARD_ORDER_PREFIX", 1
+    )[0]
+    for icon in ("edit", "task", "compact", "trash"):
+        assert f"WBC_ICONS.{icon}" in quick_actions
+
+
 def test_chat_page_context_menu_preserves_native_browser_surface():
     chat = (ROOT / "src/webui/frontend/workbench-chat.jsx").read_text(
         encoding="utf-8"

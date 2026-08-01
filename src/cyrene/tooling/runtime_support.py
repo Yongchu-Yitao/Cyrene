@@ -256,6 +256,20 @@ async def _request_scope_elevation(
             f"当前不在活动对话轮次中，无法申请权限。"
         )
 
+    # A scheduler-initiated round has nobody actively present to answer a
+    # permission prompt.  Treat every elevation boundary as a hard refusal so
+    # proactive work can choose a safe alternative or finish silently.  This
+    # guard belongs here (rather than only in the ask_user dispatcher) because
+    # process execution, external tools, uploads, and destructive operations
+    # can all create pending questions indirectly.
+    from cyrene.tooling.execution_context import is_system_initiated_round
+
+    if is_system_initiated_round():
+        return (
+            "Tool unavailable: proactive system-initiated rounds cannot request "
+            f"user permission for {operation}. Use a safe alternative or finish silently."
+        )
+
     mode = run_context.permission_mode
     permission_fingerprint = permission_elevation_fingerprint(
         tool_name=tool_name,

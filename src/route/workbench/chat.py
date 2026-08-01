@@ -943,14 +943,16 @@ def register_workbench_chat_routes(
         workspace_dir = R._workbench_resolve_workspace_dir(project)
 
         selected_candidate = None
+        recovered_stale_selection = False
         selected_key = requested_model or str(chat.get("modelSelectionId") or "").strip()
         if selected_key:
             from cyrene.runtime.settings_store import get_models
 
+            configured_models = get_models() or []
             selected_candidate = next(
                 (
                     candidate
-                    for candidate in (get_models() or [])
+                    for candidate in configured_models
                     if selected_key
                     in {
                         str(candidate.get("id") or "").strip(),
@@ -961,7 +963,26 @@ def register_workbench_chat_routes(
                 None,
             )
             if selected_candidate is None:
-                return JSONResponse({"error": "configured model not found"}, status_code=400)
+                if requested_model:
+                    return JSONResponse({"error": "configured model not found"}, status_code=400)
+                # The active model source can change while a conversation is
+                # idle (for example, Codex quota is exhausted and the user
+                # switches back to a custom DeepSeek model).  In that case the
+                # chat still carries the old source-specific selection id,
+                # which is no longer present in the active candidate list.
+                # A retry has no explicit model field, so recover by selecting
+                # the current configured primary instead of rejecting the run
+                # with a misleading "configured model not found" response.
+                selected_candidate = configured_models[0] if configured_models else None
+                if selected_candidate is not None:
+                    recovered_stale_selection = True
+                    selected_key = str(
+                        selected_candidate.get("id")
+                        or selected_candidate.get("model")
+                        or selected_candidate.get("name")
+                        or ""
+                    ).strip()
+        if selected_candidate is not None:
             from cyrene.model_runtime.client import set_session_model_preference
 
             selected_model_name = str(
@@ -971,7 +992,11 @@ def register_workbench_chat_routes(
             ).strip()
             selected_model_id = str(selected_candidate.get("id") or selected_key).strip()
             selected_effort = requested_effort or str(
-                chat.get("reasoningEffort")
+                (
+                    selected_candidate.get("reasoning_effort")
+                    if recovered_stale_selection
+                    else chat.get("reasoningEffort")
+                )
                 or selected_candidate.get("reasoning_effort")
                 or ""
             ).strip().lower()
@@ -1368,7 +1393,14 @@ def register_workbench_chat_routes(
                     exc = RuntimeError("agent run failed")
                 message = _workbench_chat_run_error_message(exc, lang)
                 error = message if isinstance(exc, httpx.TransportError) else "agent run failed"
-                return JSONResponse({"error": error, "detail": str(exc)}, status_code=502)
+                return JSONResponse(
+                    {
+                        "error": error,
+                        "detail": str(exc),
+                        **_workbench_chat_error_metadata(exc),
+                    },
+                    status_code=502,
+                )
             if kind == "awaiting":
                 pending = outcome.get("pending")
                 return {
@@ -1437,6 +1469,7 @@ def register_workbench_chat_routes(
                         "type": "error",
                         "error": "model_call_failed",
                         "message": _workbench_chat_run_error_message(exc, lang),
+                        **_workbench_chat_error_metadata(exc),
                     })
                     return
                 # The agent has returned and can no longer absorb new guidance.
@@ -1965,7 +1998,14 @@ def register_workbench_chat_routes(
                 status="error",
             )
             logger.exception("Workbench chat answer-resume failed for %s", chat_id)
-            return JSONResponse({"error": "answer resume failed", "detail": str(exc)}, status_code=502)
+            return JSONResponse(
+                {
+                    "error": "answer resume failed",
+                    "detail": str(exc),
+                    **_workbench_chat_error_metadata(exc),
+                },
+                status_code=502,
+            )
 
         await _finalize_workspace_changes(
             chat_id=chat_id,

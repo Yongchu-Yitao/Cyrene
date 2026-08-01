@@ -15,6 +15,33 @@ function BrowserViewportPanel(props) {
   return React.createElement(ScreencastBrowserViewportPanel, props);
 }
 
+function browserErrorText(err, key, fallback) {
+  var raw = String((err && err.message) || err || "").trim();
+  if (raw) {
+    var fallbackKeys = {
+      "browser action failed": "browser.error.actionFailed",
+      "capture failed": "browser.error.captureFailed",
+      "browser unavailable": "browser.error.unavailable",
+    };
+    if (fallbackKeys[raw.toLowerCase()]) {
+      key = fallbackKeys[raw.toLowerCase()];
+      raw = "";
+    }
+  }
+  if (raw) {
+    try {
+      var api = window.CyreneUI.require("api");
+      if (api && typeof api.errorText === "function") return api.errorText(err);
+    } catch (e) {}
+    return raw;
+  }
+  try {
+    return window.CyreneUI.require("i18n").t(key, null, fallback);
+  } catch (e) {
+    return fallback;
+  }
+}
+
 function BrowserIcon({ name, size }) {
   size = size || 16;
   var common = {
@@ -49,10 +76,15 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   const addressRef = React.useRef(null);
   const boundsRafRef = React.useRef(0);
   const lastBoundsRef = React.useRef("");
+  const resizeEdgeHintActiveRef = React.useRef(false);
   const overlayObscuredRef = React.useRef(false);
   const windowInteractionRef = React.useRef(false);
   const interactionPreviewTokenRef = React.useRef(0);
   const interactionPreviewMountedRef = React.useRef(false);
+  const interactionKindRef = React.useRef("");
+  const modeTargetBoundsRef = React.useRef(null);
+  const modeTargetPreviewRef = React.useRef(null);
+  const modePreparedRef = React.useRef(false);
   const tabMenuPreviewTokenRef = React.useRef(0);
   const [state, setState] = React.useState({ tabs: [], activeTabId: "", activeTab: null });
   const [address, setAddress] = React.useState("");
@@ -138,6 +170,8 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       borderRadius: borderRadius,
       pageCornerRadius: pageCornerRadius,
       zoomEnabled: zoomEnabled !== false,
+      resizeEdgeHintColor: getComputedStyle(node).getPropertyValue("--wb-accent").trim() || "#63b38f",
+      resizeEdgeHintActive: resizeEdgeHintActiveRef.current,
     };
     const signature = [
       electronSessionId,
@@ -147,6 +181,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       Math.round(rect.height),
       borderRadius,
       pageCornerRadius,
+      resizeEdgeHintActiveRef.current,
     ].join(":");
     if (lastBoundsRef.current === signature) return Promise.resolve(true);
     lastBoundsRef.current = signature;
@@ -188,6 +223,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       Math.round(rect.height),
       borderRadius,
       pageCornerRadius,
+      resizeEdgeHintActiveRef.current,
     ].join(":");
     bridge.setBounds({
       sessionId: electronSessionId,
@@ -200,6 +236,8 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
       borderRadius: borderRadius,
       pageCornerRadius: pageCornerRadius,
       zoomEnabled: zoomEnabled !== false,
+      resizeEdgeHintColor: getComputedStyle(node).getPropertyValue("--wb-accent").trim() || "#63b38f",
+      resizeEdgeHintActive: resizeEdgeHintActiveRef.current,
     }).then(function () {
       if (interactionPreviewTokenRef.current !== token) return;
       lastBoundsRef.current = signature;
@@ -217,6 +255,101 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     });
   }
 
+  function commitPreparedModeTransition(token) {
+    const target = modeTargetBoundsRef.current;
+    if (!bridge || typeof bridge.setBounds !== "function" || !target) {
+      modePreparedRef.current = false;
+      finishWindowInteraction(token);
+      return;
+    }
+    bridge.setBounds({
+      ...target,
+      sessionId: electronSessionId,
+      visible: true,
+      transition: "commit",
+      zoomEnabled: zoomEnabled !== false,
+      resizeEdgeHintColor: getComputedStyle(surfaceRef.current).getPropertyValue("--wb-accent").trim() || "#63b38f",
+    }).then(function () {
+      if (interactionPreviewTokenRef.current !== token) return;
+      modePreparedRef.current = false;
+      modeTargetBoundsRef.current = null;
+      modeTargetPreviewRef.current = null;
+      lastBoundsRef.current = "";
+      windowInteractionRef.current = false;
+      interactionPreviewMountedRef.current = false;
+      setInteractionPreview(null);
+      scheduleBounds();
+    }).catch(function () {
+      if (interactionPreviewTokenRef.current !== token) return;
+      modePreparedRef.current = false;
+      modeTargetBoundsRef.current = null;
+      modeTargetPreviewRef.current = null;
+      lastBoundsRef.current = "";
+      windowInteractionRef.current = false;
+      interactionPreviewMountedRef.current = false;
+      setInteractionPreview(null);
+      scheduleBounds();
+    });
+  }
+
+  function publishModeTargetReady(previewToken, fallback) {
+    if (!windowInteractionRef.current
+      || interactionPreviewTokenRef.current !== previewToken) return;
+    window.dispatchEvent(new CustomEvent("workbench:browser-transition-target-ready", {
+      detail: { sessionId: electronSessionId, fallback: fallback === true },
+    }));
+  }
+
+  function prepareModeTargetFrame(previewToken) {
+    var target = modeTargetBoundsRef.current;
+    if (!bridge || typeof bridge.setBounds !== "function" || !target) {
+      publishModeTargetReady(previewToken, true);
+      return;
+    }
+    bridge.setBounds({
+      ...target,
+      sessionId: electronSessionId,
+      visible: true,
+      transition: "prepare",
+      zoomEnabled: zoomEnabled !== false,
+      resizeEdgeHintColor: getComputedStyle(surfaceRef.current).getPropertyValue("--wb-accent").trim() || "#63b38f",
+    }).then(function (result) {
+      if (!windowInteractionRef.current
+        || interactionPreviewTokenRef.current !== previewToken) return;
+      if (!result || result.ok === false || !result.pngBase64) {
+        publishModeTargetReady(previewToken, true);
+        return;
+      }
+      var targetSrc = "data:image/png;base64," + result.pngBase64;
+      var decodedImage = new Image();
+      decodedImage.src = targetSrc;
+      var decoded = typeof decodedImage.decode === "function"
+        ? decodedImage.decode().catch(function () {})
+        : new Promise(function (resolve) {
+            decodedImage.onload = resolve;
+            decodedImage.onerror = resolve;
+          });
+      Promise.resolve(decoded).then(function () {
+        if (!windowInteractionRef.current
+          || interactionPreviewTokenRef.current !== previewToken) return;
+        modePreparedRef.current = true;
+        // Do not mount the target bitmap yet. Mounting it while the shell is
+        // still PiP makes the page visibly rescale before the window changes.
+        // The parent commits this pending bitmap and the target shell together
+        // inside one ReactDOM.flushSync transaction.
+        modeTargetPreviewRef.current = {
+          token: previewToken,
+          phase: "target",
+          kind: "mode",
+          src: targetSrc,
+        };
+        publishModeTargetReady(previewToken, false);
+      });
+    }).catch(function () {
+      publishModeTargetReady(previewToken, true);
+    });
+  }
+
   function publishInteractionPreviewFallback(previewToken) {
     if (!windowInteractionRef.current
       || interactionPreviewTokenRef.current !== previewToken) return;
@@ -227,6 +360,11 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     window.dispatchEvent(new CustomEvent("workbench:browser-window-preview-ready", {
       detail: { sessionId: electronSessionId, fallback: true },
     }));
+    if (interactionKindRef.current === "mode") {
+      window.dispatchEvent(new CustomEvent("workbench:browser-transition-target-ready", {
+        detail: { sessionId: electronSessionId, fallback: true },
+      }));
+    }
     scheduleBounds();
   }
 
@@ -237,6 +375,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   function onInteractionPreviewLoad(event) {
     var preview = interactionPreview;
     if (!preview) return;
+    if (preview.phase === "target") return;
     var previewToken = preview.token;
     var imageNode = event && event.currentTarget;
     var decoded = imageNode && typeof imageNode.decode === "function"
@@ -253,6 +392,10 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
               || interactionPreviewTokenRef.current !== previewToken) return;
             if (!hidden) {
               publishInteractionPreviewFallback(previewToken);
+              return;
+            }
+            if (preview.kind === "mode") {
+              prepareModeTargetFrame(previewToken);
               return;
             }
             window.dispatchEvent(new CustomEvent("workbench:browser-window-preview-ready", {
@@ -339,6 +482,18 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   }, [electronSessionId]);
 
   React.useEffect(function () {
+    function onResizeHint(event) {
+      resizeEdgeHintActiveRef.current = !!(event && event.detail && event.detail.active);
+      lastBoundsRef.current = "";
+      scheduleBounds();
+    }
+    window.addEventListener("workbench:right-resize-hint", onResizeHint);
+    return function () {
+      window.removeEventListener("workbench:right-resize-hint", onResizeHint);
+    };
+  }, [electronSessionId]);
+
+  React.useEffect(function () {
     function onWorkbenchRightResize(ev) {
       var phase = ev && ev.detail && ev.detail.phase;
       if (phase === "start") sendBounds(false);
@@ -367,6 +522,15 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
   // committed bitmap proxy for drag, resize, and mode changes; the layout
   // effect above hides the native view only after that proxy is paint-ready.
   React.useEffect(function () {
+    function onModeTargetPreviewCommit(event) {
+      var detail = event && event.detail || {};
+      if (String(detail.sessionId || "") !== electronSessionId) return;
+      var pending = modeTargetPreviewRef.current;
+      if (!pending || !windowInteractionRef.current) return;
+      setInteractionPreview(pending);
+      interactionPreviewMountedRef.current = true;
+    }
+
     function onBrowserWindowInteraction(event) {
       var detail = event && event.detail || {};
       if (String(detail.sessionId || "") !== electronSessionId) return;
@@ -387,18 +551,39 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
         }
         // Keep the bitmap proxy mounted until Electron confirms that Chromium
         // has produced a frame at the final PiP/fullscreen bounds.
-        finishWindowInteraction(token);
+        if (modePreparedRef.current && interactionKindRef.current === "mode") {
+          commitPreparedModeTransition(token);
+        } else {
+          finishWindowInteraction(token);
+        }
         return;
       }
       windowInteractionRef.current = true;
       interactionPreviewMountedRef.current = false;
+      interactionKindRef.current = String(detail.kind || "");
+      modeTargetBoundsRef.current = detail.targetBounds || null;
+      modeTargetPreviewRef.current = null;
+      modePreparedRef.current = false;
       setInteractionPreview(null);
-      if (!bridge || typeof bridge.screenshot !== "function") return;
-      bridge.screenshot({ sessionId: electronSessionId }).then(function (result) {
+      if (!bridge || typeof bridge.screenshot !== "function") {
+        publishInteractionPreviewFallback(token);
+        return;
+      }
+      bridge.screenshot({
+        sessionId: electronSessionId,
+        // The source proxy is only ever shown at its current geometry. The
+        // separately prepared target proxy handles the new geometry, so a
+        // costly full-window high-resolution source capture is unnecessary.
+        highResolution: false,
+        targetWidth: 0,
+        targetHeight: 0,
+      }).then(function (result) {
         if (!windowInteractionRef.current || interactionPreviewTokenRef.current !== token) return;
         if (result && result.ok !== false && result.pngBase64) {
           setInteractionPreview({
             token: token,
+            phase: "source",
+            kind: String(detail.kind || ""),
             src: "data:image/png;base64," + result.pngBase64,
           });
           return;
@@ -421,11 +606,17 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
         scheduleBounds();
       });
     }
+    window.addEventListener("workbench:browser-transition-commit-preview", onModeTargetPreviewCommit);
     window.addEventListener("workbench:browser-window-interaction", onBrowserWindowInteraction);
     return function () {
       interactionPreviewTokenRef.current += 1;
       windowInteractionRef.current = false;
       interactionPreviewMountedRef.current = false;
+      interactionKindRef.current = "";
+      modeTargetBoundsRef.current = null;
+      modeTargetPreviewRef.current = null;
+      modePreparedRef.current = false;
+      window.removeEventListener("workbench:browser-transition-commit-preview", onModeTargetPreviewCommit);
       window.removeEventListener("workbench:browser-window-interaction", onBrowserWindowInteraction);
     };
   }, [electronSessionId]);
@@ -440,11 +631,11 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     return Promise.resolve()
       .then(action)
       .then(function (next) {
-        if (next && next.ok === false) setError(next.error || "browser action failed");
+        if (next && next.ok === false) setError(browserErrorText(next.error, "browser.error.actionFailed", "The browser action failed. Please retry."));
         else if (next && Array.isArray(next.tabs)) setState(next);
         return next;
       })
-      .catch(function (e) { setError((e && e.message) || String(e || "browser action failed")); })
+      .catch(function (e) { setError(browserErrorText(e, "browser.error.actionFailed", "The browser action failed. Please retry.")); })
       .finally(function () { setBusy(false); scheduleBounds(); });
   }
 
@@ -492,7 +683,7 @@ function ElectronBrowserViewportPanel({ roundId, browserSessionId, onClose, brow
     }).catch(function () {
       if (tabMenuPreviewTokenRef.current !== token) return;
       closeTabContextMenu();
-      setError(browserLabel("browser.context.previewFailed", "Could not open the tab menu."));
+      setError(browserErrorText(null, "browser.error.captureFailed", "The browser preview could not be captured. Please retry."));
     });
   }
 
@@ -681,7 +872,7 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
           let msg;
           try { msg = JSON.parse(ev.data); } catch (e) { return; }
           if (msg.type === "error") {
-            setError(msg.error || "browser unavailable");
+            setError(browserErrorText(msg.error, "browser.error.unavailable", "The browser view is unavailable."));
             closed = true;
             try { ws.close(); } catch (e) {}
             return;
@@ -854,9 +1045,9 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
       .then(function (r) { return r.json().catch(function () { return {}; }); })
       .then(function (d) {
         if (d && d.ok) setNativeWindow(true);
-        else setTakeoverError((d && d.error) || "无法打开浏览器窗口");
+        else setTakeoverError(browserErrorText(d && d.error, "browser.error.openWindowFailed", "Could not open the browser window."));
       })
-      .catch(function (e) { setTakeoverError((e && e.message) || "无法打开浏览器窗口"); })
+      .catch(function (e) { setTakeoverError(browserErrorText(e, "browser.error.openWindowFailed", "Could not open the browser window.")); })
       .finally(function () { setNativeBusy(false); });
   }
   function closeNativeWindow() {
@@ -884,7 +1075,7 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
         selectedOption: completeLabel,
         text: completeLabel,
       })).catch(function (e) {
-        setTakeoverError((e && e.message) || "提交失败");
+        setTakeoverError(browserErrorText(e, "browser.error.submitFailed", "Could not submit the browser action. Please retry."));
       }).finally(function () {
         setTakeoverSubmitting(false);
       });
@@ -912,7 +1103,7 @@ function ScreencastBrowserViewportPanel({ roundId, onClose, onTakeoverComplete, 
     }).then(function () {
       window.CyreneUI.require("data").refreshSessions();
     }).catch(function (e) {
-      setTakeoverError((e && e.message) || "提交失败");
+      setTakeoverError(browserErrorText(e, "browser.error.submitFailed", "Could not submit the browser action. Please retry."));
     }).finally(function () {
       setTakeoverSubmitting(false);
     });

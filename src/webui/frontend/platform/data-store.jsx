@@ -75,6 +75,7 @@ const DATA = {
   onboarding: {
     needsOnboarding: false,
     isAbsoluteFreshStart: false,
+    hasExistingData: false,
     activeStep: "done",
     completedAt: "",
     llm: {

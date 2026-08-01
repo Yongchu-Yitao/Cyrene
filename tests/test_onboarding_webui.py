@@ -41,6 +41,7 @@ def test_get_onboarding_status_detects_absolute_fresh_start(monkeypatch, tmp_pat
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     status = onboarding.get_onboarding_status()
+    assert status["hasExistingData"] is False
 
     assert status["needsOnboarding"] is True
     assert status["isAbsoluteFreshStart"] is True

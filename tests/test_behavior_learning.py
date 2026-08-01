@@ -1026,6 +1026,11 @@ async def test_skill_risk_level_inferred_on_creation(tmp_path, monkeypatch):
     assert bl._infer_skill_risk_level([_make_step("Write")]) == "high"
     assert bl._infer_skill_risk_level([_make_step("schedule_task")]) == "high"
     assert bl._infer_skill_risk_level([_make_step("start_shell")]) == "high"
+    assert bl._infer_skill_risk_level([_make_step("browser_navigate")]) == "none"
+    assert bl._infer_skill_risk_level([_make_step("browser_click_ref")]) == "none"
+    assert bl._infer_skill_risk_level([_make_step("browser_snapshot")]) == "none"
+    assert bl._infer_skill_risk_level([_make_step("browser_type_ref")]) == "high"
+    assert bl._infer_skill_risk_level([_make_step("browser_upload_files")]) == "high"
     # Mixed: one safe + one risky → high
     assert bl._infer_skill_risk_level([_make_step("read_file"), _make_step("Edit")]) == "high"
     # Disabled risky step should not count
@@ -1037,3 +1042,31 @@ async def test_skill_risk_level_inferred_on_creation(tmp_path, monkeypatch):
     assert bl._has_skillworthy_steps([_make_step("ask_user")]) is False
     assert bl._has_auto_replay_blocked_step([_make_step("ask_user")]) is True
     assert bl._has_auto_replay_blocked_step([_make_step("browser.user.navigate")]) is True
+
+
+async def test_browser_learned_skill_replays_and_skips_legacy_progress_step(tmp_path, monkeypatch):
+    bl = await _init_behavior(tmp_path, monkeypatch)
+    from cyrene.tool_impl.skills import run_learned_skill as runner
+
+    skill = _make_skill_with_steps([
+        _make_step("send_message"),
+        _make_step("browser_navigate"),
+        _make_step("browser_click_ref"),
+        _make_step("browser_snapshot"),
+    ], risk_level="high")
+    monkeypatch.setattr(bl, "get_learned_skill_by_name", AsyncMock(return_value=skill))
+    execute = AsyncMock(return_value="ok")
+    monkeypatch.setattr(runner, "_execute_tool", execute)
+    monkeypatch.setattr(bl, "record_manual_skill_run", AsyncMock())
+
+    result = await runner._tool_run_learned_skill(
+        {"name": skill["name"], "params": {}}, MagicMock(), 1, str(tmp_path / "db.sqlite"), None,
+    )
+
+    payload = runner.json.loads(result)
+    assert payload["ok"] is True
+    assert [call.args[0] for call in execute.await_args_list] == [
+        "browser_navigate",
+        "browser_click_ref",
+        "browser_snapshot",
+    ]

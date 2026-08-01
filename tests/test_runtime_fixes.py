@@ -1810,6 +1810,57 @@ async def test_tool_executor_rejects_ask_user_for_system_initiated_round(monkeyp
     handler.assert_not_awaited()
 
 
+async def test_system_initiated_elevation_never_creates_pending_question(
+    tmp_path, monkeypatch
+):
+    from cyrene.agent import context as agent_context
+    from cyrene.agent import session as agent_session
+    from cyrene.tooling.runtime_support import _request_scope_elevation
+
+    state_file = tmp_path / "state.json"
+    _patch_state_file(monkeypatch, state_file)
+    _patch_data_dir(monkeypatch, tmp_path)
+
+    with agent_context.bind_run_context(
+        round_id="round_proactive_permission",
+        session_id="wbchat_proactive_permission",
+        permission_mode="default",
+        assistant_meta={"proactive": True, "system_initiated": True},
+    ):
+        result = await _request_scope_elevation(
+            tool_name="Bash",
+            path_hint="",
+            operation="执行本地进程或 Shell 命令",
+            reason="python3 -c 'print(1)'",
+            permission_kind="process_execution",
+        )
+
+    assert result.startswith("Tool unavailable:")
+    assert agent_session.get_pending_question() == {}
+
+
+async def test_heartbeat_agent_suppresses_awaiting_user_sentinel(monkeypatch):
+    from cyrene.agent import coordinator
+
+    async def fake_run_chat_agent(*args, **kwargs):
+        return coordinator._state._AWAITING_USER_SENTINEL
+
+    on_reply = AsyncMock()
+    monkeypatch.setattr(coordinator, "_run_chat_agent", fake_run_chat_agent)
+
+    result = await coordinator.run_heartbeat_agent(
+        "internal proactive instruction",
+        None,
+        0,
+        "db.sqlite3",
+        session_id="wbchat_sentinel_regression",
+        on_reply=on_reply,
+    )
+
+    assert result == ""
+    on_reply.assert_not_awaited()
+
+
 def test_assistant_text_ignores_reasoning_when_tool_calls_present():
     """Regression: a turn that emits tool_calls (e.g. ``quit``) with empty
     content must NOT surface ``reasoning_content`` as user-facing text — that

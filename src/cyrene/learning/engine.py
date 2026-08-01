@@ -415,14 +415,21 @@ _MIN_SKILL_CHAIN_STEPS = 2
 # them ahead of the router's ordinary clarification/permission flow.
 _AUTO_REPLAY_BLOCKED_TOOLS: frozenset[str] = frozenset({
     "ask_user",
-    "send_message",
-    "send_message_to_user",
     "browser.user.control_start",
     "browser.user.control_stop",
     "browser.user.click",
     "browser.user.scroll",
     "browser.user.key",
     "browser.user.text",
+})
+
+# Delivery-only calls are useful while the original agent run is executing,
+# but they are not part of the reusable workflow itself.  Older learned skills
+# may still contain them, so replay skips them instead of rejecting the whole
+# otherwise-safe skill or sending a duplicate progress update.
+_REPLAY_IGNORED_TOOLS: frozenset[str] = frozenset({
+    "send_message",
+    "send_message_to_user",
 })
 
 # Tools that carry meaningful side-effects and must never be replayed silently.
@@ -435,13 +442,15 @@ _HIGH_RISK_TOOLS: frozenset[str] = frozenset({
     "Write", "write_file", "Edit", "edit_file",
     # Persistent scheduled task creation
     "schedule_task",
-    # Browser automation (navigates and interacts with external pages)
-    "browser_navigate", "browser_click", "browser_click_ref", "browser_click_text", "browser_click_at",
+    # Entering data or uploading a file can disclose information or submit a
+    # state-changing form.  Navigation, observation, and ordinary clicks remain
+    # replayable because the user explicitly invoked the learned workflow.
     "browser_type", "browser_type_ref", "browser_upload_files",
 })
 
 # Stable execution-policy sets consumed by the learned-skill tool adapter.
 AUTO_REPLAY_BLOCKED_TOOLS = _AUTO_REPLAY_BLOCKED_TOOLS
+REPLAY_IGNORED_TOOLS = _REPLAY_IGNORED_TOOLS
 HIGH_RISK_TOOLS = _HIGH_RISK_TOOLS
 
 _CORRECTION_TERMS = (
@@ -1780,7 +1789,7 @@ async def _derive_parameter_templates(turn_ids: list[str]) -> tuple[list[dict[st
     for turn_id in turn_ids:
         group: list[dict[str, Any]] = []
         for action in await _action_rows_for_turn(turn_id):
-            if action["tool_name"] in _INTERNAL_TOOLS:
+            if action["tool_name"] in _INTERNAL_TOOLS or action["tool_name"] in _TRIVIAL_SKILL_TOOLS:
                 continue
             metadata = action.get("metadata_json") or {}
             group.append(
@@ -2200,6 +2209,14 @@ def _skill_stats_with_usage_counters(stats: dict[str, Any] | None) -> dict[str, 
 
 def _skill_row_to_definition(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     data = dict(row)
+    steps = _json_loads(data["steps_json"], [])
+    # The executable steps are the source of truth.  Recompute this on read so
+    # skills learned under an older, overly broad browser-risk policy are
+    # immediately usable without a destructive database migration.
+    risk_level = _infer_skill_risk_level(steps)
+    guards = _json_loads(data["guards_json"], {})
+    if isinstance(guards, dict):
+        guards = {**guards, "risk_level": risk_level}
     return {
         "skill_id": data["skill_id"],
         "project_id": data.get("project_id", ""),
@@ -2209,14 +2226,14 @@ def _skill_row_to_definition(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any
         "version": int(data["current_version"]),
         "status": data["status"],
         "skill_type": data["skill_type"],
-        "risk_level": data["risk_level"],
+        "risk_level": risk_level,
         "requires_llm": bool(data["requires_llm"]),
         "trigger": _json_loads(data["trigger_json"], {}),
         "input_schema": _json_loads(data["input_schema_json"], []),
         "parameter_extractor": _json_loads(data["parameter_extractor_json"], {}),
-        "steps": _json_loads(data["steps_json"], []),
+        "steps": steps,
         "script": _json_loads(data.get("script_json"), {}),
-        "guards": _json_loads(data["guards_json"], {}),
+        "guards": guards,
         "fallback_policy": _json_loads(data["fallback_policy_json"], {}),
         "tests": _json_loads(data["tests_json"], []),
         "editable_fields": _json_loads(data["editable_fields_json"], []),
@@ -4307,6 +4324,8 @@ async def run_learned_skill(skill_id: str, param_overrides: dict[str, Any] | Non
         if implementation_kind != "tool_call":
             continue
         tool_name = str(reference.get("tool_name") or "")
+        if tool_name in _REPLAY_IGNORED_TOOLS:
+            continue
         args_template = reference.get("args_template") or {}
         items = args_template.get("_items")
         if isinstance(items, list) and items:

@@ -7,6 +7,44 @@ var {
 } = React;
 var WorkbenchModel = window.CyreneUI.require("model");
 
+function wbErrorText(err) {
+  try {
+    var api = window.CyreneUI.require("api");
+    if (api && typeof api.errorText === "function") return api.errorText(err);
+  } catch (e) {}
+  return String((err && err.message) || err || "");
+}
+
+function wbProjectStoreHasUserContent(store) {
+  var projects = store && Array.isArray(store.projects) ? store.projects : [];
+  return projects.some(function (project) {
+    if (!project || typeof project !== "object") return false;
+    // The legacy/default project and its blank "New task" session are created
+    // automatically. A separately keyed project was explicitly created or
+    // imported and therefore counts as user content even before its first run.
+    var dataKey = String(project.dataKey || "").trim();
+    if (dataKey && dataKey !== "default") return true;
+    if (String(project.description || "").trim()) return true;
+    if (Array.isArray(project.sharedArtifacts) && project.sharedArtifacts.length) return true;
+    var context = project.context && typeof project.context === "object" ? project.context : {};
+    if (Array.isArray(context.knowledgeDocumentIds) && context.knowledgeDocumentIds.length) return true;
+    return (Array.isArray(project.sessions) ? project.sessions : []).some(function (session) {
+      if (!session || typeof session !== "object") return false;
+      var title = String(session.title || "").trim();
+      var goal = String(session.goal || "").trim();
+      if (title && title !== "新任务" && title !== "New task") return true;
+      if (goal && goal !== "通过对话明确当前任务目标。") return true;
+      return ["plan", "events", "runs", "artifacts", "acceptanceCriteria"].some(function (key) {
+        return Array.isArray(session[key]) && session[key].length > 0;
+      }) || !!String(session.agentReply || "").trim();
+    });
+  });
+}
+
+function wbRememberWelcomeHandled() {
+  try { localStorage.setItem("cyrene-workbench-welcomed", "1"); } catch (e) {}
+}
+
 // Native WebContentsView instances live above the renderer's CSS stacking
 // context. Keep a shared count of renderer overlays that must cover it, so a
 // popover can safely overlap another modal without restoring the native view
@@ -691,6 +729,14 @@ function WbColResizer() {
     if (grid) grid.style.removeProperty("--wb-right-w");
     try { localStorage.removeItem(WB_RIGHT_STORE); } catch (err) {}
   }
+  function emitResizeHint(active) {
+    document.body.classList.toggle("wb-col-resize-hover", active === true);
+    try {
+      window.dispatchEvent(new CustomEvent("workbench:right-resize-hint", {
+        detail: { active: active === true },
+      }));
+    } catch (err) {}
+  }
   var title = window.CyreneUI.require("i18n").t(
     "rail.resizeHandle",
     null,
@@ -703,6 +749,8 @@ function WbColResizer() {
       aria-orientation="vertical"
       title={title}
       onPointerDown={onPointerDown}
+      onPointerEnter={function () { emitResizeHint(true); }}
+      onPointerLeave={function () { emitResizeHint(false); }}
       onDoubleClick={onDoubleClick}
     />
   );
@@ -719,6 +767,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   });
   var [loading, setLoading] = useWorkbenchState(true);
   var [error, setError] = useWorkbenchState("");
+  var autoWelcomePendingRef = useWorkbenchRef(false);
   var [fullPage, setFullPage] = useWorkbenchState(function () {
     try {
       // Returning users resume their last page. First-time users (no page ever
@@ -730,7 +779,12 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
       // ignore a stale "welcome" value so those installs fall through to the
       // workspace instead of re-opening onboarding's get-started page.
       if (stored && stored !== "welcome") return stored;
-      if (!localStorage.getItem("cyrene-workbench-welcomed")) return "welcome";
+      // Do not decide from origin-scoped localStorage alone. The desktop may
+      // move to a fallback port, which creates a fresh storage origin even for
+      // an established user. Wait for authoritative backend content first.
+      if (!localStorage.getItem("cyrene-workbench-welcomed")) {
+        autoWelcomePendingRef.current = true;
+      }
       return null;
     } catch (e) { return null; }
   });
@@ -1132,8 +1186,23 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
     var showLoading = options.showLoading !== false;
     if (showLoading) setLoading(true);
     setError("");
-    return model.fetchProjects()
-      .then(function (next) {
+    var contentReady = autoWelcomePendingRef.current
+      ? Promise.resolve(dataStore.ready).catch(function () {})
+      : Promise.resolve();
+    return Promise.all([model.fetchProjects(), contentReady])
+      .then(function (results) {
+        var next = results[0];
+        if (autoWelcomePendingRef.current) {
+          autoWelcomePendingRef.current = false;
+          var onboardingState = dataStore.state.onboarding || {};
+          var hasUserContent = !!onboardingState.hasExistingData
+            || wbProjectStoreHasUserContent(next);
+          if (hasUserContent) {
+            wbRememberWelcomeHandled();
+          } else {
+            setFullPage(function (current) { return current == null ? "welcome" : current; });
+          }
+        }
         setStore(function (prev) {
           // Prefer an explicit target, then the already-visible UI selection.
           // This prevents the initial request from winning a race against a
@@ -1153,7 +1222,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         return next;
       })
       .catch(function (err) {
-        setError(err.message || String(err));
+        setError(wbErrorText(err));
       })
       .finally(function () {
         if (showLoading) setLoading(false);
@@ -1281,7 +1350,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         return payload;
       })
       .catch(function (err) {
-        if (seq === sessionLoadSeqRef.current) setError(err.message || String(err));
+        if (seq === sessionLoadSeqRef.current) setError(wbErrorText(err));
         return null;
       })
       .finally(function () {
@@ -1305,7 +1374,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
   // again on subsequent launches. Re-entry stays available from the Help center.
   useWorkbenchEffect(function () {
     if (fullPage !== "welcome") return;
-    try { localStorage.setItem("cyrene-workbench-welcomed", "1"); } catch (e) {}
+    wbRememberWelcomeHandled();
   }, [fullPage]);
 
   useWorkbenchEffect(function () {
@@ -1888,7 +1957,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         setStore(next);
         setExpandedStepId("");
       }).catch(function (err) {
-        setError(err.message || String(err));
+        setError(wbErrorText(err));
       });
     });
   }
@@ -1912,7 +1981,7 @@ function WorkbenchApp({ theme, actualTheme, onToggleTheme, needsOnboarding }) {
         setExpandedStepId("");
         return next;
       }).catch(function (err) {
-        setError(err.message || String(err));
+        setError(wbErrorText(err));
       });
     });
   }
@@ -2281,6 +2350,7 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
   var [sessionMenu, setSessionMenu] = useWorkbenchState(null);
   var [resourceMenu, setResourceMenu] = useWorkbenchState(null);
   var [resourceDropActive, setResourceDropActive] = useWorkbenchState(false);
+  var [chatSideHidden, setChatSideHidden] = useWorkbenchState(false);
   var topbarRef = useWorkbenchRef(null);
   var sessionMenuSeqRef = useWorkbenchRef(0);
   function acceptsResourceDrag(event, resourceApi) {
@@ -2350,6 +2420,17 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
     event.preventDefault();
     items[next].focus();
   }
+
+  useWorkbenchEffect(function () {
+    function handleChatSideVisibility(event) {
+      var detail = event && event.detail || {};
+      setChatSideHidden(!!detail.active && !!detail.hidden);
+    }
+    window.addEventListener("workbench:chat-side-visibility", handleChatSideVisibility);
+    return function () {
+      window.removeEventListener("workbench:chat-side-visibility", handleChatSideVisibility);
+    };
+  }, []);
 
   useWorkbenchEffect(function () {
     function handleBrowserCopy(event) {
@@ -2873,6 +2954,18 @@ function WorkbenchTopbar({ activePage, taskView, activeTaskId, activeChatId, rec
         ) : null}
       </div>
       <div className="workbench-top-actions">
+        {chatSideHidden && (
+          <button
+            type="button"
+            className="workbench-icon-btn"
+            data-chat-side-show="true"
+            onClick={function () { window.dispatchEvent(new CustomEvent("workbench:show-chat-side")); }}
+            title={t("workbenchChat.showSidebar", "Show side panel")}
+            aria-label={t("workbenchChat.showSidebar", "Show side panel")}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m9 10-2 2 2 2"/></svg>
+          </button>
+        )}
         <button type="button" className="workbench-search-box" onClick={onSearch} title={t("workbench.search")}>
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
           <span>{t("workbench.search")}</span>
@@ -3226,7 +3319,7 @@ function WorkbenchEditProjectModal({ project, onClose, onSave }) {
       color: color,
     })).catch(function (err) {
       setBusy(false);
-      setError(err.message || String(err));
+      setError(wbErrorText(err));
     });
   }
   return (
@@ -4754,7 +4847,7 @@ function GoalLoopWizard({ session, onClose, onStarted }) {
         setPreview(result);
         setPhase("preview");
       })
-      .catch(function (err) { setError(err.message || String(err)); })
+      .catch(function (err) { setError(wbErrorText(err)); })
       .finally(function () { setBusy(false); });
   }
 
@@ -4767,7 +4860,7 @@ function GoalLoopWizard({ session, onClose, onStarted }) {
         if (onStarted) onStarted(store);
         if (onClose) onClose();
       })
-      .catch(function (err) { setError(err.message || String(err)); })
+      .catch(function (err) { setError(wbErrorText(err)); })
       .finally(function () { setBusy(false); });
   }
 
@@ -4891,7 +4984,7 @@ function GoalLoopLimitsDialog({ session, onClose, onSaved }) {
     })
       .then(function () { return model.resumeGoalLoop(session.id); })
       .then(function (store) { if (onSaved) onSaved(store); if (onClose) onClose(); })
-      .catch(function (err) { setError((err && err.message) || String(err)); })
+      .catch(function (err) { setError(wbErrorText(err)); })
       .finally(function () { setBusy(false); });
   }
 

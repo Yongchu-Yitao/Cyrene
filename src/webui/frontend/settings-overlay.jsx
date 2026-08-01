@@ -51,6 +51,30 @@ function codexModelId(item) {
   return String(item && (item.model || item.id || item.slug) || "").trim();
 }
 
+function codexModelSelectOptions(models, selectedModel) {
+  var options = [].concat(models || []);
+  var selected = String(selectedModel || "").trim();
+  if (selected && !options.some(function (item) { return codexModelId(item) === selected; })) {
+    // Model discovery can briefly be empty (or stop advertising an older
+    // model). Keep the persisted choice visible instead of rendering a blank
+    // native select while settings and the OAuth catalog load independently.
+    options.unshift({ model: selected, displayName: selected, persisted: true });
+  }
+  return options;
+}
+
+function codexModelReasoningEfforts(model, selectedEffort) {
+  var raw = model && (model.supportedReasoningEfforts || model.supported_reasoning_efforts) || [];
+  var efforts = raw.map(function (option) {
+    return String(typeof option === "string"
+      ? option
+      : option && (option.reasoningEffort || option.reasoning_effort) || "").trim();
+  }).filter(Boolean);
+  var selected = String(selectedEffort || "").trim();
+  if (selected && efforts.indexOf(selected) < 0) efforts.unshift(selected);
+  return Array.from(new Set(efforts));
+}
+
 async function readSettingsResponse(response) {
   var payload = {};
   try {
@@ -632,6 +656,8 @@ function RemotePanel(p) {
   var remoteDraftRef = useRefSt(null);
   var inviteToolPacksRef = useRefSt([]);
   var inviteDefaultsInitializedRef = useRefSt(false);
+  var pairingPeerIdsRef = useRefSt([]);
+  var pairingExpiresAtRef = useRefSt(0);
 
   function showRemoteNotice(message, type) {
     var feedback = window.CyreneUI && window.CyreneUI.require
@@ -644,8 +670,9 @@ function RemotePanel(p) {
     setNotice(message);
   }
 
-  function loadRemote() {
-    setLoading(true);
+  function loadRemote(options) {
+    var background = !!(options && options.background);
+    if (!background) setLoading(true);
     return fetch("/api/remote/settings").then(readSettingsResponse).then(function (payload) {
       setRemote(payload);
       remoteDraftRef.current = payload;
@@ -661,12 +688,25 @@ function RemotePanel(p) {
         setInviteToolPacks(defaultToolPacks);
         setInviteProjects(defaultProjects);
       }
-      setLoading(false);
+      if (!background) setLoading(false);
       return payload;
     }).catch(function (error) {
-      setNotice(t("settings.remoteLoadFailed") + ": " + error.message);
-      setLoading(false);
+      if (!background) {
+        setNotice(t("settings.remoteLoadFailed") + ": " + error.message);
+        setLoading(false);
+      }
     });
+  }
+
+  function upsertRemotePeer(peer) {
+    var current = remoteDraftRef.current;
+    if (!current || !peer || !peer.device_id) return;
+    var peers = (current.peers || []).filter(function (item) {
+      return item.device_id !== peer.device_id;
+    });
+    var next = { ...current, peers: peers.concat([peer]) };
+    remoteDraftRef.current = next;
+    setRemote(next);
   }
 
   function loadAudit() {
@@ -684,6 +724,29 @@ function RemotePanel(p) {
       }
     };
   }, []);
+
+  useEffectSt(function () {
+    if (!pairingKey) return undefined;
+    var refresh = function () {
+      if (pairingExpiresAtRef.current && Date.now() >= pairingExpiresAtRef.current) {
+        setPairingKey("");
+        return;
+      }
+      loadRemote({ background: true }).then(function (payload) {
+        if (!payload) return;
+        var previousIds = pairingPeerIdsRef.current;
+        var hasNewPeer = (payload.peers || []).some(function (peer) {
+          return previousIds.indexOf(peer.device_id) < 0;
+        });
+        if (!hasNewPeer) return;
+        setPairingKey("");
+        showRemoteNotice(t("settings.remotePairingComplete"));
+        loadAudit();
+      });
+    };
+    var timer = setInterval(refresh, 1000);
+    return function () { clearInterval(timer); };
+  }, [pairingKey]);
 
   function persistSettings(nextRemote, version) {
     if (!nextRemote) return;
@@ -764,6 +827,9 @@ function RemotePanel(p) {
   }
 
   function createInvitation() {
+    pairingPeerIdsRef.current = ((remoteDraftRef.current || remote).peers || []).map(function (peer) {
+      return peer.device_id;
+    });
     setBusy("invite");
     fetch("/api/remote/pairing/short-key", {
       method: "POST",
@@ -777,6 +843,7 @@ function RemotePanel(p) {
         ttl_seconds: 120,
       }),
     }).then(readSettingsResponse).then(function (payload) {
+      pairingExpiresAtRef.current = Date.parse(payload.expires_at || "") || (Date.now() + 120000);
       setPairingKey(payload.pairing_key || "");
       showRemoteNotice(t("settings.remoteInvitationCreated"));
       loadAudit();
@@ -799,8 +866,9 @@ function RemotePanel(p) {
       }),
     }).then(readSettingsResponse).then(function (payload) {
       setIncomingPairingKey("");
+      upsertRemotePeer(payload.peer);
       showRemoteNotice(t("settings.remotePairingComplete"));
-      loadRemote();
+      loadRemote({ background: true });
       loadAudit();
     }).catch(function (error) {
       showRemoteNotice(error.code === "remote_pairing_peer_update_required"
@@ -1600,6 +1668,8 @@ function ModelsPanel(p) {
   var setPrimarySource = setModelSource;
   var codexPoll = useRefSt(null);
   var primarySourceRef = useRefSt(null);
+  var codexCandidateRef = useRefSt(savedCodexCandidate);
+  codexCandidateRef.current = codexCandidate;
 
   useEffectSt(function () {
     if (!primaryMenuOpen) return;
@@ -1639,7 +1709,7 @@ function ModelsPanel(p) {
       .then(function (data) {
         setCodexState({ ...data, checking: false });
         var options = data.models || [];
-        var saved = codexCandidate;
+        var saved = codexCandidateRef.current;
         var savedModel = saved && saved.model || "";
         var selected = options.find(function (item) { return codexModelId(item) === savedModel; });
         var preferred = selected || options.find(function (item) { return item.isDefault || item.is_default; }) || options[0];
@@ -1754,6 +1824,9 @@ function ModelsPanel(p) {
   var visionFallbackCount = Math.max(0, visionModels.length - 1);
   var secondaryConfigured = !!String(secondaryModel && secondaryModel.model || "").trim();
   var visionConfigured = !!String(visionModels[0] && visionModels[0].model || "").trim();
+  var codexModelOptions = codexModelSelectOptions(codexState.models, codexModel);
+  var selectedCodexModel = codexModelOptions.find(function (item) { return codexModelId(item) === codexModel; });
+  var codexEffortOptions = codexModelReasoningEfforts(selectedCodexModel, codexEffort);
 
   return React.createElement("div", { className: "settings-panel wb-models-panel" },
     SectionTitle(t("settings.models"), t("settings.modelsSubtitle")),
@@ -1827,7 +1900,7 @@ function ModelsPanel(p) {
                   setCodexEffort(effort);
                   setCodexPrimaryCandidate(value, effort);
                 },
-              }, (codexState.models || []).map(function (item) {
+              }, codexModelOptions.map(function (item) {
                 var id = codexModelId(item);
                 return React.createElement("option", { key: id, value: id }, item.displayName || item.display_name || id);
               })),
@@ -1841,10 +1914,9 @@ function ModelsPanel(p) {
                   setCodexEffort(value);
                   setCodexPrimaryCandidate(codexModel, value);
                 },
-              }, ((codexState.models || []).find(function (item) { return codexModelId(item) === codexModel; }) || {}).supportedReasoningEfforts?.map(function (option) {
-                var effort = String(option.reasoningEffort || option.reasoning_effort || "");
+              }, codexEffortOptions.map(function (effort) {
                 return React.createElement("option", { key: effort, value: effort }, t("settings.reasoningEffortValue." + effort));
-              }) || []),
+              })),
             ),
           ),
           codexNotice && React.createElement("p", { className: "wb-hint" }, codexNotice),

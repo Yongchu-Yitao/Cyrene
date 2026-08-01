@@ -166,6 +166,66 @@ def test_workbench_chat_inputs_are_borderless():
     assert ".wbc-composer-box:focus-within {" not in styles
 
 
+def test_main_chat_composer_uses_a_glass_dock_without_changing_the_input_card():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    stage_css = styles.split(".wbc-thread-stage {", 1)[1].split("}", 1)[0]
+    dock_css = styles.split(".wbc-main > .wbc-composer {", 1)[1].split("}", 1)[0]
+    page_glass_css = styles.split(".wbc-page::before {", 1)[1].split("}", 1)[0]
+    input_css = styles.split(".wbc-composer-box {", 1)[1].split("}", 1)[0]
+    scroll_css = styles.split(".wbc-scroll-to-bottom {", 1)[1].split("}", 1)[0]
+
+    assert "--wbc-thread-inset-bottom: calc(198px * var(--wb-ui-font-scale, 1));" in stage_css
+    assert "position: absolute;" in dock_css
+    assert "inset: auto 0 0;" in dock_css
+    assert "background:" not in dock_css
+    assert "background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);" in page_glass_css
+    assert "backdrop-filter: blur(32px) saturate(170%) contrast(102%);" in page_glass_css
+    assert "linear-gradient(to top, #000 0%, #000 82%, transparent 100%)" in page_glass_css
+    assert ".wbc-main > .wbc-composer::before {" not in styles
+    assert "background: var(--wb-card-bg);" in input_css
+    assert "border-radius: 14px;" in input_css
+    assert "padding: 10px 12px 8px;" in input_css
+    assert "bottom: calc(var(--wbc-thread-inset-bottom) + 4px);" in scroll_css
+
+
+def test_hidden_chat_sidebar_slightly_widens_and_centers_the_conversation_lane():
+    root = Path(__file__).resolve().parent.parent
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
+    hidden_css = styles.split(".wbc-page.wbc-side-hidden {", 1)[1].split("}", 1)[0]
+    stage_css = styles.split(".wbc-thread-stage {", 1)[1].split("}", 1)[0]
+    dock_css = styles.split(".wbc-main > .wbc-composer {", 1)[1].split("}", 1)[0]
+
+    assert "--wbc-reclaimed-side-width: 0px;" in page_css
+    assert "--wbc-conversation-shift: 0px;" in page_css
+    assert "--wbc-side-track-width: var(--wb-right-w, 350px);" in page_css
+    assert "grid-template-columns: 230px minmax(var(--wbc-main-min-width), 1fr) var(--wbc-side-track-width);" in page_css
+    assert "transition: grid-template-columns 420ms cubic-bezier(.22, 1, .36, 1);" in page_css
+    assert "--wbc-collapsed-lane-growth: clamp(64px, 5vw, 96px);" in page_css
+    assert "--wbc-side-track-width: 0px;" in hidden_css
+    assert "--wbc-reclaimed-side-width: calc(var(--wb-right-w, 350px) - var(--wbc-collapsed-lane-growth));" in hidden_css
+    assert "--wbc-conversation-shift: calc(var(--wbc-reclaimed-side-width) / 2);" in hidden_css
+    for lane_css in (stage_css, dock_css):
+        assert "width: calc(100% - var(--wbc-reclaimed-side-width));" in lane_css
+        assert "transform: translateX(var(--wbc-conversation-shift));" in lane_css
+        assert "transition: width 420ms cubic-bezier(.22, 1.24, .36, 1), transform 420ms cubic-bezier(.22, 1.24, .36, 1);" in lane_css
+
+    compact_css = styles.split("@media (max-width: 980px) {", 1)[1].split("}", 3)
+    assert any("--wbc-reclaimed-side-width: 0px;" in block for block in compact_css)
+    hidden_side_css = styles.split(".wbc-page.wbc-side-hidden .wbc-side {", 1)[1].split("}", 1)[0]
+    assert "display: none;" not in hidden_side_css
+    assert "opacity: 0;" in hidden_side_css
+    assert "visibility: hidden;" in hidden_side_css
+    assert "@media (prefers-reduced-motion: reduce)" in styles
+
+
 def test_workbench_chat_rails_use_hidden_scrollbars():
     root = Path(__file__).resolve().parent.parent
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
@@ -199,40 +259,30 @@ def test_workbench_chat_rails_use_hidden_scrollbars():
     assert "height: 0;" in thread_scrollbar_css
 
 
-def test_workbench_header_uses_a_fading_frosted_glass_overlay():
+def test_global_topbar_is_frosted_and_conversation_header_panel_is_removed():
     root = Path(__file__).resolve().parent.parent
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
     )
-
-    page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
-    shared_glass_css = styles.split(".wbc-top-glass {", 1)[1].split("}", 1)[0]
-    main_css = styles.split(".wbc-main {", 1)[1].split("}", 1)[0]
-    header_css = styles.split(".wbc-header {", 1)[1].split("}", 1)[0]
-    glass_css = styles.split(".wbc-header::before {", 1)[1].split("}", 1)[0]
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    topbar_css = styles.split(".workbench-topbar {", 1)[1].split("}", 1)[0]
     thread_stage_css = styles.split(".wbc-thread-stage {", 1)[1].split("}", 1)[0]
+    main = chat.split("function WbcMain(", 1)[1].split("function WbcHeader(", 1)[0]
 
-    assert "--wbc-top-glass-height: calc(94px * var(--wb-ui-font-scale, 1));" in page_css
-    assert "--wbc-side-column-width: var(--wb-right-w, 350px);" in page_css
-    assert "position: relative;" in page_css
-    assert "--wbc-header-overlay-height: var(--wbc-top-glass-height);" in main_css
-    assert "position: relative;" in main_css
-    assert "position: absolute;" in header_css
-    assert "z-index: 20;" in header_css
-    assert "border-bottom: 0;" in header_css
-    assert "content: none;" in glass_css
-    assert "var(--wb-main-bg) 66%" in shared_glass_css
-    assert "var(--wb-main-bg) 56%" in shared_glass_css
-    assert "var(--wb-main-bg) 32%" in shared_glass_css
-    assert "inset: 0 var(--wbc-side-column-width) auto 0;" in shared_glass_css
-    assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in shared_glass_css
-    assert "mask-image: linear-gradient(" in shared_glass_css
-    assert "#000 78%" in shared_glass_css
-    assert "transparent 100%" in shared_glass_css
-    assert "--wbc-thread-inset-top: calc(var(--wbc-header-overlay-height) + 18px);" in thread_stage_css
+    assert "background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);" in topbar_css
+    assert "backdrop-filter: blur(32px) saturate(170%) contrast(102%);" in topbar_css
+    assert "border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 64%, transparent);" in topbar_css
+    assert '<WbcHeader' not in main
+    assert 'className="wbc-header"' not in main
+    assert 'className="wbc-top-glass"' not in chat
+    assert "position: fixed;" in topbar_css
+    assert "inset: 0 0 auto;" in topbar_css
+    assert "--wbc-thread-inset-top: 76px;" in thread_stage_css
 
 
-def test_workbench_chat_rail_uses_the_same_frosted_glass_overlay():
+def test_workbench_chat_rail_keeps_its_own_fixed_header_surface():
     root = Path(__file__).resolve().parent.parent
     styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
         encoding="utf-8"
@@ -243,25 +293,82 @@ def test_workbench_chat_rail_uses_the_same_frosted_glass_overlay():
 
     rail_css = styles.split(".wbc-rail {", 1)[1].split("}", 1)[0]
     rail_glass_css = styles.split(".wbc-rail-glass {", 1)[1].split("}", 1)[0]
-    rail_head_css = styles.split(
-        ".wbc-rail-glass .workbench-rail-head {", 1
-    )[1].split("}", 1)[0]
-    glass_css = styles.split(".wbc-rail-glass::before {", 1)[1].split("}", 1)[0]
+    rail_glass_surface_css = styles.split(".wbc-rail-glass::before {", 1)[1].split("}", 1)[0]
+    rail_toolbar_css = styles.split(".wbc-rail-toolbar {", 1)[1].split("}", 1)[0]
+    new_chat_css = styles.split(".wbc-new-chat-btn {", 1)[1].split("}", 1)[0]
     search_input_css = styles.split(".wbc-search input {", 1)[1].split("}", 1)[0]
     chat_list_css = styles.split(".wbc-chat-list {", 1)[1].split("}", 1)[0]
 
     assert 'className="wbc-rail-glass"' in source
-    assert 'className="wbc-top-glass"' in source
-    assert "--wbc-rail-overlay-height: var(--wbc-top-glass-height);" in rail_css
-    assert "--wbc-rail-content-inset: calc(var(--wbc-top-glass-height) + 8px);" in rail_css
-    assert "gap: 6px;" in rail_glass_css
+    assert 'className="wbc-top-glass"' not in source
+    assert "--wbc-rail-overlay-height: calc(48px * var(--wb-ui-font-scale, 1));" in rail_css
+    assert "--wbc-rail-content-inset: calc(var(--wbc-rail-overlay-height) + 8px);" in rail_css
     assert "padding: 8px 12px;" in rail_glass_css
-    assert "height: 40px;" in rail_head_css
+    page_css = styles.split(".wbc-page {", 1)[1].split("}", 1)[0]
+    page_glass_css = styles.split(".wbc-page::before {", 1)[1].split("}", 1)[0]
+    assert "background: transparent;" in rail_css
+    assert "padding: 0 12px;" in rail_css
+    assert "padding: 0 12px 14px;" not in rail_css
+    assert "z-index: 21;" in rail_css
+    assert "--wbc-shared-glass-rail-width: 230px;" in page_css
+    assert "--wbc-shared-glass-rail-overhang: 18px;" in page_css
+    assert "--wbc-shared-glass-rail-feather: 36px;" in page_css
+    assert "--wbc-shared-glass-rail-top-inset:" in page_css
+    assert "background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);" in page_glass_css
+    assert "backdrop-filter: blur(32px) saturate(170%) contrast(102%);" in page_glass_css
+    assert "100% var(--wbc-shared-glass-height);" in page_glass_css
+    assert "mask-position: left bottom, left bottom;" in page_glass_css
+    assert "calc(100% - var(--wbc-shared-glass-rail-width))" not in page_glass_css
+    assert "mask-composite: add;" in page_glass_css
+    assert "isolation: isolate;" in rail_css
+    assert "background: transparent;" in rail_glass_css
+    assert "background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);" in rail_glass_surface_css
+    assert "backdrop-filter: blur(32px) saturate(170%) contrast(102%);" in rail_glass_surface_css
+    assert "mask-image: linear-gradient(to right" in rail_glass_surface_css
+    assert ".wbc-rail::before {" not in styles
+    assert "display: flex;" in rail_toolbar_css
+    assert "align-items: center;" in rail_toolbar_css
+    assert "gap: 8px;" in rail_toolbar_css
+    assert "width: 32px;" in new_chat_css
+    assert "height: 32px;" in new_chat_css
+    assert 'className="workbench-icon-btn wbc-new-chat-btn"' in source
+    assert 'aria-label={wbcT("workbenchChat.newChat"' in source
+    rail_markup = source.split('<div className="wbc-rail-glass">', 1)[1].split(
+        "{menuId &&", 1
+    )[0]
+    assert 'workbenchChat.railTitle' not in rail_markup
+    assert '<span>{wbcT("workbenchChat.newChat"' not in rail_markup
     assert "height: 32px;" in search_input_css
-    assert "content: none;" in glass_css
     assert "border-right: 0;" in rail_css
     assert ".wbc-rail::after {" not in styles
-    assert "padding: var(--wbc-rail-content-inset) 0 8px;" in chat_list_css
+    assert "position: relative;" in chat_list_css
+    assert "z-index: 21;" in chat_list_css
+    assert "padding: calc(58px + var(--wbc-rail-content-inset)) 0 8px;" in chat_list_css
+
+
+def test_collapsed_right_sidebar_restore_control_lives_in_the_global_topbar():
+    root = Path(__file__).resolve().parent.parent
+    chat = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    styles = (root / "src" / "webui" / "frontend" / "workbench.css").read_text(
+        encoding="utf-8"
+    )
+
+    topbar = source.split("function WorkbenchTopbar(", 1)[1].split(
+        "function WorkbenchNotificationCenter(", 1
+    )[0]
+    assert 'className="workbench-icon-btn"' in topbar
+    assert 'data-chat-side-show="true"' in topbar
+    assert 'new CustomEvent("workbench:show-chat-side")' in topbar
+    assert 'window.addEventListener("workbench:chat-side-visibility"' in topbar
+    assert 'window.addEventListener("workbench:show-chat-side"' in chat
+    assert 'new CustomEvent("workbench:chat-side-visibility"' in chat
+
+    assert ".workbench-chat-side-show {" not in styles
 
 
 def test_workbench_overview_header_uses_the_same_frosted_glass_overlay():
@@ -287,8 +394,8 @@ def test_workbench_overview_header_uses_the_same_frosted_glass_overlay():
     assert "var(--wb-right-bg) 32%" in glass_css
     assert "backdrop-filter: blur(46px) saturate(165%) contrast(103%);" in glass_css
     assert "mask-image: linear-gradient(" in glass_css
-    assert "padding: calc(var(--wbc-side-content-inset) + 14px) 14px 14px;" in side_body_css
-    assert "padding: var(--wbc-side-content-inset) 0 0;" in flush_css
+    assert "padding: calc(58px + var(--wbc-side-content-inset) + 14px) 14px 14px;" in side_body_css
+    assert "padding: calc(58px + var(--wbc-side-content-inset)) 0 0;" in flush_css
 
 
 def test_memory_toolbars_use_the_same_frosted_glass_without_overlay_spacing():
@@ -852,6 +959,52 @@ def test_workbench_uses_light_project_payload_and_lazy_session_detail():
     assert "seq !== sessionLoadSeqRef.current" in source
 
 
+def test_workbench_auto_welcome_waits_for_backend_and_skips_existing_content():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(
+        encoding="utf-8"
+    )
+    data_store = (root / "src" / "webui" / "frontend" / "platform" / "data-store.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function wbProjectStoreHasUserContent(store)" in source
+    assert "autoWelcomePendingRef.current = true" in source
+    assert "Promise.resolve(dataStore.ready)" in source
+    assert "!!onboardingState.hasExistingData" in source
+    assert "|| wbProjectStoreHasUserContent(next)" in source
+    assert 'current == null ? "welcome" : current' in source
+    assert 'hasExistingData: false' in data_store
+
+    helper_source = "function wbProjectStoreHasUserContent(" + source.split(
+        "function wbProjectStoreHasUserContent(", 1
+    )[1].split("function wbRememberWelcomeHandled", 1)[0]
+    script = f"""
+eval({json.dumps(helper_source)});
+const blankDefault = {{projects: [{{
+  dataKey: "default",
+  sessions: [{{title: "新任务", goal: "", plan: [], events: [], runs: [], artifacts: []}}]
+}}]}};
+const explicitProject = {{projects: [{{dataKey: "project_123", sessions: []}}]}};
+const usedLegacyProject = {{projects: [{{
+  dataKey: "default",
+  sessions: [{{title: "Research", goal: "Find sources"}}]
+}}]}};
+process.stdout.write(JSON.stringify({{
+  blankDefault: wbProjectStoreHasUserContent(blankDefault),
+  explicitProject: wbProjectStoreHasUserContent(explicitProject),
+  usedLegacyProject: wbProjectStoreHasUserContent(usedLegacyProject)
+}}));
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    result = json.loads(completed.stdout)
+    assert result == {
+        "blankDefault": False,
+        "explicitProject": True,
+        "usedLegacyProject": True,
+    }
+
+
 def test_workbench_module_pages_are_kept_alive_without_hidden_file_drop():
     root = Path(__file__).resolve().parent.parent
     shell = (root / "src" / "webui" / "frontend" / "workbench.jsx").read_text(encoding="utf-8")
@@ -1192,7 +1345,8 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "if (!interaction.previewReady) return;" in stop_block
     assert "interaction.pointerReleased = true;" in stop_block
     assert "if (interaction.pointerReleased) finalizeInteraction(interaction);" in stop_block
-    assert "}, 250);" in move_block
+    assert "}, 750);" in move_block
+    assert "if (interaction.cancelled) return;" in move_block
 
     browser_view = (root / "src" / "webui" / "frontend" / "shared" / "browser" / "viewport.jsx").read_text(encoding="utf-8")
     assert "lastBoundsRef" in browser_view
@@ -1230,12 +1384,39 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert 'detail: { sessionId: electronSessionId, fallback: true }' in interaction_block
     assert "function commitInteractionDelta(interaction, dx, dy)" in source
     assert "function onBrowserWindowPreviewReady(event)" in source
+    assert "if (detail.fallback) {" in source
+    assert "interaction.cancelled = true;" in source
     assert "if (!interaction.previewReady) return;" in move_block
     assert "previewReady: false" in begin_block
     assert 'window.addEventListener("workbench:browser-window-preview-ready"' in begin_block
     assert 'window.removeEventListener("workbench:browser-window-preview-ready"' in stop_block
-    assert 'wbcNotifyBrowserWindowInteraction(true, "mode", browserSessionId);' in source
+    assert 'wbcNotifyBrowserWindowInteraction(true, "mode", browserSessionId, {' in source
     assert 'wbcNotifyBrowserWindowInteraction(false, "mode", browserSessionId);' in source
+    mode_transition_block = source.split(
+        "  function runModeTransition(action, targetMode) {", 1
+    )[1].split("\n  function measuredFloatingFrame", 1)[0]
+    assert 'window.addEventListener("workbench:browser-transition-target-ready"' in mode_transition_block
+    assert "applyModeAfterPreview();" in mode_transition_block
+    assert mode_transition_block.index(
+        'window.addEventListener("workbench:browser-transition-target-ready"'
+    ) < mode_transition_block.index(
+        'wbcNotifyBrowserWindowInteraction(true, "mode", browserSessionId, {'
+    )
+    assert "setTimeout(applyModeAfterPreview, 1800)" in mode_transition_block
+    assert "function measureBrowserSurfaceForMode(targetMode)" in source
+    assert 'clone.querySelector(".browser-native-surface")' in source
+    assert "targetBounds: measureBrowserSurfaceForMode" in mode_transition_block
+    assert "highResolution: false" in browser_view
+    assert "targetWidth: 0" in browser_view
+    assert "modeTargetPreviewRef.current = {" in browser_view
+    assert 'workbench:browser-transition-commit-preview' in browser_view
+    assert "window.ReactDOM.flushSync(commitModeAndPreview)" in mode_transition_block
+    assert "function prepareModeTargetFrame(previewToken)" in browser_view
+    assert 'transition: "prepare"' in browser_view
+    assert 'phase: "target"' in browser_view
+    assert 'workbench:browser-transition-target-ready' in browser_view
+    assert "function commitPreparedModeTransition(token)" in browser_view
+    assert 'transition: "commit"' in browser_view
     sync_view_block = main.split("  syncAttachedView() {", 1)[1].split("\n  setBounds(", 1)[0]
     set_bounds_index = sync_view_block.index("active.view.setBounds(targetBounds)")
     attach_index = sync_view_block.index("win.contentView.addChildView(active.view)")
@@ -1246,20 +1427,42 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     assert "this.borderRadius = Math.max(0, Math.min(24" in main
     assert "async pageViewportMatches(view, bounds)" in main
     assert "'({ width: window.innerWidth, height: window.innerHeight })'" in main
-    assert "async settlePageViewport(view, bounds)" in main
+    assert "async settlePageViewport(view, bounds, forcePulse = false)" in main
     settle_viewport_block = main.split(
-        "  async settlePageViewport(view, bounds) {", 1
+        "  async settlePageViewport(view, bounds, forcePulse = false) {", 1
     )[1].split("\n  applyPageFrameStyle(", 1)[0]
     assert "width: target.width > 9 ? target.width - 1 : target.width" in settle_viewport_block
     assert "return this.waitForPageViewport(view, target, 6);" in settle_viewport_block
+    prepare_transition_block = main.split(
+        "  async prepareBoundsTransition() {", 1
+    )[1].split("\n  async commitBoundsTransition()", 1)[0]
+    commit_transition_block = main.split(
+        "  async commitBoundsTransition() {", 1
+    )[1].split("\n  async settleBoundsTransition()", 1)[0]
     settle_transition_block = main.split(
         "  async settleBoundsTransition() {", 1
     )[1].split("\n  setBounds(", 1)[0]
-    assert "let viewportReady = await this.settlePageViewport(active.view, targetBounds);" in settle_transition_block
-    assert "if (!viewportReady && token === this._boundsTransitionToken)" in settle_transition_block
-    assert settle_transition_block.count(
-        "await this.settlePageViewport(active.view, targetBounds)"
-    ) == 2
+    assert "const stagingBounds = {" in prepare_transition_block
+    assert "active.view.setBounds(stagingBounds)" in prepare_transition_block
+    assert "const viewportReady = await this.settlePageViewport(active.view, stagingBounds);" in prepare_transition_block
+    assert "{ fast: true }" in prepare_transition_block
+    assert "debug.sendCommand('Page.captureScreenshot'" in prepare_transition_block
+    assert "active.view.setBounds(targetBounds)" in prepare_transition_block
+    assert "const targetImage = await Promise.race" in prepare_transition_block
+    assert "targetImage.getSize()" in prepare_transition_block
+    assert "targetPngBase64 = targetImage.toPNG().toString('base64');" in prepare_transition_block
+    assert "pngBase64: targetPngBase64" in prepare_transition_block
+    assert "widthTolerance = Math.ceil(PAGE_CSS_TARGET_WIDTH * 0.05)" in main
+    assert "this._pageZoomTokenByContents = new Map();" in main
+    assert "this._pageZoomTokenByContents.get(contentsId) === zoomToken" in main
+    assert "request = request * (PAGE_CSS_TARGET_WIDTH / innerW)" not in main
+    assert "await this.settlePageViewport(active.view, targetBounds, true)" in commit_transition_block
+    assert "const prepared = await this.prepareBoundsTransition();" in settle_transition_block
+    assert "return this.commitBoundsTransition();" in settle_transition_block
+    assert "info.transition === 'prepare'" in set_bounds_block
+    assert "info.transition === 'commit'" in set_bounds_block
+    assert "Page.captureScreenshot" in main
+    assert "cssVisualViewport" in main
     assert "const surfaceRef = React.useRef(null);" in browser_view
     assert 'const pipWindow = node.closest(".wbc-browser-window.pip")' in browser_view
     assert "const borderRadius = 0;" in browser_view
@@ -1303,6 +1506,7 @@ def test_electron_browser_bounds_follow_floating_window_with_frame_coalescing():
     )[1].split("}", 1)[0]
     assert "inset: var(--browser-content-inset);" in pip_surface_rule
     assert "border-radius: 8px;" in pip_surface_rule
+    assert "background: var(--wb-surface);" in pip_surface_rule
     assert "width:" not in pip_surface_rule
     assert "height:" not in pip_surface_rule
     assert "topCover" not in main
@@ -2169,8 +2373,8 @@ def test_workbench_pip_reflow_does_not_compete_with_scroll_anchor():
     assert main.count("if (avoidanceApplyingRef.current) return;") == 2
     assert "avoidanceApplyingRef.current = false;" in main
     assert "overflow-anchor: none;" in thread_rule
-    assert "finalizing={!!(runtime && runtime.finalizing)}" in main
-    assert 'wbcT("workbenchChat.status.saving", "Saving")' in source
+    assert "finalizing={!!msg.runtimeFinalizing}" in main
+    assert 'wbcT("workbenchChat.finalizing", "Reply complete · saving results…")' in source
 
 
 def test_workbench_context_tab_has_live_session_inbox_card():
@@ -2518,7 +2722,6 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     assert 'className={"wbc-attach-card" + (showImagePreview ? " image" : " file")}' in source
     assert ".wbc-attach-file-open" in styles
     assert ".wbc-inline-image-preview img" in styles
-    assert ".wbc-inline-image-footer" in styles
     assert ".wbc-inline-image-actions .wbc-inline-image-action" in styles
     inline_image_rule = styles.split(".wbc-inline-image {", 1)[1].split("}", 1)[0]
     assert "width: min(280px, 100%);" in inline_image_rule
@@ -2527,12 +2730,14 @@ def test_workbench_attachment_preview_falls_back_without_overflowing():
     preview_image_rule = styles.split(".wbc-inline-image-preview img {", 1)[1].split("}", 1)[0]
     assert "object-fit: cover;" in preview_image_rule
     assert "border-radius: 11px;" in preview_image_rule
+    assert "border: 0;" in inline_image_rule
+    assert "background: transparent;" in inline_image_rule
+    actions_rule = styles.split(".wbc-inline-image-actions {", 1)[1].split("}", 1)[0]
     footer_rule = styles.split(".wbc-inline-image-footer {", 1)[1].split("}", 1)[0]
     assert "min-height: 34px;" in footer_rule
     assert "background: var(--wb-card-bg);" in footer_rule
     assert "box-shadow: var(--wbc-control-shadow);" in footer_rule
-    assert "border: 0;" in inline_image_rule
-    assert "background: transparent;" in inline_image_rule
+    assert "flex: 0 0 auto;" in actions_rule
     action_rule = styles.split(
         ".wbc-inline-image-actions .wbc-inline-image-action {", 1
     )[1].split("}", 1)[0]
@@ -2641,6 +2846,34 @@ def test_workbench_chat_error_retry_replays_failed_message_instead_of_reloading(
     assert '<WbcErrorNotice message={error} kind={errorKind} onRetry={onRetry} />' in source
     assert 'wbcT("workbenchChat.error.messageTitle", "Message processing failed")' in source
     assert 'wbcT("workbenchChat.error.messageBody"' in source
+
+
+def test_workbench_chat_errors_keep_i18n_metadata_and_localize_known_codes():
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "src" / "webui" / "frontend" / "workbench-chat.jsx").read_text(
+        encoding="utf-8"
+    )
+    api = (root / "src" / "webui" / "frontend" / "platform" / "api.jsx").read_text(
+        encoding="utf-8"
+    )
+    i18n = (root / "src" / "webui" / "frontend" / "workbench-i18n.jsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'streamError.code = event.code || event.failure_kind || ""' in source
+    assert 'streamError.detailKey = event.detail_key || event.detailKey || ""' in source
+    assert 'error.detailKey = (payload && (payload.detail_key || payload.detailKey)) || ""' in api
+    assert 'WORKBENCH_ERROR_I18N_KEYS' in source
+    assert 'quota_exhausted: "workbenchChat.error.quotaExhausted"' in source
+    assert 'quota_exhausted: "workbenchChat.error.quotaExhausted"' in api
+    assert 'if (/^codex\\s+quota\\s+is\\s+exhausted\\b/i.test(raw))' in source
+    for expected in (
+        '"workbenchChat.error.quotaExhausted": "Codex quota is exhausted.',
+        '"workbenchChat.error.quotaExhausted": "Codex 额度已耗尽，',
+        '"workbenchChat.error.processRestarted": "Cyrene restarted',
+        '"workbenchChat.error.processRestarted": "Cyrene 在消息完成前重启了',
+    ):
+        assert expected in i18n
 
 
 def test_workbench_uses_the_library_as_the_only_knowledge_page():

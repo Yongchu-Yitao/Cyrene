@@ -1108,6 +1108,15 @@ async def run_heartbeat_agent(
                 public_prompt="", refresh_labels=False, hide_initial_detail=True,
                 assistant_message_meta={"proactive": True, "system_initiated": True},
             )
+            # ``awaiting_user`` is an internal control outcome, never public
+            # assistant content.  Proactive rounds are forbidden from pausing,
+            # but keep this delivery-boundary guard so a future tool regression
+            # cannot leak the sentinel into a Workbench transcript or alert.
+            if reply == _state._AWAITING_USER_SENTINEL:
+                logger.warning(
+                    "Suppressing unexpected awaiting-user outcome from proactive round"
+                )
+                return ""
             if reply and on_reply is not None:
                 delivered = await on_reply(reply)
                 if delivered is None or delivered is False:

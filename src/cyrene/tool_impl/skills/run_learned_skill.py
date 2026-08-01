@@ -7,6 +7,7 @@ from typing import Any
 
 from cyrene.tooling.native_definitions import get_native_tool_def
 from cyrene.learning.engine import (
+    REPLAY_IGNORED_TOOLS as _BL_IGNORED_TOOLS,
     _AUTO_REPLAY_BLOCKED_TOOLS as _BL_BLOCKED_TOOLS,
     _HIGH_RISK_TOOLS as _BL_HIGH_RISK_TOOLS,
 )
@@ -19,12 +20,10 @@ TOOL_DEF = get_native_tool_def(TOOL_NAME)
 
 # WARNING: When adding a new destructive or interactive capability,
 # add it to the appropriate set below so RunLearnedSkill does not auto-execute it.
-_HIGH_RISK_TOOLS: frozenset[str] = _BL_HIGH_RISK_TOOLS | frozenset({
-    "browser_navigate", "browser_click", "browser_click_ref", "browser_click_text", "browser_click_at",
-    "browser_type", "browser_type_ref",
-})
+_HIGH_RISK_TOOLS: frozenset[str] = _BL_HIGH_RISK_TOOLS
 
 _AUTO_REPLAY_BLOCKED_TOOLS = _BL_BLOCKED_TOOLS
+_REPLAY_IGNORED_TOOLS = _BL_IGNORED_TOOLS
 
 
 def _has_unsafe_step(steps: list[dict[str, Any]]) -> bool:
@@ -39,6 +38,8 @@ def _has_unsafe_step(steps: list[dict[str, Any]]) -> bool:
             # normal agent permission path.
             return True
         tool_name = str(ref.get("tool_name") or "")
+        if tool_name in _REPLAY_IGNORED_TOOLS:
+            continue
         if tool_name in _HIGH_RISK_TOOLS or tool_name in _AUTO_REPLAY_BLOCKED_TOOLS:
             return True
     return False
@@ -165,6 +166,8 @@ async def _tool_run_learned_skill(args: dict[str, Any], bot: Any, chat_id: int, 
                 if not step.get("enabled", True):
                     continue
                 tool_name, args_template = normalize_learned_step(step)
+                if tool_name in _REPLAY_IGNORED_TOOLS:
+                    continue
                 items = args_template.get("_items")
                 if isinstance(items, list) and items:
                     for item_args in items:

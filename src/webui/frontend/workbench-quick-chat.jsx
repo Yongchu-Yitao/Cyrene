@@ -80,6 +80,14 @@ function quickChatJson(url) {
   return window.CyreneUI.require("api").json(url, { toast: false });
 }
 
+function quickChatErrorText(err) {
+  try {
+    var api = window.CyreneUI.require("api");
+    if (api && typeof api.errorText === "function") return api.errorText(err);
+  } catch (e) {}
+  return String((err && err.message) || err || "");
+}
+
 var QUICK_CHAT_TARGETS_URL = "/api/workbench/quick-chat/targets";
 
 // Window heights (CSS px). Empty/idle stays compact but tall enough that the
@@ -204,7 +212,7 @@ function QuickChatApp() {
       setLoading(false);
     }).catch(function (err) {
       if (cancelled) return;
-      setError(String((err && err.message) || err || quickChatText("加载失败", "Failed to load")));
+      setError(quickChatErrorText(err) || quickChatText("加载失败", "Failed to load"));
       setLoading(false);
     });
 
@@ -479,7 +487,7 @@ function QuickChatApp() {
         "That chat is still replying — pick another or try again."
       ));
     } else {
-      setSendError(String((err && err.message) || quickChatText("发送失败，请重试。", "Send failed. Try again.")));
+      setSendError(quickChatErrorText(err) || quickChatText("发送失败，请重试。", "Send failed. Try again."));
     }
   }
 

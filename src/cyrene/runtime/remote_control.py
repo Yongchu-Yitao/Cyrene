@@ -141,6 +141,9 @@ _COMMAND_CAPABILITIES = {
     "attachments.read": "artifact:read",
     "settings.read": "settings:read",
     "settings.update": "settings:update",
+    "settings.openai_oauth.read": "settings:read",
+    "settings.openai_oauth.login": "settings:update",
+    "settings.openai_oauth.logout": "settings:update",
     "shell.open": "toolpack:code_tools",
     "shell.read": "toolpack:code_tools",
     "shell.write": "toolpack:code_tools",
@@ -158,6 +161,9 @@ _PROJECT_SCOPED_COMMANDS = frozenset(
         "projects.list",
         "settings.read",
         "settings.update",
+        "settings.openai_oauth.read",
+        "settings.openai_oauth.login",
+        "settings.openai_oauth.logout",
     }
 )
 _SIDE_EFFECT_COMMANDS = frozenset(
@@ -177,6 +183,8 @@ _SIDE_EFFECT_COMMANDS = frozenset(
         "tasks.cancel",
         "approvals.respond",
         "settings.update",
+        "settings.openai_oauth.login",
+        "settings.openai_oauth.logout",
         "shell.open",
         "shell.write",
         "shell.interrupt",

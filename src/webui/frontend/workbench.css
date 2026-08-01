@@ -66,6 +66,8 @@
   --wb-notif-item-hover: color-mix(in srgb, var(--accent) 4%, #ffffff);
   min-height: 100vh;
   height: 100vh;
+  box-sizing: border-box;
+  padding-top: 58px;
   overflow: hidden;
   background: var(--wb-shell-bg);
   color: var(--wb-text);
@@ -82,11 +84,15 @@
   display: grid;
   grid-template-columns: minmax(170px, 188px) minmax(0, max-content) minmax(34px, 1fr) auto;
   align-items: center;
-  border-bottom: 1px solid var(--wb-line);
-  background: var(--wb-topbar-bg);
-  backdrop-filter: blur(20px);
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 64%, transparent);
+  background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);
+  -webkit-backdrop-filter: blur(32px) saturate(170%) contrast(102%);
+  backdrop-filter: blur(32px) saturate(170%) contrast(102%);
   -webkit-app-region: drag;
-  position: relative;
+  position: fixed;
+  inset: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
   z-index: 200;
 }
 
@@ -211,7 +217,13 @@ html[data-theme="dark"] .brand-mark {
   cursor: pointer;
   flex: 0 1 136px;
   position: relative;
-  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
+  transition:
+    width 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    flex-basis 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .workbench-session-tab:hover {
@@ -221,10 +233,18 @@ html[data-theme="dark"] .brand-mark {
 }
 
 .workbench-session-tab.active {
+  width: clamp(136px, 15vw, 220px);
+  flex-basis: 220px;
   border-color: color-mix(in srgb, var(--accent) 42%, var(--wb-line));
   background: color-mix(in srgb, var(--accent) 9%, var(--wb-control-bg));
   color: var(--wb-text);
   box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-session-tab {
+    transition: none;
+  }
 }
 
 .workbench-session-tab.resource-drop-target {
@@ -1369,6 +1389,7 @@ html[data-theme="dark"] .workbench-help-quick-icon.purple { background: rgba(121
 }
 
 .wb-col-resizer:hover::after,
+body.wb-col-resize-hover .wb-col-resizer::after,
 body.wb-col-resizing .wb-col-resizer::after {
   background: var(--wb-accent);
 }
@@ -5093,7 +5114,7 @@ html[data-theme="dark"] .wb-composer-disclaimer {
 }
 
 .wbc-error-card {
-  margin: var(--wbc-header-overlay-height) 22px 0;
+  margin: 76px 22px 0;
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
@@ -12814,94 +12835,170 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 
 .workbench-grid.is-chat {
   grid-template-columns: var(--wb-rail-w) minmax(0, 1fr);
+  height: 100vh;
+  margin-top: -58px;
+}
+
+.workbench-grid.is-chat > .workbench-project-rail {
+  box-sizing: border-box;
+  padding-top: 58px;
 }
 
 .wbc-page {
-  --wbc-top-glass-height: calc(94px * var(--wb-ui-font-scale, 1));
-  --wbc-side-column-width: var(--wb-right-w, 350px);
+  --wbc-shared-glass-height: calc(198px * var(--wb-ui-font-scale, 1));
+  --wbc-shared-glass-rail-width: 230px;
+  --wbc-shared-glass-rail-overhang: 18px;
+  --wbc-shared-glass-rail-feather: 36px;
+  --wbc-shared-glass-rail-top-inset: calc(58px + 48px * var(--wb-ui-font-scale, 1));
+  --wbc-shared-glass-right-inset: var(--wb-right-w, 350px);
+  --wbc-side-track-width: var(--wb-right-w, 350px);
+  --wbc-main-min-width: 320px;
+  /* When the side panel closes, let the conversation lane use only a modest
+     slice of the reclaimed space. The remainder becomes a symmetric inset so
+     the messages and composer still glide into the new visual centre. */
+  --wbc-collapsed-lane-growth: clamp(64px, 5vw, 96px);
+  --wbc-reclaimed-side-width: 0px;
+  --wbc-conversation-shift: 0px;
   --wbc-control-shadow:
     0 1px 2px rgba(15, 23, 42, 0.028),
     0 5px 14px rgba(15, 23, 42, 0.02);
   display: grid;
   /* Right column shares --wb-right-w (inherited from .workbench-grid) so the
      conversation viewer/map panel resizes with the same drag handle. */
-  grid-template-columns: 270px minmax(320px, 1fr) var(--wb-right-w, 350px);
+  grid-template-columns: 230px minmax(var(--wbc-main-min-width), 1fr) var(--wbc-side-track-width);
+  transition: grid-template-columns 420ms cubic-bezier(.22, 1, .36, 1);
   position: relative;
   min-width: 0;
   height: 100%;
   overflow: hidden;
 }
 
-.wbc-top-glass {
+/* One L-shaped glass plane covers the complete conversation rail and turns
+   across the bottom of the main column. Rendering this material once avoids
+   the vertical seam that appears when the rail and composer blur separately. */
+.wbc-page::before {
+  content: "";
   position: absolute;
-  z-index: 19;
-  inset: 0 var(--wbc-side-column-width) auto 0;
-  height: var(--wbc-top-glass-height);
+  z-index: 20;
+  inset: 0 var(--wbc-shared-glass-right-inset) 0 0;
   pointer-events: none;
-  background: linear-gradient(
-    to bottom,
-    color-mix(in srgb, var(--wb-main-bg) 66%, transparent) 0%,
-    color-mix(in srgb, var(--wb-main-bg) 56%, transparent) 68%,
-    color-mix(in srgb, var(--wb-main-bg) 32%, transparent) 86%,
-    transparent 100%
-  );
-  -webkit-backdrop-filter: blur(46px) saturate(165%) contrast(103%);
-  backdrop-filter: blur(46px) saturate(165%) contrast(103%);
-  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 0%, #000 78%, rgba(0, 0, 0, 0.9) 90%, transparent 100%);
+  transition: right 420ms cubic-bezier(.22, 1, .36, 1);
+  background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);
+  -webkit-backdrop-filter: blur(32px) saturate(170%) contrast(102%);
+  backdrop-filter: blur(32px) saturate(170%) contrast(102%);
+  -webkit-mask-image:
+    linear-gradient(
+      to right,
+      #000 0%,
+      #000 calc(100% - var(--wbc-shared-glass-rail-feather)),
+      transparent 100%
+    ),
+    linear-gradient(to top, #000 0%, #000 82%, transparent 100%);
+  -webkit-mask-size:
+    calc(var(--wbc-shared-glass-rail-width) + var(--wbc-shared-glass-rail-overhang)) calc(100% - var(--wbc-shared-glass-rail-top-inset)),
+    100% var(--wbc-shared-glass-height);
+  -webkit-mask-position: left bottom, left bottom;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-composite: source-over;
+  mask-image:
+    linear-gradient(
+      to right,
+      #000 0%,
+      #000 calc(100% - var(--wbc-shared-glass-rail-feather)),
+      transparent 100%
+    ),
+    linear-gradient(to top, #000 0%, #000 82%, transparent 100%);
+  mask-size:
+    calc(var(--wbc-shared-glass-rail-width) + var(--wbc-shared-glass-rail-overhang)) calc(100% - var(--wbc-shared-glass-rail-top-inset)),
+    100% var(--wbc-shared-glass-height);
+  mask-position: left bottom, left bottom;
+  mask-repeat: no-repeat;
+  mask-composite: add;
 }
 
 /* Collapse the right panel when hidden via the × / show button toggle. */
 .wbc-page.wbc-side-hidden {
-  grid-template-columns: 270px minmax(0, 1fr);
-}
-.wbc-page.wbc-side-hidden .wbc-top-glass {
-  right: 0;
+  --wbc-shared-glass-right-inset: 0px;
+  --wbc-side-track-width: 0px;
+  --wbc-reclaimed-side-width: calc(var(--wb-right-w, 350px) - var(--wbc-collapsed-lane-growth));
+  --wbc-conversation-shift: calc(var(--wbc-reclaimed-side-width) / 2);
 }
 .wbc-page.wbc-side-hidden .wbc-side {
-  display: none;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 160ms ease, visibility 0s linear 420ms;
 }
 
 /* ---- conversation rail ---- */
 
 .wbc-rail {
-  --wbc-rail-overlay-height: var(--wbc-top-glass-height);
-  --wbc-rail-content-inset: calc(var(--wbc-top-glass-height) + 8px);
+  --wbc-rail-overlay-height: calc(48px * var(--wb-ui-font-scale, 1));
+  --wbc-rail-content-inset: calc(var(--wbc-rail-overlay-height) + 8px);
   position: relative;
+  z-index: 21;
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 0 12px 14px;
+  padding: 0 12px;
   border-right: 0;
-  background: var(--wb-task-rail-bg);
+  background: transparent;
   overflow: hidden;
+  isolation: isolate;
 }
 
 .wbc-rail-glass {
   position: absolute;
-  z-index: 20;
-  inset: 0 0 auto;
+  z-index: 22;
+  inset: 58px 0 auto;
   min-height: var(--wbc-rail-overlay-height);
   box-sizing: border-box;
   isolation: isolate;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
   padding: 8px 12px;
-}
-
-.wbc-rail-glass .workbench-rail-head {
-  height: 40px;
-  padding: 0;
+  background: transparent;
 }
 
 .wbc-rail-glass::before {
-  content: none;
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--wb-topbar-bg) 58%, transparent);
+  -webkit-backdrop-filter: blur(32px) saturate(170%) contrast(102%);
+  backdrop-filter: blur(32px) saturate(170%) contrast(102%);
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 24px), transparent 100%);
+}
+
+.wbc-rail-toolbar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .wbc-search {
   position: relative;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.wbc-new-chat-btn {
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--wb-card-bg);
+  color: var(--wb-muted);
+  box-shadow: var(--wbc-control-shadow);
+}
+
+.wbc-new-chat-btn svg {
+  width: 17px;
+  height: 17px;
 }
 
 .wbc-search-icon {
@@ -12933,6 +13030,8 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-chat-list {
+  position: relative;
+  z-index: 21;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -12941,7 +13040,7 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   flex-direction: column;
   gap: 8px;
   box-sizing: border-box;
-  padding: var(--wbc-rail-content-inset) 0 8px;
+  padding: calc(58px + var(--wbc-rail-content-inset)) 0 8px;
 }
 
 .wbc-chat-list::-webkit-scrollbar {
@@ -13036,10 +13135,19 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
   flex: 0 0 auto;
 }
 
-.wb-card-menu button.wbc-chat-pin-action {
+.wb-card-menu button.wbc-chat-pin-action,
+.wb-card-menu button.wbc-chat-menu-action {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.wbc-chat-card .wb-card-menu {
+  min-width: 168px;
+}
+
+.wbc-chat-card .wb-card-menu button span:last-child {
+  white-space: nowrap;
 }
 
 .wbc-chat-card-top b {
@@ -13085,7 +13193,6 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* ---- main column ---- */
 
 .wbc-main {
-  --wbc-header-overlay-height: var(--wbc-top-glass-height);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -13295,6 +13402,9 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 }
 
 .wbc-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   border: 0;
   background: transparent;
   color: var(--wb-text);
@@ -13316,15 +13426,19 @@ html[data-theme="dark"] .wb-init-progress-dot { border-color: #46586b; }
 /* ---- thread ---- */
 
 .wbc-thread-stage {
-  --wbc-thread-inset-top: calc(var(--wbc-header-overlay-height) + 18px);
+  --wbc-thread-inset-top: 76px;
   --wbc-thread-inset-inline: 28px;
-  --wbc-thread-inset-bottom: 8px;
+  --wbc-thread-inset-bottom: calc(198px * var(--wb-ui-font-scale, 1));
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   display: flex;
   overflow: hidden;
+  width: calc(100% - var(--wbc-reclaimed-side-width));
+  transform: translateX(var(--wbc-conversation-shift));
+  transition: width 420ms cubic-bezier(.22, 1.24, .36, 1), transform 420ms cubic-bezier(.22, 1.24, .36, 1);
+  will-change: width, transform;
 }
 
 .wbc-thread {
@@ -13595,7 +13709,7 @@ html[data-theme="dark"] .wbc-selection-menu {
   position: absolute;
   z-index: 21;
   left: 50%;
-  bottom: 12px;
+  bottom: calc(var(--wbc-thread-inset-bottom) + 4px);
   width: 34px;
   height: 34px;
   display: inline-grid;
@@ -13992,9 +14106,9 @@ html[data-platform="darwin"] .wbc-browser-window.maximized .wbc-browser-window-b
   --browser-resize-gutter: 0px;
 }
 
-/* The sidebar-docked browser keeps the view full-width (no gutter bar).
-   The Electron layer shifts the view right when the pointer nears the left
-   edge so the .wb-col-resizer handle stays reachable. */
+/* The sidebar-docked browser stays flush with the panel edge. Its native page
+   must never move aside for the resize handle, because that exposes a visible
+   strip and makes the page jump under a stationary pointer. */
 .wbc-side-body .browser-view.native {
   --browser-resize-gutter: 0px;
 }
@@ -15244,6 +15358,21 @@ button.wbc-attach-file:focus-visible {
   padding: 10px 22px 8px;
 }
 
+/* Only the main conversation composer becomes a glass dock. The white input
+   card itself remains unchanged; the transcript scrolls underneath this
+   outer surface and stays legible through the blur. */
+.wbc-main > .wbc-composer {
+  position: absolute;
+  z-index: 24;
+  inset: auto 0 0;
+  box-sizing: border-box;
+  width: calc(100% - var(--wbc-reclaimed-side-width));
+  transform: translateX(var(--wbc-conversation-shift));
+  transition: width 420ms cubic-bezier(.22, 1.24, .36, 1), transform 420ms cubic-bezier(.22, 1.24, .36, 1);
+  will-change: width, transform;
+  isolation: isolate;
+}
+
 .wbc-command-row {
   margin-bottom: 6px;
 }
@@ -15849,17 +15978,20 @@ html[data-theme="dark"] .wbc-model-menu > button:hover {
 .wbc-side {
   --wbc-side-overlay-height: 62px;
   --wbc-side-content-inset: 48px;
-  border-left: 1px solid var(--wb-line);
+  border-left: 0;
   background: var(--wb-right-bg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 180ms ease 100ms, visibility 0s;
 }
 
 .wbc-side-glass {
   position: absolute;
   z-index: 20;
-  inset: 0 0 auto;
+  inset: 58px 0 auto;
   min-height: var(--wbc-side-overlay-height);
   box-sizing: border-box;
   isolation: isolate;
@@ -15899,7 +16031,7 @@ html[data-theme="dark"] .wbc-model-menu > button:hover {
      the panel is dragged narrow */
   overflow-wrap: anywhere;
   box-sizing: border-box;
-  padding: calc(var(--wbc-side-content-inset) + 14px) 14px 14px;
+  padding: calc(58px + var(--wbc-side-content-inset) + 14px) 14px 14px;
 }
 
 .wbc-side-body::-webkit-scrollbar {
@@ -17445,11 +17577,11 @@ html[data-theme="dark"] .wbc-model-menu > button:hover {
 
 @media (max-width: 1320px) {
   .wbc-page {
-    --wbc-side-column-width: var(--wb-right-w, 310px);
-    grid-template-columns: 230px minmax(300px, 1fr) var(--wb-right-w, 310px);
+    --wbc-main-min-width: 300px;
+    --wbc-side-track-width: var(--wb-right-w, 310px);
   }
   .wbc-page.wbc-side-hidden {
-    grid-template-columns: 230px minmax(0, 1fr);
+    --wbc-reclaimed-side-width: calc(var(--wb-right-w, 310px) - var(--wbc-collapsed-lane-growth));
   }
 }
 
@@ -17460,13 +17592,22 @@ html[data-theme="dark"] .wbc-model-menu > button:hover {
     grid-template-columns: 220px minmax(0, 1fr);
   }
   .wbc-page.wbc-side-hidden {
+    --wbc-reclaimed-side-width: 0px;
     grid-template-columns: 220px minmax(0, 1fr);
   }
   .wbc-side {
     display: none;
   }
-  .wbc-top-glass {
-    right: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wbc-page,
+  .wbc-page::before,
+  .wbc-side,
+  .wbc-page.wbc-side-hidden .wbc-side,
+  .wbc-thread-stage,
+  .wbc-main > .wbc-composer {
+    transition: none;
   }
 }
 
@@ -17507,7 +17648,7 @@ html[data-theme="dark"] .wbc-trace {
 /* ---- side viewer & map ---- */
 
 .wbc-side-body.flush {
-  padding: var(--wbc-side-content-inset) 0 0;
+  padding: calc(58px + var(--wbc-side-content-inset)) 0 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -18191,6 +18332,10 @@ html[data-theme="dark"] .wbc-trace {
 .wbc-browser-window.pip .browser-native-surface {
   inset: var(--browser-content-inset);
   border-radius: 8px;
+  /* Electron's rounded native view is antialiased against this renderer
+     surface. Keep it on the active shell color so its top edge does not
+     expose the default white backing surface in dark mode. */
+  background: var(--wb-surface);
 }
 
 .browser-video-fullscreen-overlay {

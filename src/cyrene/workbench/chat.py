@@ -314,6 +314,37 @@ def _workbench_chat_run_error_message(exc: Exception, lang: str = "") -> str:
     return str(exc).strip() or exc.__class__.__name__
 
 
+_WORKBENCH_CHAT_ERROR_I18N_KEYS = {
+    "quota_exhausted": "workbenchChat.error.quotaExhausted",
+    "authentication_expired": "workbenchChat.error.authenticationExpired",
+    "model_unavailable": "workbenchChat.error.modelUnavailable",
+}
+
+
+def _workbench_chat_error_metadata(exc: Exception) -> dict[str, str]:
+    """Attach stable error metadata so clients can localize known failures.
+
+    The Workbench stream may outlive the request that started it, so sending a
+    translated string from the server is not enough: the client needs a stable
+    error code/key to render the banner in its current language. Unknown errors
+    intentionally return no metadata and keep their diagnostic message.
+    """
+    try:
+        from cyrene.model_runtime.codex_provider import codex_availability_error
+
+        availability = codex_availability_error(exc)
+    except Exception:
+        availability = None
+    if availability is None:
+        return {}
+
+    code = str(getattr(availability, "kind", "") or "").strip()
+    detail_key = _WORKBENCH_CHAT_ERROR_I18N_KEYS.get(code, "")
+    if not code or not detail_key:
+        return {}
+    return {"code": code, "detail_key": detail_key}
+
+
 # ---------------------------------------------------------------------------
 # Store
 # ---------------------------------------------------------------------------

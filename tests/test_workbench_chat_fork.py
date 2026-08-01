@@ -255,6 +255,92 @@ def test_chat_message_selects_configured_model_and_reasoning_effort(
     assert selected["effort"] == "high"
 
 
+def test_retry_recovers_from_stale_model_selection_after_source_switch(
+    client, fork_env, monkeypatch
+):
+    from cyrene import agent
+    from cyrene.model_runtime import client as model_client
+    from cyrene.runtime import settings_store
+
+    _write_chat(
+        fork_env,
+        "chat_source_switch",
+        [
+            {"id": "u1", "role": "user", "content": "question"},
+            {"id": "a1", "role": "assistant", "content": "failed answer"},
+        ],
+        permissionMode="auto",
+        model="gpt-5.3-codex-spark",
+        modelSelectionId="codex-spark",
+        reasoningEffort="high",
+    )
+    _write_state(
+        fork_env,
+        "chat_source_switch",
+        [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": "failed answer"},
+        ],
+    )
+    deepseek = {
+        "id": "deepseek-flash",
+        "name": "DeepSeek V4 Flash",
+        "model": "deepseek-v4-flash",
+        "base_url": "https://api.deepseek.example/v1",
+        "reasoning_effort": "max",
+    }
+    monkeypatch.setattr(settings_store, "get_models", lambda: [deepseek])
+    selected = {}
+    monkeypatch.setattr(
+        model_client,
+        "set_session_model_preference",
+        lambda session_id, candidate, effort="": selected.update(
+            session_id=session_id, candidate=candidate, effort=effort
+        ),
+    )
+
+    async def fake_run_agent(**kwargs):
+        return "retried with DeepSeek"
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+
+    response = client.post(
+        "/api/workbench/chats/chat_source_switch/messages",
+        json={"retry": True},
+    )
+
+    assert response.status_code == 200
+    chat = client.get("/api/workbench/chats/chat_source_switch").json()["chat"]
+    assert chat["modelSelectionId"] == "deepseek-flash"
+    assert chat["model"] == "deepseek-v4-flash"
+    assert selected == {
+        "session_id": "chat_source_switch",
+        "candidate": deepseek,
+        "effort": "max",
+    }
+
+
+def test_explicit_unknown_model_still_returns_validation_error(
+    client, fork_env, monkeypatch
+):
+    from cyrene.runtime import settings_store
+
+    _write_chat(fork_env, "chat_unknown_model", [], permissionMode="auto")
+    monkeypatch.setattr(
+        settings_store,
+        "get_models",
+        lambda: [{"id": "deepseek-flash", "model": "deepseek-v4-flash"}],
+    )
+
+    response = client.post(
+        "/api/workbench/chats/chat_unknown_model/messages",
+        json={"message": "hello", "model": "missing-model"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "configured model not found"
+
+
 def _write_chats(fork_env, chats):
     """Write multiple chats into the workbench chats store."""
     from cyrene.runtime import io as io_utils
